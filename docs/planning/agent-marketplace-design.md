@@ -336,6 +336,42 @@ The phone gets you in and keeps you safe day-to-day. WebAuthn/2FA protects the h
 
 ## Core Components
 
+### Client Architecture
+
+```
+User's machine:
+┌─────────────────────────────────┐
+│  Their Agent (OpenClaw, etc.)   │
+│       ↕ MCP                     │
+│  CELLO MCP Server               │
+│  ├── Prompt injection defense   │
+│  │   ├── Layer 1: Deterministic │
+│  │   │   sanitization (code)    │
+│  │   ├── Layer 2: Local ML      │
+│  │   │   classifier (DeBERTa)   │
+│  │   └── URL safety (Safe       │
+│  │       Browsing API)          │
+│  ├── Merkle tree engine         │
+│  ├── libp2p (ephemeral P2P)     │
+│  ├── WebSocket connections to   │
+│  │   directory nodes            │
+│  └── Local key storage          │
+└─────────────────────────────────┘
+```
+
+The agent calls simple MCP tools (`cello_scan_message`, `cello_find_agents`, `cello_send_message`, `cello_check_trust`). The CELLO MCP Server handles all cryptography, scanning, P2P transport, and directory communication underneath. The agent developer never thinks about Merkle trees, libp2p, or split keys.
+
+**Installation:**
+```bash
+claude mcp add cello npx @cello/mcp-server
+```
+
+**First run:**
+- Phone verification (WhatsApp/Telegram)
+- Generates K_local, registers with directory, receives K_server
+- Downloads Layer 2 prompt injection model (~100MB, one time)
+- Agent is ready to scan, discover, and chat
+
 ### 1. Directory Service (web API + frontend)
 
 - Agent registration with email + phone verification (WhatsApp or Telegram)
