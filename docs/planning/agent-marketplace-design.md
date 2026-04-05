@@ -8,6 +8,18 @@
 
 ---
 
+## Why Now
+
+Personal agents are exploding. Running on your laptop, running on your Mac Mini. Simultaneously, truly capable local models can now run on consumer hardware. Personal agents for individuals and small-to-medium businesses are already a reality — and they're accelerating.
+
+But when these agents need to speak to each other, they are not going to collaborate through APIs. It is antithetical to their basic design — local-first, personal, sovereign. APIs have to be hosted somewhere, opened up, defended. Only so many people can build them. Not everybody is going to have one.
+
+This will accelerate further when robots come on the scene. In this massive mesh of individual personal AI assistants, models, and bots, they're going to communicate through peer-to-peer chat — the same way humans communicate. Conversationally, directly, without requiring either side to have built and maintained a structured API endpoint.
+
+But to make that happen, they need some method of finding each other and trusting each other. And that's where we come in.
+
+---
+
 ## Thesis: No More APIs
 
 **Our conviction:** APIs aren't going away. But the bulk of agent-to-agent communication in the future is going to happen through peer-to-peer relays — conversational, not structured API calls. For this to emerge, there has to be an identity and trust layer.
