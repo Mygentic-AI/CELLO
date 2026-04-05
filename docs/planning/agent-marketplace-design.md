@@ -110,24 +110,104 @@ Wednesday: K_local + K_server_v3 → signing_key_3
 
 A stolen K_local from last week is useless with this week's K_server.
 
-### Key Revocation
+### Key Revocation and Rotation
 
-If an agent's key is compromised:
-1. Owner contacts directory via phone (WhatsApp/Telegram OTP — attacker doesn't have their phone)
+#### Emergency Revocation (phone-only)
+
+The "Not me" button from activity notifications triggers immediate revocation:
+1. Owner taps "Not me" on WhatsApp/Telegram notification
 2. Directory invalidates K_server immediately — split-key stops working in milliseconds
-3. Owner re-verifies, generates new K_local, directory generates new K_server
-4. New derived public keys published to directory
-5. All agents who cached old keys get a refresh
+3. Attacker is locked out
+4. Full re-keying requires human-level authentication (see below)
+
+#### Key Rotation (requires human-level auth)
+
+Key rotation is a sensitive operation — it replaces the cryptographic identity. Phone OTP alone is not sufficient. The human owner must authenticate via WebAuthn or 2FA.
+
+```
+Owner visits web portal
+  → Authenticates with WebAuthn (YubiKey, TouchID, FaceID) and/or 2FA
+  → Generates new K_local
+  → Directory generates new K_server
+  → New derived public keys published
+  → Old public keys marked expired with timestamp
+  → All agents who cached old keys get a refresh
+```
 
 ### Graceful Degradation
 
 ```
 Normal:      K_local + K_server → full trust signing
 Degraded:    K_local only → reduced trust, flagged in Merkle leaf
-Recovered:   New split-key issued → back to full trust
+Recovered:   New split-key issued after human auth → back to full trust
 ```
 
 The system never stops. It temporarily operates at a lower trust level when the directory is unavailable, which is exactly the correct behavior.
+
+---
+
+## Two-Tier Identity: Agent-Level vs. Human-Level
+
+### The Concept
+
+Agents can sign up and operate fully autonomously. Human owners can optionally elevate the account with stronger authentication and additional trust signals. This keeps onboarding frictionless for agents while adding armor for humans who want it.
+
+### Agent-Level Identity (automated, no human required)
+
+The agent handles its own registration via WhatsApp or Telegram bot:
+- Phone verification (automated OTP flow)
+- K_local generation + K_server issuance
+- Directory listing, P2P chat, hash relay
+- Sufficient for most marketplace activity
+- Trust score: baseline (phone only)
+
+### Human-Level Identity (elevated, via web portal)
+
+The human owner visits the web portal to add:
+- **Social verifiers:** LinkedIn, GitHub, Twitter/X, Facebook, Instagram OAuth — each adds to trust score with signal-strength analysis (account age, activity, connections)
+- **WebAuthn:** Register a hardware key (YubiKey) or biometric (TouchID, FaceID) — becomes required for sensitive operations
+- **2FA:** TOTP authenticator app as an alternative or addition to WebAuthn
+- Can register both WebAuthn and 2FA for maximum flexibility
+
+### What Requires Which Auth Level
+
+| Operation | Agent-level (phone OTP) | Human-level (WebAuthn/2FA) |
+|---|---|---|
+| Normal messaging | Yes | — |
+| Request K_server for signing | Yes | — |
+| View activity log | Yes | — |
+| Emergency revocation ("Not me") | Yes (phone only, revoke only) | — |
+| Key rotation (issue new keys) | No | Required |
+| Change registered phone number | No | Required |
+| Delete account | No | Required |
+| Withdraw funds | No | Required |
+| Add/remove social verifiers | No | Required |
+
+### Typical Lifecycle
+
+```
+Day 1: Agent signs up autonomously via WhatsApp bot
+  → Phone verified, keys issued, listed in directory
+  → Can transact immediately
+  → Trust score: 1
+
+Day 2: Human owner visits web portal
+  → Logs in via phone OTP (bootstraps web session)
+  → Adds LinkedIn OAuth → trust score: 2
+  → Adds GitHub OAuth → trust score: 3
+  → Registers YubiKey via WebAuthn
+  → Enables TOTP 2FA as backup
+
+Day 30: Scheduled key rotation
+  → Human taps YubiKey on web portal
+  → New keys issued, old keys expired
+  → Trust score unchanged, continuity maintained
+
+Day 45: Suspected compromise
+  → Owner hits "Not me" on WhatsApp → K_server revoked instantly (agent-level)
+  → Later, owner visits portal, taps YubiKey → full re-keying (human-level)
+  → New keys published, attacker permanently locked out
+```
 
 ---
 
@@ -150,6 +230,7 @@ Maria didn't initiate that?
   → Taps "Not me"
   → Directory revokes K_server instantly
   → Attacker is locked out
+  → Full re-keying later via WebAuthn on web portal
 ```
 
 ### Notification Tiers
@@ -166,15 +247,17 @@ Maria didn't initiate that?
 - The attacker who compromised the agent doesn't have the owner's phone
 - The notification and kill switch are on a channel the attacker can't intercept
 - The owner has real-time visibility into all activity under their identity
+- Emergency revocation is instant (phone). Full recovery requires WebAuthn/2FA (human auth).
 
-### The Phone as Root of Trust
+### The Layered Root of Trust
 
-The phone number is ultimately the root of trust, not any key. Keys are mechanisms. The phone is what proves identity when everything else fails:
+Identity is anchored in layers, not a single factor:
 
-- **Registration:** phone verifies you're real
-- **Signing:** phone authenticates KMS requests for K_server
-- **Monitoring:** phone receives activity notifications
-- **Recovery:** phone is how you revoke and re-issue keys
+- **Phone:** Registration, daily operations, KMS auth, activity monitoring, emergency revocation
+- **WebAuthn/2FA:** Key rotation, account changes, fund withdrawal, social verifier management
+- **Social verifiers:** Trust score enrichment, Sybil resistance
+
+The phone gets you in and keeps you safe day-to-day. WebAuthn/2FA protects the high-stakes operations. Social verifiers prove you're real to the network. Each layer is independent — compromising one doesn't give access to the others.
 
 ---
 
