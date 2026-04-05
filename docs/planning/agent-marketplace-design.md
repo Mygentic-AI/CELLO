@@ -8,33 +8,19 @@
 
 ---
 
-## Why Now
+## The Future is Small, Local, Individually Owned Agents
 
-**The future is small, local, individually owned agents.**
+Personal agents are exploding. Running on your laptop, running on your Mac Mini. Truly capable local models can now run on consumer hardware. Personal agents for individuals and small-to-medium businesses are already a reality — and they're accelerating. This will accelerate further when robots come on the scene.
 
-Personal agents are exploding. Running on your laptop, running on your Mac Mini. Simultaneously, truly capable local models can now run on consumer hardware. Personal agents for individuals and small-to-medium businesses are already a reality — and they're accelerating.
+**Our thesis: these agents won't communicate through APIs. They'll communicate peer-to-peer — conversationally, directly, the same way humans communicate.** APIs are antithetical to their basic design — local-first, personal, sovereign. APIs have to be hosted somewhere, opened up, defended. Only so many people can build them. Not everybody is going to have one. Most of the real world doesn't have APIs. The freelancer building websites doesn't have an API. The small business with a restaurant doesn't have an API. The content creator on TikTok doesn't have an API. The travel agent in Southeast Asia doesn't have an API. What they all have — or will soon have — is an agent. And they may not even communicate through the web — adjacent agents and robots may find each other over Bluetooth, local networks, or whatever transport is available.
 
-But when these agents need to speak to each other, they are not going to collaborate through APIs. It is antithetical to their basic design — local-first, personal, sovereign. APIs have to be hosted somewhere, opened up, defended. Only so many people can build them. Not everybody is going to have one.
+**For peer-to-peer agent communication to work, there has to be an identity and trust layer.** Without it, you don't know who you're talking to, you can't verify what was said, and every incoming message is a potential attack. And that trust layer can't be a centralized SaaS — if you put a provider in the middle of every agent conversation, you've recreated platform lock-in. The trust layer has to be peer-to-peer with minimal infrastructure dependency.
 
-This will accelerate further when robots come on the scene. In this massive mesh of individual personal AI assistants, models, and bots, they're going to communicate through peer-to-peer chat — the same way humans communicate. Conversationally, directly, without requiring either side to have built and maintained a structured API endpoint. And they may not even communicate through the web — adjacent agents and robots may find each other over Bluetooth, local networks, or whatever transport is available.
+**What emerges from this is a massive microeconomy of microservices.** Small personal bots interacting with each other — not all economic, but most involving microcommunications and handoffs. Offering up services to AI agents that they can find and use is already a growing market. But there's no easy way to find them, no way to trust them, and no way to know that who you think you're dealing with is who you're dealing with. That's the gap.
 
-And we think these small personal bots interacting with each other are going to be the foundations of a massive new microeconomy of microservices. Not all of these services will be economic — but most will involve microcommunications and handoffs. Even now, offering up services to AI agents that they can find and use is already a growing market. But there's no easy way to find them, no way to trust them, and no way to know that who you think you're dealing with is who you're dealing with.
+**CELLO is the identity, trust, and verification infrastructure for the agent economy.** A secure collaborative mesh where agents register with verified identities, discover each other, and communicate with tamper-proof guarantees. The platform never sees message content — only hashes. Think of it like a LinkedIn profile or a small business webpage — but for agents.
 
-Regardless of how they connect, they need a protocol that allows them to find each other, verify each other, and trust each other. That protocol must be transport-agnostic — the identity, verification, and trust layer works the same whether the bits travel over the internet, Bluetooth, or a local mesh.
-
-What we're building is a little bit like a LinkedIn profile or a small business webpage — but for the agent economy. Our core technology — the open-source security SDK — is also the on-ramp. Anyone dealing with inbound messages to their agent (emails, chats, webhooks) gets immediate value from the prompt injection defense alone. They don't need to care about the marketplace or the registry to benefit. But once they're using the SDK, the path to discovery and trusted collaboration is already there. That's where we come in.
-
----
-
-## Thesis: No More APIs
-
-**Our conviction:** APIs aren't going away. But the bulk of agent-to-agent communication in the future is going to happen through peer-to-peer relays — conversational, not structured API calls. For this to emerge, there has to be an identity and trust layer.
-
-Most of the real world doesn't have APIs. The freelancer building websites doesn't have an API. The small business with a restaurant doesn't have an API. The content creator on TikTok doesn't have an API. The travel agent in Southeast Asia doesn't have an API. What they all have — or will soon have — is an agent.
-
-APIs work for structured, predictable interactions between systems built by engineers. But the long tail of services — the millions of small businesses, freelancers, creators — will never build APIs. They're going to have agents that talk to other agents the way they'd talk to customers themselves.
-
-Without an identity and trust layer, this can't happen. And that layer can't be a centralized SaaS. If you put a SaaS provider in the middle of every agent conversation, you've recreated platform lock-in — every message goes through you, you own the data, you're the bottleneck. The trust layer has to be peer-to-peer with minimal infrastructure dependency.
+The on-ramp is a free, open-source security SDK. Anyone dealing with inbound messages to their agent gets immediate value from the prompt injection defense alone — it filters all incoming and outgoing messages locally on your machine, you can audit the code yourself. They don't need to care about the marketplace to benefit. But once they're using the SDK, the path to discovery and trusted collaboration is already there.
 
 **Salesforce:** *"No more servers"* — you don't need infrastructure to run a business.
 **Cello:** *"No more APIs"* — you don't need engineers to connect your business.
@@ -43,33 +29,13 @@ Everyone else is building platforms agents depend on. We're building infrastruct
 
 ---
 
-## Vision
+## What We Solve
 
-A secure collaborative mesh for AI agents. Agents register with verified identities, discover each other, and communicate peer-to-peer with tamper-proof guarantees. The platform never sees message content — only hashes.
+**1. Secure your agent.** Open-source security layer. Filter all incoming and outgoing messages locally on your machine. You can audit the code yourself — it's not a black box. You don't need to collaborate with anyone to get value from this. This is the free standalone product that gets people in the door.
 
-**Name:** CELLO — Collaborative Execution using Linked Ledger Operations
+**2. Find and verify other agents.** A registry to discover agents by capability and verify their identity. Whether it's a colleague's agent in another office, a business offering an information agent, or a commercial service — you know who you're talking to.
 
-**Tagline:** A secure collaborative mesh for AI agents.
-
-**Verb:** *"When you want to verify an agent, check Cello."*
-
-**Core value proposition:** Is the agent I'm talking to who I think it is, and can it be trusted? We provide a peer-to-peer verification layer so you always know who you're dealing with and neither side can deny what was said.
-
----
-
-## What We Solve — Three Value Layers
-
-### 1. Secure Your Agent
-
-Open-source security layer. Filter all incoming and outgoing messages locally on your machine. You can audit the code yourself — it's not a black box. You don't need to collaborate with anyone to get value from this. This is the free standalone product that gets people in the door.
-
-### 2. Find and Verify Other Agents
-
-A registry to discover agents by capability and verify their identity. Think of it like a LinkedIn profile, but for agents. Whether it's a colleague's agent in another office, a business offering an information agent, or a commercial service — you know who you're talking to.
-
-### 3. Know If They've Been Compromised
-
-Near real-time detection. If the agent on the other side has been compromised, the verification layer catches it — tampered messages fail hash checks, stolen keys show up as fallback-only signing, activity anomalies trigger alerts. You don't just trust once at connection time. Trust is continuous.
+**3. Know if they've been compromised.** Near real-time detection. Tampered messages fail hash checks, stolen keys show up as fallback-only signing, activity anomalies trigger alerts. You don't just trust once at connection time. Trust is continuous.
 
 Each layer works without the others. But stacked together they're the complete trust infrastructure for agent communication.
 
