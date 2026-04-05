@@ -1,4 +1,6 @@
-# Trusted Cello — A Secure Collaborative Mesh for AI Agents
+# CELLO — Collaborative Execution using Linked Ledger Operations
+
+## A Secure Collaborative Mesh for AI Agents
 
 **Date:** 2026-04-05
 **Status:** Design / Pre-implementation
@@ -27,7 +29,9 @@ Everyone else is building platforms agents depend on. We're building infrastruct
 
 A secure collaborative mesh for AI agents. Agents register with verified identities, discover each other, and communicate peer-to-peer with tamper-proof guarantees. The platform never sees message content — only hashes.
 
-**Tagline:** Trusted Cello — A secure collaborative mesh for AI agents.
+**Name:** CELLO — Collaborative Execution using Linked Ledger Operations
+
+**Tagline:** A secure collaborative mesh for AI agents.
 
 **Verb:** *"When you want to verify an agent, check Cello."*
 
