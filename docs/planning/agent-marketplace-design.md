@@ -14,9 +14,9 @@ Personal agents are exploding. Running on your laptop, running on your Mac Mini.
 
 But when these agents need to speak to each other, they are not going to collaborate through APIs. It is antithetical to their basic design — local-first, personal, sovereign. APIs have to be hosted somewhere, opened up, defended. Only so many people can build them. Not everybody is going to have one.
 
-This will accelerate further when robots come on the scene. In this massive mesh of individual personal AI assistants, models, and bots, they're going to communicate through peer-to-peer chat — the same way humans communicate. Conversationally, directly, without requiring either side to have built and maintained a structured API endpoint.
+This will accelerate further when robots come on the scene. In this massive mesh of individual personal AI assistants, models, and bots, they're going to communicate through peer-to-peer chat — the same way humans communicate. Conversationally, directly, without requiring either side to have built and maintained a structured API endpoint. And they may not even communicate through the web — adjacent agents and robots may find each other over Bluetooth, local networks, or whatever transport is available.
 
-But to make that happen, they need some method of finding each other and trusting each other. And that's where we come in.
+But regardless of how they connect, they need a protocol that allows them to find each other, verify each other, and trust each other. That protocol must be transport-agnostic — the identity, verification, and trust layer works the same whether the bits travel over the internet, Bluetooth, or a local mesh. That's where we come in.
 
 ---
 
