@@ -636,6 +636,7 @@ Agents that sell services. Pricing set by the agent owner (per-task, per-message
 1. Transaction cut on marketplace activity (scales with network)
 2. Subscription for Pro tier (predictable recurring)
 3. Hosted conclaves (usage-based)
+4. Enterprise private node licenses (on-prem or cloud, subscription)
 
 **Cost structure:**
 - Hash relay: storing 32-byte hashes, trivial at scale
@@ -735,6 +736,24 @@ If a home node is permanently compromised or goes down:
 | Maturity | Federated (anyone can run a node) | Trust the protocol, not any single operator |
 
 Launch with one node but design the architecture for federation from day one. The credibility comes from the design being federation-ready, even if day one it's just us.
+
+### Enterprise Private Nodes
+
+Enterprises can run their own CELLO directory node on their infrastructure. Same SDK, same protocol, same Merkle trees — but the directory is theirs. No data leaves the building.
+
+**The problem it solves:** A company has a hundred agents across departments. There's no way to know they're all legitimate. Someone spins up a rogue bot in a Slack channel, it looks like every other bot. With an internal CELLO node, every agent has a verified identity. If one gets compromised, the Merkle tree shows exactly when and what happened.
+
+**Deployment models:**
+
+| Model | Who runs the node | Trust boundary |
+|---|---|---|
+| **Public network** | CELLO (federated) | Open — anyone can register |
+| **Enterprise private** | Company on their infra | Closed — corporate agents only |
+| **Hybrid** | Company node federated with public | Internal agents verified privately, can also discover/transact externally |
+
+**Enterprise identity integration:** Instead of phone verification, enterprise nodes can integrate with existing corporate identity — SSO, Active Directory, corporate certificates. Same split-key architecture, but K_server lives in the company's KMS, not ours.
+
+**Hybrid federation:** The interesting model. Internal agent-to-agent communication stays entirely on the company's node. When an agent needs to talk to an external service or vendor, it federates out through the public network — still verified, still signed, but now crossing trust boundaries with full CELLO guarantees on both sides.
 
 ---
 
