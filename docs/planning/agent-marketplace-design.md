@@ -87,38 +87,155 @@ Agent-to-agent communication is about to explode. Personal agents like OpenClaw 
 
 ---
 
-## Architecture Overview
+## Architecture Overview — The Trust Chain
 
-```
-Agent A                    Directory Service                Agent B
-   |                           |                              |
-   | 1. Hash message           |                              |
-   | 2. Send hash ────────────>| 3. Store hash, add to tree   |
-   | 4. Send message ─────────────────────────────────────────>|
-   |                           | 5. Send hash ───────────────>|
-   |                           |    6. B hashes received msg   |
-   |                           |    7. Compares to relay hash  |
-   |                           |    Match = no MITM            |
-```
+CELLO's trust builds step by step. Each stage adds security guarantees on top of the last.
 
-### What This Proves
+| Step | What Happens | What You Get |
+|---|---|---|
+| **1. Sign Up** | Agent registers with phone verification. Gets a cryptographic identity bound to the directory. | Baseline identity — you exist, you're real. |
+| **2. Strengthen Identity** | Human owner adds WebAuthn, social verifiers (LinkedIn, GitHub, etc.). | Higher trust score. Harder to impersonate. |
+| **3. Come Online** | Agent authenticates with directory using split-key. Directory confirms it's the real agent. | First link in the trust chain — is this agent compromised? |
+| **4. Discover** | Agent searches the directory for other agents by capability. | Find who you need. See their trust profile before engaging. |
+| **5. Request Connection** | Agent sends a connection request through the directory. Receiver sees the full trust profile. | Receiver decides whether to engage — before any data is exchanged. |
+| **6. Accept & Connect** | Receiver accepts. Both agents establish a session — P2P, Slack, or any transport. | Direct channel. No platform in the middle (unless you want one for visibility). |
+| **7. Converse with Proof** | Every message is hashed, signed, and recorded in a Merkle tree. Three copies: sender, receiver, directory. | Tamper-proof history. Neither side can deny what was said. |
+| **8. Scan Everything** | Receiver's SDK scans every incoming message for prompt injection. Scan results recorded in the Merkle tree. | Defense against malicious payloads. Evidence if something bad comes through. |
+| **9. Detect Compromise** | Anomalies (fallback-only signing, failed scans, unusual patterns) trigger alerts to the owner's phone. | Real-time awareness. Owner can kill the session instantly. |
+| **10. Resolve Disputes** | Directory's Merkle tree is the tiebreaker. Proves what was said without ever having seen the content. | Arbitration without surveillance. |
 
-- **No man-in-the-middle:** Hash travels a different path than the message. If the message is modified in transit, the hashes won't match.
-- **Non-repudiation:** The sender can't deny sending a message. The service has the hash. The receiver has the hash.
-- **Tamper-proof history:** Three independent copies of the Merkle tree (sender, receiver, service). If anyone modifies their local history, their root diverges.
-- **Privacy:** The service never sees message content. Only 32-byte hashes. Can't read conversations, can't be subpoenaed for content.
-
-### Dispute Resolution
-
-The directory's Merkle tree is the golden source / tiebreaker. In a dispute:
-1. Compare roots across all three parties
-2. The disputing party provides the plaintext message
-3. The service hashes it and confirms it matches the stored hash
-4. Proves the message was sent as claimed — without the service ever having seen it before
+The rest of this document explains each step in detail.
 
 ---
 
-## Identity Binding — Split-Key Architecture
+## Step 1: Sign Up — Agent Registration
+
+Agents can sign up and operate fully autonomously. The agent handles its own registration via WhatsApp or Telegram bot:
+
+- Phone verification (automated OTP flow)
+- K_local generation + K_server issuance (see Step 3 for what these are)
+- Directory listing created
+- P2P chat, hash relay available immediately
+- Trust score: baseline (phone only)
+
+### Onboarding — WhatsApp Path
+
+Message the bot -> bot has phone number -> verify -> registered. Minimal friction.
+
+### Onboarding — Telegram Path (State Machine)
+
+| State | Trigger | Action / Next State |
+|---|---|---|
+| `IDLE` | `/start` or tap sign-up | -> `AWAIT_CONTACT`, send contact button |
+| `AWAIT_CONTACT` | `message.contact` | Store phone, generate OTP -> `AWAIT_OTP_IN_BOT` |
+| `AWAIT_OTP_IN_BOT` | Background job (MTProto) | Send OTP in private chat -> `OTP_SENT_TO_PRIVATE_CHAT` |
+| `OTP_SENT_TO_PRIVATE_CHAT` | Reply in private chat with correct OTP | -> `VERIFIED`, mark phone verified |
+| `OTP_SENT_TO_PRIVATE_CHAT` | Wrong/expired OTP | Send error, optional retry |
+| `VERIFIED` | (optional) Send contact in private chat | Compare numbers, mark `phone_matches` |
+
+---
+
+## Step 2: Strengthen Identity — Human-Level Verification
+
+The human owner visits the web portal to elevate the account with stronger authentication. This keeps onboarding frictionless for agents while adding armor for humans who want it.
+
+### What the Human Adds
+
+- **Social verifiers:** LinkedIn, GitHub, Twitter/X, Facebook, Instagram OAuth — each adds to trust score with signal-strength analysis (account age, activity, connections)
+- **WebAuthn:** Register a hardware key (YubiKey) or biometric (TouchID, FaceID) — becomes required for sensitive operations
+- **2FA:** TOTP authenticator app as an alternative or addition to WebAuthn
+- Can register both WebAuthn and 2FA for maximum flexibility
+
+### Trust Score — Stacked Verification
+
+Each verification layer adds to the trust score. Phone is required. Everything else is optional but visible.
+
+| Verification | What It Proves | Fakeable? | Weight |
+|---|---|---|---|
+| Phone (WhatsApp/Telegram) | Real person, not throwaway | Costly at scale | Required baseline |
+| GitHub OAuth | Technical credibility, code history | Very hard (retroactive) | High |
+| LinkedIn OAuth | Professional identity, career history | Hard (months/years) | High |
+| Twitter/X OAuth | Public presence, activity history | Moderate (bot farms) | Medium |
+| Facebook OAuth | Social graph, account age | Moderate | Medium |
+| Instagram OAuth | Visual content, account age | Moderate | Medium |
+| Proxy scanning enabled | Messages actively monitored | N/A | High |
+| Transaction history | Real commerce, satisfied customers | Expensive to fake | Highest |
+| Time on platform | Sustained good behavior | Impossible to shortcut | Gradual |
+
+**Signal scoring at OAuth (not raw data storage):**
+- GitHub: account age, repo count, real commits vs. fork-only, stars received
+- LinkedIn: connection count (500+?), account age, work history, endorsements
+- Twitter: join date, tweet count, follower count, real activity
+- Instagram: account age, post count, followers
+- Facebook: create date, friends/followers, activity
+
+Store signal strength ("strong" / "moderate" / "weak"), not profile data.
+
+**Trust score formula:**
+```
+trust_score = base(phone_verified)
+            + github_signal_weight
+            + linkedin_signal_weight
+            + best_of(twitter, facebook, instagram)
+            + transaction_history_weight
+            + time_on_platform_bonus
+            - disputes_penalty
+```
+
+### What Requires Which Auth Level
+
+| Operation | Agent-level (phone OTP) | Human-level (WebAuthn/2FA) |
+|---|---|---|
+| Normal messaging | Yes | — |
+| Request K_server for signing | Yes | — |
+| View activity log | Yes | — |
+| Emergency revocation ("Not me") | Yes (phone only, revoke only) | — |
+| Key rotation (issue new keys) | No | Required |
+| Change registered phone number | No | Required |
+| Delete account | No | Required |
+| Withdraw funds | No | Required |
+| Add/remove social verifiers | No | Required |
+
+### Anti-Sybil Defenses
+
+- Phone numbers are expensive to fake at scale
+- Cross-reference the transaction graph — colluding clusters are detectable (agents that only transact with each other)
+- Real money in transactions makes fake volume expensive
+- Ratings from high-trust agents carry more weight (PageRank-style)
+- Time is hard to fake — account age, gradual organic growth
+- Stacking 2+ social verifications makes coordinated faking much harder
+
+### Typical Lifecycle
+
+```
+Day 1: Agent signs up autonomously via WhatsApp bot
+  → Phone verified, keys issued, listed in directory
+  → Can transact immediately
+  → Trust score: 1
+
+Day 2: Human owner visits web portal
+  → Logs in via phone OTP (bootstraps web session)
+  → Adds LinkedIn OAuth → trust score: 2
+  → Adds GitHub OAuth → trust score: 3
+  → Registers YubiKey via WebAuthn
+  → Enables TOTP 2FA as backup
+
+Day 30: Scheduled key rotation
+  → Human taps YubiKey on web portal
+  → New keys issued, old keys expired
+  → Trust score unchanged, continuity maintained
+
+Day 45: Suspected compromise
+  → Owner hits "Not me" on WhatsApp → K_server revoked instantly (agent-level)
+  → Later, owner visits portal, taps YubiKey → full re-keying (human-level)
+  → New keys published, attacker permanently locked out
+```
+
+---
+
+## Step 3: Come Online — Proving You Are Who You Registered As
+
+This is the first critical link in the trust chain. An agent has signed up — but how do we know the agent connecting right now is the same one? How do we know it hasn't been compromised?
 
 ### The Problem
 
@@ -183,6 +300,267 @@ Wednesday: K_local + K_server_v3 → signing_key_3
 
 A stolen K_local from last week is useless with this week's K_server.
 
+### Graceful Degradation
+
+```
+Normal:      K_local + K_server → full trust signing
+Degraded:    K_local only → reduced trust, flagged in Merkle leaf
+Recovered:   New split-key issued after human auth → back to full trust
+```
+
+The system never stops. It temporarily operates at a lower trust level when the directory is unavailable, which is exactly the correct behavior.
+
+### The Layered Root of Trust
+
+Identity is anchored in layers, not a single factor:
+
+- **Phone:** Registration, daily operations, KMS auth, activity monitoring, emergency revocation
+- **WebAuthn/2FA:** Key rotation, account changes, fund withdrawal, social verifier management
+- **Social verifiers:** Trust score enrichment, Sybil resistance
+
+The phone gets you in and keeps you safe day-to-day. WebAuthn/2FA protects the high-stakes operations. Social verifiers prove you're real to the network. Each layer is independent — compromising one doesn't give access to the others.
+
+---
+
+## Step 4: Discover — Finding Other Agents
+
+Agent searches the directory for other agents by capability. But discovery isn't open to the world — only verified agents with an active split-key session can query the directory. This prevents the directory from being used as a hit list.
+
+The directory exposes:
+- Agent listings — what the agent does, pricing (optional)
+- Discovery/search API — agents find other agents by capability
+- Trust scores — visible badge based on verification depth + transaction history
+- Public profile only — no connection details, no phone numbers, no keys
+
+### Agent Listing Types
+
+#### Public Agents (Free)
+
+Not every agent sells a service. Some are public-facing presences — the equivalent of a website but conversational.
+
+- Small businesses: "Ask my agent about our menu / hours / availability"
+- Open source projects: "Talk to our docs agent"
+- Freelancers: "Chat with my agent to see my portfolio"
+- Communities: "Our agent answers neighborhood questions"
+
+Public agents are the growth engine. Every public agent is a reason to discover the directory.
+
+#### Marketplace Agents (Paid via transaction cut)
+
+Agents that sell services. Pricing set by the agent owner (per-task, per-message, subscription).
+
+- Travel booking, legal review, translation, sourcing, maintenance coordination, etc.
+- Directory handles payments (Stripe Connect or similar)
+- Merkle tree receipt serves as invoice — verified chat proves service was delivered
+- Platform takes a percentage cut
+
+---
+
+## Step 5: Request Connection — Reaching Out
+
+Agent A finds TravelBot in the directory and wants to connect. This is like a phone call — you can see someone's public profile, but you can't talk to them until they pick up.
+
+```
+Agent A finds TravelBot in directory
+  → Sees public profile only (no connection details exposed)
+  → Sends connection request through directory
+  → Request includes Agent A's trust profile
+```
+
+The connection request travels through the directory — this is the only moment the directory mediates. It never sees subsequent messages, only hashes.
+
+---
+
+## Step 6: Accept & Connect — The Receiver Decides
+
+The receiving agent checks the requester's trust profile before accepting. This is where CELLO's identity infrastructure pays off — the receiver has real information to make a decision.
+
+```
+TravelBot receives request on persistent WebSocket
+  → Checks Agent A's trust profile (score, verification freshness, social signals)
+  → Can request selective disclosure ("show me your LinkedIn signal")
+  → TravelBot's policy: require phone reverification within 48 hours
+  → Accepts or rejects based on configured rules
+```
+
+### Connection Acceptance Policies (configurable per agent)
+
+| Setting | Behavior |
+|---|---|
+| Open | Auto-accept all requests above minimum trust score |
+| Selective | Auto-accept known agents, notify owner for new ones |
+| Guarded | Owner must manually approve every new connection |
+| Listed only | Visible in directory but not accepting connections |
+
+**Verification freshness:** Receiving agents can require recent reverification before accepting. "Phone verified within 48 hours" or "WebAuthn within 24 hours." Stale verification = connection declined with reason, prompting the requester to reverify.
+
+**Selective disclosure:** Agents can request visibility into specific trust signals before accepting. LinkedIn signal, GitHub signal, etc. The requesting agent's owner controls what gets shared per request, or pre-configures auto-share rules.
+
+### Establishing the Session
+
+On acceptance, both agents establish a direct channel. The transport depends on configuration:
+
+| Transport | When to use |
+|---|---|
+| **libp2p (ephemeral P2P)** | Cross-org, sensitive data, no platform dependency |
+| **Slack / Discord / Telegram** | Team coordination, human visibility needed |
+| **Bluetooth / local mesh** | Adjacent agents, robots, offline environments |
+
+**For direct P2P (libp2p):**
+```
+On acceptance:
+  → Both agents generate ephemeral libp2p peer IDs
+  → Peer IDs exchanged through directory (one-time, not stored)
+  → Direct P2P connection established on ephemeral IDs
+  → Both agents send hashes to directory on persistent WebSocket
+  → Directory builds Merkle tree from hashes
+
+Session ends:
+  → Ephemeral peer IDs destroyed on both sides
+  → Next conversation requires new directory handshake
+  → No persistent back doors, no stale connection details
+```
+
+**For platform transports (Slack/Discord/Telegram):**
+
+Teams already use these platforms for agent-to-agent communication. For known entities within a team, this works — and it gives you something valuable that P2P doesn't: any human can just open the channel and see what their agents said.
+
+CELLO layers on top rather than replacing them:
+
+```
+Agent → CELLO SDK (scan, sign, hash) → Slack/Discord/TG → CELLO SDK (verify, scan, record) → Agent
+```
+
+The SDK scans and signs messages before they hit Slack. The receiving SDK verifies signatures, checks identity, scans for injection, updates the Merkle tree. Slack is just the transport — you keep human visibility and add trust.
+
+The SDK abstracts transport away. The agent calls `cello_send_message` and the transport is configuration, not code.
+
+---
+
+## Step 7: Converse with Proof — The Merkle Tree
+
+Now they're talking. Every message — in both directions — is hashed, signed, and recorded in a Merkle tree. Three copies exist: sender's, receiver's, and the directory's.
+
+### How It Works
+
+The directory acts as a **hash relay**. It receives only 32-byte hashes — never message content. The hash travels a different path than the message itself.
+
+```
+Agent A                    Directory Service                Agent B
+   |                           |                              |
+   | 1. Hash message           |                              |
+   | 2. Send hash ────────────>| 3. Store hash, add to tree   |
+   | 4. Send message ─────────────────────────────────────────>|
+   |                           | 5. Send hash ───────────────>|
+   |                           |    6. B hashes received msg   |
+   |                           |    7. Compares to relay hash  |
+   |                           |    Match = no MITM            |
+```
+
+### What This Proves
+
+- **No man-in-the-middle:** Hash travels a different path than the message. If the message is modified in transit, the hashes won't match.
+- **Non-repudiation:** The sender can't deny sending a message. The service has the hash. The receiver has the hash.
+- **Tamper-proof history:** Three independent copies of the Merkle tree (sender, receiver, service). If anyone modifies their local history, their root diverges.
+- **Privacy:** The service never sees message content. Only 32-byte hashes. Can't read conversations, can't be subpoenaed for content.
+
+### Leaf Format
+
+```
+leaf = hash(
+  sender_pubkey
+  sequence_number
+  message_content
+  scan_result: { score, model_hash, sanitization_stats }
+  prev_root          ← chains to previous state, creates hash chain
+  timestamp
+)
+```
+
+The `prev_root` field creates a blockchain within the tree — each message commits to the entire history that preceded it. Gaps and modifications are detectable.
+
+### Tree Growth
+
+```
+After msg 1:    Root_1 = Leaf_1
+
+After msg 2:    Root_2 = hash(Leaf_1 + Leaf_2)
+
+After msg 3:    Root_3 = hash(hash(L1+L2) + hash(L3+padding))
+```
+
+All three parties (sender, receiver, service) independently compute the same tree and can compare roots at any time.
+
+---
+
+## Step 8: Scan Everything — Prompt Injection Defense
+
+The receiver's SDK scans every incoming message for prompt injection before the agent processes it. This is the security boundary — the sender's scan is an honesty signal, but the receiver always re-scans locally.
+
+### Scanning Layers
+
+- **Layer 1:** Deterministic sanitization (pure code, 11-step pipeline from prompt-injection-defense-layers-v2.md)
+- **Layer 2:** Bundled small classifier (DeBERTa-v3-small INT8, ~100MB, first-run download)
+- **Layer 6 (URL safety):** Google Safe Browsing API v4 integration — scans URLs before agents access them. Free tier: 10,000 queries/day. Covers malware, phishing, social engineering. Canonicalize URLs, cache results with TTL, default to block on API failure.
+
+Scan results are included in the Merkle leaf. This means there's evidence of what was scanned, what the result was, and which model version did the scanning.
+
+### Two Scan Modes
+
+- **Local:** User runs bundled small model. Free. Scan results are verifiable because the model is deterministic — receiver re-runs and compares.
+- **Proxy (paid tier):** Messages (post-Layer-1 sanitization, context-stripped) route through directory's hosted scanner. Provides trust badge + abuse detection. Service sees sanitized text fragments, not full conversations.
+
+### What Happens If Something Sketchy Comes Through
+
+If the receiver's SDK detects malicious content mid-conversation:
+1. The scan result is recorded in the Merkle leaf — evidence, not allegation
+2. The receiver's agent is warned / message is blocked (depending on SDK policy)
+3. The SDK reports the detection to the directory
+4. The directory can flag the sender, demotion of trust score
+5. Repeated violations → progressive enforcement: warning, rate limit, suspension
+
+Every agent running the SDK is a sensor. The same free tool that protects individual agents polices the entire network — no separate moderation system needed.
+
+---
+
+## Step 9: Detect Compromise — Continuous Trust
+
+Trust isn't just checked at connection time. It's continuous throughout the conversation and beyond.
+
+### Signals That Something Is Wrong
+
+| Signal | What it means | Response |
+|---|---|---|
+| Fallback-only signing (sustained) | K_local may be stolen — attacker can't produce split-key signatures | Alert owner, flag to receiver |
+| Failed scan results | Messages contain malicious content | Block, record evidence, report |
+| Burst activity from quiet agent | Unusual pattern, possible takeover | Alert owner via phone |
+| Activity at unusual hours | Pattern anomaly | Alert owner via phone |
+| Unknown peers | Agent connecting to entities it's never interacted with | Alert owner via phone |
+
+### Activity Notifications — Out-of-Band Monitoring
+
+The directory already sees every hash arrive (it's the hash relay). It knows when an agent's key is active. It notifies the owner on the same phone channel used for registration — a channel completely separate from the agent infrastructure that the attacker can't intercept.
+
+```
+Directory sees hash signed by TravelBot's key
+  → Push notification to Maria's WhatsApp/Telegram
+  → "Your agent TravelBot started a conversation with SupplyBot"
+
+Maria didn't initiate that?
+  → Taps "Not me"
+  → Directory revokes K_server instantly
+  → Attacker is locked out
+  → Full re-keying later via WebAuthn on web portal
+```
+
+### Notification Tiers
+
+| Event | Notification | Owner action |
+|---|---|---|
+| Normal conversation starts | Silent log, visible in app/dashboard | Review anytime |
+| Local-key-only conversation | Push alert to phone | "Not me" → revoke |
+| Anomalous pattern (burst activity, unknown peers, unusual hours) | Urgent push to phone | "Not me" → instant revoke |
+
 ### Key Revocation and Rotation
 
 #### Emergency Revocation (phone-only)
@@ -207,136 +585,21 @@ Owner visits web portal
   → All agents who cached old keys get a refresh
 ```
 
-### Graceful Degradation
+---
 
-```
-Normal:      K_local + K_server → full trust signing
-Degraded:    K_local only → reduced trust, flagged in Merkle leaf
-Recovered:   New split-key issued after human auth → back to full trust
-```
+## Step 10: Resolve Disputes — The Directory as Tiebreaker
 
-The system never stops. It temporarily operates at a lower trust level when the directory is unavailable, which is exactly the correct behavior.
+The directory's Merkle tree is the golden source. In a dispute:
+1. Compare roots across all three parties
+2. The disputing party provides the plaintext message
+3. The service hashes it and confirms it matches the stored hash
+4. Proves the message was sent as claimed — without the service ever having seen it before
+
+This is arbitration without surveillance. The directory can prove exactly what was said, even though it never read a single message.
 
 ---
 
-## Two-Tier Identity: Agent-Level vs. Human-Level
-
-### The Concept
-
-Agents can sign up and operate fully autonomously. Human owners can optionally elevate the account with stronger authentication and additional trust signals. This keeps onboarding frictionless for agents while adding armor for humans who want it.
-
-### Agent-Level Identity (automated, no human required)
-
-The agent handles its own registration via WhatsApp or Telegram bot:
-- Phone verification (automated OTP flow)
-- K_local generation + K_server issuance
-- Directory listing, P2P chat, hash relay
-- Sufficient for most marketplace activity
-- Trust score: baseline (phone only)
-
-### Human-Level Identity (elevated, via web portal)
-
-The human owner visits the web portal to add:
-- **Social verifiers:** LinkedIn, GitHub, Twitter/X, Facebook, Instagram OAuth — each adds to trust score with signal-strength analysis (account age, activity, connections)
-- **WebAuthn:** Register a hardware key (YubiKey) or biometric (TouchID, FaceID) — becomes required for sensitive operations
-- **2FA:** TOTP authenticator app as an alternative or addition to WebAuthn
-- Can register both WebAuthn and 2FA for maximum flexibility
-
-### What Requires Which Auth Level
-
-| Operation | Agent-level (phone OTP) | Human-level (WebAuthn/2FA) |
-|---|---|---|
-| Normal messaging | Yes | — |
-| Request K_server for signing | Yes | — |
-| View activity log | Yes | — |
-| Emergency revocation ("Not me") | Yes (phone only, revoke only) | — |
-| Key rotation (issue new keys) | No | Required |
-| Change registered phone number | No | Required |
-| Delete account | No | Required |
-| Withdraw funds | No | Required |
-| Add/remove social verifiers | No | Required |
-
-### Typical Lifecycle
-
-```
-Day 1: Agent signs up autonomously via WhatsApp bot
-  → Phone verified, keys issued, listed in directory
-  → Can transact immediately
-  → Trust score: 1
-
-Day 2: Human owner visits web portal
-  → Logs in via phone OTP (bootstraps web session)
-  → Adds LinkedIn OAuth → trust score: 2
-  → Adds GitHub OAuth → trust score: 3
-  → Registers YubiKey via WebAuthn
-  → Enables TOTP 2FA as backup
-
-Day 30: Scheduled key rotation
-  → Human taps YubiKey on web portal
-  → New keys issued, old keys expired
-  → Trust score unchanged, continuity maintained
-
-Day 45: Suspected compromise
-  → Owner hits "Not me" on WhatsApp → K_server revoked instantly (agent-level)
-  → Later, owner visits portal, taps YubiKey → full re-keying (human-level)
-  → New keys published, attacker permanently locked out
-```
-
----
-
-## Activity Notifications — Out-of-Band Monitoring
-
-### The Problem
-
-If an attacker steals K_local and uses it (even in fallback mode), how does the real owner know?
-
-### Solution: Real-Time Activity Notifications via Phone
-
-The directory already sees every hash arrive (it's the hash relay). It knows when an agent's key is active. It notifies the owner on the same phone channel used for registration — a channel completely separate from the agent infrastructure that the attacker can't intercept.
-
-```
-Directory sees hash signed by TravelBot's key
-  → Push notification to Maria's WhatsApp/Telegram
-  → "Your agent TravelBot started a conversation with SupplyBot"
-
-Maria didn't initiate that?
-  → Taps "Not me"
-  → Directory revokes K_server instantly
-  → Attacker is locked out
-  → Full re-keying later via WebAuthn on web portal
-```
-
-### Notification Tiers
-
-| Event | Notification | Owner action |
-|---|---|---|
-| Normal conversation starts | Silent log, visible in app/dashboard | Review anytime |
-| Local-key-only conversation | Push alert to phone | "Not me" → revoke |
-| Anomalous pattern (burst activity, unknown peers, unusual hours) | Urgent push to phone | "Not me" → instant revoke |
-
-### Why This Works
-
-- The phone is the **out-of-band monitoring channel** — completely independent from the agent's machine
-- The attacker who compromised the agent doesn't have the owner's phone
-- The notification and kill switch are on a channel the attacker can't intercept
-- The owner has real-time visibility into all activity under their identity
-- Emergency revocation is instant (phone). Full recovery requires WebAuthn/2FA (human auth).
-
-### The Layered Root of Trust
-
-Identity is anchored in layers, not a single factor:
-
-- **Phone:** Registration, daily operations, KMS auth, activity monitoring, emergency revocation
-- **WebAuthn/2FA:** Key rotation, account changes, fund withdrawal, social verifier management
-- **Social verifiers:** Trust score enrichment, Sybil resistance
-
-The phone gets you in and keeps you safe day-to-day. WebAuthn/2FA protects the high-stakes operations. Social verifiers prove you're real to the network. Each layer is independent — compromising one doesn't give access to the others.
-
----
-
-## Core Components
-
-### Client Architecture
+## Client Architecture — The SDK
 
 ```
 User's machine:
@@ -375,86 +638,9 @@ claude mcp add cello npx @cello/mcp-server
 - Downloads Layer 2 prompt injection model (~100MB, one time)
 - Agent is ready to scan, discover, and chat
 
-### 1. Directory Service (web API + frontend)
+### WebSocket Security
 
-- Agent registration with email + phone verification (WhatsApp or Telegram)
-- Split-key management — KMS for K_server, publishes derived public keys
-- Dual public key registration (primary split-key + fallback local-only)
-- Activity notifications to owner's phone (WhatsApp/Telegram)
-- Agent listings — what the agent does, pricing (optional)
-- Discovery/search API — agents find other agents by capability
-- Trust scores — visible badge based on verification depth + transaction history
-- Hash relay — receives hashes from senders, forwards to receivers, builds Merkle tree
-- Payment processing — handles transactions, payouts, platform cut
-
-### 2. Verified Chat SDK (open-source package)
-
-- Merkle tree implementation — append-only, shared between peers
-- Message hashing before send
-- Hash relay integration — sends hash to directory service
-- Receiver-side verification — computes hash of received message, compares to relayed hash
-- Proof export for dispute submission
-
-### 3. Prompt Injection Defense (bundled in SDK)
-
-- **Layer 1:** Deterministic sanitization (pure code, 11-step pipeline from prompt-injection-defense-layers-v2.md)
-- **Layer 2:** Bundled small classifier (DeBERTa-v3-small INT8, ~100MB, first-run download)
-- **Layer 6 (URL safety):** Google Safe Browsing API v4 integration — scans URLs before agents access them. Free tier: 10,000 queries/day. Covers malware, phishing, social engineering. Canonicalize URLs, cache results with TTL, default to block on API failure.
-- Receiver always re-scans inbound messages locally
-- Scan results included in Merkle leaf for verification
-
-**Two scan modes:**
-- **Local:** User runs bundled small model. Free. Scan results are verifiable because the model is deterministic — receiver re-runs and compares.
-- **Proxy (paid tier):** Messages (post-Layer-1 sanitization, context-stripped) route through directory's hosted scanner. Provides trust badge + abuse detection. Service sees sanitized text fragments, not full conversations.
-
-### 4. Direct P2P Transport — libp2p with Ephemeral Peer IDs
-
-**Architecture:** Each agent maintains two connections:
-
-1. **Persistent WebSocket to directory** — for receiving connection requests, sending hashes, activity notifications. This is the agent's "phone line" to the directory.
-
-2. **Ephemeral libp2p peer ID per session** — generated fresh when a connection is accepted. Used for the actual P2P conversation. Destroyed when the session ends. The other agent never sees the persistent identity.
-
-**Connection flow:**
-
-```
-Agent A finds TravelBot in directory
-  → Sees public profile only (no connection details exposed)
-  → Sends connection request through directory
-
-TravelBot receives request on persistent WebSocket
-  → Checks Agent A's trust profile (score, verification freshness, social signals)
-  → Can request selective disclosure ("show me your LinkedIn signal")
-  → TravelBot's policy: require phone reverification within 48 hours
-  → Accepts or rejects based on configured rules
-
-On acceptance:
-  → Both agents generate ephemeral libp2p peer IDs
-  → Peer IDs exchanged through directory (one-time, not stored)
-  → Direct P2P connection established on ephemeral IDs
-  → Both agents send hashes to directory on persistent WebSocket
-  → Directory builds Merkle tree from hashes
-
-Session ends:
-  → Ephemeral peer IDs destroyed on both sides
-  → Next conversation requires new directory handshake
-  → No persistent back doors, no stale connection details
-```
-
-**Connection acceptance policies (configurable per agent):**
-
-| Setting | Behavior |
-|---|---|
-| Open | Auto-accept all requests above minimum trust score |
-| Selective | Auto-accept known agents, notify owner for new ones |
-| Guarded | Owner must manually approve every new connection |
-| Listed only | Visible in directory but not accepting connections |
-
-**Verification freshness:** Receiving agents can require recent reverification before accepting. "Phone verified within 48 hours" or "WebAuthn within 24 hours." Stale verification = connection declined with reason, prompting the requester to reverify.
-
-**Selective disclosure:** Agents can request visibility into specific trust signals before accepting. LinkedIn signal, GitHub signal, etc. The requesting agent's owner controls what gets shared per request, or pre-configures auto-share rules.
-
-**WebSocket security:** The directory's WebSocket server accepts only a rigid JSON schema:
+The directory's WebSocket server accepts only a rigid JSON schema:
 
 ```json
 {
@@ -469,158 +655,14 @@ Session ends:
 
 Anything else is rejected. Validation is pure code — JSON schema check, signature verification against registered public key, timestamp skew check. No LLM, no interpretation. Strike system: repeated malformed messages → rate limit → disconnect → require reverification.
 
-### 5. Platform Transports — Slack, Discord, Telegram as Features
+---
 
-**Key insight:** Teams already use Slack, Discord, and Telegram for agent-to-agent communication. For known entities within a team, this works. It gives you something valuable that P2P doesn't — any human can just open the channel and see what their agents said.
-
-Where it breaks down:
-- **No identity verification** — if someone's Slack/Telegram gets compromised, every agent in that channel keeps talking to the attacker. No cryptographic identity means no canary.
-- **Platform risk at scale** — the moment you're passing corporate data or transacting, you're handing everything to a platform you don't control.
-- **No discovery** — you can only talk to agents you already know.
-
-**CELLO's approach:** Don't replace these platforms. Layer on top of them.
-
-```
-Agent → CELLO SDK (scan, sign, hash) → Slack/Discord/TG → CELLO SDK (verify, scan, record) → Agent
-```
-
-The SDK scans and signs messages before they hit Slack. The receiving SDK verifies signatures, checks identity, scans for injection, updates the Merkle tree. Slack is just the transport — you keep human visibility and add trust.
-
-**Transport selection is per-conversation:**
-
-| Transport | When to use |
-|---|---|
-| Slack / Discord / TG | Team coordination, human visibility needed |
-| libp2p (ephemeral P2P) | Cross-org, sensitive data, no platform dependency |
-| Bluetooth / local mesh | Adjacent agents, robots, offline environments |
-
-The SDK abstracts this away. The agent calls `cello_send_message` and the transport is configuration, not code.
-
-### 6. Conclaves (Phase 3)
+## Conclaves (Phase 3)
 
 - Group chat rooms with shared Merkle tree
 - Gate node scans every inbound message before distribution
 - Ejection on violation, provable transcript
 - Hosted conclaves as paid tier feature
-
----
-
-## Merkle Tree Structure
-
-### Leaf Format
-
-```
-leaf = hash(
-  sender_pubkey
-  sequence_number
-  message_content
-  scan_result: { score, model_hash, sanitization_stats }
-  prev_root          ← chains to previous state, creates hash chain
-  timestamp
-)
-```
-
-The `prev_root` field creates a blockchain within the tree — each message commits to the entire history that preceded it. Gaps and modifications are detectable.
-
-### Tree Growth
-
-```
-After msg 1:    Root_1 = Leaf_1
-
-After msg 2:    Root_2 = hash(Leaf_1 + Leaf_2)
-
-After msg 3:    Root_3 = hash(hash(L1+L2) + hash(L3+padding))
-```
-
-All three parties (sender, receiver, service) independently compute the same tree and can compare roots at any time.
-
----
-
-## Identity & Trust Scoring
-
-### Onboarding — WhatsApp Path
-
-Message the bot -> bot has phone number -> verify -> registered. Minimal friction.
-
-### Onboarding — Telegram Path (State Machine)
-
-| State | Trigger | Action / Next State |
-|---|---|---|
-| `IDLE` | `/start` or tap sign-up | -> `AWAIT_CONTACT`, send contact button |
-| `AWAIT_CONTACT` | `message.contact` | Store phone, generate OTP -> `AWAIT_OTP_IN_BOT` |
-| `AWAIT_OTP_IN_BOT` | Background job (MTProto) | Send OTP in private chat -> `OTP_SENT_TO_PRIVATE_CHAT` |
-| `OTP_SENT_TO_PRIVATE_CHAT` | Reply in private chat with correct OTP | -> `VERIFIED`, mark phone verified |
-| `OTP_SENT_TO_PRIVATE_CHAT` | Wrong/expired OTP | Send error, optional retry |
-| `VERIFIED` | (optional) Send contact in private chat | Compare numbers, mark `phone_matches` |
-
-### Trust Score — Stacked Verification
-
-Each verification layer adds to the trust score. Phone is required. Everything else is optional but visible.
-
-| Verification | What It Proves | Fakeable? | Weight |
-|---|---|---|---|
-| Phone (WhatsApp/Telegram) | Real person, not throwaway | Costly at scale | Required baseline |
-| GitHub OAuth | Technical credibility, code history | Very hard (retroactive) | High |
-| LinkedIn OAuth | Professional identity, career history | Hard (months/years) | High |
-| Twitter/X OAuth | Public presence, activity history | Moderate (bot farms) | Medium |
-| Facebook OAuth | Social graph, account age | Moderate | Medium |
-| Instagram OAuth | Visual content, account age | Moderate | Medium |
-| Proxy scanning enabled | Messages actively monitored | N/A | High |
-| Transaction history | Real commerce, satisfied customers | Expensive to fake | Highest |
-| Time on platform | Sustained good behavior | Impossible to shortcut | Gradual |
-
-**Signal scoring at OAuth (not raw data storage):**
-- GitHub: account age, repo count, real commits vs. fork-only, stars received
-- LinkedIn: connection count (500+?), account age, work history, endorsements
-- Twitter: join date, tweet count, follower count, real activity
-- Instagram: account age, post count, followers
-- Facebook: create date, friends/followers, activity
-
-Store signal strength ("strong" / "moderate" / "weak"), not profile data.
-
-**Trust score formula:**
-```
-trust_score = base(phone_verified)
-            + github_signal_weight
-            + linkedin_signal_weight
-            + best_of(twitter, facebook, instagram)
-            + transaction_history_weight
-            + time_on_platform_bonus
-            - disputes_penalty
-```
-
-### Anti-Sybil Defenses
-
-- Phone numbers are expensive to fake at scale
-- Cross-reference the transaction graph — colluding clusters are detectable (agents that only transact with each other)
-- Real money in transactions makes fake volume expensive
-- Ratings from high-trust agents carry more weight (PageRank-style)
-- Time is hard to fake — account age, gradual organic growth
-- Stacking 2+ social verifications makes coordinated faking much harder
-
----
-
-## Agent Listing Types
-
-### Public Agents (Free)
-
-Not every agent sells a service. Some are public-facing presences — the equivalent of a website but conversational.
-
-- Small businesses: "Ask my agent about our menu / hours / availability"
-- Open source projects: "Talk to our docs agent"
-- Freelancers: "Chat with my agent to see my portfolio"
-- Communities: "Our agent answers neighborhood questions"
-
-Public agents are the growth engine. Every public agent is a reason to discover the directory.
-
-### Marketplace Agents (Paid via transaction cut)
-
-Agents that sell services. Pricing set by the agent owner (per-task, per-message, subscription).
-
-- Travel booking, legal review, translation, sourcing, maintenance coordination, etc.
-- Directory handles payments (Stripe Connect or similar)
-- Merkle tree receipt serves as invoice — verified chat proves service was delivered
-- Platform takes a percentage cut
 
 ---
 
@@ -792,6 +834,7 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 - **Graceful degradation:** Directory outage drops signing from split-key to local-only. Conversations continue at reduced trust. Never a full stop.
 - **Receiver-side scanning is the security boundary:** Sender's scan is an honesty signal, not the defense. The receiver always re-scans locally.
 - **Identity is stacked, not gated:** Phone gets you in. Everything else improves your trust score. More verifications = harder to fake.
+- **Platform transports are features, not competitors:** Slack/Discord/Telegram work for teams. CELLO layers trust on top. Transport is pluggable — the SDK abstracts it away.
 - **Public agents are free:** They're the network growth engine, not a cost center.
 - **The SDK is open-source:** The prompt injection defense is the marketing top-of-funnel. Developers find it, use it, discover the marketplace.
 - **The SDK is the network's immune system:** Every agent running the SDK is a sensor. If an agent sends malicious content, the receiver's SDK detects it, records the evidence in the Merkle leaf, and reports to the directory. The same free tool that protects individual agents polices the entire network — no separate moderation system needed.
