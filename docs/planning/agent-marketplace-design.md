@@ -807,6 +807,64 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 
 ---
 
+## Pending Revisions (from 2026-04-05 evening session)
+
+The following changes need to be made to the document based on design discussion. These represent corrections and additions, not open questions.
+
+### Step reordering and corrections (Steps 3-6)
+
+**Step 3: Come Online** should be rewritten as a login process — challenge-response authentication:
+1. Agent connects via WebSocket, says "I'm TravelBot"
+2. Directory sends a random challenge (nonce)
+3. Agent signs with its private key (standard public-key challenge-response, Ed25519/ECDSA)
+4. Directory verifies signature against registered public key
+5. Authenticated session established — agent is online and contactable
+
+This is NOT about split-key signing. Split-key belongs later in the flow. The current Step 3 body incorrectly describes message signing here — that content should move to Step 6.
+
+**Step 4: Discover** — stays as-is. Agent has verified session, can search directory.
+
+**Step 5: Request Connection** — Agent A sends connection request through directory. Directory forwards to TravelBot via TravelBot's authenticated WebSocket. Both agents have verified sessions. The request must carry Agent A's original signature — the directory relays it, doesn't re-sign it.
+
+**Step 6: Accept & Verify** — This is where identity proof between the two agents happens. TravelBot checks trust profile, and critically: TravelBot cross-checks Agent A's public key across multiple directory nodes before verifying Agent A's signature. Never trust a single node's claim about who's contacting you. Split-key signing, dual public keys, canary mechanism, graceful degradation — all belong here.
+
+### Platform transport hash paths
+
+When Slack/Discord/Telegram is used as transport, the hashes still travel through the directory via WebSocket — not through the platform. This needs to be explicit:
+```
+Message path:    Agent A → Slack → Agent B
+Hash path:       Agent A → Directory (WebSocket) → Agent B
+```
+Agent B hashes what it received from Slack, compares against what arrived from the directory.
+
+### Identity Merkle Tree
+
+The current Merkle tree is for message hashes. A separate identity Merkle tree is needed for profiles and public keys. Every registration, public key change, and trust score update becomes a leaf. All directory nodes build the same identity tree. If a compromised node tampers with a public key, its identity tree root diverges from the honest nodes.
+
+The SDK should check TWO roots across nodes:
+- **Identity tree root** — are all nodes agreeing on who everyone is and what their public keys are?
+- **Message tree root** — are all nodes agreeing on what was said?
+
+### Node trust — client as enforcer
+
+The security model for federated directory nodes:
+- **Agents always initiate** connections to directory nodes. No directory node can cold-call an agent. This eliminates rogue nodes reaching agents they don't already trust.
+- **Connection requests carry end-to-end signatures** from the requesting agent. A compromised directory node can't fabricate requests because it doesn't have the requesting agent's private key.
+- **Receiving agents cross-check public keys** across multiple nodes at connection acceptance time. A compromised node serving a fake public key is caught because the honest nodes disagree.
+- **Identity Merkle tree** makes this deterministic — same registrations in, same root out. Any tampering changes the root.
+
+The defense against a compromised node impersonating an agent: the node generates its own keypair and claims it's Agent A's key. But when the receiver cross-checks against other nodes, the fake key doesn't match. The attack fails as long as the majority of nodes are honest.
+
+### Explored and rejected: fully distributed ledger
+
+We explored eliminating directory nodes entirely — every agent holds a full copy of the directory, propagated via gossip, with an append-only hash-chained log of operations (add/modify/delete). Signed checkpoints for new agents to bootstrap.
+
+**Why it was appealing:** eliminates node trust problem entirely. Local verification, no node to compromise.
+
+**Why we rejected it:** you still need a service for signaling (mediating introductions), hash relay (Merkle tree tiebreaker), K_server (split-key), and activity monitoring/notifications. The service kept growing back to look like a directory node anyway. Federation with client-side multi-node verification gives the same security guarantee with less architectural complexity.
+
+**What we kept from the exploration:** the insight that the client must be the enforcer. Trust comes from the agent cross-checking multiple nodes, not from trusting any single node.
+
 ## Open Questions
 
 ### P2P Transport
@@ -822,6 +880,8 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 - Node consensus — what happens when nodes disagree on more than just Merkle roots? Profile data conflicts? Trust score divergence?
 - Node incentives — why would someone run a directory node? Revenue sharing? Community governance?
 - Byzantine fault tolerance — how many compromised nodes can the network tolerate?
+- How does new registration data propagate between nodes? Push, pull, or gossip? How quickly?
+- Identity Merkle tree implementation — how are profile updates ordered deterministically across nodes?
 
 ### Protocol
 - Race conditions — what if both agents send simultaneously? Sequence number tie-breaking rule needed.
