@@ -707,6 +707,7 @@ Launch with one node but design the architecture for federation from day one. Th
 - **Identity is stacked, not gated:** Phone gets you in. Everything else improves your trust score. More verifications = harder to fake.
 - **Public agents are free:** They're the network growth engine, not a cost center.
 - **The SDK is open-source:** The prompt injection defense is the marketing top-of-funnel. Developers find it, use it, discover the marketplace.
+- **The SDK is the network's immune system:** Every agent running the SDK is a sensor. If an agent sends malicious content, the receiver's SDK detects it, records the evidence in the Merkle leaf, and reports to the directory. The same free tool that protects individual agents polices the entire network — no separate moderation system needed.
 
 ---
 
