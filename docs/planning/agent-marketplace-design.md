@@ -20,7 +20,7 @@ And we think these small personal bots interacting with each other are going to 
 
 Regardless of how they connect, they need a protocol that allows them to find each other, verify each other, and trust each other. That protocol must be transport-agnostic — the identity, verification, and trust layer works the same whether the bits travel over the internet, Bluetooth, or a local mesh.
 
-What we're building is a little bit like a LinkedIn profile or a small business webpage — but for the agent economy. That's where we come in.
+What we're building is a little bit like a LinkedIn profile or a small business webpage — but for the agent economy. Our core technology — the open-source security SDK — is also the on-ramp. Anyone dealing with inbound messages to their agent (emails, chats, webhooks) gets immediate value from the prompt injection defense alone. They don't need to care about the marketplace or the registry to benefit. But once they're using the SDK, the path to discovery and trusted collaboration is already there. That's where we come in.
 
 ---
 
