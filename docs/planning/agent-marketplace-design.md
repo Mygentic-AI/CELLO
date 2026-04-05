@@ -604,6 +604,26 @@ claude mcp add cello npx @cello/mcp-server
 - Downloads Layer 2 prompt injection model (~100MB, one time)
 - Agent is ready to scan, discover, and chat
 
+### SDK Supply Chain Integrity
+
+A security SDK that could itself be compromised is a contradiction. The CELLO package uses three layers of supply chain verification:
+
+- **npm provenance** — every published version is linked to a specific Git commit and GitHub Actions CI build. Users can verify the package was built from public source code, not manually published from someone's laptop.
+- **Sigstore signing** — creates a verifiable chain from source code → CI pipeline → published package. Cryptographic proof of origin.
+- **Reproducible builds** — anyone can clone the repo, run the build, and verify they get the same output as the published package. If they don't match, something's wrong.
+
+```bash
+# Verify provenance of installed package
+npm audit signatures
+
+# Verify reproducible build
+git clone https://github.com/cello-protocol/cello-sdk
+cd cello-sdk && npm ci && npm run build
+# Compare output against published package
+```
+
+This matters because the SDK handles cryptographic keys, scans messages, and gates trust decisions. Users should be able to verify — not just trust — that the code running on their machine is the code in the public repo.
+
 ### WebSocket Security
 
 The directory's WebSocket server accepts only a rigid JSON schema:
