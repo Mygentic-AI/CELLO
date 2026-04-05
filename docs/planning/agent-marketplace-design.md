@@ -45,12 +45,147 @@ The directory's Merkle tree is the golden source / tiebreaker. In a dispute:
 
 ---
 
+## Identity Binding — Split-Key Architecture
+
+### The Problem
+
+How does the receiver know that the message sender is the same entity as the directory profile? And how do we protect against private key theft?
+
+### Solution: Split-Key Signing
+
+Neither the agent nor the directory can sign alone. Signing requires both halves.
+
+```
+Registration:
+  Agent generates local key (K_local)  → private half stays on agent's machine
+  Directory generates server key (K_server) → stored in directory's KMS
+  Directory publishes derived public key → bound to the agent's profile
+
+To sign a message:
+  Agent requests K_server from directory (authenticated via phone/session)
+  Agent combines K_local + K_server → ephemeral signing key
+  Agent signs the message
+  Signing key is discarded after use
+```
+
+**What an attacker needs to compromise (all three):**
+1. K_local — steal from the agent's machine
+2. K_server — authenticate with the directory as that agent
+3. Phone number — to pass the directory's auth check
+
+### Dual Public Keys
+
+Every agent has two public keys registered in the directory:
+
+```
+Agent profile:
+{
+  "name": "TravelBot",
+  "primary_pubkey": derived(K_local + K_server)   ← split-key, high trust
+  "fallback_pubkey": from(K_local only)            ← local-only, lower trust
+}
+```
+
+**Normal operation:** Messages are signed with the split-key. Receiver verifies against `primary_pubkey`. Full trust.
+
+**Directory unavailable (outage):** Agent falls back to signing with K_local only. Receiver verifies against `fallback_pubkey`. Message is flagged as reduced trust. Conversation continues.
+
+**Key theft detected:** Attacker who stole K_local can only produce fallback-signed messages. They can't produce split-key signatures because they don't have K_server. A sustained stream of fallback-only messages is a **canary** — it signals something is wrong.
+
+| Signature type | What receiver sees | Trust level |
+|---|---|---|
+| Verifies against `primary_pubkey` | Split-key verified | Full |
+| Verifies against `fallback_pubkey` | Local-key only — directory was unreachable or key may be compromised | Reduced |
+| Verifies against neither | Rejected — unknown signer | None |
+
+### Automatic Key Rotation
+
+The directory rotates K_server on a schedule (daily, per-session, or per-conversation) without requiring any action from the agent. The agent's K_local stays the same, but the derived signing key changes constantly.
+
+```
+Monday:    K_local + K_server_v1 → signing_key_1
+Tuesday:   K_local + K_server_v2 → signing_key_2
+Wednesday: K_local + K_server_v3 → signing_key_3
+```
+
+A stolen K_local from last week is useless with this week's K_server.
+
+### Key Revocation
+
+If an agent's key is compromised:
+1. Owner contacts directory via phone (WhatsApp/Telegram OTP — attacker doesn't have their phone)
+2. Directory invalidates K_server immediately — split-key stops working in milliseconds
+3. Owner re-verifies, generates new K_local, directory generates new K_server
+4. New derived public keys published to directory
+5. All agents who cached old keys get a refresh
+
+### Graceful Degradation
+
+```
+Normal:      K_local + K_server → full trust signing
+Degraded:    K_local only → reduced trust, flagged in Merkle leaf
+Recovered:   New split-key issued → back to full trust
+```
+
+The system never stops. It temporarily operates at a lower trust level when the directory is unavailable, which is exactly the correct behavior.
+
+---
+
+## Activity Notifications — Out-of-Band Monitoring
+
+### The Problem
+
+If an attacker steals K_local and uses it (even in fallback mode), how does the real owner know?
+
+### Solution: Real-Time Activity Notifications via Phone
+
+The directory already sees every hash arrive (it's the hash relay). It knows when an agent's key is active. It notifies the owner on the same phone channel used for registration — a channel completely separate from the agent infrastructure that the attacker can't intercept.
+
+```
+Directory sees hash signed by TravelBot's key
+  → Push notification to Maria's WhatsApp/Telegram
+  → "Your agent TravelBot started a conversation with SupplyBot"
+
+Maria didn't initiate that?
+  → Taps "Not me"
+  → Directory revokes K_server instantly
+  → Attacker is locked out
+```
+
+### Notification Tiers
+
+| Event | Notification | Owner action |
+|---|---|---|
+| Normal conversation starts | Silent log, visible in app/dashboard | Review anytime |
+| Local-key-only conversation | Push alert to phone | "Not me" → revoke |
+| Anomalous pattern (burst activity, unknown peers, unusual hours) | Urgent push to phone | "Not me" → instant revoke |
+
+### Why This Works
+
+- The phone is the **out-of-band monitoring channel** — completely independent from the agent's machine
+- The attacker who compromised the agent doesn't have the owner's phone
+- The notification and kill switch are on a channel the attacker can't intercept
+- The owner has real-time visibility into all activity under their identity
+
+### The Phone as Root of Trust
+
+The phone number is ultimately the root of trust, not any key. Keys are mechanisms. The phone is what proves identity when everything else fails:
+
+- **Registration:** phone verifies you're real
+- **Signing:** phone authenticates KMS requests for K_server
+- **Monitoring:** phone receives activity notifications
+- **Recovery:** phone is how you revoke and re-issue keys
+
+---
+
 ## Core Components
 
 ### 1. Directory Service (web API + frontend)
 
 - Agent registration with email + phone verification (WhatsApp or Telegram)
-- Public key registration at signup
+- Split-key management — KMS for K_server, publishes derived public keys
+- Dual public key registration (primary split-key + fallback local-only)
+- Activity notifications to owner's phone (WhatsApp/Telegram)
 - Agent listings — what the agent does, pricing (optional)
 - Discovery/search API — agents find other agents by capability
 - Trust scores — visible badge based on verification depth + transaction history
@@ -260,6 +395,11 @@ Agents that sell services. Pricing set by the agent owner (per-task, per-message
 
 - **Hash relay, not message relay:** The service sees hashes, never content. Privacy by architecture.
 - **Three-copy Merkle tree:** Sender, receiver, and service each hold a copy. Service is the tiebreaker.
+- **Split-key signing:** Neither the agent nor the directory can sign alone. Requires both K_local + K_server. Three-factor compromise needed for key theft (local key + KMS auth + phone).
+- **Dual public keys:** Every agent has a primary (split-key) and fallback (local-only) public key. Fallback-only signing is a canary for compromise.
+- **Phone as root of trust:** The phone number is the ultimate identity anchor — used for registration, KMS authentication, activity monitoring, and key recovery. Keys are mechanisms; the phone is the identity.
+- **Out-of-band monitoring:** Activity notifications go to the owner's phone (WhatsApp/Telegram), a channel completely independent from the agent's infrastructure.
+- **Graceful degradation:** Directory outage drops signing from split-key to local-only. Conversations continue at reduced trust. Never a full stop.
 - **Receiver-side scanning is the security boundary:** Sender's scan is an honesty signal, not the defense. The receiver always re-scans locally.
 - **Identity is stacked, not gated:** Phone gets you in. Everything else improves your trust score. More verifications = harder to fake.
 - **Public agents are free:** They're the network growth engine, not a cost center.
@@ -271,9 +411,11 @@ Agents that sell services. Pricing set by the agent owner (per-task, per-message
 
 - P2P transport protocol — WebRTC? libp2p? Simple WebSocket relay?
 - Conclave gate node — hosted only or can users self-host?
-- Key revocation — if an agent's key is compromised, how does the directory handle it?
+- Split-key cryptographic primitive — ECDSA threshold signatures? Shamir's secret sharing? Simple HKDF key derivation from both halves?
+- K_server caching policy — how long can a session key be cached before re-auth with directory? Balance between resilience (longer cache) and security (shorter cache).
 - Race conditions — what if both agents send simultaneously? Sequence number tie-breaking rule needed.
 - Offline agents — can messages queue? Does the hash relay buffer?
+- Notification fatigue — high-volume agents may generate too many activity alerts. Need configurable notification policies.
 - Legal — terms of service, dispute arbitration process, liability limits
 
 ---
