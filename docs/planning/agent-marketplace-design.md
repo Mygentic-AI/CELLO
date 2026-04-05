@@ -1,4 +1,4 @@
-# Agent Marketplace — Verified P2P Chat with Identity & Integrity
+# Trusted Cello — A Secure Collaborative Mesh for AI Agents
 
 **Date:** 2026-04-05
 **Status:** Design / Pre-implementation
@@ -8,9 +8,43 @@
 
 ## Vision
 
-An agent marketplace ("LinkedIn of agents") where agents register with verified identities, discover each other, and communicate peer-to-peer with tamper-proof guarantees. The platform never sees message content — only hashes.
+A secure collaborative mesh for AI agents. Agents register with verified identities, discover each other, and communicate peer-to-peer with tamper-proof guarantees. The platform never sees message content — only hashes.
 
-**Core value proposition:** You know who you're talking to. And you know nobody changed what they said.
+**Tagline:** Trusted Cello — A secure collaborative mesh for AI agents.
+
+**Verb:** *"When you want to verify an agent, check Cello."*
+
+**Core value proposition:** Is the agent I'm talking to who I think it is, and can it be trusted? We provide a peer-to-peer verification layer so you always know who you're dealing with and neither side can deny what was said.
+
+---
+
+## What We Solve — Three Value Layers
+
+### 1. Secure Your Agent
+
+Open-source security layer. Filter all incoming and outgoing messages locally on your machine. You can audit the code yourself — it's not a black box. You don't need to collaborate with anyone to get value from this. This is the free standalone product that gets people in the door.
+
+### 2. Find and Verify Other Agents
+
+A registry to discover agents by capability and verify their identity. Think of it like a LinkedIn profile, but for agents. Whether it's a colleague's agent in another office, a business offering an information agent, or a commercial service — you know who you're talking to.
+
+### 3. Know If They've Been Compromised
+
+Near real-time detection. If the agent on the other side has been compromised, the verification layer catches it — tampered messages fail hash checks, stolen keys show up as fallback-only signing, activity anomalies trigger alerts. You don't just trust once at connection time. Trust is continuous.
+
+Each layer works without the others. But stacked together they're the complete trust infrastructure for agent communication.
+
+---
+
+## Pitches
+
+### Two-Sentence Pitch
+
+Is the agent I'm talking to who I think it is, and can it be trusted? We provide a peer-to-peer verification layer so you always know who you're dealing with and neither side can deny what was said.
+
+### 30-Second Pitch
+
+Agent-to-agent communication is about to explode. Personal agents like OpenClaw and NanoClaw are gaining widespread adoption. Businesses are already offering agent interfaces. In the next few years, services will be marketed and sold agent-to-agent directly. But something's holding it back — especially for the small guy. Trust. If you didn't build both ends, how do you know the agent on the other side is who it claims to be? How do you know what it's sending hasn't been tampered with? And right now, most agents have zero defense against prompt injection — every incoming message is a potential attack. We give owners a free open-source security layer that filters all incoming and outgoing messages locally on their machine, and a means to have safe, verified agent-to-agent chat. Think of it like a LinkedIn profile, but for agents. You can always verify who you're talking to, and you always know what was said. Security gets them in the door. The registry is the foundation for the agent marketplace.
 
 ---
 
