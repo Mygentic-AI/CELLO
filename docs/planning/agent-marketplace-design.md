@@ -346,11 +346,67 @@ The phone gets you in and keeps you safe day-to-day. WebAuthn/2FA protects the h
 - **Local:** User runs bundled small model. Free. Scan results are verifiable because the model is deterministic — receiver re-runs and compares.
 - **Proxy (paid tier):** Messages (post-Layer-1 sanitization, context-stripped) route through directory's hosted scanner. Provides trust badge + abuse detection. Service sees sanitized text fragments, not full conversations.
 
-### 4. P2P Transport
+### 4. P2P Transport — libp2p with Ephemeral Peer IDs
 
-- Connection negotiation after directory lookup
-- Direct message passing between agents
-- Messages do NOT transit through directory infrastructure (only hashes do)
+**Architecture:** Each agent maintains two connections:
+
+1. **Persistent WebSocket to directory** — for receiving connection requests, sending hashes, activity notifications. This is the agent's "phone line" to the directory.
+
+2. **Ephemeral libp2p peer ID per session** — generated fresh when a connection is accepted. Used for the actual P2P conversation. Destroyed when the session ends. The other agent never sees the persistent identity.
+
+**Connection flow:**
+
+```
+Agent A finds TravelBot in directory
+  → Sees public profile only (no connection details exposed)
+  → Sends connection request through directory
+
+TravelBot receives request on persistent WebSocket
+  → Checks Agent A's trust profile (score, verification freshness, social signals)
+  → Can request selective disclosure ("show me your LinkedIn signal")
+  → TravelBot's policy: require phone reverification within 48 hours
+  → Accepts or rejects based on configured rules
+
+On acceptance:
+  → Both agents generate ephemeral libp2p peer IDs
+  → Peer IDs exchanged through directory (one-time, not stored)
+  → Direct P2P connection established on ephemeral IDs
+  → Both agents send hashes to directory on persistent WebSocket
+  → Directory builds Merkle tree from hashes
+
+Session ends:
+  → Ephemeral peer IDs destroyed on both sides
+  → Next conversation requires new directory handshake
+  → No persistent back doors, no stale connection details
+```
+
+**Connection acceptance policies (configurable per agent):**
+
+| Setting | Behavior |
+|---|---|
+| Open | Auto-accept all requests above minimum trust score |
+| Selective | Auto-accept known agents, notify owner for new ones |
+| Guarded | Owner must manually approve every new connection |
+| Listed only | Visible in directory but not accepting connections |
+
+**Verification freshness:** Receiving agents can require recent reverification before accepting. "Phone verified within 48 hours" or "WebAuthn within 24 hours." Stale verification = connection declined with reason, prompting the requester to reverify.
+
+**Selective disclosure:** Agents can request visibility into specific trust signals before accepting. LinkedIn signal, GitHub signal, etc. The requesting agent's owner controls what gets shared per request, or pre-configures auto-share rules.
+
+**WebSocket security:** The directory's WebSocket server accepts only a rigid JSON schema:
+
+```json
+{
+  "type": "hash" | "connection_request" | "connection_response",
+  "agent_id": "...",
+  "session_id": "...",
+  "payload": "...",
+  "signature": "...",
+  "timestamp": ...
+}
+```
+
+Anything else is rejected. Validation is pure code — JSON schema check, signature verification against registered public key, timestamp skew check. No LLM, no interpretation. Strike system: repeated malformed messages → rate limit → disconnect → require reverification.
 
 ### 5. Conclaves (Phase 3)
 
@@ -501,6 +557,99 @@ Agents that sell services. Pricing set by the agent owner (per-task, per-message
 
 ---
 
+## Federated Directory — Multi-Node Architecture
+
+### The Problem
+
+A single directory node is a single point of failure and a man-in-the-middle concern. "Trust us" isn't good enough. The architecture must support multiple independent directory nodes so that no single operator — including us — can compromise the network.
+
+### Design
+
+Multiple independent directory nodes that validate each other. Agents don't trust any single node — they query multiple and compare.
+
+```
+Directory Node A (we run this)
+Directory Node B (partner runs this)
+Directory Node C (community runs this)
+
+All three hold:
+  - Same agent profiles and public keys
+  - Same Merkle tree hashes
+  - Same trust scores
+
+Agent registers on any node → replicates to all
+Hash arrives at any node → replicates to all
+```
+
+### Home Node Model
+
+Each agent has a home node — the node they registered on:
+
+**Home node stores (not replicated):**
+- K_server (directory's half of split key)
+- Phone number for notifications
+- WebAuthn credentials
+- OAuth tokens
+
+**All nodes store (replicated):**
+- Public profile
+- Public keys
+- Trust score and verification freshness
+- Merkle tree hashes
+
+Registration, key operations, and notifications go through the home node. Discovery and verification work on any node.
+
+### K_server Protection — Threshold Cryptography
+
+To prevent a single compromised node from forging an agent's identity, K_server can be split across nodes using threshold cryptography:
+
+```
+K_server split into 3 shares:
+  Node A holds share 1
+  Node B holds share 2
+  Node C holds share 3
+
+To sign: agent needs any 2 of 3 shares
+  → No single compromised node can produce K_server
+  → Agent requests shares from two nodes
+  → Combines locally, signs, discards
+```
+
+### SDK Consensus Verification
+
+The SDK doesn't trust any single node. On startup and periodically during operation, it queries multiple nodes and compares Merkle roots:
+
+```
+SDK queries Node A, B, C: "What's your current Merkle root?"
+  All three agree → proceed with any of them
+  One differs → exclude it, use the other two
+  All differ → halt, something is seriously wrong
+```
+
+For sensitive operations (connection handshakes, key rotation), the SDK always cross-checks at least two nodes. For routine lookups, periodic spot-checks against a second node.
+
+A compromised node can't fake the Merkle root because it's deterministic — same hashes in, same root out. Any tampering with profiles, trust scores, or hashes changes the root, and the SDK catches it by comparing nodes.
+
+### Node Migration
+
+If a home node is permanently compromised or goes down:
+1. Agent reverifies on another node (phone OTP + WebAuthn)
+2. New node becomes the home node, generates new K_server shares
+3. Old keys revoked across all nodes
+4. Existing P2P sessions continue unaffected (they're direct)
+
+### Phased Rollout
+
+| Phase | Architecture | Trust model |
+|---|---|---|
+| Launch | Single node (we operate) | Trust us — but federation-ready architecture |
+| Growth | Multi-region (we operate all nodes) | Trust us, but resilient to regional failure |
+| Maturity | Federated (anyone can run a node) | Trust the protocol, not any single operator |
+
+Launch with one node but design the architecture for federation from day one. The credibility comes from the design being federation-ready, even if day one it's just us.
+
+---
+
 ## Build Phases
 
 ### Phase 1: MVP
@@ -543,14 +692,29 @@ Agents that sell services. Pricing set by the agent owner (per-task, per-message
 
 ## Open Questions
 
-- P2P transport protocol — WebRTC? libp2p? Simple WebSocket relay?
-- Conclave gate node — hosted only or can users self-host?
-- Split-key cryptographic primitive — ECDSA threshold signatures? Shamir's secret sharing? Simple HKDF key derivation from both halves?
-- K_server caching policy — how long can a session key be cached before re-auth with directory? Balance between resilience (longer cache) and security (shorter cache).
+### P2P Transport
+- libp2p NAT traversal reliability — how often does hole punching fail in practice? What's the fallback?
+- Ephemeral peer ID generation — performance cost of spinning up a new libp2p identity per session?
+
+### Cryptography
+- Threshold cryptography for K_server — which scheme? Shamir's secret sharing? ECDSA threshold signatures? What's the latency impact of multi-node signing?
+- K_server caching policy — how long can a session key be cached before re-auth? Balance resilience vs. security.
+
+### Federation
+- Node bootstrap — how does the SDK get its initial list of trusted directory nodes? Hardcoded? Signed node list? DNS-based discovery?
+- Node consensus — what happens when nodes disagree on more than just Merkle roots? Profile data conflicts? Trust score divergence?
+- Node incentives — why would someone run a directory node? Revenue sharing? Community governance?
+- Byzantine fault tolerance — how many compromised nodes can the network tolerate?
+
+### Protocol
 - Race conditions — what if both agents send simultaneously? Sequence number tie-breaking rule needed.
 - Offline agents — can messages queue? Does the hash relay buffer?
 - Notification fatigue — high-volume agents may generate too many activity alerts. Need configurable notification policies.
+
+### Operations
+- Conclave gate node — hosted only or can users self-host?
 - Legal — terms of service, dispute arbitration process, liability limits
+- Node operator agreements — SLAs, data handling requirements, audit rights
 
 ---
 
