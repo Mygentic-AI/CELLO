@@ -6,6 +6,25 @@
 
 ---
 
+## Thesis: No More APIs
+
+**What we know that others don't believe yet:**
+
+The consensus view is that agents will talk to everything via APIs — structured endpoints, OpenAPI specs, MCP tool definitions. And APIs won't go away. But the bulk of agent-to-agent communication will be conversational, not structured API calls.
+
+Most of the real world doesn't have APIs. The freelancer building websites doesn't have an API. The small business with a restaurant doesn't have an API. The content creator on TikTok doesn't have an API. The travel agent in Southeast Asia doesn't have an API. What they all have — or will soon have — is an agent.
+
+APIs work for structured, predictable interactions between systems built by engineers. But the long tail of services — the millions of small businesses, freelancers, creators — will never build APIs. They're going to have agents that talk to other agents the way they'd talk to customers themselves. The agent economy will run on conversations, not API calls.
+
+And if that's true, then the trust layer for this can't be a centralized SaaS. If you put a SaaS provider in the middle of every agent conversation, you've recreated platform lock-in. You're Salesforce for agents — every message goes through you, you own the data, you're the bottleneck, and the small guy is dependent on your pricing, your uptime, your terms. The trust layer has to be peer-to-peer with minimal infrastructure dependency.
+
+**Salesforce:** *"No more servers"* — you don't need infrastructure to run a business.
+**Cello:** *"No more APIs"* — you don't need engineers to connect your business.
+
+Everyone else is building platforms agents depend on. We're building infrastructure agents own.
+
+---
+
 ## Vision
 
 A secure collaborative mesh for AI agents. Agents register with verified identities, discover each other, and communicate peer-to-peer with tamper-proof guarantees. The platform never sees message content — only hashes.
