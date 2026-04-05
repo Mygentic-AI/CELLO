@@ -10,6 +10,8 @@
 
 ## Why Now
 
+**The future is small, local, individually owned agents.**
+
 Personal agents are exploding. Running on your laptop, running on your Mac Mini. Simultaneously, truly capable local models can now run on consumer hardware. Personal agents for individuals and small-to-medium businesses are already a reality — and they're accelerating.
 
 But when these agents need to speak to each other, they are not going to collaborate through APIs. It is antithetical to their basic design — local-first, personal, sovereign. APIs have to be hosted somewhere, opened up, defended. Only so many people can build them. Not everybody is going to have one.
