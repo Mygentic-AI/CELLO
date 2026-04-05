@@ -16,7 +16,11 @@ But when these agents need to speak to each other, they are not going to collabo
 
 This will accelerate further when robots come on the scene. In this massive mesh of individual personal AI assistants, models, and bots, they're going to communicate through peer-to-peer chat — the same way humans communicate. Conversationally, directly, without requiring either side to have built and maintained a structured API endpoint. And they may not even communicate through the web — adjacent agents and robots may find each other over Bluetooth, local networks, or whatever transport is available.
 
-But regardless of how they connect, they need a protocol that allows them to find each other, verify each other, and trust each other. That protocol must be transport-agnostic — the identity, verification, and trust layer works the same whether the bits travel over the internet, Bluetooth, or a local mesh. That's where we come in.
+And we think these small personal bots interacting with each other are going to be the foundations of a massive new microeconomy of microservices. Even now, offering up services to AI agents that they can find and use is already a growing market. But there's no easy way to find them, no way to trust them, and no way to know that who you think you're dealing with is who you're dealing with.
+
+Regardless of how they connect, they need a protocol that allows them to find each other, verify each other, and trust each other. That protocol must be transport-agnostic — the identity, verification, and trust layer works the same whether the bits travel over the internet, Bluetooth, or a local mesh.
+
+What we're building is a little bit like a LinkedIn profile or a small business webpage — but for the agent economy. That's where we come in.
 
 ---
 
