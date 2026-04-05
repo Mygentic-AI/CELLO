@@ -352,14 +352,17 @@ User's machine:
 │  │   └── URL safety (Safe       │
 │  │       Browsing API)          │
 │  ├── Merkle tree engine         │
-│  ├── libp2p (ephemeral P2P)     │
+│  ├── Transport layer            │
+│  │   ├── libp2p (ephemeral P2P) │
+│  │   ├── Slack / Discord / TG   │
+│  │   └── Bluetooth / local mesh │
 │  ├── WebSocket connections to   │
 │  │   directory nodes            │
 │  └── Local key storage          │
 └─────────────────────────────────┘
 ```
 
-The agent calls simple MCP tools (`cello_scan_message`, `cello_find_agents`, `cello_send_message`, `cello_check_trust`). The CELLO MCP Server handles all cryptography, scanning, P2P transport, and directory communication underneath. The agent developer never thinks about Merkle trees, libp2p, or split keys.
+The agent calls simple MCP tools (`cello_scan_message`, `cello_find_agents`, `cello_send_message`, `cello_check_trust`). The CELLO MCP Server handles all cryptography, scanning, transport, and directory communication underneath. The agent developer never thinks about Merkle trees, libp2p, or split keys.
 
 **Installation:**
 ```bash
@@ -404,7 +407,7 @@ claude mcp add cello npx @cello/mcp-server
 - **Local:** User runs bundled small model. Free. Scan results are verifiable because the model is deterministic — receiver re-runs and compares.
 - **Proxy (paid tier):** Messages (post-Layer-1 sanitization, context-stripped) route through directory's hosted scanner. Provides trust badge + abuse detection. Service sees sanitized text fragments, not full conversations.
 
-### 4. P2P Transport — libp2p with Ephemeral Peer IDs
+### 4. Direct P2P Transport — libp2p with Ephemeral Peer IDs
 
 **Architecture:** Each agent maintains two connections:
 
@@ -466,7 +469,34 @@ Session ends:
 
 Anything else is rejected. Validation is pure code — JSON schema check, signature verification against registered public key, timestamp skew check. No LLM, no interpretation. Strike system: repeated malformed messages → rate limit → disconnect → require reverification.
 
-### 5. Conclaves (Phase 3)
+### 5. Platform Transports — Slack, Discord, Telegram as Features
+
+**Key insight:** Teams already use Slack, Discord, and Telegram for agent-to-agent communication. For known entities within a team, this works. It gives you something valuable that P2P doesn't — any human can just open the channel and see what their agents said.
+
+Where it breaks down:
+- **No identity verification** — if someone's Slack/Telegram gets compromised, every agent in that channel keeps talking to the attacker. No cryptographic identity means no canary.
+- **Platform risk at scale** — the moment you're passing corporate data or transacting, you're handing everything to a platform you don't control.
+- **No discovery** — you can only talk to agents you already know.
+
+**CELLO's approach:** Don't replace these platforms. Layer on top of them.
+
+```
+Agent → CELLO SDK (scan, sign, hash) → Slack/Discord/TG → CELLO SDK (verify, scan, record) → Agent
+```
+
+The SDK scans and signs messages before they hit Slack. The receiving SDK verifies signatures, checks identity, scans for injection, updates the Merkle tree. Slack is just the transport — you keep human visibility and add trust.
+
+**Transport selection is per-conversation:**
+
+| Transport | When to use |
+|---|---|
+| Slack / Discord / TG | Team coordination, human visibility needed |
+| libp2p (ephemeral P2P) | Cross-org, sensitive data, no platform dependency |
+| Bluetooth / local mesh | Adjacent agents, robots, offline environments |
+
+The SDK abstracts this away. The agent calls `cello_send_message` and the transport is configuration, not code.
+
+### 6. Conclaves (Phase 3)
 
 - Group chat rooms with shared Merkle tree
 - Gate node scans every inbound message before distribution
