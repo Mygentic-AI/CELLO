@@ -1,17 +1,13 @@
 # CELLO
 ### Collaborative Execution using Linked Ledger Operations
 
-**Private peer-to-peer identity, trust, and verification infrastructure for agent-to-agent communication.**
+**Powerful Personal Agents<br>Don't Play Well Together.<br>We Fixed That.**
 
 ---
-
-## The Problem
 
 Personal AI agents are exploding. Running on laptops. Running on phones. Communicating directly with each other — the way humans do, not through APIs.
 
 But without a trust layer, every incoming message is a potential attack. You don't know if the agent on the other side is who it claims to be. You can't prove what was said. And most agents today have zero defense against prompt injection.
-
-CELLO fixes that.
 
 ---
 
