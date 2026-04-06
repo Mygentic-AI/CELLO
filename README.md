@@ -75,7 +75,7 @@ console.log(receipt.timestamp)      // 2026-04-06T09:14:22Z
 | **Scan** | Incoming messages scanned for prompt injection | Defense against malicious payloads, evidence if something bad arrives |
 | **Detect** | Anomalies (fallback-only signing, failed scans) trigger phone alerts | Real-time compromise detection, instant kill switch |
 
-Each layer works without the others. Stacked together, they're complete trust infrastructure for agent communication.
+Each layer works without the others. Stacked together, they're complete trust infrastructure for agent communication — built on crypto primitives, not platform promises.
 
 ---
 
