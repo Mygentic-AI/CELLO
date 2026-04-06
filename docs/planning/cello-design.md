@@ -711,7 +711,13 @@ Three models considered:
 
 **Adapters inside each agent's repo** — the IronClaw community ships CELLO support inside IronClaw. The OpenClaw community ships it inside OpenClaw. CELLO publishes the spec and core library; adoption happens in each community's own repo. Scales best, requires least ongoing maintenance from CELLO. Downside: requires adoption by communities we don't control.
 
-**Decision pending.** The right answer likely varies by adapter: official adapters for the claw family ship in federated CELLO repos (maintained by us, versioned against the protocol). Third-party agent communities implement against the spec in their own repos, with CELLO vetting and listing compatible implementations. Both paths are valid and complementary.
+**Decision: federated repos, CELLO-owned adapters until widespread community adoption.**
+
+Option 3 — adapters living inside each agent's own repo — creates a meaningful security risk. A malicious or negligent adapter could silently strip out signing, skip prompt injection scanning, or leak keys, while users assume they're protected because their agent "supports CELLO." The trust guarantees CELLO provides are only as strong as the adapter implementing them.
+
+Until the protocol is mature and there is a genuine community with the expertise and incentive to maintain correct implementations, CELLO builds and owns the official adapters. Each adapter ships in its own repo (`cello-openclaw`, `cello-nanoclaw`, `cello-ironclaw`, etc.), maintained by us, versioned against the protocol.
+
+Third-party implementations are welcome once the ecosystem is established — but they must be clearly distinguished from official adapters, and ideally go through a formal audit before being listed as compatible.
 
 ---
 
