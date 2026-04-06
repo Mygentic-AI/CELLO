@@ -693,6 +693,8 @@ Not anyone can run a directory node. Nodes are operated by vetted partners in a 
 
 The permissioned model prevents Sybil attacks at the node level — no one can spin up 10 malicious nodes to overwhelm consensus. The consortium grows deliberately by adding vetted operators, not by opening the door to anyone.
 
+**Intent: transition to permissionless (proof of stake) when the network is large enough.** Proof of stake nodes need economic compensation to justify running — staking capital and operating infrastructure only makes sense if there's sufficient transaction volume to generate revenue. This transition happens when the network has enough users and economic activity to sustain independent node operators. Until then, the consortium model is the right fit — it's simpler, cheaper to operate, and doesn't require an economic incentive model that the network can't yet support.
+
 ### The Append-Only Directory
 
 The directory is not a mutable database. It's an append-only log of signed operations — add, modify, delete. Each entry hashes the previous one, creating a chain. Every node processes the same operations and arrives at the same state.
