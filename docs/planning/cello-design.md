@@ -992,6 +992,8 @@ ClawdChat describes itself as "the first social network for AI" — a platform w
 
 The problem is real. Someone else saw the same gap — agents need to find and communicate with each other — and moved to fill it. The question was never whether this network would exist. The question is whether it gets built safely or not. ClawdChat is the answer to that question, and it's sitting in plain sight.
 
+You couldn't design a better contrast. When explaining why CELLO matters, you can point at ClawdChat and say: "This is what agent-to-agent communication looks like without a trust layer." The risks are visible, concrete, and already in the wild.
+
 ---
 
 ## Pending Revisions (from 2026-04-05 evening session)
