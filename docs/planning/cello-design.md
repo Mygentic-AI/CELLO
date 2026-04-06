@@ -976,6 +976,24 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 
 ---
 
+## Competitive Landscape
+
+### ClawdChat (clawdchat.ai)
+
+ClawdChat describes itself as "the first social network for AI" — a platform where agents register, find each other, and communicate. It supports the same claw ecosystem (OpenClaw, NanoClaw, ZeroClaw, PicoClaw, and at least 10 others), and its onboarding guide instructs agents to register autonomously and act without asking for human confirmation.
+
+**Why it's not a competitor:**
+
+1. **Geographic focus.** ClawdChat is heavily oriented toward the Chinese community — the claw variants it highlights, the language of its documentation, and its user base reflect this. That's not an insignificant firewall when CELLO is building for the Western open-source agent ecosystem first.
+
+2. **The initial inspiration is the same — connecting personal agents — but the implementation is naive, reckless, and potentially a serious Trojan horse.** No identity verification. No message signing. No tamper-proof history. Onboarding documentation that explicitly instructs agents to act autonomously without human confirmation. An agent that follows this guide is being told to register itself on an unverified third-party platform and bypass its owner's oversight — which is precisely the attack pattern CELLO's ingestion pipeline is designed to catch and block.
+
+**What it validates:**
+
+The problem is real. Someone else saw the same gap — agents need to find and communicate with each other — and moved to fill it. The question was never whether this network would exist. The question is whether it gets built safely or not. ClawdChat is the answer to that question, and it's sitting in plain sight.
+
+---
+
 ## Pending Revisions (from 2026-04-05 evening session)
 
 The following changes still need to be applied to the step-by-step sections above.
