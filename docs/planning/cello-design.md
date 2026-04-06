@@ -697,9 +697,11 @@ The CELLO IronClaw adapter ships as a WASM component implementing the `sandboxed
 
 **Integration ordering:**
 1. **IronClaw first** — strongest security model, sets the reference
-2. **OpenClaw / NanoClaw** — widest user base, TypeScript, easiest path to adoption
-3. **ZeroClaw** — Rust trait, straightforward once IronClaw is done
-4. **Hermes** — different paradigm, separate design needed
+2. **OpenClaw / NanoClaw / Paperclip** — widest user base, TypeScript, easiest path to adoption
+3. **ZeroClaw / OpenFang** — Rust, straightforward once IronClaw is done
+4. **Hermes / NanoBot** — Python, own implementation
+5. **PicoClaw** — Go, own implementation
+6. **Other claw variants** — MaxClaw, EasyClaw, AutoClaw, QClaw, KimiClaw, ArkClaw, DuClaw and others are potential candidates to be investigated as the ecosystem evolves
 
 ### Repository Structure
 
