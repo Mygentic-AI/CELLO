@@ -676,49 +676,119 @@ Anything else is rejected. Validation is pure code — JSON schema check, signat
 
 ## Federated Directory — Multi-Node Architecture
 
-### The Problem
+### Why Federate
 
-A single directory node is a single point of failure and a man-in-the-middle concern. "Trust us" isn't good enough. The architecture must support multiple independent directory nodes so that no single operator — including us — can compromise the network.
+A single directory node has two problems. First, if it goes down, the system stops. Second — and more important — a single operator can tamper with the data undetected. Federation solves both: redundancy keeps the system running, and independent operators keep each other honest. Federation is a security feature first, an availability feature second.
 
-### Design
+### Permissioned Consortium
 
-Multiple independent directory nodes that validate each other. Agents don't trust any single node — they query multiple and compare.
+Not anyone can run a directory node. Nodes are operated by vetted partners in a permissioned consortium. Running a node carries responsibility — it handles signaling, hash relay, K_server shares, activity monitoring. Operators are vetted, audited, and accountable.
+
+| Phase | Who runs nodes | Trust model |
+|---|---|---|
+| Launch | We operate a single node | Trust us — but federation-ready architecture |
+| Growth | We operate multiple nodes across regions | Resilient to regional failure |
+| Maturity | Permissioned consortium of vetted operators | Trust the protocol, not any single operator |
+| Future (if needed) | Permissionless with proof of stake | Open participation with economic collateral |
+
+The permissioned model prevents Sybil attacks at the node level — no one can spin up 10 malicious nodes to overwhelm consensus. The consortium grows deliberately by adding vetted operators, not by opening the door to anyone.
+
+### The Append-Only Directory
+
+The directory is not a mutable database. It's an append-only log of signed operations — add, modify, delete. Each entry hashes the previous one, creating a chain. Every node processes the same operations and arrives at the same state.
 
 ```
-Directory Node A (we run this)
-Directory Node B (partner runs this)
-Directory Node C (community runs this)
-
-All three hold:
-  - Same agent profiles and public keys
-  - Same Merkle tree hashes
-  - Same trust scores
-
-Agent registers on any node → replicates to all
-Hash arrives at any node → replicates to all
+Entry 1: ADD AgentA {pubkey: xxx, trust: 1}        hash: abc...
+Entry 2: ADD AgentB {pubkey: yyy, trust: 1}        hash: hash(prev + entry)
+Entry 3: MODIFY AgentA {trust: 2, linkedin: strong} hash: hash(prev + entry)
+Entry 4: DELETE AgentB                              hash: hash(prev + entry)
 ```
 
-### Home Node Model
+Periodically, the log is checkpointed — the current state of all agents is hashed down to a single identity Merkle tree root. This checkpoint is the fingerprint of the entire directory at that moment. Every honest node processing the same operations produces the same root.
 
-Each agent has a home node — the node they registered on:
+This is separate from the message Merkle tree. Two trees:
+- **Identity tree** — profiles, public keys, trust scores. Checkpointed periodically.
+- **Message tree** — conversation hashes. Updated per message.
 
-**Home node stores (not replicated):**
-- K_server (directory's half of split key)
-- Phone number for notifications
-- WebAuthn credentials
-- OAuth tokens
+### How Nodes Keep Each Other Honest
 
-**All nodes store (replicated):**
-- Public profile
-- Public keys
-- Trust score and verification freshness
-- Merkle tree hashes
+Nodes broadcast checkpoint hashes to each other on a regular heartbeat:
 
-Registration, key operations, and notifications go through the home node. Discovery and verification work on any node.
+```
+Every N minutes:
+  Node A → all: "Checkpoint #4721, identity root: abc123"
+  Node B → all: "Checkpoint #4721, identity root: abc123"
+  Node C → all: "Checkpoint #4721, identity root: def456"  ← problem
+```
+
+With a permissioned consortium of 5-10 nodes, this is direct broadcast — no gossip protocol needed, the set is small enough. A node whose hash diverges is immediately flagged by every other node.
+
+A compromised node could try to maintain two copies — the honest data (for hash comparison with peers) and tampered data (for serving to clients). The client-side Merkle proof verification (below) prevents this.
+
+### How Clients Verify Nodes — Merkle Proofs
+
+The client never trusts a single node's data. For any critical lookup, the client verifies the data against the consensus checkpoint hash using a Merkle proof.
+
+When the client asks Node A for TravelBot's public key, Node A returns:
+1. TravelBot's data (public key, profile, trust score)
+2. A Merkle proof — the path of sibling hashes from that entry up to the root
+
+```
+Checkpoint root (abc123) — agreed by all nodes
+        /           \
+     hash12        hash34
+     /    \        /    \
+  hash1  hash2  hash3  hash4
+    |      |      |      |
+  AgentA  AgentB  TravelBot  AgentD
+```
+
+The client computes:
+1. Hash TravelBot's data → should equal hash3
+2. Combine hash3 + hash4 → should equal hash34
+3. Combine hash12 + hash34 → should equal abc123 (the consensus checkpoint)
+
+If the node tampered with TravelBot's public key, step 1 produces a different hash, and the chain doesn't add up to abc123. The node can't fake the proof without faking the entire tree — which would change the checkpoint hash — which wouldn't match the other nodes.
+
+**This is efficient at any scale.** The proof size is logarithmic:
+
+| Directory size | Proof size | Verification cost |
+|---|---|---|
+| 1,000 agents | ~10 hashes (~320 bytes) | Microseconds |
+| 1,000,000 agents | ~20 hashes (~640 bytes) | Microseconds |
+| 10,000,000 agents | ~23 hashes (~736 bytes) | Microseconds |
+
+The client doesn't need access to the full directory. It queries the checkpoint hash from multiple nodes (one 32-byte value), requests the data it needs with a proof, and verifies locally.
+
+### Client-Side Verification Summary
+
+The SDK protects itself at every step:
+
+| What the client checks | How | When |
+|---|---|---|
+| Checkpoint hash consensus | Query multiple nodes, compare | On startup, periodically, and before sensitive operations |
+| Individual data entries | Request data + Merkle proof, verify against consensus hash | Every critical lookup (connection requests, public key verification) |
+| Connection request authenticity | Verify requester's signature against cross-checked public key | Every incoming connection request |
+
+Agents always initiate connections to directory nodes — no node can cold-call an agent. Connection requests carry the requesting agent's end-to-end signature — a compromised node can't fabricate them. The client is the enforcer.
+
+### Detecting and Removing Compromised Nodes
+
+**Detection** happens at two levels:
+- **Nodes detect each other** — checkpoint hash heartbeat. A divergent node is immediately visible to all peers.
+- **Clients detect independently** — Merkle proof verification fails, or checkpoint hash from one node doesn't match the others.
+
+**Removal** — when a node is detected as compromised:
+1. Other nodes stop replicating to it and stop accepting data from it
+2. The consortium signs an updated node list (threshold signature — majority of remaining honest nodes required)
+3. SDKs fetch the updated node list automatically — the compromised node is excommunicated
+4. Any K_server shares held by the compromised node are invalidated; new shares are generated across remaining nodes
+
+The node list itself is a signed document, periodically refreshed. The SDK doesn't need a manual update to stop trusting a removed node.
 
 ### K_server Protection — Threshold Cryptography
 
-To prevent a single compromised node from forging an agent's identity, K_server can be split across nodes using threshold cryptography:
+No single node holds a complete K_server. It's split across nodes using threshold cryptography:
 
 ```
 K_server split into 3 shares:
@@ -732,38 +802,32 @@ To sign: agent needs any 2 of 3 shares
   → Combines locally, signs, discards
 ```
 
-### SDK Consensus Verification
+### Home Node Model
 
-The SDK doesn't trust any single node. On startup and periodically during operation, it queries multiple nodes and compares Merkle roots:
+Each agent has a home node — the node they registered on:
 
-```
-SDK queries Node A, B, C: "What's your current Merkle root?"
-  All three agree → proceed with any of them
-  One differs → exclude it, use the other two
-  All differ → halt, something is seriously wrong
-```
+**Home node stores (not replicated):**
+- K_server share (not the full key — threshold shares are distributed)
+- Phone number for notifications
+- WebAuthn credentials
+- OAuth tokens
 
-For sensitive operations (connection handshakes, key rotation), the SDK always cross-checks at least two nodes. For routine lookups, periodic spot-checks against a second node.
+**All nodes store (replicated via append-only log):**
+- Public profile
+- Public keys
+- Trust score and verification freshness
+- Message Merkle tree hashes
 
-A compromised node can't fake the Merkle root because it's deterministic — same hashes in, same root out. Any tampering with profiles, trust scores, or hashes changes the root, and the SDK catches it by comparing nodes.
+Registration, key operations, and notifications go through the home node. Discovery and verification work on any node — and every response is verifiable via Merkle proof.
 
 ### Node Migration
 
 If a home node is permanently compromised or goes down:
 1. Agent reverifies on another node (phone OTP + WebAuthn)
-2. New node becomes the home node, generates new K_server shares
-3. Old keys revoked across all nodes
-4. Existing P2P sessions continue unaffected (they're direct)
-
-### Phased Rollout
-
-| Phase | Architecture | Trust model |
-|---|---|---|
-| Launch | Single node (we operate) | Trust us — but federation-ready architecture |
-| Growth | Multi-region (we operate all nodes) | Trust us, but resilient to regional failure |
-| Maturity | Federated (anyone can run a node) | Trust the protocol, not any single operator |
-
-Launch with one node but design the architecture for federation from day one. The credibility comes from the design being federation-ready, even if day one it's just us.
+2. New node becomes the home node
+3. New K_server shares generated across remaining nodes
+4. Old keys revoked (appended to the log, propagated to all nodes)
+5. Existing P2P sessions continue unaffected (they're direct)
 
 ### Enterprise Private Nodes
 
@@ -821,6 +885,10 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 - **Receiver-side scanning is the security boundary:** Sender's scan is an honesty signal, not the defense. The receiver always re-scans locally.
 - **Identity is stacked, not gated:** Phone gets you in. Everything else improves your trust score. More verifications = harder to fake.
 - **Platform transports are features, not competitors:** Slack/Discord/Telegram work for teams. CELLO layers trust on top. Transport is pluggable — the SDK abstracts it away.
+- **Federation is a security feature, not a scaling feature:** Multiple independent nodes exist so no single operator can corrupt the truth. Redundancy is the bonus.
+- **Permissioned consortium:** Not anyone can run a node. Operators are vetted. Prevents node-level Sybil attacks. Permissionless (proof of stake) is a future option if the network grows large enough.
+- **Append-only directory:** The directory is a hash-chained log of operations (add, modify, delete), not a mutable database. Every honest node processing the same operations arrives at the same state.
+- **Client-side Merkle proof verification:** The client never trusts a single node's data. Every critical lookup comes with a Merkle proof verified against the consensus checkpoint hash. A compromised node can't serve fake data with a valid proof.
 - **Public agents are free:** They're the network growth engine, not a cost center.
 - **The SDK is open-source:** The prompt injection defense is the marketing top-of-funnel. Developers find it, use it, discover the marketplace.
 - **The SDK is the network's immune system:** Every agent running the SDK is a sensor. If an agent sends malicious content, the receiver's SDK detects it, records the evidence in the Merkle leaf, and reports to the directory. The same free tool that protects individual agents polices the entire network — no separate moderation system needed.
@@ -829,7 +897,7 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 
 ## Pending Revisions (from 2026-04-05 evening session)
 
-The following changes need to be made to the document based on design discussion. These represent corrections and additions, not open questions.
+The following changes still need to be applied to the step-by-step sections above.
 
 ### Step reordering and corrections (Steps 3-6)
 
@@ -846,7 +914,7 @@ This is NOT about split-key signing. Split-key belongs later in the flow. The cu
 
 **Step 5: Request Connection** — Agent A sends connection request through directory. Directory forwards to TravelBot via TravelBot's authenticated WebSocket. Both agents have verified sessions. The request must carry Agent A's original signature — the directory relays it, doesn't re-sign it.
 
-**Step 6: Accept & Verify** — This is where identity proof between the two agents happens. TravelBot checks trust profile, and critically: TravelBot cross-checks Agent A's public key across multiple directory nodes before verifying Agent A's signature. Never trust a single node's claim about who's contacting you. Split-key signing, dual public keys, canary mechanism, graceful degradation — all belong here.
+**Step 6: Accept & Verify** — This is where identity proof between the two agents happens. TravelBot checks trust profile, and critically: TravelBot cross-checks Agent A's public key across multiple directory nodes (with Merkle proof verification) before verifying Agent A's signature. Never trust a single node's claim about who's contacting you. Split-key signing, dual public keys, canary mechanism, graceful degradation — all belong here.
 
 ### Platform transport hash paths
 
@@ -857,33 +925,15 @@ Hash path:       Agent A → Directory (WebSocket) → Agent B
 ```
 Agent B hashes what it received from Slack, compares against what arrived from the directory.
 
-### Identity Merkle Tree
-
-The current Merkle tree is for message hashes. A separate identity Merkle tree is needed for profiles and public keys. Every registration, public key change, and trust score update becomes a leaf. All directory nodes build the same identity tree. If a compromised node tampers with a public key, its identity tree root diverges from the honest nodes.
-
-The SDK should check TWO roots across nodes:
-- **Identity tree root** — are all nodes agreeing on who everyone is and what their public keys are?
-- **Message tree root** — are all nodes agreeing on what was said?
-
-### Node trust — client as enforcer
-
-The security model for federated directory nodes:
-- **Agents always initiate** connections to directory nodes. No directory node can cold-call an agent. This eliminates rogue nodes reaching agents they don't already trust.
-- **Connection requests carry end-to-end signatures** from the requesting agent. A compromised directory node can't fabricate requests because it doesn't have the requesting agent's private key.
-- **Receiving agents cross-check public keys** across multiple nodes at connection acceptance time. A compromised node serving a fake public key is caught because the honest nodes disagree.
-- **Identity Merkle tree** makes this deterministic — same registrations in, same root out. Any tampering changes the root.
-
-The defense against a compromised node impersonating an agent: the node generates its own keypair and claims it's Agent A's key. But when the receiver cross-checks against other nodes, the fake key doesn't match. The attack fails as long as the majority of nodes are honest.
-
-### Explored and rejected: fully distributed ledger
+### Design decision: distributed ledger explored and rejected
 
 We explored eliminating directory nodes entirely — every agent holds a full copy of the directory, propagated via gossip, with an append-only hash-chained log of operations (add/modify/delete). Signed checkpoints for new agents to bootstrap.
 
 **Why it was appealing:** eliminates node trust problem entirely. Local verification, no node to compromise.
 
-**Why we rejected it:** you still need a service for signaling (mediating introductions), hash relay (Merkle tree tiebreaker), K_server (split-key), and activity monitoring/notifications. The service kept growing back to look like a directory node anyway. Federation with client-side multi-node verification gives the same security guarantee with less architectural complexity.
+**Why we rejected it:** you still need a service for signaling (mediating introductions), hash relay (Merkle tree tiebreaker), K_server (split-key), and activity monitoring/notifications. The service kept growing back to look like a directory node anyway. Federation with client-side Merkle proof verification gives the same security guarantee with less architectural complexity.
 
-**What we kept from the exploration:** the insight that the client must be the enforcer. Trust comes from the agent cross-checking multiple nodes, not from trusting any single node.
+**What we kept:** the append-only log structure for the directory data, and the insight that the client must be the enforcer.
 
 ## Open Questions
 
@@ -897,11 +947,11 @@ We explored eliminating directory nodes entirely — every agent holds a full co
 
 ### Federation
 - Node bootstrap — how does the SDK get its initial list of trusted directory nodes? Hardcoded? Signed node list? DNS-based discovery?
-- Node consensus — what happens when nodes disagree on more than just Merkle roots? Profile data conflicts? Trust score divergence?
 - Node incentives — why would someone run a directory node? Revenue sharing? Community governance?
-- Byzantine fault tolerance — how many compromised nodes can the network tolerate?
-- How does new registration data propagate between nodes? Push, pull, or gossip? How quickly?
-- Identity Merkle tree implementation — how are profile updates ordered deterministically across nodes?
+- Byzantine fault tolerance — what's the minimum consortium size for safety? 5 nodes (tolerates 2 compromised)? 7 (tolerates 3)?
+- How does new registration data propagate between nodes? Push, pull, or broadcast? How quickly?
+- Identity Merkle tree implementation — how are operations ordered deterministically across nodes? Logical clock? Consensus on ordering?
+- Checkpoint frequency — how often should the identity tree be checkpointed? Tradeoff between freshness and cost.
 
 ### Protocol
 - Race conditions — what if both agents send simultaneously? Sequence number tie-breaking rule needed.
