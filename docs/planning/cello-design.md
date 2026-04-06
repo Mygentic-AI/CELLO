@@ -695,13 +695,18 @@ IronClaw is architecturally the strongest integration target. Its WASM-sandboxed
 
 The CELLO IronClaw adapter ships as a WASM component implementing the `sandboxed-channel` WIT interface — the same contract every other IronClaw channel fulfills. It's also the reference implementation: if the IronClaw adapter is correct and secure, the others follow the same logic with thinner safety boundaries.
 
-**Integration ordering:**
-1. **IronClaw first** — strongest security model, sets the reference
-2. **OpenClaw / NanoClaw / Paperclip** — widest user base, TypeScript, easiest path to adoption
-3. **ZeroClaw / OpenFang** — Rust, straightforward once IronClaw is done
-4. **Hermes / NanoBot** — Python, own implementation
-5. **PicoClaw** — Go, own implementation
+### Integration Tiers
+
+**Tier 1 — Native adapters** (deepest integration, built where it makes sense):
+1. **IronClaw** — strongest security model, sets the reference
+2. **OpenClaw / NanoClaw / Paperclip** — widest user base, TypeScript
+3. **ZeroClaw / OpenFang** — Rust
+4. **Hermes / NanoBot** — Python
+5. **PicoClaw** — Go
 6. **Other claw variants** — MaxClaw, EasyClaw, AutoClaw, QClaw, KimiClaw, ArkClaw, DuClaw and others are potential candidates to be investigated as the ecosystem evolves
+
+**Tier 2 — MCP server** (universal fallback):
+Any agent that supports MCP gets CELLO without a custom adapter. This covers Claude Code, Codex, Gemini CLI, and anything else MCP-compatible in one shot. For agents where a native adapter isn't warranted or available, the MCP server is the right path. Native adapters are optimizations for deeper integration — not the only path in.
 
 ### Repository Structure
 
