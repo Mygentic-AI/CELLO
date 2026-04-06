@@ -658,6 +658,63 @@ Anything else is rejected. Validation is pure code — JSON schema check, signat
 
 ---
 
+## Integration Architecture — Claw Variants
+
+CELLO is a channel. From the perspective of any agent that already handles WhatsApp, Telegram, or Slack, CELLO is just one more message source — inbound messages arrive, get scanned by the existing ingestion pipeline, and outbound messages are signed and dispatched. The CELLO channel handles the cryptography, directory communication, and Merkle tree operations underneath. The agent developer doesn't change their message handling logic.
+
+### The Claw Ecosystem
+
+The claw family of agents each has a different channel integration pattern:
+
+| Agent | Language | Channel pattern |
+|---|---|---|
+| **OpenClaw** | TypeScript | Plugin system — `defineBundledChannelEntry` with plugin manifest |
+| **NanoClaw** | TypeScript | `registerChannel(name, factory)` — lightweight self-registration |
+| **ZeroClaw** | Rust | `Channel` trait — implement and wire into `start_channels` |
+| **IronClaw** | Rust | WASM components via WIT interface — `sandboxed-channel` world |
+| **Hermes** | Python | Tool-based architecture — different paradigm |
+
+Four different integration patterns across four different languages. CELLO cannot ship a single artifact and cover all of them.
+
+### Integration Approach
+
+CELLO ships a **protocol spec and a core library**. Each variant gets a thin adapter that connects the core to its channel interface. The core handles everything that matters: signing, verification, directory communication, Merkle tree operations, and prompt injection scanning. The adapter is a shim — it translates the variant's channel interface to CELLO's core API.
+
+```
+CELLO core library (Rust / TypeScript)
+    ├── cello-openclaw    (TypeScript plugin)
+    ├── cello-nanoclaw    (TypeScript channel module)
+    ├── cello-zeroclaw    (Rust Channel trait impl)
+    ├── cello-ironclaw    (Rust WASM component, WIT interface)
+    └── cello-hermes      (Python tool integration)
+```
+
+### IronClaw as the Reference Implementation
+
+IronClaw is architecturally the strongest integration target. Its WASM-sandboxed channel model means the CELLO channel component never sees host credentials, never touches the file system outside its sandbox, and is cryptographically isolated from the rest of the agent. This is the right model for security infrastructure.
+
+The CELLO IronClaw adapter ships as a WASM component implementing the `sandboxed-channel` WIT interface — the same contract every other IronClaw channel fulfills. It's also the reference implementation: if the IronClaw adapter is correct and secure, the others follow the same logic with thinner safety boundaries.
+
+**Integration ordering:**
+1. **IronClaw first** — strongest security model, sets the reference
+2. **OpenClaw / NanoClaw** — widest user base, TypeScript, easiest path to adoption
+3. **ZeroClaw** — Rust trait, straightforward once IronClaw is done
+4. **Hermes** — different paradigm, separate design needed
+
+### Repository Structure
+
+Three models considered:
+
+**Monorepo** — one CELLO repo containing all adapters. Single place to find everything, coordinated releases. Downside: OpenClaw TypeScript contributors have to navigate Rust WASM code. Gets unwieldy fast.
+
+**Federated repos** — `CELLO` owns the core. `cello-openclaw`, `cello-nanoclaw`, `cello-ironclaw` are separate repos. Each adapter lives where it belongs. Users go to one repo, not five. Downside: protocol changes require coordinating across repos.
+
+**Adapters inside each agent's repo** — the IronClaw community ships CELLO support inside IronClaw. The OpenClaw community ships it inside OpenClaw. CELLO publishes the spec and core library; adoption happens in each community's own repo. Scales best, requires least ongoing maintenance from CELLO. Downside: requires adoption by communities we don't control.
+
+**Decision pending.** The right answer likely varies by adapter: official adapters for the claw family ship in federated CELLO repos (maintained by us, versioned against the protocol). Third-party agent communities implement against the spec in their own repos, with CELLO vetting and listing compatible implementations. Both paths are valid and complementary.
+
+---
+
 ## Conclaves (Phase 3)
 
 - Group chat rooms with shared Merkle tree
