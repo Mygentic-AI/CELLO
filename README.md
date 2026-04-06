@@ -1,7 +1,7 @@
 # CELLO
 ### Collaborative Execution using Linked Ledger Operations
 
-**Powerful Personal Agents<br>Don't Play Well Together.<br>We Fixed That.**
+**Powerful Personal Agents<br>Don't Play Well Together.<br>We're Fixing That.**
 
 ---
 
