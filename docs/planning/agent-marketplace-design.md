@@ -114,11 +114,13 @@ The human owner visits the web portal to elevate the account with stronger authe
 
 ### Trust Score — Stacked Verification
 
-Each verification layer adds to the trust score. Phone is required. Everything else is optional but visible.
+Each verification layer adds to the trust score. Phone is required. Everything else is optional but visible. **WebAuthn/2FA is not mandated — the network enforces it.** Agents without strong authentication have lower trust scores, and receiving agents can refuse connections from agents that lack it. The market pressure is stronger than any mandate: if serious agents won't talk to you without WebAuthn, you'll add it — not because we forced you, but because you can't do business without it.
 
 | Verification | What It Proves | Fakeable? | Weight |
 |---|---|---|---|
 | Phone (WhatsApp/Telegram) | Real person, not throwaway | Costly at scale | Required baseline |
+| WebAuthn (YubiKey, TouchID, FaceID) | Human owner has hardware-bound credential | Requires physical access | High |
+| 2FA (TOTP authenticator) | Human owner has second factor | SIM-swap resistant | High |
 | GitHub OAuth | Technical credibility, code history | Very hard (retroactive) | High |
 | LinkedIn OAuth | Professional identity, career history | Hard (months/years) | High |
 | Twitter/X OAuth | Public presence, activity history | Moderate (bot farms) | Medium |
@@ -140,6 +142,8 @@ Store signal strength ("strong" / "moderate" / "weak"), not profile data.
 **Trust score formula:**
 ```
 trust_score = base(phone_verified)
+            + webauthn_weight
+            + totp_2fa_weight
             + github_signal_weight
             + linkedin_signal_weight
             + best_of(twitter, facebook, instagram)
@@ -176,15 +180,22 @@ trust_score = base(phone_verified)
 ```
 Day 1: Agent signs up autonomously via WhatsApp bot
   → Phone verified, keys issued, listed in directory
-  → Can transact immediately
+  → Can discover, chat, transact immediately
   → Trust score: 1
+  → Some agents won't accept connections (their policy requires WebAuthn)
+
+Day 1 (later): Agent tries to connect to SupplyBot
+  → SupplyBot's policy: "require WebAuthn"
+  → Connection declined: "This agent requires WebAuthn verification"
+  → Owner sees the rejection reason — clear path to fix it
 
 Day 2: Human owner visits web portal
   → Logs in via phone OTP (bootstraps web session)
-  → Adds LinkedIn OAuth → trust score: 2
-  → Adds GitHub OAuth → trust score: 3
-  → Registers YubiKey via WebAuthn
-  → Enables TOTP 2FA as backup
+  → Registers YubiKey via WebAuthn → trust score: 2, unlocks emergency revocation hardening
+  → Enables TOTP 2FA as backup → trust score: 3
+  → Adds LinkedIn OAuth → trust score: 4
+  → Adds GitHub OAuth → trust score: 5
+  → Retries SupplyBot → connection accepted
 
 Day 30: Scheduled key rotation
   → Human taps YubiKey on web portal
@@ -192,8 +203,8 @@ Day 30: Scheduled key rotation
   → Trust score unchanged, continuity maintained
 
 Day 45: Suspected compromise
-  → Owner hits "Not me" on WhatsApp → K_server revoked instantly (agent-level)
-  → Later, owner visits portal, taps YubiKey → full re-keying (human-level)
+  → Owner hits "Not me" on WhatsApp → K_server revoked instantly
+  → Later, owner visits portal, taps YubiKey → full re-keying (WebAuthn required)
   → New keys published, attacker permanently locked out
 ```
 
@@ -345,7 +356,7 @@ The receiving agent checks the requester's trust profile before accepting. This 
 TravelBot receives request on persistent WebSocket
   → Checks Agent A's trust profile (score, verification freshness, social signals)
   → Can request selective disclosure ("show me your LinkedIn signal")
-  → TravelBot's policy: require phone reverification within 48 hours
+  → TravelBot's policy: require WebAuthn + phone reverification within 48 hours
   → Accepts or rejects based on configured rules
 ```
 
@@ -357,6 +368,8 @@ TravelBot receives request on persistent WebSocket
 | Selective | Auto-accept known agents, notify owner for new ones |
 | Guarded | Owner must manually approve every new connection |
 | Listed only | Visible in directory but not accepting connections |
+
+**Authentication requirements:** Receiving agents can require specific verification factors before accepting. "Must have WebAuthn" or "must have 2FA" as a hard gate. This is the market-pressure mechanism — CELLO doesn't mandate strong auth, but agents that handle real money or sensitive data will. An agent owner who configures "require WebAuthn" will never accept a connection from a phone-only agent. The requester gets a clear rejection reason: "This agent requires WebAuthn verification. Add it at portal.cello.dev to connect." Friction happens at the right moment — when it matters — not at onboarding.
 
 **Verification freshness:** Receiving agents can require recent reverification before accepting. "Phone verified within 48 hours" or "WebAuthn within 24 hours." Stale verification = connection declined with reason, prompting the requester to reverify.
 
@@ -529,13 +542,15 @@ Maria didn't initiate that?
 
 ### Key Revocation and Rotation
 
-#### Emergency Revocation (phone-only)
+#### Emergency Revocation
 
 The "Not me" button from activity notifications triggers immediate revocation:
 1. Owner taps "Not me" on WhatsApp/Telegram notification
 2. Directory invalidates K_server immediately — split-key stops working in milliseconds
 3. Attacker is locked out
 4. Full re-keying requires human-level authentication (see below)
+
+**SIM-swap risk:** An attacker who ports the phone number could tap "Not me" to revoke the legitimate agent's key — a denial-of-service. This is the same phone-as-single-factor vulnerability that affects every system built on phone verification (Gmail, banks, exchanges). The mitigation is the same too: if the owner has registered WebAuthn/2FA, re-keying requires it — so the attacker can disrupt but not take over. Agents without WebAuthn are more exposed, which is another reason the trust score and connection policies push owners toward stronger auth.
 
 #### Key Rotation (requires human-level auth)
 
@@ -881,7 +896,8 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 - **Three-copy Merkle tree:** Sender, receiver, and service each hold a copy. Service is the tiebreaker.
 - **Split-key signing:** Neither the agent nor the directory can sign alone. Requires both K_local + K_server. Three-factor compromise needed for key theft (local key + KMS auth + phone).
 - **Dual public keys:** Every agent has a primary (split-key) and fallback (local-only) public key. Fallback-only signing is a canary for compromise.
-- **Phone as root of trust:** The phone number is the ultimate identity anchor — used for registration, KMS authentication, activity monitoring, and key recovery. Keys are mechanisms; the phone is the identity.
+- **Phone as root of trust, WebAuthn as armor:** The phone number is the identity anchor — used for registration, KMS authentication, activity monitoring, and key recovery. But phone numbers are vulnerable to SIM-swap attacks. WebAuthn/2FA hardens the identity without being mandated — it's part of the trust score, and receiving agents can require it as a connection policy. The network enforces strong auth through market pressure, not platform rules.
+- **Emergency revocation is phone-gated, recovery is WebAuthn-gated:** Anyone with the phone can hit "Not me" to revoke — fast response to real compromise. But re-keying requires WebAuthn/2FA — so a SIM-swap attacker can disrupt but not take over. Same tradeoff as every phone-based system, same mitigation: stronger auth protects what matters.
 - **Out-of-band monitoring:** Activity notifications go to the owner's phone (WhatsApp/Telegram), a channel completely independent from the agent's infrastructure.
 - **Graceful degradation:** Directory outage drops signing from split-key to local-only. Conversations continue at reduced trust. Never a full stop.
 - **Receiver-side scanning is the security boundary:** Sender's scan is an honesty signal, not the defense. The receiver always re-scans locally.
