@@ -210,82 +210,23 @@ Day 45: Suspected compromise
 
 ---
 
-## Step 3: Come Online — Proving You Are Who You Registered As
+## Step 3: Come Online — Authenticating to the Directory
 
-This is the first critical link in the trust chain. An agent has signed up — but how do we know the agent connecting right now is the same one? How do we know it hasn't been compromised?
+This is the first critical link in the trust chain. An agent has signed up — but how does the directory know the agent connecting right now is the same one that registered?
 
-### The Problem
+### The Login Process — Challenge-Response Authentication
 
-How does the receiver know that the message sender is the same entity as the directory profile? And how do we protect against private key theft?
-
-### Solution: Split-Key Signing
-
-Neither the agent nor the directory can sign alone. Signing requires both halves.
+Standard public-key challenge-response (Ed25519/ECDSA):
 
 ```
-Registration:
-  Agent generates local key (K_local)  → private half stays on agent's machine
-  Directory generates server key (K_server) → stored in directory's KMS
-  Directory publishes derived public key → bound to the agent's profile
-
-To sign a message:
-  Agent requests K_server from directory (authenticated via phone/session)
-  Agent combines K_local + K_server → ephemeral signing key
-  Agent signs the message
-  Signing key is discarded after use
+1. Agent connects via WebSocket, identifies itself: "I'm TravelBot"
+2. Directory sends a random challenge (nonce)
+3. Agent signs the nonce with its private key (K_local)
+4. Directory verifies the signature against the registered public key
+5. Authenticated session established — agent is online and contactable
 ```
 
-**What an attacker needs to compromise (all three):**
-1. K_local — steal from the agent's machine
-2. K_server — authenticate with the directory as that agent
-3. Phone number — to pass the directory's auth check
-
-### Dual Public Keys
-
-Every agent has two public keys registered in the directory:
-
-```
-Agent profile:
-{
-  "name": "TravelBot",
-  "primary_pubkey": derived(K_local + K_server)   ← split-key, high trust
-  "fallback_pubkey": from(K_local only)            ← local-only, lower trust
-}
-```
-
-**Normal operation:** Messages are signed with the split-key. Receiver verifies against `primary_pubkey`. Full trust.
-
-**Directory unavailable (outage):** Agent falls back to signing with K_local only. Receiver verifies against `fallback_pubkey`. Message is flagged as reduced trust. Conversation continues.
-
-**Key theft detected:** Attacker who stole K_local can only produce fallback-signed messages. They can't produce split-key signatures because they don't have K_server. A sustained stream of fallback-only messages is a **canary** — it signals something is wrong.
-
-| Signature type | What receiver sees | Trust level |
-|---|---|---|
-| Verifies against `primary_pubkey` | Split-key verified | Full |
-| Verifies against `fallback_pubkey` | Local-key only — directory was unreachable or key may be compromised | Reduced |
-| Verifies against neither | Rejected — unknown signer | None |
-
-### Automatic Key Rotation
-
-The directory rotates K_server on a schedule (daily, per-session, or per-conversation) without requiring any action from the agent. The agent's K_local stays the same, but the derived signing key changes constantly.
-
-```
-Monday:    K_local + K_server_v1 → signing_key_1
-Tuesday:   K_local + K_server_v2 → signing_key_2
-Wednesday: K_local + K_server_v3 → signing_key_3
-```
-
-A stolen K_local from last week is useless with this week's K_server.
-
-### Graceful Degradation
-
-```
-Normal:      K_local + K_server → full trust signing
-Degraded:    K_local only → reduced trust, flagged in Merkle leaf
-Recovered:   New split-key issued after human auth → back to full trust
-```
-
-The system never stops. It temporarily operates at a lower trust level when the directory is unavailable, which is exactly the correct behavior.
+This is a login, not a message signing operation. The agent proves it holds K_local without revealing it. Once authenticated, the agent has an active session and can be reached via the directory's WebSocket.
 
 ### The Layered Root of Trust
 
@@ -341,16 +282,17 @@ Agent A finds TravelBot in the directory and wants to connect. This is like a ph
 Agent A finds TravelBot in directory
   → Sees public profile only (no connection details exposed)
   → Sends connection request through directory
-  → Request includes Agent A's trust profile
+  → Directory forwards request to TravelBot via TravelBot's authenticated WebSocket
+  → Request carries Agent A's original signature — directory relays, does not re-sign
 ```
 
-The connection request travels through the directory — this is the only moment the directory mediates. It never sees subsequent messages, only hashes.
+Both agents have verified sessions at this point. The directory routes the request but never touches its content. Agent A's signature travels intact to TravelBot — the receiver can verify it came from Agent A directly, not from the directory.
 
 ---
 
-## Step 6: Accept & Connect — The Receiver Decides
+## Step 6: Accept & Verify — The Receiver Decides
 
-The receiving agent checks the requester's trust profile before accepting. This is where CELLO's identity infrastructure pays off — the receiver has real information to make a decision.
+The receiving agent checks the requester's trust profile before accepting. This is where CELLO's identity infrastructure pays off — and where split-key signing, dual public keys, and Merkle proof verification all come into play.
 
 ```
 TravelBot receives request on persistent WebSocket
@@ -359,6 +301,59 @@ TravelBot receives request on persistent WebSocket
   → TravelBot's policy: require WebAuthn + phone reverification within 48 hours
   → Accepts or rejects based on configured rules
 ```
+
+### Identity Verification — Cross-Checking Before Accepting
+
+Before accepting, TravelBot cross-checks Agent A's public key across multiple directory nodes with Merkle proof verification. Never trust a single node's claim about who's contacting you.
+
+```
+TravelBot receives connection request signed by Agent A
+  → Queries Agent A's public key from multiple directory nodes
+  → Verifies each response against consensus checkpoint hash (Merkle proof)
+  → Verifies Agent A's signature on the connection request against the cross-checked key
+  → If all checks pass: proceed to acceptance policy
+  → If any check fails: reject, log, alert owner
+```
+
+This is where split-key signing, dual public keys, and graceful degradation all apply:
+
+```
+Agent A's directory profile:
+{
+  "name": "Agent A",
+  "primary_pubkey": derived(K_local + K_server)   ← split-key, high trust
+  "fallback_pubkey": from(K_local only)            ← local-only, lower trust
+}
+```
+
+**Normal operation:** Agent A signs with the split-key. TravelBot verifies against `primary_pubkey`. Full trust.
+
+**Directory unavailable:** Agent A falls back to K_local only. TravelBot verifies against `fallback_pubkey`. Connection proceeds at reduced trust — flagged visibly.
+
+**Key theft canary:** An attacker who stole K_local can only produce fallback-signed messages — they can't produce split-key signatures without K_server. A sustained stream of fallback-only signatures signals compromise.
+
+| Signature type | What receiver sees | Trust level |
+|---|---|---|
+| Verifies against `primary_pubkey` | Split-key verified | Full |
+| Verifies against `fallback_pubkey` | Local-key only — directory unreachable or possible compromise | Reduced |
+| Verifies against neither | Rejected — unknown signer | None |
+
+**Automatic key rotation:** The directory rotates K_server on a schedule without requiring action from the agent. A stolen K_local from last week is useless with this week's K_server.
+
+```
+Monday:    K_local + K_server_v1 → signing_key_1
+Tuesday:   K_local + K_server_v2 → signing_key_2
+Wednesday: K_local + K_server_v3 → signing_key_3
+```
+
+**Graceful degradation:**
+```
+Normal:      K_local + K_server → full trust signing
+Degraded:    K_local only → reduced trust, flagged in Merkle leaf
+Recovered:   New split-key issued after human auth → back to full trust
+```
+
+The system never stops. It temporarily operates at lower trust when the directory is unavailable.
 
 ### Connection Acceptance Policies (configurable per agent)
 
@@ -404,15 +399,23 @@ Session ends:
 
 Teams already use these platforms for agent-to-agent communication. For known entities within a team, this works — and it gives you something valuable that P2P doesn't: any human can just open the channel and see what their agents said.
 
-CELLO layers on top rather than replacing them:
+CELLO layers on top rather than replacing them. Critically, hashes always travel via the directory WebSocket — never through the platform:
 
 ```
-Agent → CELLO SDK (scan, sign, hash) → Slack/Discord/TG → CELLO SDK (verify, scan, record) → Agent
+Message path:  Agent A → Slack/Discord/TG → Agent B
+Hash path:     Agent A → Directory (WebSocket) → Agent B
 ```
 
-The SDK scans and signs messages before they hit Slack. The receiving SDK verifies signatures, checks identity, scans for injection, updates the Merkle tree. Slack is just the transport — you keep human visibility and add trust.
+Agent B hashes what it received from Slack and compares it against what arrived from the directory. A mismatch means the message was modified in transit.
 
-The SDK abstracts transport away. The agent calls `cello_send_message` and the transport is configuration, not code.
+```
+Agent → CELLO client (scan, sign, hash) → Slack/Discord/TG → CELLO client (verify, scan, record) → Agent
+                                   ↘ hash → Directory WebSocket → hash ↗
+```
+
+The client scans and signs messages before they hit Slack. The receiving client verifies signatures, checks identity, scans for injection, updates the Merkle tree. Slack is just the transport — you keep human visibility and add trust.
+
+The client abstracts transport away. The agent calls `cello_send_message` and the transport is configuration, not code.
 
 ---
 
@@ -978,8 +981,9 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 - **Append-only directory:** The directory is a hash-chained log of operations (add, modify, delete), not a mutable database. Every honest node processing the same operations arrives at the same state.
 - **Client-side Merkle proof verification:** The client never trusts a single node's data. Every critical lookup comes with a Merkle proof verified against the consensus checkpoint hash. A compromised node can't serve fake data with a valid proof.
 - **Public agents are free:** They're the network growth engine, not a cost center.
-- **The SDK is open-source:** The prompt injection defense is the marketing top-of-funnel. Developers find it, use it, discover the marketplace.
-- **The SDK is the network's immune system:** Every agent running the SDK is a sensor. If an agent sends malicious content, the receiver's SDK detects it, records the evidence in the Merkle leaf, and reports to the directory. The same free tool that protects individual agents polices the entire network — no separate moderation system needed.
+- **The client is open-source:** The prompt injection defense is the marketing top-of-funnel. Developers find it, use it, discover the network.
+- **The client is the network's immune system:** Every agent running the client is a sensor. If an agent sends malicious content, the receiver's client detects it, records the evidence in the Merkle leaf, and reports to the directory. The same free tool that protects individual agents polices the entire network — no separate moderation system needed.
+- **Distributed ledger explored and rejected:** We explored eliminating directory nodes entirely — every agent holds a full copy of the directory, propagated via gossip, with an append-only hash-chained log of operations. Appealing because it eliminates the node trust problem entirely. Rejected because you still need a service for signaling (mediating introductions), hash relay (Merkle tree tiebreaker), K_server (split-key), and activity monitoring. The service kept growing back to look like a directory node anyway. Federation with client-side Merkle proof verification gives the same security guarantee with less architectural complexity. What we kept: the append-only log structure for directory data, and the principle that the client must be the enforcer.
 
 ---
 
@@ -1003,46 +1007,6 @@ You couldn't design a better contrast. When explaining why CELLO matters, you ca
 
 ---
 
-## Pending Revisions (from 2026-04-05 evening session)
-
-The following changes still need to be applied to the step-by-step sections above.
-
-### Step reordering and corrections (Steps 3-6)
-
-**Step 3: Come Online** should be rewritten as a login process — challenge-response authentication:
-1. Agent connects via WebSocket, says "I'm TravelBot"
-2. Directory sends a random challenge (nonce)
-3. Agent signs with its private key (standard public-key challenge-response, Ed25519/ECDSA)
-4. Directory verifies signature against registered public key
-5. Authenticated session established — agent is online and contactable
-
-This is NOT about split-key signing. Split-key belongs later in the flow. The current Step 3 body incorrectly describes message signing here — that content should move to Step 6.
-
-**Step 4: Discover** — stays as-is. Agent has verified session, can search directory.
-
-**Step 5: Request Connection** — Agent A sends connection request through directory. Directory forwards to TravelBot via TravelBot's authenticated WebSocket. Both agents have verified sessions. The request must carry Agent A's original signature — the directory relays it, doesn't re-sign it.
-
-**Step 6: Accept & Verify** — This is where identity proof between the two agents happens. TravelBot checks trust profile, and critically: TravelBot cross-checks Agent A's public key across multiple directory nodes (with Merkle proof verification) before verifying Agent A's signature. Never trust a single node's claim about who's contacting you. Split-key signing, dual public keys, canary mechanism, graceful degradation — all belong here.
-
-### Platform transport hash paths
-
-When Slack/Discord/Telegram is used as transport, the hashes still travel through the directory via WebSocket — not through the platform. This needs to be explicit:
-```
-Message path:    Agent A → Slack → Agent B
-Hash path:       Agent A → Directory (WebSocket) → Agent B
-```
-Agent B hashes what it received from Slack, compares against what arrived from the directory.
-
-### Design decision: distributed ledger explored and rejected
-
-We explored eliminating directory nodes entirely — every agent holds a full copy of the directory, propagated via gossip, with an append-only hash-chained log of operations (add/modify/delete). Signed checkpoints for new agents to bootstrap.
-
-**Why it was appealing:** eliminates node trust problem entirely. Local verification, no node to compromise.
-
-**Why we rejected it:** you still need a service for signaling (mediating introductions), hash relay (Merkle tree tiebreaker), K_server (split-key), and activity monitoring/notifications. The service kept growing back to look like a directory node anyway. Federation with client-side Merkle proof verification gives the same security guarantee with less architectural complexity.
-
-**What we kept:** the append-only log structure for the directory data, and the insight that the client must be the enforcer.
-
 ## Open Questions
 
 ### P2P Transport
@@ -1054,7 +1018,7 @@ We explored eliminating directory nodes entirely — every agent holds a full co
 - K_server caching policy — how long can a session key be cached before re-auth? Balance resilience vs. security.
 
 ### Federation
-- Node bootstrap — how does the SDK get its initial list of trusted directory nodes? Hardcoded? Signed node list? DNS-based discovery?
+- Node bootstrap — how does the client get its initial list of trusted directory nodes? Hardcoded? Signed node list? DNS-based discovery?
 - Node incentives — why would someone run a directory node? Revenue sharing? Community governance?
 - Byzantine fault tolerance — what's the minimum consortium size for safety? 5 nodes (tolerates 2 compromised)? 7 (tolerates 3)?
 - How does new registration data propagate between nodes? Push, pull, or broadcast? How quickly?

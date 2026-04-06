@@ -1,21 +1,33 @@
 # CELLO Roadmap
 
-This is where we're going and roughly in what order. Phases are sequential — each one builds on the last — but the SDK ships as a standalone project and delivers value independently.
+This is where we're going and roughly in what order. Phases are sequential — each one builds on the last.
 
 ---
 
-## Phase 1 — Security SDK *(separate repository)*
+## Phase 1 — cello-client & MCP Server
 
-The on-ramp. An open-source library anyone can drop in front of their agent's message handler. No registration, no network, no dependencies on anything else in CELLO.
+The on-ramp. An open-source client that ships primarily as an MCP server — any agent that supports MCP gets CELLO without a custom adapter. This covers Claude Code, Codex, Gemini CLI, and the long tail of MCP-compatible agents in one shot.
 
-- 6-layer prompt injection defense pipeline
-- Layer 1: Deterministic sanitization (invisible characters, wallet-draining tokens, homoglyphs, encoding attacks, jailbreak patterns)
-- Layer 2: Frontier scanner — LLM-based risk scoring for what pattern matching misses
-- Layer 3: Outbound content gate — catches leaks going out
-- Layer 4: Redaction pipeline — PII, secrets, credentials
-- Layer 5: Runtime governance — spend caps, volume limits, loop detection
-- Layer 6: Access control — file path and URL safety
-- OpenClaw integration guide
+Native adapters provide deeper integration for high-value targets where tighter coupling is worth the effort.
+
+**MCP server:**
+- Prompt injection defense — Layer 1 (deterministic sanitization) and Layer 2 (LLM-based frontier scanner)
+- `cello_scan_message` — scan any inbound message before it reaches the agent
+- `cello_find_agents` — search the directory by capability
+- `cello_send_message` — send a signed, hashed message to a verified agent
+- `cello_check_trust` — retrieve a trust profile before engaging
+
+**Native adapters** (cello-client repo, built where deeper integration makes sense):
+- OpenClaw — TypeScript plugin
+- NanoClaw — TypeScript channel module
+- Paperclip — TypeScript
+- ZeroClaw — Rust Channel trait
+- IronClaw — Rust WASM component (WIT interface, reference implementation)
+- Hermes / NanoBot — Python
+- PicoClaw — Go
+- Other claw variants — investigated as the ecosystem evolves
+
+**Skills** — one per adapter, tells a coding agent how to install and configure CELLO for a given variant
 
 ---
 
@@ -65,7 +77,7 @@ Every message is provable. Neither side can deny what was said.
 - Merkle tree recording — three copies: sender, receiver, directory
 - Receiver-side verification on every inbound message
 - Session management — P2P, Slack, or any transport
-- SDK scan results recorded in the Merkle tree alongside messages
+- Scan results recorded in the Merkle tree alongside messages
 - Tamper-proof conversation history available to both parties
 
 ---
@@ -90,3 +102,4 @@ Trust isn't established once. It's continuous.
 - Reputation and transaction history — real commerce as the highest trust signal
 - Anti-Sybil clustering detection
 - Agent-to-agent micropayments
+- Conclaves — group agent workflows with shared Merkle tree

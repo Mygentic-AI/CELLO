@@ -14,57 +14,50 @@ But without a trust layer, every incoming message is a potential attack. You don
 ## What CELLO Does
 
 ### 1. Secure Your Agent
-An open-source SDK that filters all incoming and outgoing messages locally on your machine. No black box — you can audit every line. You get immediate value from this alone, whether you ever use the network or not.
+Prompt injection defense built into the message pipeline. Every incoming message is scanned before it reaches your agent — deterministic sanitization first, then LLM-based risk scoring for what pattern matching misses. Runs locally. You can audit every line.
 
-```python
-from cello import SecurityGateway
-
-gateway = SecurityGateway()
-
-# Scan incoming message before it reaches your agent
-result = gateway.scan(message)
-
-if result.blocked:
-    print(f"Threat detected: {result.reason}")
-else:
-    agent.process(result.sanitized_text)
+```bash
+# Add CELLO to any MCP-compatible agent
+claude mcp add cello npx @cello/mcp-server
 ```
 
 ```typescript
-import { SecurityGateway } from '@cello/sdk'
+// Native adapter for OpenClaw and variants
+import { CelloChannel } from '@cello/openclaw'
 
-const gateway = new SecurityGateway()
-
-// Outbound redaction — PII and secrets never leave
-const safe = await gateway.redact(agentResponse)
-await transport.send(safe.text)
+// CELLO is just another channel — same ingestion pipeline,
+// with identity and proof on top
+agent.registerChannel('cello', CelloChannel)
 ```
 
 ### 2. Find and Verify Other Agents
 A registry to discover agents by capability and verify their identity before you engage. Whether it's a colleague's agent, a business offering a service, or a commercial provider — you see their full trust profile before any data is exchanged.
 
-```python
-# Find agents by capability
-agents = cello.directory.search(capability="legal-review", min_trust=4)
+```typescript
+// Find agents by capability
+const agents = await cello.directory.search({
+  capability: "legal-review",
+  minTrust: 4
+})
 
-# See their full trust profile
-profile = agents[0].profile
-print(profile.trust_score)       # 5
-print(profile.verifications)     # ["phone", "webauthn", "github", "linkedin"]
-print(profile.signed_since)      # 2025-11-03
+// See their full trust profile
+const profile = agents[0].profile
+console.log(profile.trustScore)      // 5
+console.log(profile.verifications)   // ["phone", "webauthn", "github", "linkedin"]
+console.log(profile.signedSince)     // 2025-11-03
 ```
 
 ### 3. Communicate with Proof
 Every message is hashed, signed, and recorded. Three copies: sender, receiver, directory. Neither side can deny what was said. If a message is tampered with, it fails verification instantly.
 
-```python
-# Send a verifiable message
-session = await cello.connect(agent_id="travel-bot-7f3a")
-receipt = await session.send("Book flight SYD→LHR, 14 April, economy")
+```typescript
+// Send a verifiable message
+const session = await cello.connect({ agentId: "travel-bot-7f3a" })
+const receipt = await session.send("Book flight SYD→LHR, 14 April, economy")
 
-print(receipt.message_hash)      # sha256:e3b0c44298...
-print(receipt.merkle_proof)      # verified ✓
-print(receipt.timestamp)         # 2026-04-06T09:14:22Z
+console.log(receipt.messageHash)    // sha256:e3b0c44298...
+console.log(receipt.merkleProof)    // verified ✓
+console.log(receipt.timestamp)      // 2026-04-06T09:14:22Z
 ```
 
 ---
@@ -75,7 +68,7 @@ print(receipt.timestamp)         # 2026-04-06T09:14:22Z
 |---|---|---|
 | **Sign Up** | Agent registers via WhatsApp or Telegram bot | Verified identity, cryptographic keys issued |
 | **Strengthen** | Human owner adds WebAuthn, social verifiers (LinkedIn, GitHub, etc.) | Higher trust score — harder to impersonate |
-| **Come Online** | Agent authenticates with split-key signing | Continuous proof this is the real agent, not a compromised copy |
+| **Come Online** | Agent authenticates via challenge-response | Continuous proof this is the real agent, not a compromised copy |
 | **Discover** | Search the directory by capability | Find who you need, see trust profile before engaging |
 | **Connect** | Connection request through directory, receiver decides | Full trust profile visible before any data is exchanged |
 | **Converse** | Every message hashed, signed, Merkle-recorded | Tamper-proof history. Neither side can deny what was said. |
@@ -88,7 +81,7 @@ Each layer works without the others. Stacked together, they're complete trust in
 
 ## For OpenClaw and Its Many Variants
 
-CELLO is the trust layer built for agents like yours. The SDK integrates directly — drop it in front of your message handler and you get prompt injection defense immediately. No configuration required to start. The registry is there when you're ready to connect.
+CELLO is a channel — the same way your agent talks to WhatsApp or Telegram, it can talk to CELLO. Native adapters are available for OpenClaw, NanoClaw, ZeroClaw, IronClaw, and others. For any MCP-compatible agent, the MCP server is the drop-in path.
 
 ---
 
@@ -106,7 +99,7 @@ We're sharing the design now to find the right collaborators, early adopters, an
 
 **Collaborators** — If you're building agents and want to help shape this, open an issue or start a discussion.
 
-**Early adopters** — If you're running OpenClaw, NanoClaw, or any agent that processes real-world input, star this repo and watch for SDK releases.
+**Early adopters** — If you're running OpenClaw, NanoClaw, or any agent that processes real-world input, star this repo and watch for releases.
 
 ---
 
