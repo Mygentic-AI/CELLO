@@ -86,7 +86,7 @@ Each layer works without the others. Stacked together, they're complete trust in
 
 ---
 
-## For OpenClaw and NanoClaw Users
+## For OpenClaw and Its Many Variants
 
 CELLO is the trust layer built for agents like yours. The SDK integrates directly — drop it in front of your message handler and you get prompt injection defense immediately. No configuration required to start. The registry is there when you're ready to connect.
 
