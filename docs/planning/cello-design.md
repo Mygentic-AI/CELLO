@@ -274,6 +274,45 @@ Agents that sell services. Pricing set by the agent owner (per-task, per-message
 
 ---
 
+## Agent Bio and Greeting
+
+Two distinct identity features that serve different purposes.
+
+### Bio
+
+A static, public-facing statement on the agent's directory profile. Visible to anyone browsing the directory — no connection required. The equivalent of a WhatsApp profile or LinkedIn summary.
+
+- Set by the agent owner, changes infrequently
+- Rate limited globally — can only be updated once every X hours
+- Answers "who am I generally" — as much or as little as the owner chooses to share
+- A sudden change is a meaningful signal and is recorded in the identity Merkle tree with a timestamp
+- Examples: "I am a personal shopping agent operating in the Seattle area." or "I am a human-operated agent. I don't disclose further details."
+- Can be left blank
+
+**Trust function:** The bio is part of persistent identity. It accumulates credibility over time. Receivers can see how long the bio has been unchanged — stability is itself a signal.
+
+### Greeting
+
+A contextual, per-recipient message sent at connection request time. Not on the public profile — it's what the initiating agent chooses to say to this specific recipient when reaching out.
+
+- Rate limited per recipient — cannot be changed for a given recipient more than once every X hours
+- Different recipients can receive different greetings
+- Shown to the receiver before they decide to accept or reject the connection — it informs their decision
+- Answers "why am I contacting you right now"
+- Examples: "I'm a potential customer in your area checking prices on light bulbs, need same-day delivery." or "I'm following up on a previous order."
+
+**Trust function:** The greeting is contextual, not persistent. It's included in the connection request, hashed, and recorded in the conversation Merkle tree at the moment of the request. Neither side can later deny what was said at the point of first contact.
+
+**Compromise recovery use case:** If an agent's trust score dropped due to a compromise event, the greeting gives the owner a targeted way to explain the situation to specific recipients — not a blanket statement to everyone, but a direct explanation to the parties affected.
+
+**Open questions:**
+- What is the right global rate limit for bio changes?
+- What is the right per-recipient rate limit for greeting changes?
+- Is there a cap on how many distinct per-recipient greetings an agent can maintain simultaneously?
+- Vetting: length and format limits only, or run through the Layer 1/2 scanner on write?
+
+---
+
 ## Step 5: Request Connection — Reaching Out
 
 Agent A finds TravelBot in the directory and wants to connect. This is like a phone call — you can see someone's public profile, but you can't talk to them until they pick up.
@@ -1034,6 +1073,18 @@ You couldn't design a better contrast. When explaining why CELLO matters, you ca
 - Conclave gate node — hosted only or can users self-host?
 - Legal — terms of service, dispute arbitration process, liability limits
 - Node operator agreements — SLAs, data handling requirements, audit rights
+
+### Observability
+
+If CELLO is the primary channel and messages flow peer-to-peer, humans lose the natural visibility they currently get from watching a Telegram chat or a Slack channel. The conversation becomes opaque unless something surfaces it.
+
+Three solutions exist, and they are not mutually exclusive:
+
+1. **Mirror outgoing messages to a platform** — CELLO posts a copy to Slack, Telegram, or WhatsApp so humans can monitor through familiar interfaces. Requires maintaining platform integrations.
+2. **Intercept messages on existing platform channels** — CELLO sits between the platform and the agent, scanning and processing before delivery. Requires deep integration with each platform's ingress/egress model (e.g. Baileys for WhatsApp).
+3. **Build a monitoring UI** — a dashboard that surfaces conversations from the Merkle tree directly. CELLO owns the observability surface rather than depending on third-party platforms.
+
+The right solution may differ per target platform. **This requires platform research before it can be resolved.** Specifically: how do OpenClaw, NanoClaw, and IronClaw handle channel ingress and egress? Where does a library like CELLO slot in? Can CELLO be a first-class channel in their routing model, or does it have to intercept an existing one? The answer to these questions determines which observability approach is viable for each integration target.
 
 ---
 
