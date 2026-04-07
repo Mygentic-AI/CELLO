@@ -182,6 +182,64 @@ Any implementation touching Ed25519 signing, Merkle tree construction, threshold
 
 ---
 
+## Integration Testing Strategy
+
+Unit tests are straightforward and handle more than people expect. This section is about integration testing — the smallest realistic harness at each stage, and what each stage is actually capable of testing.
+
+### Stage 1 — Unit Tests (no network, no agents)
+
+Crypto primitives, Merkle tree math, Layer 1 deterministic sanitization. All of this is standalone and fast. Attack patterns also belong here — replay attacks, tampered leaves, hash collision attempts, injection payloads — because you can construct all of it synthetically without needing a real session. This stage covers more than it looks like it should.
+
+### Stage 2 — Two MCP Servers
+
+Two CELLO MCP server instances, one as sender, one as receiver. No real directory, no real agents. One server stands in for the directory relay.
+
+What this tests:
+- Full signing and verification pipeline
+- Hash relay (simulated)
+- Merkle tree sync across two parties
+- Layer 2 DeBERTa scanner with real message content
+- Connection handshake
+- The complete SDK behavior in isolation
+
+What it can't test: the 3-party Merkle tree (need a real directory), actual split-key signing (K_server lives on the directory), WebSocket challenge-response auth, libp2p NAT traversal.
+
+### Stage 3 — MCP Servers + Local Directory Stub
+
+Add a lightweight local directory service — WebSocket server, hash relay, append-only log. Phone verification is mocked. Now you have the full 3-party Merkle tree and can test:
+
+- Split-key signing (K_server in the loop)
+- 3-party root comparison — sender, receiver, directory all independently compute and compare
+- Compromise detection: sustained fallback-only signing as a canary for key theft
+- Divergent root detection
+- Challenge-response authentication over a real WebSocket
+
+Some attack scenarios also need this stage to be meaningful. MITM detection requires a real hash relay to diverge from. Replay attacks need sequence number enforcement across a live session. Injection that passes Layer 1 but trips Layer 2 needs real message context flowing through a real pipeline, not a synthetic stub.
+
+### Stage 4 — Real Agent Integration
+
+Agent order is deliberate:
+
+**1. Claude Code (MCP)**
+Zero setup — already in the dev environment and MCP-compatible. Proves the MCP path works end-to-end before standing up any separate agent runtime. Fast feedback loop.
+
+**2. OpenClaw**
+The market. This is where CELLO needs to work. Testing against OpenClaw early means building the TypeScript adapter against the real `defineBundledChannelEntry` plugin interface from day one — not retrofitting it later when you discover constraints in the plugin manifest you didn't anticipate. If CELLO doesn't work cleanly on OpenClaw, nothing else matters.
+
+**3. Hermes**
+Self-learning agent. The interest here isn't Python — it's adaptivity. Hermes can evolve its behavior during a test session and probe in ways you wouldn't think to script manually. For a security protocol, an agent that learns and adapts is a more realistic stress test than anything written by hand. Use it to discover edge cases OpenClaw won't surface.
+
+**4. IronClaw**
+The security reference implementation. The WASM sandbox means the CELLO channel component is cryptographically isolated from the host — testing here validates the security boundary, not just the protocol. Comes after the protocol is stable enough to build the WASM component properly. Iteration cycles are slower here; don't start here.
+
+### What to Avoid
+
+Don't test on all agents simultaneously early on. The combinatorial surface is too large when the protocol is still changing. Lock down the protocol with MCP servers first, prove it on OpenClaw second, then expand.
+
+NanoClaw and ZeroClaw are available but there's no strong reason to prioritize them. They follow naturally once OpenClaw and IronClaw work — the adapters are thin and the hard work is already done.
+
+---
+
 ## Related Documents
 
 - Architecture and design: `docs/planning/cello-design.md`
