@@ -18,6 +18,8 @@ Each item: what needs deciding, the recommended choice, and why. Full analysis i
 
 *Ref: day-zero-review/01, Findings #1, #2, #5*
 
+**Agreed — 2026-04-08**
+
 ---
 
 ### 2. Signature scheme
@@ -31,6 +33,8 @@ Each item: what needs deciding, the recommended choice, and why. Full analysis i
 **Updates to design doc:** Commit to Ed25519 everywhere the doc says "Ed25519/ECDSA."
 
 *Ref: day-zero-review/01, Finding #11*
+
+**Agreed — 2026-04-08**
 
 ---
 
@@ -46,6 +50,8 @@ Each item: what needs deciding, the recommended choice, and why. Full analysis i
 
 *Ref: day-zero-review/01, Finding #19*
 
+**Agreed — 2026-04-08**
+
 ---
 
 ### 4. Threshold parameters
@@ -59,6 +65,10 @@ Each item: what needs deciding, the recommended choice, and why. Full analysis i
 **Updates to design doc:** Replace the 2-of-3 example with 3-of-5, add a note that the threshold increases as the consortium grows.
 
 *Ref: day-zero-review/01, Finding #5; day-zero-review/04, Section 3.1*
+
+**Agreed — 2026-04-08**
+
+**Note:** The threshold choice also determines the boundary between full and degraded operation. With 3-of-5, the protocol requires 3 nodes for FROST signing. With 5-of-7, it requires 5. A higher threshold is more secure but less resilient — it becomes easier to slip into degraded mode (K_local-only signing) when nodes go offline. This tradeoff should be considered when increasing the threshold at maturity.
 
 ---
 
@@ -74,6 +84,10 @@ Each item: what needs deciding, the recommended choice, and why. Full analysis i
 
 *Ref: day-zero-review/03, Section 1.1*
 
+**Agreed — 2026-04-08**
+
+**Note:** As written, this decision only describes signed hashes on the relay path (sender → directory → receiver). The protocol also requires that signed hashes are embedded in direct channel messages. Every message sent on the direct channel must bundle the content with its signed hash. This is what enables degraded-mode operation: when the directory is unavailable, the receiver can still verify message integrity from the embedded signed hash alone. The dual-path design means signed hashes travel both routes — via the relay for third-party notarization, and embedded in the direct message for local verification.
+
 ---
 
 ### 6. Merkle tree construction standard
@@ -87,6 +101,8 @@ Each item: what needs deciding, the recommended choice, and why. Full analysis i
 **Updates to design doc:** Reference RFC 6962 in the Merkle tree section.
 
 *Ref: day-zero-review/01, Finding #13*
+
+**Agreed — 2026-04-08**
 
 ---
 
@@ -102,6 +118,8 @@ Each item: what needs deciding, the recommended choice, and why. Full analysis i
 
 *Ref: day-zero-review/01, Finding #7*
 
+**Agreed — 2026-04-08**
+
 ---
 
 ### 8. Mutual authentication for directory connections
@@ -115,6 +133,8 @@ Each item: what needs deciding, the recommended choice, and why. Full analysis i
 **Updates to design doc:** Add mutual authentication to Step 3. The agent verifies the directory node's signature against the consortium's known node keys.
 
 *Ref: day-zero-review/01, Finding #10*
+
+**Agreed — 2026-04-08**
 
 ---
 
@@ -130,6 +150,8 @@ Each item: what needs deciding, the recommended choice, and why. Full analysis i
 
 *Ref: day-zero-review/01, Finding #9*
 
+**Agreed — 2026-04-08**
+
 ---
 
 ### 10. DeBERTa model verification
@@ -143,6 +165,12 @@ Each item: what needs deciding, the recommended choice, and why. Full analysis i
 **Updates to design doc:** Add model verification to the SDK section under "First run."
 
 *Ref: day-zero-review/04, Section 1.3*
+
+**Revised — 2026-04-08**
+
+**Concern:** The recommendation assumes we control the prompt injection model. We don't. DeBERTa and similar classifiers are third-party models available on Hugging Face. We vet them and ship a recommended default, but the client can swap in any classifier that meets the interface.
+
+**Revised recommendation:** The SDK must verify the integrity of whatever classifier it loads — the default model is pinned by SHA-256 hash and bundled in the package. If the user substitutes a different model, the SDK logs the substitution and the model's hash. This is an SDK implementation detail, not a protocol-level decision. The protocol does not mandate a specific model; it mandates that the client runs a prompt injection classifier and that the model's identity is verifiable.
 
 ---
 
@@ -158,6 +186,8 @@ Each item: what needs deciding, the recommended choice, and why. Full analysis i
 
 *Ref: day-zero-review/04, Section 5.1*
 
+**Agreed — 2026-04-08**
+
 ---
 
 ### 12. Sequence number assignment
@@ -171,3 +201,15 @@ Each item: what needs deciding, the recommended choice, and why. Full analysis i
 **Updates to design doc:** Add to Step 7 that the directory assigns sequence numbers and both parties wait for acknowledgment.
 
 *Ref: day-zero-review/01, Finding #6*
+
+**Revised — 2026-04-08**
+
+**Concern:** The recommendation assumes the directory is always available. The protocol must degrade gracefully when it isn't. If the directory assigns all sequence numbers and the directory is down, nobody can sequence messages — the Merkle tree can't grow and communication halts. This contradicts the graceful degradation design principle.
+
+**Revised recommendation:** Sequence number assignment follows the degradation spectrum:
+
+- **Directory available:** The directory assigns canonical sequence numbers. Both parties wait for acknowledgment. This is the strongest ordering guarantee and the normal mode of operation.
+- **Directory unavailable:** Both parties assign local sequence numbers based on their own message order. The hash chain itself still provides ordering — each hash includes the previous Merkle root, so the sequence is embedded in the math. Ordering is maintained; what's lost is the canonical third-party authority over that ordering.
+- **Reconciliation:** When the directory returns, both parties submit their locally-sequenced hashes. If both chains agree (same hashes, same order), the directory adopts the sequence and assigns canonical numbers retroactively. If they disagree, the discrepancy is flagged for investigation.
+
+The hash chain is the primary ordering mechanism. Directory-assigned sequence numbers are an authoritative overlay, not the sole source of order.
