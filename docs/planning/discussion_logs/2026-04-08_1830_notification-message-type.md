@@ -26,6 +26,10 @@ A notification message is self-contained and self-sealing. It is a single atomic
 
 The receiving client surfaces it as a distinct message type — a structured signal, not a chat message. The client handles it according to the operator's policy for that notification type.
 
+Every notification carries a **declared type** from a standardized registry. Types are not freeform strings — senders cannot invent types to evade filters. Declaring a misleading type (e.g., typing a promotional message as `order-update`) is a signed, verifiable act and a trust score event if flagged. Predefined types include at minimum: `introduction`, `order-update`, `alert`, `promotional`, `system`.
+
+**Prior conversation requirement:** a notification can only be sent to an agent with whom the sender has had at least one prior conversation. This prevents cold-contact spam entirely — a new agent cannot reach a stranger via notification without first establishing a conversational relationship.
+
 ---
 
 ## First Use Case: Agent Introduction
@@ -55,6 +59,35 @@ In each case: one-way, signed, delivered, done.
 
 ---
 
+## Filtering Architecture
+
+Filtering is a **rule engine, not an inference engine.** No LLM is involved in deciding whether to accept or reject a notification. Each incoming notification is evaluated against a deterministic rule stack:
+
+1. **Global type rules** — "I never accept `promotional` from anyone"
+2. **Sender overrides** — "except Agent X — I want `promotional` from them specifically"
+3. **Whitelist / blacklist** — explicit sender lists that override type rules
+
+**Precedence:** sender override beats global type rule.
+
+Accept or reject. O(1) per notification regardless of volume. If filtering required LLM inference, spam would become a compute DoS attack — each notification burning the recipient's tokens. Rule-based filtering eliminates this entirely. The LLM only fires after a notification has cleared the filter and the agent decides to act on it.
+
+---
+
+## Rate Limiting
+
+Two distinct attack vectors with different mitigations:
+
+**Spam** — mitigated by the prior conversation requirement (cold contact impossible) and by type-based filtering (recipient controls what lands). Warm-contact spam (a service you've engaged with sending ongoing promotions) is handled by the filter stack — the recipient opts out of `promotional` globally or per-sender.
+
+**DDoS** — notification messages are cheaper to generate than full sessions. Rate limiting is layered:
+- **Per-sending-agent:** N notifications per hour, enforced at the directory. Exact limit TBD.
+- **Trust score gated:** lower trust score = stricter rate limit. High-trust agents get more headroom.
+- **Node-level shedding:** nodes deprioritize notification hashes from low-trust senders under high load.
+
+**Verified businesses can apply for elevated rate limits** and pay for them. The rationale: we know who they are (institutional verification), they have a trust score and identity at stake, and their communication volumes are legitimately higher (a hospital notifying patients about appointments is not spam). The recipient's opt-out always overrides the sender's rate limit — a higher rate limit means more can be sent, not that more will be received.
+
+---
+
 ## Key Properties Summary
 
 | Property | Value |
@@ -74,4 +107,5 @@ In each case: one-way, signed, delivered, done.
 
 - Does a notification message require directory routing, or can it be sent peer-to-peer directly?
 - Should the directory maintain a log of sent notifications (for audit purposes), or only the hash?
-- Rate limiting: should the protocol define a maximum notification rate to prevent notification spam as a harassment vector?
+- What are the exact default rate limits per trust score tier?
+- What is the process for institutional verification to qualify for elevated rate limits?
