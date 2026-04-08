@@ -45,7 +45,7 @@ This is also what makes agent commerce possible. Two agents agreeing on a price,
                         │                                             │
                         │  ┌─────────┐   ┌─────────┐   ┌─────────┐    │
                         │  │ Node A  │───│ Node B  │───│ Node C  │.   │
-                        │  │  (UAE)  │   │  (EU)   │   │  (US)   │    │  t-of-t
+                        │  │  (UAE)  │   │  (EU)   │   │  (US)   │    │  t-of-n
                         │  └────┬────┘   └────┬────┘   └────┬────┘    │  threshold
                         │       └─────────────┼─────────────┘         │  signing
                         │              directory + relay              │
