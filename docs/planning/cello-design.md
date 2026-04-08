@@ -216,17 +216,25 @@ This is the first critical link in the trust chain. An agent has signed up — b
 
 ### The Login Process — Challenge-Response Authentication
 
-Standard public-key challenge-response (Ed25519/ECDSA):
+Standard public-key challenge-response (Ed25519):
 
 ```
 1. Agent connects via WebSocket, identifies itself: "I'm TravelBot"
-2. Directory sends a random challenge (nonce)
-3. Agent signs the nonce with its private key (K_local)
+2. Directory sends a random challenge (nonce) — 256-bit CSPRNG output,
+   single-use with expiry
+3. Agent signs the nonce with its private key (K_local). The signed response
+   binds: the nonce, the agent's ID, the directory node's ID, and a timestamp.
 4. Directory verifies the signature against the registered public key
-5. Authenticated session established — agent is online and contactable
+5. Agent verifies the directory node's identity — the directory signs its own
+   challenge response, and the agent checks that signature against the
+   consortium's known node keys (certificate pinning). Authentication is
+   bidirectional: neither side trusts the other until both have verified.
+6. Authenticated session established — agent is online and contactable
 ```
 
-This is a login, not a message signing operation. The agent proves it holds K_local without revealing it. Once authenticated, the agent has an active session and can be reached via the directory's WebSocket.
+This is a login, not a message signing operation. The agent proves it holds K_local without revealing it. The directory proves it is a legitimate consortium node and not a fake directory (DNS-spoofed or otherwise). Once both sides have authenticated, the agent has an active session and can be reached via the directory's WebSocket.
+
+**Nonce requirements:** 256-bit CSPRNG output, single-use (rejected on replay), expires after a short window, and the signed response binds to the nonce + agent ID + directory node ID + timestamp. This prevents precomputation attacks, cross-session replay, and cross-node replay.
 
 ### The Layered Root of Trust
 
@@ -358,8 +366,8 @@ This is where split-key signing, dual public keys, and graceful degradation all 
 Agent A's directory profile:
 {
   "name": "Agent A",
-  "primary_pubkey": derived(K_local + K_server)   ← split-key, high trust
-  "fallback_pubkey": from(K_local only)            ← local-only, lower trust
+  "primary_pubkey": FROST(K_local + K_server_shares)  ← threshold-signed, high trust
+  "fallback_pubkey": from(K_local only)               ← local-only, lower trust
 }
 ```
 
@@ -462,17 +470,22 @@ Now they're talking. Every message — in both directions — is hashed, signed,
 
 ### How It Works
 
-The directory acts as a **hash relay**. It receives only 32-byte hashes — never message content. The hash travels a different path than the message itself.
+The directory acts as a **hash relay**. It receives only SHA-256 hashes (32 bytes) — never message content. The hash travels a different path than the message itself.
+
+Each hash payload is signed by the sender (Ed25519). The receiver verifies the sender's signature directly — it does not trust the directory's version. Signed hashes travel both paths: via the relay for third-party notarization, and embedded in the direct channel message for local verification. A message arriving without a valid embedded signed hash is rejected by the receiver's client.
+
+The directory assigns canonical sequence numbers when hashes arrive, establishing the authoritative ordering of the conversation. In degraded mode (directory unavailable), both parties assign local sequence numbers from the hash chain itself; the directory reconciles and assigns canonical numbers retroactively when it returns.
 
 ```
 Agent A                    Directory Service                Agent B
    |                           |                              |
-   | 1. Hash message           |                              |
-   | 2. Send hash ────────────>| 3. Store hash, add to tree   |
-   | 4. Send message ─────────────────────────────────────────>|
-   |                           | 5. Send hash ───────────────>|
+   | 1. Hash + sign message    |                              |
+   | 2. Send signed hash ─────>| 3. Assign seq#, add to tree  |
+   | 4. Send message + signed hash ──────────────────────────>|
+   |                           | 5. Forward hash + seq# ─────>|
    |                           |    6. B hashes received msg   |
-   |                           |    7. Compares to relay hash  |
+   |                           |    7. Verifies sender sig     |
+   |                           |    8. Compares to relay hash  |
    |                           |    Match = no MITM            |
 ```
 
@@ -481,14 +494,17 @@ Agent A                    Directory Service                Agent B
 - **No man-in-the-middle:** Hash travels a different path than the message. If the message is modified in transit, the hashes won't match.
 - **Non-repudiation:** The sender can't deny sending a message. The service has the hash. The receiver has the hash.
 - **Tamper-proof history:** Three independent copies of the Merkle tree (sender, receiver, service). If anyone modifies their local history, their root diverges.
-- **Privacy:** The service never sees message content. Only 32-byte hashes. Can't read conversations, can't be subpoenaed for content.
+- **Privacy:** The service never sees message content. Only SHA-256 hashes (32 bytes). Can't read conversations, can't be subpoenaed for content.
 
 ### Leaf Format
 
+Merkle tree construction follows RFC 6962 (Certificate Transparency): leaf nodes are prefixed with `0x00` and internal nodes with `0x01` to prevent second-preimage attacks.
+
 ```
-leaf = hash(
+leaf = SHA-256(
+  0x00               ← leaf node marker (RFC 6962)
   sender_pubkey
-  sequence_number
+  sequence_number    ← directory-assigned canonical number
   message_content
   scan_result: { score, model_hash, sanitization_stats }
   prev_root          ← chains to previous state, creates hash chain
@@ -497,6 +513,12 @@ leaf = hash(
 ```
 
 The `prev_root` field creates a blockchain within the tree — each message commits to the entire history that preceded it. Gaps and modifications are detectable.
+
+**First message initialization:** For the first message in a conversation, `prev_root` is set to:
+```
+prev_root = SHA-256(agent_A_pubkey || agent_B_pubkey || session_id || timestamp)
+```
+Both parties can independently compute this from public information. It anchors the chain from message 1, preventing a compromised directory from substituting the first message hash.
 
 ### Tree Growth
 
@@ -650,13 +672,15 @@ The agent calls simple MCP tools (`cello_scan_message`, `cello_find_agents`, `ce
 
 **Installation:**
 ```bash
-claude mcp add cello npx @cello/mcp-server
+claude mcp add cello npx @cello/mcp-server@1.2.3
 ```
+
+Always pin the version. `npx` without a version pin fetches latest on every run — a compromised npm publish would instantly affect every agent that restarts.
 
 **First run:**
 - Phone verification (WhatsApp/Telegram)
-- Generates K_local, registers with directory, receives K_server
-- Downloads Layer 2 prompt injection model (~100MB, one time)
+- Generates K_local, registers with directory, receives K_server shares
+- Loads Layer 2 prompt injection model — bundled in the package, SHA-256 hash pinned in SDK source. The SDK verifies the model's integrity before loading. If a different model is substituted, the SDK logs the substitution and the model's hash. The protocol does not mandate a specific model; it mandates that a prompt injection classifier runs and its identity is verifiable.
 - Agent is ready to scan, discover, and chat
 
 ### SDK Supply Chain Integrity
@@ -792,7 +816,7 @@ Third-party implementations are welcome once the ecosystem is established — bu
 4. Enterprise private node licenses (on-prem or cloud, subscription)
 
 **Cost structure:**
-- Hash relay: storing 32-byte hashes, trivial at scale
+- Hash relay: storing SHA-256 hashes (32 bytes), trivial at scale
 - Proxy scanning: small classifier model on GPU, thousands of requests/second
 - Directory: standard web API infrastructure
 - Payments: Stripe Connect fees (passed through)
@@ -913,21 +937,26 @@ Agents always initiate connections to directory nodes — no node can cold-call 
 
 The node list itself is a signed document, periodically refreshed. The SDK doesn't need a manual update to stop trusting a removed node.
 
-### K_server Protection — Threshold Cryptography
+### K_server Protection — Threshold Signing (FROST)
 
-No single node holds a complete K_server. It's split across nodes using threshold cryptography:
+No single node holds a complete K_server. Signing uses FROST (Flexible Round-Optimized Schnorr Threshold signatures) on Ed25519, with a 3-of-5 threshold minimum (moving to 5-of-7 at maturity).
 
 ```
-K_server split into 3 shares:
+K_server distributed across 5 nodes as FROST key shares:
   Node A holds share 1
   Node B holds share 2
   Node C holds share 3
+  Node D holds share 4
+  Node E holds share 5
 
-To sign: agent needs any 2 of 3 shares
-  → No single compromised node can produce K_server
-  → Agent requests shares from two nodes
-  → Combines locally, signs, discards
+To sign: any 3 of 5 nodes compute partial signatures
+  → No single compromised node (or pair) can produce a valid signature
+  → The agent never holds K_server or any reconstructable share of it
+  → Partial signatures are computed on each node and combined
+  → The combined key is never assembled in one place
 ```
+
+FROST requires only 2 rounds and is designed for Ed25519. Ed25519's deterministic nonces (RFC 8032) eliminate the entire class of nonce-reuse vulnerabilities that have historically destroyed ECDSA deployments. Compromising 3 of 5 nodes across different jurisdictions and cloud providers is required to forge a signature — significantly harder than any 2-of-3 scheme.
 
 ### Home Node Model
 
@@ -1004,7 +1033,7 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 
 - **Hash relay, not message relay:** The service sees hashes, never content. Privacy by architecture.
 - **Three-copy Merkle tree:** Sender, receiver, and service each hold a copy. Service is the tiebreaker.
-- **Split-key signing:** Neither the agent nor the directory can sign alone. Requires both K_local + K_server. Three-factor compromise needed for key theft (local key + KMS auth + phone).
+- **Split-key signing (FROST):** Neither the agent nor the directory can sign alone. Signing uses FROST threshold signatures on Ed25519 — 3-of-5 directory nodes must compute partial signatures; the combined key is never assembled in one place. The agent never holds K_server or any reconstructable share of it. Three-factor compromise needed for key theft (local key + 3 of 5 directory nodes + phone).
 - **Dual public keys:** Every agent has a primary (split-key) and fallback (local-only) public key. Fallback-only signing is a canary for compromise.
 - **Phone as root of trust, WebAuthn as armor:** The phone number is the identity anchor — used for registration, KMS authentication, activity monitoring, and key recovery. But phone numbers are vulnerable to SIM-swap attacks. WebAuthn/2FA hardens the identity without being mandated — it's part of the trust score, and receiving agents can require it as a connection policy. The network enforces strong auth through market pressure, not platform rules.
 - **Emergency revocation is phone-gated, recovery is WebAuthn-gated:** Anyone with the phone can hit "Not me" to revoke — fast response to real compromise. But re-keying requires WebAuthn/2FA — so a SIM-swap attacker can disrupt but not take over. Same tradeoff as every phone-based system, same mitigation: stronger auth protects what matters.
@@ -1051,8 +1080,8 @@ You couldn't design a better contrast. When explaining why CELLO matters, you ca
 - Ephemeral peer ID generation — performance cost of spinning up a new libp2p identity per session?
 
 ### Cryptography
-- Threshold cryptography for K_server — which scheme? Shamir's secret sharing? ECDSA threshold signatures? What's the latency impact of multi-node signing?
 - K_server caching policy — how long can a session key be cached before re-auth? Balance resilience vs. security.
+- Session signing token design — how long should a FROST-delegated signing window last? What operations are permitted during degraded (K_local-only) mode?
 
 ### Federation
 - Node bootstrap — how does the client get its initial list of trusted directory nodes? Hardcoded? Signed node list? DNS-based discovery?
