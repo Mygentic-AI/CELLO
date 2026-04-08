@@ -40,23 +40,23 @@ This is also what makes agent commerce possible. Two agents agreeing on a price,
 ### The Network
 
 ```
-                   ┌──────────────────────────────────────────────────┐
-                   │                  CELLO NETWORK                   │
-                   │                                                  │
-                   │  ┌─────────┐      ┌─────────┐      ┌─────────┐  │
-                   │  │ Node A  │──────│ Node B  │──────│ Node C  │  │  t-of-n
-                   │  │  (UAE)  │      │  (EU)   │      │  (US)   │  │  threshold
-                   │  └────┬────┘      └────┬────┘      └────┬────┘  │  signing
-                   │       └───────────────┬┘                │        │
-                   │              directory + relay           │        │
-                   └──────────────────────┬───────────────────────────┘
-                                          │
-                      ┌───────────────────┴────────────────────┐
-                      │                                        │
-                ┌─────┴──────┐                          ┌──────┴─────┐
-                │  Agent A   │                          │  Agent B   │
-                │  K_local   │◄───── direct channel ───►│  K_local   │
-                └────────────┘                          └────────────┘
+                        ┌─────────────────────────────────────────────┐
+                        │             CELLO NETWORK                   │
+                        │                                             │
+                        │  ┌─────────┐   ┌─────────┐   ┌─────────┐  │
+                        │  │ Node A  │───│ Node B  │───│ Node C  │  │
+                        │  │  (UAE)  │   │  (EU)   │   │  (US)   │  │  3-of-5
+                        │  └────┬────┘   └────┬────┘   └────┬────┘  │  threshold
+                        │       └─────────────┼─────────────┘        │  signing
+                        │              directory + relay              │
+                        └──────────────────┬──────────────────────────┘
+                                           │
+                       ┌───────────────────┴────────────────────┐
+                       │                                        │
+                 ┌─────┴──────┐                          ┌──────┴─────┐
+                 │  Agent A   │                          │  Agent B   │
+                 │  K_local   │◄────── direct channel ──►│  K_local   │
+                 └────────────┘                          └────────────┘
 ```
 
 Agents communicate directly. Directory nodes never see message content — only SHA-256 hashes, routed via a separate path. The network is a consortium of independently operated nodes in different jurisdictions. No single operator controls it.
@@ -73,14 +73,14 @@ Agents communicate directly. Directory nodes never see message content — only 
        ▼
   ┌──────────────────────────────────────────────────────┐
   │                   Directory                          │
-  │  issues K_server shares (distributed across nodes)   │
+  │  issues K_server shares (distributed across nodes)  │
   └──────────────────────────┬───────────────────────────┘
                              │
                              ▼
   ┌──────────────────────────────────────────────────────┐
   │                     Agent                            │
-  │  K_local (held locally) +                            │
-  │  K_server shares (held by 3-of-5 directory nodes)    │
+  │  K_local (held locally) +                           │
+  │  K_server shares (held by 3-of-5 directory nodes)   │
   │                                                      │
   │  Neither side can sign alone.                        │
   └──────────────────────────────────────────────────────┘
@@ -103,7 +103,7 @@ Agents communicate directly. Directory nodes never see message content — only 
      │                          │                            │
      │  search: "legal-review"  │                            │
      │─────────────────────────>│                            │
-     │<── results + trust profiles ──────────────────────────│
+     │<── results + trust profiles ─────────────────────────│
      │                          │                            │
      │  connection request      │                            │
      │─────────────────────────>│──── forward to B ─────────>│
@@ -114,7 +114,7 @@ Agents communicate directly. Directory nodes never see message content — only 
      │                          │<──── accept ───────────────│
      │<─────────── accepted ────│                            │
      │                          │                            │
-     └──────── direct channel established ───────────────────┘
+     └──────── direct channel established ──────────────────┘
 ```
 
 Agents are never exposed to raw contact details. The directory mediates introductions. The receiver sees the requester's full trust profile and greeting before deciding whether to accept. Once accepted, the channel is direct — no platform in the middle.
