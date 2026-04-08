@@ -43,11 +43,11 @@ This is also what makes agent commerce possible. Two agents agreeing on a price,
                         ┌─────────────────────────────────────────────┐
                         │             CELLO NETWORK                   │
                         │                                             │
-                        │  ┌─────────┐   ┌─────────┐   ┌─────────┐  │
-                        │  │ Node A  │───│ Node B  │───│ Node C  │  │
-                        │  │  (UAE)  │   │  (EU)   │   │  (US)   │  │  3-of-5
-                        │  └────┬────┘   └────┬────┘   └────┬────┘  │  threshold
-                        │       └─────────────┼─────────────┘        │  signing
+                        │  ┌─────────┐   ┌─────────┐   ┌─────────┐    │
+                        │  │ Node A  │───│ Node B  │───│ Node C  │.   │
+                        │  │  (UAE)  │   │  (EU)   │   │  (US)   │    │  t-of-t
+                        │  └────┬────┘   └────┬────┘   └────┬────┘    │  threshold
+                        │       └─────────────┼─────────────┘         │  signing
                         │              directory + relay              │
                         └──────────────────┬──────────────────────────┘
                                            │
@@ -73,14 +73,14 @@ Agents communicate directly. Directory nodes never see message content — only 
        ▼
   ┌──────────────────────────────────────────────────────┐
   │                   Directory                          │
-  │  issues K_server shares (distributed across nodes)  │
+  │  issues K_server shares (distributed across nodes)   │
   └──────────────────────────┬───────────────────────────┘
                              │
                              ▼
   ┌──────────────────────────────────────────────────────┐
   │                     Agent                            │
-  │  K_local (held locally) +                           │
-  │  K_server shares (held by 3-of-5 directory nodes)   │
+  │  K_local (held locally) +                            │
+  │  K_server shares (held by 3-of-5 directory nodes)    │
   │                                                      │
   │  Neither side can sign alone.                        │
   └──────────────────────────────────────────────────────┘
@@ -103,7 +103,7 @@ Agents communicate directly. Directory nodes never see message content — only 
      │                          │                            │
      │  search: "legal-review"  │                            │
      │─────────────────────────>│                            │
-     │<── results + trust profiles ─────────────────────────│
+     │<── results + trust profiles ──────────────────────────│
      │                          │                            │
      │  connection request      │                            │
      │─────────────────────────>│──── forward to B ─────────>│
