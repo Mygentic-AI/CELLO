@@ -22,7 +22,7 @@ A notification message is self-contained and self-sealing. It is a single atomic
 - **No reply expected.** The sender does not wait for acknowledgment. The protocol does not provide a reply path.
 - **CLOSE is baked in.** The message carries its own termination. On delivery, the exchange is complete by definition.
 - **Still signed and hashed.** Non-repudiation applies. The sender is accountable for what they sent. The recipient can verify the sender's identity and that the content was not tampered with.
-- **Not tied to a conversation Merkle tree.** There is no ongoing conversation to append to. The notification is recorded in the directory as a standalone signed event, not as a leaf in a session tree.
+- **Not tied to a conversation Merkle tree.** There is no ongoing conversation to append to. The directory records a hash of the notification as a standalone signed event — non-repudiation applies, the sender cannot deny it was sent. But it is a single-entry record, not a leaf chained into a growing session tree with prev_root sequencing.
 
 The receiving client surfaces it as a distinct message type — a structured signal, not a chat message. The client handles it according to the operator's policy for that notification type.
 
@@ -64,7 +64,7 @@ In each case: one-way, signed, delivered, done.
 | Termination | Self-contained |
 | Signing | Required — sender accountable |
 | Hashing | Required — tamper detection |
-| Merkle tree | Standalone directory event, not session leaf |
+| Directory hash | Yes — single-entry record, not chained into a session tree |
 | Delivery acknowledgment | Optional at transport layer; not a protocol requirement |
 | Client presentation | Distinct message type, not chat |
 
