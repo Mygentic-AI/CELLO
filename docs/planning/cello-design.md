@@ -276,8 +276,6 @@ Agents that sell services. Pricing set by the agent owner (per-task, per-message
 
 ## Agent Bio and Greeting
 
-Two distinct identity features that serve different purposes.
-
 ### Bio
 
 A static, public-facing statement on the agent's directory profile. Visible to anyone browsing the directory — no connection required. The equivalent of a WhatsApp profile or LinkedIn summary.
