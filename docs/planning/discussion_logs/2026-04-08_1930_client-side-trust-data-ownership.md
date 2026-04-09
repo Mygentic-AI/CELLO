@@ -75,9 +75,38 @@ The directory can confirm "this is the bio that was registered" without ever sto
 
 ---
 
+## Extensible Trust Schema
+
+The trust score is not a fixed set of fields — it is a collection of verified attestations. LinkedIn and GitHub are standard categories, but the system is open. Any verifiable claim goes through the same oracle flow: user presents evidence → CELLO verifies → CELLO hashes → user stores the verified record.
+
+YouTube account, business registration, professional license, government ID verification via a national app — whatever can be verified can become a trust attestation. CELLO does not need to maintain a schema for every possible type. It needs the oracle function: verify, hash, return.
+
+New attestation types can emerge without protocol changes. The directory doesn't care what's inside the JSON blob — it stores a hash.
+
+---
+
+## Verified Testimonials — Yelp Without Yelp
+
+The oracle pattern enables user-generated verified reviews as trust data.
+
+A plumber asks five satisfied customers — all verified CELLO agents — to submit a recommendation directly to CELLO. Each reviewer communicates with the oracle independently. CELLO records a structured attestation: on this date, these five verified agents with these trust scores said this about this agent. Hashes it. The plumber stores the bundle. CELLO discards the content.
+
+When someone requests the plumber's trust profile, they receive the testimonials from the plumber's client and verify them against CELLO's hashes. The recipient knows:
+
+- The reviewers are real, verified accounts with known trust scores
+- The reviews have not been tampered with since verification
+- The plumber cannot selectively edit or remove unfavorable reviews from the bundle
+- No platform controls, ranks, or can remove the reviews
+
+**This is Yelp reviews without Yelp.** The business owns its reputation data. Reviews are cryptographically tamper-proof. Reviewers are verified. And CELLO never stored the content — it only verified it.
+
+The same pattern works for any context where one agent wants verified opinions from others: restaurant reviews, contractor recommendations, service quality attestations, professional references.
+
+---
+
 ## The Verification Asymmetry
 
-CELLO performs the verification work (checking LinkedIn, evaluating GitHub, etc.) but does not retain the results. This is the key asymmetry:
+CELLO performs the verification work (checking LinkedIn, evaluating GitHub, verifying testimonials) but does not retain the results. This is the key asymmetry:
 
 - **Verification** happens once, at CELLO, when the data is created
 - **Storage** is the client's responsibility from that moment forward
