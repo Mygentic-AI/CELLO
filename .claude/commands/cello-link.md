@@ -1,3 +1,8 @@
+---
+name: cello-link
+description: Scan the CELLO vault and add wikilinks between documents that share topics.
+---
+
 Scan the CELLO Obsidian vault and add wikilinks between documents that reference each other.
 
 ## Step 1 — Build the frontmatter index

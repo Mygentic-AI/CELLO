@@ -1,3 +1,8 @@
+---
+name: cello-read
+description: Load current CELLO project context — recent activity, decisions, open questions.
+---
+
 Quickly load context about the current state of the CELLO project — what's been decided, what's open, what was worked on recently. Use this at the start of any session.
 
 ## Step 1 — Recent activity
