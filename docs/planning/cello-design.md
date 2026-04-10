@@ -675,7 +675,7 @@ The receiver's client scans every incoming message for prompt injection before t
 
 ### Scanning Layers
 
-- **Layer 1:** Deterministic sanitization (pure code, 11-step pipeline from prompt-injection-defense-layers-v2.md)
+- **Layer 1:** Deterministic sanitization (pure code, 11-step pipeline from [[prompt-injection-defense-layers-v2]])
 - **Layer 2:** Bundled small classifier (DeBERTa-v3-small INT8, ~100MB, first-run download)
 - **Layer 6 (URL safety):** Google Safe Browsing API v4 integration — scans URLs before agents access them. Free tier: 10,000 queries/day. Covers malware, phishing, social engineering. Canonicalize URLs, cache results with TTL, default to block on API failure.
 
@@ -1343,5 +1343,23 @@ The right solution may differ per target platform. **This requires platform rese
 
 ## Related Documents
 
-- Prompt injection defense architecture: `cello-agent/planning/sovereign-cello/prompt-injection-defense-layers-v2.md`
+### Core Docs
+- [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — the 6-layer scanning pipeline referenced in Step 8
+- [[day-0-agent-driven-development-plan|Day-0 Agent-Driven Development Plan]] — how to build this with Claude-Flow
 - NEAR AI verified chat (research): `nearai/nearai-cloud-verifier` on GitHub (TEE-based approach, different from this P2P design)
+
+### Protocol Review
+- [[00-synthesis|Protocol Review — Synthesis]] — adversarial review: 8 critical, 23 high findings
+- [[open-decisions|Open Decisions]] — 12 resolved design decisions (FROST, Ed25519, SHA-256, thresholds, etc.)
+- [[design-problems|Design Problems]] — 7 unsolved design problems requiring mechanism work
+
+### Discussion Logs
+- [[2026-04-08_1430_protocol-strength-and-commerce|Protocol Strength and Commerce]] — non-repudiation as commerce primitive, directory as custodian
+- [[2026-04-08_1530_message-delivery-and-termination|Message Delivery and Termination]] — delivery failure tree, session termination protocol
+- [[2026-04-08_1600_data-residency-and-compliance|Data Residency and Compliance]] — GDPR, UAE residency, pseudonymity model
+- [[2026-04-08_1700_node-architecture-and-replication|Node Architecture and Replication]] — three-phase node deployment, primary/backup replication
+- [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — social recovery, tombstones, voucher accountability, session attestation
+- [[2026-04-08_1830_notification-message-type|Notification Message Type]] — fire-and-forget protocol primitive, introduction flow
+- [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — escrow staking, gate pyramid, flat fee model
+- [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — hash everything, store nothing; Yelp without Yelp
+- [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — pre-computed endorsements, anti-farming rule, bootstrapping

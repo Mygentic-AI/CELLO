@@ -25,7 +25,7 @@ For honest users the net cost is zero — the stake is returned on every legitim
 
 This is proof-of-stake applied at the connection layer rather than the consensus layer. The economic model is identical: stake to participate, behave honestly or lose your deposit.
 
-**The escrow release mechanism is the session close attestation already designed.** No separate mechanism required — CLEAN/FLAGGED attestations in the CLOSE and CLOSE-ACK leaves trigger the escrow outcome automatically.
+**The escrow release mechanism is the [[2026-04-08_1800_account-compromise-and-recovery|session close attestation already designed]].** No separate mechanism required — CLEAN/FLAGGED attestations in the CLOSE and CLOSE-ACK leaves trigger the escrow outcome automatically.
 
 ---
 
@@ -93,3 +93,12 @@ Connection staking is not a day-one requirement. Requiring crypto escrow before 
 The protocol supports staking architecturally from day one — the hooks exist, the connection challenge mechanism is specified. But all stake requirements default to zero at launch. An institution opts in when it has a reason to.
 
 By the time open institutions are on the network and genuinely at risk, the staking infrastructure is live and users are familiar with crypto wallets as a normal part of participation.
+
+---
+
+## Related Documents
+
+- [[cello-design|CELLO Design Document]] — Connection Staking section in Step 6; the Gate Pyramid is reproduced there
+- [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — session close attestation (CLEAN/FLAGGED) is the escrow release trigger
+- [[2026-04-08_1830_notification-message-type|Notification Message Type]] — notification rate limiting and DDoS defence share the same layered approach
+- [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — pre-computed endorsements reduce reliance on staking as a connection filter

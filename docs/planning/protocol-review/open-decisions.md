@@ -2,7 +2,16 @@
 
 Decisions that resolve with a clear choice. Work through these, update the design doc, and archive this file.
 
-Each item: what needs deciding, the recommended choice, and why. Full analysis in `day-zero-review/`.
+Each item: what needs deciding, the recommended choice, and why. Full analysis in [[00-synthesis|day-zero-review/]].
+
+## Related Documents
+
+- [[cello-design|CELLO Design Document]] — these decisions are reflected in the current design
+- [[00-synthesis|Protocol Review — Synthesis]] — the adversarial review that surfaced these decisions
+- [[design-problems|Design Problems]] — the harder problems requiring mechanism work (not just decisions)
+- [[2026-04-08_1700_node-architecture-and-replication|Node Architecture and Replication]] — discussion log expanding on decisions 1, 3, 4, 12
+
+---
 
 ---
 

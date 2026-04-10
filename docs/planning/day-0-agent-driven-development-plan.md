@@ -242,6 +242,8 @@ NanoClaw and ZeroClaw are available but there's no strong reason to prioritize t
 
 ## Related Documents
 
-- Architecture and design: `docs/planning/cello-design.md`
-- Prompt injection defense: `docs/planning/prompt-injection-defense-layers-v2.md`
+- [[cello-design|CELLO Design Document]] — architecture, trust chain, open questions this plan addresses
+- [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — the DeBERTa Layer 2 scanner referenced in Phase 1
+- [[00-synthesis|Protocol Review — Synthesis]] — critical findings the hive should resolve first
+- [[open-decisions|Open Decisions]] — 12 decisions the hive already resolved
 - Claude-Flow wiki: https://github.com/ruvnet/ruflo/wiki

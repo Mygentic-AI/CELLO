@@ -205,4 +205,19 @@ Every security layer above phone verification assumes the baseline identity has 
 
 ## Full Reports
 
-Individual reports are in this directory. See `README.md` for the index.
+Individual reports are in this directory. See [[09-build-in-public-index|README / index]] for the full listing.
+
+- [[01-crypto-attack-surface|01 — Crypto Attack Surface]]
+- [[02-identity-trust-gaming|02 — Identity and Trust Gaming]]
+- [[03-protocol-network-attacks|03 — Protocol and Network Attacks]]
+- [[04-ops-supply-chain|04 — Ops and Supply Chain]]
+- [[05-reputation-recovery|05 — Reputation and Recovery]]
+- [[06-power-dynamics-governance|06 — Power Dynamics and Governance]]
+- [[07-economic-marketplace|07 — Economic and Marketplace]]
+- [[08-emergent-behavior-failures|08 — Emergent Behavior Failures]]
+
+## Related Documents
+
+- [[cello-design|CELLO Design Document]] — the architecture this review assessed
+- [[open-decisions|Open Decisions]] — the 12 resolved decisions that came out of this review
+- [[design-problems|Design Problems]] — the 7 unsolved problems that came out of this review

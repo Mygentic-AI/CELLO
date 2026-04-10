@@ -103,3 +103,12 @@ This mirrors how the real world works: you can close your bank account, but the 
 **Legal defensibility:** Conversation records fall under GDPR Article 6(1)(b) ("necessary for the performance of a contract") or Article 6(1)(f) ("legitimate interest"). The counterparty has a legitimate interest in retaining proof of a commercial agreement. The right to erasure does not override another party's right to their own records.
 
 **Precedent:** Messaging platforms (WhatsApp, Telegram) follow the same model. You can delete a message on your side within a limited window. Beyond that, you can only delete your own copy — the other party's copy remains. Account deletion removes your profile and future presence, not your past messages from other people's inboxes. CELLO follows established industry practice here.
+
+---
+
+## Related Documents
+
+- [[cello-design|CELLO Design Document]] — the architecture whose data flows are analysed here (Steps 1–4, trust score design)
+- [[design-problems|Design Problems]] — Problem 6 (GDPR vs. append-only log) and Problem 7 (home node deanonymization)
+- [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — companion insight: directory stores hashes, never personal data; simplifies GDPR further
+- [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — tombstone types and what "account deletion" means at the protocol level

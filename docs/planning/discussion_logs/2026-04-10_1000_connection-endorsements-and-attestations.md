@@ -1,7 +1,7 @@
 ---
 name: Connection endorsements and attestations
 date: 2026-04-10 10:00
-description: Pre-computed endorsement system replacing just-in-time introductions, attestation as a general primitive, anti-farming rules, and bootstrapping new agents via existing networks.
+description: Pre-computed endorsement system replacing just-in-time introductions, attestation as a general primitive, revocation model, anti-farming rules, and bootstrapping new agents via existing networks.
 ---
 
 # Connection Endorsements and Attestations
@@ -61,6 +61,24 @@ Alice contacts Charlie
 
 Bob does not need to be online. Bob does not need to be aware the connection is happening. The endorsement is already stored and verified.
 
+## Revocation
+
+Bob can revoke any endorsement or attestation he has issued at any time. Revocation follows the append-only log model — the hash is never deleted. A revocation is a new directory event appended to the log: "Bob revokes endorsement [hash]."
+
+This means there are three distinct states a verifier can observe:
+
+| State | Meaning |
+|---|---|
+| Hash present, not revoked | Valid, active endorsement |
+| Hash present, revoked | Real endorsement, subsequently withdrawn |
+| Hash not present | Never issued, or data integrity failure |
+
+The distinction between "revoked" and "never existed" matters. If Alice presents an endorsement and the directory shows the hash never existed, that is a sign of fraud or fabrication. If the hash exists but is revoked, the endorsement was genuine but withdrawn — a meaningfully different situation.
+
+**Notification:** When Bob revokes, the directory notifies Alice's client. The client should remove the endorsement from its local store. Alice is not technically forced to — but any recipient who checks against the directory will see the revocation. Presenting a revoked endorsement fails verification immediately and is a trust score event.
+
+Revocation applies equally to connection endorsements and attestations.
+
 ## Bootstrapping a new agent
 
 When creating a new agent (second agent, business agent, service agent), the cold-start problem is solvable via the existing network:
@@ -111,3 +129,12 @@ The more agents in the network who have gathered endorsements, the harder it is 
 - Building a credible endorsement set requires real relationships with real agents
 - Farming is blocked at the protocol level (same-owner rule) and detectable via graph analysis (endorsement clusters with no external connections)
 - As the honest network grows, the endorsement requirement becomes a more meaningful filter — the network gets harder to game over time, not easier
+
+---
+
+## Related Documents
+
+- [[cello-design|CELLO Design Document]] — Step 6 (connection acceptance policies); the endorsement option is added to the policy table here
+- [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — the just-in-time introduction mechanism this log replaces with pre-computed endorsements; also bootstrapping via social carry-forward
+- [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — the connection gate that endorsements slot into; staking and endorsements are complementary filters
+- [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — endorsements follow the same hash-everything-store-nothing pattern

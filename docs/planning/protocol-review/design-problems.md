@@ -2,7 +2,18 @@
 
 Problems that require real design work — not a single decision but a mechanism, a policy, or an architectural change. Each one scopes what makes it hard and what the work involves.
 
-Full analysis in `day-zero-review/`.
+Full analysis in [[00-synthesis|day-zero-review/]].
+
+## Related Documents
+
+- [[cello-design|CELLO Design Document]] — the architecture these problems apply to
+- [[open-decisions|Open Decisions]] — resolved decisions (compare: those are settled; these are not)
+- [[00-synthesis|Protocol Review — Synthesis]] — the adversarial review that identified these problems
+- [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — resolves Problem 2 (trust score recovery)
+- [[2026-04-08_1600_data-residency-and-compliance|Data Residency and Compliance]] — addresses Problem 6 (GDPR vs. append-only log)
+- [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — also addresses Problem 6 and Problem 7 (home node deanonymization)
+
+---
 
 ---
 

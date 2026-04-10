@@ -113,3 +113,11 @@ CELLO performs the verification work (checking LinkedIn, evaluating GitHub, veri
 - **Authentication** happens at the recipient, by comparing client data against directory hashes
 
 CELLO is in the verification business, not the storage business.
+
+---
+
+## Related Documents
+
+- [[cello-design|CELLO Design Document]] — Step 2 (Strengthen Identity): the client-side trust data section is drawn directly from this log
+- [[2026-04-08_1600_data-residency-and-compliance|Data Residency and Compliance]] — GDPR analysis that this pattern dramatically simplifies; hash-only storage resolves the right-to-erasure tension
+- [[design-problems|Design Problems]] — Problem 6 (GDPR vs. append-only log) and Problem 7 (home node deanonymization) — this log materially addresses both

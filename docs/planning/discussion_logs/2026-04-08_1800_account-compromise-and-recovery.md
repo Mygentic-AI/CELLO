@@ -205,7 +205,7 @@ When a connection request hits a policy wall, the agents negotiate automatically
 5. Agent C sends a notification message to Agent B: "Agent A asked me to introduce them, I know them"
 6. Agent B accepts the connection based on Agent C's introduction
 
-The entire negotiation is agent-to-agent. The introduction itself is a notification message type (see separate log) — not a formal session, no reply needed.
+The entire negotiation is agent-to-agent. The introduction itself is a [[2026-04-08_1830_notification-message-type|notification message type (see separate log)]] — not a formal session, no reply needed.
 
 ### Why this breaks bot farms
 
@@ -216,3 +216,13 @@ A freshly-minted bot account has no connections to established networks. It cann
 Introduction vouching is explicitly **not** a protocol-level event. It carries no formal consequences. There is no lockout, no trust score impact, no network tracking. It is a conversational signal: "I know this person."
 
 Accountability is entirely client-side: if Agent C repeatedly introduces agents who turn out to be bad actors, Agent B adds Agent C to a local no-vouch list. This is a personal policy decision — no network effect, no formal mechanism. The protocol supports the negotiation flow; what agents do with the introduction signal is up to them.
+
+---
+
+## Related Documents
+
+- [[cello-design|CELLO Design Document]] — Steps 6 (connection policies), 7 (session termination + attestation), 9 (compromise detection), 10 (dispute resolution)
+- [[design-problems|Design Problems]] — Problem 2 (trust score recovery after compromise) — this log resolves it
+- [[2026-04-08_1830_notification-message-type|Notification Message Type]] — the introduction mechanism uses notification messages; the fire-and-forget primitive is designed here
+- [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — connection policy and escrow mechanics that depend on session close attestation
+- [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — extends the web-of-trust connection policy with pre-computed endorsements

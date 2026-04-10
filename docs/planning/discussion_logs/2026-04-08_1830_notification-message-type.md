@@ -8,7 +8,7 @@ description: A self-contained, self-sealing message type that delivers a single 
 
 ## Context
 
-The web-of-trust introduction mechanism (see companion log) requires one agent to inform another: "this person asked me to introduce them, I know them." There is no conversation here — just a delivery. The existing message model (OPEN → exchange → CLOSE/CLOSE-ACK/SEAL) is the wrong shape for this. Opening a full session, exchanging pleasantries, then closing is unnecessary overhead for what is fundamentally a one-way notification.
+The [[2026-04-08_1800_account-compromise-and-recovery|web-of-trust introduction mechanism (see companion log)]] requires one agent to inform another: "this person asked me to introduce them, I know them." There is no conversation here — just a delivery. The existing message model (OPEN → exchange → CLOSE/CLOSE-ACK/SEAL) is the wrong shape for this. Opening a full session, exchanging pleasantries, then closing is unnecessary overhead for what is fundamentally a one-way notification.
 
 This surfaced a gap: CELLO has no message type for one-way, no-reply, self-terminating communication.
 
@@ -109,3 +109,12 @@ Two distinct attack vectors with different mitigations:
 - Should the directory maintain a log of sent notifications (for audit purposes), or only the hash?
 - What are the exact default rate limits per trust score tier?
 - What is the process for institutional verification to qualify for elevated rate limits?
+
+---
+
+## Related Documents
+
+- [[cello-design|CELLO Design Document]] — Notification Messages section in Step 7; this log specifies the design in full
+- [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — the companion log that surfaced the need for this primitive (web-of-trust introductions)
+- [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — rate limiting and DDoS defense applies to notifications too
+- [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — endorsements replace some just-in-time introduction notifications with pre-computed lookups

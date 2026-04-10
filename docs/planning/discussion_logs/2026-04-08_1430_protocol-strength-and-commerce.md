@@ -33,3 +33,12 @@ description: Evaluated CELLO's strength for financial transactions and commerce 
 ## Signed hashes
 
 - Confirmed: decision #5 ensures every hash submitted to the directory is signed by the sender via FROST. The directory holds not just hashes and public keys, but cryptographic proof of who submitted each hash. The link between sender and hash is unforgeable.
+
+---
+
+## Related Documents
+
+- [[cello-design|CELLO Design Document]] — Steps 7 and 10 cover the Merkle tree and dispute resolution this log expands on
+- [[open-decisions|Open Decisions]] — Decision 5 (signed hash relay) confirmed here
+- [[2026-04-08_1530_message-delivery-and-termination|Message Delivery and Termination]] — companion session; also develops the "directory as custodian" insight
+- [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — dispute resolution via session attestation

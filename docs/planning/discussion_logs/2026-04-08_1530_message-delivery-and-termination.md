@@ -169,3 +169,12 @@ This raised the fabricated conversation attack: an attacker creates an internall
 4. What gets logged where, and what's surfaced to the user vs. handled silently by the client?
 5. Resend semantics — how does a resend differ from a replay attack at the protocol level?
 6. Directory reconciliation after outage — how do both parties submit gap-period hashes and what happens if they disagree?
+
+---
+
+## Related Documents
+
+- [[cello-design|CELLO Design Document]] — Step 7 (Merkle tree, session termination protocol) and Step 9 (compromise detection)
+- [[open-decisions|Open Decisions]] — Decision 12 (sequence number assignment + degraded mode reconciliation)
+- [[2026-04-08_1430_protocol-strength-and-commerce|Protocol Strength and Commerce]] — companion session; directory as custodian developed independently and converged
+- [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — session close attestation (CLEAN/FLAGGED) and what happens at termination
