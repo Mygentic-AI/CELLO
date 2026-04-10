@@ -63,6 +63,18 @@ Alice contacts Charlie
 
 Bob does not need to be online. Bob does not need to be aware the connection is happening. The endorsement is already stored and verified.
 
+## Privacy-preserving intersection — PSI
+
+The intersection computation above has a privacy leak. Without a privacy-preserving mechanism, either Alice must reveal her full endorser list to Charlie, or Charlie must reveal his full contact list to Alice. Either direction leaks information: an attacker making a connection attempt could use even a refused connection to harvest Charlie's contact graph, then target those people for manufactured endorsements in a future attempt.
+
+**Private Set Intersection (PSI)** lets the computation happen without either party learning the other's full set. Only the intersection is output. The directory acts as a natural PSI facilitator — it mediates the blinded hash comparison without retaining either party's inputs.
+
+Two variants serve different policy types:
+- **PSI-CA (cardinality only)** — for threshold policies ("I need at least N endorsers in common"). Reveals only the count, not which agents matched. Lower implementation cost.
+- **Full PSI** — for content-verified policies ("I need endorsement from a specific known agent"). Reveals which agents matched, allowing Charlie to fetch and verify the actual endorsement content.
+
+PSI is not a day-one requirement. The endorsement mechanism ships first; PSI is added in a second phase when endorsement policies are in production use. Full design in [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]].
+
 ## Revocation
 
 Bob can revoke any endorsement or attestation he has issued at any time. Revocation follows the append-only log model — the hash is never deleted. A revocation is a new directory event appended to the log: "Bob revokes endorsement [hash]."
@@ -142,3 +154,4 @@ The more agents in the network who have gathered endorsements, the harder it is 
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — the connection gate that endorsements slot into; staking and endorsements are complementary filters
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — endorsements and attestations follow the same hash-everything-store-nothing pattern
 - [[design-problems|Design Problems]] — pre-computed endorsements and the anti-farming rule directly address Problems 3 (phone Sybil floor) and 4 (trust farming)
+- [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — Private Set Intersection as the mechanism for the intersection computation; prevents contact graph leakage at connection time

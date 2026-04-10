@@ -23,6 +23,7 @@ Full analysis in [[00-synthesis|day-zero-review/]].
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — also addresses Problem 6 and Problem 7 (home node deanonymization)
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — pre-computed endorsements and anti-farming rule address Problems 3 (phone Sybil floor) and 4 (trust farming)
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — relay node separation, random pool selection, and tiered degraded-mode policy close Problem 1
+- [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — makes targeted endorsement farming harder (Problem 4); PSI prevents contact graph leakage during connection attempts
 
 ---
 

@@ -1408,3 +1408,4 @@ The right solution may differ per target platform. **This requires platform rese
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — hash everything, store nothing; Yelp without Yelp
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — pre-computed endorsements, anti-farming rule, bootstrapping
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — relay node separation, random pool selection, and tiered degraded-mode policy closing Problem 1
+- [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — Private Set Intersection for privacy-preserving endorsement verification at connection time

@@ -106,3 +106,4 @@ The three-part mechanism addresses the attack at every stage:
 - [[2026-04-08_1700_node-architecture-and-replication|Node Architecture and Replication]] — primary/backup replication model; relay nodes extend this architecture
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — the gate pyramid this degraded-mode policy extends; same principle of inference-free filtering at every layer
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — the whitelist/blacklist mechanism this log extends with a degraded-mode tier
+- [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — PSI and the asymmetric whitelist principle here are complementary defenses; PSI prevents contact graph leakage during connection attempts
