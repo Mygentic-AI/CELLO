@@ -59,6 +59,8 @@ Finally: the client tracks only its own lists. It does not track which other age
 
 **What this closes:** The core attack — steal K_local, DDoS directory, impersonate — is blocked at every stage. Existing sessions don't fall back. New connections default to refuse. Even if an agent is on the degraded-mode list, the session is flagged in the Merkle leaf. The time-limited fallback token (from the original design work list) is less necessary with this architecture but remains a potential refinement for new connections.
 
+**Refinement added (2026-04-10):** The random pool selection was subsequently strengthened to trust-weighted random selection. Rather than uniform random, selection probability is proportional to trust score. A phone-only agent (score 1) and a fully-verified agent (score 5) both enter the pool, but at very different weights. An attacker running 10,000 phone-only accounts contributes 10,000 weight-1 entries. One legitimate user with WebAuthn, GitHub, and LinkedIn contributes weight 5+. To dominate a weighted pool, the attacker needs those 10,000 accounts to carry real trust score — which means 10,000 genuine GitHub histories, 10,000 LinkedIn profiles with years of activity. Each layer stacks multiplicatively across the volume. The resource-tying attack and the identity attack now defend against each other: making fake identities numerous enough to matter requires making them expensive enough to matter.
+
 **What's still unspecified:** The fallback token mechanism itself — a signed "I was online as of T" proof the directory issues during normal operation. Not a blocker, but would add a layer of assurance. See [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] for the full mechanism.
 
 ---

@@ -37,13 +37,21 @@ Once a session is established through a connection node, it is handed off to rel
 
 ---
 
-## Part 2: Random pool selection for new connections
+## Part 2: Trust-weighted pool selection for new connections
 
-When connection nodes are under load — whether from DDoS or legitimate heavy traffic — incoming connection requests go into a pool and are randomly sampled rather than processed FIFO.
+When connection nodes are under load — whether from DDoS or legitimate heavy traffic — incoming connection requests go into a pool and are sampled rather than processed FIFO. Selection is random, but weighted by trust score.
 
-**Why this matters:** FIFO queuing lets a flood create a hard wall. If an attacker sends 90% of requests, they block 90% of legitimate users reliably. With random selection, they still only get selected 90% of the time — 10% of legitimate users still get through. To block 99% of legitimate users they need 99% of traffic. The cost of the attack scales proportionally with its effectiveness, and it can never achieve a guaranteed wall.
+**Why random over FIFO:** FIFO queuing lets a flood create a hard wall. If an attacker sends 90% of requests, they block 90% of legitimate users reliably. With random selection, they still only get selected 90% of the time — 10% of legitimate users still get through. To block 99% of legitimate users they need 99% of traffic. The cost of the attack scales proportionally with its effectiveness, and it can never achieve a guaranteed wall.
 
-This also removes the incentive structure for the attack. The attacker cannot reliably guarantee the directory appears down for any specific target. Their goal — forcing fallback for a particular agent — becomes probabilistic rather than certain.
+**Why weighted over uniform random:** A phone-only agent (trust score 1) and a fully-verified agent (trust score 5, with WebAuthn, GitHub, LinkedIn) both enter the pool — but their selection probabilities are not equal. The fully-verified agent is weighted proportionally higher. The attacker's 10,000 phone-only accounts each contribute weight 1. One legitimate user with substantial verification contributes weight 5 or more. The flood is diluted not just by count, but by trust density.
+
+**What this does to attack economics:** To achieve meaningful selection weight across a large fake-account farm, the attacker needs those accounts to carry real trust score — which means 10,000 GitHub accounts with genuine commit history, 10,000 LinkedIn profiles with years of professional activity, 10,000 WebAuthn hardware keys. Each verification layer stacks multiplicatively across the volume required. Phone farming is cheap. Trust farming at the scale needed to dominate a weighted pool is not.
+
+**The user experience property:** Under load, the agents most likely to be legitimate are the ones most likely to get through. A brand-new agent with only a phone number gets low selection weight — intentionally. Agents that have built real verification history have earned priority access during a squeeze. No manual adjudication, no allowlists to maintain — the trust score does the work.
+
+**Connection to Problem 3 (phone Sybil floor):** The cheap attack vector — bulk phone numbers — becomes less effective here even before the phone Sybil floor problem is solved. Even if an attacker acquires 10,000 verified phone numbers, those accounts have score 1 and contribute minimal selection weight. The resource-tying attack and the identity attack are now defended by the same mechanism from two directions.
+
+This also removes the incentive structure for the attack. The attacker cannot reliably guarantee the directory appears down for any specific target. Their goal — forcing fallback for a particular agent — becomes probabilistic rather than certain, and expensive rather than cheap.
 
 ---
 
