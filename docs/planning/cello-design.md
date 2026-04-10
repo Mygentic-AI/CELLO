@@ -16,6 +16,8 @@ Personal agents are exploding. Running on your laptop, running on your Mac Mini.
 
 **For peer-to-peer agent communication to work, there has to be an identity and trust layer.** Without it, you don't know who you're talking to, you can't verify what was said, and every incoming message is a potential attack. And that trust layer can't be a centralized SaaS — if you put a provider in the middle of every agent conversation, you've recreated platform lock-in. The trust layer has to be peer-to-peer with minimal infrastructure dependency.
 
+**This trust layer must be built into the protocol from the beginning — it cannot be retrofitted.** Email is the cautionary tale. SMTP shipped without sender verification. Thirty years later, we're still bolting on fixes — SPF, DKIM, DMARC — and spam is still unsolvable. Every one of those patches is a compromise, limited by the architecture it's trying to fix. If SMTP had required sender verification from day one, the problem wouldn't exist. Agent communication is at the same inflection point right now. Every month that passes, more agents ship with ad-hoc identity solutions that calcify into technical debt. The protocol that wins will have trust baked in from the start.
+
 **What emerges from this is a massive microeconomy of microservices.** Small personal bots interacting with each other — not all economic, but most involving microcommunications and handoffs. Offering up services to AI agents that they can find and use is already a growing market. But there's no easy way to find them, no way to trust them, and no way to know that who you think you're dealing with is who you're dealing with. That's the gap.
 
 **CELLO is the identity, trust, and verification infrastructure for the agent economy.** A secure collaborative mesh where agents register with verified identities, discover each other, and communicate with tamper-proof guarantees. The guarantees come from crypto primitives — hashing, signing, Merkle trees — not from trusting a platform. The platform never sees message content — only hashes. Think of it like a LinkedIn profile or a small business webpage — but for agents.
@@ -130,14 +132,37 @@ Each verification layer adds to the trust score. Phone is required. Everything e
 | Transaction history | Real commerce, satisfied customers | Expensive to fake | Highest |
 | Time on platform | Sustained good behavior | Impossible to shortcut | Gradual |
 
-**Signal scoring at OAuth (not raw data storage):**
+### Client-Side Trust Data Ownership — Hash Everything, Store Nothing
+
+CELLO performs the verification work — checking LinkedIn, evaluating GitHub, etc. — but does not retain the results. The directory stores only hashes. The client stores the original data.
+
+**How it works:**
+
+1. Agent provides verification sources (LinkedIn, GitHub, phone, etc.)
+2. CELLO performs the verification, creates a structured record per item (e.g., LinkedIn: connection count, account age, verified timestamp)
+3. CELLO hashes the record: `SHA-256(json_blob) → hash`
+4. CELLO stores only the hash. The original record is sent to the client. CELLO discards it.
+
+**Trust score sharing:** When another agent requests a trust score, the client sends the original records, the directory sends the hashes. The recipient hashes what the client sent and compares. Match = authentic and unmodified.
+
+**Why this matters:** CELLO literally cannot leak trust scores, bios, or verification details — it doesn't have them. A compromised directory node yields hashes, not names or LinkedIn profiles. There is nothing to exfiltrate. The client cannot modify their trust score after verification — any change produces a different hash. The GDPR tension between append-only logs and right-to-erasure is dramatically simpler when the directory stores hashes of personal data rather than the data itself.
+
+### Extensible Trust Schema
+
+The trust score is not a fixed set of fields — it is a collection of verified attestations. LinkedIn and GitHub are standard categories, but the system is open. Any verifiable claim can go through the oracle flow: present evidence → CELLO verifies → CELLO hashes → client stores. New attestation types can emerge without protocol changes. The directory doesn't care what's inside the JSON blob — it stores a hash.
+
+### Verified Testimonials
+
+The oracle pattern enables user-generated reviews as trust data. A plumber asks five satisfied customers — all verified CELLO agents — to submit recommendations directly to CELLO. Each reviewer communicates with the oracle independently. CELLO records a structured attestation, hashes it, and returns it to the plumber. The plumber stores the bundle. Anyone requesting the plumber's trust profile receives the testimonials from the plumber's client and verifies them against CELLO's hashes. Reviewers are verified, reviews are tamper-proof, no platform controls them — Yelp reviews without Yelp.
+
+### Signal Scoring
+
+Each verification source is evaluated at OAuth time:
 - GitHub: account age, repo count, real commits vs. fork-only, stars received
 - LinkedIn: connection count (500+?), account age, work history, endorsements
 - Twitter: join date, tweet count, follower count, real activity
 - Instagram: account age, post count, followers
 - Facebook: create date, friends/followers, activity
-
-Store signal strength ("strong" / "moderate" / "weak"), not profile data.
 
 **Trust score formula:**
 ```
@@ -405,15 +430,51 @@ The system never stops. It temporarily operates at lower trust when the director
 | Setting | Behavior |
 |---|---|
 | Open | Auto-accept all requests above minimum trust score |
+| Require introduction | Accept only if 1-2 agents in my network vouch for the requester |
 | Selective | Auto-accept known agents, notify owner for new ones |
 | Guarded | Owner must manually approve every new connection |
 | Listed only | Visible in directory but not accepting connections |
+
+**Web-of-trust introductions:** An agent whose connection request hits a "require introduction" policy can negotiate automatically. The requesting agent identifies mutual contacts, asks one to introduce them, and the introducing agent sends a notification to the receiver: "Agent A asked me to introduce them, I know them." The receiver accepts or declines based on who introduced them. The entire negotiation is agent-to-agent with no human involvement.
+
+Introduction vouching is explicitly not a protocol-level event. It carries no formal consequences — no lockout, no trust score impact, no network tracking. It is a conversational signal. If an agent's introductions prove unreliable, the receiving agent adds them to a local no-vouch list. This is a client-side policy decision, not a network mechanism.
+
+**Why this matters for Sybil resistance:** A bot farm of newly-created agents has no connections to established networks. It cannot provide introductions because nobody in the target's network knows them. Even if an attacker creates 20,000 phone-verified agents, none can reach agents with an introduction policy. The cost of penetrating a real network rises from "a phone number" to "a phone number plus an established agent in the target's network willing to introduce you."
 
 **Authentication requirements:** Receiving agents can require specific verification factors before accepting. "Must have WebAuthn" or "must have 2FA" as a hard gate. This is the market-pressure mechanism — CELLO doesn't mandate strong auth, but agents that handle real money or sensitive data will. An agent owner who configures "require WebAuthn" will never accept a connection from a phone-only agent. The requester gets a clear rejection reason: "This agent requires WebAuthn verification. Add it at portal.cello.dev to connect." Friction happens at the right moment — when it matters — not at onboarding.
 
 **Verification freshness:** Receiving agents can require recent reverification before accepting. "Phone verified within 48 hours" or "WebAuthn within 24 hours." Stale verification = connection declined with reason, prompting the requester to reverify.
 
 **Selective disclosure:** Agents can request visibility into specific trust signals before accepting. LinkedIn signal, GitHub signal, etc. The requesting agent's owner controls what gets shared per request, or pre-configures auto-share rules.
+
+### Connection Staking — Proof-of-Stake at the Connection Layer
+
+Some institutions — hospitals, emergency services, public agencies — must remain open to unknown inbound contacts by design. A closed connection policy defeats their purpose. This creates an attack surface: an attacker can flood an open institution with connection requests, burning its inference budget.
+
+**Staking mechanics:** When connecting to an institution that requires it, the connecting agent stakes a small amount from their escrow wallet. The stake is held until the session concludes.
+
+- **CLEAN close** → stake automatically released back to sender
+- **FLAGGED + upheld arbitration** → institution can claim the stake
+
+For honest users the net cost is zero — every legitimate interaction returns the stake. For attackers, mass connection attempts consume their escrow balance. The institution is literally paid by the attacker to defend against the attack. The escrow release mechanism is the session close attestation (CLEAN/FLAGGED) already designed — no separate mechanism required.
+
+**The Gate Pyramid — inference is the last gate, not the first:** For open institutions, filtering must be inference-free at every layer except the last. LLM inference is the most expensive operation; protecting it with cheap gates means attack traffic is shed before it ever reaches the token-burning layer.
+
+| Gate | Check | Cost |
+|---|---|---|
+| **1. Connection level** | Introduction policy, trust score floor, whitelist/blacklist, stake requirement | Lookup, no inference |
+| **2. Message level** | Valid signature + directory-confirmed hash, rate limit, message size, declared notification type | Deterministic, no inference |
+| **3. Pattern matching** | Known bad patterns, message structure validation, sender frequency anomaly detection | Rule-based, no LLM |
+| **4. Cheap classifier** | DeBERTa or equivalent scanner | Cheap inference |
+| **5. Full LLM processing** | Only traffic that cleared all above | Expensive |
+
+By the time a message reaches the LLM, it has already proven it comes from an agent with a valid stake, sufficient trust score, valid hash, within rate limits, and passing pattern checks.
+
+**Flat connection fee alternative:** A creative attacker LLM can pass all filter gates, engage convincingly, and slowly burn an institution's tokens without producing an outcome. The transcript looks plausible; arbitration cannot reliably distinguish bad faith from an unproductive conversation. For this attack vector, a flat non-refundable connection fee is more robust — no arbitration required, no intent question. Both models belong in the toolkit: staking + arbitration for clear-cut abuse, flat fee for defending against creative time-wasters.
+
+**Protocol provides primitives, clients decide policy.** This is the same problem as flooding a hospital switchboard with voice calls. CELLO provides the infrastructure — connection challenge hooks, filter gate infrastructure, session close attestation, arbitration — and the institution decides what combination to apply.
+
+**Phasing:** Connection staking is not a day-one requirement. The protocol supports staking architecturally from the start — the hooks exist, the connection challenge mechanism is specified — but all stake requirements default to zero at launch. An institution opts in when it has a reason to.
 
 ### Establishing the Session
 
@@ -532,6 +593,80 @@ After msg 3:    Root_3 = hash(hash(L1+L2) + hash(L3+padding))
 
 All three parties (sender, receiver, service) independently compute the same tree and can compare roots at any time.
 
+### Session Termination Protocol
+
+Termination is a first-class protocol event — not "nobody talked for a while." A properly terminated conversation has a sealed Merkle root. An improperly terminated one is open. Without explicit termination, the two are indistinguishable.
+
+The Merkle tree supports two leaf types: `0x00` for message leaves and `0x01` for control leaves. Control leaves carry protocol-level signals — termination, attestation, session state changes — and are hashed and signed identically to message leaves. They are part of the conversation record.
+
+**Clean termination (mutual close):**
+1. Party A sends a CLOSE control leaf (signed, hashed, carries a session close attestation — see below)
+2. Party B receives it, sends CLOSE-ACK (also signed, hashed, carries B's independent attestation)
+3. The directory notarizes the close — both parties' final hashes are recorded, and the directory signs a SEAL: a notarized statement that the conversation was closed by mutual agreement at a specific time
+4. The final Merkle root represents a complete, sealed conversation
+5. Any message arriving after the SEAL is rejected — the tree is closed
+
+**Unilateral close (SEAL-UNILATERAL):**
+Party A sends CLOSE, Party B never acknowledges. After timeout, A submits the close to the directory. The directory seals the conversation as "closed by A, unacknowledged by B." Different status than mutual close — the record shows B didn't confirm. Used when B has crashed, disappeared, or is unresponsive.
+
+**Timeout (EXPIRE):**
+No messages for a configurable period. The directory sends an EXPIRE control leaf to both parties. The conversation is sealed with an expiration marker. Either party can REOPEN within a grace period.
+
+**Abort (ABORT):**
+One party detects something wrong — hash mismatch, suspected compromise, malicious content. Sends ABORT with a reason code. Different from CLOSE: signals a problem, not a natural ending. An ABORTed conversation cannot be reopened.
+
+**Resumption (REOPEN):**
+A REOPEN control leaf can be appended to a SEALed or EXPIREd tree by either party. It re-opens the conversation, creating a continuation of the existing Merkle tree rather than a new conversation. ABORTed conversations cannot be reopened — a new conversation with a new tree is required.
+
+| Termination | Merkle tree state | Can reopen? |
+|---|---|---|
+| Mutual close (SEAL) | Sealed, both parties confirmed | Yes (REOPEN) |
+| Unilateral (SEAL-UNILATERAL) | Sealed by one party | Yes (REOPEN) |
+| Timeout (EXPIRE) | Sealed with expiration marker | Yes (within grace) |
+| Abort (ABORT) | Sealed with abort reason | No — new conversation required |
+
+### Session Close Attestation
+
+Every CLOSE and CLOSE-ACK control leaf carries an attestation field:
+
+- **CLEAN** — no issues detected during the session
+- **FLAGGED** — something suspicious was observed
+- **PENDING** — session is closing but review is ongoing, may escalate to human
+
+Both parties attest independently. If they disagree — one CLEAN, one FLAGGED — the SEAL records the disagreement. That disagreement is itself a meaningful signal.
+
+**Why this matters:**
+
+1. **"Last known good" timestamps.** Every clean-close attestation is a positive signed statement that the account was operating normally at that point. When a compromise is later reported, the most recent clean-close attestation tightens the compromise window — the directory has dated evidence of clean operation, not just the absence of anomalies.
+
+2. **LLM self-audit.** The agent must affirmatively evaluate the session before signing the close: were there unusual requests? Did anything trigger the scanner? Was I asked to act outside my normal scope? A prompt injection attack that successfully manipulated the agent during a session may not survive this end-of-session reflection.
+
+3. **Default inversion.** The protocol does not assume clean unless flagged. A session is not confirmed clean until attested. Absence of a clean-close is itself a signal.
+
+A FLAGGED session can trigger dispute resolution — the flagging party may submit the conversation transcript for arbitration (see Step 10).
+
+### Notification Messages — Fire-and-Forget
+
+Not all communication is a conversation. Some messages are one-way: an introduction, a tombstone alert, a trust event. The existing session model (OPEN → exchange → CLOSE/CLOSE-ACK/SEAL) is the wrong shape for these. Opening a full session for a single notification is unnecessary overhead.
+
+A notification message is self-contained and self-sealing — a single atomic unit with no session, no reply path, and termination baked in. It is still signed and hashed. The directory records a hash as a standalone event (not chained into a session Merkle tree). The sender is accountable; the content is verifiable.
+
+**Every notification carries a declared type** from a standardized registry — not freeform strings. Predefined types include: `introduction`, `order-update`, `alert`, `promotional`, `system`. Declaring a misleading type (e.g., typing a promotion as `order-update`) is a signed, verifiable act and a trust score event if flagged.
+
+**Prior conversation requirement:** A notification can only be sent to an agent with whom the sender has had at least one prior conversation. This prevents cold-contact spam entirely.
+
+**Filtering is a rule engine, not an inference engine.** The receiving client evaluates incoming notifications against a deterministic rule stack — no LLM involved:
+
+1. Global type rules — "I never accept `promotional` from anyone"
+2. Sender overrides — "except Agent X, I want `promotional` from them"
+3. Whitelist / blacklist — explicit sender lists that override type rules
+
+Accept or reject. O(1) per notification. If filtering required LLM inference, spam would become a compute DoS attack — each notification burning the recipient's tokens. The LLM only fires after a notification has cleared the filter and the agent decides to act on it.
+
+**Rate limiting:** Per-sending-agent limits enforced at the directory. Lower trust scores get stricter limits. Verified businesses with known identities can apply for elevated rate limits — the recipient's opt-out always overrides regardless of what the sender is permitted to send.
+
+Use cases: agent introductions (web-of-trust), tombstone notifications to counterparties, directory alerts, trust events, recovery event notifications.
+
 ---
 
 ## Step 8: Scan Everything — Prompt Injection Defense
@@ -628,6 +763,51 @@ Owner visits web portal
   → All agents who cached old keys get a refresh
 ```
 
+### Account Compromise and Recovery
+
+Detection without recovery permanently punishes honest victims. If an agent is hacked, the attacker sends malicious messages, and the trust score tanks — but after re-keying the attacker is locked out, the trust score is still in the gutter with no way back. Nobody will transact because the score is too low, and the score can't rise because nobody will transact. A temporary security event permanently destroys a business. Every detection mechanism needs a corresponding recovery mechanism.
+
+#### Tombstone Types
+
+Three distinct tombstone events, each producing a different record in the directory log:
+
+1. **Voluntary** — owner-initiated, WebAuthn-authenticated. Clean account closure.
+2. **Compromise-initiated** — triggered by the "Not me" flow. Phone OTP burns K_server. Signals active attack.
+3. **Social recovery-initiated** — M-of-N recovery contacts agree the account is compromised and the owner cannot act. Last resort.
+
+On any tombstone: K_server is burned, all active sessions receive SEAL-UNILATERAL with a tombstone reason code, social proofs (LinkedIn, GitHub) enter a freeze period and cannot be attached to any new account, and the phone number is flagged as "in recovery."
+
+#### Social Recovery
+
+When standard methods (WebAuthn, phone OTP) are unavailable or compromised, the owner contacts pre-designated recovery agents out-of-band. Those agents sign cryptographic attestations within the protocol. When the M-of-N threshold is met, a 48-hour mandatory waiting period begins. During that window, the old key can still file a contest. After the window, a new key ceremony is initiated.
+
+Recovery contacts must meet a minimum trust score floor. A vouching agent can only participate in one recovery per month. The M-of-N threshold is configurable at registration.
+
+**No ID document custody.** Identity document appeals (passport, driver's license) are explicitly excluded. Becoming a custodian of identity documents creates regulatory obligations and conflicts with the no-PII design principle. If social recovery fails, the honest answer is start fresh — new identity, trust score zero. The network cannot override cryptography without creating a central authority.
+
+**Social carry-forward:** Recovery contacts who vouched for the old identity can introduce the new identity to their network. Previously-connected agents can opt to reconnect at reduced trust. The cryptographic identity is new; the human relationships are not.
+
+#### Compromise Window
+
+The compromise window is not guessed by the owner — it is anchored to logged events in the directory: scan detection timestamps, fallback canary events, counterparty complaints, anomaly alerts. When a tombstone is filed, the directory surfaces the earliest logged anomaly and proposes it as the window start. Activity before the earliest anomaly: owner responsible. Activity after: flagged as potentially unauthorized.
+
+The session close attestation reinforces this — the most recent CLEAN close is a signed, dated statement that the account was operating normally at that point. This provides a hard "last known good" anchor.
+
+#### Recovery Point
+
+When recovery completes, the directory logs a formal recovery event: tombstone type, recovery mechanism, vouching agents, the declared compromise window, and the new public key. This is permanently visible in the trust profile.
+
+Post-recovery trust treatment: trust score floors at a function of pre-compromise history, compromise-window penalties decay at an accelerated rate, and previously-connected agents can opt to reconnect below their normal policy threshold.
+
+#### Voucher Accountability
+
+Vouching carries consequences. Two events within a 2-3 month liability window count against a vouching agent: another tombstone on the recovered account, or a FLAGGED session upheld by arbitration.
+
+- **First bad outcome:** 6-month lockout from vouching. Trust score untouched — the voucher remains a full network participant.
+- **Second bad outcome after reinstatement:** Permanent revocation of vouching privileges. The network concludes they cannot reliably assess trustworthiness for recovery purposes.
+
+Strike counting is global, not per-account. Per-account tracking was considered and rejected — it creates an exploitable loophole where a malicious actor cycles through recovery attempts via a single "friend" relationship. The protocol cannot distinguish collusion from blind loyalty.
+
 ---
 
 ## Step 10: Resolve Disputes — The Directory as Tiebreaker
@@ -639,6 +819,21 @@ The directory's Merkle tree is the golden source. In a dispute:
 4. Proves the message was sent as claimed — without the service ever having seen it before
 
 This is arbitration without surveillance. The directory can prove exactly what was said, even though it never read a single message.
+
+### Dispute Resolution via Session Attestation
+
+When a session closes with a FLAGGED attestation, the flagging party may submit the conversation transcript to the arbitration system. The transcript is cryptographically verifiable — the arbitrating system checks the Merkle root against the directory's record before evaluating. There is no dispute about what was said; the only question is whether it is concerning.
+
+**Ephemeral inference:** The arbitration system uses privacy-first LLM inference with no persistent storage. Transcript in, verdict out, nothing stored. The only record is the verdict itself, recorded in the session seal. This infrastructure exists and is partially built.
+
+**Verdict tiers:**
+- **Dismissed** — concern was overreach, minor notation that a dispute was filed and dismissed
+- **Upheld** — legitimate concern, trust score impact on the flagged party
+- **Escalated** — serious enough for human review or network-wide alert
+
+**Threshold arbitration:** Verdicts require agreement from multiple independent arbitrating nodes. A single compromised arbitrator could systematically dismiss legitimate flags or uphold false ones. Same principle as FROST applied to judgment rather than signing.
+
+**Privacy note:** The concern that flagging exposes a private conversation is addressed by the design itself. The other party already has the full transcript — the flagging disclosure is controlled and bounded. Privacy from the infrastructure is guaranteed by the protocol. Privacy between two communicating parties is a social contract, not a protocol guarantee.
 
 ---
 
@@ -829,20 +1024,19 @@ Third-party implementations are welcome once the ecosystem is established — bu
 
 A single directory node has two problems. First, if it goes down, the system stops. Second — and more important — a single operator can tamper with the data undetected. Federation solves both: redundancy keeps the system running, and independent operators keep each other honest. Federation is a security feature first, an availability feature second.
 
-### Permissioned Consortium
+### Three-Phase Node Deployment
 
 Not anyone can run a directory node. Nodes are operated by vetted partners in a permissioned consortium. Running a node carries responsibility — it handles signaling, hash relay, K_server shares, activity monitoring. Operators are vetted, audited, and accountable.
 
-| Phase | Who runs nodes | Trust model |
-|---|---|---|
-| Launch | We operate a single node | Trust us — but federation-ready architecture |
-| Growth | We operate multiple nodes across regions | Resilient to regional failure |
-| Maturity | Permissioned consortium of vetted operators | Trust the protocol, not any single operator |
-| Future (if needed) | Permissionless with proof of stake | Open participation with economic collateral |
+| Phase | Nodes | Operators | Threshold | Threat model |
+|---|---|---|---|---|
+| **Alpha** | ~6, all AWS | CELLO-operated, one per major region (NA, Europe, Middle East, India, 2x Asia) | ~4-of-6 | Reliability — operational simplicity on one cloud provider |
+| **Consortium** | ~20, multi-cloud | Vetted, contracted, audited operators across AWS + GCP + Azure | ~11-of-20 | Rogue or compromised operator — majority threshold when you know the pool but not unconditionally |
+| **Public** | 50+, permissionless | Proof-of-stake collateral required | Rotating ~5-of-7 per operation | Economic stake + slashing — extra nodes for geographic/provider redundancy, not consensus strength |
 
-The permissioned model prevents Sybil attacks at the node level — no one can spin up 10 malicious nodes to overwhelm consensus. The consortium grows deliberately by adding vetted operators, not by opening the door to anyone.
+**The key insight on thresholds:** as the pool grows, the threshold per operation comes down. More nodes = more redundancy. Security shifts from "we need a supermajority to agree" to "an attacker needs to compromise geographically dispersed nodes across different providers and jurisdictions, and loses their stake if caught."
 
-**Intent: transition to permissionless (proof of stake) when the network is large enough.** Proof of stake nodes need economic compensation to justify running — staking capital and operating infrastructure only makes sense if there's sufficient transaction volume to generate revenue. This transition happens when the network has enough users and economic activity to sustain independent node operators. Until then, the consortium model is the right fit — it's simpler, cheaper to operate, and doesn't require an economic incentive model that the network can't yet support.
+The permissioned model prevents Sybil attacks at the node level — no one can spin up 10 malicious nodes to overwhelm consensus. The consortium grows deliberately by adding vetted operators, not by opening the door to anyone. The transition to permissionless happens when the network has enough users and economic activity to sustain independent node operators.
 
 ### The Append-Only Directory
 
@@ -861,6 +1055,38 @@ This is separate from the message Merkle tree. Two trees:
 - **Identity tree** — profiles, public keys, trust scores. Checkpointed periodically.
 - **Message tree** — conversation hashes. Updated per message.
 
+### Where Consensus Is Actually Needed
+
+FROST signing itself requires no consensus — just t partial signatures from any t of the n nodes. No nodes need to agree on anything; they independently compute partial signatures. Two things do require consensus:
+
+1. **Directory state changes** — agent registrations, key rotations, trust score updates, tombstones. Infrequent but must be consistent across all nodes. All nodes must process the same operations in the same order.
+2. **Conversation hash ledger** — canonical sequence numbers for the global append-only ledger. Every message hash needs a canonical position. This happens at message frequency.
+
+**Real-time and consensus paths are separate.** Agents never wait for consensus. One primary node per session receives hashes, assigns sequence numbers, and ACKs to agents — fast, on the critical path. The primary pushes hashes to other nodes asynchronously. Periodic checkpoints where nodes agree on ledger state happen in the background. Agents are unaffected.
+
+### Primary + Backup Replication
+
+To protect against primary failure before propagation:
+
+- Agent simultaneously sends signed hash to the primary **and** 2-3 backup nodes at session establishment. Fire and forget to backups — no latency cost, agent does not wait for backup ACK.
+- Backups store hashes tagged as **PENDING** — received, but no canonical sequence number yet.
+- Primary propagates sequence numbers to backups. Backups update from PENDING to canonical.
+
+**If primary fails before propagating:** Backups already hold all hashes — nothing is lost. One backup promotes to primary for this session. New primary sequences the accumulated PENDING hashes. Agents reconnect to the new primary and continue. No resubmission required from agents.
+
+**Backup node selection is dynamic per session** — not fixed. The agent picks the 2-3 lowest-latency nodes at session establishment. Different conversations use different backup sets. Load spreads naturally across the pool without central coordination.
+
+### Client-Side Latency Monitoring
+
+Clients maintain persistent connections to all nodes and send lightweight status pings on a regular interval (10-30 seconds, configurable). Each ping is a tiny packet — a timestamp out, a timestamp back, plus a single byte load indicator from the node.
+
+**What the client does with it:**
+- Maintains a live latency table for all nodes — current RTT and trend
+- Session establishment picks the currently fastest node as primary — no guessing, no cold starts
+- If primary latency trends up, the client migrates the session to a faster node proactively — before degradation becomes visible to the agent
+
+**Node self-regulation:** Nodes return a higher load indicator as they approach capacity. Clients naturally route new sessions to less-loaded nodes. Distributed load balancing with no central coordinator — each client makes the locally optimal choice, and the effect is globally distributed load.
+
 ### How Nodes Keep Each Other Honest
 
 Nodes broadcast checkpoint hashes to each other on a regular heartbeat:
@@ -872,7 +1098,7 @@ Every N minutes:
   Node C → all: "Checkpoint #4721, identity root: def456"  ← problem
 ```
 
-With a permissioned consortium of 5-10 nodes, this is direct broadcast — no gossip protocol needed, the set is small enough. A node whose hash diverges is immediately flagged by every other node.
+With a permissioned consortium of 6-20 nodes, this is direct broadcast — no gossip protocol needed, the set is small enough. A node whose hash diverges is immediately flagged by every other node.
 
 A compromised node could try to maintain two copies — the honest data (for hash comparison with peers) and tampered data (for serving to clients). The client-side Merkle proof verification (below) prevents this.
 
@@ -939,7 +1165,7 @@ The node list itself is a signed document, periodically refreshed. The SDK doesn
 
 ### K_server Protection — Threshold Signing (FROST)
 
-No single node holds a complete K_server. Signing uses FROST (Flexible Round-Optimized Schnorr Threshold signatures) on Ed25519, with a 3-of-5 threshold minimum (moving to 5-of-7 at maturity).
+No single node holds a complete K_server. Signing uses FROST (Flexible Round-Optimized Schnorr Threshold signatures) on Ed25519. The threshold scales with the deployment phase: ~4-of-6 at Alpha, ~11-of-20 at Consortium, rotating ~5-of-7 committee at Public scale.
 
 ```
 K_server distributed across 5 nodes as FROST key shares:
@@ -956,7 +1182,7 @@ To sign: any 3 of 5 nodes compute partial signatures
   → The combined key is never assembled in one place
 ```
 
-FROST requires only 2 rounds and is designed for Ed25519. Ed25519's deterministic nonces (RFC 8032) eliminate the entire class of nonce-reuse vulnerabilities that have historically destroyed ECDSA deployments. Compromising 3 of 5 nodes across different jurisdictions and cloud providers is required to forge a signature — significantly harder than any 2-of-3 scheme.
+FROST requires only 2 rounds and is designed for Ed25519. Ed25519's deterministic nonces (RFC 8032) eliminate the entire class of nonce-reuse vulnerabilities that have historically destroyed ECDSA deployments. Compromising a threshold of nodes across different jurisdictions and cloud providers is required to forge a signature — and the threshold scales with the deployment phase.
 
 ### Home Node Model
 
@@ -1033,7 +1259,7 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 
 - **Hash relay, not message relay:** The service sees hashes, never content. Privacy by architecture.
 - **Three-copy Merkle tree:** Sender, receiver, and service each hold a copy. Service is the tiebreaker.
-- **Split-key signing (FROST):** Neither the agent nor the directory can sign alone. Signing uses FROST threshold signatures on Ed25519 — 3-of-5 directory nodes must compute partial signatures; the combined key is never assembled in one place. The agent never holds K_server or any reconstructable share of it. Three-factor compromise needed for key theft (local key + 3 of 5 directory nodes + phone).
+- **Split-key signing (FROST):** Neither the agent nor the directory can sign alone. Signing uses FROST threshold signatures on Ed25519 — a threshold of directory nodes must compute partial signatures; the combined key is never assembled in one place. The agent never holds K_server or any reconstructable share of it. The threshold scales with the deployment phase (~4-of-6 at Alpha, ~11-of-20 at Consortium, rotating ~5-of-7 at Public scale).
 - **Dual public keys:** Every agent has a primary (split-key) and fallback (local-only) public key. Fallback-only signing is a canary for compromise.
 - **Phone as root of trust, WebAuthn as armor:** The phone number is the identity anchor — used for registration, KMS authentication, activity monitoring, and key recovery. But phone numbers are vulnerable to SIM-swap attacks. WebAuthn/2FA hardens the identity without being mandated — it's part of the trust score, and receiving agents can require it as a connection policy. The network enforces strong auth through market pressure, not platform rules.
 - **Emergency revocation is phone-gated, recovery is WebAuthn-gated:** Anyone with the phone can hit "Not me" to revoke — fast response to real compromise. But re-keying requires WebAuthn/2FA — so a SIM-swap attacker can disrupt but not take over. Same tradeoff as every phone-based system, same mitigation: stronger auth protects what matters.
@@ -1043,7 +1269,7 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 - **Identity is stacked, not gated:** Phone gets you in. Everything else improves your trust score. More verifications = harder to fake.
 - **Platform transports are features, not competitors:** Slack/Discord/Telegram work for teams. CELLO layers trust on top. Transport is pluggable — the SDK abstracts it away.
 - **Federation is a security feature, not a scaling feature:** Multiple independent nodes exist so no single operator can corrupt the truth. Redundancy is the bonus.
-- **Permissioned consortium:** Not anyone can run a node. Operators are vetted. Prevents node-level Sybil attacks. Permissionless (proof of stake) is a future option if the network grows large enough.
+- **Three-phase node deployment:** Alpha (6 CELLO-operated AWS nodes, ~4-of-6), Consortium (20 vetted multi-cloud operators, ~11-of-20), Public (50+ permissionless with proof-of-stake, rotating ~5-of-7). Not anyone can run a node until the Public phase — operators are vetted, preventing node-level Sybil attacks.
 - **Append-only directory:** The directory is a hash-chained log of operations (add, modify, delete), not a mutable database. Every honest node processing the same operations arrives at the same state.
 - **Client-side Merkle proof verification:** The client never trusts a single node's data. Every critical lookup comes with a Merkle proof verified against the consensus checkpoint hash. A compromised node can't serve fake data with a valid proof.
 - **Public agents are free:** They're the network growth engine, not a cost center.
