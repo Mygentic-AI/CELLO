@@ -1,1 +1,7 @@
 docs/planning/discussion_logs_drafts/
+
+# macOS
+.DS_Store
+
+# Obsidian vault config
+.obsidian/
