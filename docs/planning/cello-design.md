@@ -160,9 +160,17 @@ CELLO performs the verification work — checking LinkedIn, evaluating GitHub, e
 
 The trust score is not a fixed set of fields — it is a collection of verified attestations. LinkedIn and GitHub are standard categories, but the system is open. Any verifiable claim can go through the oracle flow: present evidence → CELLO verifies → CELLO hashes → client stores. New attestation types can emerge without protocol changes. The directory doesn't care what's inside the JSON blob — it stores a hash.
 
-### Verified Testimonials
+### Attestations — Portable Signed Statements
 
-The oracle pattern enables user-generated reviews as trust data. A plumber asks five satisfied customers — all verified CELLO agents — to submit recommendations directly to CELLO. Each reviewer communicates with the oracle independently. CELLO records a structured attestation, hashes it, and returns it to the plumber. The plumber stores the bundle. Anyone requesting the plumber's trust profile receives the testimonials from the plumber's client and verifies them against CELLO's hashes. Reviewers are verified, reviews are tamper-proof, no platform controls them — Yelp reviews without Yelp.
+An attestation is a signed, hashable statement from one agent about another that the subject can carry and present to anyone. The content is freeform — a service review, a professional reference, a conditional endorsement ("I vouch for this plumber specifically — I've hired them twice"), anything the issuer agrees to sign. The subject stores it; the directory stores the hash; any third party can verify authenticity.
+
+The flow: Bob signs a statement about Alice. Bob sends it to Alice and to the directory. Directory hashes it, discards the content. Alice stores the attestation and the hash. When Alice presents it to Charlie, Charlie verifies the hash against the directory — tamper-proof, no platform controls it.
+
+**Revocation:** Bob can revoke an attestation at any time. The hash remains in the directory log (append-only), but a revocation event is appended alongside it. Verifiers see: hash present, status revoked. If Alice presents a revoked attestation, verification fails immediately — a trust score event.
+
+A plumber with five satisfied customers — all verified CELLO agents — can ask each to submit an attestation. The plumber stores the bundle. Anyone requesting the trust profile receives the attestations from the plumber's client and verifies them against CELLO's hashes. Reviewers are verified, reviews are tamper-proof, no platform controls them — Yelp reviews without Yelp.
+
+Connection endorsements (see Step 6) are a specific type of attestation checked programmatically at the connection gate. All other attestations are informational — part of the trust profile, not a connection filter.
 
 ### Signal Scoring
 
@@ -439,16 +447,43 @@ The system never stops. It temporarily operates at lower trust when the director
 | Setting | Behavior |
 |---|---|
 | Open | Auto-accept all requests above minimum trust score |
-| Require introduction | Accept only if 1-2 agents in my network vouch for the requester |
+| Require endorsements | Accept only if N agents I know have pre-endorsed the requester |
+| Require introduction | Ad-hoc fallback: accept if a mutual contact vouches in real time |
 | Selective | Auto-accept known agents, notify owner for new ones |
 | Guarded | Owner must manually approve every new connection |
 | Listed only | Visible in directory but not accepting connections |
 
-**Web-of-trust introductions:** An agent whose connection request hits a "require introduction" policy can negotiate automatically. The requesting agent identifies mutual contacts, asks one to introduce them, and the introducing agent sends a notification to the receiver: "Agent A asked me to introduce them, I know them." The receiver accepts or declines based on who introduced them. The entire negotiation is agent-to-agent with no human involvement.
+### Connection Endorsements — Pre-Computed Web of Trust
 
-Introduction vouching is explicitly not a protocol-level event. It carries no formal consequences — no lockout, no trust score impact, no network tracking. It is a conversational signal. If an agent's introductions prove unreliable, the receiving agent adds them to a local no-vouch list. This is a client-side policy decision, not a network mechanism.
+A connection endorsement is a signed, binary statement from one agent about another: "I know this person and have had no issues with them." It can optionally carry a short context string, but it is always binary — it either exists or it doesn't.
 
-**Why this matters for Sybil resistance:** A bot farm of newly-created agents has no connections to established networks. It cannot provide introductions because nobody in the target's network knows them. Even if an attacker creates 20,000 phone-verified agents, none can reach agents with an introduction policy. The cost of penetrating a real network rises from "a phone number" to "a phone number plus an established agent in the target's network willing to introduce you."
+Endorsements are gathered ahead of time, not at the moment of connection:
+
+```
+Alice asks Bob to endorse her (client can negotiate autonomously — inference-free or local LLM)
+  → Bob agrees and signs the endorsement (Alice's key, Bob's key, optional context, timestamp)
+  → Bob sends the signed endorsement to Alice AND to the directory
+  → Directory verifies Bob's signature, hashes it, stores the hash, discards the content
+  → Alice stores the endorsement. Directory holds only the hash.
+```
+
+At connection time, verification is a pure hash lookup — no calling out to endorsers, no inference, no waiting for Bob to be online:
+
+```
+Alice contacts Charlie (who requires endorsements)
+  → Charlie's client computes: intersection of "agents I know" ∩ "agents who endorsed Alice"
+  → Alice provides her relevant connection endorsements
+  → Charlie verifies each against the directory hash
+  → Accept or decline — milliseconds, no round-trip to endorsers required
+```
+
+**Bootstrapping a new agent:** When creating a second or business agent, ask your existing network to endorse the new public key before it goes live. The new agent launches with pre-built endorsements rather than a cold-start trust score of zero.
+
+**Anti-farming rule:** Connection endorsements between agents with the same owner are invalid. The directory enforces this at submission time — if endorser and endorsed share a phone-verified owner, the submission is rejected. An owner cannot manufacture endorsements by cross-endorsing their own agents.
+
+**Introductions as fallback:** The just-in-time introduction mechanism still exists for the ad-hoc case — when an agent has no pre-built endorsements but a mutual contact is available to vouch in real time. Endorsements are the preferred path; introductions are the fallback.
+
+**Why this matters for Sybil resistance:** A bot farm of newly-created agents has no connections to established networks and cannot acquire endorsements from real agents. Even with 20,000 phone-verified accounts, none can reach agents with an endorsement policy. And unlike introductions, the endorsement check requires no live endorser — it cannot be gamed by timing attacks or by flooding an introducer with requests.
 
 **Authentication requirements:** Receiving agents can require specific verification factors before accepting. "Must have WebAuthn" or "must have 2FA" as a hard gate. This is the market-pressure mechanism — CELLO doesn't mandate strong auth, but agents that handle real money or sensitive data will. An agent owner who configures "require WebAuthn" will never accept a connection from a phone-only agent. The requester gets a clear rejection reason: "This agent requires WebAuthn verification. Add it at portal.cello.dev to connect." Friction happens at the right moment — when it matters — not at onboarding.
 
