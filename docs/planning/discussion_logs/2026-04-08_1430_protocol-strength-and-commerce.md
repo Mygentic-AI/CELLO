@@ -1,6 +1,8 @@
 ---
-name: Protocol strength and commerce use cases
+name: Protocol Strength and Commerce Use Cases
+type: discussion
 date: 2026-04-08 14:30
+topics: [non-repudiation, merkle-tree, commerce, directory-custodian, dispute-resolution, signed-hashes, fabricated-conversation-attack]
 description: Evaluated CELLO's strength for financial transactions and commerce use cases, non-repudiation as the core primitive, and directory integrity as a conversation proof ledger.
 ---
 

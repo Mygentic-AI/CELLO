@@ -1,6 +1,8 @@
 ---
-name: Client-side trust data ownership — hash everything, store nothing
+name: Client-Side Trust Data Ownership
+type: discussion
 date: 2026-04-08 19:30
+topics: [trust-data, privacy, GDPR, hash-everything, client-sovereignty, verified-testimonials, extensible-schema, oracle-pattern, deanonymization]
 description: The directory stores hashes of trust scores, bios, and verification data — never the data itself. The client is the custodian of their own identity data. Recipients verify authenticity by comparing what the client sends against the directory's hash.
 ---
 

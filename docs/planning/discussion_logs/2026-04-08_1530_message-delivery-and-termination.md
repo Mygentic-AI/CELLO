@@ -1,6 +1,8 @@
 ---
-name: Message delivery edge cases and session termination
+name: Message Delivery Edge Cases and Session Termination
+type: discussion
 date: 2026-04-08 15:30
+topics: [message-delivery, session-termination, merkle-tree, delivery-failure, directory-custodian, sequence-numbers, dual-path, grace-period]
 description: Systematic enumeration of all message delivery failure modes across the dual-path architecture (direct channel + directory relay), and the session termination protocol that must be designed upstream of all delivery decisions.
 ---
 

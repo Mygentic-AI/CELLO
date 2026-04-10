@@ -1,6 +1,8 @@
 ---
-name: Data residency and compliance analysis
+name: Data Residency and Compliance Analysis
+type: discussion
 date: 2026-04-08 16:00
+topics: [GDPR, data-residency, compliance, pseudonymity, account-deletion, UAE, hash-relay, append-only-log, right-to-erasure]
 description: Analysis of how CELLO's architecture naturally satisfies data residency requirements (UAE, EU/GDPR), the pseudonymity model for public keys and trust scores, and the voluntary disclosure argument for bios and reputation data.
 ---
 

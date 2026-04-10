@@ -1,3 +1,12 @@
+---
+name: Open Decisions
+type: decision
+date: 2026-04-08
+topics: [FROST, Ed25519, SHA-256, threshold-signing, hash-relay, merkle-tree, sequence-numbers, DeBERTa, SDK, mutual-authentication, nonce, supply-chain]
+status: resolved
+description: 12 resolved design decisions from the day-zero protocol review — threshold scheme (FROST), signature scheme (Ed25519), hash function (SHA-256), threshold parameters (3-of-5), signed hash relay, RFC 6962 Merkle construction, and more.
+---
+
 # Open Decisions
 
 Decisions that resolve with a clear choice. Work through these, update the design doc, and archive this file.

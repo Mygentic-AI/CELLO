@@ -1,3 +1,12 @@
+---
+name: Day-0 Agent-Driven Development Plan
+type: plan
+date: 2026-04-07
+topics: [claude-flow, development-plan, testing, MCP, SDK, integration-testing, cryptography, SPARC, TDD]
+status: active
+description: How to build CELLO using Claude-Flow multi-agent orchestration — CLAUDE.md templates, hive-mind architecture, SPARC TDD phases, cryptographic correctness rules, integration testing strategy.
+---
+
 # Day-0 Agent-Driven Development Plan
 
 **Project:** CELLO — Collaborative Execution using Linked Ledger Operations

@@ -1,6 +1,8 @@
 ---
-name: Account compromise, recovery, and web-of-trust connections
+name: Account Compromise, Recovery, and Web-of-Trust Connections
+type: discussion
 date: 2026-04-08 18:00
+topics: [compromise, recovery, social-recovery, tombstone, session-attestation, dispute-resolution, web-of-trust, voucher-accountability, arbitration, sybil-defense, connection-policy]
 description: Recovery paths after account compromise — social recovery mechanics, tombstone policy, voucher accountability, session close attestation, dispute resolution via ephemeral LLM arbitration, and web-of-trust connection policy as Sybil resistance at the connection layer.
 ---
 

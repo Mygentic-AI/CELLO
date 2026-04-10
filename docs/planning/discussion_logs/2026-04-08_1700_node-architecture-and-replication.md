@@ -1,6 +1,8 @@
 ---
-name: Node architecture, replication, and client routing
+name: Node Architecture, Replication, and Client Routing
+type: discussion
 date: 2026-04-08 17:00
+topics: [federation, nodes, FROST, threshold-signing, replication, consensus, latency, backup, primary-node, load-balancing]
 description: Three-phase node deployment strategy, threshold signing parameters per phase, primary/backup replication topology, and client-side latency monitoring for dynamic routing.
 ---
 

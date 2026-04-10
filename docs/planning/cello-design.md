@@ -1,3 +1,12 @@
+---
+name: CELLO Design Document
+type: design
+date: 2026-04-05
+topics: [identity, trust, merkle-tree, FROST, split-key, federation, prompt-injection, agent-communication, commerce, discovery, onboarding, key-management, connection-policy, notifications, dispute-resolution, compliance, session-termination]
+status: active
+description: Master architecture — the 10-step trust chain, cryptographic primitives, federated directory, client architecture, integration patterns, and revenue model.
+---
+
 # CELLO — Collaborative Execution using Linked Ledger Operations
 
 ## A Secure Collaborative Mesh for AI Agents

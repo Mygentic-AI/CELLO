@@ -1,6 +1,8 @@
 ---
-name: Connection staking and institutional defense
+name: Connection Staking and Institutional Defense
+type: discussion
 date: 2026-04-08 19:00
+topics: [staking, escrow, connection-policy, gate-pyramid, DDoS-defense, institutions, flat-fee, inference-cost, session-attestation]
 description: Proof-of-stake at the connection layer as a Sybil and DDoS defense for open institutions. Escrow mechanics, the gate pyramid principle, the creative LLM problem, and why the protocol provides primitives rather than prescribing policy.
 ---
 

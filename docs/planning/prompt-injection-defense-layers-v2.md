@@ -1,3 +1,12 @@
+---
+name: Prompt Injection Defense Architecture
+type: design
+date: 2026-04-05
+topics: [prompt-injection, security, DeBERTa, sanitization, scanning, outbound-gate, redaction, governance, access-control, supply-chain]
+status: active
+description: 6-layer prompt injection defense — deterministic sanitization (11 steps), LLM scanner, outbound gate, redaction pipeline, runtime governance, access control. Integrated into CELLO client as Step 8.
+---
+
 # Prompt Injection Defense: 6-Layer Architecture
 
 Source: Andre Pemmelaar's write-up on hardening OpenClaw against prompt injection attacks.

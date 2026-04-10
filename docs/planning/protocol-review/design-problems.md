@@ -1,3 +1,12 @@
+---
+name: Design Problems
+type: review
+date: 2026-04-08
+topics: [fallback-mode, trust-recovery, sybil-defense, trust-farming, succession, GDPR, deanonymization, phone-verification, append-only-log]
+status: open
+description: 7 unsolved design problems requiring mechanism work — fallback downgrade attack, trust score recovery, phone Sybil floor, trust farming, agent succession, GDPR vs append-only log, home node deanonymization.
+---
+
 # Design Problems
 
 Problems that require real design work — not a single decision but a mechanism, a policy, or an architectural change. Each one scopes what makes it hard and what the work involves.

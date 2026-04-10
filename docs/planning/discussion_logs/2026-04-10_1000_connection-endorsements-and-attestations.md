@@ -1,6 +1,8 @@
 ---
-name: Connection endorsements and attestations
+name: Connection Endorsements and Attestations
+type: discussion
 date: 2026-04-10 10:00
+topics: [endorsements, attestations, web-of-trust, anti-farming, bootstrapping, connection-policy, pre-computed, revocation, sybil-defense]
 description: Pre-computed endorsement system replacing just-in-time introductions, attestation as a general primitive, revocation model, anti-farming rules, and bootstrapping new agents via existing networks.
 ---
 

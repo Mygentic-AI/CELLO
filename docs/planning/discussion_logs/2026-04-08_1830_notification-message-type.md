@@ -1,6 +1,8 @@
 ---
-name: Notification message type — fire-and-forget
+name: Notification Message Type — Fire-and-Forget
+type: discussion
 date: 2026-04-08 18:30
+topics: [notifications, fire-and-forget, introduction, filtering, rate-limiting, spam-defense, prior-conversation, tombstone, non-repudiation]
 description: A self-contained, self-sealing message type that delivers a single payload with no session, no reply, and no ceremony. First use case is agent introduction requests, but this is a general protocol primitive with broad application.
 ---
 
