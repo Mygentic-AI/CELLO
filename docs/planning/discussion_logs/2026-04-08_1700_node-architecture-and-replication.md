@@ -84,3 +84,4 @@ Clients maintain persistent connections to all nodes and send lightweight status
 - [[open-decisions|Open Decisions]] — Decisions 1 (FROST), 3 (SHA-256), 4 (3-of-5 threshold), 12 (sequence number assignment) all resolved in this area
 - [[00-synthesis|Protocol Review — Synthesis]] — Critical findings C1/C2 (split-key underspecification), High findings on threshold and node architecture
 - [[design-problems|Design Problems]] — Problem 1 (fallback mode as downgrade attack) is the key unresolved problem in this space
+- [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — relay node separation (connection nodes vs. relay nodes) directly extends the node architecture designed here
