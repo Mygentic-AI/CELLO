@@ -22,7 +22,7 @@ Personal agents are exploding. Running on your laptop, running on your Mac Mini.
 
 **CELLO is the identity, trust, and verification infrastructure for the agent economy.** A secure collaborative mesh where agents register with verified identities, discover each other, and communicate with tamper-proof guarantees. The guarantees come from crypto primitives — hashing, signing, Merkle trees — not from trusting a platform. The platform never sees message content — only hashes. Think of it like a LinkedIn profile or a small business webpage — but for agents.
 
-The on-ramp is a free, open-source security SDK. Anyone dealing with inbound messages to their agent gets immediate value from the prompt injection defense alone — it filters all incoming and outgoing messages locally on your machine, you can audit the code yourself. They don't need to care about the marketplace to benefit. But once they're using the SDK, the path to discovery and trusted collaboration is already there.
+The on-ramp is a free, open-source secure communication client. Anyone dealing with inbound messages to their agent gets immediate value from the prompt injection defense alone — it filters all incoming and outgoing messages locally on your machine, you can audit the code yourself. They don't need to care about the marketplace to benefit. But once they're using the client, the path to discovery and trusted collaboration is already there.
 
 **Salesforce:** *"No more servers"* — you don't need infrastructure to run a business.
 **Cello:** *"No more APIs"* — you don't need engineers to connect your business.
@@ -47,11 +47,11 @@ Each layer works without the others. But stacked together they're the complete t
 
 ### Two-Sentence Pitch
 
-Is the agent I'm talking to who I think it is, and can it be trusted? We provide a peer-to-peer verification layer so you always know who you're dealing with and neither side can deny what was said.
+Millions of agents are coming online and they could be collaborating with each other — but there's no way to verify who you're talking to, and no defense against what's being sent to you. CELLO is a peer-to-peer identity and trust layer that lets agents verify each other, communicate with tamper-proof guarantees, and prove what was said — without the platform needing to monitor or store the content.
 
 ### 30-Second Pitch
 
-Agent-to-agent communication is about to explode. Personal agents like OpenClaw and NanoClaw are gaining widespread adoption. Businesses are already offering agent interfaces. In the next few years, services will be marketed and sold agent-to-agent directly. But something's holding it back — especially for the small guy. Trust. If you didn't build both ends, how do you know the agent on the other side is who it claims to be? How do you know what it's sending hasn't been tampered with? And right now, most agents have zero defense against prompt injection — every incoming message is a potential attack. We give owners a free open-source security layer that filters all incoming and outgoing messages locally on their machine, and a means to have safe, verified agent-to-agent chat. Think of it like a LinkedIn profile, but for agents. You can always verify who you're talking to, and you always know what was said. Security gets them in the door. The registry is the foundation for the agent marketplace.
+Agent-to-agent communication is about to explode. Personal agents are already running on laptops and home servers. Businesses are deploying agent interfaces. Soon, services will be discovered, negotiated, and transacted agent-to-agent — without a human in the loop. But right now there's no trust layer. If you didn't build both ends, you don't know who the agent on the other side is, you can't verify what it sent hasn't been tampered with, and you have no defense against prompt injection — every incoming message is a potential attack. Email made this mistake. SMTP shipped without sender verification, and thirty years of patches later, spam is still unsolvable. Agent communication is at the same inflection point. CELLO builds trust in from the start — a peer-to-peer identity and verification layer where agents register with verified identities, discover each other, and communicate with tamper-proof guarantees. The platform never sees message content — only hashes. If there's a dispute, the Merkle tree proves what was said without anyone having surveilled the conversation. The on-ramp is a free, open-source secure communication client — prompt injection defense that works standalone, no sign-up required. Security is what you get from day one. The registry makes the network safer over time. And once you have a secure, private, trustless protocol for communication, commerce becomes possible.
 
 ---
 
@@ -68,7 +68,7 @@ CELLO's trust builds step by step. Each stage adds security guarantees on top of
 | **5. Request Connection** | Agent sends a connection request through the directory. Receiver sees the full trust profile. | Receiver decides whether to engage — before any data is exchanged. |
 | **6. Accept & Connect** | Receiver accepts. Both agents establish a session — P2P, Slack, or any transport. | Direct channel. No platform in the middle (unless you want one for visibility). |
 | **7. Converse with Proof** | Every message is hashed, signed, and recorded in a Merkle tree. Three copies: sender, receiver, directory. | Tamper-proof history. Neither side can deny what was said. |
-| **8. Scan Everything** | Receiver's SDK scans every incoming message for prompt injection. Scan results recorded in the Merkle tree. | Defense against malicious payloads. Evidence if something bad comes through. |
+| **8. Scan Everything** | Receiver's client scans every incoming message for prompt injection. Scan results recorded in the Merkle tree. | Defense against malicious payloads. Evidence if something bad comes through. |
 | **9. Detect Compromise** | Anomalies (fallback-only signing, failed scans, unusual patterns) trigger alerts to the owner's phone. | Real-time awareness. Owner can kill the session instantly. |
 | **10. Resolve Disputes** | Directory's Merkle tree is the tiebreaker. Proves what was said without ever having seen the content. | Arbitration without surveillance. |
 
@@ -671,7 +671,7 @@ Use cases: agent introductions (web-of-trust), tombstone notifications to counte
 
 ## Step 8: Scan Everything — Prompt Injection Defense
 
-The receiver's SDK scans every incoming message for prompt injection before the agent processes it. This is the security boundary — the sender's scan is an honesty signal, but the receiver always re-scans locally.
+The receiver's client scans every incoming message for prompt injection before the agent processes it. This is the security boundary — the sender's scan is an honesty signal, but the receiver always re-scans locally.
 
 ### Scanning Layers
 
@@ -688,14 +688,14 @@ Scan results are included in the Merkle leaf. This means there's evidence of wha
 
 ### What Happens If Something Sketchy Comes Through
 
-If the receiver's SDK detects malicious content mid-conversation:
+If the receiver's client detects malicious content mid-conversation:
 1. The scan result is recorded in the Merkle leaf — evidence, not allegation
-2. The receiver's agent is warned / message is blocked (depending on SDK policy)
-3. The SDK reports the detection to the directory
+2. The receiver's agent is warned / message is blocked (depending on client policy)
+3. The client reports the detection to the directory
 4. The directory can flag the sender, demotion of trust score
 5. Repeated violations → progressive enforcement: warning, rate limit, suspension
 
-Every agent running the SDK is a sensor. The same free tool that protects individual agents polices the entire network — no separate moderation system needed.
+Every agent running the client is a sensor. The same free tool that protects individual agents polices the entire network — no separate moderation system needed.
 
 ---
 
@@ -837,7 +837,7 @@ When a session closes with a FLAGGED attestation, the flagging party may submit 
 
 ---
 
-## Client Architecture — The SDK
+## Client Architecture — The Secure Communication Client
 
 ```
 User's machine:
@@ -875,12 +875,12 @@ Always pin the version. `npx` without a version pin fetches latest on every run 
 **First run:**
 - Phone verification (WhatsApp/Telegram)
 - Generates K_local, registers with directory, receives K_server shares
-- Loads Layer 2 prompt injection model — bundled in the package, SHA-256 hash pinned in SDK source. The SDK verifies the model's integrity before loading. If a different model is substituted, the SDK logs the substitution and the model's hash. The protocol does not mandate a specific model; it mandates that a prompt injection classifier runs and its identity is verifiable.
+- Loads Layer 2 prompt injection model — bundled in the package, SHA-256 hash pinned in client source. The client verifies the model's integrity before loading. If a different model is substituted, the client logs the substitution and the model's hash. The protocol does not mandate a specific model; it mandates that a prompt injection classifier runs and its identity is verifiable.
 - Agent is ready to scan, discover, and chat
 
-### SDK Supply Chain Integrity
+### Client Supply Chain Integrity
 
-A security SDK that could itself be compromised is a contradiction. The CELLO package uses three layers of supply chain verification:
+A secure communication client that could itself be compromised is a contradiction. The CELLO package uses three layers of supply chain verification:
 
 - **npm provenance** — every published version is linked to a specific Git commit and GitHub Actions CI build. Users can verify the package was built from public source code, not manually published from someone's laptop.
 - **Sigstore signing** — creates a verifiable chain from source code → CI pipeline → published package. Cryptographic proof of origin.
@@ -896,7 +896,7 @@ cd cello-sdk && npm ci && npm run build
 # Compare output against published package
 ```
 
-This matters because the SDK handles cryptographic keys, scans messages, and gates trust decisions. Users should be able to verify — not just trust — that the code running on their machine is the code in the public repo.
+This matters because the client handles cryptographic keys, scans messages, and gates trust decisions. Users should be able to verify — not just trust — that the code running on their machine is the code in the public repo.
 
 ### WebSocket Security
 
@@ -1139,7 +1139,7 @@ The client doesn't need access to the full directory. It queries the checkpoint 
 
 ### Client-Side Verification Summary
 
-The SDK protects itself at every step:
+The client protects itself at every step:
 
 | What the client checks | How | When |
 |---|---|---|
@@ -1161,7 +1161,7 @@ Agents always initiate connections to directory nodes — no node can cold-call 
 3. SDKs fetch the updated node list automatically — the compromised node is excommunicated
 4. Any K_server shares held by the compromised node are invalidated; new shares are generated across remaining nodes
 
-The node list itself is a signed document, periodically refreshed. The SDK doesn't need a manual update to stop trusting a removed node.
+The node list itself is a signed document, periodically refreshed. The client doesn't need a manual update to stop trusting a removed node.
 
 ### K_server Protection — Threshold Signing (FROST)
 
@@ -1213,7 +1213,7 @@ If a home node is permanently compromised or goes down:
 
 ### Enterprise Private Nodes
 
-Enterprises can run their own CELLO directory node on their infrastructure. Same SDK, same protocol, same Merkle trees — but the directory is theirs. No data leaves the building.
+Enterprises can run their own CELLO directory node on their infrastructure. Same client, same protocol, same Merkle trees — but the directory is theirs. No data leaves the building.
 
 **The problem it solves:** A company has a hundred agents across departments. There's no way to know they're all legitimate. Someone spins up a rogue bot in a Slack channel, it looks like every other bot. With an internal CELLO node, every agent has a verified identity. If one gets compromised, the Merkle tree shows exactly when and what happened.
 
@@ -1237,7 +1237,7 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 - Directory with registration (email + phone via WhatsApp/Telegram)
 - Agent listings (public + marketplace)
 - P2P chat with hash relay (Merkle tree verification)
-- SDK (open-source) for verified chat
+- Secure communication client (open-source) for verified chat
 - Payments — buyer pays, seller gets paid, platform takes cut
 
 ### Phase 2: Trust & Security
@@ -1267,7 +1267,7 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 - **Graceful degradation:** Directory outage drops signing from split-key to local-only. Conversations continue at reduced trust. Never a full stop.
 - **Receiver-side scanning is the security boundary:** Sender's scan is an honesty signal, not the defense. The receiver always re-scans locally.
 - **Identity is stacked, not gated:** Phone gets you in. Everything else improves your trust score. More verifications = harder to fake.
-- **Platform transports are features, not competitors:** Slack/Discord/Telegram work for teams. CELLO layers trust on top. Transport is pluggable — the SDK abstracts it away.
+- **Platform transports are features, not competitors:** Slack/Discord/Telegram work for teams. CELLO layers trust on top. Transport is pluggable — the client abstracts it away.
 - **Federation is a security feature, not a scaling feature:** Multiple independent nodes exist so no single operator can corrupt the truth. Redundancy is the bonus.
 - **Three-phase node deployment:** Alpha (6 CELLO-operated AWS nodes, ~4-of-6), Consortium (20 vetted multi-cloud operators, ~11-of-20), Public (50+ permissionless with proof-of-stake, rotating ~5-of-7). Not anyone can run a node until the Public phase — operators are vetted, preventing node-level Sybil attacks.
 - **Append-only directory:** The directory is a hash-chained log of operations (add, modify, delete), not a mutable database. Every honest node processing the same operations arrives at the same state.
