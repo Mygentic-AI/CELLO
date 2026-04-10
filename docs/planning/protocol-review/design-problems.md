@@ -43,6 +43,24 @@ Full analysis in [[00-synthesis|day-zero-review/]].
 
 *Ref: day-zero-review/01 #4; day-zero-review/08, Section 1.1*
 
+**How we thought through it (2026-04-10):**
+
+The first insight was separating two distinct DDoS problems. Hammering — raw volume attacks — is a solved problem (CloudFront-style mitigation). The real threat is resource-tying: flooding the connection layer to make it unavailable, forcing agents into fallback. These require different treatments.
+
+The second insight was that the problem has two separate infrastructure surfaces. If you separate connection nodes (public-facing, handle new authentication) from relay nodes (serve only established, already-authenticated sessions), a DDoS against connection nodes can't reach relay nodes. Existing sessions never fall back — they stay on split-key because the relay infrastructure isn't under attack. The attacker has to take down two distinct, differently-addressable layers to force fallback on any established session.
+
+For new connections under load, random pool selection rather than FIFO queuing means a flood can't create a hard wall. If an attacker sends 90% of requests, 10% of legitimate users still get through. The cost of the attack scales proportionally with its effectiveness — it can never guarantee blocking a specific target.
+
+The third insight inverted the fallback assumption entirely. The current design says degraded mode = lower trust but still accept. That's backwards. A degraded state is a reason to raise your guard, not lower it. The client already has the signal — it pings multiple nodes and knows when it can't reach a quorum. So the default during degraded mode should be: refuse new unauthenticated connections. Not a silent drop — a clear reason sent to the requester so legitimate agents know to retry.
+
+On top of that, the client manages two separate lists: a whitelist (preferential treatment under normal authenticated conditions) and a degraded-mode list (agents trusted enough to talk to when the directory is completely unavailable). The degraded-mode list is expected to be much shorter — a stronger statement of trust. An agent can be on both lists, one but not the other, or neither. The owner decides.
+
+Finally: the client tracks only its own lists. It does not track which other agents have listed it. An attacker who compromises a machine gets no map of who to target — they have to probe blindly, burning resources and generating detectable noise.
+
+**What this closes:** The core attack — steal K_local, DDoS directory, impersonate — is blocked at every stage. Existing sessions don't fall back. New connections default to refuse. Even if an agent is on the degraded-mode list, the session is flagged in the Merkle leaf. The time-limited fallback token (from the original design work list) is less necessary with this architecture but remains a potential refinement for new connections.
+
+**What's still unspecified:** The fallback token mechanism itself — a signed "I was online as of T" proof the directory issues during normal operation. Not a blocker, but would add a layer of assurance. See [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] for the full mechanism.
+
 ---
 
 ### 2. Trust score recovery after compromise
