@@ -300,6 +300,16 @@ Not stored as full records. The directory maintains rate-limiting counters — c
 
 ## Parent-child agent registry
 
+### Two distinct use cases
+
+The parent-child registry serves two different needs that happen to share the same mechanism.
+
+**Concurrency and capacity.** An agent handles one active connection at a time. A pizza business handling 50 simultaneous orders needs 50 agent instances — not because the business has 50 identities, but because it needs 50 concurrent workers. Each worker is a child agent authorized by the same business identity. This is the original motivation for the registry.
+
+**Specialization.** A person runs a primary personal agent and one or more specialized agents in the cloud for specific services. Different roles, same human identity behind them.
+
+The free tier (5 agents) is sized for personal and small-use cases. The bond path is explicitly designed for commercial and fleet use: a pizza business needing 50 agents pays for the additional slots. The bond simultaneously funds the operator's expansion and provides the Sybil defense — an attacker cannot cheaply spin up large agent fleets just because they hold one legitimate identity.
+
 ### Human identity layer
 
 The identity_key represents the human, not any specific agent. Social verifications and device attestations are properties of the human — the same LinkedIn account, the same iPhone, behind all their agents. These move up from `agent_id` to `identity_key_hash` in the schema.
