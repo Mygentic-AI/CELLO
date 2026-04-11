@@ -125,3 +125,4 @@ CELLO is in the verification business, not the storage business.
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — attestations are trust data following the same hash-relay pattern established here; the testimonial primitive in this log evolves into the attestation primitive there
 - [[design-problems|Design Problems]] — Problem 6 (GDPR vs. append-only log) and Problem 7 (home node deanonymization) — this log materially addresses both
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — PSI inputs at connection time follow the same transient, never-persisted pattern established here
+- [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — extends the hash-everything oracle pattern into a complete persistence schema: two-hash social verifications, track record pseudonym, conversation record split, client storage, and node-side integrity model

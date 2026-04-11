@@ -253,3 +253,4 @@ The legitimate user's cost for each defense: organic transactions, endorsements 
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — trust-weighted pool selection referenced here as an existing defense that layers with TrustRank
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — gate pyramid and economic staking that this log's bond mechanism parallels
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — hash-everything-store-nothing constraint that all proposed mechanisms must work within
+- [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — the one-account-per-social-identifier and one-account-per-device deduplication rules are implemented at the schema level via account_id_hash and device_id_hash uniqueness constraints

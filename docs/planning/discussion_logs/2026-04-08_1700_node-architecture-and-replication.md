@@ -86,3 +86,4 @@ Clients maintain persistent connections to all nodes and send lightweight status
 - [[design-problems|Design Problems]] — Problem 1 (fallback mode as downgrade attack) is the key unresolved problem in this space
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — relay node separation (connection nodes vs. relay nodes) directly extends the node architecture designed here
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — the transport layer (persistent bidirectional WebSocket) and connection setup (ephemeral Peer IDs, directory as signaling channel) for the persistent client-to-node connections this log designs around
+- [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — extends this node architecture with PostgreSQL schema, append-only RLS enforcement, hash chain integrity, and the full federation replication strategy for all directory tables

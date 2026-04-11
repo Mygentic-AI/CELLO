@@ -228,3 +228,4 @@ Accountability is entirely client-side: if Agent C repeatedly introduces agents 
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — the introduction mechanism uses notification messages; the fire-and-forget primitive is designed here
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — connection policy and escrow mechanics that depend on session close attestation
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — extends the web-of-trust connection policy with pre-computed endorsements
+- [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — the backup and recovery strategy (seed phrase + HKDF-derived keys, encrypted cloud backup) is the client-side implementation of key recovery; conversation Merkle trees are identified as the only irreplaceable client data
