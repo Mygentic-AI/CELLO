@@ -165,11 +165,15 @@ Some corporate firewalls block all non-443 traffic entirely. libp2p supports Web
 
 **Technical feasibility confirmation:** All three layers are implemented in libp2p's existing stack. DCuTR, circuit relay, and WebSocket transport are production features. No novel technology required.
 
-### Open design question: relay node architecture
+### Relay node architecture
 
-The circuit relay nodes used in Layer 2 are separate from directory nodes. They need to be operated by someone. Current open question: does CELLO operate dedicated relay infrastructure, do directory node operators also run relay nodes, or does CELLO use the existing libp2p public relay network?
+Circuit relay nodes are separate from directory nodes and are operated by different entities. This is a protocol constraint, not a preference.
 
-**Privacy implication:** The relay node sees the ephemeral Peer IDs of A and B (not their real identities) and encrypted traffic (not content). If the relay and the directory are operated by the same entity, they can correlate ephemeral Peer IDs (from relay) with real identities (from directory signaling). If they are separated, correlation requires compromising two different systems. This decision affects the privacy guarantee under relay fallback.
+**Privacy rationale:** The relay node sees the ephemeral Peer IDs of A and B and encrypted traffic (not content). The directory sees the mapping from real agent identity to current ephemeral Peer ID — it handled the signaling. An operator controlling both can correlate: look up the ephemeral Peer ID in the directory signaling record, resolve it to a real identity, and link the relay session to that identity. Separating relay and directory means this correlation requires compromising two independent systems.
+
+**Performance rationale:** Directory nodes handle signaling, hash relay, and authentication across many concurrent sessions. Circuit relay nodes are latency-sensitive forwarding infrastructure sitting in the connection path for the ~20–30% of sessions that cannot hole-punch. The resource profiles differ. Combining them degrades both: relay traffic competes with hash relay and signaling for the same resources. Separation also lets relay capacity scale independently of directory capacity.
+
+**Who operates relay nodes:** The specific model (dedicated CELLO relay infrastructure, Consortium-phase directory operators under a separate relay agreement, or a hybrid) is a governance and operations decision for later phases. The constraint is the separation itself — relay and directory must not be the same operator entity.
 
 ---
 
@@ -282,15 +286,11 @@ Each mechanism in the transport layer has been traced to known, production-ready
 
 ## Open Questions
 
-1. **Relay node operations:** Who operates circuit relay nodes? Separate CELLO infrastructure, same directory node operators, or the public libp2p relay network? This decision affects the privacy model under relay fallback.
+1. **Ephemeral Peer ID performance at scale:** Ed25519 key generation is microseconds, but spinning up a full libp2p instance per session may have overhead at high connection volumes. Needs profiling.
 
-2. **Relay/directory operator separation:** If the relay and directory are the same operator, they can correlate ephemeral Peer IDs with real identities. Should this be a design constraint that relay and directory operators must be different entities?
+2. **Session resumption within a short window:** If an agent briefly disconnects and reconnects (network hiccup), should it receive the same ephemeral Peer ID or a new one? Matters for in-flight message delivery. Currently unspecified.
 
-3. **Ephemeral Peer ID performance at scale:** Ed25519 key generation is microseconds, but spinning up a full libp2p instance per session may have overhead at high connection volumes. Needs profiling.
-
-4. **Session resumption within a short window:** If an agent briefly disconnects and reconnects (network hiccup), should it receive the same ephemeral Peer ID or a new one? Matters for in-flight message delivery. Currently unspecified.
-
-5. **Bootstrap manifest update cadence:** How often is the signed manifest updated? What is the process when a directory node is decommissioned?
+3. **Bootstrap manifest update cadence:** How often is the signed manifest updated? What is the process when a directory node is decommissioned?
 
 ---
 
