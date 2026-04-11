@@ -509,7 +509,6 @@ recovery_vouches                     — append-only
   vouching_agent_id
   vouch_sig                          — cryptographic attestation
   vouched_at
-  voucher_trust_score_at_time        — snapshotted at vouching moment
 ```
 
 ### Voucher accountability state
