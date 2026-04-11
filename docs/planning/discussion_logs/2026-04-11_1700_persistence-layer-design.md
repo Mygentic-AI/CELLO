@@ -345,6 +345,19 @@ contact_list[]  — client only
 
 The `degraded_mode` list is a shorter, stronger trust statement: agents on it are trusted to connect even when the directory is unavailable and no fresh trust verification is possible. It represents a subset of the whitelist, not a separate concept — an agent can be on the degraded-mode list and not the general whitelist. Separation is deliberate: "I always accept you" is different from "I accept you even when I can't check anything."
 
+**Recovery contact obligations (client only):**
+
+When Bob receives a `RECOVERY_CONTACT_DESIGNATED` notification, his client records the designation locally. This is the authoritative source for Bob's recovery contact obligations — he does not need to query the directory to know who he is designated for.
+
+```
+recovery_contact_for[]   — client only
+  principal_agent_id     — the agent Bob is designated to help recover
+  m_threshold            — how many contacts are needed (so Bob knows how critical his participation is)
+  designated_at          — when the designation was received
+```
+
+When a `RECOVERY_ATTESTATION_REQUESTED` notification arrives, Bob's client matches it against this table to surface the pending request. Bob's explicit in-client action to sign the attestation is the only thing that counts toward the M-of-N threshold — the notification alone does nothing.
+
 **Rejected connection requests:**
 
 Not stored as full records. The directory maintains rate-limiting counters — connection attempts rejected by a given target within a rolling window. This is a Layer 2 (node integrity) concern, not an identity record. Tracking rejection counts is the primary defense against connection-request flooding and DDoS.
@@ -401,20 +414,22 @@ The notification message type is a first-class protocol primitive: self-containe
 ```
 notification_events                  — append-only
   notification_id                    — UUID
-  sender_pseudonym                   — pseudonym of the sending agent
+  sender_pseudonym                   — pseudonym of the sending agent (NULL for system-originated)
   recipient_pseudonym                — pseudonym of the recipient
-  notification_type:                 INTRODUCTION | TOMBSTONE_ALERT | RECOVERY_VOUCHING_REQUEST | SYSTEM
+  notification_type:                 INTRODUCTION | TOMBSTONE_ALERT | RECOVERY_CONTACT_DESIGNATED | RECOVERY_ATTESTATION_REQUESTED | SYSTEM
   payload_hash                       — SHA-256 of the notification payload
   sent_at                            — timestamp
-  delivered_at                       — NULL until delivery confirmed
-  acknowledged_at                    — NULL until recipient acknowledges
 ```
 
 Notification payloads are not stored by the directory — only the hash. The client holds the payload.
 
+**Notification types used in recovery:**
+- `RECOVERY_CONTACT_DESIGNATED` — sent by the directory when Alice designates Bob. No action required from Bob; his client records it locally.
+- `RECOVERY_ATTESTATION_REQUESTED` — sent by the directory when a recovery is initiated for an account Bob is designated for. This is an invitation to sign; Bob does nothing unless Alice has already contacted him out-of-band and asked him to act.
+
 **Rate limiting** is enforced per-sender: N notifications per hour, with the limit scaled by trust score tier. Rate limiting counters are operational state (Redis), not append-only records. See the operational state note below.
 
-Notifications are not chained into a Merkle tree — they are single-entry records. The `payload_hash` is the only integrity guarantee; the protocol does not provide non-repudiation for notifications the way it does for conversation sessions.
+Notifications are fire-and-forget — there is no delivery acknowledgement tracked at the directory. The `payload_hash` is the only integrity guarantee; the protocol does not provide non-repudiation for notifications the way it does for conversation sessions.
 
 ---
 
@@ -436,7 +451,7 @@ On tombstone filing, the directory surfaces the earliest logged anomaly event as
 
 ### Recovery contacts
 
-Pre-designated M-of-N contacts, registered at account setup or updated later.
+Pre-designated M-of-N contacts, registered at account setup or updated later. Active designation: when Alice designates Bob, the directory sends Bob a `RECOVERY_CONTACT_DESIGNATED` notification and his client records the role locally. No acceptance action is required at designation time.
 
 ```
 recovery_contact_designations        — append-only
@@ -449,10 +464,19 @@ recovery_contact_designations        — append-only
 recovery_contact_members             — append-only
   designation_id                     — references recovery_contact_designations
   contact_agent_id                   — one row per designated contact
-  contact_sig                        — contact's acceptance signature (optional — passive contacts don't need to pre-accept)
 ```
 
 Only the most recent active designation applies. A new designation supersedes the previous one but does not delete it.
+
+**Two-phase notification flow:**
+
+Phase 1 (designation time): `RECOVERY_CONTACT_DESIGNATED` is sent to Bob. His client stores the record. No action required. Bob's client is now the local source of truth for "who am I a recovery contact for?" — he does not need to query the directory to answer this.
+
+Phase 2 (recovery time): when Alice initiates recovery, the directory sends `RECOVERY_ATTESTATION_REQUESTED` to all designated contacts. Bob receives it but takes no action unless Alice has first contacted him out-of-band and asked him to act. The out-of-band contact is the security gate — Bob cannot verify from the notification alone whether the request is legitimate or from an attacker. His deliberate inaction in the absence of Alice's out-of-band contact is the default. Participation is opt-in at recovery time: Bob must explicitly sign the attestation in his client. If Bob does not sign, his slot does not count toward the M-of-N threshold.
+
+**Privacy:** The recovery contact list is not publicly queryable. Bob can see his own designations from his local client record. He cannot see who else is designated for the same account — if Bob is compromised, the attacker learns nothing about who else to target.
+
+**Index requirement:** `recovery_contact_members` requires an index on `contact_agent_id` to support the directory's per-contact lookups (who are the contacts for a given designation ID, and which designations include a given contact).
 
 ### Recovery events log
 
