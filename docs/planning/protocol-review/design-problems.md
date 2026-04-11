@@ -15,6 +15,7 @@ Full analysis in [[00-synthesis|day-zero-review/]].
 
 ## Related Documents
 
+- [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — synthesis document; §1.5 (Sybil architecture), §3.3 (degraded mode/Problem 1), §8 (recovery/Problem 2), §5.4–5.5 (endorsements/Problems 3–4), §10 (GDPR/Problem 6)
 - [[cello-design|CELLO Design Document]] — the architecture these problems apply to
 - [[open-decisions|Open Decisions]] — resolved decisions (compare: those are settled; these are not)
 - [[00-synthesis|Protocol Review — Synthesis]] — the adversarial review that identified these problems

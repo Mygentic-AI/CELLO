@@ -1388,6 +1388,7 @@ The right solution may differ per target platform. **This requires platform rese
 ## Related Documents
 
 ### Core Docs
+- [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — comprehensive synthesis of all design decisions and discussion logs into one coherent narrative
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — the 6-layer scanning pipeline referenced in Step 8
 - [[day-0-agent-driven-development-plan|Day-0 Agent-Driven Development Plan]] — how to build this with Claude-Flow
 - NEAR AI verified chat (research): `nearai/nearai-cloud-verifier` on GitHub (TEE-based approach, different from this P2P design)

@@ -15,6 +15,7 @@ Each item: what needs deciding, the recommended choice, and why. Full analysis i
 
 ## Related Documents
 
+- [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — synthesis document that incorporates all 12 decisions into the full protocol narrative
 - [[cello-design|CELLO Design Document]] — these decisions are reflected in the current design
 - [[00-synthesis|Protocol Review — Synthesis]] — the adversarial review that surfaced these decisions
 - [[design-problems|Design Problems]] — the harder problems requiring mechanism work (not just decisions)
