@@ -24,39 +24,47 @@ The same-owner rule remains useful against casual self-endorsement but should no
 
 ## Raising the identity floor (Problem 3)
 
+### Design principle: every signal is optional, only phone OTP is required
+
+The only day-one registration requirement is phone OTP via WhatsApp or Telegram. Everything else — SIM age scoring, device attestation, WebAuthn, GitHub, LinkedIn, bonds — is an optional trust signal that makes your agent more trustworthy if you have it. No signal is a gate. No missing signal is a penalty. The system works with whatever subset of signals is available, both for the user and for the infrastructure.
+
+This means these mechanisms do not need to be integrated at launch. If we haven't set up Twilio Lookup on day one, agents register without a SIM quality signal and their score reflects what we do know. If a client can't provide device attestation (desktop, server, older phone), same thing — no boost, no penalty. Each signal lights up independently as the infrastructure matures.
+
 ### SIM age and carrier-level signals
 
-At OTP verification, query a phone intelligence API (Twilio Lookup, Telesign). Use the returned signals — SIM tenure, number type (mobile/VoIP/landline), carrier name, porting history — as continuous inputs to the trust score formula, not binary gates.
+When the directory has phone intelligence integration available (Twilio Lookup, Telesign), it can query carrier metadata alongside OTP verification: SIM tenure, number type (mobile/VoIP/landline), carrier name, porting history. These feed into the trust score as continuous inputs, not binary gates.
 
-A SIM active for 2+ years on a major carrier scores near full base weight. A SIM activated 3 hours ago on a known VoIP provider scores near zero. For regions with poor carrier data, the score defaults to a conservative middle value rather than rejecting the user.
+A SIM active for 2+ years on a major carrier adds a meaningful trust boost. A SIM activated 3 hours ago on a known VoIP provider adds little or nothing. For regions with poor carrier data, the signal is simply absent — the agent is not penalized; they just don't get the boost.
 
-**Attacker cost impact:** Floor moves from $0.05/identity to $5-15/identity (must use aged real SIMs from gray markets, limited supply).
+**Attacker cost impact:** When available, moves the effective floor from $0.05/identity to $5-15/identity (must use aged real SIMs from gray markets, limited supply).
 
 **User friction:** Zero — happens silently during the existing OTP flow.
 
 **Coverage:** Twilio Lookup covers 200+ countries. Data quality varies but partial signal is better than none.
 
-### Passive device attestation
+### Device attestation
 
-At registration, the client generates a device attestation using the TPM/Secure Enclave (WebAuthn attestation statement), Android Play Integrity, or Apple DeviceCheck. This proves a real physical device exists without requiring any extra user action — the client collects it silently.
+When the CELLO client is running on a device that supports it, it can provide a device attestation (TPM/Secure Enclave, Android Play Integrity, Apple DeviceCheck). This proves a real physical device exists. The client submits the attestation to the directory alongside other trust data — the same way it would submit a WebAuthn credential or a social verification.
 
 A bulk attacker running 20,000 registrations from cloud VMs or emulators cannot produce 20,000 unique device attestations. Real devices have TPMs; emulators do not.
 
 **Attacker cost impact:** $50-200/identity (need physical devices). Device farms exist but are expensive to scale.
 
-**User friction:** Zero — automatic during registration for anyone with a smartphone.
+**User friction:** Zero — automatic for anyone on a smartphone that supports it.
 
-**Limitation:** Desktop/server agents without TPMs get a lower base score and compensate with other signals. Device attestation is strongest for the phone-onboarded path.
+**Availability:** Desktop and server agents without TPMs simply don't provide this signal. They compensate with other signals or operate at whatever trust score their available signals produce. Device attestation is strongest for the phone-onboarded path but is never required.
 
-### Tiered identity classes
+### Tiered trust ceilings based on phone quality
 
-Rather than binary VoIP detection (reject/accept), create three identity classes at registration:
+When carrier intelligence is available, agents are classified into trust tiers based on phone quality:
 
 | Class | Criteria | Trust ceiling |
 |---|---|---|
 | Verified Mobile | Carrier-attached SIM, passes phone intelligence | Uncapped |
 | Unverified Number | VoIP, virtual, or carrier intelligence unavailable | Capped at score 2 |
 | Provisional | Failed phone intelligence, graduates after 60 days clean | Capped at score 2 for 60 days, then re-evaluated |
+
+When carrier intelligence is not yet integrated, all agents are treated as Verified Mobile by default — the ceiling only applies once we have the signal to classify against.
 
 VoIP agents are not rejected — they operate at a lower trust ceiling. Since trust-weighted pool selection already exists, they are naturally deprioritized without being banned. The Provisional tier is the escape valve for legitimate users on carriers with poor intelligence coverage.
 
@@ -68,7 +76,7 @@ An agent can optionally post a refundable bond to strengthen their trust profile
 
 **Why optional rather than mandatory:** A mandatory bond is a speed bump that loses legitimate users before they see any value. It also creates a hard dependency on payment infrastructure at launch — accepting payments globally (mobile money, prepaid cards, Lightning Network) is a significant technical and regulatory undertaking that requires funding and time to set up. The bond mechanism lights up when payment infrastructure arrives for marketplace transactions, staking, and other features that already require it.
 
-**Why it still helps:** When available, the bond makes batch Sybil economics unfavorable. At $0.20/identity, 20,000 agents costs $4,000 in locked capital with a 90-day exposure window. But the network does not depend on it — the day-one defenses (SIM age scoring, device attestation, TrustRank, incubation period, graph analysis) work without any payment infrastructure.
+**Why it still helps:** When available, the bond makes batch Sybil economics unfavorable. At $0.20/identity, 20,000 agents costs $4,000 in locked capital with a 90-day exposure window. But the network does not depend on it — TrustRank, graph analysis, incubation period, and whatever other signals are available at that point work without any payment infrastructure.
 
 **Risk:** PPP tiers can be gamed (US attacker uses Nigerian numbers). Mitigated by VoIP detection and carrier-country-based pricing (not IP geolocation).
 
@@ -218,17 +226,17 @@ The legitimate user's cost for each defense: organic transactions, endorsements 
 
 ## Priority ordering
 
-**Day-one (no payment infrastructure required):**
+**Priority by leverage (each is independent — integrate as infrastructure allows):**
 
 1. **TrustRank with automatic seed selection** — highest leverage, blocks all tiers of attack from accumulating usable trust
-2. **SIM age / carrier signals** — zero user friction, significant attacker cost increase
-3. **Diminishing returns per counterparty** — makes farming self-defeating without new infrastructure
-4. **Conductance-based cluster scoring** — catches farming that survives other defenses
-5. **Device attestation** — zero friction, high attacker cost, but only for phone-onboarded path
-6. **Endorsement rate limiting + weight decay** — defends the endorsement system specifically
-7. **Temporal burst detection + dual-graph comparison** — catches sophisticated attackers, lower priority for initial launch
+2. **SIM age / carrier signals** — zero user friction, significant attacker cost increase; requires phone intelligence API integration
+3. **Diminishing returns per counterparty** — makes farming self-defeating; pure formula change, no external dependency
+4. **Conductance-based cluster scoring** — catches farming that survives other defenses; directory-side computation
+5. **Device attestation** — zero friction, high attacker cost; requires client-side platform integration (SafetyNet/DeviceCheck)
+6. **Endorsement rate limiting + weight decay** — defends the endorsement system specifically; protocol-level rule
+7. **Temporal burst detection + dual-graph comparison** — catches sophisticated attackers; directory-side computation
 
-**When payment infrastructure is available:**
+**Requires payment infrastructure (not available at launch):**
 
 8. **Optional refundable bond** — voluntary trust signal that adds economic cost for Sybil operations; lights up alongside marketplace transactions and connection staking
 
