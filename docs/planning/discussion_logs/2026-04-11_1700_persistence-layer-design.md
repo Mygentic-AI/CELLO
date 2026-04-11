@@ -26,6 +26,8 @@ The directory is a hash ledger and verification authority. The client is the dat
 
 **One exception — track record:** The directory holds the actual data (conversation counts and outcomes), keyed by pseudonym. Alice presents the binding (`agent_id → pseudonym`); Bob queries the directory live. This is the reverse of all other data — the direction of trust is inverted.
 
+The reason: track record data is not provided by Alice — it is computed by the directory as a side effect of its core function. Every time a conversation seals, the directory records it. It does not need Alice to report what happened; it observed it directly. If Alice held the data and the directory held only a hash, she could self-report selectively — presenting a hash from a favorable past state while hiding recent flagged conversations. Because the directory computed the data itself, self-reporting is not possible. Alice's only contribution is the pseudonym binding — the key that lets Bob look up what the directory already knows.
+
 ---
 
 ## The identity hierarchy
