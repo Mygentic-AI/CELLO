@@ -1084,6 +1084,7 @@ Several mechanisms appear separate but are tightly coupled through shared primit
 
 ## Related Documents
 
+- [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — the four-layer system model and four trust signal classes (identity proofs, network graph, track record, economic stake); explains why each layer exists and why they can't be collapsed
 - [[cello-design|CELLO Design Document]] — the original 10-step architecture this document elaborates and extends
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — full specification of the 6-layer scanning pipeline (Part 7 above)
 - [[open-decisions|Open Decisions]] — 12 resolved cryptographic and protocol decisions incorporated throughout

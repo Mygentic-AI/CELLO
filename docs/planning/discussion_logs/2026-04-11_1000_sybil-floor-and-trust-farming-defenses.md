@@ -245,6 +245,7 @@ The legitimate user's cost for each defense: organic transactions, endorsements 
 ## Related Documents
 
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — §1.5 synthesizes this log's full Sybil defense stack into the complete protocol context
+- [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — explains why TrustRank alone is insufficient: it is an absolute signal anchored to a fixed reference, not a relative signal; only Class 2 (network graph) provides the structural Sybil asymmetry
 - [[design-problems|Design Problems]] — Problems 3 (phone Sybil floor) and 4 (trust farming) that this log directly addresses
 - [[cello-design|CELLO Design Document]] — Step 2 (trust score formula, signal scoring, anti-Sybil defenses) and Step 6 (connection acceptance policies)
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — the endorsement system and same-owner anti-farming rule this log extends with rate limiting, weight decay, and fan-out detection
