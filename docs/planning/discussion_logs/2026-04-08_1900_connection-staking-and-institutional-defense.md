@@ -105,3 +105,4 @@ By the time open institutions are on the network and genuinely at risk, the stak
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — notification rate limiting and DDoS defence share the same layered approach
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — pre-computed endorsements reduce reliance on staking as a connection filter
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — degraded-mode policy applies the same gate pyramid principle: inference-free, layered filtering at every stage
+- [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — PPP-adjusted refundable bond parallels connection staking; both are economic Sybil defenses at different layers

@@ -155,3 +155,4 @@ The more agents in the network who have gathered endorsements, the harder it is 
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — endorsements and attestations follow the same hash-everything-store-nothing pattern
 - [[design-problems|Design Problems]] — pre-computed endorsements and the anti-farming rule directly address Problems 3 (phone Sybil floor) and 4 (trust farming)
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — Private Set Intersection as the mechanism for the intersection computation; prevents contact graph leakage at connection time
+- [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — extends endorsement anti-farming with rate limiting, weight decay by volume, fan-out detection, and social account binding locks
