@@ -33,28 +33,29 @@ The reason: track record data is not provided by Alice — it is computed by the
 ## The identity hierarchy
 
 ```
-Agent (public_key)
-├── Identity (static-ish)
-│   ├── social_verifications[]       two hashes per item — see below
-│   ├── device_attestations[]        two hashes per item — see below
-│   └── bio_hash
+Human Identity (identity_key)
+├── social_verifications[]           shared across all agents under this identity
+├── device_attestations[]            shared across all agents under this identity
 │
-├── Track Record (grows with usage)
-│   └── pseudonym binding            agent_id ↔ pseudonym Y, directory-signed
-│       (directory holds the actual data keyed by pseudonym)
+├── Agent (primary)
+│   ├── bio_hash
+│   ├── Track Record                 agent-specific
+│   ├── Connection Endorsements      agent-specific
+│   ├── Attestations                 agent-specific
+│   ├── Conversations                agent-specific
+│   └── Financial (not day-one)
 │
-├── Connection Endorsements
-│   └── endorsement_hash[]           hashes of received endorsement records
+├── Child Agent A                    authorized by identity_key
+│   ├── Track Record                 starts at zero, builds independently
+│   ├── Connection Endorsements      agent-specific
+│   ├── Attestations                 agent-specific
+│   └── Conversations                agent-specific
 │
-├── Attestations
-│   └── attestation_hash[]           hashes of received attestation records
-│
-├── Conversations
-│   └── conversation_records[]       Seals + Participation (split — see below)
-│
-└── Financial (not day-one)
-    ├── bonds[]
-    └── payment_methods[]
+└── Child Agent B                    authorized by identity_key
+    └── ...
+```
+
+Free tier: 5 agents per human identity. Additional agents require a bond per slot (amounts TBD — schema accommodates bonds now).
 ```
 
 ---
@@ -297,6 +298,74 @@ Not stored as full records. The directory maintains rate-limiting counters — c
 
 ---
 
+## Parent-child agent registry
+
+### Human identity layer
+
+The identity_key represents the human, not any specific agent. Social verifications and device attestations are properties of the human — the same LinkedIn account, the same iPhone, behind all their agents. These move up from `agent_id` to `identity_key_hash` in the schema.
+
+Child agents inherit the human's identity signals. They do not inherit track record, endorsements, or attestations — those describe what a specific agent has done, and each agent builds its own.
+
+| Inherited from human identity | Agent-specific — not inherited |
+|---|---|
+| Social verifications | Track record |
+| Device attestations | Endorsements received |
+| Parent authorization signal | Attestations received |
+
+The authorization gives the child a trust floor — the human's identity signals as context for Bob's evaluation — but not the parent's track record or endorsements. A new child starts at zero history and builds independently.
+
+### Agent authorizations table
+
+```
+agent_authorizations        — append-only
+  identity_key_hash         — the authorizing human identity
+  child_agent_id            — the authorized child
+  authorization_sig         — identity_key signs child_agent_id + timestamp
+  bond_id                   — NULL for free-tier slots; references bonds table for paid slots
+  authorized_at
+
+authorization_revocations   — append-only
+  authorization_id          — references agent_authorizations
+  revocation_sig            — identity_key signs the revocation
+  revoked_at
+```
+
+Revocation is a separate append-only record, not an UPDATE to the authorization row.
+
+### Free tier and paid slots
+
+- **Free tier:** 5 active authorizations per human identity
+- **Paid slots:** agents beyond 5 require a bond deposit per slot
+- Bond amounts are a parameter set when financial infrastructure is ready — the schema accommodates them now
+
+Directory enforcement at authorization time:
+```
+active_count = authorized - revoked for this identity_key_hash
+if active_count < 5:  allow without bond
+if active_count >= 5: require bond deposit first
+```
+
+### Escalation and decay
+
+Bad outcomes from child agents raise an escalation score on the human identity's authorization record. The escalation score increases the bond requirement for additional slots. Over time, with no further bad outcomes, the score decays.
+
+This is a general principle across all CELLO escalation mechanisms: **violations raise a score, time decays it.** An operator who is compromised, has a child tombstoned through no deliberate fault, and then operates cleanly for an extended period recovers their standing. The decay is simple — a time-weighted penalty applied to each event's age. Specific half-life parameters are TBD.
+
+```
+authorization_violation_events   — append-only
+  identity_key_hash              — the parent human identity
+  child_agent_id                 — which child triggered the violation
+  violation_type                 — CHILD_TOMBSTONED | CHILD_FLAGGED_PATTERN | ...
+  recorded_at
+```
+
+The current escalation score is computed from the violation events log with the decay function applied to each event's age. No fixed score value is stored — it is always derived from the log. This means:
+- The source of truth is always the event log
+- The score at any historical point can be reconstructed
+- Decay parameters can be tuned without a schema migration
+
+---
+
 ## Client storage
 
 ### Local database — SQLCipher
@@ -453,7 +522,7 @@ CREATE POLICY insert_only ON conversation_seals
 -- No UPDATE or DELETE policy = those operations are impossible for all roles
 ```
 
-**Append-only tables:** `agent_registrations`, `social_verifications`, `device_bindings`, `endorsements`, `attestations`, `conversation_seals`, `conversation_participation`, `revocations`, `tombstones`, `key_rotation_log`, `identity_migration_log`
+**Append-only tables:** `agent_registrations`, `social_verifications`, `device_bindings`, `endorsements`, `attestations`, `conversation_seals`, `conversation_participation`, `revocations`, `tombstones`, `key_rotation_log`, `identity_migration_log`, `agent_authorizations`, `authorization_revocations`, `authorization_violation_events`
 
 **State transition tables** (new rows only — history is never overwritten): `agent_status_history`, `device_binding_releases`, `bond_status_history`
 
