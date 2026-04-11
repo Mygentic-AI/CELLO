@@ -977,6 +977,8 @@ conversation_proof_log               — append-only
   recorded_at
 ```
 
+**Greetings:** a greeting is the first message in the conversation Merkle tree — no separate entity. It is stored by the client as the first leaf and its hash is part of the Merkle chain. The directory has no special awareness of it.
+
 **What the directory does NOT store:** individual message hashes. The directory receives a signed hash relay for each message as it flows, but does not persist per-message records. The client holds the full message history. Non-repudiation is guaranteed by the Merkle structure: every message hash commits to the previous root, so any alteration to any message in the chain invalidates every subsequent hash and ultimately the sealed `merkle_root` the directory holds. A client presenting a tampered history cannot produce a chain that matches the directory's root. The sealed root is the only checkpoint needed.
 
 The `log_entry_hash` forms a running chain over all sealed conversations in insertion order. Periodically, the directory publishes a checkpoint: the `log_entry_hash` at a given `log_id`, signed by the directory. Clients can request inclusion proofs showing their conversation is in the ledger at a specific checkpoint.
