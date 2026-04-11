@@ -48,27 +48,29 @@ A bulk attacker running 20,000 registrations from cloud VMs or emulators cannot 
 
 **Limitation:** Desktop/server agents without TPMs get a lower base score and compensate with other signals. Device attestation is strongest for the phone-onboarded path.
 
-### PPP-adjusted refundable bond
-
-At registration, the agent posts a refundable bond returned after 90 days of clean operation (no upheld flags, no tombstone). The amount is adjusted by purchasing-power parity tied to the phone number's country code: $1 in high-income countries, $0.10-0.30 in low-income countries. The directory publishes a signed bond-tier table updated quarterly.
-
-The bond does not need to deter a single attacker — it needs to make batch economics unfavorable. At $0.20/identity, 20,000 Sybil agents costs $4,000 in locked capital with a 90-day exposure window during which graph analysis has time to flag the cluster.
-
-**Payment rails:** Must support mobile money (M-Pesa, GCash, Wave) and prepaid cards, not just Stripe. Lightning Network micropayments for the sub-dollar range.
-
-**Risk:** PPP tiers can be gamed (US attacker uses Nigerian numbers). Mitigated by VoIP detection and carrier-country-based pricing (not IP geolocation).
-
 ### Tiered identity classes
 
-Rather than binary VoIP detection (reject/accept), create three identity classes:
+Rather than binary VoIP detection (reject/accept), create three identity classes at registration:
 
-| Class | Criteria | Trust ceiling | Bond |
-|---|---|---|---|
-| Verified Mobile | Carrier-attached SIM, passes phone intelligence | Uncapped | Standard |
-| Unverified Number | VoIP, virtual, or carrier intelligence unavailable | Capped at score 2 | 3x standard |
-| Provisional | Failed phone intelligence but paid elevated bond | Capped at score 2 for 60 days, then re-evaluated | 5x standard |
+| Class | Criteria | Trust ceiling |
+|---|---|---|
+| Verified Mobile | Carrier-attached SIM, passes phone intelligence | Uncapped |
+| Unverified Number | VoIP, virtual, or carrier intelligence unavailable | Capped at score 2 |
+| Provisional | Failed phone intelligence, graduates after 60 days clean | Capped at score 2 for 60 days, then re-evaluated |
 
 VoIP agents are not rejected — they operate at a lower trust ceiling. Since trust-weighted pool selection already exists, they are naturally deprioritized without being banned. The Provisional tier is the escape valve for legitimate users on carriers with poor intelligence coverage.
+
+### Optional refundable bond (not day-one — requires payment infrastructure)
+
+An agent can optionally post a refundable bond to strengthen their trust profile. The bond is returned after 90 days of clean operation (no upheld flags, no tombstone). The amount is adjusted by purchasing-power parity tied to the phone number's country code: $1 in high-income countries, $0.10-0.30 in low-income countries. The directory publishes a signed bond-tier table updated quarterly.
+
+**This is not a registration requirement.** It follows the same pattern as every other trust signal: phone gets you in, everything else is optional. An agent that posts a bond gets a trust score boost — the same way WebAuthn, GitHub, and LinkedIn do. An agent that doesn't post a bond is not penalized; they simply don't get the boost.
+
+**Why optional rather than mandatory:** A mandatory bond is a speed bump that loses legitimate users before they see any value. It also creates a hard dependency on payment infrastructure at launch — accepting payments globally (mobile money, prepaid cards, Lightning Network) is a significant technical and regulatory undertaking that requires funding and time to set up. The bond mechanism lights up when payment infrastructure arrives for marketplace transactions, staking, and other features that already require it.
+
+**Why it still helps:** When available, the bond makes batch Sybil economics unfavorable. At $0.20/identity, 20,000 agents costs $4,000 in locked capital with a 90-day exposure window. But the network does not depend on it — the day-one defenses (SIM age scoring, device attestation, TrustRank, incubation period, graph analysis) work without any payment infrastructure.
+
+**Risk:** PPP tiers can be gamed (US attacker uses Nigerian numbers). Mitigated by VoIP detection and carrier-country-based pricing (not IP geolocation).
 
 ### Incubation period
 
@@ -182,13 +184,13 @@ The current design leans on GitHub, LinkedIn, Twitter/Facebook/Instagram. These 
 
 ## Stacked cost curve
 
-| Scenario | Current estimated cost | With proposed defenses |
-|---|---|---|
-| 20,000 phone-only Sybils | ~$1,000 | $4,000+ locked bonds, near-zero trust (TrustRank = infinity) |
-| 100 agents passing connection policies | ~$300 | $5,000-15,000 + 90-day exposure + graph detection |
-| Full-stack attack (500 SIMs + 50 credentialed + 3 months) | ~$10K | Caught by TrustRank + closed-loop + behavioral correlation |
+| Scenario | Current estimated cost | With day-one defenses | With bond (when available) |
+|---|---|---|---|
+| 20,000 phone-only Sybils | ~$1,000 | Near-zero trust (TrustRank = infinity, low SIM scores) | +$4,000 locked capital |
+| 100 agents passing connection policies | ~$300 | $5,000-15,000 + 90-day exposure + graph detection | +bonds on top |
+| Full-stack attack (500 SIMs + 50 credentialed + 3 months) | ~$10K | Caught by TrustRank + closed-loop + behavioral correlation | +bonds on top |
 
-The legitimate user's cost for each defense: one bond (returned), organic transactions, endorsements from existing contacts, natural TrustRank accumulation. The asymmetry is structural — legitimate use is inherently diverse and connected; farming is inherently insular and repetitive.
+The legitimate user's cost for each defense: organic transactions, endorsements from existing contacts, natural TrustRank accumulation, and optionally a small bond (returned after 90 days). The asymmetry is structural — legitimate use is inherently diverse and connected; farming is inherently insular and repetitive.
 
 ---
 
@@ -198,7 +200,7 @@ The legitimate user's cost for each defense: one bond (returned), organic transa
 
 **Multi-SIM identity sprawl + round-robin.** Buys 2,000 prepaid SIMs, registers 2,000 agents, cross-endorses between different phone hashes (bypasses same-owner rule entirely), runs closed-loop transactions.
 
-**Blocked by:** SIM age scoring (near-zero base trust), device attestation (need physical phones), TrustRank (no path to seeds), conductance scoring (insular cluster), incubation period (slows graph building).
+**Blocked by:** SIM age scoring (near-zero base trust), device attestation (need physical phones), TrustRank (no path to seeds), conductance scoring (insular cluster), incubation period (slows graph building). When available, optional bonds add further economic cost.
 
 ### Tier 2: Funded attacker ($10K-$50K)
 
@@ -216,14 +218,19 @@ The legitimate user's cost for each defense: one bond (returned), organic transa
 
 ## Priority ordering
 
+**Day-one (no payment infrastructure required):**
+
 1. **TrustRank with automatic seed selection** — highest leverage, blocks all tiers of attack from accumulating usable trust
 2. **SIM age / carrier signals** — zero user friction, significant attacker cost increase
 3. **Diminishing returns per counterparty** — makes farming self-defeating without new infrastructure
 4. **Conductance-based cluster scoring** — catches farming that survives other defenses
 5. **Device attestation** — zero friction, high attacker cost, but only for phone-onboarded path
 6. **Endorsement rate limiting + weight decay** — defends the endorsement system specifically
-7. **PPP-adjusted bond** — effective but requires payment rail infrastructure
-8. **Temporal burst detection + dual-graph comparison** — catches sophisticated attackers, lower priority for day-one
+7. **Temporal burst detection + dual-graph comparison** — catches sophisticated attackers, lower priority for initial launch
+
+**When payment infrastructure is available:**
+
+8. **Optional refundable bond** — voluntary trust signal that adds economic cost for Sybil operations; lights up alongside marketplace transactions and connection staking
 
 ---
 
