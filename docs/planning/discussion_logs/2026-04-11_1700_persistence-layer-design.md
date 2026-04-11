@@ -977,6 +977,8 @@ conversation_proof_log               — append-only
   recorded_at
 ```
 
+**What the directory does NOT store:** individual message hashes. The directory receives a signed hash relay for each message as it flows, but does not persist per-message records. The client holds the full message history. Non-repudiation is guaranteed by the Merkle structure: every message hash commits to the previous root, so any alteration to any message in the chain invalidates every subsequent hash and ultimately the sealed `merkle_root` the directory holds. A client presenting a tampered history cannot produce a chain that matches the directory's root. The sealed root is the only checkpoint needed.
+
 The `log_entry_hash` forms a running chain over all sealed conversations in insertion order. Periodically, the directory publishes a checkpoint: the `log_entry_hash` at a given `log_id`, signed by the directory. Clients can request inclusion proofs showing their conversation is in the ledger at a specific checkpoint.
 
 This structure serves a different function from the hash chain on other tables. The per-table hash chain detects tampering with existing records. The conversation proof ledger provides ordered proof of existence — a conversation that isn't in the ledger didn't happen, and the ledger can be verified without trusting any single node.
