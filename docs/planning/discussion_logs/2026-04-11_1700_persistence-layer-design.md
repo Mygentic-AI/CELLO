@@ -380,20 +380,23 @@ tombstones                           — append-only
   created_at
 ```
 
+**Scope of voluntary tombstone:** VOLUNTARY is strictly clean account closure — leaving the network. It is not the path for a compromised account that has accumulated a bad reputation. An account that was hacked and is now on blacklists files a COMPROMISE_INITIATED tombstone and goes through the recovery path; post-recovery, the trust score reflects the compromise window but the agent is not permanently destroyed. Voluntary tombstone implies nothing went wrong.
+
 **Immediate effects on tombstone — enforced by directory on INSERT:**
 
 | Effect | VOLUNTARY | COMPROMISE_INITIATED | SOCIAL_RECOVERY_INITIATED |
 |---|---|---|---|
 | K_server burned, sessions invalidated | ✓ | ✓ | ✓ |
-| Social proofs enter 30-day freeze | ✓ | ✓ | ✓ |
-| Phone number flagged "in recovery" | ✓ | ✓ | ✓ |
 | SEAL-UNILATERAL sent to all active sessions | ✓ | ✓ | ✓ |
+| Social enrichment proofs released with 12-month rebinding lockout | ✓ | ✓ | ✓ |
+| Social enrichment proofs enter 30-day security freeze | — | ✓ | ✓ |
+| Phone number flagged "in recovery" | — | ✓ | ✓ |
 | 48-hour waiting period before new key ceremony | — | ✓ | ✓ |
 | Compromise window recorded and visible in trust profile | — | ✓ | ✓ |
 
-The waiting period on non-voluntary tombstones is the defense against an attacker who socially engineers the recovery contacts. The old key can file a contest during the window.
+**Why two separate rows for social proofs:** The 12-month rebinding lockout (via `social_binding_releases`) fires on all tombstone types. It is an anti-cycling measure: there is no legitimate reason to close an account and immediately reopen with the same LinkedIn or GitHub credibility. For compromise tombstones, the additional 30-day security freeze is a separate, shorter mechanism targeting a different threat — preventing an attacker who has triggered the tombstone from immediately transferring the victim's social proofs to a new identity before the victim can act.
 
-**Social proof freeze tracking:**
+**Social proof freeze (compromise and social recovery only):**
 
 ```
 social_proof_freezes                 — append-only
@@ -403,7 +406,9 @@ social_proof_freezes                 — append-only
   created_at
 ```
 
-The directory rejects attempts to bind a frozen `account_id_hash` to any new agent during the freeze period. This prevents an attacker from silently transferring the victim's social proofs to a new identity.
+During the freeze, `account_id_hash` cannot be bound to any new agent. Exception: the recovering party (who presents a valid recovery event referencing the same tombstone) may rebind their own proofs — the freeze blocks attackers, not the original owner reclaiming what is theirs.
+
+The waiting period on non-voluntary tombstones is the defense against an attacker who socially engineers the recovery contacts. The old key can file a contest during the window.
 
 ---
 
