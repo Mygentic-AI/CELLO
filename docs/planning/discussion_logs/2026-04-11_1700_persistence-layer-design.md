@@ -113,6 +113,19 @@ The directory checks `rebinding_lockout_until` on any new binding attempt for th
 
 The directory cannot reconstruct the data from a hash. The client holds the only copy of the actual content.
 
+### Verification freshness
+
+Social verifications decay in weight if not periodically refreshed. The flow describes liveness probing — requiring fresh account activity (new LinkedIn post, new GitHub commit) to maintain full verification weight. Each successful liveness probe is recorded as a separate append-only event.
+
+```
+social_verification_freshness_checks — append-only
+  social_verification_id             — references the original verification
+  checked_at                         — timestamp of the liveness check
+  check_result:                      FRESH | STALE | FAILED
+```
+
+The `social_verifications` table itself is not mutated — it records the original verification. The freshness table records whether the account was active when checked. The directory computes the effective weight of a social verification from the original verification record and the most recent freshness check result. A verification with no recent freshness check is treated as stale after a configurable window (exact duration TBD).
+
 ---
 
 ## Device attestations — same two-hash pattern
@@ -120,8 +133,9 @@ The directory cannot reconstruct the data from a hash. The client holds the only
 Device attestations follow the same structure:
 
 ```
-device_id_hash:     SHA-256(device_unique_identifier)   — which device (deduplication)
-attestation_hash:   SHA-256(attestation_blob)            — proof of attestation
+device_id_hash:      SHA-256(device_unique_identifier)   — which device (deduplication)
+attestation_hash:    SHA-256(attestation_blob)            — proof of attestation
+attestation_type:    WEBAUTHN | TPM | PLAY_INTEGRITY | APP_ATTEST
 ```
 
 Supported types:
@@ -129,6 +143,8 @@ Supported types:
 - **TPM (Trusted Platform Module)** — embedded chip on modern laptops and desktops; keys non-extractable; signing operations happen inside the chip
 - **Play Integrity (Android)** — proves the agent runs on a real, unmodified Android device, signed by Google
 - **App Attest (iOS)** — Apple's equivalent; proves genuine app on real Apple hardware
+
+The `attestation_type` field is needed for two reasons: verification logic differs per type (different challenge/response formats, different trust anchors), and it enables the directory to surface the attestation type in trust profiles — "hardware-bound TPM key" is a different signal from "WebAuthn on a mobile device."
 
 ### The deployment insight
 
@@ -155,7 +171,21 @@ The directory holds track record data keyed by pseudonym. It can compute: "pseud
 
 **Salt usage:** The salt is only needed to prove the binding — that pseudonym Y belongs to agent alice_id. Once proved, the directory co-signs the binding. The salt never leaves the Alice→directory channel.
 
-### The binding
+### Directory storage of the binding
+
+When Alice proves ownership of pseudonym Y to the directory, the directory co-signs the binding and stores it:
+
+```
+pseudonym_bindings                   — append-only
+  agent_id                           — the agent claiming the pseudonym
+  pseudonym                          — SHA-256(agent_id + salt)
+  directory_signature                — directory signs (agent_id || pseudonym)
+  bound_at
+```
+
+This record serves one purpose: preventing Alice from claiming a pseudonym that belongs to someone else. The directory co-signature is what gives the binding proof presented to Bob its authority. Without this table, the directory has no record of which pseudonyms it has attested.
+
+### The binding proof Alice sends Bob
 
 Alice presents a minimal signed proof to Bob:
 
@@ -196,6 +226,7 @@ Conversation records are split into two tables to disassociate parties from outc
 conversation_id:         UUID (random — not derived from parties)
 merkle_root:             final sealed hash
 close_type:              MUTUAL_SEAL | SEAL_UNILATERAL | EXPIRE | ABORT | REOPEN
+close_reason_code:       nullable — populated for ABORT and SEAL_UNILATERAL; NULL for clean closes
 party_a_attestation:     CLEAN | FLAGGED | PENDING
 party_b_attestation:     CLEAN | FLAGGED | PENDING
 seal_date:               DATE — day granularity only, not exact time
@@ -376,6 +407,8 @@ tombstones                           — append-only
   recovery_contact_threshold         — M-of-N value if SOCIAL_RECOVERY_INITIATED; NULL otherwise
   compromise_window_start            — earliest logged anomaly event; NULL for VOLUNTARY
   compromise_window_end              — timestamp of tombstone filing
+  waiting_period_ends_at             — NULL for VOLUNTARY; tombstone time + 48h for others
+  old_key_contest_filed_at           — NULL unless old key filed a contest during the waiting window
   seal_record_hash                   — hash of the full tombstone record (for non-repudiation)
   created_at
 ```
@@ -544,14 +577,19 @@ Trust Seeders are the bootstrap mechanism for Class 2 (network graph) signals. A
 ```
 trust_seeders                        — append-only
   seeder_agent_id
+  seed_type:                         MANUAL | FORMULA_QUALIFIED
   approved_at
   qualification_snapshot_hash        — hash of the qualification criteria met at approval time
-  approved_by                        — reviewing body (in Alpha phase: CELLO consortium)
+  approved_by                        — reviewing body; NULL for FORMULA_QUALIFIED (auto-approved)
   status:                            ACTIVE | SUSPENDED | REVOKED
   status_changed_at
 ```
 
-Automatic qualification criteria (verified by directory at application time): verified mobile phone + WebAuthn or TPM attestation + at least one social verification with account age > 1 year + at least 5 unique counterparties with clean close attestations.
+Two paths to seeder status:
+- `FORMULA_QUALIFIED` — automatic; the directory checks the criteria at regular intervals and grants seeder status when all are met. No application or review required.
+- `MANUAL` — the pre-launch cohort of founding members (open-source projects, early partners) who receive enhanced manual verification. Approved by the consortium rather than formula.
+
+Automatic qualification criteria (verified by directory): verified mobile phone + WebAuthn or TPM attestation + at least one social verification with account age > 1 year + at least 5 unique counterparties with clean close attestations.
 
 ### Seeder vouching and accountability
 
@@ -592,10 +630,13 @@ agent_registrations                  — append-only
   identity_key_hash                  — links to the human identity layer
   phone_hash                         — SHA-256(E.164 phone number); uniqueness enforced
   initial_signing_key_hash           — the signing key at registration time
+  initial_fallback_pubkey_hash       — SHA-256 of K_local (fallback-only signing key)
   trust_tier:                        PROVISIONAL | VERIFIED_MOBILE | VERIFIED_DEVICE
   incubation_start                   — timestamp; incubation enforcement keyed from here
   registered_at
 ```
+
+The `initial_fallback_pubkey_hash` records the K_local public key at registration time. K_local is the fallback signing key used when the directory is unavailable (K_server is unreachable and FROST split-key signing cannot complete). A sustained stream of K_local-only signatures — where FROST signing should be possible — is the primary canary for K_server theft or directory manipulation. The directory detects this by checking whether recent signatures used the registered fallback key rather than the expected FROST-signed key, triggering a `FALLBACK_CANARY` anomaly event. The fallback key can be rotated via the standard `key_rotation_log` mechanism.
 
 **Trust tier at registration:**
 - `PROVISIONAL` — phone OTP verified only; basic floor
@@ -864,7 +905,7 @@ CREATE POLICY insert_only ON conversation_seals
 -- No UPDATE or DELETE policy = those operations are impossible for all roles
 ```
 
-**Append-only tables:** `agent_registrations`, `social_verifications`, `social_binding_releases`, `device_bindings`, `endorsements`, `attestations`, `bio_history`, `conversation_seals`, `conversation_participation`, `conversation_proof_log`, `arbitration_verdicts`, `notification_events`, `revocations`, `tombstones`, `social_proof_freezes`, `anomaly_events`, `recovery_contact_designations`, `recovery_contact_members`, `recovery_events`, `recovery_vouches`, `voucher_accountability_events`, `voucher_lockouts`, `trust_seeders`, `seeder_vouches`, `seeder_accountability_events`, `seeder_lockouts`, `key_rotation_log`, `identity_migration_log`, `agent_authorizations`, `authorization_revocations`, `authorization_violation_events`
+**Append-only tables:** `agent_registrations`, `social_verifications`, `social_verification_freshness_checks`, `social_binding_releases`, `device_bindings`, `endorsements`, `attestations`, `bio_history`, `pseudonym_bindings`, `conversation_seals`, `conversation_participation`, `conversation_proof_log`, `directory_checkpoints`, `checkpoint_node_signatures`, `arbitration_verdicts`, `notification_events`, `revocations`, `tombstones`, `social_proof_freezes`, `anomaly_events`, `recovery_contact_designations`, `recovery_contact_members`, `recovery_events`, `recovery_vouches`, `voucher_accountability_events`, `voucher_lockouts`, `trust_seeders`, `seeder_vouches`, `seeder_accountability_events`, `seeder_lockouts`, `key_rotation_log`, `identity_migration_log`, `agent_authorizations`, `authorization_revocations`, `authorization_violation_events`
 
 **State transition tables** (new rows only — history is never overwritten): `agent_status_history`, `device_binding_releases`, `bond_status_history`
 
@@ -901,6 +942,28 @@ The append-only source tables support derived structures that are not themselves
 - A graph analysis results table holds the output of async batch jobs (clustering coefficients, community assignments, conductance scores) and is updated periodically
 
 These derived structures can be rebuilt from the protected source tables at any time. They do not require hash-chain protection. Their integrity is guaranteed by recomputability.
+
+### Directory checkpoints
+
+Periodically, federation nodes agree on ledger state by publishing and cross-signing a checkpoint. This is distinct from the per-table hash chain (which detects tampering within a table) — checkpoints provide a signed, multi-node agreement on the state of the entire directory at a point in time.
+
+```
+directory_checkpoints                — append-only
+  checkpoint_id                      — sequential, monotonically increasing
+  conversation_proof_log_id          — the log_id at checkpoint time (anchors conversation history)
+  identity_merkle_root               — hash of all active identity records at checkpoint time
+  conversation_merkle_root           — log_entry_hash from conversation_proof_log at checkpoint time
+  checkpoint_hash                    — SHA-256(identity_merkle_root || conversation_merkle_root || checkpoint_id)
+  created_at
+
+checkpoint_node_signatures           — append-only
+  checkpoint_id                      — references directory_checkpoints
+  node_id                            — the signing federation node
+  node_signature                     — node signs the checkpoint_hash
+  signed_at
+```
+
+A checkpoint is considered confirmed when a threshold of federation nodes have signed it. Clients can request the latest confirmed checkpoint to verify their view of the directory is consistent with the network. A node whose checkpoint diverges from the majority is flagged for investigation.
 
 ### Conversation proof ledger (meta-Merkle tree)
 
