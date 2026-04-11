@@ -164,7 +164,7 @@ If the directory's participation table shows more conversations for pseudonym Y 
 | Source | Content |
 |---|---|
 | From Alice | Pseudonym Y + binding proof (directory-signed) |
-| From directory | Live conversation count, clean/flagged split, last activity date bucket |
+| From directory | Live conversation count, **unique counterparties**, clean/flagged split, last activity date bucket |
 
 Neither party alone provides the complete picture. Alice cannot fabricate the stats; the directory cannot attribute them without the binding Alice provides.
 
@@ -195,6 +195,79 @@ Two rows per conversation. The directory can count conversations per agent via p
 **Why date bucket, not exact timestamp:** Exact timestamps are identifying even without party information. Day granularity is sufficient for track record purposes (recency, volume over time) while preventing precise timing correlation across records.
 
 Both tables replicate to all federation nodes.
+
+---
+
+## Conversation graph analytics
+
+The participation table is not just a record of who had conversations — it is a complete pseudonymous conversation graph. Nodes are pseudonyms; edges are shared conversations. This enables two tiers of analysis with no schema changes: the data is already there.
+
+### Day-one: unique counterparties
+
+Raw conversation count is gameable by a closed pair running up volume between themselves. The meaningful signal is unique counterparties — how many distinct pseudonyms a given pseudonym has exchanged conversations with. This is a simple aggregate query on the participation table:
+
+```sql
+SELECT COUNT(DISTINCT p2.party_pseudonym)
+FROM conversation_participation p1
+JOIN conversation_participation p2
+  ON p1.conversation_id = p2.conversation_id
+WHERE p1.party_pseudonym = Y
+  AND p2.party_pseudonym != Y
+```
+
+1,000 conversations with 847 unique counterparties is a fundamentally different trust signal from 1,000 conversations with 3 unique counterparties. This is a day-one stat returned alongside raw counts in every stats response.
+
+### Day-two: dispersion and trust farm detection
+
+A trust farm may be invisible at the per-agent level — each member may have acceptable-looking unique counterparty counts. The farming pattern is visible only at the graph level: a cluster of pseudonyms that mostly talk to each other, with few external connections.
+
+What this enables:
+
+- **Clustering coefficient**: what fraction of a pseudonym's conversation partners also talk to each other? High value signals a closed loop.
+- **Community detection** (Louvain or spectral clustering): identifies clusters with high internal edge density relative to external connections — a trust farm is a community that is almost entirely self-referential.
+- **Conductance scoring**: ratio of edges leaving a cluster to edges within it. Low conductance signals an isolated community. This is the same metric in the Sybil floor design.
+
+The cross-group analysis matters here: it is not enough to ask whether Alice has diverse conversations. Alice, Bob, Carol, and ten others may each individually look fine, while the cluster as a whole is a closed loop. The graph must be analysed as a whole, not agent by agent.
+
+### Persistence requirements for graph analytics
+
+The following structures are required to support analytics at scale without degrading connection-request query performance.
+
+**Index on `party_pseudonym`**
+Without this, every per-agent stats query is a full table scan of the participation table. Required day-one.
+
+**Pre-computed stats** (materialized view, refreshed on a schedule)
+```
+pseudonym             — the subject
+conversation_count    — total rows for this pseudonym
+unique_counterparties — count of distinct peer pseudonyms
+clean_count           — joined from seals table
+flagged_count         — joined from seals table
+last_activity_date    — max seal_date for this pseudonym
+```
+Served directly on stats queries — not computed on demand per request. Refreshed periodically as conversations accumulate. The source tables are append-only; the materialized view is derived and can be rebuilt from them at any time.
+
+**Conversation graph edge table** (materialized, incrementally updated)
+```
+pseudonym_a        — first pseudonym in pair (canonical ordering)
+pseudonym_b        — second pseudonym
+conversation_count — how many conversations this pair has had
+clean_count        — clean outcomes between this pair
+flagged_count      — flagged outcomes between this pair
+```
+Pre-computes adjacency between pseudonym pairs. Without this, graph traversal requires scanning the full participation table for every neighbourhood query — O(N²) at scale. Required for day-two graph analysis.
+
+**Graph analysis results table** (written by async batch job, not on query path)
+```
+pseudonym              — the subject pseudonym
+clustering_coefficient — 0.0–1.0
+community_id           — cluster assignment
+conductance_score      — 0.0–1.0 (lower = more isolated)
+computed_at            — when this was last run
+```
+Graph algorithms run asynchronously and are not on the critical path for connection requests. Results are updated periodically as the conversation graph grows. This table is **not** append-only — it stores current computed state, not history.
+
+The materialized view and edge table are derived data, not source of truth. They can be rebuilt from the protected append-only source tables at any time and do not require hash-chain integrity protection — their integrity is guaranteed by recomputability from the protected sources.
 
 ---
 
@@ -334,6 +407,17 @@ All tables replicate to all federation nodes via PostgreSQL logical replication.
 
 A single compromised node is self-revealing. The confidentiality value of a breached node is zero — it holds hashes. The integrity threat is real — the hash chain and federation together protect against it.
 
+### Analytics infrastructure
+
+The append-only source tables support derived structures that are not themselves append-only:
+
+- `conversation_participation` requires an index on `party_pseudonym` (day-one requirement — without it every stats query is a full table scan)
+- A materialized view of pre-computed per-pseudonym stats (conversation count, unique counterparties, clean/flagged, last activity) is refreshed on a schedule and served on stats queries
+- A conversation graph edge table (pre-computed adjacency between pseudonym pairs) is required for day-two graph analysis — deriving it on demand from raw participation rows is O(N²) at scale
+- A graph analysis results table holds the output of async batch jobs (clustering coefficients, community assignments, conductance scores) and is updated periodically
+
+These derived structures can be rebuilt from the protected source tables at any time. They do not require hash-chain protection. Their integrity is guaranteed by recomputability.
+
 ### Audit logging
 
 All access and all INSERTs are logged via `pgaudit`. The audit log is append-only and shipped to external storage — a compromised node cannot erase its own access history.
@@ -353,7 +437,7 @@ All access and all INSERTs are logged via `pgaudit`. The audit log is append-onl
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — endorsement and attestation hash schema; the two-hash social verification pattern follows the same oracle flow established there
 - [[2026-04-08_1530_message-delivery-and-termination|Message Delivery and Termination]] — conversation Merkle trees, CLOSE/CLOSE-ACK, and the non-repudiation model that conversation records here are designed to support
 - [[2026-04-08_1700_node-architecture-and-replication|Node Architecture and Replication]] — the three-phase node deployment and primary/backup replication that the node-side persistence design here builds on
-- [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — the one-account-per-social-identifier and one-account-per-device rules here are the schema-level enforcement of the Sybil floor
+- [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — the one-account-per-social-identifier and one-account-per-device rules are the schema-level Sybil floor; the conversation graph edge table and graph analysis results table here are the persistence infrastructure for the conductance scoring and closed-loop detection designed there
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — key recovery via seed phrase; the backup strategy here depends on the recovery mechanism designed there
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — the four trust signal classes (identity proofs, network graph, track record, economic stake) that this persistence schema implements
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — the transport layer; the persistent bidirectional WebSocket is what makes the live directory query (pseudonym → track record stats) possible at connection time
