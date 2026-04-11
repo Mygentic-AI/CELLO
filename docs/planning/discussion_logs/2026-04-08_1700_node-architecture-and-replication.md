@@ -85,3 +85,4 @@ Clients maintain persistent connections to all nodes and send lightweight status
 - [[00-synthesis|Protocol Review — Synthesis]] — Critical findings C1/C2 (split-key underspecification), High findings on threshold and node architecture
 - [[design-problems|Design Problems]] — Problem 1 (fallback mode as downgrade attack) is the key unresolved problem in this space
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — relay node separation (connection nodes vs. relay nodes) directly extends the node architecture designed here
+- [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — the transport layer (persistent bidirectional WebSocket) and connection setup (ephemeral Peer IDs, directory as signaling channel) for the persistent client-to-node connections this log designs around

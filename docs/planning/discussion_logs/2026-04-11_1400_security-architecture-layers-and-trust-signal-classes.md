@@ -1,7 +1,7 @@
 ---
 name: Security Architecture Layers and Trust Signal Classes
 type: discussion
-date: 2026-04-11 14:00
+date: 2026-04-11 15:00
 topics: [security-architecture, system-layers, trust-signals, sybil-defense, prompt-injection, relative-signals, absolute-signals, PSI, enforcement, governance]
 description: A four-layer system model and four-class trust signal taxonomy for CELLO's security architecture, with the key insight that network graph signals are structurally different from all other signals — relative rather than absolute.
 ---
@@ -44,6 +44,10 @@ Who you demonstrably are. Subdivided:
 ### Class 2 — Network graph
 
 Who do I know that knows you. Connection endorsements, just-in-time introductions, TrustRank distance to seed nodes.
+
+**Trust Seeders** are the bootstrap mechanism for Class 2: a formal, applied-for role whose holders vouch for new agents' entry into the network. Without some mechanism for new agents to acquire their first Class 2 signal, the network has no entry path for people who don't yet know anyone on it. Trust Seeders are the designed solution. They are part of this layer, not a separate concern. See the Trust Seeder discussion log for the full mechanism.
+
+**Vouching skin-in-the-game** is what gives Class 2 signals teeth. An endorsement that costs the endorser nothing is a weak signal — it degrades toward LinkedIn. The design includes accountability consequences for endorsers whose vouches turn out to be for bad actors: the voucher's ability to endorse is constrained, not their general network participation. This keeps the signal meaningful without making endorsing prohibitively risky for honest actors. See the Trust Seeder discussion log for the accountability model.
 
 ### Class 3 — Track record
 
@@ -94,6 +98,8 @@ What happens when trust signals reveal a problem. Connection policies, progressi
 
 This layer is substantially designed. It lives in the protocol as defined behaviors triggered by events in the other layers.
 
+**Exponential backoff** is the specific enforcement mechanism for Trust Seeder accountability: a first bad outcome locks a seeder out of vouching for one month; a further bad outcome during the lockout doubles it to two months, then four, eight, sixteen, thirty-two, and so on. The lockout is on vouching capability only — not network participation. This is part of this layer. See the Trust Seeder discussion log for the full mechanism and design rationale.
+
 ### Layer 5b — Protocol governance
 
 Who controls the rules and how they change. Node admission to the consortium, voting on protocol parameter changes (thresholds, rate limits, penalty schedules), operator agreements, the process for evolving the protocol itself.
@@ -116,6 +122,10 @@ The key thing the layer model makes explicit that the lifecycle model doesn't: *
 
 ## Related Documents
 
+- [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — Layer 1 (transport and cryptography) in full detail; bootstrap discovery, ephemeral Peer IDs, three-layer NAT traversal, and dual-path hash relay vetted for technical feasibility
+- [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — Layer 2 (node integrity) mechanism; relay node separation, trust-weighted pool selection, and degraded-mode policy
+- [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — spans Layer 2 (DDoS defense via staking) and Layer 3 (gate pyramid as the client-side filtering architecture); both layers in one mechanism
+- [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — Layer 5a (enforcement) in practice; tombstone types, voucher accountability, and recovery paths are the consequence layer operating on signals from all other layers
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — the full protocol narrative; the four-layer model provides the organizing framework for understanding how its sections relate
 - [[cello-design|CELLO Design Document]] — the 10-step architecture; complementary framing to the layer model here
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — Layer 3 (client protection) in full detail

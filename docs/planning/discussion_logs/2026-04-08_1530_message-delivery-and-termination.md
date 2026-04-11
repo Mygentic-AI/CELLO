@@ -2,7 +2,7 @@
 name: Message Delivery Edge Cases and Session Termination
 type: discussion
 date: 2026-04-08 15:30
-topics: [message-delivery, session-termination, merkle-tree, delivery-failure, directory-custodian, sequence-numbers, dual-path, grace-period]
+topics: [message-delivery, session-termination, merkle-tree, delivery-failure, directory-custodian, sequence-numbers, dual-path, grace-period, transport, websocket]
 description: Systematic enumeration of all message delivery failure modes across the dual-path architecture (direct channel + directory relay), and the session termination protocol that must be designed upstream of all delivery decisions.
 ---
 
@@ -180,3 +180,4 @@ This raised the fabricated conversation attack: an attacker creates an internall
 - [[open-decisions|Open Decisions]] — Decision 12 (sequence number assignment + degraded mode reconciliation)
 - [[2026-04-08_1430_protocol-strength-and-commerce|Protocol Strength and Commerce]] — companion session; directory as custodian developed independently and converged
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — session close attestation (CLEAN/FLAGGED) and what happens at termination
+- [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — the persistent bidirectional WebSocket resolves most mid-conversation delivery questions; CLOSE/CLOSE-ACK is the designed solution to the last-message problem identified in this log's termination protocol
