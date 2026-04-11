@@ -337,12 +337,14 @@ CELLO does not mandate a specific backend. The security tier can be surfaced in 
 
 ### Backup
 
-**The only mandatory backup is the private key**, stored as a seed phrase (BIP-39) at agent creation. All secondary secrets are derived from it:
+**The only mandatory backup is the identity key**, stored as a seed phrase (BIP-39) at agent creation. The identity key is the long-term root — it anchors the pseudonym and authorises signing key rotations. The signing key used for day-to-day operations is separate and can be rotated without affecting the backup requirement (see Key Rotation below).
+
+All secondary secrets derive from the identity key:
 
 ```
-salt        = HKDF(private_key, "track-record-salt", agent_id)
-db_key      = HKDF(private_key, "local-db-key", agent_id)
-backup_key  = HKDF(private_key, "backup-key", agent_id)
+salt        = HKDF(identity_key, "track-record-salt", agent_id)
+db_key      = HKDF(identity_key, "local-db-key", agent_id)
+backup_key  = HKDF(identity_key, "backup-key", agent_id)
 ```
 
 The full client data store is encrypted with `backup_key` and uploaded to user-configured cloud storage. The cloud provider sees only ciphertext.
@@ -363,6 +365,77 @@ Conversation Merkle trees are the only data that cannot be reconstructed from sc
 
 ---
 
+## Key rotation
+
+### The problem: everything derives from the master key
+
+If signing key and identity key are the same, rotating the key changes the salt, which changes the pseudonym, which orphans the entire track record. The agent can no longer claim their history under the new key.
+
+### The fix: decouple identity key from signing key
+
+Two distinct keys serve two distinct purposes:
+
+```
+identity_key  — long-term root; backed up as seed phrase; rarely if ever rotated
+                derives: salt, pseudonym, db_key, backup_key
+                authorises: signing key rotations
+
+signing_key   — operational key; used for message signing, directory auth, FROST
+                can be rotated independently on any schedule
+```
+
+The identity key is what the seed phrase backs up. The signing key is what agents use every day and may want to rotate for security hygiene. Separating them means signing key rotation is a routine operation with no impact on track record continuity.
+
+This maps to the same pattern used in HD wallets (master seed → derived spending keys) and PKI (root CA → leaf certificates).
+
+### Signing key rotation (routine)
+
+1. Agent generates a new signing key
+2. Signs the new key with the identity key: `identity_key.sign(new_signing_pubkey || timestamp)`
+3. Submits the rotation to the directory
+4. Directory records the rotation event, updates the active signing key
+5. Pseudonym unchanged — track record unaffected
+6. Old signing key is revoked
+
+### Identity key rotation (exceptional — requires old key to be available)
+
+1. Agent generates a new identity key
+2. Signs the new identity key with the old: `old_identity_key.sign(new_identity_pubkey || timestamp)`
+3. Directory records migration: `old_pseudonym → new_pseudonym`
+4. Both pseudonyms remain queryable; the directory serves track record continuity across the transition
+5. Old identity key is retired
+
+This path is only available while the old key is still in the agent's possession. If the old key is lost or compromised, this is the account compromise scenario — full track record transfer may not be possible.
+
+### FROST key share refresh (distinct from rotation)
+
+FROST supports proactive secret sharing — periodically redistributing key shares across directory nodes without changing the public key. The public key, the agent_id, the pseudonym, and the track record are all unaffected. This is a clean background security operation that is invisible to the persistence layer. It should not be conflated with key rotation.
+
+### Directory records for key rotation
+
+Both rotation types require new append-only tables:
+
+```
+key_rotation_log              — signing key rotations
+  agent_id
+  old_signing_key_hash
+  new_signing_key_hash
+  authorised_by               — signature from identity_key
+  rotated_at                  — timestamp
+
+identity_migration_log        — identity key rotations
+  old_identity_key_hash
+  new_identity_key_hash
+  old_pseudonym
+  new_pseudonym
+  authorised_by               — signature from old_identity_key
+  migrated_at                 — timestamp
+```
+
+Both are append-only. The rotation log lets the directory validate that a signing key change was authorised by the identity key. The migration log lets the directory serve track record continuity queries across an identity key transition.
+
+---
+
 ## Node-side persistence
 
 ### Database
@@ -380,7 +453,7 @@ CREATE POLICY insert_only ON conversation_seals
 -- No UPDATE or DELETE policy = those operations are impossible for all roles
 ```
 
-**Append-only tables:** `agent_registrations`, `social_verifications`, `device_bindings`, `endorsements`, `attestations`, `conversation_seals`, `conversation_participation`, `revocations`, `tombstones`
+**Append-only tables:** `agent_registrations`, `social_verifications`, `device_bindings`, `endorsements`, `attestations`, `conversation_seals`, `conversation_participation`, `revocations`, `tombstones`, `key_rotation_log`, `identity_migration_log`
 
 **State transition tables** (new rows only — history is never overwritten): `agent_status_history`, `device_binding_releases`, `bond_status_history`
 
