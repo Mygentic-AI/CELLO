@@ -1101,3 +1101,4 @@ Several mechanisms appear separate but are tightly coupled through shared primit
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — relay node separation, trust-weighted pool selection, degraded-mode policy (§2.2, §3.3, §5.6)
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — PSI mechanics (§5.5)
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — full Sybil defense stack (§1.5)
+- [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — complete schema for every protocol entity described in this document; reconciled directly against this flow to ensure all events, tables, and fields are covered

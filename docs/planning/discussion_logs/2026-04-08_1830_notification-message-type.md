@@ -121,3 +121,4 @@ Two distinct attack vectors with different mitigations:
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — rate limiting and DDoS defense applies to notifications too
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — endorsements replace some just-in-time introduction notifications with pre-computed lookups
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — the degraded-mode tiered list extends the whitelist/blacklist mechanism defined here
+- [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — the notification_events table answers the open question here about directory logging of notifications; also defines RECOVERY_CONTACT_DESIGNATED and RECOVERY_ATTESTATION_REQUESTED as formal notification types
