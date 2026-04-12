@@ -2,9 +2,9 @@
 name: Design Problems
 type: review
 date: 2026-04-08
-topics: [fallback-mode, trust-recovery, sybil-defense, trust-farming, succession, GDPR, deanonymization, phone-verification, append-only-log]
+topics: [fallback-mode, trust-recovery, sybil-defense, trust-farming, succession, GDPR, deanonymization, phone-verification, append-only-log, supply-chain, prompt-injection]
 status: open
-description: 7 unsolved design problems requiring mechanism work — fallback downgrade attack, trust score recovery, phone Sybil floor, trust farming, agent succession, GDPR vs append-only log, home node deanonymization.
+description: "8 unsolved design problems — fallback downgrade attack, trust score recovery, phone Sybil floor, trust farming, agent succession, GDPR vs append-only log, home node deanonymization, ML model supply chain."
 ---
 
 # Design Problems
@@ -166,3 +166,32 @@ Finally: the client tracks only its own lists. It does not track which other age
 - Assess whether PIR (Private Information Retrieval) is practical for directory queries
 
 *Ref: day-zero-review/04, Section 2.1*
+
+---
+
+### 8. ML model supply chain
+
+**The problem:** The prompt injection scanner depends on a third-party ML model (DeBERTa or equivalent) downloaded at install or first run. If the source is compromised — or the model is silently updated to include a backdoor pattern — every agent in the network runs a poisoned classifier. A model that passes 99% of injection attempts but lets one specific pattern through is indistinguishable from a functioning model until exploited. Every agent uses the same model, so a single compromised artifact is a network-wide backdoor.
+
+**What makes it hard:** The models are not owned or maintained by CELLO — they are third-party artifacts hosted on Hugging Face with their own release cycle. Bundling them in the npm package directly is impractical (100MB+ model weights). Runtime download keeps the package size reasonable but introduces a fetch-at-install risk. Model updates are desirable (better detection) but require hash updates — which means any pinning mechanism has maintenance cost on every legitimate model release.
+
+**Decided approach (2026-04-12):**
+
+The npm package includes a download script that fetches the model from a fixed Hugging Face URL. Because the script is part of the versioned npm package, the source is pinned — there is no arbitrary redirect to a malicious location. The download script verifies the model weights against a SHA-256 hash pinned in the script source after every download:
+
+```bash
+EXPECTED_HASH="<hash pinned in source>"
+ACTUAL_HASH=$(sha256sum model.bin | awk '{print $1}')
+if [ "$ACTUAL_HASH" != "$EXPECTED_HASH" ]; then
+  echo "Model hash mismatch — refusing to run"
+  exit 1
+fi
+```
+
+If the hash does not match, the agent refuses to start. The hash lives in source control alongside the download script — updating the model requires a deliberate code change and a new npm release, which means a human decision point, a changelog entry, and an audit trail.
+
+**Trade-off accepted:** When the upstream model releases a new version, the pinned hash must be updated and a new npm version published. This is friction on every legitimate model update. The alternative — accepting any model at the fixed URL without verification — creates a silent supply chain attack surface. Hash pinning is the right trade-off.
+
+**What this does not cover:** A compromise of the Hugging Face repository itself (model weights replaced at the same URL before the hash is updated in the next npm release) would be caught at install time by the hash mismatch — the agent would refuse to run rather than silently operate with a poisoned model. This is the correct failure mode.
+
+*Ref: day-zero-review/04, Finding #1.3*
