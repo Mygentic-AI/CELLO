@@ -389,9 +389,22 @@ recovery_contact_for[]   — client only
 
 When a `RECOVERY_ATTESTATION_REQUESTED` notification arrives, Bob's client matches it against this table to surface the pending request. Bob's explicit in-client action to sign the attestation is the only thing that counts toward the M-of-N threshold — the notification alone does nothing.
 
-**Rejected connection requests:**
+**Connection requests:**
 
-Not stored as full records. The directory maintains rate-limiting counters — connection attempts rejected by a given target within a rolling window. This is a Layer 2 (node integrity) concern, not an identity record. Tracking rejection counts is the primary defense against connection-request flooding and DDoS.
+Every connection request — accepted or rejected — is recorded. A pattern of widespread rejections across many distinct targets is a meaningful signal: possible Sybil probing (testing which agents have permissive policies), network reconnaissance, or pre-attack behavior. Redis counters handle real-time rate limit enforcement; this table handles pattern detection and audit.
+
+```
+connection_requests                  — append-only
+  request_id                         — UUID
+  requester_pseudonym
+  target_pseudonym
+  outcome:                           ACCEPTED | REJECTED | EXPIRED
+  rejection_reason:                  POLICY_BLOCK | INSUFFICIENT_ENDORSEMENTS | INTRODUCTION_REQUIRED | RATE_LIMITED | BLOCKED | NULL
+  conversation_id                    — NULL if rejected; references conversation_seals if accepted
+  requested_at
+```
+
+The directory can compute: "this pseudonym has accumulated N rejections from M distinct targets in the last 7 days" — a direct input to the anomaly detection system. A high rejection rate across many distinct targets is a stronger signal than volume alone; it indicates the agent is being rebuffed by the network broadly, not just by one cautious agent.
 
 ---
 
@@ -480,7 +493,7 @@ The compromise window is anchored to logged events, not the owner's memory. Thes
 ```
 anomaly_events                       — append-only
   agent_id
-  event_type:                        SCAN_DETECTION | FALLBACK_CANARY | COUNTERPARTY_COMPLAINT | UNUSUAL_SIGNING_PATTERN | ATYPICAL_HOURS | CUSTOM
+  event_type:                        SCAN_DETECTION | FALLBACK_CANARY | COUNTERPARTY_COMPLAINT | UNUSUAL_SIGNING_PATTERN | ATYPICAL_HOURS | WIDESPREAD_REJECTION_PATTERN | CUSTOM
   event_detail_hash                  — hash of the event detail blob; client holds content
   logged_at
 ```
@@ -905,7 +918,7 @@ CREATE POLICY insert_only ON conversation_seals
 -- No UPDATE or DELETE policy = those operations are impossible for all roles
 ```
 
-**Append-only tables:** `agent_registrations`, `social_verifications`, `social_verification_freshness_checks`, `social_binding_releases`, `device_bindings`, `endorsements`, `attestations`, `bio_history`, `pseudonym_bindings`, `conversation_seals`, `conversation_participation`, `conversation_proof_log`, `directory_checkpoints`, `checkpoint_node_signatures`, `arbitration_verdicts`, `notification_events`, `revocations`, `tombstones`, `social_proof_freezes`, `anomaly_events`, `recovery_contact_designations`, `recovery_contact_members`, `recovery_events`, `recovery_vouches`, `voucher_accountability_events`, `voucher_lockouts`, `trust_seeders`, `seeder_vouches`, `seeder_accountability_events`, `seeder_lockouts`, `key_rotation_log`, `identity_migration_log`, `agent_authorizations`, `authorization_revocations`, `authorization_violation_events`
+**Append-only tables:** `agent_registrations`, `social_verifications`, `social_verification_freshness_checks`, `social_binding_releases`, `device_bindings`, `endorsements`, `attestations`, `bio_history`, `pseudonym_bindings`, `connection_requests`, `conversation_seals`, `conversation_participation`, `conversation_proof_log`, `directory_checkpoints`, `checkpoint_node_signatures`, `arbitration_verdicts`, `notification_events`, `revocations`, `tombstones`, `social_proof_freezes`, `anomaly_events`, `recovery_contact_designations`, `recovery_contact_members`, `recovery_events`, `recovery_vouches`, `voucher_accountability_events`, `voucher_lockouts`, `trust_seeders`, `seeder_vouches`, `seeder_accountability_events`, `seeder_lockouts`, `key_rotation_log`, `identity_migration_log`, `agent_authorizations`, `authorization_revocations`, `authorization_violation_events`
 
 **State transition tables** (new rows only — history is never overwritten): `agent_status_history`, `device_binding_releases`, `bond_status_history`
 
