@@ -4,7 +4,7 @@ type: review
 date: 2026-04-08
 topics: [security-review, cryptography, identity, trust-gaming, protocol-attacks, ops, reputation, governance, economics, emergent-behavior, sybil-defense, supply-chain]
 status: reference
-description: Cross-cutting adversarial review synthesis — 8 critical, 23 high, 30+ medium findings. Three core themes: underspecified split-key, cheap identity baseline, no recovery paths.
+description: "Cross-cutting adversarial review synthesis — 8 critical, 23 high, 30+ medium findings. Three core themes: underspecified split-key, cheap identity baseline, no recovery paths."
 ---
 
 # CELLO Protocol — Cross-Cutting Analysis Synthesis
