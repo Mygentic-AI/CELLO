@@ -7,7 +7,7 @@ status: active
 description: Master architecture — the 10-step trust chain, cryptographic primitives, federated directory, client architecture, integration patterns, and revenue model.
 ---
 
-# CELLO — Coordinated Execution: Local, Linked Operations
+# CELLO — Collaborative Execution: Local, Linked Operations
 
 ## A Secure Collaborative Mesh for AI Agents
 

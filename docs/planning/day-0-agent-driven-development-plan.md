@@ -9,7 +9,7 @@ description: How to build CELLO using Claude-Flow multi-agent orchestration — 
 
 # Day-0 Agent-Driven Development Plan
 
-**Project:** CELLO — Coordinated Execution: Local, Linked Operations
+**Project:** CELLO — Collaborative Execution: Local, Linked Operations
 **Date:** 2026-04-07
 **Status:** Pre-implementation / Kick-off
 
