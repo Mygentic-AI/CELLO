@@ -39,7 +39,8 @@ The four classes of signals used to evaluate the trustworthiness of a connection
 Who you demonstrably are. Subdivided:
 
 - **Social**: phone OTP, SIM age scoring, LinkedIn, GitHub, Twitter/X, Facebook, Instagram. Account age, activity level, history.
-- **Technical**: WebAuthn (hardware-bound credential), device attestation (TPM, Play Integrity, DeviceCheck), hardware binding.
+- **Account security**: WebAuthn (hardware-bound login credential; phishing-resistant; proves the owner has a physical device but does not sacrifice it — one device can register WebAuthn credentials for many accounts).
+- **Device sacrifice**: platform attestation (TPM on Windows, Play Integrity on Android, App Attest on iOS/macOS). Provides a stable device identifier that the directory enforces one-account-per-device against. Requires a native app — not available from a web browser. See [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] for the full distinction.
 
 ### Class 2 — Network graph
 
@@ -134,3 +135,4 @@ The key thing the layer model makes explicit that the lifecycle model doesn't: *
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — Class 2 signals in full detail; the endorsement system is the practical implementation of the relative signal principle
 - [[design-problems|Design Problems]] — the 7 open problems; protocol governance (Layer 5b) is a gap not currently listed there
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — the four trust signal classes map directly to the persistence hierarchy: identity proofs (social verifications + device attestations), network graph (endorsements), track record (pseudonym model), and economic stake (financial schema)
+- [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] — corrects Class 1 Technical signals here: WebAuthn (account security / tethering) and device sacrifice (platform attestation) are distinct sub-classes with different Sybil-defense properties

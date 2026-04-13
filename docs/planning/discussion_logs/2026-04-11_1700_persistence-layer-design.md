@@ -135,16 +135,17 @@ Device attestations follow the same structure:
 ```
 device_id_hash:      SHA-256(device_unique_identifier)   — which device (deduplication)
 attestation_hash:    SHA-256(attestation_blob)            — proof of attestation
-attestation_type:    WEBAUTHN | TPM | PLAY_INTEGRITY | APP_ATTEST
+attestation_type:    TPM | PLAY_INTEGRITY | APP_ATTEST
 ```
 
 Supported types:
-- **WebAuthn / FIDO2** — hardware-bound credential; works on any device with a compatible authenticator
-- **TPM (Trusted Platform Module)** — embedded chip on modern laptops and desktops; keys non-extractable; signing operations happen inside the chip
-- **Play Integrity (Android)** — proves the agent runs on a real, unmodified Android device, signed by Google
-- **App Attest (iOS)** — Apple's equivalent; proves genuine app on real Apple hardware
+- **TPM (Trusted Platform Module)** — embedded chip on modern laptops and desktops; keys non-extractable; signing operations happen inside the chip. Used on Windows (and Linux with TPM 2.0).
+- **Play Integrity (Android)** — proves the agent runs on a real, unmodified Android device, signed by Google. Requires native Android app.
+- **App Attest (iOS / macOS)** — Apple's Secure Enclave-based attestation; proves genuine app on real Apple hardware. Requires native iOS or macOS app.
 
-The `attestation_type` field is needed for two reasons: verification logic differs per type (different challenge/response formats, different trust anchors), and it enables the directory to surface the attestation type in trust profiles — "hardware-bound TPM key" is a different signal from "WebAuthn on a mobile device."
+**WebAuthn is not a device attestation type.** WebAuthn provides a hardware-bound login credential but does not expose a stable device identifier — by design, for privacy. A single device can register WebAuthn credentials for many accounts, so WebAuthn cannot support the one-device-per-account deduplication rule. It is an account security signal handled separately from this schema. See [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] for the full analysis.
+
+The `attestation_type` field is needed because verification logic differs per type (different challenge/response formats, different trust anchors), and it enables the directory to surface the attestation type in trust profiles — "hardware-bound TPM key" is a different signal from "App Attest on a mobile device."
 
 ### The deployment insight
 
@@ -1039,3 +1040,4 @@ All access and all INSERTs are logged via `pgaudit`. The audit log is append-onl
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — the notification primitive whose directory-side persistence is the notification_events table here
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — the transport layer; the persistent bidirectional WebSocket is what makes the live directory query (pseudonym → track record stats) possible at connection time
 - [[design-problems|Design Problems]] — financial schema and conversation tree retention are candidates for addition to the open problems list
+- [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] — corrects the attestation_type schema here: WEBAUTHN removed; WebAuthn reclassified as account security signal, not device sacrifice

@@ -55,7 +55,7 @@ After registration, the human owner can strengthen the agent's trust profile via
 
 | Signal | What it proves | Trust impact |
 |---|---|---|
-| WebAuthn (YubiKey, TouchID, FaceID) | Hardware-bound credential, owner has physical access | High — also unlocks key rotation authority |
+| WebAuthn (YubiKey, TouchID, FaceID) | Phishing-resistant login; proves owner has a hardware-bound credential. Account security signal — does not sacrifice the device (one device can register WebAuthn credentials for many accounts). | Medium-High — account security, not Sybil defense |
 | TOTP 2FA | Second factor, SIM-swap resistant | High |
 | LinkedIn OAuth | Professional identity, career history | High (signal-strength evaluated at OAuth time) |
 | GitHub OAuth | Technical activity, real code history | High (commits, account age, stars received) |
@@ -66,7 +66,7 @@ After registration, the human owner can strengthen the agent's trust profile via
 | Signal | What it proves | Trust impact |
 |---|---|---|
 | SIM age / carrier quality (Twilio Lookup, Telesign) | Phone is an aged real SIM, not freshly activated VoIP | Significant — raises attacker cost from ~$0.05 to $5–15/identity |
-| Device attestation (TPM, Android Play Integrity, Apple DeviceCheck) | Real physical device, not a VM or emulator | High — raises attacker cost to $50–200/device |
+| Device attestation (TPM, Android Play Integrity, Apple App Attest) | Real physical device committed exclusively to this account. Directory enforces one-account-per-device via stable device identifier. **Requires native app** — not available from the web portal. Two-tier delivery: Apple ecosystem (macOS + iOS app using App Attest), Windows/Google ecosystem (Windows + Android app using TPM / Play Integrity). | High — raises attacker cost to $50–200/device |
 
 **Network-built signals (accumulate over time):**
 
@@ -1102,4 +1102,5 @@ Several mechanisms appear separate but are tightly coupled through shared primit
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — PSI mechanics (§5.5)
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — full Sybil defense stack (§1.5)
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — technical feasibility vetting of the full transport layer (§2, §3, §6): bootstrap discovery, directory authentication, ephemeral Peer IDs, three-layer NAT traversal, dual-path hash relay, and Merkle chain as implicit ACK
+- [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] — corrects §1.2 here: WebAuthn is account security (tethering), not device sacrifice; native app required for platform attestation; two-tier web/native architecture
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — complete schema for every protocol entity described in this document; reconciled directly against this flow to ensure all events, tables, and fields are covered
