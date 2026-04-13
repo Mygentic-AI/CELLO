@@ -179,3 +179,4 @@ The ML-DSA security level (44 vs 65, i.e., 18 KB vs 23 KB) has not been decided.
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — §1.2 (trust enrichment), §2.3 (FROST signing mechanics), and §5 (connection package contents whose sizes are estimated above)
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — the connection package schema; endorsed records, attestations, and pseudonym bindings are the ML-DSA-signed items in the size estimates
 - [[design-problems|Design Problems]] — Problem 8 (ML model supply chain) for comparison: both involve a third-party artifact with integrity pinning; the supply chain thinking there parallels the library trust reasoning here
+- [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — ML-DSA security level choice (undecided here) is tracked as an open item there; signature sizes don't affect MMR structure but affect connection package estimates

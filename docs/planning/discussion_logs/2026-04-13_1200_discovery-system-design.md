@@ -194,3 +194,5 @@ The discovery system does not need to know about keys, FROST, or Merkle tree int
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — the track record and pseudonym model that feeds the conversation count and clean-close rate shown in discovery
 - [[2026-04-08_1530_message-delivery-and-termination|Message Delivery and Termination]] — the Merkle tree model that Class 3 group conversations extend to the multi-party case
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — dispute resolution and arbitration that the Class 3 Merkle tree non-repudiation feeds into
+- [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — the MMR consumes conversation seals regardless of participant count; Class 3 group conversation seals enter the proof ledger identically to two-party seals
+- [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]] — full design of the N-party Merkle tree, ordering, and transport needed for Class 3 chat rooms; resolves the offline agent catch-up and concurrent message problems identified here

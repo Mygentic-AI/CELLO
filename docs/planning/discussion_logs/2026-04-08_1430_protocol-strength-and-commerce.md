@@ -44,3 +44,4 @@ description: Evaluated CELLO's strength for financial transactions and commerce 
 - [[open-decisions|Open Decisions]] — Decision 5 (signed hash relay) confirmed here
 - [[2026-04-08_1530_message-delivery-and-termination|Message Delivery and Termination]] — companion session; also develops the "directory as custodian" insight
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — dispute resolution via session attestation
+- [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — full design of the meta-Merkle tree concept introduced here; replaces hash chain with MMR, defines inclusion proof format, distributed construction, and storage analysis

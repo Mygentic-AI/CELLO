@@ -27,6 +27,7 @@ Full analysis in [[00-synthesis|day-zero-review/]].
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — relay node separation, random pool selection, and tiered degraded-mode policy close Problem 1
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — makes targeted endorsement farming harder (Problem 4); PSI prevents contact graph leakage during connection attempts
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — layered defenses for Problems 3 and 4: TrustRank seeding, SIM age scoring, conductance-based cluster detection, diminishing transaction returns, device attestation, endorsement rate limiting
+- [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — resolves the "conversation tree retention" question for the directory side: ~365 bytes/conversation means no pruning needed; the fabricated conversation defense is now fully specified
 
 ---
 
