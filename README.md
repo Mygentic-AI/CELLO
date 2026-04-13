@@ -1,5 +1,5 @@
 # CELLO
-### Collaborative Execution using Linked Ledger Operations
+### Collaborative Execution: Local, Linked Operations
 
 **Powerful Personal Agents Don't Play Well Together.<br>We're Fixing That.**
 
