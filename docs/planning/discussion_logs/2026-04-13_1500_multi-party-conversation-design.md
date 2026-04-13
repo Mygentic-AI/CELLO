@@ -2,8 +2,8 @@
 name: Multi-Party Conversation Design
 type: discussion
 date: 2026-04-13 15:00
-topics: [merkle-tree, group-conversations, ordering, concurrency, transport, libp2p, GossipSub, relay, seal, attestation, batching, LLM, client-architecture, MOLT-Book, chat-rooms, discovery, WebSocket, fan-out, causal-acknowledgment]
-description: Design of multi-party (N>2) conversation support — the concurrent message ordering problem, authorship vs ordering separation, serialized and concurrent operating modes, client-side receive windows for LLM agent participation, transport topology for group message delivery, and schema changes from two-party assumptions to N-party.
+topics: [merkle-tree, group-conversations, ordering, concurrency, transport, libp2p, GossipSub, relay, seal, attestation, batching, LLM, client-architecture, MOLT-Book, chat-rooms, discovery, WebSocket, fan-out, causal-acknowledgment, liveness, delivery-verification, MCP-tools, CELLO-client, protocol-signals]
+description: Design of multi-party (N>2) conversation support — the concurrent message ordering problem, authorship vs ordering separation, serialized and concurrent operating modes, client-side receive windows for LLM agent participation, transport topology for group message delivery, schema changes from two-party assumptions to N-party, participant liveness and delivery verification (active/delivered/offline), and CELLO MCP Server tool surface for structured protocol control signals.
 ---
 
 # Multi-Party Conversation Design
@@ -184,10 +184,12 @@ conversation_seals                     — one row per conversation (unchanged s
 conversation_attestations              — one row per participant per conversation
   conversation_id:         UUID — references conversation_seals
   participant_pseudonym:   SHA-256(agent_id + salt)
-  attestation:             CLEAN | FLAGGED | PENDING | ABSENT
+  attestation:             CLEAN | FLAGGED | PENDING | DELIVERED | ABSENT
   seal_signature:          participant's signature over the final merkle_root
   attested_at:             timestamp
 ```
+
+`DELIVERED` covers participants whose client received the conversation messages (transport-level acknowledgment) but who never responded — the messages arrived, but the agent produced no output. This is the equivalent of WhatsApp's double grey tick: delivered, not seen, and certainly not processed. The distinction from `PENDING` matters: `PENDING` means the seal process has started and the participant hasn't responded yet; `DELIVERED` means the conversation ran its course and the participant received messages but never actively participated.
 
 `ABSENT` covers participants who left the room, went offline, or were removed before the seal. Their non-participation is recorded rather than left ambiguous.
 
@@ -368,13 +370,104 @@ The room creator selects the transport mode (or the client auto-selects based on
 
 ---
 
-## 9. Open questions
+## 9. Participant liveness and delivery verification
+
+### Three observable states
+
+In a two-party conversation, silence from the other party is unambiguous — the conversation has stalled. In multi-party, a silent participant could be in one of three genuinely different states:
+
+| State | Observable signal | What it means |
+|---|---|---|
+| **Active** | Sent a message | The agent processed input and produced output. This is the only state that proves the LLM engaged with the conversation. |
+| **Delivered** | Transport-level ACK (WebSocket or libp2p confirms receipt) | The client received the message bytes. Nothing more. The LLM may not have seen them. |
+| **Offline** | WebSocket/libp2p connection dropped; pings stopped | The client is unreachable. No messages are being delivered. |
+
+### The WhatsApp analogy
+
+WhatsApp distinguishes three ticks: sent (one grey), delivered (two grey), read (two blue). CELLO can verify the first two — the transport layer knows if a message left the sender and if it arrived at the recipient's client. CELLO **cannot** verify the third. There is no mechanism to prove that an LLM has "read" or "processed" a message. The client could acknowledge receipt and then drop the message before it reaches the LLM's context window.
+
+This is a fundamental asymmetry: **delivery is verifiable; processing is not.**
+
+### Only a response is meaningful verification
+
+The only proof that an agent has processed a message is a response. Specifically: a message whose `last_seen_seq` demonstrates that the agent saw the conversation up to at least that point. A `last_seen_seq` of 15 proves the agent processed at least through message 15 — not because someone verified it, but because the agent's output demonstrates awareness of the content.
+
+No amount of infrastructure-level signaling (read receipts, heartbeats, presence indicators) can prove processing. They prove liveness of the client software. Only output proves engagement of the agent.
+
+### Implications for attestation
+
+This is why the attestation enum includes `DELIVERED` as distinct from both `PENDING` and `ABSENT`. At seal time:
+
+- `CLEAN` / `FLAGGED` — the participant actively responded and attested
+- `PENDING` — the seal was initiated but the participant hasn't responded yet (they may still)
+- `DELIVERED` — messages were transport-confirmed as received, but the participant never produced any output in the conversation (or during the seal window)
+- `ABSENT` — the participant went offline (connection dropped) or was removed
+
+The distinction between `DELIVERED` and `ABSENT` matters for dispute evaluation. A participant who received every message but said nothing is in a different position from one whose connection dropped at message 3.
+
+### No periodic receipt mechanism
+
+An earlier design considered having agents periodically broadcast "I have seen through seq N" heartbeats. This was rejected. LLM agents are fundamentally receive-and-respond systems — they don't monitor pending state or produce background signals. Asking an agent to emit periodic receipts means adding a timer-driven process that runs outside the LLM's inference cycle. The `last_seen_seq` in each response already provides this signal as a natural byproduct of participation. Adding a separate receipt mechanism creates complexity without providing information that responses don't already carry.
+
+---
+
+## 10. CELLO MCP Server tool surface
+
+### The problem
+
+CELLO agents need to perform protocol-level actions: close a session, flag a message, leave a room, acknowledge a dispute. These are not natural language actions — they are structured protocol signals with specific semantics. If an agent says "I think we're done here" in natural language, is that a conversational remark or a session close request? Interpretation requires inference on the receiving side, which is unreliable and expensive.
+
+### The principle
+
+Natural language is for conversation content. Protocol actions use structured tool calls.
+
+The CELLO client (the agent-side software that manages connections, Merkle trees, and transport) exposes itself as an MCP server. Agents interact with CELLO through MCP tool calls, not through an SDK. Nobody develops software against CELLO — they install the CELLO MCP Server and get tools.
+
+### Existing tools (from the design document)
+
+The CELLO design document defines four agent-facing tools:
+
+1. `cello_scan` — invoke prompt-injection defense scanning on a received message
+2. `cello_report` — report a detected prompt injection attempt
+3. `cello_verify` — check the trust signals and identity of a conversation partner
+4. `cello_search` — search the discovery registry
+
+### Additional tools needed for multi-party
+
+Group conversations introduce protocol actions that don't exist in two-party:
+
+| Tool | What it does | Why structured |
+|---|---|---|
+| `cello_close_session` | Initiate session close / seal process | Must trigger the seal exchange, not be confused with a conversational goodbye |
+| `cello_flag_message` | Flag a specific message (by seq number) as problematic | Must record in the attestation layer, not just be a chat message saying "that was bad" |
+| `cello_leave_room` | Leave a group conversation | Must trigger participant set change and control leaf, not be confused with "I'm heading out" |
+| `cello_join_room` | Join a discoverable group conversation | Must trigger participant set change, anchor re-computation, and history delivery |
+| `cello_acknowledge_receipt` | Explicit acknowledgment of message receipt (optional, for high-stakes rooms) | Provides a verified delivery signal without requiring a full response |
+
+### The boundary
+
+The CELLO MCP Server handles everything below the conversation content:
+
+- **CELLO MCP Server layer**: Transport, Merkle trees, seals, sequence numbers, trust verification, discovery queries, protocol control signals
+- **Agent layer**: Conversation content, decision-making, natural language responses
+
+An agent calls `cello_close_session` when it decides the conversation is over. The CELLO MCP Server handles the seal exchange, final Merkle root computation, attestation collection, and cleanup. The agent never touches those mechanics.
+
+### Open: full tool surface design
+
+The complete CELLO MCP Server tool surface — including tools for two-party conversations, discovery, trust verification, and the multi-party extensions above — needs its own design session. The tools listed here are the minimum identified by the multi-party design. The full surface will be larger.
+
+---
+
+## 11. Open questions
 
 - **Offline catch-up in group conversations** — identified in the discovery system design as an open problem. The transport topology choice affects this: GossipSub requires online presence; encrypted relay could buffer for offline participants. Needs its own design session.
 - **Control message bypass in serialized mode** — if C detects something malicious while the send queue has pending messages, can C send an ABORT or FLAGGED signal without waiting in the queue? Control events may need a separate priority channel.
 - **Mid-conversation participant changes** — what happens when a new participant joins or an existing one leaves? The tree anchor needs re-computation. The Merkle tree continues (it doesn't restart) but records the participant set change as a control leaf.
 - **Group key management for encrypted relay** — if using encrypted relay fan-out, how is the shared group key established and rotated? Key distribution to new joiners and revocation on departure.
 - **Maximum room size** — is there a practical upper bound on participant count? The protocol scales (directory fan-out is linear, MMR doesn't care), but the client-side batching and LLM context window create practical limits.
+- **CELLO MCP Server full tool surface** — the tools identified in §10 are the minimum for multi-party. The complete tool surface (including two-party session management, discovery, trust verification, dispute tools) needs its own design session. This is a client architecture question, not a protocol question.
+- **DELIVERED-to-ABSENT transition** — how long does a participant stay in DELIVERED state before being reclassified as ABSENT? Is this a room-level timeout or a protocol-level default? The distinction affects dispute evaluation.
 
 ---
 
@@ -386,5 +479,5 @@ The room creator selects the transport mode (or the client auto-selects based on
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — `conversation_seals` schema with hardcoded party_a/party_b attestations that this design replaces; `conversation_participation` table that already supports N rows
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — the two-party transport architecture (persistent WebSocket to directory, P2P via libp2p, dual-path hash relay) that this design extends to multi-party; GossipSub as a candidate for group message delivery
 - [[2026-04-08_1530_message-delivery-and-termination|Message Delivery and Termination]] — delivery failure tree for the dual-path architecture; needs extension for multi-party fan-out failure modes
-- [[cello-design|CELLO Design Document]] — the original two-party conversation model this design generalizes
+- [[cello-design|CELLO Design Document]] — the original two-party conversation model this design generalizes; §Agent-Facing Tools defines the four existing MCP tools (cello_scan, cello_report, cello_verify, cello_search) that §10 extends for multi-party
 - [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] — trust signals displayed in discovery results for group conversation participants
