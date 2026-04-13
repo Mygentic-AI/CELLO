@@ -1042,3 +1042,4 @@ All access and all INSERTs are logged via `pgaudit`. The audit log is append-onl
 - [[design-problems|Design Problems]] — financial schema and conversation tree retention are candidates for addition to the open problems list
 - [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] — corrects the attestation_type schema here: WEBAUTHN removed; WebAuthn reclassified as account security signal, not device sacrifice
 - [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — the endorsed records, attestations, and pseudonym bindings in this schema are the ML-DSA-signed items; connection package size estimates derived from this schema
+- [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — the pseudonym and track record schema here feeds the conversation count and clean-close rate displayed in discovery results
