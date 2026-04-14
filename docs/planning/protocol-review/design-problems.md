@@ -28,6 +28,9 @@ Full analysis in [[00-synthesis|day-zero-review/]].
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — makes targeted endorsement farming harder (Problem 4); PSI prevents contact graph leakage during connection attempts
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — layered defenses for Problems 3 and 4: TrustRank seeding, SIM age scoring, conductance-based cluster detection, diminishing transaction returns, device attestation, endorsement rate limiting
 - [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — resolves the "conversation tree retention" question for the directory side: ~365 bytes/conversation means no pruning needed; the fabricated conversation defense is now fully specified
+- [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — transport security configuration relevant to Problem 10 (no forward secrecy); GossipSub and encrypted relay affect the multi-party key management dimension of the same problem
+- [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — ML-DSA transition and key management mechanics relevant to Problem 9 (K_server rotation overlap window)
+- [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — the scanner design at the centre of Problem 12 (false positive handling); context-aware scanning modes and appeal mechanisms are the design work needed there
 
 ---
 
