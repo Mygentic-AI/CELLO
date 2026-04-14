@@ -336,3 +336,4 @@ The open item in the persistence-layer-design — "Conversation tree retention �
 - [[design-problems|Design Problems]] — Problem 8 (ML model supply chain) for comparison: both involve integrity-pinned third-party artifacts; the library trust reasoning parallels the hash-pinning approach here
 - [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — ML-DSA security level choice affects signature sizes but not MMR structure
 - [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — Class 3 group conversations require multi-party seals; the MMR consumes seals regardless of participant count
+- [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — `cello_close_session` seals into the MMR; the `mmr_peak` return value exposes proof ledger state to the agent

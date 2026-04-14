@@ -363,6 +363,7 @@ The 80/20 applies to sequencing, not to skipping. Each of these four must be pre
 
 - [[cello-design|CELLO Design Document]] — Step 8 integrates this pipeline into the CELLO client; Layer 2 scan results are recorded in Merkle leaves
 - [[day-0-agent-driven-development-plan|Day-0 Development Plan]] — Phase 1 implementation includes the DeBERTa scanner
+- [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — maps the six defense layers to the MCP tool surface: Layers 1, 3–6 fire automatically; Layer 2 is exposed as `cello_scan` for explicit agent invocation
 
 ---
 

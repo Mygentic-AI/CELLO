@@ -107,3 +107,4 @@ By the time open institutions are on the network and genuinely at risk, the stak
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — degraded-mode policy applies the same gate pyramid principle: inference-free, layered filtering at every stage
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — PPP-adjusted refundable bond parallels connection staking; both are economic Sybil defenses at different layers
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — financial schema (bonds, stakes, escrow) is an open item there; arbitration_verdicts table is the escrow release trigger for upheld disputes
+- [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — `cello_accept_connection` and `cello_decline_connection` implement the connection gate; `cello_manage_policy` configures the signal requirements the gate pyramid evaluates

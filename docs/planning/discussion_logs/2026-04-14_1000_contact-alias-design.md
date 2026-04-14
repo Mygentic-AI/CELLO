@@ -211,3 +211,4 @@ Deactivate an alias. Pending connection requests in flight at the time of retire
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — §5.1–5.3 (connection request flow that alias-routed requests follow); §4.2 (bio and greeting — same privacy model applied to alias context)
 - [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]] — room-level handles decoupled from agent identity; contact aliases may formalise this for Class 3 rooms
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — alias-specific connection policies use the same signal requirement model as global connection policies
+- [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — implements `cello_create_alias`, `cello_list_aliases`, `cello_retire_alias`; integrates alias-routed requests into `cello_initiate_connection` and alias-scoped policies into `cello_manage_policy`
