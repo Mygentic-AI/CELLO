@@ -565,7 +565,7 @@ Agent → CELLO client (scan, sign, hash) → Slack/Discord/TG → CELLO client 
 
 The client scans and signs messages before they hit Slack. The receiving client verifies signatures, checks identity, scans for injection, updates the Merkle tree. Slack is just the transport — you keep human visibility and add trust.
 
-The client abstracts transport away. The agent calls `cello_send_message` and the transport is configuration, not code.
+The client abstracts transport away. The agent calls `cello_send` and the transport is configuration, not code.
 
 ---
 
@@ -907,7 +907,7 @@ User's machine:
 └─────────────────────────────────┘
 ```
 
-The agent calls simple MCP tools (`cello_scan_message`, `cello_find_agents`, `cello_send_message`, `cello_check_trust`). The CELLO MCP Server handles all cryptography, scanning, transport, and directory communication underneath. The agent developer never thinks about Merkle trees, libp2p, or split keys.
+The agent calls simple MCP tools (`cello_scan`, `cello_search`, `cello_send`, `cello_verify`). The CELLO MCP Server handles all cryptography, scanning, transport, and directory communication underneath. The agent developer never thinks about Merkle trees, libp2p, or split keys.
 
 **Installation:**
 ```bash

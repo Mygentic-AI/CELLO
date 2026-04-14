@@ -228,24 +228,38 @@ conversation_id:         UUID (random — not derived from parties)
 merkle_root:             final sealed hash
 close_type:              MUTUAL_SEAL | SEAL_UNILATERAL | EXPIRE | ABORT | REOPEN
 close_reason_code:       nullable — populated for ABORT and SEAL_UNILATERAL; NULL for clean closes
-party_a_attestation:     CLEAN | FLAGGED | PENDING
-party_b_attestation:     CLEAN | FLAGGED | PENDING
+participant_count:       integer — how many agents participated (2 for direct; N for group rooms)
 seal_date:               DATE — day granularity only, not exact time
 ```
 
 **close_type values:**
-- `MUTUAL_SEAL` — both parties completed the CLOSE/CLOSE-ACK exchange
-- `SEAL_UNILATERAL` — one party issued SEAL-UNILATERAL (timeout, tombstone, or connection failure)
+- `MUTUAL_SEAL` — all active participants completed the CLOSE/CLOSE-ACK exchange
+- `SEAL_UNILATERAL` — one participant initiated close; others didn't acknowledge within timeout
 - `EXPIRE` — session expired without an explicit close
 - `ABORT` — protocol-level abort (message delivery failure, network partition)
 - `REOPEN` — a prior seal was disputed and reopened for arbitration; references the original `conversation_id`
 
-**attestation values (per party):**
+**Table 1a — Conversation Attestations** (per-participant, supports N > 2)
+
+Replaces the previous `party_a_attestation` / `party_b_attestation` columns. For two-party conversations this table has exactly two rows — functionally identical to the old schema, just normalised. See [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]] for full semantics.
+
+```
+conversation_attestations            — append-only
+  conversation_id:         UUID — references conversation_seals
+  participant_pseudonym:   SHA-256(agent_id + salt)
+  attestation:             CLEAN | FLAGGED | PENDING | DELIVERED | ABSENT
+  seal_signature:          participant's signature over the final merkle_root
+  attested_at:             timestamp
+```
+
+**attestation values:**
 - `CLEAN` — no issues detected during this session
 - `FLAGGED` — suspicious activity observed; session is eligible for arbitration submission
 - `PENDING` — session closed but review is ongoing; may later escalate to FLAGGED
+- `DELIVERED` — messages arrived but the participant never responded (double grey tick equivalent)
+- `ABSENT` — participant left the room, went offline, or was removed before the seal
 
-If both parties attest CLEAN, the seal is unambiguously clean. If either attests FLAGGED, the session is eligible for arbitration. A disagreement (one CLEAN, one FLAGGED) is recorded as such and is itself a meaningful signal — the directory records it but does not adjudicate it.
+If all active participants attest CLEAN the seal is unambiguously clean. If any attest FLAGGED the session is eligible for arbitration. A disagreement is recorded as-is and is itself a meaningful signal — the directory records it but does not adjudicate it.
 
 **Table 2 — Conversation Participation** (parties, no outcomes)
 
@@ -399,13 +413,64 @@ connection_requests                  — append-only
   request_id                         — UUID
   requester_pseudonym
   target_pseudonym
-  outcome:                           ACCEPTED | REJECTED | EXPIRED
-  rejection_reason:                  POLICY_BLOCK | INSUFFICIENT_ENDORSEMENTS | INTRODUCTION_REQUIRED | RATE_LIMITED | BLOCKED | NULL
+  outcome:                           ACCEPTED | REJECTED | EXPIRED | PENDING_ESCALATION
+  rejection_reason:                  POLICY_BLOCK | INSUFFICIENT_ENDORSEMENTS | INTRODUCTION_REQUIRED | RATE_LIMITED | BLOCKED | ALIAS_RETIRED | NULL
+  via_alias_id                       — NULL for direct connections; references contact_aliases for alias-routed connections
+  escalation_expires_at              — NULL unless outcome is PENDING_ESCALATION; deadline for human escalation response
   conversation_id                    — NULL if rejected; references conversation_seals if accepted
   requested_at
 ```
 
+`PENDING_ESCALATION` is set when automated policy evaluation does not produce a clear accept/reject and the agent's policy includes a `human_escalation_fallback` flag. The request waits for human input via an external channel (WhatsApp, Telegram, Slack) until `escalation_expires_at`, at which point it auto-declines. When the human responds, the outcome transitions to `ACCEPTED` or `REJECTED` and a `CONNECTION_ESCALATION_RESOLVED` notification is issued.
+
+`ALIAS_RETIRED` in `rejection_reason` applies when a connection attempt arrives via a contact alias that was retired before the request was processed.
+
 The directory can compute: "this pseudonym has accumulated N rejections from M distinct targets in the last 7 days" — a direct input to the anomaly detection system. A high rejection rate across many distinct targets is a stronger signal than volume alone; it indicates the agent is being rebuffed by the network broadly, not just by one cautious agent.
+
+---
+
+## Contact alias registry
+
+Contact aliases are user-created, revocable identifiers for sharing outside CELLO. They let an agent be findable in a specific external context (a workflow site, a forum, a GitHub issue) without exposing its permanent agent ID. Full design in [[2026-04-14_1000_contact-alias-design|Contact Alias Design]].
+
+**Directory tables (append-only):**
+
+```
+contact_aliases                      — append-only
+  alias_id                           — UUID
+  alias_slug                         — human-readable or random token; unique among ACTIVE aliases
+  owner_agent_id                     — the registering agent
+  connection_mode:                   SINGLE | OPEN
+                                       SINGLE: closes after the first accepted connection
+                                       OPEN: accepts multiple connections until retired
+  alias_policy_hash                  — SHA-256 of the alias-specific connection policy; NULL = use global policy
+  status:                            ACTIVE | RETIRED | EXPIRED
+  status_changed_at
+  created_at
+
+contact_alias_retirements            — append-only
+  alias_id                           — references contact_aliases
+  retired_by                         — agent_id authorising the retirement
+  retirement_sig                     — agent signs the retirement
+  retired_at
+```
+
+The `alias_slug` uniqueness constraint applies only to ACTIVE aliases. A retired slug can be reused by anyone (including the original owner), preventing permanent reservation of useful slugs.
+
+**Client-side table (not replicated to directory):**
+
+```
+contact_alias_records                — local only
+  alias_id                           — matches directory record
+  alias_slug
+  context_note                       — why this alias was created; owner-authored free text
+  shared_at_locations[]              — where the owner left it (URL, platform, date)
+  connection_count                   — how many connections arrived via this alias
+  created_at
+  retired_at                         — NULL if still active
+```
+
+This table is the owner's private knowledge about their aliases and is never sent to the directory.
 
 ---
 
@@ -468,7 +533,7 @@ notification_events                  — append-only
   notification_id                    — UUID
   sender_pseudonym                   — pseudonym of the sending agent (NULL for system-originated)
   recipient_pseudonym                — pseudonym of the recipient
-  notification_type:                 INTRODUCTION | TOMBSTONE_ALERT | RECOVERY_CONTACT_DESIGNATED | RECOVERY_ATTESTATION_REQUESTED | SYSTEM
+  notification_type:                 INTRODUCTION | TOMBSTONE_ALERT | RECOVERY_CONTACT_DESIGNATED | RECOVERY_ATTESTATION_REQUESTED | CONNECTION_ESCALATION_RESOLVED | SYSTEM
   payload_hash                       — SHA-256 of the notification payload
   sent_at                            — timestamp
 ```
@@ -902,6 +967,65 @@ Both are append-only. The rotation log lets the directory validate that a signin
 
 ---
 
+## Discovery and room persistence
+
+The discovery system (see [[2026-04-13_1200_discovery-system-design|Discovery System Design]]) introduces three classes of discoverable content: Class 1 permanent agent profiles, Class 2 ephemeral bulletin listings, and Class 3 group conversation rooms. The tools `cello_create_listing`, `cello_update_listing`, `cello_renew_listing`, `cello_retire_listing`, `cello_create_room`, `cello_join_room`, and `cello_leave_room` all write to this schema.
+
+### Directory listings (Class 1 and Class 2)
+
+Updates follow the same append-only supersession pattern as bio history: a new row is appended and `superseded_at` is set on the previous row. The current listing is the row with `superseded_at = NULL`.
+
+```
+directory_listings                   — append-only
+  listing_id                         — UUID; stable identifier across versions
+  owner_agent_id                     — the listing owner
+  listing_type:                      PROFILE | BULLETIN
+  description                        — free text (semantically indexed for search)
+  tags[]                             — structured capability/category tags
+  location_text                      — approximate area ("downtown Dubai", "greater Montreal")
+  pricing                            — free text ("free", "paid — contact for rates", etc.)
+  connection_policy:                 OPEN | SELECTIVE | INVITE_ONLY
+  ttl_days                           — NULL for PROFILE; required for BULLETIN
+  expires_at                         — NULL for PROFILE; TTL deadline for BULLETIN
+  status:                            ACTIVE | ARCHIVED | EXPIRED
+  status_changed_at
+  created_at
+  superseded_at                      — NULL for current version; set when updated, archived, or expired
+```
+
+The `listing_id` is stable across versions. Renewing a Class 2 listing extends `expires_at` by appending a new row (new `expires_at`, same `listing_id`, old row superseded). Retiring a listing appends a final row with `status: ARCHIVED`. Expired listings transition to `status: EXPIRED` via a scheduled job.
+
+### Group rooms (Class 3)
+
+```
+group_rooms                          — append-only
+  room_id                            — UUID
+  owner_agent_id
+  topic                              — short title (semantically indexed for search)
+  description                        — free text
+  tags[]
+  room_type:                         OPEN | INVITE_ONLY
+  ordering_mode:                     SERIALIZED | CONCURRENT
+  dispute_eligible:                  boolean
+  room_handle                        — human-readable slug; unique among active rooms
+  status:                            ACTIVE | CLOSED
+  created_at
+  closed_at                          — NULL if still active
+
+room_memberships                     — append-only
+  room_id                            — references group_rooms
+  member_agent_id
+  alias_handle                       — room-local display name; NULL = use directory handle
+  event_type:                        JOINED | LEFT | REMOVED
+  recorded_at
+```
+
+Current room members = all agents whose most recent `room_memberships` row for a given `room_id` has `event_type: JOINED`.
+
+Room conversation records use the same `conversation_seals` and `conversation_attestations` tables as direct conversations. The `participant_count` column on `conversation_seals` carries the room size at seal time.
+
+---
+
 ## Node-side persistence
 
 ### Database
@@ -919,9 +1043,13 @@ CREATE POLICY insert_only ON conversation_seals
 -- No UPDATE or DELETE policy = those operations are impossible for all roles
 ```
 
-**Append-only tables:** `agent_registrations`, `social_verifications`, `social_verification_freshness_checks`, `social_binding_releases`, `device_bindings`, `endorsements`, `attestations`, `bio_history`, `pseudonym_bindings`, `connection_requests`, `conversation_seals`, `conversation_participation`, `conversation_proof_log`, `directory_checkpoints`, `checkpoint_node_signatures`, `arbitration_verdicts`, `notification_events`, `revocations`, `tombstones`, `social_proof_freezes`, `anomaly_events`, `recovery_contact_designations`, `recovery_contact_members`, `recovery_events`, `recovery_vouches`, `voucher_accountability_events`, `voucher_lockouts`, `trust_seeders`, `seeder_vouches`, `seeder_accountability_events`, `seeder_lockouts`, `key_rotation_log`, `identity_migration_log`, `agent_authorizations`, `authorization_revocations`, `authorization_violation_events`
+**Append-only tables:** `agent_registrations`, `social_verifications`, `social_verification_freshness_checks`, `social_binding_releases`, `device_bindings`, `endorsements`, `attestations`, `bio_history`, `pseudonym_bindings`, `connection_requests`, `conversation_seals`, `conversation_attestations`, `conversation_participation`, `conversation_proof_leaves`, `conversation_proof_mmr_nodes`, `directory_checkpoints`, `checkpoint_node_signatures`, `arbitration_verdicts`, `notification_events`, `revocations`, `tombstones`, `social_proof_freezes`, `anomaly_events`, `recovery_contact_designations`, `recovery_contact_members`, `recovery_events`, `recovery_vouches`, `voucher_accountability_events`, `voucher_lockouts`, `trust_seeders`, `seeder_vouches`, `seeder_accountability_events`, `seeder_lockouts`, `key_rotation_log`, `identity_migration_log`, `agent_authorizations`, `authorization_revocations`, `authorization_violation_events`, `contact_aliases`, `contact_alias_retirements`, `directory_listings`, `group_rooms`, `room_memberships`
 
 **State transition tables** (new rows only — history is never overwritten): `agent_status_history`, `device_binding_releases`, `bond_status_history`
+
+**Mutable derived tables** (recomputed from append-only sources; no hash-chain protection needed): `identity_tree_leaves`, `identity_tree_nodes`
+
+**Ephemeral operational tables** (cleared on schedule; not append-only): `conversation_seal_staging`
 
 ### Hash chain integrity
 
@@ -959,15 +1087,15 @@ These derived structures can be rebuilt from the protected source tables at any 
 
 ### Directory checkpoints
 
-Periodically, federation nodes agree on ledger state by publishing and cross-signing a checkpoint. This is distinct from the per-table hash chain (which detects tampering within a table) — checkpoints provide a signed, multi-node agreement on the state of the entire directory at a point in time.
+Periodically, federation nodes agree on ledger state by publishing and cross-signing a checkpoint. This is distinct from the per-table hash chain (which detects tampering within a table) — checkpoints provide a signed, multi-node agreement on the state of the entire directory at a point in time. Full design in [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]].
 
 ```
 directory_checkpoints                — append-only
   checkpoint_id                      — sequential, monotonically increasing
-  conversation_proof_log_id          — the log_id at checkpoint time (anchors conversation history)
-  identity_merkle_root               — hash of all active identity records at checkpoint time
-  conversation_merkle_root           — log_entry_hash from conversation_proof_log at checkpoint time
-  checkpoint_hash                    — SHA-256(identity_merkle_root || conversation_merkle_root || checkpoint_id)
+  mmr_leaf_count                     — how many conversation proof leaves at checkpoint time
+  mmr_peaks                          — ordered list of (position, hash) for current MMR peaks
+  identity_merkle_root               — hash of all active identity records at checkpoint time (identity tree root)
+  checkpoint_hash                    — SHA-256(mmr_peaks_serialized || identity_merkle_root || checkpoint_id)
   created_at
 
 checkpoint_node_signatures           — append-only
@@ -977,29 +1105,65 @@ checkpoint_node_signatures           — append-only
   signed_at
 ```
 
-A checkpoint is considered confirmed when a threshold of federation nodes have signed it. Clients can request the latest confirmed checkpoint to verify their view of the directory is consistent with the network. A node whose checkpoint diverges from the majority is flagged for investigation.
+A checkpoint is confirmed when a threshold of federation nodes have signed it. Clients can request the latest confirmed checkpoint to verify their view of the directory is consistent with the network. A node whose checkpoint diverges from the majority is flagged for investigation.
 
-### Conversation proof ledger (meta-Merkle tree)
+### Conversation proof ledger (Merkle Mountain Range)
 
 The `conversation_seals` table records individual seals. A second structure accumulates those seal hashes into a global append-only proof ledger — the defense against fabricated conversation claims. Any party can prove a specific conversation existed at a given point in time without revealing who was involved.
 
+The original hash-chain design (`conversation_proof_log`) provided O(N) inclusion proofs — unusable at scale. It is replaced with a **Merkle Mountain Range (MMR)**: an append-only forest of perfect binary Merkle trees that supports O(log N) inclusion proofs and checkpoint-batched distributed construction. See [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] for the full algorithm and distributed construction protocol.
+
 ```
-conversation_proof_log               — append-only
-  log_id                             — sequential, monotonically increasing
-  seal_merkle_root                   — the merkle_root from the corresponding conversation_seals row
-  log_entry_hash                     — SHA-256(seal_merkle_root || previous_log_entry_hash)
+conversation_proof_leaves            — append-only, one row per sealed conversation
+  leaf_index                         — sequential (0, 1, 2, ...)
+  mmr_position                       — position in the MMR (deterministic from leaf_index)
+  checkpoint_id                      — which checkpoint batch this leaf entered in
+  seal_merkle_root                   — from conversation_seals
+  leaf_hash                          — SHA-256(leaf_index || seal_merkle_root || recorded_at)
+  recorded_at                        — original seal time (for audit)
+
+conversation_proof_mmr_nodes         — append-only, internal tree nodes
+  mmr_position                       — deterministic from the MMR structure
+  hash                               — SHA-256(left_child_hash || right_child_hash)
+  height                             — 1+ (leaves are height 0, stored in the other table)
+
+conversation_seal_staging            — cleared after each checkpoint (not append-only)
+  seal_id                            — from conversation_seals
+  seal_merkle_root
+  conversation_id
   recorded_at
 ```
+
+`conversation_seal_staging` accumulates seals between checkpoints. At checkpoint time, nodes sort the batch deterministically (by `recorded_at ASC`, `conversation_id ASC`), independently compute the same MMR extension, then sign the resulting checkpoint. The staging table is cleared after each confirmed checkpoint.
+
+Every INSERT into `conversation_seals` triggers a leaf append — all close types, no exceptions. The proof ledger proves existence in time, not quality.
+
+**Storage cost:** ~365 bytes per conversation including all tables and PostgreSQL row overhead. 100 million conversations ≈ 36 GB — no pruning ever needed.
 
 **Greetings:** a greeting is the first message in the conversation Merkle tree — no separate entity. It is stored by the client as the first leaf and its hash is part of the Merkle chain. The directory has no special awareness of it.
 
 **What the directory does NOT store:** individual message hashes. The directory receives a signed hash relay for each message as it flows, but does not persist per-message records. The client holds the full message history. Non-repudiation is guaranteed by the Merkle structure: every message hash commits to the previous root, so any alteration to any message in the chain invalidates every subsequent hash and ultimately the sealed `merkle_root` the directory holds. A client presenting a tampered history cannot produce a chain that matches the directory's root. The sealed root is the only checkpoint needed.
 
-The `log_entry_hash` forms a running chain over all sealed conversations in insertion order. Periodically, the directory publishes a checkpoint: the `log_entry_hash` at a given `log_id`, signed by the directory. Clients can request inclusion proofs showing their conversation is in the ledger at a specific checkpoint.
+### Identity Merkle tree
 
-This structure serves a different function from the hash chain on other tables. The per-table hash chain detects tampering with existing records. The conversation proof ledger provides ordered proof of existence — a conversation that isn't in the ledger didn't happen, and the ledger can be verified without trusting any single node.
+A second tree commits to the current state of all agent identity records — used by clients for Merkle proof verification (end-to-end-flow §2.5). Unlike the MMR (which is append-only), this tree is mutable: agent state changes on key rotation, trust score update, new endorsement, tombstone, etc.
 
-Federation nodes each maintain the ledger and compare checkpoint hashes. A node that omits a conversation seal is detected at the next checkpoint comparison.
+```
+identity_tree_leaves                 — mutable (current state, one row per agent)
+  agent_id                           — primary key
+  leaf_hash                          — SHA-256(agent_id || signing_pubkey || identity_pubkey || status || trust_score_hash || bio_hash || social_verifications_hash || attestations_hash || endorsements_hash || last_updated)
+  tree_position                      — position in sorted order
+  last_updated
+
+identity_tree_nodes                  — recomputed on state change
+  position                           — tree position
+  height                             — 0 = leaf reference, 1+ = internal
+  hash                               — SHA-256(left_child_hash || right_child_hash)
+```
+
+On any agent state change: recompute that agent's `leaf_hash`, walk from the leaf to the root recomputing each parent, update `identity_merkle_root` for the next checkpoint. Cost: O(log N) hash computations per change.
+
+These two tables are **not** append-only — they store current derived state and do not require hash-chain integrity protection. Integrity is guaranteed by recomputability from the protected append-only source tables.
 
 ### Operational state
 
@@ -1024,7 +1188,7 @@ All access and all INSERTs are logged via `pgaudit`. The audit log is append-onl
 ## Open items
 
 - **Financial schema** — bonds, connection stakes, payment method references. Not day-one, but needs a skeleton before staking infrastructure is designed.
-- **Conversation tree retention** — how long clients hold full Merkle trees; whether there is a retention policy; what happens to non-repudiation guarantees after pruning.
+- **Conversation tree retention (client side)** — how long clients hold full Merkle trees; whether there is a client-side retention policy; what happens to non-repudiation guarantees after local pruning. The directory side is resolved: ~365 bytes/conversation means no pruning is ever needed there. The open question is client-side only.
 
 ---
 
@@ -1042,9 +1206,9 @@ All access and all INSERTs are logged via `pgaudit`. The audit log is append-onl
 - [[design-problems|Design Problems]] — financial schema and conversation tree retention are candidates for addition to the open problems list
 - [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] — corrects the attestation_type schema here: WEBAUTHN removed; WebAuthn reclassified as account security signal, not device sacrifice
 - [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — the endorsed records, attestations, and pseudonym bindings in this schema are the ML-DSA-signed items; connection package size estimates derived from this schema
-- [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — the pseudonym and track record schema here feeds the conversation count and clean-close rate displayed in discovery results
-- [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — replaces the `conversation_proof_log` hash chain here with an MMR; redesigns `directory_checkpoints` to reference MMR peaks; resolves the "conversation tree retention" open item for the directory side (~365 bytes/conversation, no pruning needed)
-- [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]] — replaces the hardcoded `party_a_attestation`/`party_b_attestation` columns in `conversation_seals` with a per-participant `conversation_attestations` table for N>2 support
-- [[2026-04-14_1000_contact-alias-design|Contact Alias Design]] — adds the `contact_aliases` directory table and `contact_alias_records` client-side table; the `connection_requests` table gains a `via_alias_id` field to carry alias context through the connection request flow
-- [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — adds `PENDING_ESCALATION` to `connection_requests.outcome`, `escalation_expires_at` column, and `CONNECTION_ESCALATION_RESOLVED` notification type; the tool surface is the agent-facing interface to all schema entities defined here
+- [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — the three-class discovery system whose `directory_listings`, `group_rooms`, and `room_memberships` persistence schema is defined here; the pseudonym and track record schema here feeds the conversation count and clean-close rate displayed in discovery results
+- [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — full algorithm for the MMR and checkpoint-batched distributed construction; the `conversation_proof_leaves`, `conversation_proof_mmr_nodes`, `conversation_seal_staging`, `identity_tree_leaves`, and `identity_tree_nodes` schemas defined here are derived from that design; resolves the "conversation tree retention" open item for the directory side (~365 bytes/conversation, no pruning needed)
+- [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]] — full N-party Merkle, ordering, and seal semantics; the `conversation_attestations` table and `participant_count` column on `conversation_seals` defined here implement that design
+- [[2026-04-14_1000_contact-alias-design|Contact Alias Design]] — full alias design; the `contact_aliases`, `contact_alias_retirements`, and `contact_alias_records` tables and the `connection_requests.via_alias_id` field defined here implement that design
+- [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — the `PENDING_ESCALATION` outcome, `escalation_expires_at`, `ALIAS_RETIRED` rejection reason, and `CONNECTION_ESCALATION_RESOLVED` notification type defined here implement the protocol additions required by that tool surface; all other schema entities here are the storage layer the tool surface operates against
 - [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession and Ownership Transfer]] — adds three new directory tables (`successor_designations`, `succession_packages`, `succession_events`) and a new `SUCCESSION_INITIATED` tombstone type; extends the identity_migration_log and recovery contacts schema defined here
