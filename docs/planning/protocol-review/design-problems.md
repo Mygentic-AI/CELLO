@@ -247,3 +247,21 @@ If the hash does not match, the agent refuses to start. The hash lives in source
 - Evaluate whether "Not me" should revoke K_server immediately or initiate a short delay (e.g., 5 minutes) during which the legitimate owner can cancel via WebAuthn — trading instant revocation for SIM-swap resistance
 
 *Ref: day-zero-review/02, Findings #7-8*
+
+---
+
+### 12. False positive handling and appeal process
+
+**The problem:** The prompt injection scanner is a statistical classifier. It will produce false positives. A cybersecurity advisory agent discussing exploit techniques gets flagged because its messages contain strings like "ignore previous instructions" — which it is literally advising clients about. A legal agent quoting malicious messages in a dispute context gets flagged for the content of the evidence. A red-team testing agent gets penalized for doing its job. Progressive enforcement applies mechanically: warning, rate limit, suspension. There is no appeal mechanism, no domain-specific exception, and no way to distinguish "resembles an attack pattern" from "is an attack." The system punishes agents for the semantic content of their professional expertise.
+
+**What makes it hard:** Any exception mechanism is also an attack vector. An agent that claims "cybersecurity context" to bypass the scanner is a perfect cover for actual injection attacks. Allowlisting by domain introduces a classification problem at least as hard as the original scanning problem. Per-agent scanner configuration (custom sensitivity thresholds) means agents can weaken their own defenses, which affects the safety of every agent they communicate with. An appeal process requires adjudication — someone or something must decide whether a flag was legitimate — but the protocol is designed to operate without centralized judgment. The scanner is also open-source (same model for everyone), so an attacker can test against it until they find bypasses; false positive reports from attackers gaming the system would further degrade scanner calibration.
+
+**Design work needed:**
+- Design a context-aware scanning mode where the scanner considers conversation metadata (both parties' declared domains, conversation topic) alongside raw content
+- Evaluate per-conversation scanner sensitivity negotiation — both parties agree on a threshold as part of the connection handshake, accepting mutual risk
+- Design an appeal mechanism for automated penalties: who reviews, what evidence is considered, what happens during the appeal (active but flagged? restricted? unchanged?), and what the timeline is
+- Define a "false positive report" that feeds into scanner calibration without being gameable — an attacker filing false-positive reports on genuine detections would degrade the classifier
+- Consider whether the scanner weaponization attack (craft prompts to make a competitor's LLM emit flaggable output, then report the flags) requires a defense at the scanner level, the dispute level, or both
+- Evaluate professional-context trust signals (verified cybersecurity credential, legal credential) that adjust scanner interpretation without disabling protection
+
+*Ref: day-zero-review/05, Sections 2.1, 6.1; day-zero-review/02, Finding #9*
