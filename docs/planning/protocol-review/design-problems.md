@@ -31,6 +31,7 @@ Full analysis in [[00-synthesis|day-zero-review/]].
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — transport security configuration relevant to Problem 10 (no forward secrecy); GossipSub and encrypted relay affect the multi-party key management dimension of the same problem
 - [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — ML-DSA transition and key management mechanics relevant to Problem 9 (K_server rotation overlap window)
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — the scanner design at the centre of Problem 12 (false positive handling); context-aware scanning modes and appeal mechanisms are the design work needed there
+- [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession and Ownership Transfer]] — resolves Problem 5; voluntary transfer, involuntary succession (dead-man's switch), succession package, and what transfers vs. what doesn't
 
 ---
 
@@ -137,6 +138,24 @@ Finally: the client tracks only its own lists. It does not track which other age
 - Consider multi-signatory ownership for business agents
 
 *Ref: day-zero-review/05, Sections 3.1-3.4*
+
+**How we thought through it (2026-04-14):**
+
+The key insight was that succession and transfer are two distinct scenarios requiring different mechanisms, and that the voluntary transfer case is almost entirely built from existing protocol pieces.
+
+**Voluntary transfer (owner alive):** Composes the existing `identity_migration_log` mechanism with a new announcement period (7–14 days). Connected agents receive notification, can revoke endorsements; old owner can cancel. The rest is already built.
+
+**Involuntary succession** splits on whether the seed phrase is accessible. If it is, the successor derives the old `identity_key` and performs a standard identity migration — track record continuity preserved, protocol doesn't need to know the owner is dead. If the seed phrase is lost, track record is cryptographically orphaned (the protocol cannot override this without creating a central authority). What the protocol can do: record a succession link from old agent to new agent, tombstone the old agent (`SUCCESSION_INITIATED`), notify connected agents. The succession link is informational — connected agents and the market decide how to weight it.
+
+**The dead-man's switch model** (1Password / Apple Digital Legacy informed): pre-designated successor initiates a claim; directory notifies the owner via external channels, all recovery contacts, and all connected agents; a 30+ day waiting period runs (configurable); any sign of life from the owner cancels it automatically; if the period expires without contest, M-of-N recovery contacts attest permanence and succession executes. No ID documents, no central authority, no CELLO PII custody. The waiting period does the job identity verification does at Apple — longer wait, less proof needed.
+
+**Succession package:** optional encrypted bundle containing the seed phrase, stored at the directory, decryptable only by the designated successor's `identity_key`. Allows full track record continuity even for involuntary succession. Deliberately optional — some owners specifically want the successor to start fresh.
+
+**What transfers and what doesn't** falls out of the cryptographic architecture, not a policy decision: track record (if seed phrase available), conversation history — yes. Social verifications, device attestations, endorsements, attestations — no, because they are bound to the old human's accounts and devices.
+
+**Multi-signatory ownership deliberately skipped:** business co-ownership is a legal arrangement, not a protocol concern. The parent-child registry covers multi-agent structures for partnerships.
+
+See [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession and Ownership Transfer]] for the full mechanism.
 
 ---
 
