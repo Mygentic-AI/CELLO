@@ -230,3 +230,20 @@ If the hash does not match, the agent refuses to start. The hash lives in source
 - Evaluate the privacy cost of not mandating FS: passive observers (ISPs, network-level attackers) can decrypt stored traffic if they later compromise a long-term key
 
 *Ref: day-zero-review/01 (forward secrecy gap); day-zero-review/03 (P2P transport security)*
+
+---
+
+### 11. "Not me" revocation as a denial-of-service weapon
+
+**The problem:** The "Not me" button on phone notifications is designed for emergency key revocation — the owner sees unauthorized activity, taps the button, and K_server is immediately revoked. But an attacker who SIM-swaps the owner's phone number now receives the notifications. The attacker taps "Not me," revoking K_server. The owner visits the web portal, re-keys via WebAuthn, and the agent is restored. The attacker — who still controls the phone number — sees the next activity notification and taps "Not me" again. The agent is revoked again. This cycle repeats indefinitely. The agent can never maintain a stable identity. The emergency revocation mechanism, deliberately designed for zero-friction instant response, is equally zero-friction as a denial-of-service weapon.
+
+**What makes it hard:** The "Not me" button's entire value comes from its immediacy and simplicity — a genuine emergency (someone is actively impersonating you right now) requires instant action without authentication barriers. Adding WebAuthn confirmation to "Not me" stops this specific attack but changes the threat model for the original use case: an owner who has lost access to their WebAuthn device can no longer emergency-revoke. Rate-limiting "Not me" after a re-key introduces a window where a real compromise can't be stopped. Moving "Not me" out of phone notifications and into the web portal (behind WebAuthn) eliminates the SIM swap surface but loses the instant-response property entirely. Every mitigation degrades the legitimate emergency use case.
+
+**Design work needed:**
+- Design a cool-down period after WebAuthn re-keying where phone-triggered "Not me" is suppressed or requires WebAuthn confirmation (accepting a bounded risk window for legitimate emergencies during the cool-down)
+- Evaluate moving "Not me" entirely to the web portal behind WebAuthn — quantify what is lost in emergency response time vs. what is gained in DoS resistance
+- Design a "contested identity" state: after N revoke/re-key cycles within a time window, the agent enters a frozen state that requires a more deliberate resolution process (multi-factor, time delay, or human review) rather than continuing the ping-pong
+- Consider separating the notification channel from the phone number — push notifications via a native app (tied to the device, not the SIM) make SIM swap irrelevant for this attack vector
+- Evaluate whether "Not me" should revoke K_server immediately or initiate a short delay (e.g., 5 minutes) during which the legitimate owner can cancel via WebAuthn — trading instant revocation for SIM-swap resistance
+
+*Ref: day-zero-review/02, Findings #7-8*
