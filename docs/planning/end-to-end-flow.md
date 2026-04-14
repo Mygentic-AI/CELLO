@@ -1088,7 +1088,7 @@ Several mechanisms appear separate but are tightly coupled through shared primit
 - [[cello-design|CELLO Design Document]] — the original 10-step architecture this document elaborates and extends
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — full specification of the 6-layer scanning pipeline (Part 7 above)
 - [[open-decisions|Open Decisions]] — 12 resolved cryptographic and protocol decisions incorporated throughout
-- [[design-problems|Design Problems]] — remaining open problems; Parts 3, 5, 8, and the Sybil architecture address Problems 1–4 and 6–7; Problem 5 (succession) is not yet addressed
+- [[design-problems|Design Problems]] — remaining open problems; Parts 3, 5, 8, and the Sybil architecture address Problems 1–4 and 6–7; Problem 5 (succession) is resolved by the succession log below
 - [[2026-04-08_1430_protocol-strength-and-commerce|Protocol Strength and Commerce]] — non-repudiation as commerce primitive; fabricated conversation attack and the meta-Merkle tree defense
 - [[2026-04-08_1530_message-delivery-and-termination|Message Delivery and Termination]] — delivery failure tree (§6.4) and session termination protocol (§6.6)
 - [[2026-04-08_1600_data-residency-and-compliance|Data Residency and Compliance]] — GDPR analysis and pseudonymity model underlying Part 10
@@ -1110,3 +1110,4 @@ Several mechanisms appear separate but are tightly coupled through shared primit
 - [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]] — extends §6.2 (leaf format), §6.3 (sequencing), and §6.6 (seals) from two-party to N-party; authorship/ordering separation, serialized and concurrent modes, client-side receive windows for LLM agents
 - [[2026-04-14_1000_contact-alias-design|Contact Alias Design]] — revocable privacy-preserving identifiers extending §5.1–5.3 connection request flow with alias-routed requests
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — 33 MCP tools implementing Steps 4–8 of this protocol flow; defines the agent-facing interface for sessions, security, discovery, connections, group conversations, and policy
+- [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession and Ownership Transfer]] — resolves the §8 succession gap: voluntary transfer via identity_migration_log + announcement period; involuntary succession via dead-man's switch with pre-designated successor, 30-day waiting period, and M-of-N recovery contact attestation
