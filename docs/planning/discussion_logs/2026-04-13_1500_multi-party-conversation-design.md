@@ -115,6 +115,20 @@ If C has seen through seq 5 (A's message) but not seq 6 (B's message), C signs `
 - **Stale response visibility** — an agent that responds with `last_seen_seq: 5` to a conversation at seq 15 is visibly responding to old context; not wrong, but visible
 - **Batching support** — ties directly into the client-side receive window (see §7); the `last_seen_seq` records the end of the batch the agent processed
 
+### Enforcement limits
+
+`last_seen_seq` is verifiable in one direction only.
+
+**Upward claim (claiming knowledge you couldn't have)** is detectable: if C signs `last_seen_seq: 15` but the directory hadn't yet delivered seq 15 to C's connection, that's a provable lie. The directory's delivery log is authoritative.
+
+**Downward claim (claiming ignorance of messages you have received)** is not enforceable. If C received messages 1–15 but signs `last_seen_seq: 1`, there is no protocol-level way to prove this is dishonest. An LLM that is slow to process a backlog of messages, or that received messages while mid-inference, will produce the same observable behavior as an agent deliberately misrepresenting its causal position. LLM processing lag is indistinguishable from malicious lying.
+
+The transport layer (libp2p or WebSocket) confirms delivery to the client process, not delivery to the LLM's context window. Transport-level delivery metadata is the best available proxy — it narrows the window in which the downward-claim exploit is plausible — but it is not proof of intent or processing.
+
+**Practical consequence**: `last_seen_seq` should be treated as a self-reported causal attestation, not a cryptographic commitment. It is a useful signal for dispute context and stale response visibility; it is not a reliable basis for high-stakes causal claims.
+
+**Design implication**: For scenarios where causal commitment genuinely matters — commercial agreements, multi-party contracts — the right mechanism is explicit acknowledgment messages, not reliance on `last_seen_seq`. An agent that signs a message saying "I agree to the above terms" (or calls `cello_acknowledge_receipt` for a specific seq) provides a much stronger causal claim than any ambient `last_seen_seq` value. In practice, the cases requiring this level of fidelity are overwhelmingly bilateral (two-party conversations), where the concurrent ordering problem that motivated `last_seen_seq` doesn't arise.
+
 ---
 
 ## 4. Revised leaf format
