@@ -2,9 +2,9 @@
 name: Design Problems
 type: review
 date: 2026-04-08
-topics: [fallback-mode, trust-recovery, sybil-defense, trust-farming, succession, GDPR, deanonymization, phone-verification, append-only-log, supply-chain, prompt-injection]
+topics: [fallback-mode, trust-recovery, sybil-defense, trust-farming, succession, GDPR, deanonymization, phone-verification, append-only-log, supply-chain, prompt-injection, key-rotation, forward-secrecy, SIM-swap, false-positive, appeal-process, FROST]
 status: open
-description: "8 unsolved design problems — fallback downgrade attack, trust score recovery, phone Sybil floor, trust farming, agent succession, GDPR vs append-only log, home node deanonymization, ML model supply chain."
+description: "12 design problems — fallback downgrade attack, trust score recovery, phone Sybil floor, trust farming, agent succession, GDPR vs append-only log, home node deanonymization, ML model supply chain, K_server rotation overlap, forward secrecy, Not-me revocation DoS, false positive handling."
 ---
 
 # Design Problems
@@ -196,3 +196,20 @@ If the hash does not match, the agent refuses to start. The hash lives in source
 **What this does not cover:** A compromise of the Hugging Face repository itself (model weights replaced at the same URL before the hash is updated in the next npm release) would be caught at install time by the hash mismatch — the agent would refuse to run rather than silently operate with a poisoned model. This is the correct failure mode.
 
 *Ref: day-zero-review/04, Finding #1.3*
+
+---
+
+### 9. K_server rotation overlap window
+
+**The problem:** The directory rotates K_server on a schedule. When K_server changes, the derived primary_pubkey changes with it. During rotation, there is a window where in-flight signatures were created with K_server_v1 but arrive after K_server_v2 is deployed. An attacker who captured a signature made with v1 can replay it during the overlap window. Separately — and more disruptively — agents who cached the old primary_pubkey now see all new signatures as invalid. They may interpret this as fallback-only signing, which reduces trust. K_server rotation, a routine security operation, generates false compromise signals across the network.
+
+**What makes it hard:** A grace period where both v1 and v2 are accepted is necessary for in-flight signatures but creates a replay window. Eliminating the grace period means legitimate messages signed seconds before rotation are rejected. Changing the primary_pubkey atomically across a distributed federation with caching clients is hard — "atomic" doesn't exist when 20 nodes and thousands of clients are involved. And the compromise canary (designed to detect K_local theft) can't distinguish "K_server rotated and I have a stale pubkey" from "this agent is signing with K_local only."
+
+**Design work needed:**
+- Include a K_server version identifier or rotation epoch in every signed message; verifiers reject signatures from expired epochs after the grace window
+- Define the overlap window duration and hard cutoff — how long v1 remains valid after v2 is deployed
+- Design atomic pubkey publication — the directory publishes the new primary_pubkey at a checkpoint boundary so all nodes and clients learn of it simultaneously
+- Define a "key rotation" notification distinct from the compromise canary — connected agents need to know "this pubkey changed because of scheduled rotation, not because of compromise"
+- Specify how in-flight FROST signing sessions that straddle a rotation boundary are handled (abort and retry with new shares? complete with old shares within grace window?)
+
+*Ref: day-zero-review/01, Finding #3*
