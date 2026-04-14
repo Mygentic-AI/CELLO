@@ -827,3 +827,4 @@ The documents `cello-design.md` and `end-to-end-flow.md` should be updated to us
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — Connection gate that `cello_accept_connection` and `cello_decline_connection` interact with
 - [[2026-04-08_1530_message-delivery-and-termination|Message Delivery and Termination]] — Delivery confirmation and Merkle sealing that `cello_send`, `cello_close_session`, and `cello_abort_session` drive
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — Notification primitive that `cello_poll_notifications` surfaces
+- [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow — Trust Data Relay and Selective Disclosure]] — defines the trust data relay and one-round negotiation that `cello_initiate_connection`, `cello_accept_connection`, and `cello_decline_connection` implement
