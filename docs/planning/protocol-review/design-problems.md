@@ -213,3 +213,20 @@ If the hash does not match, the agent refuses to start. The hash lives in source
 - Specify how in-flight FROST signing sessions that straddle a rotation boundary are handled (abort and retry with new shares? complete with old shares within grace window?)
 
 *Ref: day-zero-review/01, Finding #3*
+
+---
+
+### 10. No forward secrecy for P2P messages
+
+**The problem:** Messages on the direct P2P channel are signed for integrity and non-repudiation, but the protocol does not specify an ephemeral key exchange for encryption. Without forward secrecy, a future compromise of an agent's long-term key exposes all past messages if they were logged or intercepted in transit. libp2p supports encrypted transports (Noise protocol with ephemeral Diffie-Hellman) that would provide forward secrecy, but the CELLO protocol does not mandate a specific transport security configuration. An implementer could use a transport without forward secrecy and still be spec-compliant.
+
+**What makes it hard:** The protocol has a tension between forward secrecy and dispute resolution. Forward secrecy on the wire means that intercepted ciphertext is useless after the session ends — good for privacy. But dispute resolution requires that both parties retain plaintext message history as evidence — which means the plaintext is stored on disk regardless. Forward secrecy protects against passive network observers but does nothing for client-side storage compromise, which is the more likely threat. The question is whether the protocol-level complexity of mandating FS is justified when the client-side storage requirement partially undermines it. Additionally, multi-party conversations introduce encrypted relay fan-out, where the encryption model is different from direct P2P — the relay node handles ciphertext, and key management becomes a group problem.
+
+**Design work needed:**
+- Decide whether to mandate a specific libp2p transport security protocol (Noise XX or IK) with ephemeral keys, or leave transport security as an implementation choice
+- Clarify the interaction between transport-layer forward secrecy and client-side message retention for disputes — what is the actual threat model FS addresses in CELLO's architecture?
+- For multi-party encrypted relay: define whether the shared group key uses ephemeral session keys or long-term keys, and how key rotation interacts with forward secrecy
+- Consider whether the protocol needs a "conversation session key" distinct from identity keys, negotiated per conversation and rotated periodically
+- Evaluate the privacy cost of not mandating FS: passive observers (ISPs, network-level attackers) can decrypt stored traffic if they later compromise a long-term key
+
+*Ref: day-zero-review/01 (forward secrecy gap); day-zero-review/03 (P2P transport security)*
