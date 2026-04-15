@@ -4,7 +4,7 @@ type: review
 date: 2026-04-08
 topics: [fallback-mode, trust-recovery, sybil-defense, trust-farming, succession, GDPR, deanonymization, phone-verification, append-only-log, supply-chain, prompt-injection, key-rotation, forward-secrecy, SIM-swap, false-positive, appeal-process, FROST]
 status: open
-description: "12 design problems — fallback downgrade attack, trust score recovery, phone Sybil floor, trust farming, agent succession, GDPR vs append-only log, home node deanonymization, ML model supply chain, K_server rotation overlap, forward secrecy, Not-me revocation DoS, false positive handling."
+description: "12 design problems — fallback downgrade attack, trust signal recovery, phone Sybil floor, trust farming, agent succession, GDPR vs append-only log, home node deanonymization, ML model supply chain, K_server rotation overlap, forward secrecy, Not-me revocation DoS, false positive handling."
 ---
 
 # Design Problems
@@ -20,13 +20,13 @@ Full analysis in [[00-synthesis|day-zero-review/]].
 - [[cello-design|CELLO Design Document]] — the architecture these problems apply to
 - [[open-decisions|Open Decisions]] — resolved decisions (compare: those are settled; these are not)
 - [[00-synthesis|Protocol Review — Synthesis]] — the adversarial review that identified these problems
-- [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — resolves Problem 2 (trust score recovery)
+- [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — resolves Problem 2 (trust signal recovery after compromise)
 - [[2026-04-08_1600_data-residency-and-compliance|Data Residency and Compliance]] — addresses Problem 6 (GDPR vs. append-only log)
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — also addresses Problem 6 and Problem 7 (home node deanonymization)
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — pre-computed endorsements and anti-farming rule address Problems 3 (phone Sybil floor) and 4 (trust farming)
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — relay node separation, random pool selection, and tiered degraded-mode policy close Problem 1
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — makes targeted endorsement farming harder (Problem 4); PSI prevents contact graph leakage during connection attempts
-- [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — layered defenses for Problems 3 and 4: TrustRank seeding, SIM age scoring, conductance-based cluster detection, diminishing transaction returns, device attestation, endorsement rate limiting
+- [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — layered defenses for Problems 3 and 4: SIM age scoring, conductance-based cluster detection, diminishing transaction returns, device attestation, endorsement rate limiting
 - [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — resolves the "conversation tree retention" question for the directory side: ~365 bytes/conversation means no pruning needed; the fabricated conversation defense is now fully specified
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — transport security configuration relevant to Problem 10 (no forward secrecy); GossipSub and encrypted relay affect the multi-party key management dimension of the same problem
 - [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — ML-DSA transition and key management mechanics relevant to Problem 9 (K_server rotation overlap window)
@@ -70,7 +70,7 @@ Finally: the client tracks only its own lists. It does not track which other age
 
 **What this closes:** The core attack — steal K_local, DDoS directory, impersonate — is blocked at every stage. Existing sessions don't fall back. New connections default to refuse. Even if an agent is on the degraded-mode list, the session is flagged in the Merkle leaf. The time-limited fallback token (from the original design work list) is less necessary with this architecture but remains a potential refinement for new connections.
 
-**Refinement added (2026-04-10):** The random pool selection was subsequently strengthened to trust-weighted random selection. Rather than uniform random, selection probability is proportional to trust score. A phone-only agent (score 1) and a fully-verified agent (score 5) both enter the pool, but at very different weights. An attacker running 10,000 phone-only accounts contributes 10,000 weight-1 entries. One legitimate user with WebAuthn, GitHub, and LinkedIn contributes weight 5+. To dominate a weighted pool, the attacker needs those 10,000 accounts to carry real trust score — which means 10,000 genuine GitHub histories, 10,000 LinkedIn profiles with years of activity. Each layer stacks multiplicatively across the volume. The resource-tying attack and the identity attack now defend against each other: making fake identities numerous enough to matter requires making them expensive enough to matter.
+**Refinement added (2026-04-10):** The random pool selection was subsequently strengthened to trust-weighted random selection. Rather than uniform random, selection probability is proportional to accumulated trust signals. An agent with minimal trust signals (phone only) and a fully-verified agent (WebAuthn, GitHub, LinkedIn) both enter the pool, but at very different weights. An attacker running 10,000 phone-only accounts contributes 10,000 minimal-weight entries. One legitimate user with strong trust signals contributes far more weight. To dominate a weighted pool, the attacker needs those 10,000 accounts to carry real trust signals — which means 10,000 genuine GitHub histories, 10,000 LinkedIn profiles with years of activity. Each layer stacks multiplicatively across the volume. The resource-tying attack and the identity attack now defend against each other: making fake identities numerous enough to matter requires making them expensive enough to matter.
 
 **What's still unspecified:** The fallback token mechanism itself — a signed "I was online as of T" proof the directory issues during normal operation. Not a blocker, but would add a layer of assurance. See [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] for the full mechanism.
 
@@ -78,16 +78,16 @@ Finally: the client tracks only its own lists. It does not track which other age
 
 ---
 
-### 2. Trust score recovery after compromise
+### 2. Trust signal recovery after compromise
 
-**The problem:** An agent gets hacked, the attacker sends malicious messages, the trust score tanks. Owner re-keys, attacker is locked out. But the trust score is in the gutter and there's no recovery mechanism. Nobody will transact because the score is too low, and the score can't rise because nobody will transact. A temporary security event permanently destroys a business.
+**The problem:** An agent gets hacked, the attacker sends malicious messages, trust signals degrade. Owner re-keys, attacker is locked out. But trust signals are in poor standing and there's no recovery mechanism. Nobody will transact because trust signals are too weak, and trust signals can't recover because nobody will transact. A temporary security event permanently destroys a business.
 
 **What makes it hard:** You need to distinguish "this agent was compromised and has recovered" from "this agent is malicious and re-keyed to evade penalties." Both look the same from the outside. Recovery mechanisms that are too generous get exploited by bad actors. Mechanisms that are too strict punish honest victims. The solution also needs to work for the SMB owner whose livelihood depends on their agent — a 30-day recovery timeline might be survivable for enterprise but fatal for a freelancer.
 
 **Design work needed:**
 - Define a formal "compromise recovery event" in the append-only log (WebAuthn-authenticated, timestamped, distinct from routine key rotation)
-- Design a trust score recovery schedule (accelerated penalty decay after verified re-key)
-- Define a trust score floor based on pre-compromise history
+- Design a trust signal recovery schedule (accelerated penalty decay after verified re-key)
+- Define a trust signal floor based on pre-compromise history
 - Design a mechanism for previously-connected agents to reconnect at reduced trust without meeting full policy thresholds
 - Consider a "recovery badge" visible in the trust profile
 
@@ -108,7 +108,7 @@ The Sybil floor problem does not require the phone verification step itself to b
 - **Conductance-based cluster scoring** — Sybil clusters transacting only with each other have near-zero external connectivity, directly measurable without any propagated score.
 - **Counterparty diversity ratio + diminishing returns** — `min(1, unique_counterparties / total_transactions)` penalizes closed-loop farming; `base_weight / ln(n + 1)` makes round-robin self-defeating.
 - **PSI endorsement intersection** — "does Alice have endorsers I personally know?" cannot be gamed by manufacturing endorsements from arbitrary agents; the attacker needs actual overlap with the checking agent's contact graph.
-- **Trust ceilings** — VoIP and virtual numbers are capped at trust score 2. Not rejected, but naturally deprioritized everywhere trust-weighted selection applies.
+- **Trust ceilings** — VoIP and virtual numbers have trust signals restricted. Not rejected, but naturally deprioritized everywhere trust-weighted selection applies.
 - **Incubation period** — 7-day rate limit for new agents, slowing graph-building and giving detection time to work.
 - **Optional refundable bond** — PPP-adjusted voluntary signal. Not a gate; adds economic cost for batch Sybil operations when payment infrastructure exists.
 - **Device attestation, WebAuthn, GitHub, LinkedIn** — each optional signal raises the per-identity cost for a convincing fake.
@@ -121,11 +121,11 @@ No blocking design work remains. Implementation choices (which APIs, scoring wei
 
 ---
 
-### 4. Trust score farming via closed-loop transactions
+### 4. Trust signal farming via closed-loop transactions
 
-**The problem:** 10 Sybil agents transacting with each other in round-robin at $0.01/transaction build legitimate-looking trust scores for ~$300. Combined with PageRank-style rating amplification, a small "authority" cluster can boost hundreds of downstream agents. This is the SEO link-farm playbook applied to trust scores.
+**The problem:** 10 Sybil agents transacting with each other in round-robin at $0.01/transaction accumulate trust signals fraudulently for ~$300. Combined with amplification via strategic endorsements, a small "authority" cluster can boost hundreds of downstream agents. This is the SEO link-farm playbook applied to trust.
 
-**What makes it hard:** You need to detect coordinated fake activity without penalizing legitimate clusters (a small business and its regular suppliers will also have a dense transaction graph). Closed-loop detection works for simple patterns but attackers can add noise transactions with real agents. Minimum transaction floors help but change what kinds of micro-commerce the platform can support. The trust score formula itself needs to be resistant to gaming, which means understanding graph theory attacks before the formula is finalized.
+**What makes it hard:** You need to detect coordinated fake activity without penalizing legitimate clusters (a small business and its regular suppliers will also have a dense transaction graph). Closed-loop detection works for simple patterns but attackers can add noise transactions with real agents. Minimum transaction floors help but change what kinds of micro-commerce the platform can support. The trust signal weight formula itself needs to be resistant to gaming, which means understanding graph theory attacks before the formula is finalized.
 
 **Resolution: defense stack fully designed — remaining items are deferred to day two.**
 
@@ -152,15 +152,15 @@ No blocking design work remains for the pre-commerce phase.
 
 ### 5. Agent succession and ownership transfer
 
-**The problem:** Agent identities are economic assets bound to a single human owner's phone and WebAuthn credentials. If the owner dies, the agent dies. If the business is sold, the trust score can't transfer. If co-owners split, there's no concept of shared ownership or disputed control.
+**The problem:** Agent identities are economic assets bound to a single human owner's phone and WebAuthn credentials. If the owner dies, the agent dies. If the business is sold, trust signals can't transfer. If co-owners split, there's no concept of shared ownership or disputed control.
 
-**What makes it hard:** Succession and transfer are security-sensitive operations that could be exploited (social engineering someone's "designated recovery contacts," hostile takeover disguised as a business sale). The mechanism needs time delays, multi-party authorization, and abuse resistance — but also needs to actually work for a grieving business partner who needs the agent running tomorrow. Transfer also raises a philosophical question: should trust score be transferable? The history belongs to the old owner, but the new owner needs it to operate.
+**What makes it hard:** Succession and transfer are security-sensitive operations that could be exploited (social engineering someone's "designated recovery contacts," hostile takeover disguised as a business sale). The mechanism needs time delays, multi-party authorization, and abuse resistance — but also needs to actually work for a grieving business partner who needs the agent running tomorrow. Transfer also raises a philosophical question: should trust signals be transferable? The history belongs to the old owner, but the new owner needs it to operate.
 
 **Design work needed:**
 - Design designated recovery contacts (how many, how designated, what authentication, what cooling period)
 - Design the succession flow (joint authentication of recovery contacts + time delay + original owner cancel window)
 - Design the transfer protocol (current owner initiates with WebAuthn, new owner completes identity verification, announcement period to connected agents)
-- Decide trust score transfer policy (carry history but reset identity verification components?)
+- Decide trust signal transfer policy (carry history but reset identity verification components?)
 - Consider multi-signatory ownership for business agents
 
 *Ref: day-zero-review/05, Sections 3.1-3.4*
@@ -281,18 +281,23 @@ Remaining specification work: K_server_X rotation notification format, grace per
 
 ### 10. No forward secrecy for P2P messages
 
-**The problem:** Messages on the direct P2P channel are signed for integrity and non-repudiation, but the protocol does not specify an ephemeral key exchange for encryption. Without forward secrecy, a future compromise of an agent's long-term key exposes all past messages if they were logged or intercepted in transit. libp2p supports encrypted transports (Noise protocol with ephemeral Diffie-Hellman) that would provide forward secrecy, but the CELLO protocol does not mandate a specific transport security configuration. An implementer could use a transport without forward secrecy and still be spec-compliant.
+**Original framing:** The protocol did not mandate a specific transport security configuration, so an implementer could use a transport without forward secrecy and still be spec-compliant.
 
-**What makes it hard:** The protocol has a tension between forward secrecy and dispute resolution. Forward secrecy on the wire means that intercepted ciphertext is useless after the session ends — good for privacy. But dispute resolution requires that both parties retain plaintext message history as evidence — which means the plaintext is stored on disk regardless. Forward secrecy protects against passive network observers but does nothing for client-side storage compromise, which is the more likely threat. The question is whether the protocol-level complexity of mandating FS is justified when the client-side storage requirement partially undermines it. Additionally, multi-party conversations introduce encrypted relay fan-out, where the encryption model is different from direct P2P — the relay node handles ciphertext, and key management becomes a group problem.
+**Resolution: forward secrecy is provided by design — closed.**
 
-**Design work needed:**
-- Decide whether to mandate a specific libp2p transport security protocol (Noise XX or IK) with ephemeral keys, or leave transport security as an implementation choice
-- Clarify the interaction between transport-layer forward secrecy and client-side message retention for disputes — what is the actual threat model FS addresses in CELLO's architecture?
-- For multi-party encrypted relay: define whether the shared group key uses ephemeral session keys or long-term keys, and how key rotation interacts with forward secrecy
-- Consider whether the protocol needs a "conversation session key" distinct from identity keys, negotiated per conversation and rotated periodically
-- Evaluate the privacy cost of not mandating FS: passive observers (ISPs, network-level attackers) can decrypt stored traffic if they later compromise a long-term key
+The libp2p session setup already provides forward secrecy at the transport layer:
 
-*Ref: day-zero-review/01 (forward secrecy gap); day-zero-review/03 (P2P transport security)*
+- Both clients generate **fresh ephemeral Ed25519 key pairs** at session start. The public key becomes the libp2p Peer ID for that session.
+- libp2p uses the **Noise protocol**, which performs an ephemeral Diffie-Hellman key exchange. Intercepted ciphertext is useless after session end because the ephemeral keys are destroyed.
+- On session end, both key pairs are discarded. No record is retained.
+
+This is not an implementation choice — ephemeral Peer IDs per session are a specified part of the connection model (see [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]]). Forward secrecy is structural.
+
+The concern about client-side message retention "undermining" forward secrecy is a category error. Forward secrecy protects passive network observers — someone who recorded encrypted traffic cannot decrypt it later even with a compromised long-term key. Client-side storage security is a separate concern (endpoint security), not a reason to forego transport FS.
+
+**Multi-party group key management** is the one genuinely distinct question raised here, but it has its own design log and is not part of the P2P forward secrecy problem.
+
+*Ref: day-zero-review/01 (forward secrecy gap); day-zero-review/03 (P2P transport security); [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]]]*
 
 ---
 
