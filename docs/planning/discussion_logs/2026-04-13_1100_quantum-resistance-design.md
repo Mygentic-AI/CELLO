@@ -181,3 +181,4 @@ The ML-DSA security level (44 vs 65, i.e., 18 KB vs 23 KB) has not been decided.
 - [[design-problems|Design Problems]] — Problem 8 (ML model supply chain) for comparison: both involve a third-party artifact with integrity pinning; the supply chain thinking there parallels the library trust reasoning here
 - [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — ML-DSA security level choice (undecided here) is tracked as an open item there; signature sizes don't affect MMR structure but affect connection package estimates
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — FROST remains for session/seal; scope of quantum debt narrowed to session boundaries (not per-message)
+- [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] — K_server rotation uses the same FROST DKG infrastructure and IThresholdSigner abstraction designed here; per-agent K_server stores one share set per node

@@ -142,3 +142,4 @@ This reduces the K_server rotation problem from "every message could straddle a 
 - [[2026-04-08_1430_protocol-strength-and-commerce|Protocol Strength and Commerce]] — hash signing uses K_local, not FROST
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — FROST is for session/seal, not per-message signing
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — no schema changes required; signing mechanism is above the persistence layer
+- [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] — session-level FROST is the prerequisite that makes rotation tractable; this log is the direct follow-on resolving Problem 9
