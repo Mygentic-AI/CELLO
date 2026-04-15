@@ -224,6 +224,16 @@ Catches attempts to phone home with stolen data embedded in rendered content. Pa
 **Financial data**
 Dollar amounts that might be leaking internal pricing or deal terms. Configurable allowlist for legitimate template amounts.
 
+**Terms-violation self-check (local model)**
+
+In addition to the deterministic pattern checks above, Layer 3 includes a local-model reasoning step that evaluates whether the outbound content could constitute a terms of service violation — prompt injection artifacts, prohibited content, or output that resembles the result of a successful manipulation attack.
+
+This check runs on the local model (zero API cost, no external latency) and produces a structured judgment before the message is sent. If the check fires, delivery is blocked and the judgment is logged alongside the Merkle leaf.
+
+**Why this matters for scanner weaponization defense:** An attacker who manipulates the victim's LLM into emitting flaggable content relies on that content leaving the agent. The outbound self-check catches it before delivery — the flaggable message is never sent, the victim is never penalized, the attack produces nothing. Additionally, if the check passes and the content is sent, the logged self-judgment becomes evidence in any subsequent appeal: the Merkle record shows what was sent; the self-check log shows the agent evaluated it and found it clean before sending.
+
+**Scope:** The self-check is a second opinion, not a replacement for Layer 1 and Layer 2 inbound defenses. Its specific function is catching manipulation that survived inbound scanning and produced problematic outbound content. It does not re-scan inbound messages.
+
 ---
 
 ## Layer 4: Redaction Pipeline

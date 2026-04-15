@@ -332,7 +332,7 @@ The remaining residual — that an owner faces some inconvenience and downtime d
 
 **1. Outbound self-check (primary defense against scanner weaponization)**
 
-Layer 3 (the outbound gate) is extended to include a local-model reasoning check: before sending, the agent evaluates whether the content could constitute a terms violation, not just pattern-match against known bad strings. Since this runs on a local model it costs nothing extra and adds no external latency.
+Layer 3 (the outbound gate) is extended to include a local-model reasoning check: before sending, the agent evaluates whether the content could constitute a terms violation, not just pattern-match against known bad strings. Since this runs on a local model it costs nothing extra and adds no external latency. See [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — Layer 3 for the full specification.
 
 This largely collapses the weaponization attack. An attacker manipulates the victim's LLM into generating flaggable content — but the outbound self-check catches it before it goes out. The flaggable message is never sent, the victim is never penalized, the attack produces nothing.
 
