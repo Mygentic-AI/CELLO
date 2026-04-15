@@ -127,15 +127,26 @@ No blocking design work remains. Implementation choices (which APIs, scoring wei
 
 **What makes it hard:** You need to detect coordinated fake activity without penalizing legitimate clusters (a small business and its regular suppliers will also have a dense transaction graph). Closed-loop detection works for simple patterns but attackers can add noise transactions with real agents. Minimum transaction floors help but change what kinds of micro-commerce the platform can support. The trust score formula itself needs to be resistant to gaming, which means understanding graph theory attacks before the formula is finalized.
 
-**Design work needed:**
-- Design closed-loop money flow detection (A pays B, B pays C, C pays A within N hops)
-- Define minimum transaction values and counterparty diversity requirements
-- Design rating velocity limits (how many ratings per agent per time window)
-- Define what "meaningful transaction" means — message exchange duration, content diversity, minimum value
+**Resolution: defense stack fully designed — remaining items are deferred to day two.**
 
-Note: TrustRank was previously listed here but has been removed — see [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]]. Conductance-based cluster scoring, counterparty diversity ratio, and diminishing returns per counterparty cover the same detection surface without a global propagated score.
+The detection mechanisms are designed and cover the attack surface without a global propagated score (TrustRank removed — see [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]]):
 
-*Ref: day-zero-review/02, Findings #2-3; day-zero-review/07, Section 8.4*
+- **Diminishing returns per counterparty** — `base_weight / ln(n + 1)` with a 0.3 floor. Round-robin is algebraically self-defeating after the first pass.
+- **Counterparty diversity ratio** — `min(1, unique_counterparties / total_transactions)`. A farming cluster bottoms out quickly.
+- **Trust-independence rule** — transactions between same-owner, co-registered, or shared-endorser agents count at 10% weight.
+- **Conductance-based cluster scoring** — detectable even with 20% noise transactions added.
+- **Temporal burst detection** — metronome signature, synchronized activation, graph age mismatch.
+- **Dual-graph comparison** — endorsement vs. transaction graph divergence catches coordinated farming that passes individual checks.
+- **Anti-endorsement-farming** — rate limiting, weight decay for promiscuous endorsers, fan-out detection, social account binding lock, liveness probing.
+
+**Remaining open items (deferred):**
+
+- **Closed-loop money flow detection** (A→B→C→A within N hops) and **minimum transaction values / "meaningful transaction" definition** — these depend on the payment and commerce layer and are deferred until monetary transactions are available.
+- **Rating velocity limits** — implementation detail; thresholds to be set based on observed usage patterns at launch.
+
+No blocking design work remains for the pre-commerce phase.
+
+*Ref: day-zero-review/02, Findings #2-3; day-zero-review/07, Section 8.4; [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]]*
 
 ---
 
