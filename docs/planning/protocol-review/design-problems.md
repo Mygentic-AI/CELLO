@@ -100,14 +100,21 @@ Finally: the client tracks only its own lists. It does not track which other age
 
 **What makes it hard:** Phone verification is the onboarding path — it needs to be low-friction for legitimate users while being expensive for attackers. Any Sybil defense that adds friction also adds friction for the restaurant owner in Accra who just wants to set up an agent. The solution needs to work globally across carriers with wildly different verification reliability. VoIP detection helps but isn't foolproof. A deposit system changes the economics but creates a barrier to entry.
 
-**Design work needed:**
-- Evaluate phone number intelligence APIs (Twilio Lookup, Telesign) — what can they detect, at what cost, across which geographies?
-- Design the VoIP/virtual number detection policy (reject? lower trust? flag?)
-- Evaluate a refundable deposit ($1-5) — does this work globally? What about regions without easy digital payment?
-- Design rate limiting by carrier, prefix, and geography
-- Consider carrier reputation scoring
+**Resolution: resolved through layered trust signals — phone intelligence deferred to day two.**
 
-*Ref: day-zero-review/02, Findings #1, #12, #19*
+The Sybil floor problem does not require the phone verification step itself to be expensive. The defense is layered above it:
+
+- **TrustRank** — trust propagates outward from manually verified seed agents. A farm of phone-only accounts with no path to any seed node gets near-zero propagated trust regardless of internal activity. This is the highest-leverage defense and requires no phone intelligence infrastructure.
+- **Trust ceilings** — VoIP and virtual numbers are capped at trust score 2. They're not rejected, but they're naturally deprioritized everywhere trust-weighted selection applies.
+- **Incubation period** — rate-limits graph-building speed, giving detection time to work.
+- **Optional refundable bond** — PPP-adjusted voluntary trust signal. Not a gate; adds economic cost for batch Sybil operations when available.
+- **WebAuthn, GitHub, LinkedIn, device attestation** — each optional signal makes it harder and more expensive to manufacture a convincing fake identity at scale.
+
+Phone intelligence APIs (Twilio Lookup, Telesign), VoIP detection policy, and carrier reputation scoring are **day-two enhancements** that further raise the floor but are not required for the core defense to function. When integrated, they feed into the trust score as continuous inputs — a SIM active 2+ years on a major carrier scores higher; a VoIP number gets capped. Until then, agents without phone intelligence signals are not penalized; they simply don't receive the boost.
+
+No blocking design work remains. Implementation choices (which APIs, scoring weights, rate-limiting thresholds) are engineering decisions, not architectural ones.
+
+*Ref: day-zero-review/02, Findings #1, #12, #19; [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]]*
 
 ---
 
