@@ -326,16 +326,38 @@ The remaining residual — that an owner faces some inconvenience and downtime d
 
 ### 12. False positive handling and appeal process
 
-**The problem:** The prompt injection scanner is a statistical classifier. It will produce false positives. A cybersecurity advisory agent discussing exploit techniques gets flagged because its messages contain strings like "ignore previous instructions" — which it is literally advising clients about. A legal agent quoting malicious messages in a dispute context gets flagged for the content of the evidence. A red-team testing agent gets penalized for doing its job. Progressive enforcement applies mechanically: warning, rate limit, suspension. There is no appeal mechanism, no domain-specific exception, and no way to distinguish "resembles an attack pattern" from "is an attack." The system punishes agents for the semantic content of their professional expertise.
+**The problem:** The prompt injection scanner is a statistical classifier. It will produce false positives. A cybersecurity advisory agent discussing exploit techniques gets flagged because its messages contain strings like "ignore previous instructions" — which it is literally advising clients about. A legal agent quoting malicious messages in a dispute context gets flagged for the content of the evidence. A red-team testing agent gets penalized for doing its job. The original problem statement also identified scanner weaponization as an attack: craft prompts to manipulate a victim's LLM into emitting flaggable outbound content, get their stake claimed via arbitration.
 
-**What makes it hard:** Any exception mechanism is also an attack vector. An agent that claims "cybersecurity context" to bypass the scanner is a perfect cover for actual injection attacks. Allowlisting by domain introduces a classification problem at least as hard as the original scanning problem. Per-agent scanner configuration (custom sensitivity thresholds) means agents can weaken their own defenses, which affects the safety of every agent they communicate with. An appeal process requires adjudication — someone or something must decide whether a flag was legitimate — but the protocol is designed to operate without centralized judgment. The scanner is also open-source (same model for everyone), so an attacker can test against it until they find bypasses; false positive reports from attackers gaming the system would further degrade scanner calibration.
+**Resolution: resolved through layered defenses — one known edge case deferred.**
 
-**Design work needed:**
-- Design a context-aware scanning mode where the scanner considers conversation metadata (both parties' declared domains, conversation topic) alongside raw content
-- Evaluate per-conversation scanner sensitivity negotiation — both parties agree on a threshold as part of the connection handshake, accepting mutual risk
-- Design an appeal mechanism for automated penalties: who reviews, what evidence is considered, what happens during the appeal (active but flagged? restricted? unchanged?), and what the timeline is
-- Define a "false positive report" that feeds into scanner calibration without being gameable — an attacker filing false-positive reports on genuine detections would degrade the classifier
-- Consider whether the scanner weaponization attack (craft prompts to make a competitor's LLM emit flaggable output, then report the flags) requires a defense at the scanner level, the dispute level, or both
-- Evaluate professional-context trust signals (verified cybersecurity credential, legal credential) that adjust scanner interpretation without disabling protection
+**1. Outbound self-check (primary defense against scanner weaponization)**
 
-*Ref: day-zero-review/05, Sections 2.1, 6.1; day-zero-review/02, Finding #9*
+Layer 3 (the outbound gate) is extended to include a local-model reasoning check: before sending, the agent evaluates whether the content could constitute a terms violation, not just pattern-match against known bad strings. Since this runs on a local model it costs nothing extra and adds no external latency.
+
+This largely collapses the weaponization attack. An attacker manipulates the victim's LLM into generating flaggable content — but the outbound self-check catches it before it goes out. The flaggable message is never sent, the victim is never penalized, the attack produces nothing.
+
+It also provides evidence for appeals: the Merkle record shows what was sent; the local outbound check log shows it was evaluated and found clean before sending. An arbitrator has a meaningful second data point.
+
+**2. Appeal via LLM arbiter**
+
+The protocol already has LLM-as-judge for dispute arbitration — ephemeral inference, cryptographically verifiable inputs from the Merkle record, verdict-only persistence. Appeals for scanner flags use exactly the same mechanism. The concern in the original problem statement that "an appeal process requires a centralized adjudicator which contradicts the protocol's design" was incorrect — the protocol already has this infrastructure.
+
+The full conversation record is Merkle-anchored. The arbitrator sees not just the flagged output but the full sequence of what the counterparty sent that preceded it. If manipulation is present, the triggering input is in the record.
+
+**3. Delayed stake release**
+
+After an upheld arbitration verdict, the claimed stake is held for an appeal window before release. The attacker's capital stays locked and at risk throughout the appeal period. This removes the immediate profitability of systematic stake farming — a successful hit requires waiting out the appeal window with capital tied up and exposed.
+
+**4. Cross-victim pattern detection**
+
+If a single agent or cluster of agents is the common denominator across multiple FLAGGED sessions from different victims, the presumption inverts. The directory tracks FLAGGED session outcomes per agent. A pattern of one agent repeatedly being the counterparty in flagged sessions — while the other party varies — is strong evidence the common agent is the cause. This is surfaced as a trust signal and feeds into appeal adjudication.
+
+**5. Attack prompt fingerprinting**
+
+The Merkle record captures what each party sent. If similar inputs appear across multiple victims' records, those inputs are fingerprinted as known attack patterns — useful both for detection (Layer 1 can be updated) and as evidence in appeals showing the attacker's playbook.
+
+**Known open edge case: subtle manipulation**
+
+The defenses above handle the obvious case well. The hard remaining case is subtle manipulation — innocuous-looking inputs that through a chain of reasoning cause the LLM to emit flaggable content, where the triggering input doesn't obviously resemble an attack. The outbound self-check mitigates this (the agent evaluates its own output before sending) but cannot guarantee detection in all cases. This is a known limitation of statistical classifiers and LLM reasoning, not a CELLO-specific gap. It is deferred as a future refinement.
+
+*Ref: day-zero-review/05, Sections 2.1, 6.1; day-zero-review/02, Finding #9; [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]]; [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]]*
