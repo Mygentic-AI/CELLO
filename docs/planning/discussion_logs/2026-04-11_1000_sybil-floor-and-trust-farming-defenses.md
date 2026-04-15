@@ -2,8 +2,8 @@
 name: Sybil Floor and Trust Farming Defenses
 type: discussion
 date: 2026-04-11 10:00
-topics: [sybil-defense, trust-farming, phone-verification, TrustRank, graph-analysis, identity, onboarding, mechanism-design, endorsements, anti-farming]
-description: Four-lens analysis (economics, graph theory, identity, adversarial) producing layered defenses for Problems 3 and 4 — TrustRank seeding, conductance scoring, device attestation, diminishing transaction returns, and endorsement rate limiting.
+topics: [sybil-defense, trust-farming, phone-verification, graph-analysis, identity, onboarding, mechanism-design, endorsements, anti-farming]
+description: Four-lens analysis (economics, graph theory, identity, adversarial) producing layered defenses for Problems 3 and 4 — conductance scoring, device attestation, diminishing transaction returns, and endorsement rate limiting. TrustRank formally deprecated in 2026-04-14_1500.
 ---
 
 # Sybil Floor and Trust Farming Defenses
@@ -12,7 +12,7 @@ Four independent analyses of Problems 3 (phone verification Sybil floor) and 4 (
 
 ## Consensus finding
 
-All four analyses converge on the same #1 priority: **TrustRank seeded from verified agents is the single highest-leverage unbuilt defense.** Without it, every other measure can be circumvented by a patient attacker with ~$10K. With it, Sybil clusters that have no path to seed nodes get zero propagated trust regardless of internal activity.
+All four analyses originally converged on TrustRank as the #1 priority. **TrustRank has since been formally deprecated** — see [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]]. The remaining stack (SIM age, diminishing returns, conductance scoring, device attestation, endorsement defenses, temporal detection, optional bond) stands on its own without it — the cold-start problem TrustRank addressed is handled by the discovery system's group rooms, bulletin listings, and open connection policies.
 
 ## Structural limitation of the same-owner rule
 
@@ -32,7 +32,7 @@ This means these mechanisms do not need to be integrated at launch. If we haven'
 
 ### SIM age and carrier-level signals
 
-When the directory has phone intelligence integration available (Twilio Lookup, Telesign), it can query carrier metadata alongside OTP verification: SIM tenure, number type (mobile/VoIP/landline), carrier name, porting history. These feed into the trust score as continuous inputs, not binary gates.
+When the directory has phone intelligence integration available (Twilio Lookup, Telesign), it can query carrier metadata alongside OTP verification: SIM tenure, number type (mobile/VoIP/landline), carrier name, porting history. These feed into trust signals as continuous inputs, not binary gates.
 
 A SIM active for 2+ years on a major carrier adds a meaningful trust boost. A SIM activated 3 hours ago on a known VoIP provider adds little or nothing. For regions with poor carrier data, the signal is simply absent — the agent is not penalized; they just don't get the boost.
 
@@ -52,7 +52,7 @@ A bulk attacker running 20,000 registrations from cloud VMs or emulators cannot 
 
 **User friction:** Zero — automatic for anyone on a smartphone that supports it.
 
-**Availability:** Desktop and server agents without TPMs simply don't provide this signal. They compensate with other signals or operate at whatever trust score their available signals produce. Device attestation is strongest for the phone-onboarded path but is never required.
+**Availability:** Desktop and server agents without TPMs simply don't provide this signal. They compensate with other signals or operate at whatever trust profile their available signals produce. Device attestation is strongest for the phone-onboarded path but is never required.
 
 ### Tiered trust ceilings based on phone quality
 
@@ -72,17 +72,17 @@ VoIP agents are not rejected — they operate at a lower trust ceiling. Since tr
 
 An agent can optionally post a refundable bond to strengthen their trust profile. The bond is returned after 90 days of clean operation (no upheld flags, no tombstone). The amount is adjusted by purchasing-power parity tied to the phone number's country code: $1 in high-income countries, $0.10-0.30 in low-income countries. The directory publishes a signed bond-tier table updated quarterly.
 
-**This is not a registration requirement.** It follows the same pattern as every other trust signal: phone gets you in, everything else is optional. An agent that posts a bond gets a trust score boost — the same way WebAuthn, GitHub, and LinkedIn do. An agent that doesn't post a bond is not penalized; they simply don't get the boost.
+**This is not a registration requirement.** It follows the same pattern as every other trust signal: phone gets you in, everything else is optional. An agent that posts a bond gains additional trust signals — the same way WebAuthn, GitHub, and LinkedIn do. An agent that doesn't post a bond is not penalized; they simply don't get the boost.
 
 **Why optional rather than mandatory:** A mandatory bond is a speed bump that loses legitimate users before they see any value. It also creates a hard dependency on payment infrastructure at launch — accepting payments globally (mobile money, prepaid cards, Lightning Network) is a significant technical and regulatory undertaking that requires funding and time to set up. The bond mechanism lights up when payment infrastructure arrives for marketplace transactions, staking, and other features that already require it.
 
-**Why it still helps:** When available, the bond makes batch Sybil economics unfavorable. At $0.20/identity, 20,000 agents costs $4,000 in locked capital with a 90-day exposure window. But the network does not depend on it — TrustRank, graph analysis, incubation period, and whatever other signals are available at that point work without any payment infrastructure.
+**Why it still helps:** When available, the bond makes batch Sybil economics unfavorable. At $0.20/identity, 20,000 agents costs $4,000 in locked capital with a 90-day exposure window. But the network does not depend on it — graph analysis, incubation period, and whatever other trust signals are available at that point work without any payment infrastructure.
 
 **Risk:** PPP tiers can be gamed (US attacker uses Nigerian numbers). Mitigated by VoIP detection and carrier-country-based pricing (not IP geolocation).
 
 ### Incubation period
 
-Phone-only agents get a provisional score of 0.5 and a 7-day incubation period with a rate limit of 3 new outbound connections per day. After 7 days with no flags, the score rises to 1.
+Phone-only agents get minimal trust signals and a 7-day incubation period with a rate limit of 3 new outbound connections per day. After 7 days with no flags, baseline trust signals are established.
 
 **Why this helps:** 10 Sybil agents at 3 connections/day/agent takes weeks instead of hours to build any meaningful graph. Each day is a day the graph analysis system can inspect them.
 
@@ -94,7 +94,7 @@ Phone-only agents get a provisional score of 0.5 and a 7-day incubation period w
 
 ### Diminishing returns per counterparty pair
 
-Modify the trust score formula so transaction history weight follows logarithmic decay per unique counterparty: `weight(tx_n with counterparty X) = base_weight / ln(n + 1)`. The first transaction contributes full weight. The tenth contributes ~10%.
+Modify the trust signal weight formula so transaction history weight follows logarithmic decay per unique counterparty: `weight(tx_n with counterparty X) = base_weight / ln(n + 1)`. The first transaction contributes full weight. The tenth contributes ~10%.
 
 Additionally, impose a counterparty diversity ratio: trust contribution from transaction history is multiplied by `min(1, unique_counterparties / total_transactions)`. Ten transactions with ten different counterparties: multiplier = 1.0. Ten transactions with one counterparty: multiplier = 0.1.
 
@@ -143,6 +143,8 @@ Transactions between trust-dependent agents count at 10% weight. Round-robin amo
 ---
 
 ## TrustRank design (addresses both problems)
+
+> **Deprecated.** TrustRank and the Trust Seeder role have been formally removed from the protocol — see [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]]. The design below is preserved as historical context only. The cold-start problem it addressed is handled by the discovery system.
 
 ### Seed selection
 
@@ -194,11 +196,11 @@ The current design leans on GitHub, LinkedIn, Twitter/Facebook/Instagram. These 
 
 | Scenario | Current estimated cost | With day-one defenses | With bond (when available) |
 |---|---|---|---|
-| 20,000 phone-only Sybils | ~$1,000 | Near-zero trust (TrustRank = infinity, low SIM scores) | +$4,000 locked capital |
+| 20,000 phone-only Sybils | ~$1,000 | Near-zero trust (no seed path, low SIM trust signals) | +$4,000 locked capital |
 | 100 agents passing connection policies | ~$300 | $5,000-15,000 + 90-day exposure + graph detection | +bonds on top |
-| Full-stack attack (500 SIMs + 50 credentialed + 3 months) | ~$10K | Caught by TrustRank + closed-loop + behavioral correlation | +bonds on top |
+| Full-stack attack (500 SIMs + 50 credentialed + 3 months) | ~$10K | Caught by conductance scoring + closed-loop + behavioral correlation | +bonds on top |
 
-The legitimate user's cost for each defense: organic transactions, endorsements from existing contacts, natural TrustRank accumulation, and optionally a small bond (returned after 90 days). The asymmetry is structural — legitimate use is inherently diverse and connected; farming is inherently insular and repetitive.
+The legitimate user's cost for each defense: organic transactions, endorsements from existing contacts, natural trust signal accumulation, and optionally a small bond (returned after 90 days). The asymmetry is structural — legitimate use is inherently diverse and connected; farming is inherently insular and repetitive.
 
 ---
 
@@ -208,11 +210,11 @@ The legitimate user's cost for each defense: organic transactions, endorsements 
 
 **Multi-SIM identity sprawl + round-robin.** Buys 2,000 prepaid SIMs, registers 2,000 agents, cross-endorses between different phone hashes (bypasses same-owner rule entirely), runs closed-loop transactions.
 
-**Blocked by:** SIM age scoring (near-zero base trust), device attestation (need physical phones), TrustRank (no path to seeds), conductance scoring (insular cluster), incubation period (slows graph building). When available, optional bonds add further economic cost.
+**Blocked by:** SIM age scoring (near-zero base trust signals), device attestation (need physical phones), conductance scoring (insular cluster), incubation period (slows graph building). When available, optional bonds add further economic cost.
 
 ### Tier 2: Funded attacker ($10K-$50K)
 
-**Aged social account purchase + endorsement harvesting.** Buys 200 aged GitHub/LinkedIn accounts, attaches to agents with real SIMs, builds trust score of 4-5, then endorses downstream phone-only agents. Also: engages legitimately for 60 days to harvest real endorsements.
+**Aged social account purchase + endorsement harvesting.** Buys 200 aged GitHub/LinkedIn accounts, attaches to agents with real SIMs, builds strong trust signals, then endorses downstream phone-only agents. Also: engages legitimately for 60 days to harvest real endorsements.
 
 **Blocked by:** Social account binding lock (can't resell), liveness probing (dormant accounts decay), endorsement rate limiting (prevents fan-out), temporal correlation (200 accounts onboarding in one week is anomalous).
 
@@ -228,13 +230,14 @@ The legitimate user's cost for each defense: organic transactions, endorsements 
 
 **Priority by leverage (each is independent — integrate as infrastructure allows):**
 
-1. **TrustRank with automatic seed selection** — highest leverage, blocks all tiers of attack from accumulating usable trust
-2. **SIM age / carrier signals** — zero user friction, significant attacker cost increase; requires phone intelligence API integration
-3. **Diminishing returns per counterparty** — makes farming self-defeating; pure formula change, no external dependency
-4. **Conductance-based cluster scoring** — catches farming that survives other defenses; directory-side computation
-5. **Device attestation** — zero friction, high attacker cost; requires client-side platform integration (SafetyNet/DeviceCheck)
-6. **Endorsement rate limiting + weight decay** — defends the endorsement system specifically; protocol-level rule
-7. **Temporal burst detection + dual-graph comparison** — catches sophisticated attackers; directory-side computation
+> Note: TrustRank was originally #1. It has been formally deprecated — see [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]]. The remaining stack is renumbered below.
+
+1. **SIM age / carrier signals** — zero user friction, significant attacker cost increase; requires phone intelligence API integration
+2. **Diminishing returns per counterparty** — makes farming self-defeating; pure formula change, no external dependency
+3. **Conductance-based cluster scoring** — catches farming that survives other defenses; directory-side computation
+4. **Device attestation** — zero friction, high attacker cost; requires client-side platform integration (SafetyNet/DeviceCheck)
+5. **Endorsement rate limiting + weight decay** — defends the endorsement system specifically; protocol-level rule
+6. **Temporal burst detection + dual-graph comparison** — catches sophisticated attackers; directory-side computation
 
 **Requires payment infrastructure (not available at launch):**
 
@@ -245,16 +248,16 @@ The legitimate user's cost for each defense: organic transactions, endorsements 
 ## Related Documents
 
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — §1.5 synthesizes this log's full Sybil defense stack into the complete protocol context
-- [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — explains why TrustRank alone is insufficient: it is an absolute signal anchored to a fixed reference, not a relative signal; only Class 2 (network graph) provides the structural Sybil asymmetry
+- [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — Class 2 (network graph) provides the structural Sybil asymmetry; conductance scoring and cluster detection live here
 - [[design-problems|Design Problems]] — Problems 3 (phone Sybil floor) and 4 (trust farming) that this log directly addresses
-- [[cello-design|CELLO Design Document]] — Step 2 (trust score formula, signal scoring, anti-Sybil defenses) and Step 6 (connection acceptance policies)
+- [[cello-design|CELLO Design Document]] — Step 2 (trust signals, signal scoring, anti-Sybil defenses) and Step 6 (connection acceptance policies)
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — the endorsement system and same-owner anti-farming rule this log extends with rate limiting, weight decay, and fan-out detection
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — PSI prevents targeted farming; this log addresses untargeted farming that PSI does not cover
-- [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — trust-weighted pool selection referenced here as an existing defense that layers with TrustRank
+- [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — trust-weighted pool selection referenced here as an existing defense that layers with the Sybil stack
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — gate pyramid and economic staking that this log's bond mechanism parallels
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — hash-everything-store-nothing constraint that all proposed mechanisms must work within
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — the one-account-per-social-identifier and one-account-per-device deduplication rules are implemented at the schema level via account_id_hash and device_id_hash uniqueness constraints
-- [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — the anonymous trust score surfaced in discovery results is computed by the mechanisms designed here; discovery is the primary consumer of the trust score
+- [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — the anonymous trust signals surfaced in discovery results are computed by the mechanisms designed here; discovery is the primary consumer of trust signals
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — trust signals designed here are surfaced via `cello_verify` and used in `SignalRequirementPolicy`; anti-farming rules shape what endorsement counts mean in connection policies
 - [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow — Trust Data Relay and Selective Disclosure]] — trust signals designed here are among the mandatory signals relayed during connection requests; behavioral metrics cannot be withheld
 - [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]] — removes TrustRank (Layer 0 and consensus #1 priority here) and the Trust Seeder role; the remaining stack (SIM age, diminishing returns, conductance, device attestation, endorsement defenses, temporal detection, bonds) stands on its own

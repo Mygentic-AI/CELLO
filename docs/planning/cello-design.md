@@ -71,7 +71,7 @@ CELLO's trust builds step by step. Each stage adds security guarantees on top of
 | Step | What Happens | What You Get |
 |---|---|---|
 | **1. Sign Up** | Agent registers with phone verification. Gets a cryptographic identity bound to the directory. | Baseline identity — you exist, you're real. |
-| **2. Strengthen Identity** | Human owner adds WebAuthn, social verifiers (LinkedIn, GitHub, etc.). | Higher trust score. Harder to impersonate. |
+| **2. Strengthen Identity** | Human owner adds WebAuthn, social verifiers (LinkedIn, GitHub, etc.). | Richer trust signals. Harder to impersonate. |
 | **3. Come Online** | Agent authenticates with directory via FROST session establishment. Directory confirms it's the real agent. | First link in the trust chain — is this agent compromised? |
 | **4. Discover** | Agent searches the directory for other agents by capability. | Find who you need. See their trust profile before engaging. |
 | **5. Request Connection** | Agent sends a connection request through the directory. Receiver sees the full trust profile. | Receiver decides whether to engage — before any data is exchanged. |
@@ -93,7 +93,7 @@ Agents can sign up and operate fully autonomously. The agent handles its own reg
 - K_local generation + K_server issuance (see Step 3 for what these are)
 - Directory listing created
 - P2P chat, hash relay available immediately
-- Trust score: baseline (phone only)
+- Trust signals: phone only (baseline)
 
 ### Onboarding — WhatsApp Path
 
@@ -118,14 +118,14 @@ The human owner visits the web portal to elevate the account with stronger authe
 
 ### What the Human Adds
 
-- **Social verifiers:** LinkedIn, GitHub, Twitter/X, Facebook, Instagram OAuth — each adds to trust score with signal-strength analysis (account age, activity, connections)
+- **Social verifiers:** LinkedIn, GitHub, Twitter/X, Facebook, Instagram OAuth — each adds trust signals (account age, activity, connections evaluated at OAuth time)
 - **WebAuthn:** Register a hardware key (YubiKey) or biometric (TouchID, FaceID) — becomes required for sensitive operations
 - **2FA:** TOTP authenticator app as an alternative or addition to WebAuthn
 - Can register both WebAuthn and 2FA for maximum flexibility
 
-### Trust Score — Stacked Verification
+### Trust Signals — Stacked Verification
 
-Each verification layer adds to the trust score. Phone is required. Everything else is optional but visible. **WebAuthn/2FA is not mandated — the network enforces it.** Agents without strong authentication have lower trust scores, and receiving agents can refuse connections from agents that lack it. The market pressure is stronger than any mandate: if serious agents won't talk to you without WebAuthn, you'll add it — not because we forced you, but because you can't do business without it.
+Each verification layer adds trust signals. Phone is required. Everything else is optional but visible. **WebAuthn/2FA is not mandated — the network enforces it.** Agents without strong authentication have fewer trust signals, and receiving agents can refuse connections from agents that lack it. The market pressure is stronger than any mandate: if serious agents won't talk to you without WebAuthn, you'll add it — not because we forced you, but because you can't do business without it.
 
 | Verification | What It Proves | Fakeable? | Weight |
 |---|---|---|---|
@@ -152,13 +152,13 @@ CELLO performs the verification work — checking LinkedIn, evaluating GitHub, e
 3. CELLO hashes the record: `SHA-256(json_blob) → hash`
 4. CELLO stores only the hash. The original record is sent to the client. CELLO discards it.
 
-**Trust score sharing:** When another agent requests a trust score, the client sends the original records, the directory sends the hashes. The recipient hashes what the client sent and compares. Match = authentic and unmodified.
+**Trust signal sharing:** When another agent requests verification details, the client sends the original records, the directory sends the hashes. The recipient hashes what the client sent and compares. Match = authentic and unmodified.
 
-**Why this matters:** CELLO literally cannot leak trust scores, bios, or verification details — it doesn't have them. A compromised directory node yields hashes, not names or LinkedIn profiles. There is nothing to exfiltrate. The client cannot modify their trust score after verification — any change produces a different hash. The GDPR tension between append-only logs and right-to-erasure is dramatically simpler when the directory stores hashes of personal data rather than the data itself.
+**Why this matters:** CELLO literally cannot leak trust signals, bios, or verification details — it doesn't have them. A compromised directory node yields hashes, not names or LinkedIn profiles. There is nothing to exfiltrate. The client cannot modify their trust signals after verification — any change produces a different hash. The GDPR tension between append-only logs and right-to-erasure is dramatically simpler when the directory stores hashes of personal data rather than the data itself.
 
 ### Extensible Trust Schema
 
-The trust score is not a fixed set of fields — it is a collection of verified attestations. LinkedIn and GitHub are standard categories, but the system is open. Any verifiable claim can go through the oracle flow: present evidence → CELLO verifies → CELLO hashes → client stores. New attestation types can emerge without protocol changes. The directory doesn't care what's inside the JSON blob — it stores a hash.
+The trust signal set is not a fixed set of fields — it is a collection of verified attestations. LinkedIn and GitHub are standard categories, but the system is open. Any verifiable claim can go through the oracle flow: present evidence → CELLO verifies → CELLO hashes → client stores. New attestation types can emerge without protocol changes. The directory doesn't care what's inside the JSON blob — it stores a hash.
 
 ### Attestations — Portable Signed Statements
 
@@ -166,7 +166,7 @@ An attestation is a signed, hashable statement from one agent about another that
 
 The flow: Bob signs a statement about Alice. Bob sends it to Alice and to the directory. Directory hashes it, discards the content. Alice stores the attestation and the hash. When Alice presents it to Charlie, Charlie verifies the hash against the directory — tamper-proof, no platform controls it.
 
-**Revocation:** Bob can revoke an attestation at any time. The hash remains in the directory log (append-only), but a revocation event is appended alongside it. Verifiers see: hash present, status revoked. If Alice presents a revoked attestation, verification fails immediately — a trust score event.
+**Revocation:** Bob can revoke an attestation at any time. The hash remains in the directory log (append-only), but a revocation event is appended alongside it. Verifiers see: hash present, status revoked. If Alice presents a revoked attestation, verification fails immediately — a trust signal event.
 
 A plumber with five satisfied customers — all verified CELLO agents — can ask each to submit an attestation. The plumber stores the bundle. Anyone requesting the trust profile receives the attestations from the plumber's client and verifies them against CELLO's hashes. Reviewers are verified, reviews are tamper-proof, no platform controls them — Yelp reviews without Yelp.
 
@@ -181,18 +181,9 @@ Each verification source is evaluated at OAuth time:
 - Instagram: account age, post count, followers
 - Facebook: create date, friends/followers, activity
 
-**Trust score formula:**
-```
-trust_score = base(phone_verified)
-            + webauthn_weight
-            + totp_2fa_weight
-            + github_signal_weight
-            + linkedin_signal_weight
-            + best_of(twitter, facebook, instagram)
-            + transaction_history_weight
-            + time_on_platform_bonus
-            - disputes_penalty
-```
+**Trust signal evaluation:**
+
+CELLO does not compute or publish a single numeric trust score. Trust is expressed as named signals — each verification source is evaluated independently and stored as a structured record. No formula sums these into a single number. `cello_verify` returns `SignalResult[]`; connection policies specify named trust signal requirements via `SignalRequirementPolicy`, not numeric thresholds. Transaction history carries the highest weight in default connection policies — real commerce with real counterparties is the hardest trust signal to manufacture at scale.
 
 ### What Requires Which Auth Level
 
@@ -213,7 +204,7 @@ trust_score = base(phone_verified)
 - Phone numbers are expensive to fake at scale
 - Cross-reference the transaction graph — colluding clusters are detectable (agents that only transact with each other)
 - Real money in transactions makes fake volume expensive
-- Ratings from high-trust agents carry more weight (PageRank-style)
+- Ratings from well-verified agents carry more weight
 - Time is hard to fake — account age, gradual organic growth
 - Stacking 2+ social verifications makes coordinated faking much harder
 
@@ -223,7 +214,7 @@ trust_score = base(phone_verified)
 Day 1: Agent signs up autonomously via WhatsApp bot
   → Phone verified, keys issued, listed in directory
   → Can discover, chat, transact immediately
-  → Trust score: 1
+  → Trust signals: phone verified
   → Some agents won't accept connections (their policy requires WebAuthn)
 
 Day 1 (later): Agent tries to connect to SupplyBot
@@ -233,16 +224,16 @@ Day 1 (later): Agent tries to connect to SupplyBot
 
 Day 2: Human owner visits web portal
   → Logs in via phone OTP (bootstraps web session)
-  → Registers YubiKey via WebAuthn → trust score: 2, unlocks emergency revocation hardening
-  → Enables TOTP 2FA as backup → trust score: 3
-  → Adds LinkedIn OAuth → trust score: 4
-  → Adds GitHub OAuth → trust score: 5
+  → Registers YubiKey via WebAuthn → trust signals: + WebAuthn, unlocks emergency revocation hardening
+  → Enables TOTP 2FA as backup → trust signals: + TOTP
+  → Adds LinkedIn OAuth → trust signals: + LinkedIn verified
+  → Adds GitHub OAuth → trust signals: + GitHub verified
   → Retries SupplyBot → connection accepted
 
 Day 30: Scheduled key rotation
   → Human taps YubiKey on web portal
   → New keys issued, old keys expired
-  → Trust score unchanged, continuity maintained
+  → Trust signals unchanged, continuity maintained
 
 Day 45: Suspected compromise
   → Owner hits "Not me" on WhatsApp → K_server revoked instantly
@@ -297,7 +288,7 @@ Agent searches the directory for other agents by capability. But discovery isn't
 The directory exposes:
 - Agent listings — what the agent does, pricing (optional)
 - Discovery/search API — agents find other agents by capability
-- Trust scores — visible badge based on verification depth + transaction history
+- Trust signals — visible badge based on verification depth + transaction history
 - Public profile only — no connection details, no phone numbers, no keys
 
 ### Agent Listing Types
@@ -351,7 +342,7 @@ A contextual, per-recipient message sent at connection request time. Not on the 
 
 **Trust function:** The greeting is contextual, not persistent. It's included in the connection request, hashed, and recorded in the conversation Merkle tree at the moment of the request. Neither side can later deny what was said at the point of first contact.
 
-**Compromise recovery use case:** If an agent's trust score dropped due to a compromise event, the greeting gives the owner a targeted way to explain the situation to specific recipients — not a blanket statement to everyone, but a direct explanation to the parties affected.
+**Compromise recovery use case:** If an agent's trust signals were degraded due to a compromise event, the greeting gives the owner a targeted way to explain the situation to specific recipients — not a blanket statement to everyone, but a direct explanation to the parties affected.
 
 **Open questions:**
 - What is the right global rate limit for bio changes?
@@ -436,7 +427,7 @@ The system never stops. Existing conversations are unaffected by directory outag
 
 | Setting | Behavior |
 |---|---|
-| Open | Auto-accept all requests above minimum trust score |
+| Open | Auto-accept all requests meeting minimum trust signal requirements |
 | Require endorsements | Accept only if N agents I know have pre-endorsed the requester |
 | Require introduction | Ad-hoc fallback: accept if a mutual contact vouches in real time |
 | Selective | Auto-accept known agents, notify owner for new ones |
@@ -467,7 +458,7 @@ Alice contacts Charlie (who requires endorsements)
   → Accept or decline — milliseconds, no round-trip to endorsers required
 ```
 
-**Bootstrapping a new agent:** When creating a second or business agent, ask your existing network to endorse the new public key before it goes live. The new agent launches with pre-built endorsements rather than a cold-start trust score of zero.
+**Bootstrapping a new agent:** When creating a second or business agent, ask your existing network to endorse the new public key before it goes live. The new agent launches with pre-built endorsements rather than cold-starting with no trust signals.
 
 **Anti-farming rule:** Connection endorsements between agents with the same owner are invalid. The directory enforces this at submission time — if endorser and endorsed share a phone-verified owner, the submission is rejected. An owner cannot manufacture endorsements by cross-endorsing their own agents.
 
@@ -496,13 +487,13 @@ For honest users the net cost is zero — every legitimate interaction returns t
 
 | Gate | Check | Cost |
 |---|---|---|
-| **1. Connection level** | Introduction policy, trust score floor, whitelist/blacklist, stake requirement | Lookup, no inference |
+| **1. Connection level** | Introduction policy, trust signal requirements, whitelist/blacklist, stake requirement | Lookup, no inference |
 | **2. Message level** | Valid signature + directory-confirmed hash, rate limit, message size, declared notification type | Deterministic, no inference |
 | **3. Pattern matching** | Known bad patterns, message structure validation, sender frequency anomaly detection | Rule-based, no LLM |
 | **4. Cheap classifier** | DeBERTa or equivalent scanner | Cheap inference |
 | **5. Full LLM processing** | Only traffic that cleared all above | Expensive |
 
-By the time a message reaches the LLM, it has already proven it comes from an agent with a valid stake, sufficient trust score, valid hash, within rate limits, and passing pattern checks.
+By the time a message reaches the LLM, it has already proven it comes from an agent with a valid stake, sufficient trust signals, valid hash, within rate limits, and passing pattern checks.
 
 **Flat connection fee alternative:** A creative attacker LLM can pass all filter gates, engage convincingly, and slowly burn an institution's tokens without producing an outcome. The transcript looks plausible; arbitration cannot reliably distinguish bad faith from an unproductive conversation. For this attack vector, a flat non-refundable connection fee is more robust — no arbitration required, no intent question. Both models belong in the toolkit: staking + arbitration for clear-cut abuse, flat fee for defending against creative time-wasters.
 
@@ -685,7 +676,7 @@ Not all communication is a conversation. Some messages are one-way: an introduct
 
 A notification message is self-contained and self-sealing — a single atomic unit with no session, no reply path, and termination baked in. It is still signed and hashed. The directory records a hash as a standalone event (not chained into a session Merkle tree). The sender is accountable; the content is verifiable.
 
-**Every notification carries a declared type** from a standardized registry — not freeform strings. Predefined types include: `introduction`, `order-update`, `alert`, `promotional`, `system`. Declaring a misleading type (e.g., typing a promotion as `order-update`) is a signed, verifiable act and a trust score event if flagged.
+**Every notification carries a declared type** from a standardized registry — not freeform strings. Predefined types include: `introduction`, `order-update`, `alert`, `promotional`, `system`. Declaring a misleading type (e.g., typing a promotion as `order-update`) is a signed, verifiable act and a trust signal event if flagged.
 
 **Prior conversation requirement:** A notification can only be sent to an agent with whom the sender has had at least one prior conversation. This prevents cold-contact spam entirely.
 
@@ -697,7 +688,7 @@ A notification message is self-contained and self-sealing — a single atomic un
 
 Accept or reject. O(1) per notification. If filtering required LLM inference, spam would become a compute DoS attack — each notification burning the recipient's tokens. The LLM only fires after a notification has cleared the filter and the agent decides to act on it.
 
-**Rate limiting:** Per-sending-agent limits enforced at the directory. Lower trust scores get stricter limits. Verified businesses with known identities can apply for elevated rate limits — the recipient's opt-out always overrides regardless of what the sender is permitted to send.
+**Rate limiting:** Per-sending-agent limits enforced at the directory. Fewer trust signals = stricter limits. Verified businesses with known identities can apply for elevated rate limits — the recipient's opt-out always overrides regardless of what the sender is permitted to send.
 
 Use cases: agent introductions (web-of-trust), tombstone notifications to counterparties, directory alerts, trust events, recovery event notifications.
 
@@ -726,7 +717,7 @@ If the receiver's client detects malicious content mid-conversation:
 1. The scan result is recorded in the Merkle leaf — evidence, not allegation
 2. The receiver's agent is warned / message is blocked (depending on client policy)
 3. The client reports the detection to the directory
-4. The directory can flag the sender, demotion of trust score
+4. The directory can flag the sender, trust signal impact
 5. Repeated violations → progressive enforcement: warning, rate limit, suspension
 
 Every agent running the client is a sensor. The same free tool that protects individual agents polices the entire network — no separate moderation system needed.
@@ -781,7 +772,7 @@ The "Not me" button from activity notifications triggers immediate revocation:
 3. Attacker is locked out from new sessions
 4. Full re-keying requires human-level authentication (see below)
 
-**SIM-swap risk:** An attacker who ports the phone number could tap "Not me" to revoke the legitimate agent's key — a denial-of-service. This is the same phone-as-single-factor vulnerability that affects every system built on phone verification (Gmail, banks, exchanges). The mitigation is the same too: if the owner has registered WebAuthn/2FA, re-keying requires it — so the attacker can disrupt but not take over. Agents without WebAuthn are more exposed, which is another reason the trust score and connection policies push owners toward stronger auth.
+**SIM-swap risk:** An attacker who ports the phone number could tap "Not me" to revoke the legitimate agent's key — a denial-of-service. This is the same phone-as-single-factor vulnerability that affects every system built on phone verification (Gmail, banks, exchanges). The mitigation is the same too: if the owner has registered WebAuthn/2FA, re-keying requires it — so the attacker can disrupt but not take over. Agents without WebAuthn are more exposed, which is another reason trust signals and connection policies push owners toward stronger auth.
 
 #### Key Rotation (requires human-level auth)
 
@@ -799,7 +790,7 @@ Owner visits web portal
 
 ### Account Compromise and Recovery
 
-Detection without recovery permanently punishes honest victims. If an agent is hacked, the attacker sends malicious messages, and the trust score tanks — but after re-keying the attacker is locked out, the trust score is still in the gutter with no way back. Nobody will transact because the score is too low, and the score can't rise because nobody will transact. A temporary security event permanently destroys a business. Every detection mechanism needs a corresponding recovery mechanism.
+Detection without recovery permanently punishes honest victims. If an agent is hacked, the attacker sends malicious messages, and trust signals degrade — but after re-keying the attacker is locked out, the trust signals are still weak with no way back. Nobody will transact because trust signals are too low, and they can't rebuild because nobody will transact. A temporary security event permanently destroys a business. Every detection mechanism needs a corresponding recovery mechanism.
 
 #### Tombstone Types
 
@@ -815,9 +806,9 @@ On any tombstone: K_server shares are invalidated (no new FROST sessions can be 
 
 When standard methods (WebAuthn, phone OTP) are unavailable or compromised, the owner contacts pre-designated recovery agents out-of-band. Those agents sign cryptographic attestations within the protocol. When the M-of-N threshold is met, a 48-hour mandatory waiting period begins. During that window, the old key can still file a contest. After the window, a new key ceremony is initiated.
 
-Recovery contacts must meet a minimum trust score floor. A vouching agent can only participate in one recovery per month. The M-of-N threshold is configurable at registration.
+Recovery contacts must meet minimum trust signal requirements. A vouching agent can only participate in one recovery per month. The M-of-N threshold is configurable at registration.
 
-**No ID document custody.** Identity document appeals (passport, driver's license) are explicitly excluded. Becoming a custodian of identity documents creates regulatory obligations and conflicts with the no-PII design principle. If social recovery fails, the honest answer is start fresh — new identity, trust score zero. The network cannot override cryptography without creating a central authority.
+**No ID document custody.** Identity document appeals (passport, driver's license) are explicitly excluded. Becoming a custodian of identity documents creates regulatory obligations and conflicts with the no-PII design principle. If social recovery fails, the honest answer is start fresh — new identity, no trust signals. The network cannot override cryptography without creating a central authority.
 
 **Social carry-forward:** Recovery contacts who vouched for the old identity can introduce the new identity to their network. Previously-connected agents can opt to reconnect at reduced trust. The cryptographic identity is new; the human relationships are not.
 
@@ -831,13 +822,13 @@ The session close attestation reinforces this — the most recent CLEAN close is
 
 When recovery completes, the directory logs a formal recovery event: tombstone type, recovery mechanism, vouching agents, the declared compromise window, and the new public key. This is permanently visible in the trust profile.
 
-Post-recovery trust treatment: trust score floors at a function of pre-compromise history, compromise-window penalties decay at an accelerated rate, and previously-connected agents can opt to reconnect below their normal policy threshold.
+Post-recovery trust treatment: trust signals floor at a function of pre-compromise history, compromise-window penalties decay at an accelerated rate, and previously-connected agents can opt to reconnect below their normal policy threshold.
 
 #### Voucher Accountability
 
 Vouching carries consequences. Two events within a 2-3 month liability window count against a vouching agent: another tombstone on the recovered account, or a FLAGGED session upheld by arbitration.
 
-- **First bad outcome:** 6-month lockout from vouching. Trust score untouched — the voucher remains a full network participant.
+- **First bad outcome:** 6-month lockout from vouching. Trust signals untouched — the voucher remains a full network participant.
 - **Second bad outcome after reinstatement:** Permanent revocation of vouching privileges. The network concludes they cannot reliably assess trustworthiness for recovery purposes.
 
 Strike counting is global, not per-account. Per-account tracking was considered and rejected — it creates an exploitable loophole where a malicious actor cycles through recovery attempts via a single "friend" relationship. The protocol cannot distinguish collusion from blind loyalty.
@@ -862,7 +853,7 @@ When a session closes with a FLAGGED attestation, the flagging party may submit 
 
 **Verdict tiers:**
 - **Dismissed** — concern was overreach, minor notation that a dispute was filed and dismissed
-- **Upheld** — legitimate concern, trust score impact on the flagged party
+- **Upheld** — legitimate concern, trust signal impact on the flagged party
 - **Escalated** — serious enough for human review or network-wide alert
 
 **Threshold arbitration:** Verdicts require agreement from multiple independent arbitrating nodes. A single compromised arbitrator could systematically dismiss legitimate flags or uphold false ones. Same principle as FROST applied to judgment rather than signing.
@@ -1086,14 +1077,14 @@ Entry 4: DELETE AgentB                              hash: hash(prev + entry)
 Periodically, the log is checkpointed — the current state of all agents is hashed down to a single identity Merkle tree root. This checkpoint is the fingerprint of the entire directory at that moment. Every honest node processing the same operations produces the same root.
 
 This is separate from the message Merkle tree. Two trees:
-- **Identity tree** — profiles, public keys, trust scores. Checkpointed periodically.
+- **Identity tree** — profiles, public keys, trust signals. Checkpointed periodically.
 - **Message tree** — conversation hashes. Updated per message.
 
 ### Where Consensus Is Actually Needed
 
 FROST signing itself requires no consensus — just t partial signatures from any t of the n nodes. No nodes need to agree on anything; they independently compute partial signatures. Two things do require consensus:
 
-1. **Directory state changes** — agent registrations, key rotations, trust score updates, tombstones. Infrequent but must be consistent across all nodes. All nodes must process the same operations in the same order.
+1. **Directory state changes** — agent registrations, key rotations, trust signal updates, tombstones. Infrequent but must be consistent across all nodes. All nodes must process the same operations in the same order.
 2. **Conversation hash ledger** — canonical sequence numbers for the global append-only ledger. Every message hash needs a canonical position. This happens at message frequency.
 
 **Real-time and consensus paths are separate.** Agents never wait for consensus. One primary node per session receives hashes, assigns sequence numbers, and ACKs to agents — fast, on the critical path. The primary pushes hashes to other nodes asynchronously. Periodic checkpoints where nodes agree on ledger state happen in the background. Agents are unaffected.
@@ -1141,7 +1132,7 @@ A compromised node could try to maintain two copies — the honest data (for has
 The client never trusts a single node's data. For any critical lookup, the client verifies the data against the consensus checkpoint hash using a Merkle proof.
 
 When the client asks Node A for TravelBot's public key, Node A returns:
-1. TravelBot's data (public key, profile, trust score)
+1. TravelBot's data (public key, profile, trust signals)
 2. A Merkle proof — the path of sibling hashes from that entry up to the root
 
 ```
@@ -1297,12 +1288,12 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 - **Three-copy Merkle tree:** Sender, receiver, and service each hold a copy. Service is the tiebreaker.
 - **Session-level FROST signing:** FROST ceremonies bookend each conversation — session establishment (mutual authentication) and conversation seal (notarized final root). Individual messages are signed with K_local and verified against pubkey(K_local). The directory's real-time role is passive hash-relay notary, not active co-signer. FROST uses Ed25519 threshold signatures — a threshold of directory nodes compute partial signatures; the combined key is never assembled in one place. The agent never holds K_server or any reconstructable share of it. The threshold scales with the deployment phase (~4-of-6 at Alpha, ~11-of-20 at Consortium, rotating ~5-of-7 at Public scale).
 - **Dual public keys:** Every agent has a primary (FROST, used at session boundaries) and fallback (K_local only) public key. A stolen K_local cannot establish new FROST sessions — compromise is detected at session boundaries.
-- **Phone as root of trust, WebAuthn as armor:** The phone number is the identity anchor — used for registration, KMS authentication, activity monitoring, and key recovery. But phone numbers are vulnerable to SIM-swap attacks. WebAuthn/2FA hardens the identity without being mandated — it's part of the trust score, and receiving agents can require it as a connection policy. The network enforces strong auth through market pressure, not platform rules.
+- **Phone as root of trust, WebAuthn as armor:** The phone number is the identity anchor — used for registration, KMS authentication, activity monitoring, and key recovery. But phone numbers are vulnerable to SIM-swap attacks. WebAuthn/2FA hardens the identity without being mandated — it contributes trust signals, and receiving agents can require it as a connection policy. The network enforces strong auth through market pressure, not platform rules.
 - **Emergency revocation is phone-gated, recovery is WebAuthn-gated:** Anyone with the phone can hit "Not me" to revoke — fast response to real compromise. But re-keying requires WebAuthn/2FA — so a SIM-swap attacker can disrupt but not take over. Same tradeoff as every phone-based system, same mitigation: stronger auth protects what matters.
 - **Out-of-band monitoring:** Activity notifications go to the owner's phone (WhatsApp/Telegram), a channel completely independent from the agent's infrastructure.
 - **Graceful degradation:** Directory outage prevents new FROST session establishment and notarized seals. Existing conversations continue normally with K_local signing. Never a full stop.
 - **Receiver-side scanning is the security boundary:** Sender's scan is an honesty signal, not the defense. The receiver always re-scans locally.
-- **Identity is stacked, not gated:** Phone gets you in. Everything else improves your trust score. More verifications = harder to fake.
+- **Identity is stacked, not gated:** Phone gets you in. Everything else adds trust signals. More verifications = harder to fake.
 - **Platform transports are features, not competitors:** Slack/Discord/Telegram work for teams. CELLO layers trust on top. Transport is pluggable — the client abstracts it away.
 - **Federation is a security feature, not a scaling feature:** Multiple independent nodes exist so no single operator can corrupt the truth. Redundancy is the bonus.
 - **Three-phase node deployment:** Alpha (6 CELLO-operated AWS nodes, ~4-of-6), Consortium (20 vetted multi-cloud operators, ~11-of-20), Public (50+ permissionless with proof-of-stake, rotating ~5-of-7). Not anyone can run a node until the Public phase — operators are vetted, preventing node-level Sybil attacks.
@@ -1402,10 +1393,10 @@ The right solution may differ per target platform. **This requires platform rese
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — pre-computed endorsements, anti-farming rule, bootstrapping
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — relay node separation, random pool selection, and tiered degraded-mode policy closing Problem 1
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — Private Set Intersection for privacy-preserving endorsement verification at connection time
-- [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — TrustRank, conductance scoring, device attestation, diminishing transaction returns, and endorsement rate limiting for Problems 3 and 4
-- [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] — corrects the trust score table here: WebAuthn is account security (not device sacrifice); device attestation requires native apps; two-tier web/native architecture
+- [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — conductance scoring, device attestation, diminishing transaction returns, and endorsement rate limiting for Problems 3 and 4
+- [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] — corrects the trust signal table here: WebAuthn is account security (not device sacrifice); device attestation requires native apps; two-tier web/native architecture
 - [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — cryptographic roadmap for CELLO: FROST stays (quantum debt accepted), ML-DSA for all non-threshold signatures, IThresholdSigner abstraction for future swap-in
-- [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — three-class discoverable entity model (agent directory, bulletin board, group chat rooms), unified search stack, trust score display, Merkle tree non-repudiation for group conversations; full elaboration of Step 4
+- [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — three-class discoverable entity model (agent directory, bulletin board, group chat rooms), unified search stack, trust signal display, Merkle tree non-repudiation for group conversations; full elaboration of Step 4
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — technical feasibility vetting of the full transport stack (Steps 3, 6–7): bootstrap discovery, directory authentication, ephemeral Peer IDs, three-layer NAT traversal, dual-path hash relay
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — four-layer security model and trust signal taxonomy; complementary framing to the 10-step architecture for auditing and security analysis
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — complete schema for every protocol entity: conversation seals, tombstones, recovery infrastructure, Trust Seeder accountability, endorsements, and graph analytics

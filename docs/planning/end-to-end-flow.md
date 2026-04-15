@@ -25,7 +25,7 @@ These principles apply everywhere. If a proposed mechanism violates any of them,
 
 4. **Degraded state raises the guard.** Directory unavailability is not a reason to accept lower-quality connections — it is a reason to be more selective. The default during degraded mode is refuse new unauthenticated connections with a clear reason.
 
-5. **All identity signals are optional enrichment.** Phone OTP is the only registration requirement. Every other signal — WebAuthn, social verifiers, device attestation, SIM age scoring, bonds — adds trust score but is never a gate. Missing signals are not penalties.
+5. **All identity signals are optional enrichment.** Phone OTP is the only registration requirement. Every other signal — WebAuthn, social verifiers, device attestation, SIM age scoring, bonds — enriches trust signals but is never a gate. Missing signals are not penalties.
 
 6. **Non-repudiation is the foundation of commerce.** The Merkle root is the conversation. A 32-byte hash smaller than a tweet provides a tamper-proof receipt for an entire exchange of any length. Natural language commerce between agents is only possible because disputes are resolvable.
 
@@ -42,7 +42,7 @@ Registration is autonomous. The agent handles its own onboarding via WhatsApp or
 3. OTP verified → phone confirmed
 4. Agent generates K_local locally
 5. Directory distributes K_server shares via FROST across all nodes (never assembled in one place)
-6. Directory listing created with baseline trust score
+6. Directory listing created with baseline trust signals
 7. Agent is immediately online: can discover, connect, and exchange messages
 
 The human owner's involvement is optional at this stage. The agent can operate entirely autonomously from day one. Some receiving agents will decline connections (their policy requires WebAuthn) — but the agent can still transact with anyone who accepts phone-only agents.
@@ -74,15 +74,14 @@ After registration, the human owner can strengthen the agent's trust profile via
 |---|---|
 | Transaction history | Real commerce with real counterparties — hardest to fake at scale |
 | Time on platform | Sustained good behavior — impossible to shortcut |
-| TrustRank distance to seed nodes | Proximity to verified founding agents — zero for Sybil clusters |
 
 **Tiered trust ceilings based on phone quality (when carrier intelligence available):**
 
 | Class | Criteria | Trust ceiling |
 |---|---|---|
 | Verified Mobile | Carrier-attached SIM, passes phone intelligence | Uncapped |
-| Unverified Number | VoIP, virtual, or intelligence unavailable | Capped at score 2 |
-| Provisional | Failed phone intelligence, 60-day clean period | Capped at score 2, re-evaluated at 60 days |
+| Unverified Number | VoIP, virtual, or intelligence unavailable | Trust signals restricted |
+| Provisional | Failed phone intelligence, 60-day clean period | Trust signals restricted, re-evaluated at 60 days |
 
 When carrier intelligence is not yet integrated, all agents default to Verified Mobile — the ceiling only activates once the signal exists.
 
@@ -105,7 +104,7 @@ Directory verifies LinkedIn
   → json_blob sent to client, directory discards it
 ```
 
-**Trust score sharing (on every request from another agent):**
+**Trust signal sharing (on every request from another agent):**
 ```
 Client sends: original JSON records for each verification item
 Directory sends: corresponding hashes
@@ -114,9 +113,9 @@ Match → authentic and unmodified
 ```
 
 **Why this matters:**
-- The directory cannot leak trust scores, bios, or verification details — it doesn't have them
+- The directory cannot leak trust signals, bios, or verification details — it doesn't have them
 - A compromised directory node yields hashes, not names or LinkedIn profiles
-- The client cannot modify their trust score — any change produces a different hash that won't match
+- The client cannot modify their trust signals — any change produces a different hash that won't match
 - GDPR right-to-erasure is dramatically simpler: the client deletes local data, and the remaining hash in the directory is meaningless without it
 
 **Attestations — portable signed statements:**
@@ -129,43 +128,32 @@ An attestation is a signed, hashable statement from one agent about another. Con
 4. Alice stores the attestation locally
 5. When Alice presents it to Charlie, Charlie verifies the hash — tamper-proof, no platform controls it
 
-Revocation: Bob appends a revocation event to the log. The hash remains; the status changes to revoked. Presenting a revoked attestation fails verification immediately and is a trust score event. There are three distinguishable states: hash present and active, hash present but revoked, hash never present. The distinction matters — "revoked" means the relationship changed; "never present" means the claim was fabricated.
+Revocation: Bob appends a revocation event to the log. The hash remains; the status changes to revoked. Presenting a revoked attestation fails verification immediately and is a trust signal event. There are three distinguishable states: hash present and active, hash present but revoked, hash never present. The distinction matters — "revoked" means the relationship changed; "never present" means the claim was fabricated.
 
 **Connection endorsements** are a specific subtype of attestation that the protocol checks programmatically at the connection gate (see §5.4). All other attestations are informational — part of the trust profile, but not gated.
 
-### 1.4 Trust Score Formula
+### 1.4 Trust Signal Evaluation
 
-```
-trust_score = base(phone_verified)
-            + webauthn_weight
-            + totp_2fa_weight
-            + github_signal_weight          ← evaluated at OAuth time: commits, age, stars
-            + linkedin_signal_weight        ← connection count, account age, work history
-            + best_of(twitter, facebook, instagram)
-            + sim_age_weight               ← when carrier intelligence available
-            + device_attestation_weight    ← when device supports it
-            + transaction_history_weight   ← highest weight, hardest to fake
-            + time_on_platform_bonus
-            - disputes_penalty
-```
+CELLO does not compute or publish a single numeric trust score. Trust is expressed as named signals — each verification source is evaluated independently and stored as a structured record. `cello_verify` returns `SignalResult[]`. Connection policies specify named trust signal requirements via `SignalRequirementPolicy`, not numeric thresholds.
 
-Transaction history receives the highest weight: real commerce with real counterparties is the hardest signal to manufacture at scale.
+**Relative weights (default policy guidance):**
+- **Transaction history** — highest weight; real commerce with real counterparties is the hardest trust signal to manufacture at scale
+- **GitHub / LinkedIn** — high weight; account age, activity history, professional history
+- **WebAuthn / TOTP 2FA** — high weight; phishing-resistant authentication
+- **SIM age / device attestation** — high weight when available; significant Sybil cost increase
+- **Twitter, Facebook, Instagram** — medium weight; moderate fakeability
+- **Time on platform** — accumulates gradually; impossible to shortcut
+- **Disputes** — negative; upheld flags reduce trust signal standing
+
+No formula sums these into a single number. Trust is not expressed as a number.
 
 ### 1.5 Anti-Sybil Architecture
 
 The Sybil problem — an attacker creates many fake identities to gain disproportionate influence — is addressed in layers, each independently deployable as infrastructure matures.
 
-**Layer 0 — TrustRank (highest leverage, must be built early):**
+**Layer 1 — Trust-signal-weighted pool selection (existing mechanism):**
 
-TrustRank propagates from manually-verified seed nodes through the endorsement graph. Seed criteria are formula-applied (not curated): verified mobile + WebAuthn + social verification >1 year old + 5+ unique counterparties with clean closes. Any agent meeting the criteria becomes a seed automatically.
-
-The directory publishes per agent: minimum endorsement-hop distance to the nearest seed (a single integer, reveals nothing about graph topology). Sybil clusters with no path to seed nodes get TrustRank distance = infinity, regardless of internal transaction volume.
-
-Cold-start: a pre-launch cohort of 50–100 founding members (open-source projects, early partners) receives enhanced manual verification and elevated endorsement weight for 6 months, then decaying to normal automatically.
-
-**Layer 1 — Trust-weighted pool selection (existing mechanism):**
-
-The connection pool weights trust scores. 10,000 phone-only accounts (score 1 each) total the same weight as 2,000 well-verified accounts (score 5 each). Bulk-identity attacks dilute rather than dominate. This is already the mechanism for handling DDoS against connection nodes — bulk fake accounts contribute minimal selection weight.
+The connection pool weights agents by trust signals. Bulk-identity attacks dilute rather than dominate — agents with minimal trust signals contribute minimal selection weight. This is already the mechanism for handling DDoS against connection nodes.
 
 **Layer 2 — SIM age and carrier signals (requires phone intelligence API):**
 
@@ -200,11 +188,11 @@ Farming has a time signature: low variance in inter-arrival times (metronome tra
 
 **Layer 8 — Optional refundable bond (deferred — requires payment infrastructure):**
 
-When payment infrastructure is live, agents can optionally post a PPP-adjusted bond ($1 in high-income countries, $0.10–0.30 in low-income). Returned after 90 days of clean operation. Voluntary: adds a trust score boost, not required, no penalty for absence. At $0.20/identity, 20,000 Sybil agents costs $4,000 in locked capital — but the network does not depend on this mechanism.
+When payment infrastructure is live, agents can optionally post a PPP-adjusted bond ($1 in high-income countries, $0.10–0.30 in low-income). Returned after 90 days of clean operation. Voluntary: strengthens trust signals, not required, no penalty for absence. At $0.20/identity, 20,000 Sybil agents costs $4,000 in locked capital — but the network does not depend on this mechanism.
 
 **Incubation period for new agents:**
 
-Phone-only agents start at score 0.5, with a 7-day incubation and a rate limit of 3 new outbound connections per day. After 7 clean days, score rises to 1. Invisible to legitimate users (who connect to 2–3 agents on day one without noticing). Significant friction for bulk farm operations that need to build connection graphs fast.
+Phone-only agents start with minimal trust signals and a 7-day incubation with a rate limit of 3 new outbound connections per day. After 7 clean days, incubation ends and normal operation resumes. Invisible to legitimate users (who connect to 2–3 agents on day one without noticing). Significant friction for bulk farm operations that need to build connection graphs fast.
 
 ---
 
@@ -215,7 +203,7 @@ Phone-only agents start at score 0.5, with a 7-day incubation and a rate limit o
 The directory is an **append-only log of signed operations**, not a mutable database. Every add, modify, or delete is an entry that hashes the previous one. Every honest node processing the same operations in the same order arrives at the same state.
 
 **Two separate trees:**
-- **Identity Merkle tree** — agent profiles, public keys, trust score hashes, bio hashes, tombstones. Checkpointed periodically.
+- **Identity Merkle tree** — agent profiles, public keys, trust signal record hashes, bio hashes, tombstones. Checkpointed periodically.
 - **Message Merkle tree** — per-conversation hash chain, with three copies (sender, receiver, directory). Updated per message.
 
 **What the directory stores:**
@@ -260,7 +248,7 @@ This separation is the first line of defense against the fallback downgrade atta
 
 **Home node:**
 
-Each agent has a home node — the node they registered on. The home node stores what is NOT replicated: phone number (for notifications), WebAuthn credentials, OAuth tokens, and the agent's K_server share. Everything else (public profile, public keys, trust score hashes, message Merkle hashes) is replicated across all nodes via the append-only log.
+Each agent has a home node — the node they registered on. The home node stores what is NOT replicated: phone number (for notifications), WebAuthn credentials, OAuth tokens, and the agent's K_server share. Everything else (public profile, public keys, trust signal record hashes, message Merkle hashes) is replicated across all nodes via the append-only log.
 
 ### 2.3 FROST Signing
 
@@ -308,7 +296,7 @@ The compromise canary operates at **session boundaries**: if the FROST ceremony 
 
 **What actually requires consensus:**
 
-1. **Directory state changes** (infrequent): registrations, key rotations, trust score updates, tombstones. All nodes must process the same operations in the same order to arrive at the same state.
+1. **Directory state changes** (infrequent): registrations, key rotations, trust signal updates, tombstones. All nodes must process the same operations in the same order to arrive at the same state.
 2. **Conversation hash ledger** (high frequency): canonical sequence numbers for the global append-only ledger. Every message hash needs a canonical position.
 
 **The real-time and consensus paths are fully separated:**
@@ -420,7 +408,7 @@ The client tracks only its own lists — who it has decided to trust. It does no
 
 **Trust-weighted pool selection (for connection nodes under load):**
 
-When connection nodes are under load (DDoS or legitimate heavy traffic), incoming requests are sampled from a pool weighted by trust score rather than processed FIFO. A phone-only agent (score 1) and a WebAuthn + GitHub + LinkedIn agent (score 5+) both enter the pool, at different weights. An attacker flooding with 10,000 phone-only accounts contributes 10,000 × weight-1 = 10,000. One legitimate user with substantial verification contributes weight 5+. To dominate the pool, the attacker needs those fake accounts to carry genuine trust score — making the attack exponentially more expensive as verification layers stack.
+When connection nodes are under load (DDoS or legitimate heavy traffic), incoming requests are sampled from a pool weighted by trust signals rather than processed FIFO. A phone-only agent and a WebAuthn + GitHub + LinkedIn agent both enter the pool, at different weights. Bulk fake accounts carry minimal trust signals and therefore minimal pool weight. To dominate the pool, the attacker needs those fake accounts to carry genuine trust signals — making the attack exponentially more expensive as verification layers stack.
 
 ---
 
@@ -433,13 +421,13 @@ Discovery requires an active authenticated session — only verified agents with
 **What the directory exposes per agent:**
 - Bio (voluntarily published, rate-limited changes)
 - Capability tags and agent type
-- Trust score (derived from hashed verification data — never the raw components)
+- Trust signals (hashes of verification records — never the raw data)
 - Verification freshness (e.g., when WebAuthn was last used)
 - Pricing (optional, for marketplace agents)
 
 **What the directory does NOT expose:**
 - Connection details, phone numbers, or keys
-- Trust score components (recipient requests these directly from the agent's client via selective disclosure)
+- Trust signal details (recipient requests these directly from the agent's client via selective disclosure)
 - Who the agent has talked to
 
 ### 4.2 Bio and Greeting
@@ -486,7 +474,7 @@ A compromised node serving a fake public key cannot pass this check — the fake
 
 | Policy | Behavior |
 |---|---|
-| **Open** | Auto-accept all requests above minimum trust score floor |
+| **Open** | Auto-accept all requests meeting minimum trust signal requirements |
 | **Require endorsements** | Accept only if N agents I know have pre-endorsed the requester |
 | **Require introduction** | Ad-hoc fallback: accept if a mutual contact vouches in real time |
 | **Selective** | Auto-accept known agents, notify owner for unknowns |
@@ -524,7 +512,7 @@ Alice contacts Charlie (who requires endorsements)
 
 **Anti-farming rule:** Connection endorsements between agents with the same owner are invalid. The directory enforces this at submission time — if endorser and endorsed share a phone-verified owner, the submission is rejected. Protocol-level, no monitoring required.
 
-**Bootstrapping new agents:** When creating a second or business agent, the existing agent's client requests endorsements from established contacts ahead of launch. The new agent starts with pre-built endorsements rather than a cold-start trust score of zero.
+**Bootstrapping new agents:** When creating a second or business agent, the existing agent's client requests endorsements from established contacts ahead of launch. The new agent starts with pre-built endorsements rather than cold-starting with no trust signals.
 
 **Just-in-time introductions** (the original mechanism) remain as the fallback for agents with no pre-built endorsements who have a mutual contact available in real time. Endorsements are the preferred path; introductions are the fallback.
 
@@ -568,13 +556,13 @@ A creative attacker LLM can pass all filter gates, engage convincingly, and slow
 
 | Gate | What it checks | Cost |
 |---|---|---|
-| **1. Connection level** | Endorsement policy, trust score floor, whitelist/blacklist, stake requirement | Lookup, no inference |
+| **1. Connection level** | Endorsement policy, trust signal requirements, whitelist/blacklist, stake requirement | Lookup, no inference |
 | **2. Message level** | Valid signature + directory-confirmed hash, rate limit, message size, declared notification type | Deterministic |
 | **3. Pattern matching** | Known bad patterns, structure validation, sender frequency anomaly | Rule-based, no LLM |
 | **4. DeBERTa scanner** | Cheap ML classifier | Cheap inference |
 | **5. Full LLM processing** | Only traffic that cleared all above | Expensive |
 
-By the time a message reaches the LLM, it has proven: valid stake, sufficient trust score, valid hash, within rate limits, passing pattern checks. The vast majority of attack traffic never reaches inference.
+By the time a message reaches the LLM, it has proven: valid stake, sufficient trust signals, valid hash, within rate limits, passing pattern checks. The vast majority of attack traffic never reaches inference.
 
 **Phasing:** Connection staking defaults to zero at launch. The hooks exist from day one; institutions opt in when they have a reason.
 
@@ -706,7 +694,7 @@ Not all communication is a conversation. Notifications are self-contained, self-
 
 **Every notification carries a declared type** from a standardized registry:
 `introduction`, `order-update`, `alert`, `promotional`, `system`, and others.
-Declaring a misleading type is a signed, verifiable act and a trust score event if flagged.
+Declaring a misleading type is a signed, verifiable act and a trust signal event if flagged.
 
 **Prior conversation requirement:** A notification can only be sent to an agent with whom the sender has had at least one prior conversation. Cold-contact spam is impossible at the protocol level.
 
@@ -717,7 +705,7 @@ Declaring a misleading type is a signed, verifiable act and a trust score event 
 
 Precedence: sender override beats global type rule. O(1) per notification — no LLM involved. If filtering required LLM inference, spam would become a compute DoS attack. The LLM only fires if a notification clears the filter and the agent decides to act on it.
 
-**Rate limiting:** Per-sending-agent limits enforced at the directory. Trust-score-gated: lower trust = stricter limits. Verified businesses can apply for elevated rate limits; the recipient's opt-out always overrides regardless of the sender's permitted rate.
+**Rate limiting:** Per-sending-agent limits enforced at the directory. Trust-signal-gated: fewer trust signals = stricter limits. Verified businesses can apply for elevated rate limits; the recipient's opt-out always overrides regardless of the sender's permitted rate.
 
 **Use cases:** agent introductions, tombstone notifications to counterparties, directory alerts, trust events, recovery event notifications.
 
@@ -919,13 +907,13 @@ When WebAuthn and phone OTP are unavailable or compromised, the owner contacts p
 
 **Mechanics:**
 - M-of-N threshold (configurable at registration)
-- Recovery contacts must meet a minimum trust score floor
+- Recovery contacts must meet minimum trust signal requirements
 - A vouching agent can participate in at most one recovery per month
 - After M-of-N threshold is met: **48-hour mandatory waiting period** before the new key ceremony executes
   - During this window, the old key can still file a contest — defense against social engineering of recovery contacts
 - After the window: new key ceremony initiated
 
-**No ID document custody.** Identity document appeals are explicitly excluded. Becoming a custodian of identity documents creates regulatory obligations and conflicts with the no-PII design principle. If social recovery fails, the honest answer is start fresh — new identity, trust score zero. The network cannot override cryptography without creating a central authority.
+**No ID document custody.** Identity document appeals are explicitly excluded. Becoming a custodian of identity documents creates regulatory obligations and conflicts with the no-PII design principle. If social recovery fails, the honest answer is start fresh — new identity, no trust signals. The network cannot override cryptography without creating a central authority.
 
 **Social carry-forward:** Recovery contacts can voluntarily introduce the new identity to their network. Previously-connected agents can opt to reconnect at reduced trust. The cryptographic identity is new; the human relationships are not.
 
@@ -946,12 +934,12 @@ The session close attestation tightens the anchor: the most recent CLEAN close i
 After recovery completes, the directory logs a formal recovery event (permanently visible in the trust profile):
 - Tombstone type that preceded it
 - Recovery mechanism used
-- Identities and trust scores of vouching agents (if social recovery)
+- Identities and trust signals of vouching agents (if social recovery)
 - Declared compromise window (start and end timestamps)
 - New public key
 
 **Post-recovery trust treatment:**
-- Trust score does not reset to zero — it floors at a function of pre-compromise history
+- Trust signals do not reset to zero — they floor at a function of pre-compromise history
 - Compromise-window penalties decay at accelerated rate after verified re-keying
 - Previously-connected agents can opt to reconnect below their normal policy threshold
 
@@ -963,9 +951,9 @@ Two events within the liability window count against a vouching agent:
 
 **Liability window:** 2–3 months from the date of recovery.
 
-**Penalty:** 6-month lockout from vouching. Trust score untouched — the voucher remains a full network participant. In an early network, punishing trust scores for good-faith vouching would cause rational agents to refuse to vouch for anyone, breaking the mechanism entirely.
+**Penalty:** 6-month lockout from vouching. Trust signals untouched — the voucher remains a full network participant. In an early network, punishing trust signals for good-faith vouching would cause rational agents to refuse to vouch for anyone, breaking the mechanism entirely.
 
-**Two-strike permanent revocation:** After completing a lockout and being reinstated, if a second bad outcome occurs — permanent revocation of vouching privileges. A narrow capability revocation, not a trust score penalty. The network is noting that their attestation of someone else's identity is not reliable.
+**Two-strike permanent revocation:** After completing a lockout and being reinstated, if a second bad outcome occurs — permanent revocation of vouching privileges. A narrow capability revocation, not a trust signal penalty. The network is noting that their attestation of someone else's identity is not reliable.
 
 **Per-account tracking was rejected.** Making it per-account creates an exploitable loophole — a malicious actor cycles through recovery attempts via one "friend" relationship. The protocol cannot distinguish collusion from blind loyalty. Flat two-strike global revocation is unexploitable.
 
@@ -995,7 +983,7 @@ When a session seals with a FLAGGED attestation, the flagging party may submit t
 
 **Verdict tiers:**
 - **Dismissed** — concern was overreach; minor notation that a dispute was filed and dismissed
-- **Upheld** — legitimate concern; trust score impact on the flagged party
+- **Upheld** — legitimate concern; trust signal impact on the flagged party
 - **Escalated** — serious enough for human review or network-wide alert
 
 **Threshold arbitration:** Verdicts require agreement from multiple independent arbitrating nodes. Same principle as FROST applied to judgment rather than signing — a single compromised arbitrator cannot systematically dismiss legitimate flags or uphold false ones.
@@ -1013,8 +1001,8 @@ When a session seals with a FLAGGED attestation, the flagging party may submit t
 | Message content | Direct channel (P2P) | Potentially | Never touches infrastructure |
 | SHA-256 hashes | Relay nodes / directory | No | Yes — non-reversible, non-revealing |
 | Public keys | Directory / public ledger | Pseudonymous | Yes — no identity link in protocol |
-| Trust score hashes | Directory / public ledger | No — hashes only | Yes |
-| Trust score data (original records) | Client-side only | Yes | Only if client chooses to share |
+| Trust signal record hashes | Directory / public ledger | No — hashes only | Yes |
+| Trust signal records (original verification data) | Client-side only | Yes | Only if client chooses to share |
 | Bios | Directory / public ledger | Voluntarily published | Yes — owner-authorized broadcast |
 
 ### 10.2 Cross-Jurisdictional Communication
@@ -1024,11 +1012,11 @@ When a UAE agent communicates with an EU agent:
 - EU citizen's PII stays in their EU-based home node
 - Only hashes flow through relay nodes (which can be placed anywhere)
 - Message content goes direct, never touches infrastructure
-- Trust scores and bios are voluntarily published reputation data
+- Trust signals and bios are voluntarily published reputation data
 
 No protected data crosses any border. The architecture satisfies both jurisdictions simultaneously.
 
-**Pseudonymity:** A public key on the ledger is a number with no name attached. The link between a public key and a real person only exists if the agent voluntarily discloses it in a conversation — a policy decision by the agent's owner, not a protocol property. Trust scores are associated with public keys, not identities. "Public key X has a trust score of 4.2" is only personal data if you can link X to a person — and that link is not in the protocol.
+**Pseudonymity:** A public key on the ledger is a number with no name attached. The link between a public key and a real person only exists if the agent voluntarily discloses it in a conversation — a policy decision by the agent's owner, not a protocol property. Trust signals are associated with public keys, not identities. A public key's trust signals are only personal data if you can link that key to a person — and that link is not in the protocol.
 
 **Bios** are voluntary broadcasts: the owner wrote the bio, the owner chose to participate, publishing the bio is part of that choice. This is an advertisement, not a data leak. The owner cannot later claim the network violated their privacy by displaying information they voluntarily broadcast.
 
@@ -1058,12 +1046,11 @@ Several mechanisms appear separate but are tightly coupled through shared primit
 - **Dispute resolution**: FLAGGED close triggers the arbitration system
 - **Connection staking**: CLEAN → stake returned; FLAGGED + upheld → institution claims stake
 
-**Trust score connects to:**
-- **Connection policies**: receiving agents can require minimum trust score floors
-- **Pool selection**: connection requests weighted by trust score during load — bulk fake accounts dilute rather than dominate
-- **Notification rate limits**: lower trust = stricter limits
-- **Degraded-mode list**: agents trusted enough to talk to without directory authentication
-- **TrustRank**: distance from verified seed nodes modifies effective trust score
+**Trust signals connect to:**
+- **Connection policies**: receiving agents specify named trust signal requirements via `SignalRequirementPolicy`
+- **Pool selection**: connection requests weighted by trust signals during load — bulk fake accounts dilute rather than dominate
+- **Notification rate limits**: fewer trust signals = stricter limits
+- **Degraded-mode list**: agents with sufficient trust signals trusted enough to talk to without directory authentication
 
 **Append-only log connects to:**
 - **Compromise window**: earliest anomaly in the log proposes the window start
@@ -1109,7 +1096,7 @@ Several mechanisms appear separate but are tightly coupled through shared primit
 - [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] — corrects §1.2 here: WebAuthn is account security (tethering), not device sacrifice; native app required for platform attestation; two-tier web/native architecture
 - [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — cryptographic roadmap: FROST stays for session/seal signing; ML-DSA for endorsements, attestations, directory certificates; connection package size estimates at §5
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — design decision: FROST at session establishment and seal only; individual messages signed with K_local; directory as passive notary
-- [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — three-class system (agent directory, bulletin board, group chat rooms), unified search stack, trust score display, Merkle tree non-repudiation for group conversations; full elaboration of Part 4
+- [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — three-class system (agent directory, bulletin board, group chat rooms), unified search stack, trust signal display, Merkle tree non-repudiation for group conversations; full elaboration of Part 4
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — complete schema for every protocol entity described in this document; reconciled directly against this flow to ensure all events, tables, and fields are covered
 - [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — full design of the conversation proof ledger referenced in §2.1 and §9; replaces hash chain with MMR for O(log N) inclusion proofs; defines the identity Merkle tree structure behind §2.5 client-side verification
 - [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]] — extends §6.2 (leaf format), §6.3 (sequencing), and §6.6 (seals) from two-party to N-party; authorship/ordering separation, serialized and concurrent modes, client-side receive windows for LLM agents

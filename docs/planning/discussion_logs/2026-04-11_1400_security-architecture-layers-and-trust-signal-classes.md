@@ -44,11 +44,11 @@ Who you demonstrably are. Subdivided:
 
 ### Class 2 — Network graph
 
-Who do I know that knows you. Connection endorsements, just-in-time introductions, TrustRank distance to seed nodes.
+Who do I know that knows you. Connection endorsements, just-in-time introductions.
 
-**Trust Seeders** are the bootstrap mechanism for Class 2: a formal, applied-for role whose holders vouch for new agents' entry into the network. Without some mechanism for new agents to acquire their first Class 2 signal, the network has no entry path for people who don't yet know anyone on it. Trust Seeders are the designed solution. They are part of this layer, not a separate concern. See the Trust Seeder discussion log for the full mechanism.
+> **Note:** TrustRank distance to seed nodes and the Trust Seeder role were originally part of this class but have been formally deprecated — see [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]]. The cold-start problem they addressed is handled by the discovery system's group rooms, bulletin listings, and open connection policies.
 
-**Vouching skin-in-the-game** is what gives Class 2 signals teeth. An endorsement that costs the endorser nothing is a weak signal — it degrades toward LinkedIn. The design includes accountability consequences for endorsers whose vouches turn out to be for bad actors: the voucher's ability to endorse is constrained, not their general network participation. This keeps the signal meaningful without making endorsing prohibitively risky for honest actors. See the Trust Seeder discussion log for the accountability model.
+**Vouching skin-in-the-game** is what gives Class 2 signals teeth. An endorsement that costs the endorser nothing is a weak signal — it degrades toward LinkedIn. The design includes accountability consequences for endorsers whose vouches turn out to be for bad actors: the voucher's ability to endorse is constrained, not their general network participation. This keeps the signal meaningful without making endorsing prohibitively risky for honest actors.
 
 ### Class 3 — Track record
 
@@ -83,9 +83,11 @@ Without PSI, the intersection check — "which of Alice's endorsers are in Charl
 
 PSI is what makes the relative property unexploitable. The intersection check happens without either party learning the other's unmatched entries. A failed connection attempt teaches the attacker nothing about whose endorsement would succeed with Charlie. The target's graph remains opaque. The attacker cannot even learn who to target — they must manufacture endorsements from random people and hope for intersection, which makes the attack scale like a random walk through the real social graph rather than a surgical operation.
 
-**TrustRank and the limits of absolute-but-anchored signals:**
+**Absolute-but-anchored signals (historical note):**
 
-TrustRank occupies an interesting middle ground. It is absolute (computed from a global reference set of seed nodes) but anchored against a fixed, attacker-can't-choose reference point. An attacker can try to get endorsed by a seed node — but seed criteria are strict and the set is monitored. This is harder than manufacturing arbitrary endorsements, but it is still categorically different from Class 2: it doesn't depend on the *checking party's* specific graph. Two people with very different contact graphs see the same TrustRank score for the same agent.
+> TrustRank has been formally deprecated — see [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]]. The analysis below is preserved as context for understanding why it was considered and why it was ultimately removed.
+
+TrustRank occupied an interesting middle ground. It was absolute (computed from a global reference set of seed nodes) but anchored against a fixed, attacker-can't-choose reference point. An attacker could try to get endorsed by a seed node — but seed criteria are strict and the set is monitored. This was harder than manufacturing arbitrary endorsements, but still categorically different from Class 2: it didn't depend on the *checking party's* specific graph. Two people with very different contact graphs see the same TrustRank score for the same agent — which is why it contradicts the signal-based model and was removed.
 
 ---
 
@@ -95,11 +97,11 @@ The four layers above describe *how the system works mechanically*. There is an 
 
 ### Layer 5a — Enforcement mechanisms
 
-What happens when trust signals reveal a problem. Connection policies, progressive enforcement (rate limits, warnings, suspension), arbitration verdicts, tombstones, trust score penalties, voucher accountability, rate limits. This is the **consequences layer** — the system's response to violation.
+What happens when trust signals reveal a problem. Connection policies, progressive enforcement (rate limits, warnings, suspension), arbitration verdicts, tombstones, trust signal penalties, voucher accountability, rate limits. This is the **consequences layer** — the system's response to violation.
 
 This layer is substantially designed. It lives in the protocol as defined behaviors triggered by events in the other layers.
 
-**Exponential backoff** is the specific enforcement mechanism for Trust Seeder accountability: a first bad outcome locks a seeder out of vouching for one month; a further bad outcome during the lockout doubles it to two months, then four, eight, sixteen, thirty-two, and so on. The lockout is on vouching capability only — not network participation. This is part of this layer. See the Trust Seeder discussion log for the full mechanism and design rationale.
+**Exponential backoff** for Trust Seeder accountability was part of this layer. The Trust Seeder role has been deprecated — see [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]]. General voucher accountability (the 6-month lockout model from Step 9 of the design) remains active.
 
 ### Layer 5b — Protocol governance
 
@@ -130,7 +132,7 @@ The key thing the layer model makes explicit that the lifecycle model doesn't: *
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — the full protocol narrative; the four-layer model provides the organizing framework for understanding how its sections relate
 - [[cello-design|CELLO Design Document]] — the 10-step architecture; complementary framing to the layer model here
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — Layer 3 (client protection) in full detail
-- [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — Layer 2 (node integrity) in full detail; the absolute vs. relative signal distinction explains why TrustRank alone is insufficient
+- [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — Layer 2 (node integrity) in full detail; the absolute vs. relative signal distinction here explains why the remaining Sybil stack works without TrustRank
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — the mechanism that makes the relative property of Class 2 signals unexploitable; PSI is what prevents a failed connection attempt from leaking the checking party's contact graph
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — Class 2 signals in full detail; the endorsement system is the practical implementation of the relative signal principle
 - [[design-problems|Design Problems]] — the 7 open problems; protocol governance (Layer 5b) is a gap not currently listed there
