@@ -103,19 +103,21 @@ Finally: the client tracks only its own lists. It does not track which other age
 
 **Resolution: resolved through layered trust signals — phone intelligence deferred to day two.**
 
-The Sybil floor problem does not require the phone verification step itself to be expensive. The defense is layered above it:
+The Sybil floor problem does not require the phone verification step itself to be expensive. The defense is layered above it. Note: TrustRank was considered but removed (see [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]]) — it contradicts the signal-based model and was never a design decision. The actual stack:
 
-- **TrustRank** — trust propagates outward from manually verified seed agents. A farm of phone-only accounts with no path to any seed node gets near-zero propagated trust regardless of internal activity. This is the highest-leverage defense and requires no phone intelligence infrastructure.
-- **Trust ceilings** — VoIP and virtual numbers are capped at trust score 2. They're not rejected, but they're naturally deprioritized everywhere trust-weighted selection applies.
-- **Incubation period** — rate-limits graph-building speed, giving detection time to work.
-- **Optional refundable bond** — PPP-adjusted voluntary trust signal. Not a gate; adds economic cost for batch Sybil operations when available.
-- **WebAuthn, GitHub, LinkedIn, device attestation** — each optional signal makes it harder and more expensive to manufacture a convincing fake identity at scale.
+- **Conductance-based cluster scoring** — Sybil clusters transacting only with each other have near-zero external connectivity, directly measurable without any propagated score.
+- **Counterparty diversity ratio + diminishing returns** — `min(1, unique_counterparties / total_transactions)` penalizes closed-loop farming; `base_weight / ln(n + 1)` makes round-robin self-defeating.
+- **PSI endorsement intersection** — "does Alice have endorsers I personally know?" cannot be gamed by manufacturing endorsements from arbitrary agents; the attacker needs actual overlap with the checking agent's contact graph.
+- **Trust ceilings** — VoIP and virtual numbers are capped at trust score 2. Not rejected, but naturally deprioritized everywhere trust-weighted selection applies.
+- **Incubation period** — 7-day rate limit for new agents, slowing graph-building and giving detection time to work.
+- **Optional refundable bond** — PPP-adjusted voluntary signal. Not a gate; adds economic cost for batch Sybil operations when payment infrastructure exists.
+- **Device attestation, WebAuthn, GitHub, LinkedIn** — each optional signal raises the per-identity cost for a convincing fake.
 
-Phone intelligence APIs (Twilio Lookup, Telesign), VoIP detection policy, and carrier reputation scoring are **day-two enhancements** that further raise the floor but are not required for the core defense to function. When integrated, they feed into the trust score as continuous inputs — a SIM active 2+ years on a major carrier scores higher; a VoIP number gets capped. Until then, agents without phone intelligence signals are not penalized; they simply don't receive the boost.
+Phone intelligence APIs (Twilio Lookup, Telesign), VoIP detection policy, and carrier reputation scoring are **day-two enhancements** that further raise the floor but are not required for the core defense to function.
 
 No blocking design work remains. Implementation choices (which APIs, scoring weights, rate-limiting thresholds) are engineering decisions, not architectural ones.
 
-*Ref: day-zero-review/02, Findings #1, #12, #19; [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]]*
+*Ref: day-zero-review/02, Findings #1, #12, #19; [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]]; [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]]*
 
 ---
 
@@ -128,9 +130,10 @@ No blocking design work remains. Implementation choices (which APIs, scoring wei
 **Design work needed:**
 - Design closed-loop money flow detection (A pays B, B pays C, C pays A within N hops)
 - Define minimum transaction values and counterparty diversity requirements
-- Evaluate TrustRank (anti-spam variant of PageRank) seeded from manually verified agents
 - Design rating velocity limits (how many ratings per agent per time window)
 - Define what "meaningful transaction" means — message exchange duration, content diversity, minimum value
+
+Note: TrustRank was previously listed here but has been removed — see [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]]. Conductance-based cluster scoring, counterparty diversity ratio, and diminishing returns per counterparty cover the same detection surface without a global propagated score.
 
 *Ref: day-zero-review/02, Findings #2-3; day-zero-review/07, Section 8.4*
 
