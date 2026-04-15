@@ -829,3 +829,4 @@ The documents `cello-design.md` and `end-to-end-flow.md` should be updated to us
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — Notification primitive that `cello_poll_notifications` surfaces
 - [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow — Trust Data Relay and Selective Disclosure]] — defines the trust data relay and one-round negotiation that `cello_initiate_connection`, `cello_accept_connection`, and `cello_decline_connection` implement
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — `cello_send` no longer performs FROST; signs with K_local. FROST ceremonies are handled at session establishment and seal only
+- [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]] — confirms the signal-based trust model: `cello_verify` returns `SignalResult[]` not a score; TrustRank as a single propagated number contradicts this design

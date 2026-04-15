@@ -34,6 +34,7 @@ Full analysis in [[00-synthesis|day-zero-review/]].
 - [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession and Ownership Transfer]] — resolves Problem 5; voluntary transfer, involuntary succession (dead-man's switch), succession package, and what transfers vs. what doesn't
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — Problem 9 (K_server rotation) window narrowed; Problem 1 (fallback downgrade) severity reduced
 - [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] — resolves Problem 9; per-agent K_server, independent K_local/K_server rotation, storage and durability design
+- [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]] — removes TrustRank from the recommended fixes for Problems 3 and 4; the remaining Sybil defenses (conductance, PSI, diminishing returns, endorsement rate limiting) address those problems without a global propagated score
 
 ---
 
