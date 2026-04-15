@@ -33,6 +33,7 @@ Full analysis in [[00-synthesis|day-zero-review/]].
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — the scanner design at the centre of Problem 12 (false positive handling); context-aware scanning modes and appeal mechanisms are the design work needed there
 - [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession and Ownership Transfer]] — resolves Problem 5; voluntary transfer, involuntary succession (dead-man's switch), succession package, and what transfers vs. what doesn't
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — Problem 9 (K_server rotation) window narrowed; Problem 1 (fallback downgrade) severity reduced
+- [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] — resolves Problem 9; per-agent K_server, independent K_local/K_server rotation, storage and durability design
 
 ---
 
@@ -240,6 +241,12 @@ If the hash does not match, the agent refuses to start. The hash lives in source
 *Ref: day-zero-review/01, Finding #3*
 
 **Scope narrowed (2026-04-15):** The move to session-level FROST drastically reduces the rotation overlap problem. FROST ceremonies now occur only at session establishment and conversation seal — not per message. A rotation during a conversation has **no impact on message signing** (messages use K_local). The rotation only matters if it coincides with a session establishment or seal ceremony. The window of exposure shrinks from "every message could straddle a rotation boundary" to "only session-start and seal ceremonies could straddle a rotation boundary." The primary_pubkey caching problem is also reduced: clients only need the current primary_pubkey at session boundaries, not for every message verification. See [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]].
+
+**Resolved (2026-04-15):** The three hard components of this problem are eliminated by the combination of session-level FROST and per-agent K_server. (1) In-flight signature straddle: messages don't use FROST, so no messages straddle a rotation boundary — only short-lived session establishment and seal ceremonies can, and those simply abort and retry. (2) Global atomic pubkey publication: K_server is per-agent, not a shared directory key. Rotating K_server_X changes one agent's pubkey; other agents are completely unaffected. No global coordination needed. (3) False compromise canary fires: the canary fires on failed FROST session establishment, not on stale pubkeys. Per-agent rotation causes no confusion for other agents.
+
+The two rotation operations are independent: K_server_X rotation is a directory-only operation (protects against leaked node shares, transparent to the agent except for a pubkey notification); K_local rotation is agent-controlled with directory nudges (protects against a stolen K_local, renders it immediately useless on retirement). See [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] for the full mechanism.
+
+Remaining specification work: K_server_X rotation notification format, grace period for sealing active sessions under an old K_server_X, and epoch identifier format for FROST ceremony outputs. These are implementation details, not hard design problems.
 
 ---
 
