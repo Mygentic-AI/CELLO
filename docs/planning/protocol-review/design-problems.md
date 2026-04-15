@@ -269,16 +269,22 @@ Remaining specification work: K_server_X rotation notification format, grace per
 
 ### 11. "Not me" revocation as a denial-of-service weapon
 
-**The problem:** The "Not me" button on phone notifications is designed for emergency key revocation — the owner sees unauthorized activity, taps the button, and K_server is immediately revoked. But an attacker who SIM-swaps the owner's phone number now receives the notifications. The attacker taps "Not me," revoking K_server. The owner visits the web portal, re-keys via WebAuthn, and the agent is restored. The attacker — who still controls the phone number — sees the next activity notification and taps "Not me" again. The agent is revoked again. This cycle repeats indefinitely. The agent can never maintain a stable identity. The emergency revocation mechanism, deliberately designed for zero-friction instant response, is equally zero-friction as a denial-of-service weapon.
+**Original framing:** An attacker who SIM-swaps the owner's phone number could repeatedly tap "Not me" to revoke K_server, then re-key repeatedly — creating an indefinite revoke/re-key cycle that prevents the agent from maintaining a stable identity.
 
-**What makes it hard:** The "Not me" button's entire value comes from its immediacy and simplicity — a genuine emergency (someone is actively impersonating you right now) requires instant action without authentication barriers. Adding WebAuthn confirmation to "Not me" stops this specific attack but changes the threat model for the original use case: an owner who has lost access to their WebAuthn device can no longer emergency-revoke. Rate-limiting "Not me" after a re-key introduces a window where a real compromise can't be stopped. Moving "Not me" out of phone notifications and into the web portal (behind WebAuthn) eliminates the SIM swap surface but loses the instant-response property entirely. Every mitigation degrades the legitimate emergency use case.
+**Resolution: not a real DoS attack — closed, no design work needed.**
 
-**Design work needed:**
-- Design a cool-down period after WebAuthn re-keying where phone-triggered "Not me" is suppressed or requires WebAuthn confirmation (accepting a bounded risk window for legitimate emergencies during the cool-down)
-- Evaluate moving "Not me" entirely to the web portal behind WebAuthn — quantify what is lost in emergency response time vs. what is gained in DoS resistance
-- Design a "contested identity" state: after N revoke/re-key cycles within a time window, the agent enters a frozen state that requires a more deliberate resolution process (multi-factor, time delay, or human review) rather than continuing the ping-pong
-- Consider separating the notification channel from the phone number — push notifications via a native app (tied to the device, not the SIM) make SIM swap irrelevant for this attack vector
-- Evaluate whether "Not me" should revoke K_server immediately or initiate a short delay (e.g., 5 minutes) during which the legitimate owner can cancel via WebAuthn — trading instant revocation for SIM-swap resistance
+On analysis, the scenario does not constitute a denial-of-service attack in any meaningful sense. When a SIM swap occurs:
+
+1. The legitimate owner's phone immediately loses service — they know instantly that something is wrong.
+2. "Not me" suspends the agent. In a SIM-swap scenario, **this is the correct outcome**: the attacker has the phone number and could be impersonating the owner. Suspension protects counterparties from being deceived.
+3. The owner recovers via WebAuthn at the web portal, re-keys, and **changes their registered phone number** — which also requires WebAuthn. This permanently removes the attacker's "Not me" access.
+4. The attack window is bounded by carrier SIM recovery time (typically hours). It cannot persist indefinitely.
+
+The "DoS" framing conflates "attacker causes disruption" with "attacker causes harm." In this scenario, the disruption is protective. The agent being suspended while the owner's phone number is under attacker control is the defense working correctly, not a failure mode.
+
+The remaining residual — that an owner faces some inconvenience and downtime during carrier recovery — is an unavoidable consequence of any phone-number-anchored identity system, not a flaw specific to CELLO's "Not me" design. Banks, exchanges, and every other phone-verified service share this exposure.
+
+**No design work needed.** The "contested identity" frozen state and cool-down mechanisms proposed in the original problem statement would add complexity without addressing any real threat.
 
 *Ref: day-zero-review/02, Findings #7-8*
 
