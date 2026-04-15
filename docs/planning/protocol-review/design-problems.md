@@ -187,17 +187,19 @@ See [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession a
 
 ### 6. GDPR vs. append-only log
 
-**The problem:** The directory is an append-only, hash-chained log. GDPR Article 17 grants the right to erasure. European agent owners can demand deletion of personal data. The log can't remove entries without breaking the hash chain. Phone numbers, public keys, trust score history, and identity operations are personal data. Non-compliance: fines up to 4% of global revenue.
+**Original framing:** The append-only log can't remove entries without breaking the hash chain, creating a conflict with GDPR Article 17 right to erasure.
 
-**What makes it hard:** The append-only property is a security feature — it's what makes tampering detectable. Breaking it undermines the trust model. But GDPR is not optional for any business operating in the EU. The solution needs to satisfy both: preserve hash chain integrity while making personal data actually deletable. "We only store hashes of personal data" helps for messages but doesn't help for the identity log, which contains actual personal data.
+**Resolution: not an issue — closed.**
 
-**Design work needed:**
-- Design "logical deletion" — append a deletion marker, then cryptographically erase the associated personal data while keeping the hash chain intact (the hash of the deleted data remains as a tombstone)
-- Separate personal data from the hash chain: the log stores hashes of identity operations, actual personal data stored separately and deletable
-- Determine which data falls under "necessary for the performance of a contract" (GDPR Article 6(1)(b)) vs. requiring explicit consent
-- Get a privacy lawyer involved before launch — this is a legal design constraint, not just a technical one
+The problem statement assumed the log contained personal data. It doesn't:
 
-*Ref: day-zero-review/04, Section 7.1; day-zero-review/06, Section 3.1*
+- **All PII lives in the sign-up system.** Phone numbers, WebAuthn credentials, OAuth tokens — these are held by the sign-up system, entirely separate from the directory and relay nodes. Account deletion wipes them completely. Real deletion of real PII, no hash chain involved.
+- **The append-only log contains only hashes.** Hashes are not personal data. There is nothing for GDPR to reach.
+- **Conversation content never touches the infrastructure.** Messages go peer-to-peer. The only parties who hold conversation records are the participants themselves. The directory has no conversation logs to delete.
+
+A user requesting account deletion gets exactly what GDPR requires: their PII is gone. What remains are hashes in a log — cryptographically meaningless without the data they hash, which has been deleted.
+
+*Ref: day-zero-review/04, Section 7.1; [[2026-04-08_1600_data-residency-and-compliance|Data Residency and Compliance]]; [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]]*
 
 ---
 
