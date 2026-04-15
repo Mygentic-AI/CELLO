@@ -203,16 +203,21 @@ See [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession a
 
 ### 7. Home node deanonymization
 
-**The problem:** The home node stores phone numbers (for notifications) and receives hash relay data (who talks to whom, when). A rogue operator just correlates the two — no hacking required. This is architectural: the home node must have both datasets to function. The privacy guarantee ("directory never sees content") is real but the metadata exposure to the home node operator is total.
+**Original framing:** A "home node" storing both phone numbers and hash relay traffic would allow a rogue operator to trivially correlate them — no hacking required.
 
-**What makes it hard:** Separating the notification function from the hash relay function means no single operator has both datasets — but it adds complexity and a second trust relationship. Cryptographic notification routing (home node triggers a notification without knowing which conversation caused it) is possible but non-trivial. The alternative is accepting this as a known risk and controlling it through operator agreements and audits — but that's "trust the operator," which is exactly what the protocol is designed to avoid.
+**Resolution: based on a misunderstanding of the architecture — closed.**
 
-**Design work needed:**
-- Evaluate whether notification and hash relay functions can be architecturally separated
-- Design cryptographic notification routing if separation is feasible
-- If not feasible, design operator agreements with specific data handling requirements, audit rights, and penalties
-- Consider periodic home node rotation so no single operator accumulates a long history
-- Assess whether PIR (Private Information Retrieval) is practical for directory queries
+Two architectural facts make this attack impossible:
+
+**1. There is no "home node."** Agent data is federated across all directory and relay nodes. No single operator has a privileged relationship with a specific agent. A client may prefer a node it recently used for latency reasons, but if that node is overloaded it moves to another. No operator accumulates an exclusive long-term history for any agent.
+
+**2. Phone numbers and hash relay traffic live in entirely separate systems that never intersect.** The architecture has three distinct layers:
+
+- **Sign-up system** — handles phone number, email, and public key issuance. Has no visibility into conversations or hash relay traffic.
+- **Directory and relay nodes** — operate exclusively on public keys. Never touch phone numbers.
+- **Notification path** — when a relay node needs to alert an owner, it sends a public key event to the sign-up system, which performs the phone lookup and pushes the notification. The relay node never learns the phone number; the sign-up system never learns the content or context of what triggered the notification.
+
+A rogue relay or directory node operator sees public keys and timing metadata — no phone numbers. A rogue sign-up system operator sees phone numbers but has no hash relay traffic. The correlation attack is architecturally impossible because the two datasets never co-exist in the same system.
 
 *Ref: day-zero-review/04, Section 2.1*
 
