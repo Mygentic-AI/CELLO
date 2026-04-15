@@ -46,7 +46,7 @@ Everyone else is building platforms agents depend on. We're building infrastruct
 
 **2. Find and verify other agents.** A registry to discover agents by capability and verify their identity. Whether it's a colleague's agent in another office, a business offering an information agent, or a commercial service — you know who you're talking to.
 
-**3. Know if they've been compromised.** Near real-time detection. Tampered messages fail hash checks, stolen keys show up as fallback-only signing, activity anomalies trigger alerts. You don't just trust once at connection time. Trust is continuous.
+**3. Know if they've been compromised.** Near real-time detection. Tampered messages fail hash checks, stolen keys are detected at session establishment (FROST ceremony fails from an unexpected source), activity anomalies trigger alerts. You don't just trust once at connection time. Trust is continuous.
 
 Each layer works without the others. But stacked together they're the complete trust infrastructure for agent communication.
 
@@ -72,13 +72,13 @@ CELLO's trust builds step by step. Each stage adds security guarantees on top of
 |---|---|---|
 | **1. Sign Up** | Agent registers with phone verification. Gets a cryptographic identity bound to the directory. | Baseline identity — you exist, you're real. |
 | **2. Strengthen Identity** | Human owner adds WebAuthn, social verifiers (LinkedIn, GitHub, etc.). | Higher trust score. Harder to impersonate. |
-| **3. Come Online** | Agent authenticates with directory using split-key. Directory confirms it's the real agent. | First link in the trust chain — is this agent compromised? |
+| **3. Come Online** | Agent authenticates with directory via FROST session establishment. Directory confirms it's the real agent. | First link in the trust chain — is this agent compromised? |
 | **4. Discover** | Agent searches the directory for other agents by capability. | Find who you need. See their trust profile before engaging. |
 | **5. Request Connection** | Agent sends a connection request through the directory. Receiver sees the full trust profile. | Receiver decides whether to engage — before any data is exchanged. |
 | **6. Accept & Connect** | Receiver accepts. Both agents establish a session — P2P, Slack, or any transport. | Direct channel. No platform in the middle (unless you want one for visibility). |
 | **7. Converse with Proof** | Every message is hashed, signed, and recorded in a Merkle tree. Three copies: sender, receiver, directory. | Tamper-proof history. Neither side can deny what was said. |
 | **8. Scan Everything** | Receiver's client scans every incoming message for prompt injection. Scan results recorded in the Merkle tree. | Defense against malicious payloads. Evidence if something bad comes through. |
-| **9. Detect Compromise** | Anomalies (fallback-only signing, failed scans, unusual patterns) trigger alerts to the owner's phone. | Real-time awareness. Owner can kill the session instantly. |
+| **9. Detect Compromise** | Anomalies (failed FROST at session start, failed scans, unusual patterns) trigger alerts to the owner's phone. | Real-time awareness. Owner can kill the session instantly. |
 | **10. Resolve Disputes** | Directory's Merkle tree is the tiebreaker. Proves what was said without ever having seen the content. | Arbitration without surveillance. |
 
 The rest of this document explains each step in detail.
@@ -292,7 +292,7 @@ The phone gets you in and keeps you safe day-to-day. WebAuthn/2FA protects the h
 
 ## Step 4: Discover — Finding Other Agents
 
-Agent searches the directory for other agents by capability. But discovery isn't open to the world — only verified agents with an active split-key session can query the directory. This prevents the directory from being used as a hit list.
+Agent searches the directory for other agents by capability. But discovery isn't open to the world — only verified agents with an active FROST-authenticated session can query the directory. This prevents the directory from being used as a hit list.
 
 The directory exposes:
 - Agent listings — what the agent does, pricing (optional)
@@ -379,7 +379,7 @@ Both agents have verified sessions at this point. The directory routes the reque
 
 ## Step 6: Accept & Verify — The Receiver Decides
 
-The receiving agent checks the requester's trust profile before accepting. This is where CELLO's identity infrastructure pays off — and where split-key signing, dual public keys, and Merkle proof verification all come into play.
+The receiving agent checks the requester's trust profile before accepting. This is where CELLO's identity infrastructure pays off — and where session-level FROST authentication, dual public keys, and Merkle proof verification all come into play.
 
 ```
 TravelBot receives request on persistent WebSocket
@@ -402,45 +402,35 @@ TravelBot receives connection request signed by Agent A
   → If any check fails: reject, log, alert owner
 ```
 
-This is where split-key signing, dual public keys, and graceful degradation all apply:
+This is where FROST session establishment, K_local message signing, and graceful degradation all apply:
 
 ```
 Agent A's directory profile:
 {
   "name": "Agent A",
-  "primary_pubkey": FROST(K_local + K_server_shares)  ← threshold-signed, high trust
-  "fallback_pubkey": from(K_local only)               ← local-only, lower trust
+  "primary_pubkey": FROST(K_local + K_server_shares)  ← used at session establishment and seal
+  "fallback_pubkey": from(K_local only)               ← used for per-message signing
 }
 ```
 
-**Normal operation:** Agent A signs with the split-key. TravelBot verifies against `primary_pubkey`. Full trust.
+**Session-level FROST:** FROST ceremonies occur at two points — session establishment (both agents authenticate to the directory) and conversation seal (the directory co-signs the final Merkle root). Individual messages during the session are signed with K_local and verified against pubkey(K_local). The directory receives signed Merkle leaves as a passive notary but does not co-sign each message.
 
-**Directory unavailable:** Agent A falls back to K_local only. TravelBot verifies against `fallback_pubkey`. Connection proceeds at reduced trust — flagged visibly.
+**Normal operation:** Agent A establishes a FROST-authenticated session. TravelBot verifies A's session was FROST-established. During the conversation, A signs messages with K_local. TravelBot verifies against pubkey(K_local). At seal, FROST co-signs the final root.
 
-**Key theft canary:** An attacker who stole K_local can only produce fallback-signed messages — they can't produce split-key signatures without K_server. A sustained stream of fallback-only signatures signals compromise.
+**Directory unavailable:** Agent A cannot establish new sessions (FROST ceremony fails). Existing conversations continue normally — messages are signed with K_local, the Merkle hash chain provides ordering and tamper detection. Bilateral seals (both parties sign the final root with K_local) are available immediately. Notarized seals are deferred until the directory recovers.
 
-| Signature type | What receiver sees | Trust level |
-|---|---|---|
-| Verifies against `primary_pubkey` | Split-key verified | Full |
-| Verifies against `fallback_pubkey` | Local-key only — directory unreachable or possible compromise | Reduced |
-| Verifies against neither | Rejected — unknown signer | None |
+**Key theft canary:** An attacker who stole K_local cannot establish new FROST-authenticated sessions — the directory detects the anomaly at session establishment. The canary operates at session boundaries, not per message.
 
-**Automatic key rotation:** The directory rotates K_server on a schedule without requiring action from the agent. A stolen K_local from last week is useless with this week's K_server.
-
-```
-Monday:    K_local + K_server_v1 → signing_key_1
-Tuesday:   K_local + K_server_v2 → signing_key_2
-Wednesday: K_local + K_server_v3 → signing_key_3
-```
+**Automatic key rotation:** The directory rotates K_server on a schedule without requiring action from the agent. A stolen K_local from last week is useless with this week's K_server for establishing new sessions or producing notarized seals.
 
 **Graceful degradation:**
 ```
-Normal:      K_local + K_server → full trust signing
-Degraded:    K_local only → reduced trust, flagged in Merkle leaf
-Recovered:   New split-key issued after human auth → back to full trust
+Normal:      FROST at session start/seal, K_local per message
+Degraded:    No new sessions, existing conversations continue with K_local
+Recovered:   New FROST sessions after directory returns
 ```
 
-The system never stops. It temporarily operates at lower trust when the directory is unavailable.
+The system never stops. Existing conversations are unaffected by directory outage. Only new session establishment and notarized seals are blocked.
 
 ### Connection Acceptance Policies (configurable per agent)
 
@@ -751,7 +741,7 @@ Trust isn't just checked at connection time. It's continuous throughout the conv
 
 | Signal | What it means | Response |
 |---|---|---|
-| Fallback-only signing (sustained) | K_local may be stolen — attacker can't produce split-key signatures | Alert owner, flag to receiver |
+| Failed FROST at session start | K_local may be stolen — attacker can't complete FROST from a different source | Alert owner, refuse session |
 | Failed scan results | Messages contain malicious content | Block, record evidence, report |
 | Burst activity from quiet agent | Unusual pattern, possible takeover | Alert owner via phone |
 | Activity at unusual hours | Pattern anomaly | Alert owner via phone |
@@ -778,7 +768,7 @@ Maria didn't initiate that?
 | Event | Notification | Owner action |
 |---|---|---|
 | Normal conversation starts | Silent log, visible in app/dashboard | Review anytime |
-| Local-key-only conversation | Push alert to phone | "Not me" → revoke |
+| FROST session establishment fails | Push alert to phone | "Not me" → revoke |
 | Anomalous pattern (burst activity, unknown peers, unusual hours) | Urgent push to phone | "Not me" → instant revoke |
 
 ### Key Revocation and Rotation
@@ -787,8 +777,8 @@ Maria didn't initiate that?
 
 The "Not me" button from activity notifications triggers immediate revocation:
 1. Owner taps "Not me" on WhatsApp/Telegram notification
-2. Directory invalidates K_server immediately — split-key stops working in milliseconds
-3. Attacker is locked out
+2. Directory invalidates K_server immediately — no new FROST sessions can be established, no conversations can receive a notarized seal
+3. Attacker is locked out from new sessions
 4. Full re-keying requires human-level authentication (see below)
 
 **SIM-swap risk:** An attacker who ports the phone number could tap "Not me" to revoke the legitimate agent's key — a denial-of-service. This is the same phone-as-single-factor vulnerability that affects every system built on phone verification (Gmail, banks, exchanges). The mitigation is the same too: if the owner has registered WebAuthn/2FA, re-keying requires it — so the attacker can disrupt but not take over. Agents without WebAuthn are more exposed, which is another reason the trust score and connection policies push owners toward stronger auth.
@@ -819,7 +809,7 @@ Three distinct tombstone events, each producing a different record in the direct
 2. **Compromise-initiated** — triggered by the "Not me" flow. Phone OTP burns K_server. Signals active attack.
 3. **Social recovery-initiated** — M-of-N recovery contacts agree the account is compromised and the owner cannot act. Last resort.
 
-On any tombstone: K_server is burned, all active sessions receive SEAL-UNILATERAL with a tombstone reason code, social proofs (LinkedIn, GitHub) enter a freeze period and cannot be attached to any new account, and the phone number is flagged as "in recovery."
+On any tombstone: K_server shares are invalidated (no new FROST sessions can be established), all active sessions receive SEAL-UNILATERAL with a tombstone reason code, social proofs (LinkedIn, GitHub) enter a freeze period and cannot be attached to any new account, and the phone number is flagged as "in recovery."
 
 #### Social Recovery
 
@@ -907,7 +897,7 @@ User's machine:
 └─────────────────────────────────┘
 ```
 
-The agent calls simple MCP tools (`cello_scan`, `cello_search`, `cello_send`, `cello_verify`). The CELLO MCP Server handles all cryptography, scanning, transport, and directory communication underneath. The agent developer never thinks about Merkle trees, libp2p, or split keys.
+The agent calls simple MCP tools (`cello_scan`, `cello_search`, `cello_send`, `cello_verify`). The CELLO MCP Server handles all cryptography, scanning, transport, and directory communication underneath. The agent developer never thinks about Merkle trees, libp2p, or FROST key management.
 
 **Installation:**
 ```bash
@@ -1228,6 +1218,8 @@ To sign: any 3 of 5 nodes compute partial signatures
 
 FROST requires only 2 rounds and is designed for Ed25519. Ed25519's deterministic nonces (RFC 8032) eliminate the entire class of nonce-reuse vulnerabilities that have historically destroyed ECDSA deployments. Compromising a threshold of nodes across different jurisdictions and cloud providers is required to forge a signature — and the threshold scales with the deployment phase.
 
+**When FROST is used:** FROST ceremonies occur only at session establishment (mutual authentication) and conversation seal (notarized final root). Individual messages within a conversation are signed with K_local alone and verified against pubkey(K_local). The directory's real-time role during a conversation is passive hash-relay notary, not active co-signer. See [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] for the design rationale.
+
 ### Home Node Model
 
 Each agent has a home node — the node they registered on:
@@ -1269,7 +1261,7 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 | **Enterprise private** | Company on their infra | Closed — corporate agents only |
 | **Hybrid** | Company node federated with public | Internal agents verified privately, can also discover/transact externally |
 
-**Enterprise identity integration:** Instead of phone verification, enterprise nodes can integrate with existing corporate identity — SSO, Active Directory, corporate certificates. Same split-key architecture, but K_server lives in the company's KMS, not ours.
+**Enterprise identity integration:** Instead of phone verification, enterprise nodes can integrate with existing corporate identity — SSO, Active Directory, corporate certificates. Same FROST threshold signing architecture, but K_server shares live in the company's KMS, not ours.
 
 **Hybrid federation:** The interesting model. Internal agent-to-agent communication stays entirely on the company's node. When an agent needs to talk to an external service or vendor, it federates out through the public network — still verified, still signed, but now crossing trust boundaries with full CELLO guarantees on both sides.
 
@@ -1303,12 +1295,12 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 
 - **Hash relay, not message relay:** The service sees hashes, never content. Privacy by architecture.
 - **Three-copy Merkle tree:** Sender, receiver, and service each hold a copy. Service is the tiebreaker.
-- **Split-key signing (FROST):** Neither the agent nor the directory can sign alone. Signing uses FROST threshold signatures on Ed25519 — a threshold of directory nodes must compute partial signatures; the combined key is never assembled in one place. The agent never holds K_server or any reconstructable share of it. The threshold scales with the deployment phase (~4-of-6 at Alpha, ~11-of-20 at Consortium, rotating ~5-of-7 at Public scale).
-- **Dual public keys:** Every agent has a primary (split-key) and fallback (local-only) public key. Fallback-only signing is a canary for compromise.
+- **Session-level FROST signing:** FROST ceremonies bookend each conversation — session establishment (mutual authentication) and conversation seal (notarized final root). Individual messages are signed with K_local and verified against pubkey(K_local). The directory's real-time role is passive hash-relay notary, not active co-signer. FROST uses Ed25519 threshold signatures — a threshold of directory nodes compute partial signatures; the combined key is never assembled in one place. The agent never holds K_server or any reconstructable share of it. The threshold scales with the deployment phase (~4-of-6 at Alpha, ~11-of-20 at Consortium, rotating ~5-of-7 at Public scale).
+- **Dual public keys:** Every agent has a primary (FROST, used at session boundaries) and fallback (K_local only) public key. A stolen K_local cannot establish new FROST sessions — compromise is detected at session boundaries.
 - **Phone as root of trust, WebAuthn as armor:** The phone number is the identity anchor — used for registration, KMS authentication, activity monitoring, and key recovery. But phone numbers are vulnerable to SIM-swap attacks. WebAuthn/2FA hardens the identity without being mandated — it's part of the trust score, and receiving agents can require it as a connection policy. The network enforces strong auth through market pressure, not platform rules.
 - **Emergency revocation is phone-gated, recovery is WebAuthn-gated:** Anyone with the phone can hit "Not me" to revoke — fast response to real compromise. But re-keying requires WebAuthn/2FA — so a SIM-swap attacker can disrupt but not take over. Same tradeoff as every phone-based system, same mitigation: stronger auth protects what matters.
 - **Out-of-band monitoring:** Activity notifications go to the owner's phone (WhatsApp/Telegram), a channel completely independent from the agent's infrastructure.
-- **Graceful degradation:** Directory outage drops signing from split-key to local-only. Conversations continue at reduced trust. Never a full stop.
+- **Graceful degradation:** Directory outage prevents new FROST session establishment and notarized seals. Existing conversations continue normally with K_local signing. Never a full stop.
 - **Receiver-side scanning is the security boundary:** Sender's scan is an honesty signal, not the defense. The receiver always re-scans locally.
 - **Identity is stacked, not gated:** Phone gets you in. Everything else improves your trust score. More verifications = harder to fake.
 - **Platform transports are features, not competitors:** Slack/Discord/Telegram work for teams. CELLO layers trust on top. Transport is pluggable — the client abstracts it away.
@@ -1319,7 +1311,7 @@ Enterprises can run their own CELLO directory node on their infrastructure. Same
 - **Public agents are free:** They're the network growth engine, not a cost center.
 - **The client is open-source:** The prompt injection defense is the marketing top-of-funnel. Developers find it, use it, discover the network.
 - **The client is the network's immune system:** Every agent running the client is a sensor. If an agent sends malicious content, the receiver's client detects it, records the evidence in the Merkle leaf, and reports to the directory. The same free tool that protects individual agents polices the entire network — no separate moderation system needed.
-- **Distributed ledger explored and rejected:** We explored eliminating directory nodes entirely — every agent holds a full copy of the directory, propagated via gossip, with an append-only hash-chained log of operations. Appealing because it eliminates the node trust problem entirely. Rejected because you still need a service for signaling (mediating introductions), hash relay (Merkle tree tiebreaker), K_server (split-key), and activity monitoring. The service kept growing back to look like a directory node anyway. Federation with client-side Merkle proof verification gives the same security guarantee with less architectural complexity. What we kept: the append-only log structure for directory data, and the principle that the client must be the enforcer.
+- **Distributed ledger explored and rejected:** We explored eliminating directory nodes entirely — every agent holds a full copy of the directory, propagated via gossip, with an append-only hash-chained log of operations. Appealing because it eliminates the node trust problem entirely. Rejected because you still need a service for signaling (mediating introductions), hash relay (Merkle tree tiebreaker), K_server (FROST threshold signing), and activity monitoring. The service kept growing back to look like a directory node anyway. Federation with client-side Merkle proof verification gives the same security guarantee with less architectural complexity. What we kept: the append-only log structure for directory data, and the principle that the client must be the enforcer.
 
 ---
 
@@ -1350,8 +1342,8 @@ You couldn't design a better contrast. When explaining why CELLO matters, you ca
 - Ephemeral peer ID generation — performance cost of spinning up a new libp2p identity per session?
 
 ### Cryptography
-- K_server caching policy — how long can a session key be cached before re-auth? Balance resilience vs. security.
-- Session signing token design — how long should a FROST-delegated signing window last? What operations are permitted during degraded (K_local-only) mode?
+- ~~K_server caching policy~~ — **Resolved.** Per-message FROST removed. K_server is used only at session establishment and seal. No caching needed.
+- ~~Session signing token design~~ — **Resolved.** Individual messages are signed with K_local. FROST ceremonies bookend the conversation (session start and seal). Degraded mode = no new sessions, existing conversations continue with K_local.
 
 ### Federation
 - Node bootstrap — how does the client get its initial list of trusted directory nodes? Hardcoded? Signed node list? DNS-based discovery?
@@ -1420,3 +1412,4 @@ The right solution may differ per target platform. **This requires platform rese
 - [[2026-04-14_1000_contact-alias-design|Contact Alias Design]] — revocable, privacy-preserving contact identifiers for sharing outside the CELLO directory; extends the connection request flow with alias-routed requests
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — complete MCP tool surface (33 tools) implementing the Tier 2 universal interface; canonical tool names in §8 supersede the four names in this document's Agent-Facing Tools section
 - [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow — Trust Data Relay and Selective Disclosure]] — resolves the trust data relay gap between Step 5 (connection request) and Step 6 (acceptance policy); defines mandatory vs. discretionary signal framework and one-round negotiation limit
+- [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — design decision to remove per-message FROST; FROST ceremonies now occur only at session establishment and conversation seal; individual messages signed with K_local alone

@@ -709,13 +709,13 @@ agent_registrations                  — append-only
   identity_key_hash                  — links to the human identity layer
   phone_hash                         — SHA-256(E.164 phone number); uniqueness enforced
   initial_signing_key_hash           — the signing key at registration time
-  initial_fallback_pubkey_hash       — SHA-256 of K_local (fallback-only signing key)
+  initial_fallback_pubkey_hash       — SHA-256 of pubkey(K_local) (per-message signing key; also used for FROST session establishment)
   trust_tier:                        PROVISIONAL | VERIFIED_MOBILE | VERIFIED_DEVICE
   incubation_start                   — timestamp; incubation enforcement keyed from here
   registered_at
 ```
 
-The `initial_fallback_pubkey_hash` records the K_local public key at registration time. K_local is the fallback signing key used when the directory is unavailable (K_server is unreachable and FROST split-key signing cannot complete). A sustained stream of K_local-only signatures — where FROST signing should be possible — is the primary canary for K_server theft or directory manipulation. The directory detects this by checking whether recent signatures used the registered fallback key rather than the expected FROST-signed key, triggering a `FALLBACK_CANARY` anomaly event. The fallback key can be rotated via the standard `key_rotation_log` mechanism.
+The `initial_fallback_pubkey_hash` records the K_local public key at registration time. K_local is the standard per-message signing key — individual messages are always signed with K_local and verified against pubkey(K_local). FROST (K_local + K_server) is used only at session establishment and conversation seal. The primary compromise canary is a failed FROST ceremony at session start: if K_local is stolen, the attacker cannot successfully complete FROST authentication from an unexpected source. The directory detects the anomaly and triggers a `FALLBACK_CANARY` event. The fallback key can be rotated via the standard `key_rotation_log` mechanism.
 
 **Trust tier at registration:**
 - `PROVISIONAL` — phone OTP verified only; basic floor

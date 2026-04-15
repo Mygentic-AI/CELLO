@@ -10,7 +10,7 @@ description: Evaluated CELLO's strength for financial transactions and commerce 
 
 ## Protocol strength
 
-- With all 12 open decisions accepted, CELLO's authentication is stronger than human-browser banking. Split-key (FROST 3-of-5) means a compromised device alone can't sign anything.
+- With all 12 open decisions accepted, CELLO's authentication is stronger than human-browser banking. FROST session establishment (3-of-5 threshold) means a compromised device alone can't authenticate — even if K_local is stolen, the attacker cannot initiate a new FROST session.
 - For financial transactions specifically, fallback mode must be disabled entirely. If the directory is down, no transactions. Availability yields to security when money moves.
 - Three of the 7 design problems are critical for finance (fallback, succession, GDPR vs. audit trail). Four are compensated for by the bank's own security.
 
@@ -34,7 +34,7 @@ description: Evaluated CELLO's strength for financial transactions and commerce 
 
 ## Signed hashes
 
-- Confirmed: decision #5 ensures every hash submitted to the directory is signed by the sender via FROST. The directory holds not just hashes and public keys, but cryptographic proof of who submitted each hash. The link between sender and hash is unforgeable.
+- Confirmed: decision #5 ensures every hash submitted to the directory is signed by the sender via K_local. The directory holds not just hashes and public keys, but cryptographic proof of who submitted each hash. The link between sender and hash is unforgeable. (FROST is used at session establishment and seal — individual message hashes carry K_local signatures, which are verifiable against pubkey(K_local) in the directory.)
 
 ---
 
@@ -45,3 +45,4 @@ description: Evaluated CELLO's strength for financial transactions and commerce 
 - [[2026-04-08_1530_message-delivery-and-termination|Message Delivery and Termination]] — companion session; also develops the "directory as custodian" insight
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — dispute resolution via session attestation
 - [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — full design of the meta-Merkle tree concept introduced here; replaces hash chain with MMR, defines inclusion proof format, distributed construction, and storage analysis
+- [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — hash signing uses K_local, not FROST; corrects the "signed by sender via FROST" claim in §Signed hashes

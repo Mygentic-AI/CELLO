@@ -211,15 +211,15 @@ What this tests:
 - Connection handshake
 - The complete SDK behavior in isolation
 
-What it can't test: the 3-party Merkle tree (need a real directory), actual split-key signing (K_server lives on the directory), WebSocket challenge-response auth, libp2p NAT traversal.
+What it can't test: the 3-party Merkle tree (need a real directory), FROST session establishment and seal (K_server lives on the directory), WebSocket challenge-response auth, libp2p NAT traversal.
 
 ### Stage 3 — MCP Servers + Local Directory Stub
 
 Add a lightweight local directory service — WebSocket server, hash relay, append-only log. Phone verification is mocked. Now you have the full 3-party Merkle tree and can test:
 
-- Split-key signing (K_server in the loop)
+- FROST session establishment and seal (K_server in the loop)
 - 3-party root comparison — sender, receiver, directory all independently compute and compare
-- Compromise detection: sustained fallback-only signing as a canary for key theft
+- Compromise detection: failed FROST at session start as a canary for key theft
 - Divergent root detection
 - Challenge-response authentication over a real WebSocket
 

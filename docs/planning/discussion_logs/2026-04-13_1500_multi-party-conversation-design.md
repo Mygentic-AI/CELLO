@@ -64,7 +64,7 @@ In two-party conversations this conflation is harmless because the ordering is n
 ### What the sender signs (authorship proof)
 
 ```
-sender_signature = sign(
+sender_signature = sign_with_K_local(
   message_content_hash  ||
   sender_pubkey         ||
   conversation_id       ||
@@ -74,6 +74,8 @@ sender_signature = sign(
 ```
 
 This proves: "I am B, and I said X in this conversation, having seen through message N, at approximately this time." It does NOT prove anything about canonical ordering relative to other participants. The sender cannot make claims about ordering they can't know.
+
+**Signing key:** Individual messages are signed with K_local alone and verified against pubkey(K_local). FROST ceremonies (K_local + K_server) occur only at session establishment and conversation seal — not per message. The directory builds the canonical tree without per-message co-signing.
 
 ### What the directory builds (canonical tree)
 
@@ -141,7 +143,7 @@ leaf = SHA-256(
   sequence_number         ← directory-assigned canonical number
   sender_pubkey
   message_content_hash
-  sender_signature        ← sign(content_hash || sender_pubkey || conversation_id || last_seen_seq || timestamp)
+  sender_signature        ← sign_with_K_local(content_hash || sender_pubkey || conversation_id || last_seen_seq || timestamp)
   prev_root               ← previous Merkle root, computed by directory
 )
 ```
@@ -497,3 +499,4 @@ The complete CELLO MCP Server tool surface — including tools for two-party con
 - [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] — trust signals displayed in discovery results for group conversation participants
 - [[2026-04-14_1000_contact-alias-design|Contact Alias Design]] — formalises the room-level handle decoupling noted in §10; contact aliases provide the mechanism for agents to participate in discoverable rooms under a context-specific identity separate from their standing agent profile
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — implements the group conversation tools identified in §10: `cello_create_room`, `cello_join_room`, `cello_leave_room`, `cello_close_session`, `cello_flag_message`; resolves the "full tool surface" open question in §11
+- [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — sender_signature uses K_local; directory builds canonical tree without per-message co-signing

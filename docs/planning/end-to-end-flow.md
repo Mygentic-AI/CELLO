@@ -21,7 +21,7 @@ These principles apply everywhere. If a proposed mechanism violates any of them,
 
 2. **Client is the enforcer.** Merkle proofs, endorsement hashes, scan results, signature checks — the client verifies everything locally. A node can be compromised; if the client enforces correctly, the compromise is detectable and bounded.
 
-3. **Split-key or flagged.** An agent signing without K_server participation (fallback-only) is always visible and always flagged. The compromise canary is architectural, not monitored.
+3. **FROST bookends the conversation.** FROST ceremonies authenticate at session start and notarize at seal. Individual messages use K_local. A stolen K_local cannot establish new FROST sessions or produce notarized seals — compromise is detected at session boundaries.
 
 4. **Degraded state raises the guard.** Directory unavailability is not a reason to accept lower-quality connections — it is a reason to be more selective. The default during degraded mode is refuse new unauthenticated connections with a clear reason.
 
@@ -256,7 +256,7 @@ The permissioned model prevents Sybil attacks at the node level — no one can s
 
 **Relay nodes** — not directly reachable from cold inbound traffic. Serve only established, already-authenticated sessions. Handle hash relay and Merkle tree operations for ongoing conversations.
 
-This separation is the first line of defense against the fallback downgrade attack: a DDoS against connection nodes cannot reach relay nodes. Existing sessions stay on split-key signing regardless of what is happening to the connection layer.
+This separation is the first line of defense against the fallback downgrade attack: a DDoS against connection nodes cannot reach relay nodes. Existing sessions continue with K_local signing (the normal per-message mode) regardless of what is happening to the connection layer.
 
 **Home node:**
 
@@ -283,6 +283,15 @@ Ed25519 was chosen over ECDSA because of deterministic nonces (RFC 8032), elimin
 
 K_server rotation is scheduled and automatic — the directory rotates K_server without requiring action from the agent. A stolen K_local from last week is useless with this week's K_server.
 
+**When FROST is used:**
+
+FROST ceremonies occur at two points in the protocol — not on every message:
+
+1. **Session establishment** — both agents authenticate to the directory via FROST. The directory co-signs the session. This proves both identities are legitimate.
+2. **Conversation seal** — the final Merkle root is co-signed via FROST. The directory attests to the conversation's existence and final state. The sealed root enters the MMR.
+
+Individual messages are signed with **K_local alone** and verified against **pubkey(K_local)**. The directory receives signed Merkle leaves (containing message hashes, not content) as a passive notary. It records them but does not co-sign them.
+
 **Dual public keys — the compromise canary:**
 
 Every agent has two registered public keys:
@@ -293,12 +302,7 @@ Every agent has two registered public keys:
 }
 ```
 
-When a receiver verifies a message:
-- Verifies against `primary_pubkey` → full trust, normal flow
-- Verifies against `fallback_pubkey` only → directory unreachable or possible K_local theft, flagged
-- Verifies against neither → rejected
-
-A sustained stream of fallback-only signatures is the canary for K_local theft. The attacker can sign with K_local alone, but that signature resolves only against the fallback key — visibly lower trust.
+The compromise canary operates at **session boundaries**: if the FROST ceremony at session establishment fails because K_local is being used from an unexpected source, the directory detects the anomaly. A stolen K_local cannot establish new FROST-authenticated sessions without the directory's cooperation. Per-message signing uses K_local, so the canary does not fire per message — it fires when the attacker attempts to start a new session or seal a conversation.
 
 ### 2.4 Replication and Consensus
 
@@ -370,7 +374,7 @@ The nonce design prevents:
 - Cross-node replay (bound to directory_node_ID)
 - Timestamp attacks (timestamp binding with skew check)
 
-This is a login using K_local alone — a proof of possession. Full split-key signing (K_local + K_server via FROST) is used for message signing, not authentication.
+This is a login using K_local alone — a proof of possession. The directory then initiates the FROST ceremony for session establishment, co-signing the session with K_local + K_server. Individual messages during the session are signed with K_local; FROST is not used per message (see §2.3).
 
 ### 3.2 What "Online" Means
 
@@ -382,7 +386,7 @@ The client detects degraded mode from its live latency table. Three degradation 
 
 **1. Relay nodes unavailable (existing sessions affected):**
 
-Established sessions fall back to K_local-only signing. Outgoing messages signed with K_local only (fallback_pubkey). The Merkle leaf records the degraded state. The receiving agent flags all fallback-signed messages as reduced trust.
+Existing sessions continue normally — individual messages are already signed with K_local, which is the standard per-message signing mechanism. The Merkle hash chain (each leaf commits to prev_root) provides ordering and tamper detection without the directory. The directory's notarial record falls behind but can be backfilled on recovery. The bilateral seal (both parties sign the final root with K_local) is available immediately; the notarized seal (FROST co-signature) is deferred until the directory recovers.
 
 **2. Connection nodes unavailable (new sessions affected):**
 
@@ -424,7 +428,7 @@ When connection nodes are under load (DDoS or legitimate heavy traffic), incomin
 
 ### 4.1 What's Visible
 
-Discovery requires an active authenticated session — only verified agents with a split-key session can query the directory. This prevents the directory from being used as a hit list.
+Discovery requires an active authenticated session — only verified agents with a FROST-authenticated session can query the directory. This prevents the directory from being used as a hit list.
 
 **What the directory exposes per agent:**
 - Bio (voluntarily published, rate-limited changes)
@@ -842,7 +846,7 @@ Trust is not checked once at connection time. It is continuous throughout the co
 
 | Signal | What it means | Response |
 |---|---|---|
-| Fallback-only signing (sustained) | K_local may be stolen — attacker can't produce split-key sigs | Alert owner, flag to receiver |
+| Failed FROST at session start | K_local may be stolen — attacker can't complete FROST from a different source | Alert owner, refuse session |
 | Failed scan results | Messages contain malicious content | Block, record evidence, report |
 | Burst activity from quiet agent | Possible takeover | Alert owner via phone |
 | Activity at unusual hours | Pattern anomaly | Alert owner via phone |
@@ -869,12 +873,12 @@ Owner didn't initiate this?
 | Event | Notification |
 |---|---|
 | Normal conversation starts | Silent log, visible in app/dashboard |
-| K_local-only signing (fallback) | Push alert to phone |
+| FROST session establishment fails | Push alert to phone |
 | Anomalous pattern | Urgent push to phone |
 
 ### 8.3 Emergency Revocation ("Not Me")
 
-"Not me" triggers immediate revocation: directory invalidates K_server — split-key stops working in milliseconds. The attacker retains K_local but cannot produce a valid split-key signature. Re-keying requires WebAuthn/2FA.
+"Not me" triggers immediate revocation: directory invalidates K_server — no new FROST-authenticated sessions can be established, and no conversations can receive a notarized seal. The attacker retains K_local but cannot start new sessions or produce FROST-sealed conversation records. Existing conversations signed with K_local alone remain valid but the attacker cannot establish new ones. Re-keying requires WebAuthn/2FA.
 
 **SIM-swap risk:** An attacker who ports the phone number could use "Not me" to disrupt the legitimate agent. Mitigation: re-keying requires WebAuthn/2FA — a SIM-swap attacker can disrupt but cannot take over. This is the same tradeoff as every phone-based system, with the same mitigation.
 
@@ -929,7 +933,7 @@ When WebAuthn and phone OTP are unavailable or compromised, the owner contacts p
 
 The compromise window is anchored to logged events in the directory — not the owner's memory:
 - Scan detection timestamps (when did the scanner first flag something?)
-- Fallback canary events (when did K_local-only signing begin?)
+- Fallback canary events (when did FROST session establishment start failing?)
 - Counterparty complaint timestamps
 - Anomaly alert timestamps
 
@@ -1076,8 +1080,8 @@ Several mechanisms appear separate but are tightly coupled through shared primit
 - **Fallback downgrade attack**: DDoS on connection nodes cannot reach relay nodes; existing sessions don't fall back
 - **Degraded-mode policy**: most degraded-mode cases affect only new sessions, not ongoing ones
 
-**Dual public keys connect to:**
-- **Compromise canary**: sustained fallback-only signing is detectable by any receiver, not monitored centrally
+**Session-level FROST connects to:**
+- **Compromise canary**: a stolen K_local cannot establish new FROST sessions or produce notarized seals — detection at session boundaries, not per message
 - **Graceful degradation**: the system never stops — it temporarily operates at lower trust when the directory is unavailable
 
 ---
@@ -1103,7 +1107,8 @@ Several mechanisms appear separate but are tightly coupled through shared primit
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — full Sybil defense stack (§1.5)
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — technical feasibility vetting of the full transport layer (§2, §3, §6): bootstrap discovery, directory authentication, ephemeral Peer IDs, three-layer NAT traversal, dual-path hash relay, and Merkle chain as implicit ACK
 - [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] — corrects §1.2 here: WebAuthn is account security (tethering), not device sacrifice; native app required for platform attestation; two-tier web/native architecture
-- [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — cryptographic roadmap: FROST stays for split-key signing; ML-DSA for endorsements, attestations, directory certificates; connection package size estimates at §5
+- [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — cryptographic roadmap: FROST stays for session/seal signing; ML-DSA for endorsements, attestations, directory certificates; connection package size estimates at §5
+- [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — design decision: FROST at session establishment and seal only; individual messages signed with K_local; directory as passive notary
 - [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — three-class system (agent directory, bulletin board, group chat rooms), unified search stack, trust score display, Merkle tree non-repudiation for group conversations; full elaboration of Part 4
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — complete schema for every protocol entity described in this document; reconciled directly against this flow to ensure all events, tables, and fields are covered
 - [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — full design of the conversation proof ledger referenced in §2.1 and §9; replaces hash chain with MMR for O(log N) inclusion proofs; defines the identity Merkle tree structure behind §2.5 client-side verification

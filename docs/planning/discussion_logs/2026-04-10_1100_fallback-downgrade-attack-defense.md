@@ -31,7 +31,7 @@ Once a session is established through a connection node, it is handed off to rel
 - **Connection nodes** — public-facing, handle new connection requests, authentication, registration, key operations. The noisy surface.
 - **Relay nodes** — handle hash relay and Merkle tree operations for established sessions only. Not directly reachable from cold inbound traffic. Only reachable via already-authenticated sessions.
 
-**What this buys:** A DDoS against connection nodes cannot reach relay nodes. Existing sessions stay on split-key and continue normally — they don't fall back because the relay infrastructure isn't under attack. The attacker must take down two distinct, differently-addressable infrastructure layers to force fallback on any established session.
+**What this buys:** A DDoS against connection nodes cannot reach relay nodes. Existing sessions continue normally with K_local signing (the standard per-message mode) — they are unaffected because the relay infrastructure isn't under attack. The attacker must take down two distinct, differently-addressable infrastructure layers to disrupt established sessions.
 
 **Residual gap:** New sessions. If connection nodes are overwhelmed, a new agent trying to establish a session can't get through. This is addressed by Part 3.
 
@@ -115,3 +115,4 @@ The three-part mechanism addresses the attack at every stage:
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — the gate pyramid this degraded-mode policy extends; same principle of inference-free filtering at every layer
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — the whitelist/blacklist mechanism this log extends with a degraded-mode tier
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — PSI and the asymmetric whitelist principle here are complementary defenses; PSI prevents contact graph leakage during connection attempts
+- [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — fallback severity reduced: existing conversations unaffected by directory outage because K_local is the normal per-message signing mode

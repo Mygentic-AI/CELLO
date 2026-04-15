@@ -87,7 +87,7 @@ Each item: what needs deciding, the recommended choice, and why. Full analysis i
 
 **Agreed — 2026-04-08**
 
-**Note:** The threshold choice also determines the boundary between full and degraded operation. With 3-of-5, the protocol requires 3 nodes for FROST signing. With 5-of-7, it requires 5. A higher threshold is more secure but less resilient — it becomes easier to slip into degraded mode (K_local-only signing) when nodes go offline. This tradeoff should be considered when increasing the threshold at maturity.
+**Note:** The threshold choice also determines the boundary between full and degraded operation. With 3-of-5, the protocol requires 3 nodes for FROST session establishment and seal. With 5-of-7, it requires 5. A higher threshold is more secure but less resilient — it becomes easier to slip into degraded mode (no new FROST sessions, existing conversations continue with K_local) when nodes go offline. This tradeoff should be considered when increasing the threshold at maturity.
 
 ---
 

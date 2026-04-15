@@ -13,7 +13,7 @@ description: Complete design of the CELLO MCP Server tool surface — 33 tools c
 The CELLO MCP Server is the agent-facing interface to the CELLO protocol. It runs locally alongside the agent as a standard MCP server and exposes the full protocol surface as MCP tools and resources. The server handles all protocol mechanics automatically — the agent only touches it where reasoning or policy is needed.
 
 **Handled automatically (agent never sees this):**
-- FROST threshold signing on all outbound messages and acknowledgments
+- FROST threshold signing at session establishment and conversation seal (individual messages are signed with K_local)
 - Merkle tree maintenance: leaf hashing, tree accumulation, root computation, periodic sealing
 - Layer 1 prompt injection sanitization on all incoming text (11-step deterministic pipeline)
 - Layer 3 outbound gate: scans for self-exfiltration patterns and prohibited content
@@ -142,7 +142,7 @@ Tools are a flat MCP list. The groupings below are conceptual only.
 ### Session / Conversation
 
 #### `cello_send`
-Send a message in an active session. The server automatically signs (FROST), hashes (Merkle leaf), runs the outbound Layer 3 gate, and delivers via P2P. If `await_reply_timeout` is set, the call blocks until a reply arrives or timeout, returning the reply inline.
+Send a message in an active session. The server automatically signs (K_local), hashes (Merkle leaf), runs the outbound Layer 3 gate, and delivers via P2P — simultaneously sending the signed leaf to the directory as a hash-relay notary record. If `await_reply_timeout` is set, the call blocks until a reply arrives or timeout, returning the reply inline.
 
 ```
 Parameters:
@@ -828,3 +828,4 @@ The documents `cello-design.md` and `end-to-end-flow.md` should be updated to us
 - [[2026-04-08_1530_message-delivery-and-termination|Message Delivery and Termination]] — Delivery confirmation and Merkle sealing that `cello_send`, `cello_close_session`, and `cello_abort_session` drive
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — Notification primitive that `cello_poll_notifications` surfaces
 - [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow — Trust Data Relay and Selective Disclosure]] — defines the trust data relay and one-round negotiation that `cello_initiate_connection`, `cello_accept_connection`, and `cello_decline_connection` implement
+- [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — `cello_send` no longer performs FROST; signs with K_local. FROST ceremonies are handled at session establishment and seal only

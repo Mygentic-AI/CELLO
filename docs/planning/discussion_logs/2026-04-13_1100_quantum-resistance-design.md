@@ -10,7 +10,7 @@ description: Investigation and design decisions for quantum-resistant cryptograp
 
 ## The problem
 
-CELLO's core security property — the split-key compromise canary — depends on FROST (Flexible Round-Optimized Schnorr Threshold Signatures). FROST is built on elliptic curve cryptography, which is quantum-vulnerable: Shor's algorithm running on a sufficiently powerful quantum computer can recover a private key from a public key in polynomial time. When quantum computers of that capability exist, the split-key guarantee collapses.
+CELLO's session-level compromise canary depends on FROST (Flexible Round-Optimized Schnorr Threshold Signatures) — FROST ceremonies occur at session establishment and conversation seal, while individual messages are signed with K_local alone. FROST is built on elliptic curve cryptography, which is quantum-vulnerable: Shor's algorithm running on a sufficiently powerful quantum computer can recover a private key from a public key in polynomial time. When quantum computers of that capability exist, the FROST session authentication guarantee collapses.
 
 The straightforward answer — replace EC signatures with ML-DSA (CRYSTALS-Dilithium, NIST FIPS 204) — doesn't work for FROST. Understanding why requires understanding what FROST is.
 
@@ -61,7 +61,7 @@ Given that FROST cannot be replaced today and threshold ML-DSA is not ready, the
 
 **Track 1 — FROST (quantum-vulnerable, accepted debt)**
 
-Used for: K_local + K_server split-key signing — the compromise canary mechanism. This is the load-bearing property of the protocol. FROST stays until threshold ML-DSA is production-ready, behind an abstracted interface so the swap is mechanical when the time comes.
+Used for: K_local + K_server threshold signing at session establishment and conversation seal — the compromise canary mechanism (compromise is detected when an attacker attempts a FROST session from a different source). Individual messages within a conversation are signed with K_local alone. FROST stays until threshold ML-DSA is production-ready, behind an abstracted interface so the swap is mechanical when the time comes.
 
 **Track 2 — ML-DSA (quantum-resistant, deploy now)**
 
@@ -92,7 +92,7 @@ IThresholdSigner
   └── ThresholdMlDsaSigner    ← future swap-in
 ```
 
-Every call to split-key signing goes through `IThresholdSigner`. When threshold ML-DSA matures and a vetted implementation exists, `FrostThresholdSigner` is replaced with `ThresholdMlDsaSigner` — the protocol layer above it does not change.
+Every call to threshold signing (session establishment and conversation seal) goes through `IThresholdSigner`. When threshold ML-DSA matures and a vetted implementation exists, `FrostThresholdSigner` is replaced with `ThresholdMlDsaSigner` — the protocol layer above it does not change.
 
 This is not a hybrid scheme. The FROST path and the ML-DSA path are independent. No hybrid FROST + ML-DSA threshold layer: it would add complexity and operational overhead without meaningfully improving security given the quantum threat timeline.
 
@@ -180,3 +180,4 @@ The ML-DSA security level (44 vs 65, i.e., 18 KB vs 23 KB) has not been decided.
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — the connection package schema; endorsed records, attestations, and pseudonym bindings are the ML-DSA-signed items in the size estimates
 - [[design-problems|Design Problems]] — Problem 8 (ML model supply chain) for comparison: both involve a third-party artifact with integrity pinning; the supply chain thinking there parallels the library trust reasoning here
 - [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — ML-DSA security level choice (undecided here) is tracked as an open item there; signature sizes don't affect MMR structure but affect connection package estimates
+- [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — FROST remains for session/seal; scope of quantum debt narrowed to session boundaries (not per-message)

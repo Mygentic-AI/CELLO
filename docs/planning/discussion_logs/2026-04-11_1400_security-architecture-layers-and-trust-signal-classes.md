@@ -14,7 +14,7 @@ CELLO's security architecture has four distinct layers with distinct goals and d
 
 ### Layer 1 — Transport and cryptography
 
-libp2p, peer discovery, FROST split-key signing, Merkle trees, hash relay, directory infrastructure. The cryptographic substrate everything else is built on.
+libp2p, peer discovery, FROST threshold signing (session establishment and seal), K_local per-message signing, Merkle trees, hash relay, directory infrastructure. The cryptographic substrate everything else is built on.
 
 ### Layer 2 — Node integrity
 

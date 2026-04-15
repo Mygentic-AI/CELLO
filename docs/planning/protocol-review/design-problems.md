@@ -32,6 +32,7 @@ Full analysis in [[00-synthesis|day-zero-review/]].
 - [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — ML-DSA transition and key management mechanics relevant to Problem 9 (K_server rotation overlap window)
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — the scanner design at the centre of Problem 12 (false positive handling); context-aware scanning modes and appeal mechanisms are the design work needed there
 - [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession and Ownership Transfer]] — resolves Problem 5; voluntary transfer, involuntary succession (dead-man's switch), succession package, and what transfers vs. what doesn't
+- [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — Problem 9 (K_server rotation) window narrowed; Problem 1 (fallback downgrade) severity reduced
 
 ---
 
@@ -70,6 +71,8 @@ Finally: the client tracks only its own lists. It does not track which other age
 **Refinement added (2026-04-10):** The random pool selection was subsequently strengthened to trust-weighted random selection. Rather than uniform random, selection probability is proportional to trust score. A phone-only agent (score 1) and a fully-verified agent (score 5) both enter the pool, but at very different weights. An attacker running 10,000 phone-only accounts contributes 10,000 weight-1 entries. One legitimate user with WebAuthn, GitHub, and LinkedIn contributes weight 5+. To dominate a weighted pool, the attacker needs those 10,000 accounts to carry real trust score — which means 10,000 genuine GitHub histories, 10,000 LinkedIn profiles with years of activity. Each layer stacks multiplicatively across the volume. The resource-tying attack and the identity attack now defend against each other: making fake identities numerous enough to matter requires making them expensive enough to matter.
 
 **What's still unspecified:** The fallback token mechanism itself — a signed "I was online as of T" proof the directory issues during normal operation. Not a blocker, but would add a layer of assurance. See [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] for the full mechanism.
+
+**Severity reduced (2026-04-15):** The move to session-level FROST fundamentally changes the fallback landscape. Individual messages are now signed with K_local in normal operation — K_local signing is the standard mode, not a degraded fallback. Directory outage prevents new FROST session establishment and notarized seals, but **existing conversations continue normally**. There is no "mass fallback" event because conversations in progress never needed per-message FROST. The compromise canary does not fire network-wide on directory outage. The remaining exposure: an attacker who steals K_local during a directory outage can impersonate the agent in new connections to agents on the degraded-mode list — but cannot establish FROST-authenticated sessions, limiting the scope. See [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]].
 
 ---
 
@@ -235,6 +238,8 @@ If the hash does not match, the agent refuses to start. The hash lives in source
 - Specify how in-flight FROST signing sessions that straddle a rotation boundary are handled (abort and retry with new shares? complete with old shares within grace window?)
 
 *Ref: day-zero-review/01, Finding #3*
+
+**Scope narrowed (2026-04-15):** The move to session-level FROST drastically reduces the rotation overlap problem. FROST ceremonies now occur only at session establishment and conversation seal — not per message. A rotation during a conversation has **no impact on message signing** (messages use K_local). The rotation only matters if it coincides with a session establishment or seal ceremony. The window of exposure shrinks from "every message could straddle a rotation boundary" to "only session-start and seal ceremonies could straddle a rotation boundary." The primary_pubkey caching problem is also reduced: clients only need the current primary_pubkey at session boundaries, not for every message verification. See [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]].
 
 ---
 

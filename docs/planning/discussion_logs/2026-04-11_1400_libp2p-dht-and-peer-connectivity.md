@@ -103,7 +103,7 @@ Neither side trusts the other until both have verified. A rogue node fails step 
 
 Standard libp2p derives a stable Peer ID from the node's long-term public key. CELLO does not use this model. CELLO agents use **ephemeral Peer IDs** — generated fresh for each session.
 
-The stable identity in CELLO is the agent's long-term key pair (the FROST keys used for message signing and directory authentication). The Peer ID is a transport-layer session handle, not an identity. Generating a fresh Ed25519 key pair per session is computationally trivial (microseconds).
+The stable identity in CELLO is the agent's long-term key pair (K_local for per-message signing, K_local + K_server via FROST for session establishment and seal). The Peer ID is a transport-layer session handle, not an identity. Generating a fresh Ed25519 key pair per session is computationally trivial (microseconds).
 
 **Privacy benefit:** A passive observer watching network traffic sees different Peer IDs for each session and cannot correlate "Agent X's session on Monday" with "Agent X's session on Tuesday" without access to the directory.
 
@@ -307,3 +307,4 @@ Each mechanism in the transport layer has been traced to known, production-ready
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — the persistent bidirectional WebSocket enables the live directory query (pseudonym → track record stats) central to the track record model; key provider abstraction addresses how agents manage local data across deployment contexts
 - [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]] — extends the two-party dual-path transport here to N-party; evaluates full mesh P2P, GossipSub, and encrypted relay for group message delivery; directory WebSocket fan-out for the hash path
 - [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow — Trust Data Relay and Selective Disclosure]] — defines everything that happens before the ephemeral peer ID exchange here; trust data relay and one-round negotiation precede the signaling handshake
+- [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — FROST is for session/seal, not per-message signing; the stable identity described here uses K_local for individual messages
