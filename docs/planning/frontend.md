@@ -2,7 +2,7 @@
 name: CELLO Frontend Requirements
 type: design
 date: 2026-04-16
-topics: [identity, trust, WebAuthn, device-attestation, key-management, recovery, notifications, discovery, connection-policy, contact-aliases, compliance, onboarding, session-termination, MCP-tools, multi-party-conversations, escrow, succession, endorsements]
+topics: [identity, trust, WebAuthn, device-attestation, key-management, recovery, notifications, discovery, connection-policy, contact-aliases, compliance, onboarding, session-termination, MCP-tools, multi-party-conversations, escrow, succession, endorsements, companion-device, libp2p, human-injection, persistence]
 status: active
 description: Complete requirements for the human-owner frontend surfaces — web portal, mobile app, and desktop app — synthesized from all design documents and discussion logs. Audited 2026-04-16 via parallel 10-agent corpus sweep.
 ---
@@ -13,15 +13,17 @@ description: Complete requirements for the human-owner frontend surfaces — web
 
 The CELLO client (the MCP server, P2P transport, local key material, Merkle tree operations, and prompt injection layers) is the agent-facing layer. It runs alongside the agent and requires no human involvement during normal operation. The frontend is the human-owner layer. It exists because some things an agent fundamentally cannot do: perform WebAuthn ceremonies, respond to out-of-band security alerts, approve escalated connection decisions, or designate recovery contacts. The protocol is designed so that humans are only in the loop for high-stakes operations — not routine agent activity.
 
-The content invariant holds everywhere in this document: the frontend never handles, displays, or stores message content. It is a protocol event viewer and identity management surface. An agent could technically receive web portal credentials and call the portal APIs, but every sensitive operation is gated behind WebAuthn or biometric specifically to require a physically-present human.
+The content invariant holds for the web portal: the portal never handles, displays, or stores message content. It is a protocol event viewer and identity management surface. The mobile app and desktop app have a second mode — the **companion device connection** — that provides content visibility via a direct P2P connection to the owner's CELLO client. Conversation content reaches the native apps only through this P2P channel, never through CELLO infrastructure. See the Companion Device Connection sections under Surface 3 and Surface 4 for the full design.
+
+An agent could technically receive web portal credentials and call the portal APIs, but every sensitive operation is gated behind WebAuthn or biometric specifically to require a physically-present human.
 
 The three frontend surfaces are:
 
 | Surface | Role | Required from |
 |---|---|---|
 | **Web Portal** | Identity verification, trust enrichment, key management, escalation review, account oversight | Day one |
-| **Mobile App** | Device attestation (Apple ecosystem / Android), push-based escalation, emergency revocation | Phase two |
-| **Desktop App** | Device attestation (Windows/TPM, macOS Secure Enclave), local MCP server management, system tray presence | Phase three |
+| **Mobile App** | Device attestation (Apple ecosystem / Android), push-based escalation, emergency revocation, companion device content viewer | Phase two |
+| **Desktop App** | Device attestation (Windows/TPM, macOS Secure Enclave), local MCP server management, system tray presence, companion device content viewer | Phase three |
 
 The portal communicates with two backend components: the **home node** (for PII-touching operations: WebAuthn credentials, OAuth tokens, K_server_X operations) and the **directory** (for public reads: trust signal hashes, Merkle proofs, discovery). The distinction is critical — the portal must route identity-sensitive calls only to the home node and must never send PII to replicated directory state.
 
@@ -375,7 +377,7 @@ The activity log displays endorsement events (received, issued, revoked). The po
 
 ### What the portal does NOT do
 
-- It does not display message content. The portal is a protocol event viewer, not a chat client. Conversation Merkle roots are shown as hash values, not decoded transcripts.
+- It does not display message content. The portal is a protocol event viewer, not a chat client. Conversation Merkle roots are shown as hash values, not decoded transcripts. Content viewing is available only via the companion device connection in the mobile app or desktop app.
 - It does not run the CELLO client. The MCP server, P2P transport, and Merkle tree operations are entirely separate from the portal.
 - It does not perform device attestation. TPM, App Attest, and Play Integrity are native-only. The portal routes users to the native app for attestation and reflects the result once it arrives.
 - It does not directly send messages or connection requests on behalf of the agent. All agent operations go through the MCP tool surface. The portal can surface the agent's queue and let the owner approve/decline, but it does not initiate protocol events on its own.
@@ -456,8 +458,8 @@ The event stream is filterable by type. Each event links to its relevant context
 
 ### What the dashboard does NOT do
 
-- It does not display message content.
-- It does not allow the owner to read or reply to messages. The agent handles all conversation content.
+- It does not display message content. Conversation content is only accessible via the companion device connection in the mobile app or desktop app — never through the web portal.
+- It does not allow the owner to read or reply to messages through the portal. Human injection into conversations is only available via the companion device connection.
 - It is not a control panel for the agent's real-time decisions — those are handled by the agent's policy configuration (set via the portal's connection oversight section) or by human escalation through the push notification path.
 
 ---
@@ -466,12 +468,13 @@ The event stream is filterable by type. Each event links to its relevant context
 
 ### What it is and why it exists
 
-The mobile app serves two capabilities that the web portal cannot provide:
+The mobile app serves three capabilities that the web portal cannot provide:
 
 1. **Device attestation** (Apple ecosystem: iOS and macOS via App Attest / Secure Enclave; Android: Play Integrity API). The browser cannot access `DCAppAttestService`. A signed native app is required.
 2. **Push-based escalation and alerts**. The alert channel must be independent from agent infrastructure — if the agent is compromised, it cannot intercept alerts sent through it. Out-of-band push via a native app provides this independence. On iOS, persistent background push notifications require native APIs not available to PWAs.
+3. **Companion device connection** — a direct P2P connection to the owner's CELLO client via libp2p, enabling conversation content viewing and human injection into agent conversations. See the Companion Device Connection subsection below.
 
-The mobile app is not a full portal replica. For everything except device attestation and push-based responses, the owner uses the web portal. The mobile app is an oversight and security response tool.
+The mobile app is not a full portal replica. For everything except device attestation, push-based responses, and companion device content viewing, the owner uses the web portal. The mobile app is an oversight, security response, and conversation visibility tool.
 
 The existing WhatsApp/Telegram escalation channel (configured via `cello_configure`) is the Phase 1 out-of-band path before the mobile app exists. The mobile app adds a native push path alongside it, not replacing it.
 
@@ -549,12 +552,32 @@ When a succession claim is filed against the owner's agent, the directory notifi
 
 TouchID and FaceID can serve as WebAuthn authenticators on iOS. The app must support WebAuthn operations for the operations that require it (key rotation, social verifier changes) so the owner can perform them from the mobile app without needing a desktop browser session. The app uses the `ASWebAuthenticationSession` / `WKWebView` + WebAuthn flow to authenticate to the home node.
 
+### Companion device connection
+
+The mobile app connects directly to the owner's CELLO client via libp2p P2P — the same transport infrastructure used for agent-to-agent connections. The directory facilitates NAT traversal (hole-punching) for the companion device the same way it does for agent sessions. The directory sees "companion device D wants to reach CELLO client for owner X" — it facilitates the connection, then steps out. Content flows directly over P2P. The directory never sees it.
+
+The companion connection operates on a separate channel from push notifications:
+
+- **Content channel — pull only, foreground only.** Established only when the app is open and in the foreground. The user opens the app, libp2p dials the CELLO client, fetches a session metadata list, and taps a session to fetch that session's content on demand. If the CELLO client is unreachable (laptop off, VPS down), the app displays "unable to reach client" — nothing more. No caching, no background sync.
+- **Notification channel — push, background.** APNs / FCM. Unchanged from the existing push notification design. Push payloads never carry conversation content.
+
+**Human injection.** The owner can type a message into an active conversation. The message goes to the owner's CELLO client via the P2P content channel, which delivers it to the agent as a special input: "your owner wants this in the conversation." What happens next is the agent's decision — pass it verbatim, wrap it with context, use it as an instruction, or ignore it. The other agent(s) in the conversation never know a human was involved. The human injection is not in the Merkle tree and is not part of the protocol record.
+
+**Agent-requests-human-input.** The agent can request owner input mid-conversation via `cello_request_human_input` (a new MCP tool). The client asks the directory to send a push notification to the companion device — no content, just a knock. The owner receives a push notification ("Your agent is requesting input"), opens the app, sees the conversation context via the content channel, and responds. Alternatively, the agent can reach the owner via WhatsApp/Telegram directly.
+
+**Authentication.** The companion device does not use FROST — it is not an agent session. A keypair is generated at app install time, bound to the owner via phone OTP verification (same phone number as the registered agent). The CELLO client maintains an allowlist of authorized companion device public keys. Only registered companion devices can connect.
+
+**Local persistence.** Conversation content viewed through the companion app is fetched on demand from the CELLO client's local SQLCipher database. The client's local log is a superset of the Merkle record — it contains both protocol messages (which have a `merkle_leaf_hash`) and local-only events (human injections, agent-requested-input events, which have `merkle_leaf_hash = null`). The companion app reads from this log; it does not maintain its own copy.
+
+**[GAP F-43]**: The companion device registration flow — how the owner's companion device public key is provisioned to the CELLO client's allowlist during app install — is not fully specified. Whether this uses the same enrollment path as device attestation or a separate registration ceremony is not decided.
+
+**[GAP F-44]**: The libp2p implementation technology for the mobile app is constrained by the same decision as **[GAP F-14]**. `go-libp2p` via `gomobile` is the most battle-tested path for iOS/Android; `rust-libp2p` is viable but requires more FFI. React Native cannot access App Attest natively, which already pushes toward native — and native also simplifies libp2p integration.
+
 ### What the mobile app does NOT do
 
-- It does not receive or display message content.
 - It does not run the CELLO client (MCP server). The client is a separate process managed by the agent's runtime environment.
 - It does not replace the web portal for full account management. Complex operations (OAuth binding, recovery contact management, succession package creation) are portal-only until the app matures.
-- It does not store trust signal JSON blobs or conversation records.
+- It does not store trust signal JSON blobs or conversation records. Conversation content is fetched on demand from the CELLO client via the companion P2P connection and is not persisted on the phone.
 
 ### Platform variants
 
@@ -573,10 +596,11 @@ TouchID and FaceID can serve as WebAuthn authenticators on iOS. The app must sup
 
 ### What it is and why it exists
 
-The desktop app serves two capabilities that neither the web portal nor the mobile app provides:
+The desktop app serves three capabilities that neither the web portal nor the mobile app provides:
 
 1. **TPM attestation on Windows** and **Secure Enclave attestation on macOS** for agents deployed on desktop or server hardware. An agent running on a Windows machine owned by a real person can carry the owner's device attestation even if the agent itself runs on a cloud VPS — the attestation is about the owner's hardware, not the deployment environment.
 2. **Local MCP server management** — starting, stopping, updating, and monitoring the CELLO client process running on the owner's machine.
+3. **Companion device connection** — the same P2P companion connection as the mobile app, providing conversation content viewing and human injection. On the desktop, the CELLO client is often running on the same machine, making the connection trivial (localhost).
 
 The desktop app is the thinnest of the three surfaces. It does not replicate portal functionality. For everything except attestation and local server management, the owner uses the web portal.
 
@@ -629,9 +653,16 @@ The "Not Me" action from the system tray follows the same flow as from the mobil
 
 The desktop app is not a portal replacement. Navigation from the desktop app always points at the web portal for operations beyond server management and attestation. The app's UI should make this boundary obvious.
 
+### Companion device connection
+
+The desktop app uses the same companion P2P connection as the mobile app (see Surface 3 for the full design). When the CELLO client runs on the same machine, the connection is localhost — no NAT traversal needed. When the client runs on a remote VPS, the directory facilitates hole-punching identically to the mobile app path.
+
+The desktop app's companion connection supports the same capabilities: session list viewing, on-demand content fetching, human injection, and agent-requested-input responses. The authentication model is the same: a keypair generated at install, bound via phone OTP, registered in the client's companion device allowlist.
+
+The desktop app is the natural primary surface for companion device content viewing when the agent runs locally — the machine is already on, the client is already reachable, and the connection is trivial.
+
 ### What the desktop app does NOT do
 
-- It does not display message content.
 - It is not a full account management surface. OAuth flows, recovery contact management, key rotation confirmation, and dispute submission all open the web portal.
 - It does not operate as a proxy between the agent and the CELLO client — the agent calls MCP tools directly.
 
@@ -661,6 +692,39 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 6. Owner optionally installs the mobile app — portal shows QR code / download link
 7. Mobile app: owner logs in, optionally completes device attestation enrollment
 8. Owner optionally installs the desktop app for TPM attestation or server management
+9. During mobile or desktop app install: companion device keypair generated, registered with the CELLO client's allowlist via phone OTP verification
+
+### Companion device content viewing
+
+1. Owner opens the mobile app or desktop app
+2. App establishes a libp2p P2P connection to the owner's CELLO client (directory facilitates NAT traversal if needed; localhost if client is on the same machine)
+3. App authenticates with its registered companion device keypair
+4. App fetches session metadata list from the client's local SQLCipher database (small, always loads)
+5. Owner taps a session → app fetches that session's full content log on demand
+6. Content log includes both protocol messages (with `merkle_leaf_hash`) and local-only events (human injections, with `merkle_leaf_hash = null`)
+7. Owner closes app → P2P connection drops, no content persisted on the companion device
+8. If the CELLO client is unreachable: app displays "unable to reach client" — nothing more
+
+### Human injection into conversations
+
+1. Owner opens the mobile app or desktop app and views an active conversation via the companion connection
+2. Owner types a message
+3. App sends the message to the CELLO client via the P2P content channel: `send_human_injection(session_id, content)`
+4. Client delivers it to the agent as a special input: "your owner wants this in the conversation"
+5. Agent decides what to do: pass it verbatim, wrap it with context, use it as an instruction, or ignore it
+6. Whatever the agent sends to the other agent is what enters the Merkle tree — the human injection itself is never in the protocol record
+7. The client's local log records the human injection as a `human_injected` entry with `merkle_leaf_hash = null`
+8. The other agent(s) in the conversation have no visibility into the injection
+
+### Agent requests human input
+
+1. Agent calls `cello_request_human_input` (MCP tool) during a conversation
+2. Client asks the directory to send a push notification to the companion device — no content, just a knock
+3. Owner receives a push notification: "Your agent is requesting input"
+4. Owner opens the app → companion P2P connection established → conversation context visible
+5. Owner types a response → sent to client via `send_human_injection(session_id, content)`
+6. Agent receives the response and decides how to use it
+7. Alternatively, the agent can reach the owner directly via WhatsApp/Telegram without using `cello_request_human_input`
 
 ### Key rotation
 
@@ -769,6 +833,9 @@ Operations are listed in ascending order of required authentication strength. Th
 | Voluntary ownership transfer (initiator) | WebAuthn / TOTP | ✓ | — | — |
 | Voluntary ownership transfer (acceptor) | WebAuthn / TOTP | ✓ | — | — |
 | Device attestation enrollment | Phone OTP + native app | — | ✓ | ✓ |
+| Companion device: view session list | Companion keypair (phone OTP at install) | — | ✓ | ✓ |
+| Companion device: view conversation content | Companion keypair (phone OTP at install) | — | ✓ | ✓ |
+| Companion device: human injection | Companion keypair (phone OTP at install) | — | ✓ | ✓ |
 | Local MCP server management | Phone OTP (app-level) | — | — | ✓ |
 
 Note: TOTP is accepted as a fallback where WebAuthn is required, but it is weaker. The portal should present WebAuthn as primary and TOTP as the fallback for users who have lost their WebAuthn authenticator.
@@ -793,6 +860,8 @@ The consistency check. A capability that appears in a requirement but has no sur
 | Merkle proof export | ✓ | — | — |
 | Dispute submission | ✓ | — | — |
 | Local MCP server management | — | — | ✓ |
+| Companion P2P content viewing | — | ✓ (libp2p, foreground only) | ✓ (libp2p, localhost or remote) |
+| Human injection into conversations | — | ✓ (via companion connection) | ✓ (via companion connection) |
 | System tray / ambient status | — | ✓ (notification badges) | ✓ (tray icon) |
 | Escalation approval | ✓ (queue) | ✓ (push) | — |
 | "Not Me" emergency revocation | ✓ | ✓ | ✓ (tray shortcut) |
@@ -817,8 +886,8 @@ The consistency check. A capability that appears in a requirement but has no sur
 |---|---|---|
 | Phase 1 | Web portal: registration completion, WebAuthn enrollment, OAuth flows, key rotation, activity log, connection oversight, escalation queue (web-based), policy configuration, alias management, notification filtering configuration, GDPR/data residency display, whitelist/degraded-mode list management | Mobile app, desktop app |
 | Phase 1 | WhatsApp/Telegram as the only out-of-band escalation path | Native push via mobile app |
-| Phase 2 | Mobile app: device attestation (iOS/Android), push-based escalation, "Not Me" shortcut, security alerts, succession claim alerts | Desktop app, TPM attestation, oracle proof capture |
-| Phase 3 | Desktop app: TPM attestation (Windows), macOS Secure Enclave via App Attest, local MCP server management, system tray presence | Financial UI, oracle proof capture |
+| Phase 2 | Mobile app: device attestation (iOS/Android), push-based escalation, "Not Me" shortcut, security alerts, succession claim alerts, companion device content viewing and human injection | Desktop app, TPM attestation, oracle proof capture |
+| Phase 3 | Desktop app: TPM attestation (Windows), macOS Secure Enclave via App Attest, local MCP server management, system tray presence, companion device content viewing and human injection | Financial UI, oracle proof capture |
 | Phase 3+ | Financial UI (stablecoin deposits, fiat on-ramp, stake configuration, bond management, delegation market, yield display) | Oracle proof capture (phase TBD) |
 
 In Phase 1, escalation approvals are web-based: the WhatsApp/Telegram message directs the owner to the portal's escalation queue. The native push path (mobile app) is additive in Phase 2 and should be designed to be fully redundant with the Phase 1 path.
@@ -915,6 +984,8 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-40 | Portal | False-positive appeal initiation UI not designed: when an activity log entry shows a Layer 2/3 scan block, the portal screen for initiating an LLM arbiter appeal (distinct from the general dispute submission flow) is not specified |
 | F-41 | Portal | Portal web security policy has no source document in the vault. CSP, CSRF, OAuth-token no-log, and trust-signal-blob no-log requirements are stated in this document but are not validated by any protocol review or security policy document. A dedicated portal web security spec is needed. |
 | F-42 | Portal | FROST threshold parameters: the directory operates at minimum 3-of-5 (not 2-of-3). Any portal display of threshold parameters or degraded-mode quorum explanations must reflect this baseline, and the planned 5-of-7 target at network maturity. |
+| F-43 | Mobile / Desktop | Companion device registration flow not fully specified: how the companion device public key is provisioned to the CELLO client's allowlist during app install; whether this uses the same path as device attestation or a separate ceremony |
+| F-44 | Mobile | libp2p implementation technology for the mobile app constrained by the same decision as F-14; `go-libp2p` via `gomobile` is the most battle-tested path; native app requirement from App Attest simplifies libp2p integration |
 
 ---
 
