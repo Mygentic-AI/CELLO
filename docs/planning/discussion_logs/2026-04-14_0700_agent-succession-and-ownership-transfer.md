@@ -238,3 +238,4 @@ succession_events                              append-only, directory
 - [[cello-design|CELLO Design Document]] — Step 9 (compromise detection) and Step 10 (dispute resolution); succession adds a lifecycle event distinct from compromise
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — §8 recovery section notes Problem 5 (succession) as unaddressed; this log resolves it
 - [[frontend|CELLO Frontend Requirements]] — succession management UI (designate successor, dead-man's switch, claim filing, 7–14 day announcement counter, cancellation) sourced from this log
+- [[agent-client|CELLO Agent Client Requirements]] — Part 1 implements the succession package creation/decryption flow (encrypt seed phrase to successor's identity_key, upload to directory; successor decrypts and performs identity migration) and the voluntary transfer announcement period client state machine (TRANSFER_PENDING → TRANSFER_EXECUTING → IDLE with cancellation path)

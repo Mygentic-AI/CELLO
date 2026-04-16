@@ -338,3 +338,4 @@ The open item in the persistence-layer-design — "Conversation tree retention �
 - [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — Class 3 group conversations require multi-party seals; the MMR consumes seals regardless of participant count
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — `cello_close_session` seals into the MMR; the `mmr_peak` return value exposes proof ledger state to the agent
 - [[server-infrastructure|CELLO Server Infrastructure Requirements]] — the distributed MMR construction, checkpoint batching, and node-level proof ledger storage designed here are reflected in the directory server requirements
+- [[agent-client|CELLO Agent Client Requirements]] — Part 4 implements the five-step MMR inclusion proof verification algorithm defined here; client requests and caches the proof at cello_close_session time
