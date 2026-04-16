@@ -145,3 +145,4 @@ The cold-start path for new agents: discovery listings, group rooms, open connec
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — `cello_verify` returns `SignalResult[]` not a score; `SignalRequirementPolicy` uses named signal requirements; explicitly states "Trust is not expressed as a number"
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — the Class 2 relative signal mechanism that provides the hard Sybil defense without TrustRank
 - [[00-synthesis|Protocol Review Synthesis]] — original source of TrustRank recommendation
+- [[frontend|CELLO Frontend Requirements]] — trust signal display uses named SignalResult[] not a numeric score; TrustRank UI is explicitly absent; the signal-based trust taxonomy drives the trust card design

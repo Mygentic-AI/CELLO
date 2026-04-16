@@ -116,3 +116,4 @@ The three-part mechanism addresses the attack at every stage:
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — the whitelist/blacklist mechanism this log extends with a degraded-mode tier
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — PSI and the asymmetric whitelist principle here are complementary defenses; PSI prevents contact graph leakage during connection attempts
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — fallback severity reduced: existing conversations unaffected by directory outage because K_local is the normal per-message signing mode
+- [[frontend|CELLO Frontend Requirements]] — K_LOCAL_DEGRADED_MODE banner, whitelist/degraded-mode-list tier UI, and fallback-state connection policy display sourced from this log

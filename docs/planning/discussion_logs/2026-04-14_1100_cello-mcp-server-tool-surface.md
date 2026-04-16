@@ -831,3 +831,4 @@ The documents `cello-design.md` and `end-to-end-flow.md` should be updated to us
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — `cello_send` no longer performs FROST; signs with K_local. FROST ceremonies are handled at session establishment and seal only
 - [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]] — confirms the signal-based trust model: `cello_verify` returns `SignalResult[]` not a score; TrustRank as a single propagated number contradicts this design
 - [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — adds `cello_request_human_input` MCP tool and companion read/write API separate from the agent-facing MCP surface
+- [[frontend|CELLO Frontend Requirements]] — the web portal and mobile app are the human-facing complement to the MCP tool surface; connection, session, notification, and policy views mirror the tool-surface operations defined here

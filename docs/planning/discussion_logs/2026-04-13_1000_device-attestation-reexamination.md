@@ -132,3 +132,4 @@ The trust score formula previously listed WebAuthn with "High" weight in the sam
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — device attestation as Sybil defense (Problem 3); WebAuthn not a Sybil defense mechanism
 - [[design-problems|Design Problems]] — Problem 3 (phone Sybil floor); device attestation is one layer of the defense stack
 - [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — companion device registration uses the same App Attest-bound keypair provisioned during device attestation enrollment
+- [[frontend|CELLO Frontend Requirements]] — device attestation signal display (TPM/App Attest/Play Integrity badge), WebAuthn tethering indicator, and native-app-required messaging sourced from this log

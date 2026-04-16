@@ -186,3 +186,4 @@ This raised the fabricated conversation attack: an attacker creates an internall
 - [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — full design of the meta-Merkle tree / conversation proof ledger concept first identified here; replaces the hash chain with an MMR
 - [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]] — extends the two-party Merkle tree and termination protocol here to N participants; authorship/ordering separation resolves the concurrent message problem
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — `cello_send`, `cello_close_session`, and `cello_abort_session` implement the delivery confirmation and Merkle sealing protocol designed here
+- [[frontend|CELLO Frontend Requirements]] — session close-type display (MUTUAL_SEAL, SEAL_UNILATERAL, EXPIRE, ABORT, REOPEN) and delivery-failure state indicators in the sessions overview sourced from this log

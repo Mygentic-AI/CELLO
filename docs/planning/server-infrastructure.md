@@ -823,3 +823,4 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]]
 - [[open-decisions|Open Decisions]]
 - [[design-problems|Design Problems]]
+- [[frontend|CELLO Frontend Requirements]] — the web portal, mobile app, and desktop app requirements that the server infrastructure must support; the two documents together define the full client-server contract

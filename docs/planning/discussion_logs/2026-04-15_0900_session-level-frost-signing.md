@@ -143,3 +143,5 @@ This reduces the K_server rotation problem from "every message could straddle a 
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — FROST is for session/seal, not per-message signing
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — no schema changes required; signing mechanism is above the persistence layer
 - [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] — session-level FROST is the prerequisite that makes rotation tractable; this log is the direct follow-on resolving Problem 9
+- [[frontend|CELLO Frontend Requirements]] — session establishment and seal indicators in the sessions view; FROST ceremony points are the only two moments requiring directory co-signing, shaping the loading/confirmation UX
+- [[server-infrastructure|CELLO Server Infrastructure Requirements]] — FROST ceremony points (session establishment and seal) are the only server co-signing operations; this log's scope reduction directly shapes the server signing infrastructure requirements

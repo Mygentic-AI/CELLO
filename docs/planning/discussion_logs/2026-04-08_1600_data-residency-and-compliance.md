@@ -114,3 +114,4 @@ This mirrors how the real world works: you can close your bank account, but the 
 - [[design-problems|Design Problems]] — Problem 6 (GDPR vs. append-only log) and Problem 7 (home node deanonymization)
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — companion insight: directory stores hashes, never personal data; simplifies GDPR further
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — tombstone types and what "account deletion" means at the protocol level
+- [[frontend|CELLO Frontend Requirements]] — GDPR/data residency UI (home node jurisdiction display, data classification view, consent log, bio/trust-score erasure with tombstone, blockchain consent warning) sourced from this log

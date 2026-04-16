@@ -140,3 +140,5 @@ Remaining specification work (not hard design problems): the exact format of the
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — K_server_X shares stored in the node database; initial_fallback_pubkey_hash is the K_local registration record
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — K_local rotation is closely related to the compromise recovery flow; tombstone triggers K_server_X invalidation
 - [[2026-04-08_1700_node-architecture-and-replication|Node Architecture and Replication]] — proactive share refresh operates across the same node infrastructure described there
+- [[frontend|CELLO Frontend Requirements]] — K_local rotation prompt UI, K_LOCAL_DEGRADED_MODE banner, and whitelist/degraded-mode-list configuration panel sourced from this log
+- [[server-infrastructure|CELLO Server Infrastructure Requirements]] — per-agent K_server_X rotation, proactive share refresh, and dual-meaning KEY_ROTATION_RECOMMENDED resolution are server-side infrastructure concerns specified here

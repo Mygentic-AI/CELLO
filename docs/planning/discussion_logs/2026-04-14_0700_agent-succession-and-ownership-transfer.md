@@ -237,3 +237,4 @@ succession_events                              append-only, directory
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — the four signal classes referenced in the transfer table; why Class 1 and Class 2 signals are non-transferable (they are bound to a specific human, not to the agent)
 - [[cello-design|CELLO Design Document]] — Step 9 (compromise detection) and Step 10 (dispute resolution); succession adds a lifecycle event distinct from compromise
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — §8 recovery section notes Problem 5 (succession) as unaddressed; this log resolves it
+- [[frontend|CELLO Frontend Requirements]] — succession management UI (designate successor, dead-man's switch, claim filing, 7–14 day announcement counter, cancellation) sourced from this log
