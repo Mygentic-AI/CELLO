@@ -855,3 +855,4 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 - [[design-problems|Design Problems]]
 - [[frontend|CELLO Frontend Requirements]] — the web portal, mobile app, and desktop app requirements that the server infrastructure must support; the two documents together define the full client-server contract
 - [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — designs the companion device P2P connection that the directory must facilitate; introduces a new connection type, new notification type, and companion device key registry
+- [[agent-client|CELLO Agent Client Requirements]] — the client-side counterpart to this document; the client and directory together implement the full protocol; shared conflicts (C-1, C-3, C-4, C-5, C-6, C-7) are cross-referenced throughout both documents

@@ -145,3 +145,4 @@ This reduces the K_server rotation problem from "every message could straddle a 
 - [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] — session-level FROST is the prerequisite that makes rotation tractable; this log is the direct follow-on resolving Problem 9
 - [[frontend|CELLO Frontend Requirements]] — session establishment and seal indicators in the sessions view; FROST ceremony points are the only two moments requiring directory co-signing, shaping the loading/confirmation UX
 - [[server-infrastructure|CELLO Server Infrastructure Requirements]] — FROST ceremony points (session establishment and seal) are the only server co-signing operations; this log's scope reduction directly shapes the server signing infrastructure requirements
+- [[agent-client|CELLO Agent Client Requirements]] — Part 4 implements the session-level signing model: K_local per-message, FROST at establishment and seal only; Part 2 covers the FROST canary at session establishment

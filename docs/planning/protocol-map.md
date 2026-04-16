@@ -254,3 +254,4 @@ All 12 design problems are closed. All 12 open decisions are resolved. The proto
 - [[day-0-agent-driven-development-plan|Day-0 Development Plan]]
 - [[frontend|CELLO Frontend Requirements]] — complete requirements for portal, mobile app, and desktop app, with all conflicts and gaps identified
 - [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — companion device P2P connection, human injection, and local persistence model
+- [[agent-client|CELLO Agent Client Requirements]] — complete requirements for the locally-running CELLO client: identity and key management, P2P transport, Merkle operations, prompt injection defense, connection management, trust data custody, persistence, companion device API, and MCP tool surface

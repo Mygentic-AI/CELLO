@@ -310,3 +310,4 @@ Each mechanism in the transport layer has been traced to known, production-ready
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — FROST is for session/seal, not per-message signing; the stable identity described here uses K_local for individual messages
 - [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — reuses libp2p P2P infrastructure for companion device connections; same hole-punching and NAT traversal serves both agent-to-agent and owner-to-client connections
 - [[server-infrastructure|CELLO Server Infrastructure Requirements]] — the libp2p transport layer, dual-path hash relay, and persistent WebSocket infrastructure designed here underpin the server connectivity requirements
+- [[agent-client|CELLO Agent Client Requirements]] — Part 3 implements the full transport stack: ephemeral Peer IDs, three-layer NAT traversal, signaling flow, dual-path dispatch, and companion device P2P reuse

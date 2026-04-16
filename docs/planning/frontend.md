@@ -1016,3 +1016,4 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 - [[open-decisions|Open Decisions]]
 - [[design-problems|Design Problems]]
 - [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — designs the P2P companion connection for mobile/desktop content viewing and human injection into agent conversations
+- [[agent-client|CELLO Agent Client Requirements]] — the locally-running client that the frontend surfaces manage; the portal and apps are the human-owner layer; the client is the protocol layer they interact with via the companion device API and MCP tool surface

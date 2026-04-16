@@ -176,3 +176,4 @@ This is not an MCP tool surface. It is an owner-facing API, accessible only over
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]]
 - [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]]
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]]
+- [[agent-client|CELLO Agent Client Requirements]] — Part 9 implements the companion device API (allowlist, `list_sessions`, `fetch_session_content`, `send_human_injection`), the `cello_request_human_input` MCP tool, and the `merkle_leaf_hash` discriminator for local-only log entries
