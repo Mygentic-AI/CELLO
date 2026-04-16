@@ -991,7 +991,7 @@ The client implements the complete notification type registry. Types are enumera
 
 | Type | Source | Description |
 |---|---|---|
-| `connection_request` | Directory | Incoming connection request — trust profile, greeting (after Layer 1), scan_result, via_alias? |
+| `connection_request` | Directory | Incoming connection request — trust profile, greeting (Layer 1 sanitized before queuing — no unsanitized user content reaches the agent), scan_result, via_alias? Agent may call `cello_scan` on greeting before accepting. |
 | `connection_accepted` | Directory | An outbound request the agent sent was accepted |
 | `connection_declined` | Directory | An outbound request was declined |
 | `connection_escalation_resolved` | Client | Human escalation resolved (accepted / declined / timed out) |
@@ -1065,6 +1065,8 @@ The client's behavior is identical across deployment models. The calling pattern
 **Discovery:** `cello_search` queries the directory's BM25 + vector similarity + tag/filter stack; requires an active authenticated session. `cello_create_listing` writes to the directory's `directory_listings` table; the client signs the listing creation.
 
 **Connection Management:** `cello_accept_connection` and `cello_decline_connection` are normally called automatically by the policy evaluation pipeline; the agent calls them explicitly for escalated cases where the human owner has responded. `cello_initiate_connection` accepts target by agent_id, handle, or alias URI — the client resolves the alias to an agent_id at connection time.
+
+**`connection_request` event routing (AC-64 resolved):** Incoming connection requests surface exclusively via `cello_poll_notifications`, never via `cello_receive`. The `connection_request` notification payload includes the requester's trust signals and the greeting text — but the greeting has already passed through the Layer 1 deterministic sanitization pipeline before the event is queued. The agent therefore sees a sanitized greeting and can evaluate it before deciding to accept. If the agent wants deeper assurance, it calls `cello_scan` on the greeting text before calling `cello_accept_connection` — this is the recommended invocation point for Layer 2 and is explicitly optional. `cello_receive` is session messages only: it is not called until after acceptance, and the greeting is not re-delivered through it. This separation preserves the security invariant: no unsanitized user-generated content ever reaches the agent through either tool.
 
 **Policy & Configuration:** `cello_manage_policy` reads and writes the `SignalRequirementPolicy` — the client validates that the policy is expressed as named signal requirements, never as numeric thresholds. `cello_configure` updates `ServerConfig` including escalation channels, scan sensitivity, P2P bootstrap nodes, and degraded mode behavior.
 
@@ -1310,7 +1312,7 @@ The client's behavior on receiving a K_server revocation event is directly contr
 | AC-61 | Notifications | Inbound notification filter stack absent: three-layer receiver-side filter (global type rules, per-sender overrides, whitelist/blacklist precedence) not described. This must be LLM-free to prevent compute DoS |
 | AC-62 | Notifications | Agent-to-agent notification types (`introduction`, `order-update`, `alert`, `promotional`) absent from the notification type registry. These are the most common application-layer types per notification-message-type.md |
 | AC-63 | Notifications | Outbound notification signing path not described. Fire-and-forget notifications are not session messages — they produce a single-entry directory record, not a Merkle leaf. The signing and hash submission path for this structure is absent |
-| AC-64 | Notifications | `connection_request` event surface ambiguity: attributed to both `cello_receive` (Part 11 notes, alias design log) and `cello_poll_notifications` (Part 10 registry). These are incompatible assignments; agent polling loop depends on knowing which tool surfaces which event |
+| AC-64 | Notifications | ~~Resolved~~ — `connection_request` surfaces via `cello_poll_notifications` only. Greeting is included but Layer 1 sanitized before queuing. Agent evaluates greeting + trust signals, optionally calls `cello_scan`, then accepts/declines. `cello_receive` is session messages only; greeting is not re-delivered. |
 | AC-65 | Notifications | `cello_retire_alias` behavior with in-flight connection requests not specified. Source states: accepted connections complete; unacted requests are rejected on alias retirement. This behavior belongs in the Part 11 implementation note for `cello_retire_alias` |
 | AC-66 | Notifications | Alias-scoped policy variants not described in `cello_manage_policy` implementation note. Alias policies are named variants scoped to one alias, distinct from the global policy. The tool's Part 11 note is incomplete |
 | AC-67 | Notifications | `list_sessions()` pagination/retention window unspecified. On long-running agents, returning full session history will violate the "always loads quickly" guarantee. Neither a window nor pagination is defined |
