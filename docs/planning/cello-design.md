@@ -1370,6 +1370,9 @@ The right solution may differ per target platform. **This requires platform rese
 
 ## Related Documents
 
+### Protocol Map
+- [[protocol-map|CELLO Protocol Map]] — top-level orientation document; start here to understand the full protocol at summary level before diving into this document or the end-to-end flow
+
 ### Core Docs
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — comprehensive synthesis of all design decisions and discussion logs into one coherent narrative
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — the 6-layer scanning pipeline referenced in Step 8
