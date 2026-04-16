@@ -21,7 +21,6 @@ Build a mental map grouped by `type`:
 - `design` — the stable architecture documents
 - `discussion` — what's been explored and decided, in chronological order
 - `decision` — resolved questions (open-decisions.md)
-- `review` — adversarial findings (design-problems.md, 00-synthesis.md)
 - `plan` — implementation approach
 
 Note the `topics` on recent discussion logs — these show where thinking is active.
