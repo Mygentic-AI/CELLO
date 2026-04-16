@@ -1055,10 +1055,11 @@ The following names are canonical and supersede inconsistencies in earlier docum
 **AC-C1: Bot vs. portal boundary for registration**
 The client's registration path depends on whether registration always begins with the WhatsApp/Telegram bot or whether a portal-only path exists. See server infrastructure Conflict C-1 and frontend Conflict FC-1. Until resolved, the client cannot implement a definitive registration flow.
 
-**AC-C2: Who computes `prev_root` in Merkle leaf**
+**AC-C2: Who computes `prev_root` in Merkle leaf** *(three-way conflict — NOT RESOLVED)*
 - Earlier design (2026-04-08): Sender includes `prev_root` in the signed leaf.
-- Later design (2026-04-13, multi-party): Sender signs only the authorship proof; directory appends `prev_root`.
-- Resolution: The 2026-04-13 design supersedes. The client must not compute or include `prev_root` in the signed leaf.
+- Middle design (2026-04-13, multi-party): Sender signs only the authorship proof; directory appends `prev_root`.
+- Later design (2026-04-15, session-level FROST signing): Sender-computed `prev_root` reinstated — the log explicitly states "A builds a signed Merkle leaf containing: hash(message), prev_root (committing to all previous messages), and A's K_local signature over the leaf."
+- The prior resolution (2026-04-13 supersedes) is now contradicted by the 2026-04-15 document. Requires explicit decision. See also [GAP AC-21] (genesis `prev_root` initialization value).
 
 **AC-C3: Merkle leaf prefix collision**
 RFC 6962 internal nodes use prefix `0x01`. §6.6 of end-to-end-flow assigns prefix `0x01` to control leaves (CLOSE, SEAL, ABORT, etc.). These are incompatible. The client cannot implement the Merkle tree correctly until this is resolved. See server infrastructure Conflict C-3.
@@ -1075,6 +1076,31 @@ Whether the two escalation channels are parallel redundant paths (both fire) or 
 - §8.3: Existing conversations signed with K_local alone remain valid after "Not Me" K_server revocation.
 - §8.4: All active sessions receive SEAL-UNILATERAL with tombstone reason code on any tombstone.
 The client's behavior on receiving a K_server revocation event is directly contradicted across two sections. Decision required before the client can implement the "Not Me" response path. See server infrastructure Conflict C-5.
+
+**AC-C7: Leaf inner authorship proof vs. outer directory leaf — two separate structures**
+- Part 4 uses "Merkle leaf" to refer both to the sender's inner signed payload (content_hash, sender_pubkey, conversation_id, last_seen_seq, timestamp) and to the outer directory-constructed leaf (sequence_number, sender_pubkey, message_content_hash, sender_signature, prev_root) per multi-party design §4.
+- These are two distinct data structures. The document conflates them throughout (cross-cutting message flow, leaf format specification). Implementors cannot construct the correct leaf format without a clear separation between what the sender signs and what the directory hashes.
+- Requires explicit two-structure specification before implementation. See multi-party-conversation-design.md §4.
+
+**AC-C8: Escalation resolution routing — client callback vs. home node proxy**
+- agent-client.md Part 6, step 5: "The channel callback triggers `cello_accept_connection` or `cello_decline_connection`" — the callback routes directly to the client.
+- frontend.md cross-surface escalation flow, step 7: "The decision is submitted to the home node, which calls `cello_accept_connection` or `cello_decline_connection`" — the home node is an intermediary.
+- These are architecturally incompatible. The CELLO client is on the agent operator's private hardware; a home-node-to-client call is unusual and not described elsewhere. Decision required.
+
+**AC-C9: Directory role during connection request relay — relay vs. verify-and-vouch**
+- agent-client.md Part 6: "The directory relays connection requests without re-signing."
+- connection-request-flow-and-trust-relay.md: The directory verifies submitted trust scores against its held hashes before forwarding — "it is not merely relaying, it is vouching that the data is authentic."
+- Whether the receiver's Merkle proof check (pipeline step 2) is redundant given directory pre-verification, or essential because the directory is untrusted, needs explicit statement.
+
+**AC-C10: Companion device identity verification — client vs. directory**
+- agent-client.md Part 9: "The directory does not verify the companion device keypair — the client does that directly."
+- server-infrastructure.md: "The directory must maintain a registry of authorized companion device public keys per agent."
+- Who performs the verification (client allowlist vs. directory registry) is contradicted. Decision required.
+
+**AC-C11: "Not Me" revocation from desktop tray — unhoused capability**
+- frontend.md Surface 4: Desktop app system tray includes "Not Me / Emergency" shortcut, routed through the companion connection.
+- agent-client.md Part 9: The companion device API exposes only `list_sessions()`, `fetch_session_content()`, and `send_human_injection()` — no revocation endpoint.
+- Emergency revocation from the desktop companion has no path in the companion API. Either the API needs a revocation endpoint, or the desktop tray routes via a different channel. Decision required.
 
 ---
 
@@ -1100,6 +1126,72 @@ The client's behavior on receiving a K_server revocation event is directly contr
 | AC-16 | Notifications | Whether notifications route through directory or can go peer-to-peer is explicitly unresolved |
 | AC-17 | Notifications | Escalation channel callback mechanism (how owner's WhatsApp/Telegram/Slack response routes back to client to trigger accept/decline) not specified |
 | AC-18 | Status | `cello_status` does not distinguish between "directory temporarily unreachable" and "agent locked post-Not-Me revocation"; these are meaningfully different states |
+| AC-19 | Registration | Incubation period (7-day, 3 outbound connections/day for phone-only agents) not mentioned anywhere; client must track incubation state locally and enforce outbound rate limits |
+| AC-20 | Registration | Email verification is a mandatory registration requirement (per server-infrastructure) but is entirely absent from the client — not in registration flow, trust signal types, data ownership map, or storage tiers |
+| AC-21 | Merkle | Genesis `prev_root` initialization value not specified. open-decisions.md Decision 7 defines it as `hash(agent_A_pubkey \|\| agent_B_pubkey \|\| session_id \|\| timestamp)`. Without this, independent implementations diverge at the first message of every conversation. Blocked by AC-C2 resolution |
+| AC-22 | Merkle | `scan_result` is listed in the data ownership map as part of the signed Merkle leaf, but the leaf construction spec in Part 4 does not include it as a field. libp2p-dht-and-peer-connectivity.md explicitly includes `scan_result` in the leaf format |
+| AC-23 | Merkle | Degraded-mode leaf construction unspecified: `last_seen_seq` is defined as "the last sequence number received from the directory" — which is unavailable when the directory is unreachable. How the client constructs valid leaves during degraded operation is not specified |
+| AC-24 | Merkle | Degraded-mode session flag ("flagged in Merkle leaf") has no specified leaf field. The Merkle leaf structure in Part 4 has no `degraded_mode_session` field or equivalent |
+| AC-25 | Merkle | MMR inclusion proof verification not described. Client must implement the five-step inclusion proof algorithm (recompute leaf → walk sibling hashes → reconstruct checkpoint → verify federation signatures → accept/reject) for fabricated conversation defense. Distinct from per-message cross-check |
+| AC-26 | Merkle | `mmr_peak` return from `cello_close_session` is inconsistent with batched checkpoint MMR construction: seals accumulate in staging between checkpoints, so the peak at seal time is from the last checkpoint, not this conversation. The meaning of `mmr_peak` at return time needs clarification |
+| AC-27 | Merkle | ABORT and EXPIRE conversations must also enter the MMR per meta-merkle-tree-design.md (all INSERT into `conversation_seals` triggers MMR append). Whether `cello_close_session` participates in MMR insertion for ABORT and EXPIRE closes is not specified |
+| AC-28 | Merkle | Multi-party tree anchor formula not described. Source replaces two-party anchor with `SHA-256(sorted_participant_pubkeys \|\| session_id \|\| timestamp)`. Mid-conversation participant joins trigger a re-anchor control leaf. Neither the anchor formula nor the re-anchor control leaf type appears in the control leaves table |
+| AC-29 | Merkle | LLM receive window for group rooms (silence threshold, max accumulation window, direct-address override; controlled by `room_config` fields `silence_threshold_ms` and `max_accumulation_ms`) is entirely absent. This is a client-side mechanism the agent uses to participate in group rooms |
+| AC-30 | Merkle | Serialized-mode group room dispatch: dual-path simultaneous dispatch does not apply. In serialized mode, the client submits to the directory send queue; there is no P2P direct send before sequencing. A different dispatch path per ordering mode is required |
+| AC-31 | Merkle | Three-tier group message content delivery topology not described: full mesh P2P (2–5 participants), GossipSub (5–15+), encrypted relay fan-out (any size). Client must select topology based on participant count |
+| AC-32 | Merkle | Per-participant attestation table for multi-party seals not described. Source replaces `party_a_attestation`/`party_b_attestation` with a `conversation_attestations` table and adds `DELIVERED` (transport ACK received, no output) and `ABSENT` (participant went offline/removed) states. Client must submit per-participant rows at seal time |
+| AC-33 | Merkle | `DELIVERED`→`ABSENT` transition timeout unspecified for group room participants. AC-6 covers bilateral inactivity timeout only |
+| AC-34 | Merkle | Control message priority in serialized mode: whether ABORT or FLAGGED control leaves can bypass the send queue is an open design question not surfaced in the gaps list |
+| AC-35 | Merkle | Delivery Case B: hash-arrives-first-then-message handling path is absent. The delivery failure table only covers message-arrives-first (Case C) for the asymmetric case. session-level-frost-signing.md identifies directory-first arrival as a common case requiring distinct handling |
+| AC-36 | Merkle | Post-session message arrival (delivery Case B4): three-way choice (accept-for-record-only / discard / accept-and-flag) is unresolved and not listed as a gap |
+| AC-37 | Merkle | Resend vs. replay attack disambiguation not addressed. When the client retries delivery, the recipient needs a mechanism to distinguish retransmission from injected replay. Not carried forward as a gap |
+| AC-38 | Merkle | `cello_acknowledge_receipt` tool missing from the 34-tool MCP surface. Source identifies this as required for explicit causal commitment in high-stakes multi-party scenarios (commerce use case) |
+| AC-39 | Merkle | Bilateral seal protocol incomplete: bilateral seal requires both parties to sign the final root AND exchange attestations per session-level-frost-signing.md. The attestation exchange step when the directory is unavailable is not described |
+| AC-40 | Crypto | ML-DSA signature scheme not mentioned. quantum-resistance-design.md specifies ML-DSA (not Ed25519) for all non-threshold signatures: endorsements, attestations, directory certificates, pseudonym bindings, connection package items. Client must implement two verification paths |
+| AC-41 | Crypto | `IThresholdSigner` abstraction interface not required. quantum-resistance-design.md mandates this interface (`FrostThresholdSigner` → `ThresholdMlDsaSigner`) as the mechanism for the quantum migration path. `KeyProvider` covers private key operations but not threshold signing |
+| AC-42 | Crypto | Device attestation scope misframed in Deployment Contexts table. Attestation is about the owner's personal devices (iPhone, MacBook, TPM hardware), not the deployment infrastructure. A cloud VM agent whose owner has linked their iPhone carries full attestation. The table implies VPS agents cannot have device attestation, which is wrong per device-attestation-reexamination.md |
+| AC-43 | Crypto | WebAuthn not distinguished from device attestation in registration flow step 5. WebAuthn is a tethering/account-security signal; it is not a device sacrifice mechanism and does not produce stable device identifiers for Sybil deduplication. The distinction must be explicit (see device-attestation-reexamination.md) |
+| AC-44 | Crypto | Mid-session compromise canary gap not stated: the canary fires at session establishment boundaries only, not per message. A K_local extraction during an active session is not detected until the next session start. This is an operational security gap the document implies is covered but is not |
+| AC-45 | Crypto | npm pinned-version installation requirement missing. open-decisions.md Decision 11 specifies the install command must use a pinned version (`npx @cello/mcp-server@1.2.3`) not latest, to prevent compromised npm publish from affecting all agents on restart |
+| AC-46 | Transport | AutoNAT step absent from session establishment flow. libp2p-dht-and-peer-connectivity.md specifies each client runs AutoNAT ("can you reach me at this address?") before signaling candidate addresses to the directory. Without AutoNAT, reported external addresses are wrong and hole-punch success rate degrades |
+| AC-47 | Transport | Fire-and-forget redundant hash delivery to backup nodes (2–3 lowest-latency) is described as conditional on "high load" in Part 3. node-architecture-and-replication.md describes it as always-on normal operation at session establishment. The behavioral specification conflicts |
+| AC-48 | Transport | Node load indicator in ping response not described. node-architecture-and-replication.md specifies ping packets return a single-byte load indicator used for load-aware node routing. agent-client.md describes RTT-only routing |
+| AC-49 | Transport | Home node deanonymization risk not stated. The directory knows the stable-identity-to-ephemeral-Peer-ID mapping because it handles signaling. agent-client.md's ephemeral Peer ID privacy description implies stronger privacy than the design provides |
+| AC-50 | Transport | Signaling behavior with respect to multi-node topology unspecified: if signaling goes only to the primary node, a primary failure mid-establishment leaves backup nodes unaware of ephemeral Peer IDs |
+| AC-51 | Transport | Client behavior when all three bootstrap levels fail is unspecified |
+| AC-52 | Transport | Relay node hash relay role creates a three-path architecture not reflected in agent-client.md's dual-path model. server-infrastructure.md relay node section describes relay nodes forwarding signed hash payloads to receiving agents during established sessions. The client's dual-path model must account for this third path |
+| AC-53 | Connections | Gate pyramid message-level gate (Gate 2: valid signature, rate limit per sender, message size limit, notification type policy check) absent from client requirements. This is a client-side DDoS/flood defense for open institutions |
+| AC-54 | Connections | Connection staking entirely absent from Part 6. Gate 1 of the gate pyramid is a stake requirement check. Client must enforce stake policy at the connection gate, check escrow balance, and trigger escrow release on CLEAN close. None of this is in Part 6 |
+| AC-55 | Connections | PSI (Private Set Intersection) completely absent from client requirements — no mention, no gap marker, not in related documents. Client is an active participant in the OPRF blinding step for endorser intersection. Phase 2 but needs a design stub and related documents pointer |
+| AC-56 | Connections | Negotiation round abuse logging: the one-round negotiation request should be logged as a non-repudiable event. Requesting-then-rejecting patterns feed into trust scoring per connection-request-flow-and-trust-relay.md open question #4. Not currently a requirement |
+| AC-57 | Connections | Mandatory signal partial disclosure: what exactly constitutes "including" a mandatory signal is not specified. The source document tentatively concludes all-or-nothing, but the client enforcement logic depends on this definition |
+| AC-58 | Connections | Social account binding lock: once a GitHub/LinkedIn account is bound, it cannot be rebound for 12 months. This is a client-side enforcement obligation per sybil-floor-and-trust-farming-defenses.md. Not mentioned in Part 7 |
+| AC-59 | Connections | Endorsement dual-dispatch: when issuing an endorsement, the client sends the signed record to both the endorsed agent (P2P) and the directory (hash registration) simultaneously. This dispatch architecture is not described for when AC-12 tools are built |
+| AC-60 | Notifications | Fire-and-forget notification outbound gate: client must enforce prior-conversation requirement before sending a notification. No MCP tool for outbound notification send is defined (no `cello_send_notification` or equivalent) |
+| AC-61 | Notifications | Inbound notification filter stack absent: three-layer receiver-side filter (global type rules, per-sender overrides, whitelist/blacklist precedence) not described. This must be LLM-free to prevent compute DoS |
+| AC-62 | Notifications | Agent-to-agent notification types (`introduction`, `order-update`, `alert`, `promotional`) absent from the notification type registry. These are the most common application-layer types per notification-message-type.md |
+| AC-63 | Notifications | Outbound notification signing path not described. Fire-and-forget notifications are not session messages — they produce a single-entry directory record, not a Merkle leaf. The signing and hash submission path for this structure is absent |
+| AC-64 | Notifications | `connection_request` event surface ambiguity: attributed to both `cello_receive` (Part 11 notes, alias design log) and `cello_poll_notifications` (Part 10 registry). These are incompatible assignments; agent polling loop depends on knowing which tool surfaces which event |
+| AC-65 | Notifications | `cello_retire_alias` behavior with in-flight connection requests not specified. Source states: accepted connections complete; unacted requests are rejected on alias retirement. This behavior belongs in the Part 11 implementation note for `cello_retire_alias` |
+| AC-66 | Notifications | Alias-scoped policy variants not described in `cello_manage_policy` implementation note. Alias policies are named variants scoped to one alias, distinct from the global policy. The tool's Part 11 note is incomplete |
+| AC-67 | Notifications | `list_sessions()` pagination/retention window unspecified. On long-running agents, returning full session history will violate the "always loads quickly" guarantee. Neither a window nor pagination is defined |
+| AC-68 | Notifications | Tamper detection notification type missing. frontend.md activity log requires a distinct event type for hash–message mismatch (Case A2 tamper detection). `security_block` is defined as Layer 1 only and does not cover message-level tamper events |
+| AC-69 | Notifications | No tamper detection notification type for `trust_event` level mismatch. Case A2 delivery failure fires `security_block` via `cello_receive` per Part 4, but `security_block` in the registry is labeled Layer 1 only — the label contradicts the Part 4 description |
+| AC-70 | Persistence | Client-side hash chain on INSERT not required. persistence-layer-design.md specifies a running `chain_entry = SHA-256(record_contents \|\| previous_chain_hash)` on all protected tables. agent-client.md's append-only enforcement uses application convention only — weaker than the cryptographic chain the source requires |
+| AC-71 | Persistence | Social verification freshness records not in persistence tier. persistence-layer-design.md defines `social_verification_freshness_checks` table (checked_at, check_result: FRESH/STALE/FAILED). Client holds the only copy; directory holds only the hash. Without freshness records, the oracle pattern breaks for freshness signals |
+| AC-72 | Persistence | Companion device allowlist schema not defined anywhere. The allowlist is a security boundary but has no documented schema (device name, registered_at, revocation mechanism, binding proof reference) in any requirements document |
+| AC-73 | Persistence | Push notification channel independence from P2P content channel not stated in client offline behavior section. When the CELLO client is unreachable, APNs/FCM push notifications (including "Not Me" emergency) continue working. The current framing implies all companion communication fails when the client is offline |
+| AC-74 | Persistence | `cello_request_human_input` routing when both companion and WhatsApp/Telegram are configured: does the client send a knock only to the companion device, or also to the escalation channel? If the companion is unreachable and no WhatsApp/Telegram fallback fires, the agent's input request is silently lost |
+| AC-75 | Persistence | Companion app install while CELLO client is offline: keypair registration ceremony requires the client to be reachable to update the allowlist. This failure mode is unaddressed |
+| AC-76 | Persistence | Discovery search results (`cello_search`) not listed as a Layer 1 fire surface. Bio text and capability tags are user-generated strings that will be presented to the agent as actionable text |
+| AC-77 | Recovery | Three tombstone types (VOLUNTARY, COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED) not specified in client. Client must set the correct type on initiation and react differently to each incoming type |
+| AC-78 | Recovery | Voucher accountability enforcement absent: client has no mechanism to check its own vouching lockout status before signing a `RECOVERY_ATTESTATION_REQUESTED`, and no behavior for refusing to sign while locked out |
+| AC-79 | Recovery | Client post-recovery state transition unspecified: what the client does after its own recovery completes (clear locked state, present recovery record in `cello_status`, reconnect to prior contacts at reduced trust) is not described |
+| AC-80 | Recovery | Compromise window presentation and owner contest flow absent: client has no mechanism to receive, display, or contest the proposed compromise window when a tombstone is filed |
+| AC-81 | Recovery | Succession package creation (encrypt seed phrase to successor's identity key, upload blob to directory) and decryption (successor uses own identity key to decrypt, then performs identity migration) are client-side crypto operations with no coverage. The Part 8 backup section and related documents mention succession only by reference |
+| AC-82 | Recovery | Voluntary transfer announcement period client state machine absent: client must notify connected agents, maintain cancellable state, and execute or abort transfer on expiry. No client behavior is specified for the 7–14 day announcement period |
+| AC-83 | Recovery | Asymmetric whitelist knowledge not stated as an explicit prohibition. The client must never store or cache information about which agents have it on their whitelists. Easy to accidentally violate; must be an explicit requirement |
+| AC-84 | Recovery | Arbitration submission flow has no MCP tool. `cello_report` submits a trust incident report; there is no tool for submitting a FLAGGED session transcript to threshold arbitration, checking arbitration status, or receiving an arbitration verdict notification type |
 
 ---
 
