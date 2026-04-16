@@ -246,6 +246,7 @@ All 12 design problems are closed. All 12 open decisions are resolved. The proto
 
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]]
 - [[cello-design|CELLO Design Document]]
+- [[server-infrastructure|Server Infrastructure Requirements]] — complete requirements for signup portal, directory nodes, and relay nodes, with all conflicts and gaps identified
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]]
 - [[open-decisions|Open Decisions]]
 - [[design-problems|Design Problems]]
