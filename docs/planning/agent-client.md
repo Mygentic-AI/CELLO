@@ -1027,7 +1027,7 @@ The owner's response via any configured channel must route back to the client an
 
 ## Part 11: MCP Tool Surface
 
-The client exposes 34 tools (the 33 from the canonical tool surface, plus `cello_request_human_input`). The full tool specifications — parameters, return types, and usage guidance — are in [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]]. This section covers the client's implementation responsibilities for each group.
+The client exposes 35 tools (the 33 from the canonical tool surface, plus `cello_request_human_input` and `cello_acknowledge_receipt`). The full tool specifications — parameters, return types, and usage guidance — are in [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]]. This section covers the client's implementation responsibilities for each group.
 
 ### Deployment models
 
@@ -1041,7 +1041,7 @@ The client's behavior is identical across deployment models. The calling pattern
 
 | Group | Tools | Count |
 |---|---|---|
-| Session / Conversation | `cello_send`, `cello_receive`, `cello_initiate_session`, `cello_close_session`, `cello_abort_session`, `cello_resume_session`, `cello_list_sessions` | 7 |
+| Session / Conversation | `cello_send`, `cello_receive`, `cello_initiate_session`, `cello_close_session`, `cello_abort_session`, `cello_resume_session`, `cello_list_sessions`, `cello_acknowledge_receipt` | 8 |
 | Security | `cello_scan`, `cello_report`, `cello_redact`, `cello_block_agent` | 4 |
 | Trust / Identity | `cello_verify`, `cello_get_trust_profile`, `cello_check_own_signals` | 3 |
 | Discovery & Listings | `cello_search`, `cello_create_listing`, `cello_update_listing`, `cello_renew_listing`, `cello_retire_listing` | 5 |
@@ -1052,11 +1052,11 @@ The client's behavior is identical across deployment models. The calling pattern
 | Status | `cello_status` | 1 |
 | Contact Aliases | `cello_create_alias`, `cello_list_aliases`, `cello_retire_alias` | 3 |
 | Human Input | `cello_request_human_input` | 1 |
-| **Total** | | **34** |
+| **Total** | | **35** |
 
 ### Key client-side implementation notes per group
 
-**Session / Conversation:** `cello_send` dispatches dual-path simultaneously (P2P + directory hash relay); applies Layer 3 outbound gate and Layer 4 redaction before delivery; the `leaf_hash` return value is the Merkle leaf hash for the sent message. `cello_receive` applies Layer 1 sanitization to all incoming text before returning content; returns a `security_block` sentinel if Layer 1 fires rather than passing unsanitized text. `cello_close_session` participates in the FROST seal ceremony; returns `sealed_root_hash` and `mmr_peak`.
+**Session / Conversation:** `cello_send` dispatches dual-path simultaneously (P2P + directory hash relay); applies Layer 3 outbound gate and Layer 4 redaction before delivery; the `leaf_hash` return value is the Merkle leaf hash for the sent message. `cello_receive` applies Layer 1 sanitization to all incoming text before returning content; returns a `security_block` sentinel if Layer 1 fires rather than passing unsanitized text. `cello_close_session` participates in the FROST seal ceremony; returns `sealed_root_hash` and `mmr_peak`. `cello_acknowledge_receipt` provides explicit causal commitment: the agent calls it with a `leaf_hash` to record that it has processed a specific message and that any subsequent messages from this agent are causally downstream of that receipt. The client writes a signed `RECEIPT` control leaf into the Merkle tree (same construction as other control leaves) and submits the hash to the directory. Designed for high-stakes multi-party and commerce scenarios where implicit ACK via the Merkle chain is insufficient — e.g., an agent must prove it received an offer before it made a counter-offer. Calling `cello_acknowledge_receipt` is always optional; the default implicit ACK behaviour (Merkle chain) remains the norm for all other sessions.
 
 **Security:** `cello_scan` invokes the Layer 2 LLM scanner; the client is responsible for enforcing structured output mode and schema validation. `cello_report` submits a signed trust incident report to the directory; the client signs with K_local before submission.
 
@@ -1284,7 +1284,7 @@ The client's behavior on receiving a K_server revocation event is directly contr
 | AC-35 | Merkle | Delivery Case B: hash-arrives-first-then-message handling path is absent. The delivery failure table only covers message-arrives-first (Case C) for the asymmetric case. session-level-frost-signing.md identifies directory-first arrival as a common case requiring distinct handling |
 | AC-36 | Merkle | ~~Resolved~~ — within `post_seal_grace_seconds` (default 300s, configurable): accept-and-record as `post_seal: true` leaf. After window: auto-REOPEN, deliver as first leaf of new conversation. Post-ABORT arrivals always rejected. |
 | AC-37 | Merkle | Resend vs. replay attack disambiguation not addressed. When the client retries delivery, the recipient needs a mechanism to distinguish retransmission from injected replay. Not carried forward as a gap |
-| AC-38 | Merkle | `cello_acknowledge_receipt` tool missing from the 34-tool MCP surface. Source identifies this as required for explicit causal commitment in high-stakes multi-party scenarios (commerce use case) |
+| AC-38 | Merkle | ~~Resolved~~ — `cello_acknowledge_receipt` added as tool 35. Writes a signed `RECEIPT` control leaf; optional explicit causal commitment for commerce/multi-party scenarios. Implicit Merkle-chain ACK remains the default. |
 | AC-39 | Merkle | Bilateral seal protocol incomplete: bilateral seal requires both parties to sign the final root AND exchange attestations per session-level-frost-signing.md. The attestation exchange step when the directory is unavailable is not described |
 | AC-40 | Crypto | ML-DSA signature scheme not mentioned. quantum-resistance-design.md specifies ML-DSA (not Ed25519) for all non-threshold signatures: endorsements, attestations, directory certificates, pseudonym bindings, connection package items. Client must implement two verification paths |
 | AC-41 | Crypto | `IThresholdSigner` abstraction interface not required. quantum-resistance-design.md mandates this interface (`FrostThresholdSigner` → `ThresholdMlDsaSigner`) as the mechanism for the quantum migration path. `KeyProvider` covers private key operations but not threshold signing |
