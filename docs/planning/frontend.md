@@ -2,9 +2,9 @@
 name: CELLO Frontend Requirements
 type: design
 date: 2026-04-16
-topics: [identity, trust, WebAuthn, device-attestation, key-management, recovery, notifications, discovery, connection-policy, contact-aliases, compliance, onboarding, session-termination, MCP-tools]
+topics: [identity, trust, WebAuthn, device-attestation, key-management, recovery, notifications, discovery, connection-policy, contact-aliases, compliance, onboarding, session-termination, MCP-tools, multi-party-conversations, escrow, succession, endorsements]
 status: active
-description: Complete requirements for the human-owner frontend surfaces — web portal, mobile app, and desktop app — synthesized from all design documents and discussion logs. Includes all conflicts requiring resolution and all identified gaps.
+description: Complete requirements for the human-owner frontend surfaces — web portal, mobile app, and desktop app — synthesized from all design documents and discussion logs. Audited 2026-04-16 via parallel 10-agent corpus sweep.
 ---
 
 # CELLO Frontend Requirements
@@ -20,8 +20,8 @@ The three frontend surfaces are:
 | Surface | Role | Required from |
 |---|---|---|
 | **Web Portal** | Identity verification, trust enrichment, key management, escalation review, account oversight | Day one |
-| **Mobile App** | Device attestation (Apple ecosystem), push-based escalation, emergency revocation | Phase two |
-| **Desktop App** | Device attestation (Windows/TPM), local MCP server management, system tray presence | Phase three |
+| **Mobile App** | Device attestation (Apple ecosystem / Android), push-based escalation, emergency revocation | Phase two |
+| **Desktop App** | Device attestation (Windows/TPM, macOS Secure Enclave), local MCP server management, system tray presence | Phase three |
 
 The portal communicates with two backend components: the **home node** (for PII-touching operations: WebAuthn credentials, OAuth tokens, K_server_X operations) and the **directory** (for public reads: trust signal hashes, Merkle proofs, discovery). The distinction is critical — the portal must route identity-sensitive calls only to the home node and must never send PII to replicated directory state.
 
@@ -64,7 +64,7 @@ When an agent registers via the WhatsApp/Telegram bot, the human owner receives 
 3. A prominent prompt to designate M-of-N recovery contacts (not a hard gate but difficult to skip — see recovery contact designation below)
 4. An optional prompt to install the mobile app for device attestation and push-based alerts
 
-The portal must make the connection between trust signals and practical outcomes concrete: "agents with WebAuthn can connect to 87% of listed services; phone-only agents can connect to 42%." The exact statistics are not specified and are a product decision, but the concept — showing the owner what their current trust profile opens and closes — is a design requirement.
+The portal must make the connection between trust signals and practical outcomes concrete: the owner must see which connection policy tiers their current trust profile opens and closes. The exact statistics are a product decision and must be derived from real network data — the portal must not display fabricated placeholder numbers.
 
 **[GAP F-3]**: The portal's routing path for a new registration (how does the portal identify that this is a first-time visit vs. a returning owner?) is not specified. The onboarding link from the bot, its format, and its expiry are not specified.
 
@@ -74,7 +74,7 @@ Each trust enrichment flow follows the oracle pattern: portal verifies → produ
 
 **WebAuthn (YubiKey, TouchID, FaceID)**
 
-WebAuthn is an account security signal (phishing-resistant login / tethering), not a Sybil defense. One device can register WebAuthn for many CELLO accounts — this is by design and is not a limitation. The portal must communicate this to the owner so the value proposition (account security, not device sacrifice) is understood.
+WebAuthn is an account security signal (phishing-resistant login / tethering), not a Sybil defense. One device can register WebAuthn for many CELLO accounts — this is by design and is not a limitation. The portal must communicate this distinction to the owner so the value proposition (account security, not device sacrifice) is understood. Specifically, the portal must not label WebAuthn as a "device attestation" type — the `attestation_type` enum is `TPM | PLAY_INTEGRITY | APP_ATTEST` only.
 
 Enrollment flow:
 1. Portal issues a WebAuthn registration challenge
@@ -114,6 +114,17 @@ Device attestation is not available from the web portal. The portal's role here 
 - When the owner visits the trust enrichment section, the portal must clearly explain what device attestation is (Sybil defense; device sacrifice; raises attacker cost to $50–200/device), why it requires a native app, and provide a download link or QR code for the appropriate platform.
 - After the owner installs the native app and completes attestation, the portal should reflect the updated trust profile on the next page load.
 
+### Trust signal taxonomy
+
+The portal must display trust signals using the four-class taxonomy — these must appear as distinct named categories, never collapsed into a single score:
+
+- **Class 1 — Identity proofs**: Two sub-classes that must be visually distinguished: (a) *Account security* (WebAuthn — phishing-resistant login, tethering) and (b) *Device sacrifice* (App Attest / Play Integrity / TPM — Sybil defense, native app required). Phone verification, TOTP, OAuth social proofs also in Class 1.
+- **Class 2 — Network graph signals**: Endorsement count, conductance-based cluster score, counterparty diversity ratio, temporal anomaly flags. All are named signals displayed as present/absent/value — never aggregated into a score.
+- **Class 3 — Track record**: Conversation count, clean-close rate, time on platform.
+- **Class 4 — Economic stake**: Bond status, connection staking level.
+
+The portal must never display or reference TrustRank in any form (not as a score, a seed-distance integer, or a "distance to nearest verified node" label). TrustRank is formally deprecated and was never built. The portal must not display or reference Trust Seeders or any "seed-status" badge — the Trust Seeder role is removed from the protocol.
+
 ### Account management
 
 The portal handles all sensitive account operations, all of which require WebAuthn or TOTP authentication:
@@ -124,10 +135,17 @@ The portal handles all sensitive account operations, all of which require WebAut
 3. Portal sends a key rotation request to the home node, authenticated with the WebAuthn credential
 4. Home node triggers a new K_server_X ceremony across directory nodes
 5. New derived public keys published; old public keys marked expired with timestamp
-6. All agents that cached old keys are notified to refresh via `KEY_ROTATION_RECOMMENDED` notification
+6. Connected agents are notified to refresh their cached key material. Note: this uses a distinct notification type from `KEY_ROTATION_RECOMMENDED` (which is the directory's inbound scheduling nudge to the owner — see **[CONFLICT FC-5]**). **[GAP F-24]**: the exact format and name of the counterparty-facing key refresh notification is deferred in the key rotation design document.
 7. Portal displays confirmation with the new public key fingerprint and the rotation timestamp
 
-Key rotation must be presented to the owner as a routine security operation. The portal should suggest it on the schedule recommended in the protocol (not yet specified — **[GAP F-7]**) and not only after a compromise event.
+Key rotation must be presented to the owner as a routine security operation — not as an emergency. Since the K_server_X rotation is per-agent (not a network-wide event), the portal must not use alarming language about rotation. The portal should prompt rotation on the schedule recommended in the protocol (not yet specified — **[GAP F-7]**) and not only after a compromise event.
+
+Key rotation must happen at a session boundary. If the owner initiates rotation while active sessions exist, the portal must display a grace period indicator showing whether active sessions must be sealed under the old K_server_X before old shares are retired. **[GAP F-24]** covers the unspecified grace period duration.
+
+**[CONFLICT FC-5]**: `KEY_ROTATION_RECOMMENDED` is used with two incompatible meanings across the source corpus:
+- *Definition A* (key-rotation-design.md): the directory's inbound scheduling nudge to the owner-agent, recommending that the owner rotate their own K_local (a scheduled-maintenance alert).
+- *Definition B* (used in this document's earlier key rotation flow): an outbound notification sent to counterparties after a completed rotation, telling them to refresh cached key material.
+These must be distinct notification types. Decision required: name the counterparty-facing key refresh notification (it is not `KEY_ROTATION_RECOMMENDED`).
 
 **Phone number change**
 
@@ -142,26 +160,50 @@ Requires WebAuthn. Adding a new verifier follows the OAuth enrichment flow above
 Requires WebAuthn. Deletion is permanent and irreversible. The portal must present a multi-step confirmation:
 1. Explain what is deleted (home node PII, active public keys, active trust signal entries, bios from live directory index — all wiped or tombstoned)
 2. Explain what survives (sealed conversation Merkle hashes are not deleted; counterparties' records are not affected)
-3. Issue a WebAuthn challenge
-4. Write a signed tombstone to the directory
-5. Wipe the home node PII completely
+3. Explain the GDPR implication: any data voluntarily published to a public blockchain ledger cannot be deleted — this consent is permanent
+4. Issue a WebAuthn challenge
+5. Write a signed tombstone to the directory
+6. Wipe the home node PII completely
 
-**[GAP F-8]**: What happens to pending escrow stakes or bonds at the time of deletion is not specified.
+**[GAP F-8]**: What happens to pending escrow stakes or bonds at the time of deletion is not specified. The escrow model uses two custody paths (DeFi smart contract vs. institutional custodian), each requiring a different instruction to release or return funds before the home node is wiped. The portal cannot complete deletion until that state is resolved.
+
+**Bio and profile management**
+
+The portal allows the owner to compose and update the agent's bio (public-facing, static, visible to directory browsers). Bio updates are rate-limited — the owner can only update once every X hours. **[GAP F-22]**: the value of X is not specified.
+
+The portal must display bio change history with timestamps (recorded in the identity Merkle tree). This history is a trust signal — stability matters.
+
+The portal allows the owner to manage per-recipient greetings: contextual messages used at connection request time. Greetings are not on the public profile; different recipients can receive different greetings. Greetings are rate-limited per recipient. **[GAP F-23]**: greeting rate limits and the maximum number of distinct per-recipient greetings maintainable simultaneously are not specified.
+
+**GDPR and data residency**
+
+The portal must display:
+- The owner's home node jurisdiction (the country in which their PII is stored)
+- A data classification view: which data lives on the home node vs. relay/directory vs. public ledger
+- A GDPR consent record: a log of what the owner has voluntarily published (bio, trust signals, public key registrations) with dates and a mechanism to review and withdraw
+
+The portal must provide a bio removal and trust-score erasure request UI. Deletion produces a tombstone entry — not a silent absence. The portal must display the tombstone state after deletion.
+
+The portal must support home node jurisdiction migration. After migration, the portal must reflect the new jurisdiction.
+
+The portal must surface a permanent-consent warning before any data transitions to a public blockchain ledger, explaining that deletion becomes technically impossible after that point.
 
 ### Activity log and audit view
 
-The portal exposes the owner's view of what their agent has been doing. This is a read-only view — no agent activity is initiated here.
+The portal exposes the owner's view of what their agent has been doing. This is a read-only view — no agent activity is initiated here. The portal reads this data from the home node and directory (via `cello_list_sessions` and `cello_poll_notifications`); it does not store this data independently.
 
 Contents:
-- Sessions opened and sealed: timestamp, counterparty agent ID, session duration, seal status (CLEAN / FLAGGED / PENDING), Merkle root value
-- FROST events: session establishment challenges (pass/fail), seal ceremonies
-- Security events: Layer 1 trigger events (sanitization fired), Layer 2 scan results that were flagged, Layer 3 outbound gate blocks
+- Sessions opened and sealed: timestamp, counterparty agent ID, session duration, seal status, Merkle root value
+- FROST events: session establishment challenges (pass/fail), seal ceremonies. FROST occurs only at session establishment and conversation seal — not per message.
+- Security events: sanitization-layer trigger events, scan results that were flagged, outbound gate blocks
 - Connection request events: received, auto-accepted, auto-declined, escalated to human, pending
 - Endorsement events: endorsements received, endorsements issued, endorsements revoked
 - System events: directory reachability changes, K_local degraded mode entry/exit, key rotation events
 - Anomaly alerts: compromise canary firings, burst activity detections, unusual signing pattern events
+- **Notification events**: tombstone notifications (connected identity tombstoned), trust event notifications (connected agent's trust status changed), recovery event notifications (recovered identity re-entering network), session-close attestation dispute notifications. These come from the formal notification type registry; the event stream must support filtering by type.
+- Delivery failure security events: hash–message mismatch events (tamper detection), hash-without-message events (permanent delivery gap with hash as evidence of intent)
 
-The activity log is the same data surfaced by `cello_list_sessions` and `cello_poll_notifications` via the MCP tool surface, presented for a human reader. The portal does not store this data independently — it reads it from the home node and directory.
+The activity log is the same data surfaced by `cello_list_sessions` and `cello_poll_notifications` via the MCP tool surface, presented for a human reader.
 
 **[GAP F-9]**: The retention period for the activity log is not specified. Is the full audit trail available in perpetuity, or is there a rolling window? The answer has implications for storage at the home node.
 
@@ -173,8 +215,9 @@ The activity log is the same data surfaced by `cello_list_sessions` and `cello_p
 
 When the agent's policy includes a `human_escalation_fallback` flag and an incoming connection request reaches PENDING_ESCALATION state, the portal displays the pending request with:
 - The requester's agent ID and handle
-- The requester's full trust profile as it would appear to the receiving agent (signals present, quality metadata)
+- The requester's full trust profile as it would appear to the receiving agent (named signals with quality metadata — never a numeric score)
 - The greeting text (after Layer 1 sanitization has been applied)
+- The alias context note (if the request came in via a named alias the owner created)
 - The time remaining before auto-decline fires (the `escalation_expires_at` countdown)
 - Accept and Decline actions
 
@@ -186,6 +229,19 @@ The portal is the web-based fallback for escalation decisions. The mobile app is
 
 The portal displays all connections: accepted, declined, pending, and disconnected. Per connection: counterparty identity, connection date, number of sessions, seal statistics, and current status.
 
+**Whitelist and degraded-mode list configuration**
+
+The portal must support two independently configurable agent lists:
+
+- **Whitelist** — agents that receive preferential treatment during normal directory-available operation (e.g., auto-accept, skip escalation queue)
+- **Degraded-mode list** — a shorter, stronger-trust list of agents the owner permits to connect even when the directory is unreachable and FROST authentication is unavailable
+
+These are not the same list. The portal must clearly communicate that whitelist membership does not automatically grant degraded-mode access, and that the degraded-mode list represents a stronger trust statement. Both lists are private — their composition is never surfaced to other agents.
+
+The portal must also display a table showing how inbound agents are handled during degraded mode (accepted with reduced trust / refused — retry when available / refused with final decline) based on whether the inbound agent is on the degraded-mode list, whitelist only, or neither.
+
+**[GAP F-21]**: The whitelist and degraded-mode list configuration UI is not designed in any source document. Specifically: minimum trust signal floor for degraded-mode list membership, UI for adding/removing agents from each list, and whether the lists are managed exclusively in the portal vs. also in the desktop app are not specified.
+
 **Alias management**
 
 The portal is the primary surface for managing contact aliases:
@@ -193,7 +249,11 @@ The portal is the primary surface for managing contact aliases:
 - View active aliases: alias URI (shareable), connection count, status, context note
 - Retire aliases: one-click revocation; portal appends revocation event to directory
 
-The alias URI takes the form `cello:alias/<slug>`. The portal must expose a short-URL resolver so a browser can resolve this to a connection request flow for the (non-CELLO) recipient. Whether this resolver lives on the portal domain or a separate service is not specified. **[GAP F-10]**
+The alias URI takes the form `cello:alias/<slug>`. The portal must expose a short-URL resolver so a browser can resolve this to a connection request flow for non-CELLO visitors. **[GAP F-10]**: whether this resolver lives on the portal domain or a separate service is not specified.
+
+**[GAP F-30]**: Alias TTL/expiry is unresolved. The directory schema includes `EXPIRED` as a possible alias status, but no TTL field appears in the schema and the TTL mechanism is not specified.
+
+**[GAP F-31]**: The non-CELLO browser visitor flow for the alias short-URL resolver is not designed. Source documents describe alias resolution for CELLO agents calling `cello_initiate_connection` — they do not describe what a browser visitor (non-CELLO) sees when they hit the short URL.
 
 **Policy configuration**
 
@@ -204,18 +264,33 @@ The portal exposes a UI for configuring the agent's `SignalRequirementPolicy`:
 - Endorsement count requirements
 - Human escalation fallback toggle and escalation timeout
 - Auto-accept for already-connected agents
+- Six connection acceptance policy modes: Open, Require endorsements, Require introduction, Selective, Guarded, Listed only
 
 Policy is expressed as named signal requirements, never as numeric thresholds. The portal must not expose a raw JSON editor — it must present the policy as structured form fields that prevent the owner from accidentally expressing a numeric-score-based policy.
+
+**Notification filtering configuration**
+
+The portal must expose a notification filtering rule engine:
+- Global type rules (e.g., block all "promotional" type notifications)
+- Per-sender overrides (a specific agent's notifications override the global type rule)
+- Whitelist/blacklist for senders
+
+The precedence must be visually clear (sender override beats global type rule). The owner must be able to set a recipient-side opt-out that overrides any sender's permitted rate limit.
+
+The portal must display each sender agent's notification rate-limit tier and whether they have institutional verification (elevated rate limits). The portal must provide a UI for the owner to apply for institutional verification to obtain elevated rate limits.
 
 ### Trust profile self-view
 
 The portal displays the agent's own trust profile exactly as it appears to other agents in the directory — not the raw data, but the verified hash + presence/absence view. This is what `cello_get_trust_profile` returns, displayed for a human reader.
 
 Contents:
-- Active signals: what is present, quality metadata (age, platform, verified_at where applicable)
+- Active signals: displayed by class (Class 1–4), with quality metadata (age, platform, verified_at where applicable). Named signals only — no composite score.
 - Missing signals: what is absent, what it would take to add each, what receiving agents commonly require it
+- Whether each active signal is mandatory (always shared) or discretionary (owner may withhold). **[GAP F-5 note]**: the mandatory/discretionary classification of all signals is explicitly an open question in the connection-request design — not all signals have been classified yet.
 - Connection policy indicator: what an unknown agent sees about this agent's openness to connection
 - Conversation statistics: session count, clean-close rate, platform age
+- Succession link indicator: if this agent succeeded another identity, a permanently visible succession record showing tombstone type, recovery mechanism, vouching contact identities, declared compromise window, and new public key. This must be displayed to both the owner and counterparties.
+- Recovery contact status: a visible "no recovery contacts" indicator when none are designated
 
 **[CONFLICT FC-2 noted above applies here]**: Whether the trust profile self-view reflects a public or private view of the profile depends on the authenticated vs. public browse mode decision.
 
@@ -223,20 +298,40 @@ Contents:
 
 The portal exposes read and write access to all three discovery classes:
 
-- **Class 1 (Agent directory)**: Browse agents, search by capability tags and semantic query. View trust signal summaries. Initiate connection requests (routing to the agent's connection request flow, not directly from the portal).
+- **Class 1 (Agent directory)**: Browse agents, search by capability tags and semantic query (BM25, tag/filter, approximate location). View trust signal summaries (named signals only). Generate and share the agent's QR code and handle from a listing. Initiate connection requests (routing to the agent's connection request flow, not directly from the portal).
 - **Class 2 (Bulletin board)**: Browse and create ephemeral listings. Set TTL, tags, description, pricing, location. Renew and retire listings.
-- **Class 3 (Group rooms)**: Browse rooms, view membership counts and descriptions. Create rooms. Room join/leave is an agent operation, not a portal operation.
+- **Class 3 (Group rooms)**: Browse rooms, view membership counts, descriptions, and ordering mode (SERIALIZED vs. CONCURRENT). Create rooms (topic, description, tags, room type open/invite-only, dispute eligibility). Room join/leave is an agent operation, not a portal operation.
 
-The portal's discovery view is for the owner to understand the ecosystem, not for the agent to find counterparties. The agent's discovery is via `cello_search`.
+The portal's discovery view is for the owner to understand the ecosystem, not for the agent to find counterparties. The agent's discovery is via `cello_search`. The portal's discovery surface is especially important for new agents in their incubation period — it must surface agents with open connection policies, Class 2 bulletin listings, and Class 3 group rooms as pathways to build track record organically.
+
+**Incubation period display**
+
+New agents are in an incubation period (7 days, 3 new outbound connections/day limit). The portal must:
+- Display an incubation status indicator showing days remaining and daily connection attempts used
+- Explain the limit to the owner so they are not confused by connection refusals
+- Not suggest the limit is due to an error or policy violation
 
 ### Financial UI (later phase)
 
 The portal will support, in a later phase:
-- Stablecoin deposit flows for escrow collateral (USDT, USDC, ETH)
-- Fiat on-ramp via institutional partners
-- Connection stake configuration for agents that opt into institutional defense
 
-The portal must never hold or manage cash. All payment flows route through a compliant custodian. The portal is only the initiation and display surface.
+- Stablecoin deposit flows for escrow collateral (USDT, USDC, ETH) — framed as opening a yield-bearing account, not as locking up a security deposit
+- Fiat on-ramp via institutional partners — the portal UI must route to the partner; CELLO never holds or manages cash
+- Connection stake configuration for agents that opt into institutional defense
+- Bond creation and management: commitment terms, bond amount, oracle type selection, expiry, counterparty selection
+- Delegation market: view delegation offers, accept/reject, display delegated capital liability
+- Per-asset yield display: mechanism (ETH → PoS staking yield; USDT/USDC → money market), cumulative yield earned, CELLO's share, withdraw-yield-independently action
+- Lock period countdown for bonds and Sybil defense stakes (30-day minimum)
+- Escrow release/forfeiture outcome per session-close attestation (CLEAN → stake returned; FLAGGED → stake held for arbitration)
+- Oracle proof submission for disputes: upload timestamped, GPS-tagged photo or video as delivery/arrival proof for a disputed or pending bond
+
+The portal must never hold or manage cash. All payment flows route through a compliant custodian.
+
+**[GAP F-36]**: Delegation/lending market UI is not specified. No source document defines whether the portal surfaces third-party delegation offers, how the owner reviews and accepts delegated capital, or how delegated-stake liability is displayed.
+
+**[GAP F-37]**: Yield display mechanics are not specified. No document defines how the portal shows cumulative yield earned vs. CELLO's share, or whether yield can be withdrawn independently of principal.
+
+**[GAP F-38]**: The oracle proof capture flow (GPS + camera + timestamp) is a native mobile capability but has not been assigned to a rollout phase.
 
 ### Recovery contact designation
 
@@ -251,7 +346,32 @@ The portal should make designation of M-of-N recovery contacts prominent and dif
 The portal also supports:
 - Viewing and updating the recovery contact list
 - Configuring the M-of-N threshold (configurable at registration)
-- Creating and viewing the succession package (encrypted blob for the designated successor — the portal handles the encryption client-side using the successor's `identity_key`; the portal must never handle the plaintext seed phrase)
+- Creating and viewing the succession package (encrypted blob for the designated successor — the portal handles the encryption client-side using the successor's `identity_key`; the portal must never handle the plaintext seed phrase). **[GAP F-39]**: the portal must defend against XSS access to the in-page plaintext during encryption; the specific ceremony (Web Crypto API vs. WASM) and how the portal obtains the successor's `identity_key` are not specified.
+
+### Succession and ownership transfer
+
+The portal exposes a separate successor designation: a specific CELLO identity to whom the agent's identity, track record, and succession package will transfer. This is distinct from recovery contacts (who attest the owner is permanently unavailable) — a single person can hold both roles, but the roles are separate.
+
+**Voluntary ownership transfer** (WebAuthn required):
+1. Old owner initiates transfer from portal — announces it to connected agents (7–14 day announcement period)
+2. During the announcement period: old owner can cancel from the portal; the portal must display a cancellation action prominently
+3. New owner authenticates via their own portal session to accept the transfer
+4. Transfer completes; succession link is recorded in the directory's identity Merkle tree
+5. Old identity's connections can see the succession link and choose to reconnect with the new identity
+
+**[GAP F-32]**: Portal UI for contesting an incoming succession claim filed by a third party is not designed. The succession log specifies that the directory notifies the owner and recovery contacts via external channels when a claim is filed, and the owner can contest — but the portal screen for doing so does not exist.
+
+**[GAP F-33]**: The announcement period management UI (cancel action, 7–14 day countdown display) is not designed.
+
+**[GAP F-34]**: The new owner's authentication flow for accepting an ownership transfer is not specified. The portal must support the receiving side of the handshake.
+
+### Endorsement management
+
+The activity log displays endorsement events (received, issued, revoked). The portal must:
+- Show the endorsement count on the trust profile self-view as a discretionary signal (the owner may withhold specific endorser identities while sharing the count)
+- Reflect revocation notifications from the directory in the activity log
+
+**[GAP F-35]**: Endorsement request management UI is not specified. The MCP tool surface document explicitly lists `cello_request_endorsement` and `cello_revoke_endorsement` as missing from the 33-tool surface. The portal has no specified UI for: requesting endorsements from contacts, reviewing incoming endorsement requests, or bootstrapping endorsements when creating a second agent.
 
 ### What the portal does NOT do
 
@@ -280,24 +400,59 @@ The Agent Dashboard is not a separate deployed product. It lives in the same web
 
 ### Sessions overview
 
-- Active sessions: counterparty, opened_at, message count, current session state
-- Recently sealed sessions: seal type (MUTUAL / UNILATERAL), seal timestamp, Merkle root hash, attestation (CLEAN / FLAGGED / PENDING)
-- A FLAGGED seal is highlighted. If the owner wants to submit the session to arbitration, the dashboard provides a "Submit to arbitration" action (see Dispute Submission in Cross-Surface Flows below)
-- Aborted sessions: abort reason code, timestamp
+The sessions view must support both two-party and multi-party (group) conversations. The multi-party attestation schema supersedes the two-party schema — the two-party case is the degenerate case of a multi-party conversation with two participants.
+
+Session close types (complete set):
+- **MUTUAL_SEAL** — both parties (or all participants) signed the final Merkle root
+- **SEAL_UNILATERAL** — one party closed without the other's acknowledgment
+- **EXPIRE** — session expired without explicit close
+- **ABORT** — session aborted; reason code and timestamp displayed
+- **REOPEN** — a previously sealed session was reopened
+
+Per-participant attestation states (complete set):
+- **CLEAN** — participant attested no issues
+- **FLAGGED** — participant flagged the session for dispute
+- **PENDING** — attestation not yet submitted
+- **DELIVERED** — transport-confirmed receipt with no output (distinct from ABSENT)
+- **ABSENT** — connection dropped; no delivery confirmation
+
+For group conversations, the dashboard displays a per-participant attestation table (one row per participant) rather than a single pair of party_a / party_b attestation values.
 
 The Merkle root values are displayed as truncated hex (first 8 bytes) with copy-to-clipboard for the full value. They are not decoded or explained beyond "this is the tamper-proof fingerprint of this conversation."
 
+**[CONFLICT FC-6]**: The earlier two-party session vocabulary (MUTUAL / UNILATERAL seal types; CLEAN / FLAGGED / PENDING attestation states) in prior versions of this document is superseded by the multi-party attestation model (five close types; five attestation states; per-participant attestation rows). The multi-party design document (2026-04-13) is the governing specification.
+
+**[CONFLICT FC-7]**: The "Submit to arbitration" trigger condition cannot rely on a conversation-level FLAGGED flag in multi-party conversations, because the FLAGGED state is now per-participant. An action must be available when any participant's individual attestation is FLAGGED, not only when a conversation-level flag is set. Resolution required before the dispute submission UI can be implemented.
+
+A FLAGGED individual attestation is highlighted. If the owner wants to submit the session to arbitration, the dashboard provides a "Submit to arbitration" action (see Dispute Submission in Cross-Surface Flows below).
+
+Session details additionally show:
+- Ordering mode for group conversations (SERIALIZED vs. CONCURRENT)
+- Session channel type (libp2p P2P vs. platform transport: Slack/Discord/Telegram)
+- Seal mode (bilateral-only vs. notarized-FROST seal)
+- Whether seal notarization is PENDING (directory was unavailable at seal time; FROST ceremony deferred until directory recovers)
+- For aborted sessions: abort reason code and timestamp
+
+**[GAP F-26]**: The DELIVERED-to-ABSENT transition timeout in group conversations is not specified. Until resolved, the dashboard cannot accurately display participant state.
+
 ### Notifications and event stream
 
-A chronological event stream showing all notification types from `cello_poll_notifications`:
-- Security blocks (Layer 1 fires): what triggered it, from which session
-- Endorsements received and revoked
+A chronological event stream showing all notification types from `cello_poll_notifications`. Types derived from the formal notification type registry:
+
+- Security blocks (Layer 1 sanitization fires): what triggered it, from which session
+- Endorsements received, issued, and revoked
 - Connection events (accepted, declined, escalation resolved)
 - System events: directory reachability changes, K_local degraded mode
 - Key rotation events
 - Anomaly alerts (these are also sent to phone — the dashboard shows the same events)
+- Tombstone notifications: a connected identity has been tombstoned
+- Trust event notifications: a connected agent's trust status has changed
+- Recovery event notifications: a recovered identity is re-entering the network
+- Session-close attestation dispute notifications: a counterparty has filed a dispute against a session
 
 The event stream is filterable by type. Each event links to its relevant context in the portal (a security block links to the session; an endorsement links to the endorser's trust profile).
+
+**[GAP F-27]**: The notification delivery path (P2P vs. directory-routed) is not specified. The portal's notification display depends on which backend component delivers notification payloads. **[GAP F-28]**: The home-node API surface for notification payloads to the portal (distinct from the agent-facing MCP tool surface) is not specified.
 
 ### What the dashboard does NOT do
 
@@ -313,7 +468,7 @@ The event stream is filterable by type. Each event links to its relevant context
 
 The mobile app serves two capabilities that the web portal cannot provide:
 
-1. **Device attestation** (Apple ecosystem: iOS and macOS via App Attest / Secure Enclave). The browser cannot access `DCAppAttestService`. A signed native app is required.
+1. **Device attestation** (Apple ecosystem: iOS and macOS via App Attest / Secure Enclave; Android: Play Integrity API). The browser cannot access `DCAppAttestService`. A signed native app is required.
 2. **Push-based escalation and alerts**. The alert channel must be independent from agent infrastructure — if the agent is compromised, it cannot intercept alerts sent through it. Out-of-band push via a native app provides this independence. On iOS, persistent background push notifications require native APIs not available to PWAs.
 
 The mobile app is not a full portal replica. For everything except device attestation and push-based responses, the owner uses the web portal. The mobile app is an oversight and security response tool.
@@ -336,17 +491,19 @@ Re-attestation: Platform attestation credentials have a validity period. The app
 
 **Device replacement**: The old attestation binding must be released before the new device can be enrolled. The release requires WebAuthn authentication (web portal or the app on the old device if still available). If the old device is permanently lost, social recovery or a directed dispute with the directory is the path — the exact protocol for this case is not specified. **[GAP F-12]**
 
+The mobile app must distinguish WebAuthn (account security / tethering) from App Attest (device sacrifice) in its UI and onboarding. They are separate enrollment flows with separate trust signal implications.
+
 ### Push-based escalation approvals
 
 When an incoming connection request reaches PENDING_ESCALATION state, the directory sends a push notification to the owner's registered device via the app's push token:
 
 Notification payload (displayed in lock-screen preview):
 - Requester handle (truncated)
-- Top two trust signals present
+- Top two trust signals present (named signals — never a numeric score)
 - "Accept or decline — expires in N minutes"
 
 Full view (after unlock):
-- Complete trust profile (signals with quality metadata)
+- Complete trust profile (named signals with quality metadata)
 - Greeting text (after Layer 1 sanitization)
 - Alias context (if the request came in via a named alias the owner created)
 - Accept button / Decline button / "View in portal" link
@@ -360,7 +517,7 @@ The app must handle the case where the owner taps the notification but then take
 The "Not Me" flow is optimized for speed. When the owner believes their agent is compromised:
 
 1. The owner taps a prominently placed "Not Me / Emergency" action — accessible from the app's home screen without navigating menus
-2. The app re-authenticates with phone OTP (or biometric if that is sufficient for the revoke operation — the distinction between phone OTP and WebAuthn for emergency revocation is that revocation only requires phone OTP, not WebAuthn)
+2. The app re-authenticates with phone OTP (phone OTP is sufficient for revocation — WebAuthn is required only for the re-keying step that follows)
 3. The app sends a signed revocation request to the home node
 4. The home node immediately burns the K_server_X shares — no new FROST sessions are possible
 5. The app displays confirmation: "Agent locked. No new authenticated sessions can be established. Visit the portal to re-key."
@@ -372,15 +529,21 @@ The re-keying step (issuing new K_local and K_server_X) requires WebAuthn and is
 ### Security alerts
 
 The app receives push notifications for all anomaly events the directory has flagged for this agent:
-- `FROST_SESSION_FAILURE` (compromise canary — urgent)
-- `UNUSUAL_SIGNING_PATTERN` (urgent)
+- `FROST_SESSION_FAILURE` (compromise canary — urgent; breaks through Do Not Disturb)
+- `UNUSUAL_SIGNING_PATTERN` (urgent; breaks through Do Not Disturb)
 - `BURST_ACTIVITY` (warning)
 - `ATYPICAL_HOURS` (informational unless combined with other signals)
 - `WIDESPREAD_REJECTION_PATTERN` (warning)
-- `K_LOCAL_DEGRADED_MODE` (informational — directory unreachable)
-- `KEY_ROTATION_RECOMMENDED` (scheduled maintenance)
+- `K_LOCAL_DEGRADED_MODE` (informational — directory unreachable; existing sessions continue)
+- `KEY_ROTATION_RECOMMENDED` (scheduled maintenance — directory nudging the agent to rotate K_local)
+- Tombstone notifications, trust event notifications, recovery event notifications (same as event stream)
+- Bond/escrow alerts: approaching lock expiry, stake slashing events (FLAGGED session close), oracle proof deadline reminders — at OS-alert level
 
 The app displays these in a prioritized alert list. Urgent alerts (FROST failure, unusual signing) use OS-level alerts that break through Do Not Disturb.
+
+### Succession alerts
+
+When a succession claim is filed against the owner's agent, the directory notifies the owner via configured external channels (WhatsApp/Telegram, independent of the CELLO client). The mobile app must also receive and surface this as an urgent push notification so the owner can immediately authenticate to contest.
 
 ### WebAuthn on mobile
 
@@ -441,14 +604,14 @@ No native device sacrifice is available. Server agents sit at the base trust lev
 The desktop app provides a management interface for the locally-running CELLO client:
 
 - **Start / stop / restart** the MCP server process
-- **View server status**: directory reachability, active P2P peers, active sessions, pending notifications, K_local_only mode — the same data returned by `cello_status`
+- **View server status**: directory reachability, active P2P peers, active sessions, pending notifications, K_local_only mode — the same data returned by `cello_status`. The status must distinguish two qualitatively different states: "directory unreachable — existing sessions continue" vs. "agent locked — no new sessions possible"
 - **View server logs**: recent MCP server output for troubleshooting
 - **Update the server**: when a new CELLO client version is available, the desktop app handles the download, hash verification (SHA-256 pinned to the npm package signature), and process restart
 - **Configuration**: scan sensitivity, P2P bootstrap nodes, escalation channels, directory fallback behavior — a GUI layer over the settings that `cello_configure` manages programmatically
 
 The desktop app does not replace the MCP server — it manages it. The agent still calls MCP tools directly; the desktop app is a management surface, not a proxy.
 
-**[GAP F-16]**: The auto-update mechanism for the desktop app itself (the management layer, not the MCP server) is not specified. Auto-update (Electron's `autoUpdater`, Squirrel, etc.) vs. manual download are not decided.
+**[GAP F-16]**: The auto-update mechanism for the desktop app itself (the management layer, not the MCP server) is not specified.
 
 ### System tray / menubar presence
 
@@ -480,7 +643,7 @@ The desktop app is not a portal replacement. Navigation from the desktop app alw
 | Windows | TPM 2.0 via TBS API | Requires TPM chip present; most post-2016 business hardware has TPM 2.0 |
 | Linux | None | No device sacrifice available; app may still be useful for local server management without attestation |
 
-**[GAP F-17]**: Whether a Linux version of the desktop app is scoped. Linux is mentioned in the design documents as a deployment environment for agents but not as a target for the native app. Server management tooling on Linux may be sufficient as a CLI or systemd service.
+**[GAP F-17]**: Whether a Linux version of the desktop app is in scope is not specified. Linux is mentioned as a deployment environment for agents but not as a target for the native app.
 
 ---
 
@@ -504,10 +667,10 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 1. Owner opens the web portal (or mobile app WebAuthn path)
 2. Initiates key rotation from account management
 3. Portal issues a WebAuthn challenge; owner taps hardware key or biometric
-4. Client generates new K_local
+4. Client generates new K_local (at the next session boundary)
 5. Portal sends key rotation request to home node (authenticated with WebAuthn response)
 6. Home node triggers new K_server_X ceremony across directory nodes
-7. New public keys published; old keys marked expired; connected agents receive `KEY_ROTATION_RECOMMENDED`
+7. New public keys published; old keys marked expired; connected agents receive a key refresh notification (**[see Conflict FC-5]** for the notification type naming issue)
 8. Portal shows confirmation: new key fingerprint, rotation timestamp
 9. Desktop app system tray (if running) shows a brief "Keys rotated" notification
 
@@ -549,20 +712,27 @@ This flow is primarily handled at the protocol level between the home node, dire
 3. Each recovery contact opens the portal and navigates to "Vouch for recovery"
 4. Recovery contact authenticates with their own WebAuthn and signs a recovery attestation for the locked-out account
 5. When M-of-N threshold is met, the directory records the recovery threshold reached
-6. 48-hour mandatory waiting period begins — the old key can contest during this window
+6. 48-hour mandatory waiting period begins — the old key can contest during this window. The portal must surface a "contest recovery" action for any session holding the old key.
 7. After 48 hours: owner can open the portal with a new device, authenticate with the new phone (or with a surviving second factor), and initiate a new K_local + K_server_X ceremony
 8. Portal displays the vouching contact identities and the declared compromise window for the owner to review
 
+Post-recovery, the portal must display:
+- The formal recovery event in the trust profile (permanently visible): tombstone type, recovery mechanism, vouching agent identities, declared compromise window (start/end timestamps), new public key
+- Post-recovery trust treatment: signals floored at a function of pre-compromise history, not reset to zero; decay rate for compromise-window penalties
+- Voucher accountability status for recovery contacts: liability window (2–3 months), lockout indicator if triggered
+
 **[GAP F-18]**: The portal UI for a recovery contact vouching on behalf of another agent is not designed. Specifically: how does the recovery contact navigate to the vouch screen? Is there a URL from the directory, a manual agent ID entry, or a QR code flow?
+
+**Social carry-forward** (post-recovery): Previously-connected agents can choose to reconnect with the recovered identity. The portal must support a carry-forward re-connection flow, allowing the owner to reach out to their prior network. No source document designs this UI — it is a gap.
 
 ### Dispute submission
 
-1. Owner views a FLAGGED session in the dashboard
+1. Owner views a FLAGGED individual attestation in the dashboard (**[see Conflict FC-7]** for the trigger condition in multi-party conversations)
 2. Owner clicks "Submit to arbitration"
 3. Portal asks the owner to confirm: submitting to arbitration is public to the counterparty (their full transcript copy will be compared against the submitted copy)
 4. Owner confirms
-5. Portal fetches the partial Merkle proof for this session from the directory (the sealed Merkle root plus the path proving inclusion in the MMR)
-6. Portal submits the proof to the directory's dispute arbitration endpoint
+5. Portal fetches the partial Merkle proof for this session from the directory (the sealed Merkle root plus the path proving inclusion in the MMR). For multi-party conversations, this must use the multi-party attestation table format.
+6. Portal submits the proof to the directory's dispute arbitration endpoint (multiple independent arbitrating nodes must agree — the portal must not submit to a single-node endpoint)
 7. Dashboard shows the session status as "PENDING_ARBITRATION"
 8. When a verdict is issued (DISMISSED / UPHELD / ESCALATED), the dashboard reflects the outcome and any trust signal impact
 
@@ -588,13 +758,16 @@ Operations are listed in ascending order of required authentication strength. Th
 | Designate recovery contacts | Phone OTP | ✓ | — | — |
 | View succession package status | Phone OTP | ✓ | — | — |
 | Submit to arbitration | Phone OTP | ✓ | — | — |
+| Configure whitelist / degraded-mode list | Phone OTP | ✓ | — | — |
+| Configure notification filtering | Phone OTP | ✓ | — | — |
 | Key rotation | WebAuthn / TOTP | ✓ | ✓ (biometric) | — |
 | Change registered phone number | WebAuthn / TOTP | ✓ | ✓ (biometric) | — |
 | Add / remove social verifiers | WebAuthn / TOTP | ✓ | — | — |
 | Account deletion | WebAuthn / TOTP | ✓ | — | — |
 | Fund withdrawal | WebAuthn / TOTP | ✓ | — | — |
 | Create succession package | WebAuthn / TOTP | ✓ | — | — |
-| Voluntary ownership transfer | WebAuthn / TOTP | ✓ | — | — |
+| Voluntary ownership transfer (initiator) | WebAuthn / TOTP | ✓ | — | — |
+| Voluntary ownership transfer (acceptor) | WebAuthn / TOTP | ✓ | — | — |
 | Device attestation enrollment | Phone OTP + native app | — | ✓ | ✓ |
 | Local MCP server management | Phone OTP (app-level) | — | — | ✓ |
 
@@ -625,10 +798,14 @@ The consistency check. A capability that appears in a requirement but has no sur
 | "Not Me" emergency revocation | ✓ | ✓ | ✓ (tray shortcut) |
 | Recovery contact vouching | ✓ | — | — |
 | Succession package creation | ✓ | — | — |
-| Alias short-URL resolution | ✓ (resolver on portal domain — **[see F-10]**) | — | — |
+| Alias short-URL resolution | ✓ (resolver on portal domain — **[see F-10, F-31]**) | — | — |
 | Discovery browse | ✓ | — | — |
 | Activity log | ✓ | — (push notifications only) | — |
-| Financial UI | ✓ (later phase) | — | — |
+| Financial UI | ✓ (later phase) | ✓ (read-only balance + alerts) | — |
+| Oracle proof capture (GPS+camera) | — | ✓ (native, phase TBD — **[see F-38]**) | — |
+| Notification filtering configuration | ✓ | — | — |
+| Whitelist/degraded-mode list configuration | ✓ | — | — |
+| GDPR consent record / data classification | ✓ | — | — |
 
 **[GAP F-20]**: Using TOTP on the same mobile device that is receiving push notifications and managing the agent introduces a security concern: if the device is compromised, both the TOTP seed and the push channel are in the same attack envelope. The design documents do not address this. A decision on whether TOTP is permitted as a factor on the same device as the mobile app is needed.
 
@@ -638,11 +815,11 @@ The consistency check. A capability that appears in a requirement but has no sur
 
 | Phase | What ships | What is deferred |
 |---|---|---|
-| Phase 1 | Web portal: registration completion, WebAuthn enrollment, OAuth flows, key rotation, activity log, connection oversight, escalation queue (web-based), policy configuration, alias management | Mobile app, desktop app |
+| Phase 1 | Web portal: registration completion, WebAuthn enrollment, OAuth flows, key rotation, activity log, connection oversight, escalation queue (web-based), policy configuration, alias management, notification filtering configuration, GDPR/data residency display, whitelist/degraded-mode list management | Mobile app, desktop app |
 | Phase 1 | WhatsApp/Telegram as the only out-of-band escalation path | Native push via mobile app |
-| Phase 2 | Mobile app: device attestation (iOS/Android), push-based escalation, "Not Me" shortcut, security alerts | Desktop app, TPM attestation |
-| Phase 3 | Desktop app: TPM attestation (Windows), macOS Secure Enclave via App Attest, local MCP server management, system tray presence | — |
-| Phase 3+ | Financial UI (stablecoin deposits, fiat on-ramp, stake configuration) | — |
+| Phase 2 | Mobile app: device attestation (iOS/Android), push-based escalation, "Not Me" shortcut, security alerts, succession claim alerts | Desktop app, TPM attestation, oracle proof capture |
+| Phase 3 | Desktop app: TPM attestation (Windows), macOS Secure Enclave via App Attest, local MCP server management, system tray presence | Financial UI, oracle proof capture |
+| Phase 3+ | Financial UI (stablecoin deposits, fiat on-ramp, stake configuration, bond management, delegation market, yield display) | Oracle proof capture (phase TBD) |
 
 In Phase 1, escalation approvals are web-based: the WhatsApp/Telegram message directs the owner to the portal's escalation queue. The native push path (mobile app) is additive in Phase 2 and should be designed to be fully redundant with the Phase 1 path.
 
@@ -675,6 +852,21 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 - These directly contradict. The mobile app's "Not Me" confirmation screen must display accurate consequences. Decision required before the app can be implemented.
 - This is the same as server infrastructure Conflict C-5.
 
+**FC-5: `KEY_ROTATION_RECOMMENDED` dual meaning**
+- Definition A (key-rotation-design.md): The directory's inbound scheduling nudge to the owner-agent to rotate K_local. This is an informational/maintenance-class alert received by the agent.
+- Definition B (used in earlier versions of this document): An outbound notification sent to counterparty agents after a completed K_local rotation, telling them to refresh their cached key material.
+- These must be distinct notification types. The portal's key rotation confirmation flow (showing "connected agents notified") depends on knowing which notification type is sent to counterparties. Until the counterparty-facing key refresh notification is named, the cross-surface key rotation flow description is ambiguous.
+
+**FC-6: Two-party seal vocabulary vs. multi-party attestation schema**
+- Position A (earlier versions of this document): Session seal types are MUTUAL / UNILATERAL; attestation states are CLEAN / FLAGGED / PENDING; the seal record is a two-column per-session entry.
+- Position B (multi-party-conversation-design.md, 2026-04-13): Close types are MUTUAL_SEAL / SEAL_UNILATERAL / EXPIRE / ABORT / REOPEN; attestation states are CLEAN / FLAGGED / PENDING / DELIVERED / ABSENT; the seal record is a `conversation_attestations` table with one row per participant.
+- The multi-party design is the governing specification — the two-party case is a degenerate case. This document has been updated accordingly, but any other documentation, database schemas, or API contracts using the two-party vocabulary must be updated.
+
+**FC-7: "Submit to arbitration" trigger condition in multi-party context**
+- Position A (implied by earlier FLAGGED-seal framing): The "Submit to arbitration" action triggers when a conversation's seal state is FLAGGED.
+- Position B (implied by per-participant attestation model): FLAGGED is now a per-participant state, not a conversation-level state. An action must be available when any participant's individual attestation is FLAGGED.
+- Decision required: what triggers the arbitration button in a multi-party conversation where some participants attest CLEAN and others attest FLAGGED?
+
 ---
 
 ## Gaps Requiring Decisions
@@ -688,7 +880,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-5 | Portal | Liveness probing interval for social verifier freshness not specified |
 | F-6 | Portal | Metadata evaluation criteria for Twitter/X, Facebook, Instagram OAuth not specified |
 | F-7 | Portal | Recommended key rotation schedule (the interval at which the portal should prompt the owner) not specified |
-| F-8 | Portal | Handling of pending escrow stakes or bonds at account deletion time not specified |
+| F-8 | Portal | Handling of pending escrow stakes or bonds at account deletion time not specified; two distinct custody paths (DeFi smart contract vs. institutional custodian) each require a different instruction to release funds before home node wipe |
 | F-9 | Portal | Retention period for the activity log not specified |
 | F-10 | Portal | Alias short-URL resolver: whether it lives on the portal domain or a separate service not specified |
 | F-11 | Portal | Minimum trust signal floor for recovery contacts not defined |
@@ -698,9 +890,31 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-15 | Mobile | iPadOS support not specified |
 | F-16 | Desktop | Auto-update mechanism for the desktop app management layer not specified |
 | F-17 | Desktop | Whether a Linux version of the desktop app is in scope not specified |
-| F-18 | Recovery flow | Portal UI for a recovery contact vouching on behalf of a locked-out account not designed |
+| F-18 | Recovery flow | Portal UI for a recovery contact vouching on behalf of a locked-out account not designed: navigation path (URL from directory, manual agent ID entry, or QR code) not specified |
 | F-19 | Dispute flow | Whether the dispute submission requires the client to provide full message content or only Merkle proofs is not designed; if content is required, this is the only point where message content passes through infrastructure and needs explicit justification |
 | F-20 | Mobile / Auth | Whether TOTP is permitted as a factor on the same device as the mobile app (creates an attack envelope concern) not addressed |
+| F-21 | Portal | Whitelist vs. degraded-mode list configuration UI not designed: minimum trust signal floor for degraded-mode list, UI for add/remove, whether both lists are managed in portal only or also in desktop app |
+| F-22 | Portal | Bio change rate limit value (X hours) not specified |
+| F-23 | Portal | Greeting per-recipient rate limit and management UI not specified; maximum number of distinct per-recipient greetings maintainable simultaneously not specified |
+| F-24 | Portal | Grace period for sealing active sessions under old K_server_X during key rotation not specified; epoch identifier format for FROST ceremony outputs not specified |
+| F-25 | Portal | Counterparty-facing key refresh notification type name and format not specified (distinct from the inbound `KEY_ROTATION_RECOMMENDED` scheduling nudge — see FC-5) |
+| F-26 | Dashboard | DELIVERED-to-ABSENT transition timeout in group conversations not specified; portal cannot accurately display participant state without this |
+| F-27 | Dashboard | Notification delivery path (P2P vs. directory-routed) not specified; portal's notification display depends on which backend component delivers payloads |
+| F-28 | Portal | Home-node API surface for notification payloads to the portal (distinct from agent-facing MCP tool surface) not specified |
+| F-29 | Mobile | Oracle proof capture (GPS + camera + timestamp) for bond/escrow disputes is a native mobile capability; rollout phase not assigned |
+| F-30 | Portal | Alias TTL/expiry mechanism not specified: the EXPIRED status exists in directory schema but no TTL field appears; the mechanism to trigger expiry is absent |
+| F-31 | Portal | Non-CELLO browser visitor flow for the alias short-URL resolver not designed; source documents describe resolution only for CELLO agents calling `cello_initiate_connection` |
+| F-32 | Portal | Succession claim portal UI not designed: how the owner sees and contests an incoming succession claim filed by a third party |
+| F-33 | Portal | Ownership transfer announcement period UI not designed: cancel action, 7–14 day countdown display, what connected agents see |
+| F-34 | Portal | New owner's authentication flow for accepting an ownership transfer not specified |
+| F-35 | Portal | Endorsement request management UI not specified; `cello_request_endorsement` and `cello_revoke_endorsement` are explicitly listed as missing from the MCP tool surface |
+| F-36 | Portal | Delegation/lending market UI not specified: browse offers, accept/reject delegation, liability display, alerts when delegated stake is at risk |
+| F-37 | Portal | Yield display mechanics not specified: cumulative yield earned vs. CELLO's share, whether yield can be withdrawn independently of principal, yield history |
+| F-38 | Mobile | Oracle proof capture (GPS + camera + timestamp for bond/escrow disputes) rollout phase not assigned |
+| F-39 | Portal | Succession package creation ceremony security not specified: how portal obtains successor's `identity_key`, browser-level security during in-page plaintext encryption, Web Crypto API vs. WASM choice |
+| F-40 | Portal | False-positive appeal initiation UI not designed: when an activity log entry shows a Layer 2/3 scan block, the portal screen for initiating an LLM arbiter appeal (distinct from the general dispute submission flow) is not specified |
+| F-41 | Portal | Portal web security policy has no source document in the vault. CSP, CSRF, OAuth-token no-log, and trust-signal-blob no-log requirements are stated in this document but are not validated by any protocol review or security policy document. A dedicated portal web security spec is needed. |
+| F-42 | Portal | FROST threshold parameters: the directory operates at minimum 3-of-5 (not 2-of-3). Any portal display of threshold parameters or degraded-mode quorum explanations must reflect this baseline, and the planned 5-of-7 target at network maturity. |
 
 ---
 
@@ -717,6 +931,16 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 - [[2026-04-13_1200_discovery-system-design|Discovery System Design]]
 - [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession and Ownership Transfer]]
 - [[2026-04-15_1100_key-rotation-design|Key Rotation Design]]
+- [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]]
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]]
+- [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]]
+- [[2026-04-08_1830_notification-message-type|Notification Message Type]]
+- [[2026-04-08_1530_message-delivery-and-termination|Message Delivery and Termination]]
+- [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]]
+- [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]]
+- [[2026-04-08_1600_data-residency-and-compliance|Data Residency and Compliance]]
+- [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback and Downgrade Attack Defense]]
+- [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]]
+- [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow and Trust Relay]]
 - [[open-decisions|Open Decisions]]
 - [[design-problems|Design Problems]]
