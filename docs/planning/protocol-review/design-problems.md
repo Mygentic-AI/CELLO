@@ -3,8 +3,8 @@ name: Design Problems
 type: review
 date: 2026-04-08
 topics: [fallback-mode, trust-recovery, sybil-defense, trust-farming, succession, GDPR, deanonymization, phone-verification, append-only-log, supply-chain, prompt-injection, key-rotation, forward-secrecy, SIM-swap, false-positive, appeal-process, FROST]
-status: open
-description: "12 design problems — fallback downgrade attack, trust signal recovery, phone Sybil floor, trust farming, agent succession, GDPR vs append-only log, home node deanonymization, ML model supply chain, K_server rotation overlap, forward secrecy, Not-me revocation DoS, false positive handling."
+status: resolved
+description: "12 design problems — all closed. Fallback downgrade attack, trust signal recovery, phone Sybil floor, trust farming, agent succession, GDPR vs append-only log, home node deanonymization, ML model supply chain, K_server rotation overlap, forward secrecy, Not-me revocation DoS, false positive handling."
 ---
 
 # Design Problems
