@@ -108,6 +108,42 @@ The salt is never stored independently. It is always recomputable from the ident
 
 When presenting a pseudonym to a counterparty, the client generates a binding proof: `{agent_id, pseudonym, directory_signature}`. The directory co-signs the binding at registration time (preventing an agent from claiming a pseudonym that belongs to someone else). The counterparty uses the pseudonym to query the directory for the agent's live track record stats.
 
+### Two-track signing model
+
+CELLO uses two cryptographic signing schemes that serve different roles. Implementors must support both.
+
+| Artifact | Scheme | Quantum-safe? | Rationale |
+|---|---|---|---|
+| Split-key signing (session establishment, conversation seal) | FROST (Ed25519) | No — accepted quantum debt | No viable threshold alternative exists; `IThresholdSigner` abstraction enables future swap |
+| Per-message signing (K_local) | Ed25519 | No — accepted quantum debt | Used for individual messages within an established session |
+| Endorsement records | ML-DSA (liboqs / node-oqs) | Yes | Simple signature, no threshold needed |
+| Attestations | ML-DSA | Yes | Same |
+| Directory certificates | ML-DSA | Yes | Same |
+| Pseudonym binding | ML-DSA | Yes | Directory co-signs at registration; single key |
+| Connection package items | ML-DSA | Yes | Same |
+
+ML-DSA is CRYSTALS-Dilithium, NIST FIPS 204. Security level (ML-DSA-44 vs ML-DSA-65) is an open decision. The library to build against is `liboqs` / `node-oqs` (Open Quantum Safe project, implements FIPS 204).
+
+The quantum vulnerability of FROST is documented, accepted, and has a defined resolution path through the `IThresholdSigner` abstraction. Threshold ML-DSA is research-grade and not yet production-ready (estimated 5–7 years to standardization).
+
+### `IThresholdSigner` abstraction
+
+Every call to threshold signing goes through this interface. This is a day-one requirement, not a future enhancement — retrofitting it later is significantly more expensive.
+
+```typescript
+interface IThresholdSigner {
+  // Session establishment and conversation seal only
+  participateInCeremony(ceremonyId: string, localShare: KeyShare): Promise<ThresholdSignature>
+}
+
+class FrostThresholdSigner implements IThresholdSigner { ... }     // day one
+class ThresholdMlDsaSigner implements IThresholdSigner { ... }     // future swap-in
+```
+
+When threshold ML-DSA matures and a vetted implementation exists, `FrostThresholdSigner` is replaced with `ThresholdMlDsaSigner`. The protocol layer above it does not change.
+
+`IThresholdSigner` is separate from `KeyProvider`. `KeyProvider` handles private key backend (OS keychain, TPM, cloud secret manager). `IThresholdSigner` handles the multi-party threshold ceremony protocol.
+
 ### K_server_X — FROST threshold shares
 
 The client does not hold K_server_X shares. K_server_X is distributed as FROST threshold shares across directory nodes. The client holds K_local; the directory nodes hold the K_server_X shares. A FROST signing ceremony requires both — neither can produce the combined signature alone.
@@ -165,6 +201,69 @@ The full client data store is encrypted with `backup_key` and uploaded to user-c
 Conversation Merkle trees are the only data that cannot be reconstructed from scratch — they must be in the encrypted backup or recovered from counterparties. Everything else is either re-queryable from the directory (track record stats) or re-derivable from the identity key.
 
 **[GAP AC-2]**: Client-side conversation tree retention policy is not specified. How long the client holds full Merkle trees, whether there is a pruning policy, and what happens to non-repudiation guarantees after local pruning are open questions. The directory side is resolved (~365 bytes/conversation; no pruning needed). The client side is not.
+
+### Succession package
+
+The owner can optionally create a succession package: an encrypted bundle containing the seed phrase, stored at the directory, decryptable only by the designated successor's `identity_key`.
+
+**Client-side creation flow:**
+
+1. Owner designates a successor via the portal (or companion app); the directory stores the `successor_designations` record
+2. Owner opts into a succession package; the client fetches the designated successor's `identity_key` public key from the directory
+3. Client encrypts the seed phrase to the successor's `identity_key`:
+   ```
+   encrypted_payload = encrypt(seed_phrase, successor_identity_pubkey)
+   payload_hash      = SHA-256(encrypted_payload)
+   package_sig       = sign(payload_hash || agent_id || timestamp, identity_key)
+   ```
+4. Client uploads `{encrypted_payload, payload_hash, package_sig}` to the directory's succession package endpoint
+5. Directory stores the encrypted blob and records `succession_package_hash` on the agent's registration record
+
+The directory never holds the plaintext seed phrase. Only the designated successor's `identity_key` can decrypt the payload. The `package_sig` lets verifiers confirm the owner authorised the package at upload time.
+
+**Client-side decryption flow (designated successor after succession executes):**
+
+1. Successor receives `succession_package_available` notification after the dead-man's switch waiting period completes and the succession executes
+2. Successor fetches the encrypted payload from the directory
+3. Successor's client decrypts: `seed_phrase = decrypt(encrypted_payload, own_identity_key)`
+4. Client derives the predecessor's `identity_key` from the recovered seed phrase
+5. Client uses the predecessor's `identity_key` to sign the identity migration: `old_identity_key.sign(new_identity_pubkey || timestamp)` — same as the standard identity migration flow
+6. Directory records the migration in `identity_migration_log`: `old_pseudonym → new_pseudonym`; track record continuity is preserved
+
+The path with a succession package is equivalent to voluntary transfer in terms of protocol outcome. Without a succession package, the succession link is informational only — the successor starts fresh.
+
+### Voluntary transfer announcement period
+
+A voluntary transfer (the owner is alive and present) reuses the identity key migration machinery with an added announcement period.
+
+**Client state machine for the announcement period:**
+
+```
+IDLE → TRANSFER_PENDING (owner initiates, new owner accepts, 7–14 day window begins)
+TRANSFER_PENDING → IDLE  (owner cancels within window)
+TRANSFER_PENDING → TRANSFER_EXECUTING (window expires, no cancellation)
+TRANSFER_EXECUTING → IDLE (migration complete — new owner holds the identity)
+```
+
+**During `TRANSFER_PENDING`:**
+
+1. Client sends a `OWNERSHIP_TRANSFER_ANNOUNCED` notification to all agents in the contact list — this is a best-effort local-list notification; the directory also notifies agents with active conversations
+2. Client surfaces the pending transfer prominently via `cello_status` (state: `TRANSFER_PENDING`, expiry timestamp, cancellation token)
+3. Client blocks new session establishments during the announcement window — no new FROST ceremonies while a transfer is pending
+4. Client remains available for ongoing sessions under the old owner's authentication
+
+**On window expiry with no cancellation:**
+
+1. Client executes the identity key migration: `old_identity_key.sign(new_identity_pubkey || timestamp)`
+2. Directory records the migration and releases old owner's social verifications and device attestations — they are bound to the old owner's accounts and devices, not transferable
+3. New owner's client takes over; old client enters a terminated state
+
+**On cancellation within the window:**
+
+1. Owner authenticates (WebAuthn or phone OTP) and submits a signed cancellation: `sign("CANCEL_TRANSFER" || transfer_id || timestamp, identity_key)`
+2. Client transitions from `TRANSFER_PENDING` back to `IDLE`
+3. Directory records the cancellation; connected agents receive a `OWNERSHIP_TRANSFER_CANCELLED` notification
+4. Session establishment resumes normally
 
 ---
 
@@ -314,17 +413,38 @@ These operations are automatic. The agent never handles raw Merkle leaves, FROST
 
 ### Per-message signing (K_local only)
 
-Every outbound message is signed with K_local. The client constructs a Merkle leaf containing:
+Every outbound message involves **two distinct structures** that must not be conflated:
 
-- `content_hash` — SHA-256 of the message content
-- `sender_pubkey` — the sender's current K_local public key
-- `conversation_id` — stable identifier for this conversation
-- `last_seen_seq` — the last sequence number received from the directory (ordering anchor)
-- `timestamp`
+**Structure 1 — Sender's inner authorship proof (what the client signs with K_local):**
 
-The directory appends `prev_root` and the canonical sequence number when building the authoritative tree. The client does not include `prev_root` in the signed leaf — this is the directory's responsibility (multi-party design, 2026-04-13 supersedes earlier two-party design in which the sender computed `prev_root`).
+```
+sender_signature = sign_with_K_local(
+  content_hash      ||   SHA-256 of the message content
+  sender_pubkey     ||   the sender's current K_local public key
+  conversation_id   ||   stable identifier for this conversation
+  last_seen_seq     ||   highest sequence number received at composition time
+  timestamp            sender's local clock, not canonical
+)
+```
 
-**[CONFLICT AC-C2]**: Earlier design documents (2026-04-08) describe the sender including `prev_root` in the signed leaf. The multi-party design (2026-04-13) explicitly moves `prev_root` computation to the directory. The later document supersedes. Any client implementation relying on sender-controlled `prev_root` is wrong.
+This proves: "I said this, in this conversation, having seen through message N, at approximately this time." It does NOT commit to canonical ordering relative to other participants.
+
+**Structure 2 — Outer directory-constructed leaf (what the directory hashes into the tree):**
+
+```
+leaf = SHA-256(
+  0x00                  leaf node marker (RFC 6962)
+  sequence_number       directory-assigned canonical number
+  sender_pubkey
+  message_content_hash
+  sender_signature      the authorship proof above, embedded as a field
+  prev_root             previous Merkle root, computed by directory
+)
+```
+
+The sender produces Structure 1 and transmits it with the message content. The directory embeds Structure 1's `sender_signature` into Structure 2 and computes `prev_root`. The client never computes `prev_root`.
+
+**[CONFLICT AC-C2]**: This two-structure model is from the multi-party design (2026-04-13). The session-level FROST signing log (2026-04-15) reinstates sender-computed `prev_root`. These three documents are in conflict. The two-structure model is documented here as the current working design, but this is not yet resolved. See AC-C2 in the Conflicts section.
 
 The leaf prefix follows RFC 6962: `0x00` for message leaves, `0x01` for internal nodes.
 
@@ -350,6 +470,24 @@ On receiving a message:
 5. Mismatch → tamper detection event: log as `hash_message_mismatch`, reject message, escalate to the notification queue
 
 The cross-check is the security guarantee. B's receipt of the message from A and the hash from the directory, independently, makes it impossible for either A or the directory alone to present tampered content without detection.
+
+### MMR inclusion proof verification
+
+The per-message cross-check proves a message arrived from the sender. The MMR inclusion proof proves the sealed conversation was actually recorded in the conversation proof ledger — the fabricated conversation defense. These are distinct verification operations. The client must implement both.
+
+After `cello_close_session` returns `sealed_root_hash` and `mmr_peak`, the client can request and verify an inclusion proof for the sealed conversation. The five-step verification algorithm (all local, no additional network requests after proof receipt):
+
+1. **Recompute leaf hash** from known conversation data: `SHA-256(leaf_index || seal_merkle_root || recorded_at)`. Must match `proof.leaf_hash`.
+
+2. **Walk sibling hashes upward** from leaf to peak. At each level: `hash = SHA-256(left || right)`. Left/right determined by MMR position (deterministic). Final hash must equal the peak hash for this leaf's subtree.
+
+3. **Reconstruct checkpoint commitment.** Concatenate all peak hashes (`other_peak_hashes` from the proof plus the peak computed in step 2) in MMR left-to-right order. Hash with `identity_merkle_root` and `checkpoint_id`. Must equal `checkpoint_hash`.
+
+4. **Verify federation signatures.** For each `{node_id, signature}` in `node_signatures`: verify against consortium-pinned node public keys. Count must meet threshold (4-of-6 alpha, 11-of-20 consortium).
+
+5. **Accept or reject.** All steps pass → conversation provably existed before checkpoint. Any step fails → proof is invalid, treat as rogue node behavior.
+
+Proof size: under 3 KB for a ledger with 10 million conversations. Verification time: microseconds. The client should request and verify this proof at `cello_close_session` time and cache it alongside the sealed conversation record.
 
 ### Merkle chain as implicit ACK
 
