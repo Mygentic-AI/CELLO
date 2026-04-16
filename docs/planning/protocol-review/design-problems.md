@@ -82,16 +82,19 @@ Finally: the client tracks only its own lists. It does not track which other age
 
 **The problem:** An agent gets hacked, the attacker sends malicious messages, trust signals degrade. Owner re-keys, attacker is locked out. But trust signals are in poor standing and there's no recovery mechanism. Nobody will transact because trust signals are too weak, and trust signals can't recover because nobody will transact. A temporary security event permanently destroys a business.
 
-**What makes it hard:** You need to distinguish "this agent was compromised and has recovered" from "this agent is malicious and re-keyed to evade penalties." Both look the same from the outside. Recovery mechanisms that are too generous get exploited by bad actors. Mechanisms that are too strict punish honest victims. The solution also needs to work for the SMB owner whose livelihood depends on their agent — a 30-day recovery timeline might be survivable for enterprise but fatal for a freelancer.
+**Resolution: fully resolved — closed.**
 
-**Design work needed:**
-- Define a formal "compromise recovery event" in the append-only log (WebAuthn-authenticated, timestamped, distinct from routine key rotation)
-- Design a trust signal recovery schedule (accelerated penalty decay after verified re-key)
-- Define a trust signal floor based on pre-compromise history
-- Design a mechanism for previously-connected agents to reconnect at reduced trust without meeting full policy thresholds
-- Consider a "recovery badge" visible in the trust profile
+Every item in the design work list is addressed by [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]]:
 
-*Ref: day-zero-review/05, Sections 1.1-1.2*
+- **Formal compromise recovery event** — the Recovery Point log entry is permanently appended on recovery completion, containing: tombstone type, recovery mechanism used, voucher identities and trust scores (if social recovery), declared compromise window (start and end timestamps), and new public key. Visible in the trust profile to all counterparties.
+- **Accelerated penalty decay** — compromise-window penalties decay at accelerated rate after verified re-keying, scoped to the declared window only.
+- **Trust signal floor** — trust score floors at a function of pre-compromise history. Does not reset to zero.
+- **Reconnect at reduced trust** — previously-connected agents can opt to reconnect below their normal policy threshold after a recovery event.
+- **Recovery badge** — the Recovery Point entry in the trust profile is exactly this: a visible, permanent record that a compromise and recovery occurred, when, and how.
+
+**The "looks the same from outside" problem** is resolved by the compromise window mechanism. The directory anchors the window to the earliest logged anomaly event — scanner flags, fallback canary fires, counterparty complaints, anomaly alerts. Penalties are scoped to that window. A malicious agent re-keying to evade still carries all penalties from before the re-key; the anomaly trail doesn't disappear.
+
+*Ref: day-zero-review/05, Sections 1.1-1.2; [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]]*
 
 ---
 
