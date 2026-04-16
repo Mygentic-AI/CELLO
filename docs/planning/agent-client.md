@@ -342,7 +342,7 @@ The stable identity is the agent's long-term key pair (K_local for per-message s
 
 Privacy benefit: a passive observer watching network traffic sees different Peer IDs for each session and cannot correlate across sessions without access to the directory signaling record. The directory knows the mapping from stable identity to current ephemeral Peer ID (it handles the signaling), but external observers do not.
 
-**[GAP AC-4]**: Session resumption semantics within a short window are not specified. If the client briefly disconnects (network hiccup), should it reuse the same ephemeral Peer ID or generate a new one? This matters for in-flight message delivery during the interruption.
+**Session resumption within a short window (AC-4 resolved):** On a brief disconnection (network hiccup, transient NAT failure), the client reuses the same ephemeral Peer ID rather than generating a new one. The counterparty retains the existing P2P connection context; in-flight messages can be retransmitted against the same Peer ID without requiring a new signaling round-trip through the directory. A new ephemeral Peer ID is generated only when a session is deliberately closed, when the client restarts, or when the reconnection window expires (see AC-5 for the expiry threshold). Reusing the Peer ID within the window does not weaken privacy — the directory already knows the stable-identity-to-Peer-ID mapping for the duration of the session; the privacy benefit of ephemeral IDs is cross-session unlinkability, not within-session unlinkability.
 
 ### NAT traversal — three-layer fallback
 
@@ -1249,7 +1249,7 @@ The client's behavior on receiving a K_server revocation event is directly contr
 | AC-1 | Key management | K_server_X rotation notification format, grace period duration, and epoch identifier format not specified |
 | AC-2 | Persistence | ~~Resolved~~ — 2-year default (`merkle_retention_days: 730`), configurable per deployment. Sealed root hash and MMR peak survive pruning; leaf-level proofs do not. 30-day `MERKLE_PRUNE_SCHEDULED` notice before deletion. |
 | AC-3 | Transport | Acceptable timestamp skew window for directory nonce verification not specified |
-| AC-4 | Transport | Session resumption within short window: reuse ephemeral Peer ID or generate new one? |
+| AC-4 | Transport | ~~Resolved~~ — reuse same ephemeral Peer ID on brief disconnect; new ID generated only on deliberate close, restart, or reconnection window expiry (AC-5). |
 | AC-5 | Transport | How many P2P session drops before conversation is considered abandoned; retry vs. escalate to relay behavior |
 | AC-6 | Merkle | Session inactivity timeout value not specified |
 | AC-7 | Merkle | REOPEN semantics: new FROST ceremony required? Sequence numbers across seal boundary? Unilateral REOPEN permitted? |
