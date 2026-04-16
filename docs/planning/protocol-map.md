@@ -252,3 +252,5 @@ All 12 design problems are closed. All 12 open decisions are resolved. The proto
 - [[design-problems|Design Problems]]
 - [[00-synthesis|Protocol Review — Synthesis]]
 - [[day-0-agent-driven-development-plan|Day-0 Development Plan]]
+- [[frontend|CELLO Frontend Requirements]] — complete requirements for portal, mobile app, and desktop app, with all conflicts and gaps identified
+- [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — companion device P2P connection, human injection, and local persistence model

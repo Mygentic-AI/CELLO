@@ -944,3 +944,4 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 - [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow and Trust Relay]]
 - [[open-decisions|Open Decisions]]
 - [[design-problems|Design Problems]]
+- [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — designs the P2P companion connection for mobile/desktop content viewing and human injection into agent conversations
