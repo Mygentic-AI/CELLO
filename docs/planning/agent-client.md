@@ -509,8 +509,9 @@ Control leaves (CLOSE, CLOSE-ACK, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN) are ha
 | `ABORT` | Security event or policy breach | Yes — REOPEN not permitted |
 | `REOPEN` | Either party reopens a SEALED or EXPIRED session | Continuation |
 
-After `SEAL`: any subsequent message is rejected.
-After `ABORT`: `REOPEN` is not permitted.
+After `SEAL`: any subsequent message is rejected — with one time-windowed exception (AC-36 resolved). If a message arrives after `SEAL` but within a configurable grace window (`post_seal_grace_seconds`, default `300`), the client accepts it as a record-only leaf appended to the sealed tree. This handles in-flight messages that were dispatched before the sender received the `SEAL` notification. After the grace window expires, any arriving message triggers a new conversation: the client auto-initiates a `REOPEN` and delivers the message as the first leaf of the continuation session. The grace window is configurable via `cello_configure`. Messages accepted during the grace window are flagged `post_seal: true` in the local leaf record and surfaced to the agent via `cello_receive` with a `post_seal_arrival` flag so the agent can handle them appropriately.
+
+After `ABORT`: `REOPEN` is not permitted. Post-`ABORT` message arrivals are always rejected regardless of timing — the security event that triggered `ABORT` makes record-only acceptance unsafe.
 
 **[GAP AC-6]**: Session inactivity timeout value is not specified. This is server infrastructure Gap G-13.
 
@@ -1281,7 +1282,7 @@ The client's behavior on receiving a K_server revocation event is directly contr
 | AC-33 | Merkle | `DELIVERED`→`ABSENT` transition timeout unspecified for group room participants. AC-6 covers bilateral inactivity timeout only |
 | AC-34 | Merkle | Control message priority in serialized mode: whether ABORT or FLAGGED control leaves can bypass the send queue is an open design question not surfaced in the gaps list |
 | AC-35 | Merkle | Delivery Case B: hash-arrives-first-then-message handling path is absent. The delivery failure table only covers message-arrives-first (Case C) for the asymmetric case. session-level-frost-signing.md identifies directory-first arrival as a common case requiring distinct handling |
-| AC-36 | Merkle | Post-session message arrival (delivery Case B4): three-way choice (accept-for-record-only / discard / accept-and-flag) is unresolved and not listed as a gap |
+| AC-36 | Merkle | ~~Resolved~~ — within `post_seal_grace_seconds` (default 300s, configurable): accept-and-record as `post_seal: true` leaf. After window: auto-REOPEN, deliver as first leaf of new conversation. Post-ABORT arrivals always rejected. |
 | AC-37 | Merkle | Resend vs. replay attack disambiguation not addressed. When the client retries delivery, the recipient needs a mechanism to distinguish retransmission from injected replay. Not carried forward as a gap |
 | AC-38 | Merkle | `cello_acknowledge_receipt` tool missing from the 34-tool MCP surface. Source identifies this as required for explicit causal commitment in high-stakes multi-party scenarios (commerce use case) |
 | AC-39 | Merkle | Bilateral seal protocol incomplete: bilateral seal requires both parties to sign the final root AND exchange attestations per session-level-frost-signing.md. The attestation exchange step when the directory is unavailable is not described |
