@@ -200,7 +200,7 @@ The full client data store is encrypted with `backup_key` and uploaded to user-c
 
 Conversation Merkle trees are the only data that cannot be reconstructed from scratch — they must be in the encrypted backup or recovered from counterparties. Everything else is either re-queryable from the directory (track record stats) or re-derivable from the identity key.
 
-**[GAP AC-2]**: Client-side conversation tree retention policy is not specified. How long the client holds full Merkle trees, whether there is a pruning policy, and what happens to non-repudiation guarantees after local pruning are open questions. The directory side is resolved (~365 bytes/conversation; no pruning needed). The client side is not.
+**Conversation tree retention policy (AC-2 resolved):** The client retains full Merkle trees for two years from the conversation seal date, then prunes them from local storage. The retention window is configurable via `cello_configure` (`merkle_retention_days`, default `730`). The node operator can override this default at deployment time. After pruning, the sealed root hash and MMR peak remain in the directory's conversation seal record — non-repudiation at the conversation level is preserved. What is lost after pruning is the ability to produce individual leaf-level proofs; disputes referencing pruned leaves must rely on the counterparty's copy or the directory's sealed root. The client surfaces the configured retention window in `cello_status` and emits a `MERKLE_PRUNE_SCHEDULED` notification 30 days before any batch of trees is pruned, giving the owner the option to export or extend before deletion.
 
 ### Succession package
 
@@ -1247,7 +1247,7 @@ The client's behavior on receiving a K_server revocation event is directly contr
 | ID | Area | Gap |
 |---|---|---|
 | AC-1 | Key management | K_server_X rotation notification format, grace period duration, and epoch identifier format not specified |
-| AC-2 | Persistence | Client-side conversation tree retention policy not specified: pruning schedule, what happens to non-repudiation guarantees after local pruning |
+| AC-2 | Persistence | ~~Resolved~~ — 2-year default (`merkle_retention_days: 730`), configurable per deployment. Sealed root hash and MMR peak survive pruning; leaf-level proofs do not. 30-day `MERKLE_PRUNE_SCHEDULED` notice before deletion. |
 | AC-3 | Transport | Acceptable timestamp skew window for directory nonce verification not specified |
 | AC-4 | Transport | Session resumption within short window: reuse ephemeral Peer ID or generate new one? |
 | AC-5 | Transport | How many P2P session drops before conversation is considered abandoned; retry vs. escalate to relay behavior |
