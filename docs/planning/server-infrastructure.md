@@ -2,7 +2,7 @@
 name: CELLO Server Infrastructure Requirements
 type: design
 date: 2026-04-16
-topics: [identity, directory, relay, FROST, key-management, MCP-tools, persistence, discovery, notifications, recovery, compliance, session-termination, transport]
+topics: [identity, directory, relay, FROST, key-management, MCP-tools, persistence, discovery, notifications, recovery, compliance, session-termination, transport, companion-device, libp2p]
 status: active
 description: Complete requirements for the three server-side components — signup web portal, directory nodes, and relay nodes — synthesized from all design documents and discussion logs. Includes all conflicts requiring resolution and all identified gaps.
 ---
@@ -358,6 +358,15 @@ After ABORT: REOPEN is not permitted.
 - One negotiation round permitted: Bob can ask for one additional disclosure; Alice provides or refuses; Bob accepts or declines. No further rounds.
 - All actual trust data held in memory during relay is cleared after the accept/reject decision — never persisted to disk. Directory's persistent store holds only hashes.
 
+**Companion device connections**:
+- The directory facilitates NAT traversal for companion device connections using the same hole-punching mechanism as agent-to-agent sessions
+- Companion devices are a distinct connection type: the directory sees "companion device D wants to reach CELLO client for owner X" — facilitates the P2P connection, then steps out
+- Companion device authentication is outside the FROST model — the companion device presents a keypair registered at install time (bound via phone OTP), not a FROST-authenticated agent identity
+- The directory must maintain a registry of authorized companion device public keys per agent, alongside the existing device attestation records
+- Companion device connections are read-only from the directory's perspective: no hashes are submitted, no Merkle tree operations occur, no sequence numbers are assigned
+- The `cello_request_human_input` MCP tool triggers a push notification to the companion device via the directory — the directory sees "send a knock to owner X's companion device," content-free
+- **[GAP G-41]**: Companion device key registration: where the companion device's public key is stored (home node alongside other PII? replicated directory state?), how it is provisioned during app install, and how it is revoked when the owner deregisters a companion device are not specified
+
 **Multi-node public key cross-check**:
 - Receiver cross-checks requester's public key across multiple nodes with Merkle proof verification
 - Each node provides data + Merkle proof path from entry to consensus checkpoint root
@@ -500,7 +509,7 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
 - **Rate limits**: Per-sending-agent, gated by trust tier (fewer trust signals = stricter limits). Verified businesses can apply for elevated limits. Recipient opt-out always overrides. **Specific rate limit values: not specified. [GAP G-31]**
 - **Delivery**: Via recipient's persistent authenticated WebSocket
 - **Notification hashes**: Stored as standalone events — not chained into a session Merkle tree
-- **Notification type registry**: Enumerated, not freeform. Types include at minimum: `INTRODUCTION`, `ORDER_UPDATE`, `ALERT`, `PROMOTIONAL`, `SYSTEM`, `CONNECTION_REQUEST`, `ENDORSEMENT_RECEIVED`, `SECURITY_BLOCK`, `TOMBSTONE`, `TRUST_EVENT`, `RECOVERY_EVENT`, `SESSION_CLOSE_ATTESTATION_DISPUTE`, `SUCCESSION_CLAIM_FILED`
+- **Notification type registry**: Enumerated, not freeform. Types include at minimum: `INTRODUCTION`, `ORDER_UPDATE`, `ALERT`, `PROMOTIONAL`, `SYSTEM`, `CONNECTION_REQUEST`, `ENDORSEMENT_RECEIVED`, `SECURITY_BLOCK`, `TOMBSTONE`, `TRUST_EVENT`, `RECOVERY_EVENT`, `SESSION_CLOSE_ATTESTATION_DISPUTE`, `SUCCESSION_CLAIM_FILED`, `HUMAN_INPUT_REQUESTED`
 - **Whether notifications must route through directory or can go peer-to-peer**: explicitly unresolved **[GAP G-32]**
 - **Institutional verification for elevated rate limits**: application process and criteria not specified **[GAP G-33]**
 
@@ -530,6 +539,7 @@ All tables are append-only unless noted. Mutable tables are marked.
 | `social_verification_freshness_checks` | append-only |
 | `social_proof_freezes` | append-only |
 | `device_attestation_records` | append-only; types: TPM, PLAY_INTEGRITY, APP_ATTEST (NOT WEBAUTHN) |
+| `companion_device_registrations` | append-only; companion device public keys authorized to read from the CELLO client via P2P — **[see GAP G-41]** |
 | `bio_history` | append-only; supersession pattern |
 | `pseudonym_bindings` | append-only |
 | `conversation_seals` | append-only; random UUID conversation_id |
@@ -623,6 +633,12 @@ When relay nodes are unavailable:
 - The notarized FROST seal is deferred until the relay/directory returns
 - The bilateral seal is available immediately; the notarized seal requires directory involvement
 
+### Companion device relay
+
+Companion device connections use the same NAT traversal as agent-to-agent connections. When hole-punching fails (~20–30% of cases), the companion device falls back to circuit relay through a relay node — the same path as agent sessions that fail to hole-punch.
+
+From the relay node's perspective, a companion device connection is indistinguishable from any other relayed P2P connection: encrypted traffic between two ephemeral Peer IDs. The relay node sees no content and cannot distinguish a companion device connection from an agent-to-agent session.
+
 ### Notification relay
 
 When a relay node needs to alert an agent owner (e.g., anomaly detection):
@@ -674,6 +690,17 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 6. SEAL is recorded in `conversation_seals`; triggers MMR leaf append
 7. If staking was active: CLEAN → stake auto-released; FLAGGED + upheld arbitration → institution can claim stake
 
+### Companion device connection flow
+
+1. Owner opens mobile app or desktop app; app initiates libp2p connection to directory
+2. App presents its registered companion device public key; directory verifies against the owner's companion device registry
+3. Directory facilitates NAT traversal (hole-punching) between the companion device and the owner's CELLO client — same mechanism as agent-to-agent P2P setup
+4. Direct P2P connection established between companion device and CELLO client; directory steps out
+5. Companion device reads session metadata and conversation content on demand from the CELLO client's local SQLCipher database
+6. Content flows directly over P2P — the directory never sees it
+7. For human injection: companion device sends `send_human_injection(session_id, content)` to the CELLO client; client delivers to the agent; agent decides what to forward
+8. When the `cello_request_human_input` MCP tool is called: CELLO client sends a content-free knock request to the directory; directory pushes a notification to the companion device via APNs/FCM; owner opens the app and the content channel is established per steps 1–4
+
 ### Compromise response flow
 
 1. Owner receives push alert via WhatsApp/Telegram (from directory, through notification path)
@@ -715,6 +742,8 @@ In Alpha, some components that will eventually be separated (relay vs. directory
 | Notification hashes | All directory nodes | Yes | Not deleted |
 | Message content | Client only (P2P) | N/A | Client-side |
 | Scan results | Part of Merkle leaf | Yes (in conversation tree) | Not deleted |
+| Companion device public keys | Home node or directory — **[GAP G-41]** | TBD | Revoked on deregistration |
+| Human injection logs | Client only (local SQLCipher) | N/A | Client-side; not in Merkle tree |
 | Anomaly event timestamps | All directory nodes | Yes | Not deleted |
 | Succession packages | Directory (home node?) | TBD — **[GAP G-39]** | Not specified |
 | Oracle evidence (GPS, photos) | Not specified — **[GAP G-40]** | Not specified | Not specified |
@@ -808,6 +837,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-38 | Relay | Group key management for encrypted relay fan-out (establishment, new-joiner distribution, departure revocation) explicitly unresolved |
 | G-39 | Cross | Succession package storage: which node type holds it, replication policy, at-rest protection not specified |
 | G-40 | Cross | Oracle evidence (GPS, photos, video) storage location, retention policy, and post-dispute disposition not specified |
+| G-41 | Directory | Companion device key registration: storage location (home node vs. replicated), provisioning during app install, revocation on deregistration, and maximum number of companion devices per agent not specified |
 
 ---
 
@@ -824,3 +854,4 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 - [[open-decisions|Open Decisions]]
 - [[design-problems|Design Problems]]
 - [[frontend|CELLO Frontend Requirements]] — the web portal, mobile app, and desktop app requirements that the server infrastructure must support; the two documents together define the full client-server contract
+- [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — designs the companion device P2P connection that the directory must facilitate; introduces a new connection type, new notification type, and companion device key registry
