@@ -72,9 +72,23 @@ Finally: the client tracks only its own lists. It does not track which other age
 
 **Refinement added (2026-04-10):** The random pool selection was subsequently strengthened to trust-weighted random selection. Rather than uniform random, selection probability is proportional to accumulated trust signals. An agent with minimal trust signals (phone only) and a fully-verified agent (WebAuthn, GitHub, LinkedIn) both enter the pool, but at very different weights. An attacker running 10,000 phone-only accounts contributes 10,000 minimal-weight entries. One legitimate user with strong trust signals contributes far more weight. To dominate a weighted pool, the attacker needs those 10,000 accounts to carry real trust signals — which means 10,000 genuine GitHub histories, 10,000 LinkedIn profiles with years of activity. Each layer stacks multiplicatively across the volume. The resource-tying attack and the identity attack now defend against each other: making fake identities numerous enough to matter requires making them expensive enough to matter.
 
-**What's still unspecified:** The fallback token mechanism itself — a signed "I was online as of T" proof the directory issues during normal operation. Not a blocker, but would add a layer of assurance. See [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] for the full mechanism.
-
 **Severity reduced (2026-04-15):** The move to session-level FROST fundamentally changes the fallback landscape. Individual messages are now signed with K_local in normal operation — K_local signing is the standard mode, not a degraded fallback. Directory outage prevents new FROST session establishment and notarized seals, but **existing conversations continue normally**. There is no "mass fallback" event because conversations in progress never needed per-message FROST. The compromise canary does not fire network-wide on directory outage. The remaining exposure: an attacker who steals K_local during a directory outage can impersonate the agent in new connections to agents on the degraded-mode list — but cannot establish FROST-authenticated sessions, limiting the scope. See [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]].
+
+**Resolution: fully resolved — closed.**
+
+This is one of the most thoroughly defended problems in the protocol. The attack requires stealing K_local AND successfully DDoSing the directory AND targeting an agent who has the victim on their degraded-mode list — three independent conditions that each have their own defense:
+
+1. **Raw-volume DDoS** — CloudFront-style infrastructure mitigation. Standard solved problem. CELLO inherits it. See [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] §"Two distinct DDoS problems".
+
+2. **Resource-tying DDoS** (flooding connection nodes to block new sessions) — relay node separation means this cannot reach established sessions. Trust-weighted random pool selection means a flood can never create a hard wall against legitimate agents. Both defenses are fully designed. See [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] §Parts 1 and 2.
+
+3. **Fallback triggered anyway** — the client's default in degraded mode is to refuse new unauthenticated connections. An attacker cannot impersonate the victim to anyone who has not explicitly pre-authorized them on a short, deliberately-curated degraded-mode list.
+
+4. **Attacker on the degraded-mode list** — the session is flagged in the Merkle leaf. It is not a clean-trust session.
+
+5. **Impersonation somehow occurs** — the legitimate owner hits "Not Me." K_server is immediately revoked and the attacker is locked out. Problem 11 already established that "Not Me" cannot itself be weaponized as a DoS vector. The owner's recovery path is clean.
+
+What remains after all five layers is no worse than any other identity system (stolen credential → impersonation → owner revokes). CELLO's defense-in-depth makes it significantly harder to reach that point, and shorter-lived once reached. The fallback token mechanism (a directory-issued "I was online as of T" proof) was noted as a potential refinement but is unnecessary given the above stack.
 
 ---
 
