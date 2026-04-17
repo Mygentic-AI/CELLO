@@ -42,7 +42,7 @@ The portal is operated by CELLO (centralized). It is not a protocol-level depend
 
 ### Session bootstrapping and authentication
 
-Portal sessions are bootstrapped via phone OTP, which links the browser session to the phone number already registered to the agent. This is the same phone number used at agent registration via the WhatsApp/Telegram bot.
+Portal sessions are bootstrapped via phone OTP, which links the browser session to the phone number already registered to the agent. This is the same phone number used at agent registration via the WhatsApp/Telegram/WeChat bot.
 
 Authentication levels during a portal session:
 
@@ -51,7 +51,7 @@ Authentication levels during a portal session:
 
 The session token issued after phone OTP is scoped: it permits reading and low-stakes writes, but the backend rejects WebAuthn-required operations presented with only a phone-OTP-level session token regardless of how recent the OTP was.
 
-**[CONFLICT FC-1 — same as server C-1]**: Multiple documents describe phone OTP as happening exclusively in the WhatsApp/Telegram bot during initial registration. Other passages describe the portal handling OTP. Whether the portal has a standalone OTP path (so a new user can start from the portal directly) or always operates downstream of prior bot-verified registration is never made explicit. Decision required: can the portal onboard an un-phone-verified user from scratch, or must the user always pass through the WhatsApp/Telegram bot first?
+**[CONFLICT FC-1 — same as server C-1]**: Multiple documents describe phone OTP as happening exclusively in the WhatsApp/Telegram/WeChat bot during initial registration. Other passages describe the portal handling OTP. Whether the portal has a standalone OTP path (so a new user can start from the portal directly) or always operates downstream of prior bot-verified registration is never made explicit. Decision required: can the portal onboard an un-phone-verified user from scratch, or must the user always pass through the WhatsApp/Telegram/WeChat bot first?
 
 **[GAP F-1]**: Portal session lifecycle is not specified. How long does a phone OTP session remain valid? What triggers re-authentication? Does the session step up from phone-OTP to WebAuthn-level for the duration of the session, or does each WebAuthn-required operation issue a fresh challenge even within the same session?
 
@@ -59,7 +59,7 @@ The session token issued after phone OTP is scoped: it permits reading and low-s
 
 ### Registration completion flow
 
-When an agent registers via the WhatsApp/Telegram bot, the human owner receives a link to the portal. The portal recognizes the new registration and presents:
+When an agent registers via the WhatsApp/Telegram/WeChat bot, the human owner receives a link to the portal. The portal recognizes the new registration and presents:
 
 1. A summary of what the agent currently has (phone verified, baseline keys issued)
 2. The trust enrichment paths available, with an explanation of what each adds and what receiving agents may require
@@ -107,7 +107,7 @@ After enrollment, WebAuthn is required for subsequent sensitive operations. The 
 
 TOTP 2FA must be enrollable alongside WebAuthn as a backup, not as the primary factor. The portal should not allow TOTP as the sole factor for key rotation — it is weaker than WebAuthn and should be positioned as a recovery path.
 
-**[GAP F-4]**: TOTP enrollment mechanics are not specified. How is the TOTP secret generated? Where is it stored (signup portal backend? client-side only?)? The JSON record schema for TOTP as a trust signal is not defined.
+**TOTP 2FA enrollment**: RFC 6238 (30-second window, 1-step tolerance). Portal generates TOTP secret, encodes as QR code, user scans with authenticator app, portal verifies 6-digit code. Secret discarded after activation; only the hash of the JSON record is stored. Canonical JSON record envelope applies: `{ signal_class, verified_at, verifier, payload, portal_signature }`. TOTP is a fallback for WebAuthn, not a substitute — it does not satisfy WebAuthn-required operations as a primary factor.
 
 **LinkedIn, GitHub, Twitter/X, Facebook, Instagram (OAuth)**
 
@@ -123,7 +123,7 @@ Each OAuth binding:
 
 The portal must visibly communicate the binding lock to the owner before they confirm an OAuth binding.
 
-**Liveness probing**: The portal must periodically require fresh activity (new commit, new LinkedIn post) to maintain verification weight. Purchased dormant accounts must decay. The portal is responsible for initiating these re-checks and updating the trust signal hash when they pass. The polling interval is not specified. **[GAP F-5]**
+**Liveness probing**: The portal must periodically require fresh activity (new commit, new LinkedIn post) to maintain verification weight. Purchased dormant accounts must decay. The portal is responsible for initiating these re-checks and updating the trust signal hash when they pass. **Probe interval: 60 days.** On failure: signal marked `VERIFICATION_STALE`. After 3 consecutive failures (180 days): signal marked `UNVERIFIED`, hash updated in directory, agent notified.
 
 **[GAP F-6]**: The exact metadata evaluated for Twitter/X, Facebook, and Instagram is not specified in source documents. LinkedIn and GitHub have clear criteria; the others do not.
 
@@ -160,13 +160,13 @@ The portal handles all sensitive account operations, all of which require WebAut
 
 Key rotation must be presented to the owner as a routine security operation — not as an emergency. Since the K_server_X rotation is per-agent (not a network-wide event), the portal must not use alarming language about rotation. The portal should prompt rotation on the schedule recommended in the protocol (not yet specified — **[GAP F-7]**) and not only after a compromise event.
 
-Key rotation must happen at a session boundary. If the owner initiates rotation while active sessions exist, the portal must display a grace period indicator showing whether active sessions must be sealed under the old K_server_X before old shares are retired. **[GAP F-24]** covers the unspecified grace period duration.
+Key rotation must happen at a session boundary. If the owner initiates rotation while active sessions exist, the portal must display a grace period indicator: the old K_server_X epoch (`agent_id:epoch:N` format) remains valid for **7 days** after rotation. The `expires_at` field in the `KEY_ROTATION_RECOMMENDED` notification payload gives the exact hard cutoff. Sessions that seal within the grace window use the old epoch normally; signatures from the old epoch are rejected after the hard cutoff. If any sessions remain open as the cutoff approaches, the portal must surface a clear warning.
 
 **[CONFLICT FC-5 — Resolved]**: `KEY_ROTATION_RECOMMENDED` and `KEY_ROTATED` are now distinct notification types. `KEY_ROTATION_RECOMMENDED` is the directory's inbound scheduling nudge to the owner-agent. `KEY_ROTATED` is the outbound notification sent to counterparty agents after a completed rotation, telling them to refresh cached key material. Gap F-25 is closed.
 
 **Phone number change**
 
-Requires WebAuthn. The new phone number must go through OTP verification before the change commits. The signup portal backend validates the OTP via the WhatsApp/Telegram bot integration. Social proofs and WebAuthn credentials are not affected. The old phone number is no longer usable for portal login after the change commits.
+Requires WebAuthn. The new phone number must go through OTP verification before the change commits. The signup portal backend validates the OTP via the WhatsApp/Telegram/WeChat bot integration. Social proofs and WebAuthn credentials are not affected. The old phone number is no longer usable for portal login after the change commits.
 
 **Social verifier add/remove**
 
@@ -186,11 +186,11 @@ Requires WebAuthn. Deletion is permanent and irreversible. The portal must prese
 
 **Bio and profile management**
 
-The portal allows the owner to compose and update the agent's bio (public-facing, static, visible to directory browsers). Bio updates are rate-limited — the owner can only update once every X hours. **[GAP F-22]**: the value of X is not specified.
+The portal allows the owner to compose and update the agent's bio (public-facing, static, visible to directory browsers). Bio updates are rate-limited to once every **12 hours**.
 
 The portal must display bio change history with timestamps (recorded in the identity Merkle tree). This history is a trust signal — stability matters.
 
-The portal allows the owner to manage per-recipient greetings: contextual messages used at connection request time. Greetings are not on the public profile; different recipients can receive different greetings. Greetings are rate-limited per recipient. **[GAP F-23]**: greeting rate limits and the maximum number of distinct per-recipient greetings maintainable simultaneously are not specified.
+The portal allows the owner to manage per-recipient greetings: contextual messages used at connection request time. Greetings are not on the public profile; different recipients can receive different greetings. Greetings are rate-limited per recipient: **1 per recipient per 7 days** (if ignored or no response); **30 days** if the recipient explicitly declined; **permanent** if the recipient blocked the sender. The maximum number of distinct per-recipient greetings maintainable simultaneously is not yet specified.
 
 **GDPR and data residency**
 
@@ -272,7 +272,7 @@ The portal is the primary surface for managing contact aliases:
 
 The alias URI takes the form `cello:alias/<slug>`. The portal must expose a short-URL resolver so a browser can resolve this to a connection request flow for non-CELLO visitors. **[GAP F-10]**: whether this resolver lives on the portal domain or a separate service is not specified.
 
-**[GAP F-30]**: Alias TTL/expiry is unresolved. The directory schema includes `EXPIRED` as a possible alias status, but no TTL field appears in the schema and the TTL mechanism is not specified.
+Contact aliases have a configurable TTL — default **6 months of inactivity**. A scheduled directory job at each checkpoint marks aliases `EXPIRED` if no session has been initiated through them within the TTL window. The TTL resets on each successful contact through the alias. The portal alias management UI must display each alias's last-contacted timestamp and the time remaining before expiry.
 
 **[GAP F-31]**: The non-CELLO browser visitor flow for the alias short-URL resolver is not designed. Source documents describe alias resolution for CELLO agents calling `cello_initiate_connection` — they do not describe what a browser visitor (non-CELLO) sees when they hit the short URL.
 
@@ -327,7 +327,7 @@ The portal's discovery view is for the owner to understand the ecosystem, not fo
 
 **Incubation period display**
 
-New agents are in an incubation period (7 days, 3 new outbound connections/day limit). The portal must:
+New agents are in an incubation period (7 days, 25 new outbound connections/day limit). The portal must:
 - Display an incubation status indicator showing days remaining and daily connection attempts used
 - Explain the limit to the owner so they are not confused by connection refusals
 - Not suggest the limit is due to an error or policy violation
@@ -360,7 +360,7 @@ The portal should make designation of M-of-N recovery contacts prominent and dif
 
 - After the initial registration completion flow, the portal should present recovery contact designation as a step with its own screen, not a footnote in settings.
 - The owner must be able to search for contacts by agent handle, invite by alias URI, or paste an agent ID.
-- Contacts must meet a minimum trust signal floor (exact floor not yet specified — **[GAP F-11]**).
+- Contacts must meet a minimum trust signal floor: **≥2 social bindings each older than 2 years AND WebAuthn or device attestation active; not currently in incubation.** Phone-only accounts cannot serve as recovery contacts.
 - The portal shows whether each designated contact has the required signals.
 - An agent without any recovery contacts must display a visible indicator in its trust profile — the directory enforces this; the portal must communicate it clearly.
 
@@ -443,7 +443,7 @@ The Merkle root values are displayed as truncated hex (first 8 bytes) with copy-
 
 **[CONFLICT FC-7]**: The "Submit to arbitration" trigger condition cannot rely on a conversation-level FLAGGED flag in multi-party conversations, because the FLAGGED state is now per-participant. An action must be available when any participant's individual attestation is FLAGGED, not only when a conversation-level flag is set. Resolution required before the dispute submission UI can be implemented.
 
-A FLAGGED individual attestation is highlighted. If the owner wants to submit the session to arbitration, the dashboard provides a "Submit to arbitration" action (see Dispute Submission in Cross-Surface Flows below).
+A FLAGGED individual attestation is highlighted. If the owner wants to submit the session to arbitration, the dashboard provides a "Submit to arbitration" action (see Dispute Submission in Cross-Surface Flows below). If the flag is not submitted within **7 days**, it expires automatically with no consequence to either party. The dashboard must display the 7-day countdown on any open FLAGGED attestation and confirm expiry when the deadline passes. Note: if the same agent flags and abandons more than 3 sessions in a rolling 90-day window, that pattern is recorded in the flagger's own trust profile as a behavioral signal.
 
 Session details additionally show:
 - Ordering mode for group conversations (SERIALIZED vs. CONCURRENT)
@@ -496,9 +496,9 @@ The mobile app serves three capabilities that the web portal cannot provide:
 
 The mobile app is not a full portal replica. For everything except device attestation, push-based responses, and companion device content viewing, the owner uses the web portal. The mobile app is an oversight, security response, and conversation visibility tool.
 
-The existing WhatsApp/Telegram escalation channel (configured via `cello_configure`) is the Phase 1 out-of-band path before the mobile app exists. The mobile app adds a native push path alongside it, not replacing it.
+The existing WhatsApp/Telegram/WeChat escalation channel (configured via `cello_configure`) is the Phase 1 out-of-band path before the mobile app exists. The mobile app adds a native push path alongside it, not replacing it.
 
-**[CONFLICT FC-3]**: Whether the native push path and the WhatsApp/Telegram path must both be configured, or whether the mobile app supersedes the WhatsApp/Telegram channel once installed, is not specified. They must produce the same outcomes (same `CONNECTION_ESCALATION_RESOLVED` notification), but whether they are redundant paths or a primary/fallback hierarchy is not decided. Decision required.
+**[CONFLICT FC-3]**: Whether the native push path and the WhatsApp/Telegram/WeChat path must both be configured, or whether the mobile app supersedes the WhatsApp/Telegram/WeChat channel once installed, is not specified. They must produce the same outcomes (same `CONNECTION_ESCALATION_RESOLVED` notification), but whether they are redundant paths or a primary/fallback hierarchy is not decided. Decision required.
 
 ### Device attestation enrollment
 
@@ -568,7 +568,7 @@ The app displays these in a prioritized alert list. Urgent alerts (FROST failure
 
 ### Succession alerts
 
-When a succession claim is filed against the owner's agent, the directory notifies the owner via configured external channels (WhatsApp/Telegram, independent of the CELLO client). The mobile app must also receive and surface this as an urgent push notification so the owner can immediately authenticate to contest.
+When a succession claim is filed against the owner's agent, the directory notifies the owner via configured external channels (WhatsApp/Telegram/WeChat, independent of the CELLO client). The mobile app must also receive and surface this as an urgent push notification so the owner can immediately authenticate to contest.
 
 ### WebAuthn on mobile
 
@@ -585,7 +585,7 @@ The companion connection operates on a separate channel from push notifications:
 
 **Human injection.** The owner can type a message into an active conversation. The message goes to the owner's CELLO client via the P2P content channel, which delivers it to the agent as a special input: "your owner wants this in the conversation." What happens next is the agent's decision — pass it verbatim, wrap it with context, use it as an instruction, or ignore it. The other agent(s) in the conversation never know a human was involved. The human injection is not in the Merkle tree and is not part of the protocol record.
 
-**Agent-requests-human-input.** The agent can request owner input mid-conversation via `cello_request_human_input` (a new MCP tool). The client asks the directory to send a push notification to the companion device — no content, just a knock. The owner receives a push notification ("Your agent is requesting input"), opens the app, sees the conversation context via the content channel, and responds. Alternatively, the agent can reach the owner via WhatsApp/Telegram directly.
+**Agent-requests-human-input.** The agent can request owner input mid-conversation via `cello_request_human_input` (a new MCP tool). The client asks the directory to send a push notification to the companion device — no content, just a knock. The owner receives a push notification ("Your agent is requesting input"), opens the app, sees the conversation context via the content channel, and responds. Alternatively, the agent can reach the owner via WhatsApp/Telegram/WeChat directly.
 
 **Authentication.** The companion device does not use FROST — it is not an agent session. A keypair is generated at app install time, bound to the owner via phone OTP verification (same phone number as the registered agent). The CELLO client maintains an allowlist of authorized companion device public keys. Only registered companion devices can connect.
 
@@ -700,7 +700,7 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 
 ### Registration and first-use
 
-1. Agent registers via WhatsApp/Telegram bot — phone OTP, K_local and K_server_X generated, agent listed in directory
+1. Agent registers via WhatsApp/Telegram/WeChat bot — phone OTP, K_local and K_server_X generated, agent listed in directory
 2. Bot sends the owner a link to the web portal
 3. Owner opens the portal, logs in via phone OTP (bootstrapping the web session from the bot-verified phone number)
 4. Portal presents the registration completion flow: current trust signals, available enrichment paths, recovery contact prompt
@@ -740,7 +740,7 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 4. Owner opens the app → companion P2P connection established → conversation context visible
 5. Owner types a response → sent to client via `send_human_injection(session_id, content)`
 6. Agent receives the response and decides how to use it
-7. Alternatively, the agent can reach the owner directly via WhatsApp/Telegram without using `cello_request_human_input`
+7. Alternatively, the agent can reach the owner directly via WhatsApp/Telegram/WeChat without using `cello_request_human_input`
 
 ### Key rotation
 
@@ -757,7 +757,7 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 ### Compromise detection and "Not Me"
 
 1. Directory detects anomaly event (e.g., FROST session establishment failure from unexpected source)
-2. Directory pushes push notification to mobile app AND sends message to WhatsApp/Telegram (parallel paths — **[see Conflict FC-3]** for their relationship)
+2. Directory pushes push notification to mobile app AND sends message to WhatsApp/Telegram/WeChat (parallel paths — **[see Conflict FC-3]** for their relationship)
 3. Owner receives push notification
 4. Owner taps "Not Me / Emergency" in mobile app
 5. App re-authenticates with phone OTP
@@ -778,7 +778,7 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 3. If `human_escalation_fallback` is set and the request does not produce a clear accept/reject: request transitions to PENDING_ESCALATION
 4. Two parallel notifications fire:
    - Push notification to mobile app (if installed and registered)
-   - Message to WhatsApp/Telegram escalation channel (always configured as fallback)
+   - Message to WhatsApp/Telegram/WeChat escalation channel (always configured as fallback)
 5. Owner reviews the request in either the mobile app (push notification card) or the web portal (escalation queue)
 6. Owner taps Accept or Decline
 7. The decision is submitted to the signup portal backend, which calls `cello_accept_connection` or `cello_decline_connection`
@@ -800,8 +800,9 @@ This flow is primarily handled at the protocol level between the signup portal b
 
 Post-recovery, the portal must display:
 - The formal recovery event in the trust profile (permanently visible): tombstone type, recovery mechanism, vouching agent identities, declared compromise window (start/end timestamps), new public key
-- Post-recovery trust treatment: signals floored at a function of pre-compromise history, not reset to zero; decay rate for compromise-window penalties
-- Voucher accountability status for recovery contacts: liability window (2–3 months), lockout indicator if triggered
+- Post-recovery trust treatment: key-dependent signals (WebAuthn, device attestation) must be re-verified from scratch; key-independent signals (social bindings) restored on fresh OAuth; track record and endorsements preserved
+- **Probationary period progress**: track record history is visible but carries reduced weight until **3 months AND 200 clean conversations** post-recovery are both completed. The portal must display a probationary status indicator showing progress toward both conditions.
+- Voucher accountability status for recovery contacts: 90-day liability window, lockout indicator if triggered
 
 **[GAP F-18]**: The portal UI for a recovery contact vouching on behalf of another agent is not designed. Specifically: how does the recovery contact navigate to the vouch screen? Is there a URL from the directory, a manual agent ID entry, or a QR code flow?
 
@@ -873,7 +874,7 @@ The consistency check. A capability that appears in a requirement but has no sur
 | Play Integrity (Android) | — | ✓ (Android) | — |
 | TPM attestation (Windows) | — | — | ✓ (Windows) |
 | Native push notifications | — | ✓ | ✓ (system tray + OS notification) |
-| Out-of-band escalation | ✓ (WhatsApp/Telegram fallback, configured separately) | ✓ | ✓ |
+| Out-of-band escalation | ✓ (WhatsApp/Telegram/WeChat fallback, configured separately) | ✓ | ✓ |
 | OAuth flows (LinkedIn, GitHub, etc.) | ✓ | ✓ (in-app browser / native OAuth SDK) | — |
 | Merkle proof export | ✓ | — | — |
 | Dispute submission | ✓ | — | — |
@@ -903,12 +904,12 @@ The consistency check. A capability that appears in a requirement but has no sur
 | Phase | What ships | What is deferred |
 |---|---|---|
 | Phase 1 | Web portal: registration completion, WebAuthn enrollment, OAuth flows, key rotation, activity log, connection oversight, escalation queue (web-based), policy configuration, alias management, notification filtering configuration, GDPR/data residency display, whitelist/degraded-mode list management | Mobile app, desktop app |
-| Phase 1 | WhatsApp/Telegram as the only out-of-band escalation path | Native push via mobile app |
+| Phase 1 | WhatsApp/Telegram/WeChat as the only out-of-band escalation path | Native push via mobile app |
 | Phase 2 | Mobile app: device attestation (iOS/Android), push-based escalation, "Not Me" shortcut, security alerts, succession claim alerts, companion device content viewing and human injection | Desktop app, TPM attestation, oracle proof capture |
 | Phase 3 | Desktop app: TPM attestation (Windows), macOS Secure Enclave via App Attest, local MCP server management, companion device content viewing and human injection | Financial UI, oracle proof capture, system tray (far future) |
 | Phase 3+ | Financial UI (stablecoin deposits, fiat on-ramp, stake configuration, bond management, delegation market, yield display) | Oracle proof capture (phase TBD) |
 
-In Phase 1, escalation approvals are web-based: the WhatsApp/Telegram message directs the owner to the portal's escalation queue. The native push path (mobile app) is additive in Phase 2 and should be designed to be fully redundant with the Phase 1 path.
+In Phase 1, escalation approvals are web-based: the WhatsApp/Telegram/WeChat message directs the owner to the portal's escalation queue. The native push path (mobile app) is additive in Phase 2 and should be designed to be fully redundant with the Phase 1 path.
 
 In Phase 1, the desktop app's server management features are replaced by CLI tooling (`cello-server start|stop|status`). The desktop app wraps these operations in a GUI.
 
@@ -917,20 +918,20 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 ## Conflicts Requiring Resolution
 
 **FC-1: Portal/bot boundary for phone OTP**
-- Position A: Phone OTP happens exclusively in the WhatsApp/Telegram bot; the portal always operates downstream of an already-verified phone number. The portal login flow assumes a bot-registered agent exists and bootstraps from it.
+- Position A: Phone OTP happens exclusively in the WhatsApp/Telegram/WeChat bot; the portal always operates downstream of an already-verified phone number. The portal login flow assumes a bot-registered agent exists and bootstraps from it.
 - Position B: The portal also supports a standalone OTP path, allowing an owner to register entirely through the browser without installing WhatsApp or Telegram.
 - The decision affects: whether the portal needs its own OTP delivery mechanism, whether bot registration is mandatory, and whether the portal's onboarding flow can be self-contained.
 - This is the same as server infrastructure Conflict C-1, but the frontend must resolve it before the portal's registration flow can be implemented.
 
-**FC-2: Bio public access vs. authenticated discovery**
-- Position A (end-to-end-flow §4.2): "Bio — visible to anyone browsing the directory — no connection required."
-- Position B (end-to-end-flow §4.1): "Discovery requires an active authenticated session — only verified agents with a FROST-authenticated session can query the directory."
-- The decision affects: whether the portal exposes a public browse mode without login, what data is available unauthenticated, and whether the alias short-URL resolver must show the target's bio to an anonymous visitor.
-- This is the same as server infrastructure Conflict C-6.
+**FC-2: Bio public access vs. authenticated discovery — Resolved**
+- **Two-tier access model**: Class 1 profiles (bio, capability tags, approximate location, pricing signal, connection policy indicator, anonymous trust score) are publicly browsable without authentication. Search, browse, and Class 3 room listing are also publicly accessible. Authentication gates only protocol operations (connection requests, trust signal relay, FROST ceremonies).
+- The portal must expose a public browse tier: anyone can search and view Class 1 profiles without a CELLO account. The alias short-URL resolver shows the target's bio, handle, and agent type to unauthenticated visitors, plus a "connect with CELLO" CTA.
+- Joining a Class 3 room requires an authenticated session; browsing available rooms does not.
+- This closes F-31 in part: the alias resolver CTA design for non-CELLO visitors is now specified at the concept level. Detailed UX for the CTA flow remains a gap.
 
-**FC-3: Native push vs. WhatsApp/Telegram escalation relationship**
-- Position A: The mobile app push path and the WhatsApp/Telegram path are parallel, redundant channels. Both fire for every escalation event. The owner can respond via either.
-- Position B: The mobile app push path supersedes the WhatsApp/Telegram path once the app is installed. The WhatsApp/Telegram channel is only used when the app is not installed.
+**FC-3: Native push vs. WhatsApp/Telegram/WeChat escalation relationship**
+- Position A: The mobile app push path and the WhatsApp/Telegram/WeChat path are parallel, redundant channels. Both fire for every escalation event. The owner can respond via either.
+- Position B: The mobile app push path supersedes the WhatsApp/Telegram/WeChat path once the app is installed. The WhatsApp/Telegram/WeChat channel is only used when the app is not installed.
 - The decision affects: whether both channels must produce consistent state when both fire; whether double-response (both paths responding) is possible and what happens; and how the owner configures the escalation channel after installing the app.
 
 **FC-4: "Not Me" scope for existing sessions — Resolved**
@@ -958,14 +959,14 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-1 | Portal | Portal session lifecycle not specified: session duration, step-up auth mechanics, fresh-challenge-per-operation vs. session-level upgrade |
 | F-2 | Portal | Portal-to-home-node authentication mechanism not specified: what credential does the portal present for PII operations? |
 | F-3 | Portal | Onboarding link from bot: format, expiry, and portal-side mechanism for recognizing first-time vs. returning visit |
-| F-4 | Portal | TOTP enrollment mechanics and JSON record schema not specified |
-| F-5 | Portal | Liveness probing interval for social verifier freshness not specified |
+| ~~F-4~~ | Portal | ~~Closed~~ — RFC 6238 TOTP (30-sec window, 1-step tolerance); QR code enrollment; canonical JSON record envelope: `signal_class`, `verified_at`, `verifier`, `payload`, `portal_signature`. Secret discarded after activation. |
+| ~~F-5~~ | Portal | ~~Closed~~ — 60-day probe interval. Failure → `VERIFICATION_STALE`. 3 consecutive failures (180 days) → `UNVERIFIED`, hash updated in directory, agent notified. |
 | F-6 | Portal | Metadata evaluation criteria for Twitter/X, Facebook, Instagram OAuth not specified |
 | F-7 | Portal | Recommended key rotation schedule (the interval at which the portal should prompt the owner) not specified |
 | F-8 | Portal | Handling of pending escrow stakes or bonds at account deletion time not specified; two distinct custody paths (DeFi smart contract vs. institutional custodian) each require a different instruction to release funds before signup portal PII wipe |
 | F-9 | Portal | Retention period for the activity log not specified |
 | F-10 | Portal | Alias short-URL resolver: whether it lives on the portal domain or a separate service not specified |
-| F-11 | Portal | Minimum trust signal floor for recovery contacts not defined |
+| ~~F-11~~ | Portal | ~~Closed~~ — ≥2 social bindings each >2 years old AND WebAuthn or device attestation active; not in incubation. Phone-only accounts cannot serve as recovery contacts. |
 | F-12 | Mobile | Protocol for releasing an attestation binding when the original device is permanently lost not specified |
 | F-13 | Mobile | Push notification token provisioning, rotation, and revocation mechanism not specified |
 | F-14 | Mobile | Implementation technology (React Native vs. Swift/Kotlin native) not specified; App Attest integration requires native Swift |
@@ -973,26 +974,26 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-16 | Desktop | Auto-update mechanism for the desktop app management layer not specified |
 | F-17 | Desktop | Whether a Linux version of the desktop app is in scope not specified |
 | F-18 | Recovery flow | Portal UI for a recovery contact vouching on behalf of a locked-out account not designed: navigation path (URL from directory, manual agent ID entry, or QR code) not specified |
-| F-19 | Dispute flow | Whether the dispute submission requires the client to provide full message content or only Merkle proofs is not designed; if content is required, this is the only point where message content passes through infrastructure and needs explicit justification |
+| F-19 | Dispute flow | **Partially resolved**: arbitration design (G-27) confirms content IS sent to external frontier models (Tier 2 inference panel) — privacy disclosure required at submission. Remaining open: the specific portal UI for the disclosure acknowledgment screen and how the client packages the transcript for submission. |
 | F-20 | Mobile / Auth | Whether TOTP is permitted as a factor on the same device as the mobile app (creates an attack envelope concern) not addressed |
 | F-21 | Portal | Whitelist vs. degraded-mode list configuration UI not designed: minimum trust signal floor for degraded-mode list, UI for add/remove, whether both lists are managed in portal only or also in desktop app |
-| F-22 | Portal | Bio change rate limit value (X hours) not specified |
-| F-23 | Portal | Greeting per-recipient rate limit and management UI not specified; maximum number of distinct per-recipient greetings maintainable simultaneously not specified |
-| F-24 | Portal | Grace period for sealing active sessions under old K_server_X during key rotation not specified; epoch identifier format for FROST ceremony outputs not specified |
+| ~~F-22~~ | Portal | ~~Closed~~ — 12-hour cooldown. Portal must disable the bio edit button and display time remaining until cooldown expires. |
+| F-23 | Portal | Greeting rate limits now specified: 1 per recipient per 7 days; 30 days after explicit decline; permanent on block. **Still open**: maximum number of distinct per-recipient greetings maintainable simultaneously not specified. |
+| ~~F-24~~ | Portal | ~~Closed~~ — Epoch ID format: `agent_id:epoch:N`. Grace period: 7 days. Hard cutoff after grace. `expires_at` in `KEY_ROTATION_RECOMMENDED` payload. Portal must display countdown to hard cutoff if sessions remain open. |
 | ~~F-25~~ | Portal | ~~Closed~~ — counterparty-facing key refresh notification named `KEY_ROTATED`; see FC-5 resolution above |
 | F-26 | Dashboard | DELIVERED-to-ABSENT transition timeout in group conversations not specified; portal cannot accurately display participant state without this |
 | ~~F-27~~ | Dashboard | ~~Retired~~ — two delivery paths resolved: directory WebSocket pushes system/protocol events to the agent; client-to-companion P2P delivers owner-targeted notifications. The portal receives events via the directory WebSocket path (same as the agent). See AC-16 / G-32. |
 | F-28 | Portal | Home-node API surface for notification payloads to the portal (distinct from agent-facing MCP tool surface) not specified |
 | F-29 | Mobile | Oracle proof capture (GPS + camera + timestamp) for bond/escrow disputes is a native mobile capability; rollout phase not assigned |
-| F-30 | Portal | Alias TTL/expiry mechanism not specified: the EXPIRED status exists in directory schema but no TTL field appears; the mechanism to trigger expiry is absent |
+| ~~F-30~~ | Portal | ~~Closed~~ — Default TTL: 6 months inactivity. Checkpoint job marks EXPIRED. TTL resets on each successful contact through the alias. Portal must show last-contacted timestamp and time remaining before expiry. |
 | F-31 | Portal | Non-CELLO browser visitor flow for the alias short-URL resolver not designed; source documents describe resolution only for CELLO agents calling `cello_initiate_connection` |
 | F-32 | Portal | Succession claim portal UI not designed: how the owner sees and contests an incoming succession claim filed by a third party |
 | F-33 | Portal | Ownership transfer announcement period UI not designed: cancel action, 7–14 day countdown display, what connected agents see |
 | F-34 | Portal | New owner's authentication flow for accepting an ownership transfer not specified |
 | F-35 | Portal | Endorsement request management UI not specified; `cello_request_endorsement` and `cello_revoke_endorsement` are explicitly listed as missing from the MCP tool surface |
-| F-36 | Portal | Delegation/lending market UI not specified: browse offers, accept/reject delegation, liability display, alerts when delegated stake is at risk |
-| F-37 | Portal | Yield display mechanics not specified: cumulative yield earned vs. CELLO's share, whether yield can be withdrawn independently of principal, yield history |
-| F-38 | Mobile | Oracle proof capture (GPS + camera + timestamp for bond/escrow disputes) rollout phase not assigned |
+| F-36 | Portal | Delegation/lending market UI not specified. **Blocked by G-36 deferral**: financial infrastructure is out of scope for initial launch. |
+| F-37 | Portal | Yield display mechanics not specified. **Blocked by G-36 deferral**: financial infrastructure is out of scope for initial launch. |
+| F-38 | Mobile | Oracle data flow now specified (G-40): oracle verifies → hash stored → original discarded; client holds original and presents to arbitration. Native capture implementation and rollout phase assignment still open. |
 | F-39 | Portal | Succession package creation ceremony security not specified: how portal obtains successor's `identity_key`, browser-level security during in-page plaintext encryption, Web Crypto API vs. WASM choice |
 | F-40 | Portal | False-positive appeal initiation UI not designed: when an activity log entry shows a Layer 2/3 scan block, the portal screen for initiating an LLM arbiter appeal (distinct from the general dispute submission flow) is not specified |
 | F-41 | Portal | Portal web security policy has no source document in the vault. CSP, CSRF, OAuth-token no-log, and trust-signal-blob no-log requirements are stated in this document but are not validated by any protocol review or security policy document. A dedicated portal web security spec is needed. |

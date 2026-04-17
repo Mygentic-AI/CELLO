@@ -174,7 +174,7 @@ Rotation flow:
 
 K_local rotation and K_server_X rotation are independent. K_server_X can rotate without the agent doing anything — the directory does it internally and notifies the agent of the new pubkey. K_local rotation triggers a new K_server_X ceremony as a side effect.
 
-**[GAP AC-1]**: The exact format of the K_server_X rotation notification, the grace period for sealing active sessions under old K_server_X, and the epoch identifier format for FROST ceremony outputs are not specified in the key rotation design. These are carried forward from server-infrastructure Gap G-8.
+**K_server_X epoch identifiers and rotation (AC-1 resolved):** Each K_server_X epoch is identified as `{agent_id}:epoch:{N}` where N is a monotonic integer. FROST ceremony outputs include the epoch identifier; verifiers must reject signatures from expired epochs. Grace period: 7 days after rotation — sessions established under the old K_server_X may seal during this window. Hard cutoff after 7 days: signatures from the expired epoch are rejected outright. The rotation notification payload includes `agent_id`, `old_epoch`, `new_epoch`, `old_pubkey`, `new_pubkey`, `rotation_timestamp`, `expires_at`.
 
 ### Signing key rotation (routine) vs. identity key rotation (exceptional)
 
@@ -277,7 +277,7 @@ TRANSFER_EXECUTING → IDLE (migration complete — new owner holds the identity
 
 ### Bot-initiated registration
 
-The client's registration flow begins with the WhatsApp/Telegram bot. The bot handles phone OTP verification. On success, the bot provisions the agent:
+The client's registration flow begins with the WhatsApp, Telegram, or WeChat bot. The bot handles phone OTP verification. On success, the bot provisions the agent:
 
 1. Client generates K_local (signing key) on device
 2. Directory runs the K_server_X FROST key ceremony across t-of-n nodes — establishing the threshold shares that pair with this agent's K_local
@@ -286,7 +286,7 @@ The client's registration flow begins with the WhatsApp/Telegram bot. The bot ha
 
 The client is responsible for generating K_local and presenting the public key to the directory during the ceremony. The identity key is generated simultaneously; the BIP-39 seed phrase is produced for the owner to back up.
 
-**Registration entry point (AC-C1 resolved):** Registration is entry-point agnostic — neither the bot nor the portal is the privileged starting point. Both mandatory ceremonies (phone OTP and email verification) are always required, but they can be completed in either order through any supported surface. Portal-first path: operator registers via web portal → email OTP completed there → portal initiates the WhatsApp or Telegram phone OTP ceremony. Bot-first path: operator initiates via WhatsApp or Telegram → phone OTP completed there → email verification required (bot prompts for it). The email OTP is the correlation token that ties a portal-initiated registration to the subsequent phone ceremony. Human operators can complete all ceremonies manually; the system makes no assumption that an agent is on the other end.
+**Registration entry point (AC-C1 resolved):** Registration is entry-point agnostic — neither the bot nor the portal is the privileged starting point. Both mandatory ceremonies (phone OTP and email verification) are always required, but they can be completed in either order through any supported surface. Portal-first path: operator registers via web portal → email OTP completed there → portal initiates the WhatsApp, Telegram, or WeChat phone OTP ceremony. Bot-first path: operator initiates via WhatsApp, Telegram, or WeChat → phone OTP completed there → email verification required (bot prompts for it). The email OTP is the correlation token that ties a portal-initiated registration to the subsequent phone ceremony. Human operators can complete all ceremonies manually; the system makes no assumption that an agent is on the other end.
 
 ### Bootstrap discovery
 
@@ -315,13 +315,13 @@ Authentication is bidirectional on connection:
 4. Directory verifies signature against the registered public key
 5. Client verifies the directory's identity: directory signs its own challenge response; client checks against consortium-pinned node keys
 
-**[GAP AC-3]**: Acceptable timestamp skew window for the directory's nonce verification is not specified. This is carried from server infrastructure Gap G-10.
+**Timestamp skew (AC-3 resolved):** The acceptable skew window for directory nonce verification is ±30 seconds. Consistent with NTP-synchronized systems and TOTP tolerance. Requests with timestamps outside this window are rejected as potential replays.
 
 ### FROST session establishment — the opening canary
 
 When the client initiates or accepts a session, FROST authentication runs before any application messages flow. Both agents authenticate to the directory via mutual challenge-response; the directory co-signs the session establishment via FROST.
 
-This ceremony is the compromise canary. If K_local has been stolen and an attacker is attempting to open a session from an unexpected source, the FROST ceremony produces a detectable anomaly: two competing FROST participation attempts for the same agent from different sources. The directory detects and fires a `FALLBACK_CANARY` anomaly event, triggering a push alert to the owner's WhatsApp/Telegram.
+This ceremony is the compromise canary. If K_local has been stolen and an attacker is attempting to open a session from an unexpected source, the FROST ceremony produces a detectable anomaly: two competing FROST participation attempts for the same agent from different sources. The directory detects and fires a `FALLBACK_CANARY` anomaly event, triggering a push alert to the owner's WhatsApp/Telegram/WeChat.
 
 The canary fires at session establishment boundaries. It does not fire per message (individual messages are signed K_local-only). A K_local extraction during an active session is therefore detected at the next session start, not message by message.
 
@@ -530,7 +530,7 @@ Control leaves (CLOSE, CLOSE-ACK, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN) are ha
 | `CLOSE-ACK` | Party B acknowledges | No — in progress |
 | `SEAL` | Directory notarizes mutual close (FROST) | Yes |
 | `SEAL-UNILATERAL` | Timeout — B did not send CLOSE-ACK | Yes |
-| `EXPIRE` | No messages for configurable inactivity window | Quasi-terminal (REOPEN permitted) |
+| `EXPIRE` | No messages for 72 hours (3 days) | Quasi-terminal (REOPEN permitted) |
 | `ABORT` | Security event or policy breach | Yes — REOPEN not permitted |
 | `REOPEN` | Either party reopens a SEALED or EXPIRED session | Continuation |
 
@@ -538,7 +538,7 @@ After `SEAL`: any subsequent message is rejected — with one time-windowed exce
 
 After `ABORT`: `REOPEN` is not permitted. Post-`ABORT` message arrivals are always rejected regardless of timing — the security event that triggered `ABORT` makes record-only acceptance unsafe.
 
-**[GAP AC-6]**: Session inactivity timeout value is not specified. This is server infrastructure Gap G-13.
+**Session inactivity timeout (AC-6 resolved):** 72 hours (3 days) with no messages triggers an `EXPIRE` control leaf. The session moves to quasi-terminal state; `REOPEN` is permitted. The 72-hour window is weekend-safe — a Friday afternoon session won't expire over the weekend.
 
 **[GAP AC-7]**: `REOPEN` semantics are incompletely specified: whether REOPEN requires a new FROST ceremony, how sequence numbers are handled across the seal boundary, and whether REOPEN can be unilateral are not defined. This is server infrastructure Gap G-14.
 
@@ -548,6 +548,8 @@ When the agent sends a CLOSE leaf, it includes a session attestation:
 
 - `CLEAN` — no issues detected during this session
 - `FLAGGED` — suspicious activity observed; session is eligible for arbitration submission
+
+A `FLAGGED` attestation that is never submitted to arbitration expires after **7 days** with no consequence to either party. Serial flag-and-abandon (flagging agent abandons more than 3 flags in a rolling 90-day window without submitting) is recorded as a behavioral signal on the flagger's trust profile — this eliminates the harassment attack vector where an agent repeatedly flags counterparties without intending to pursue arbitration.
 
 The attestation is part of the CLOSE leaf — signed and in the Merkle tree. It serves triple duty: "last known good" timestamp for compromise window determination if something goes wrong later, forced LLM self-audit (the agent must evaluate the session before it can close cleanly), and escrow release trigger (CLEAN → stake returned; FLAGGED + upheld arbitration → institution can claim).
 
@@ -716,14 +718,14 @@ All trust data held in memory during relay is cleared after the accept/reject de
 When the policy includes a `human_escalation_fallback` flag and a request reaches `PENDING_ESCALATION` state:
 
 1. Client transitions the request to `PENDING_ESCALATION` in `connection_requests` (with `escalation_expires_at` set)
-2. Client fires a notification to the configured escalation channel: WhatsApp, Telegram, or Slack webhook (configured via `cello_configure`)
+2. Client fires a notification to the configured escalation channel: WhatsApp, Telegram, WeChat, or Slack webhook (configured via `cello_configure`)
 3. The owner reviews the pending request in the escalation channel or via the web portal / mobile app push notification
 4. Owner responds ACCEPT or DECLINE
-5. The owner's response routes directly back to the client via the same channel the client used to send the notification — WhatsApp/Telegram bot reply handler, Slack webhook reply, or CELLO mobile app over the companion P2P connection. The client's reply handler fires `cello_accept_connection` or `cello_decline_connection` directly. No home node intermediary is involved.
+5. The owner's response routes directly back to the client via the same channel the client used to send the notification — WhatsApp/Telegram/WeChat bot reply handler, Slack webhook reply, or CELLO mobile app over the companion P2P connection. The client's reply handler fires `cello_accept_connection` or `cello_decline_connection` directly. No home node intermediary is involved.
 6. Client appends a `CONNECTION_ESCALATION_RESOLVED` notification to the queue
 7. If `escalation_expires_at` passes without a response: request auto-declines
 
-The client must handle the mobile app push path and the WhatsApp/Telegram path as equivalent — both produce identical outcomes via the same `cello_accept_connection` / `cello_decline_connection` calls.
+The client must handle the mobile app push path and the WhatsApp/Telegram/WeChat path as equivalent — both produce identical outcomes via the same `cello_accept_connection` / `cello_decline_connection` calls.
 
 **Escalation channel dispatch (AC-C5 resolved):** All configured escalation channels fire on every escalation event — there is no hierarchy and no suppression logic based on app presence or reachability. The owner explicitly configures which channels they want active via `cello_configure`. If both native push and WhatsApp/Telegram are configured, both always fire. App reachability does not affect routing: the P2P architecture means the companion app's connectivity is independent of the escalation channel decision. The owner's configuration is the sole determinant.
 
@@ -990,7 +992,7 @@ The `cello_request_human_input` MCP tool is agent-facing (not companion-device-f
 
 The directory sees "send a knock to owner X's companion device" — no content, no context, just a signal. The knock is the `HUMAN_INPUT_REQUESTED` notification type in the directory's notification type registry.
 
-Alternatively, the agent can reach the owner via the configured WhatsApp/Telegram channel without using `cello_request_human_input`. Both paths produce the same outcome from the agent's perspective: owner input delivered via the injection mechanism.
+Alternatively, the agent can reach the owner via the configured WhatsApp/Telegram/WeChat channel without using `cello_request_human_input`. Both paths produce the same outcome from the agent's perspective: owner input delivered via the injection mechanism.
 
 ### Client offline behavior for companion connections
 
@@ -1050,12 +1052,13 @@ When a `connection_request` event produces `PENDING_ESCALATION`, the client rout
 escalation_channels:
   whatsapp?:      phone number or recipient identifier
   telegram?:      chat ID or recipient identifier
+  wechat?:        WeChat recipient identifier
   slack_webhook?: Slack incoming webhook URL
 ```
 
 The notification must include: the requester's handle, top trust signals (named, never a numeric score), the greeting text (post-Layer-1), the time remaining before auto-decline.
 
-The owner's response routes directly to the client via the channel's own reply mechanism (AC-C8 resolved, AC-17 resolved): WhatsApp/Telegram bot reply handler, Slack incoming webhook reply, CELLO mobile app over companion P2P. No home node intermediary. The client maintains the connection for each configured channel and the reply handler fires `cello_accept_connection` or `cello_decline_connection` directly.
+The owner's response routes directly to the client via the channel's own reply mechanism (AC-C8 resolved, AC-17 resolved): WhatsApp/Telegram/WeChat bot reply handler, Slack incoming webhook reply, CELLO mobile app over companion P2P. No directory node intermediary. The client maintains the connection for each configured channel and the reply handler fires `cello_accept_connection` or `cello_decline_connection` directly.
 
 ---
 
@@ -1129,7 +1132,7 @@ The following names are canonical and supersede inconsistencies in earlier docum
 
 ### Registration and first-use
 
-1. Owner initiates registration via WhatsApp/Telegram bot — phone OTP, baseline provisioning
+1. Owner initiates registration via WhatsApp/Telegram/WeChat bot — phone OTP, baseline provisioning
 2. Client generates K_local and identity key; BIP-39 seed phrase produced for owner to back up
 3. K_server_X FROST ceremony runs; primary and fallback public keys registered in directory
 4. Client performs bootstrap discovery and establishes persistent authenticated WebSocket
@@ -1183,7 +1186,7 @@ The following names are canonical and supersede inconsistencies in earlier docum
 ### Compromise detection and "Not Me"
 
 1. Directory detects anomaly (e.g., FROST session establishment failure from unexpected source)
-2. Directory fires `FALLBACK_CANARY` anomaly event; pushes push notification to owner's WhatsApp/Telegram
+2. Directory fires `FALLBACK_CANARY` anomaly event; pushes push notification to owner's WhatsApp/Telegram/WeChat
 3. Owner taps "Not Me" in mobile app or portal
 4. Mobile app sends revocation request to signup portal backend; signup portal backend instructs the directory to burn K_server_X shares; `COMPROMISE_INITIATED` tombstone filed
 5. **All active sessions are terminated immediately via two parallel abort paths:**
@@ -1246,7 +1249,7 @@ The relay node appends `prev_root` to the outer leaf (Structure 2) during the se
 **AC-C4: DeBERTa model delivery — resolved**
 The model is downloaded on first install (not bundled in the npm package). The npm package includes a postinstall download script that fetches DeBERTa-v3-small INT8 from a fixed URL and verifies the SHA-256 hash before the model is used. Bundling was rejected because it would bloat the npm package significantly and make supply chain updates require a full package republish. The hash pin in source code is the security guarantee regardless of delivery mechanism.
 
-**AC-C5: Native push vs. WhatsApp/Telegram escalation relationship — resolved**
+**AC-C5: Native push vs. WhatsApp/Telegram/WeChat escalation relationship — resolved**
 All configured channels always fire. No hierarchy, no suppression based on app presence or reachability. Owner's `cello_configure` settings are the sole determinant of which channels are active.
 
 **AC-C6: "Not Me" scope for existing sessions — resolved**
@@ -1256,7 +1259,7 @@ All configured channels always fire. No hierarchy, no suppression based on app p
 Two distinct structures. Structure 1 (inner): what the sender signs with K_local — content_hash, sender_pubkey, conversation_id, last_seen_seq, timestamp. Structure 2 (outer): what the relay node hashes into the conversation Merkle tree — sequence_number, sender_pubkey, message_content_hash, sender_signature (Structure 1 embedded), prev_root (relay-appended). At seal time, the relay hands the full leaf sequence to the directory, which recomputes the tree independently. See Part 4 for full specification.
 
 **AC-C8: Escalation resolution routing — resolved**
-Owner responses route directly to the client via the channel's own reply mechanism. WhatsApp/Telegram: bot reply handler. Slack: incoming webhook reply. CELLO mobile app: companion P2P connection. No directory node intermediary. The client maintains the connection for each configured channel. Also resolves GAP AC-17.
+Owner responses route directly to the client via the channel's own reply mechanism. WhatsApp/Telegram/WeChat: bot reply handler. Slack: incoming webhook reply. CELLO mobile app: companion P2P connection. No directory node intermediary. The client maintains the connection for each configured channel. Also resolves GAP AC-17.
 
 **AC-C9: Directory role during connection request relay — resolved**
 The directory's role is verify-then-relay-discard. It checks each submitted trust blob against held hashes (fraud filter only), appends track record stats, forwards the full package, and discards the blobs. It does not re-sign trust data and is not a trust authority. The receiver's independent verification (Merkle inclusion proof for identity, Alice's own signatures for trust blobs) is mandatory and non-redundant — the directory could be compromised. The client is the enforcer.
@@ -1273,12 +1276,12 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 
 | ID | Area | Gap |
 |---|---|---|
-| AC-1 | Key management | K_server_X rotation notification format, grace period duration, and epoch identifier format not specified |
+| AC-1 | Key management | ~~Resolved~~ — epoch format `{agent_id}:epoch:{N}` (monotonic integer); 7-day grace period; hard cutoff after expiry. Notification payload: `agent_id`, `old_epoch`, `new_epoch`, `old_pubkey`, `new_pubkey`, `rotation_timestamp`, `expires_at`. |
 | AC-2 | Persistence | ~~Resolved~~ — 2-year default (`merkle_retention_days: 730`), configurable per deployment. Sealed root hash and MMR peak survive pruning; leaf-level proofs do not. 30-day `MERKLE_PRUNE_SCHEDULED` notice before deletion. |
-| AC-3 | Transport | Acceptable timestamp skew window for directory nonce verification not specified |
+| AC-3 | Transport | ~~Resolved~~ — ±30 seconds. Consistent with NTP-synchronized systems and TOTP tolerance. |
 | AC-4 | Transport | ~~Resolved~~ — reuse same ephemeral Peer ID on brief disconnect; new ID generated only on deliberate close, restart, or reconnection window expiry (AC-5). |
 | AC-5 | Transport | How many P2P session drops before conversation is considered abandoned; retry vs. escalate to relay behavior |
-| AC-6 | Merkle | Session inactivity timeout value not specified |
+| AC-6 | Merkle | ~~Resolved~~ — 72 hours (3 days). No messages → `EXPIRE` control leaf; quasi-terminal (REOPEN permitted). Weekend-safe. |
 | AC-7 | Merkle | REOPEN semantics: new FROST ceremony required? Sequence numbers across seal boundary? Unilateral REOPEN permitted? |
 | AC-8 | Group rooms | Offline catch-up for group rooms not designed: client rejoining mid-conversation receives `current_message_count` but no replay mechanism |
 | AC-9 | Delivery | ~~Resolved~~ — `delivery_grace_seconds` default 600 (10 min), configurable via `cello_configure`. Protocol-wide; no per-conversation-type variation. |
@@ -1289,9 +1292,9 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-14 | Companion | Maximum number of companion devices per agent not specified |
 | AC-15 | Companion | Human injection delivery mechanism to agent input channel for Deployment Model A (direct MCP) not designed; `cello_receive` returns protocol messages, not owner-injected content |
 | AC-16 | Notifications | ~~Resolved~~ — directory-sourced events push via authenticated WebSocket; owner-targeted client notifications go direct to companion over P2P. Two paths, not mutually exclusive. |
-| AC-17 | Notifications | ~~Resolved~~ — response routes directly to client via channel's own reply mechanism: WhatsApp/Telegram bot reply handler, Slack webhook reply, CELLO mobile app over companion P2P. No home node intermediary. |
+| AC-17 | Notifications | ~~Resolved~~ — response routes directly to client via channel's own reply mechanism: WhatsApp/Telegram/WeChat bot reply handler, Slack webhook reply, CELLO mobile app over companion P2P. No directory node intermediary. |
 | AC-18 | Status | `cello_status` does not distinguish between "directory temporarily unreachable" and "agent locked post-Not-Me revocation"; these are meaningfully different states |
-| AC-19 | Registration | Incubation period (7-day, 3 outbound connections/day for phone-only agents) not mentioned anywhere; client must track incubation state locally and enforce outbound rate limits |
+| AC-19 | Registration | Incubation period (7-day, **25** outbound connections/day limit for new agents) not mentioned anywhere in the body of the document; client must track incubation state locally and enforce outbound rate limits. Directory enforces at FROST ceremony time; client-side enforcement is a secondary guard. |
 | AC-20 | Registration | Email verification is a mandatory registration requirement (per server-infrastructure) but is entirely absent from the client — not in registration flow, trust signal types, data ownership map, or storage tiers |
 | AC-21 | Merkle | ~~Resolved~~ — relay node initialises genesis `prev_root` as `SHA-256(agent_A_pubkey \|\| agent_B_pubkey \|\| session_id \|\| timestamp)` per open-decisions.md Decision 7, using the session assignment data received from the directory. Unblocked by AC-C2 resolution. |
 | AC-22 | Merkle | `scan_result` is listed in the data ownership map as part of the signed Merkle leaf, but the leaf construction spec in Part 4 does not include it as a field. libp2p-dht-and-peer-connectivity.md explicitly includes `scan_result` in the leaf format |
@@ -1346,7 +1349,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-71 | Persistence | Social verification freshness records not in persistence tier. persistence-layer-design.md defines `social_verification_freshness_checks` table (checked_at, check_result: FRESH/STALE/FAILED). Client holds the only copy; directory holds only the hash. Without freshness records, the oracle pattern breaks for freshness signals |
 | AC-72 | Persistence | Companion device allowlist schema not defined anywhere. The allowlist is a security boundary but has no documented schema (device name, registered_at, revocation mechanism, binding proof reference) in any requirements document |
 | AC-73 | Persistence | Push notification channel independence from P2P content channel not stated in client offline behavior section. When the CELLO client is unreachable, APNs/FCM push notifications (including "Not Me" emergency) continue working. The current framing implies all companion communication fails when the client is offline |
-| AC-74 | Persistence | `cello_request_human_input` routing when both companion and WhatsApp/Telegram are configured: does the client send a knock only to the companion device, or also to the escalation channel? If the companion is unreachable and no WhatsApp/Telegram fallback fires, the agent's input request is silently lost |
+| AC-74 | Persistence | `cello_request_human_input` routing when both companion and WhatsApp/Telegram/WeChat are configured: does the client send a knock only to the companion device, or also to the escalation channel? If the companion is unreachable and no WhatsApp/Telegram/WeChat fallback fires, the agent's input request is silently lost |
 | AC-75 | Persistence | Companion app install while CELLO client is offline: keypair registration ceremony requires the client to be reachable to update the allowlist. This failure mode is unaddressed |
 | AC-76 | Persistence | Discovery search results (`cello_search`) not listed as a Layer 1 fire surface. Bio text and capability tags are user-generated strings that will be presented to the agent as actionable text |
 | AC-77 | Recovery | Three tombstone types (VOLUNTARY, COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED) not specified in client. Client must set the correct type on initiation and react differently to each incoming type |
