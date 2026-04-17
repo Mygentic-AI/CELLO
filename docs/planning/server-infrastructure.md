@@ -358,7 +358,7 @@ After ABORT: REOPEN is not permitted. Post-ABORT message arrivals are always rej
 - On receiving the connection request package, the directory:
   1. Checks each submitted trust blob against the hashes it already holds — this is a **fraud filter only**, not a trust authority function. It stops obviously invalid or tampered submissions.
   2. Appends track record stats from its own authoritative store (keyed to Alice's pseudonymous pubkey). These stats are directory-held data, not Alice-submitted data.
-  3. Forwards the full package — including Alice's greeting text, Layer 1 sanitized before queuing — to Bob via his authenticated WebSocket as a `CONNECTION_REQUEST` notification.
+  3. Forwards the full package to Bob via his authenticated WebSocket.
   4. Discards the trust blobs. The directory never stores trust signal data beyond hashes — the blobs exist only transiently during relay.
 - The directory does not re-sign the trust data. Alice's original Ed25519 signatures on each blob arrive at Bob intact. The directory is not a trust authority — it is a verified relay.
 - The connection package that arrives at Bob contains: Alice's trust signal blobs (signed by Alice at creation time), Alice's identity key, and track record stats appended by the directory.
@@ -523,7 +523,7 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
 - **Notification hashes**: Stored as standalone events — not chained into a session Merkle tree
 - **Notification type registry**: Enumerated, not freeform. Types include at minimum: `INTRODUCTION`, `ORDER_UPDATE`, `ALERT`, `PROMOTIONAL`, `SYSTEM`, `CONNECTION_REQUEST`, `ENDORSEMENT_RECEIVED`, `SECURITY_BLOCK`, `TOMBSTONE`, `TRUST_EVENT`, `RECOVERY_EVENT`, `SESSION_CLOSE_ATTESTATION_DISPUTE`, `SUCCESSION_CLAIM_FILED`, `HUMAN_INPUT_REQUESTED`, `PEER_COMPROMISED_ABORT`
 - **Note**: `EMERGENCY_SESSION_ABORT` is a directory-to-client control instruction sent via the agent's persistent WebSocket — it is NOT a notification type and does not appear in the notification registry
-- **Notification routing (two paths)**: Directory-sourced events (connection requests, tombstones, security alerts, system notifications) push to the agent via its authenticated WebSocket — this is the directory's responsibility. Owner-targeted notifications originating from the client (e.g., escalation prompts, human input requests) go direct to the companion device over P2P — the directory's role is limited to facilitating NAT traversal, not relaying the notification content. See agent-client.md AC-16 (resolved). **[GAP G-32 — RESOLVED]**
+- **Whether notifications must route through directory or can go peer-to-peer**: explicitly unresolved **[GAP G-32]**
 - **Institutional verification for elevated rate limits**: application process and criteria not specified **[GAP G-33]**
 
 ### Contact aliases
@@ -555,7 +555,7 @@ All tables are append-only unless noted. Mutable tables are marked.
 | ~~`companion_device_registrations`~~ | **Removed** — companion device allowlist is held locally by the CELLO client, not the directory. See AC-C10 (resolved). |
 | `bio_history` | append-only; supersession pattern |
 | `pseudonym_bindings` | append-only |
-| `conversation_seals` | append-only; random UUID conversation_id; sealed root hash and MMR peak retained indefinitely (survive client-side 2-year pruning) |
+| `conversation_seals` | append-only; random UUID conversation_id |
 | `conversation_attestations` | append-only; N-party, replaced party_a/party_b columns |
 | `conversation_participation` | append-only; party_pseudonym = SHA-256(agent_id + salt) |
 | `arbitration_verdicts` | append-only; separate from seals |
@@ -836,7 +836,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-29 | Directory | Bio update rate limit N (hours) not defined |
 | G-30 | Directory | Greeting rate limit threshold not specified |
 | G-31 | Directory | Notification rate limit values per trust tier not specified |
-| G-32 | Directory | ~~Resolved~~ — directory-sourced events push via WebSocket; owner-targeted client notifications go direct to companion over P2P. Directory facilitates NAT traversal only. See AC-16 (resolved). |
+| G-32 | Directory | Whether notifications route through directory or can go peer-to-peer: explicitly unresolved |
 | G-33 | Directory | Institutional verification process for elevated notification rate limits not specified |
 | G-34 | Directory | Alias creation rate limiting mechanism and thresholds not specified |
 | G-35 | Directory | Alias TTL mechanism: schema has EXPIRED state but no scheduled expiry job or TTL configuration defined |
