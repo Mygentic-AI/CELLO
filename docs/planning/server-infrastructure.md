@@ -448,7 +448,10 @@ CELLO does not compute or publish a single numeric trust score. Trust is express
 
 **Sybil defense computations (directory-side)**:
 
-- **Conductance-based cluster scoring**: For agent's 1-hop neighborhood (minimum 5+ distinct counterparties), what fraction of edges point outside the neighborhood. Published as a hashed, verifiable score. Computation frequency and storage location not specified. **[GAP G-21]**
+- **Conductance-based cluster scoring** — [GAP G-21 RESOLVED]: For agent's 1-hop neighborhood (minimum 5+ distinct counterparties), what fraction of edges point outside the neighborhood.
+  - **Computation frequency**: At each directory checkpoint. Conductance is a batch graph metric — real-time computation is unnecessary and expensive. Incremental recomputation (only agents whose neighborhood changed since the last checkpoint) keeps it tractable at scale.
+  - **Storage**: `conductance_score FLOAT`, `conductance_computed_at TIMESTAMP`, `conductance_sample_size INT` on the agent record (or companion `agent_scores` table). Append-only audit trail in `conductance_history`. Replicates to all directory nodes via the append-only log like all other directory-computed agent facts.
+  - **Publication**: Not exposed externally. Conductance is an internal fraud detection signal — publishing the raw score lets adversaries tune cluster topology to stay above threshold. It feeds into the anonymous trust score display in discovery (network graph health signal class: active/inactive) but the raw value stays internal to the directory.
 - **Counterparty diversity ratio**: `min(1, unique_counterparties / total_transactions)` — penalizes closed-loop farming
 - **Diminishing returns per counterparty**: `weight(tx_n) = base_weight / ln(n+1)`, floor 0.3 — repeated round-robin transactions are algebraically self-defeating
 - **Trust-independence rule**: Transactions between same-owner, co-registered, or shared-endorser agents count at 10% weight
@@ -508,12 +511,21 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
 
 ### Dispute resolution
 
-- Multi-node threshold arbitration: verdicts require agreement from multiple independent arbitrating nodes — single compromised arbitrator cannot systematically bias outcomes
-- Ephemeral inference: transcript in, verdict out, nothing stored. Only the verdict is recorded in the session seal.
-- Before evaluation: directory verifies submitted transcript Merkle root against its stored record
-- Verdict tiers: DISMISSED (minor notation), UPHELD (trust signal impact on flagged party), ESCALATED (human review or network-wide alert)
-- UPHELD verdict: claimed stake held for an appeal window before release
-- Arbitration system provisioning, node selection, compensation model: **not specified. [GAP G-27]**
+- **Two-tier arbitration** — [GAP G-27 RESOLVED]:
+
+  **Tier 1 — Deterministic**: Pattern/regex detection caught something unambiguous (prompt injection attempt, forbidden characters, known attack signatures). No inference needed. The detection log is the evidence. Verdict is automatic — UPHELD without a panel.
+
+  **Tier 2 — Inference panel**: Ambiguous content, behavioral patterns, semantic concerns. Three frontier models — different models, not the same model three times — evaluate the same case with the same system prompt. Majority verdict. Different models guard against model-specific bias; same-model-3×  would only capture non-determinism variance, not genuine independence. Model set is pinned per protocol version by CELLO (expected: Claude Sonnet/Opus class, Gemini Pro class, GPT class). The long-term direction is a purpose-built fine-tuned model once labeled arbitration examples accumulate.
+
+  **Privacy disclosure**: Submitting a dispute requires explicit acknowledgment that conversation content will be sent to external frontier models not under the submitter's control. Required at submission, not buried. Fully local deployments should note this limitation.
+
+  **System prompt governance**: The arbitration system prompt is CELLO-controlled and not published. Publishing it invites gaming — adversaries would optimize against the prompt. CELLO applies DSPy-style optimization as case data accumulates. At Consortium maturity, a governance committee reviews prompt changes, but the prompt itself remains private. This is accepted practice: publishing the prompt's security properties (what it evaluates) is fine; publishing the prompt itself is not.
+
+  **Compensation model**:
+  - **Alpha and Consortium**: CELLO funds all arbitration costs. Adding payment friction before shallow wallets exist creates two problems — friction at a critical growth phase, and a payment mechanism that doesn't exist yet.
+  - **Transition trigger**: User-pays becomes viable when shallow wallets are live (see G-36). Until then, CELLO absorbs costs.
+  - **Enforcement at Alpha/Consortium**: No financial penalties since wallets don't exist. Worst outcome is account suspension or ban. This is sufficient at these phases — the user base is small and vetted.
+  - **Node infrastructure**: CELLO operates arbitration inference at Alpha and Consortium. No separate arbitration node tier needed at these phases — it's API calls to frontier model providers, not a distributed node class.
 
 **FLAGGED sessions without arbitration**: The document says the flagging party "may submit" the transcript — submission is optional. What happens to a FLAGGED session that is never submitted to arbitration (does trust signal impact apply automatically?) is not specified. **[GAP G-28]**
 
@@ -895,13 +907,13 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-18 | Directory | PSI implementation library and API contract provisional |
 | G-19 | Directory | ~~Resolved~~ — Gap was an artifact of the home node model. `phone_hash` is stored in `agent_registrations` and replicates to all directory nodes. Every node enforces the same-owner rule at endorsement submission time. No additional mechanism required. |
 | G-20 | Directory | Custodian API interface for escrow release/slash not specified |
-| G-21 | Directory | Conductance score computation frequency, storage location, and publication mechanism not specified |
+| G-21 | Directory | ~~Resolved~~ — Computed at each directory checkpoint (incremental recomputation for changed neighborhoods). Stored on agent record (`conductance_score`, `conductance_computed_at`, `conductance_sample_size`); append-only history table; replicated via append-only log. Not published externally — internal fraud signal only; feeds network graph health signal class in discovery display. |
 | G-22 | Directory | Directory WhatsApp/Telegram authentication, channel unavailability handling, and jurisdiction restrictions not specified |
 | G-23 | Directory | Trust signal floor formula after recovery not defined |
 | G-24 | Directory | Minimum trust signal floor for recovery contacts not defined (TBD) |
 | G-25 | Directory | Whether voucher accountability rules apply to succession attestation (vs. compromise recovery only) not addressed |
 | G-26 | Directory | Voucher liability window: 2–3 month range not resolved to a fixed value |
-| G-27 | Directory | Arbitration system provisioning, node selection, and compensation model not specified |
+| G-27 | Directory | ~~Resolved~~ — Two-tier: deterministic (regex/pattern detection → auto-UPHELD, no inference) and inference (3 different frontier models, same system prompt, majority verdict). System prompt CELLO-controlled, not published (gaming risk). Privacy disclosure required at submission (content sent to external models). CELLO funds at Alpha and Consortium; user-pays gated on shallow wallets (G-36). No financial penalties until wallets exist — account suspension is the enforcement tool. No separate arbitration node tier needed at these phases. |
 | G-28 | Directory | FLAGGED session without arbitration: whether trust signal impact applies automatically not specified |
 | G-29 | Directory | Bio update rate limit N (hours) not defined |
 | G-30 | Directory | Greeting rate limit threshold not specified |
