@@ -25,7 +25,7 @@ The three frontend surfaces are:
 | **Mobile App** | Device attestation (Apple ecosystem / Android), push-based escalation, emergency revocation, companion device content viewer | Phase two |
 | **Desktop App** | Device attestation (Windows/TPM, macOS Secure Enclave), local MCP server management, companion device content viewer | Phase three (system tray deferred — far future) |
 
-The portal communicates with two backend components: the **home node** (for PII-touching operations: WebAuthn credentials, OAuth tokens, K_server_X operations) and the **directory** (for public reads: trust signal hashes, Merkle proofs, discovery). The distinction is critical — the portal must route identity-sensitive calls only to the home node and must never send PII to replicated directory state.
+The portal communicates with two backend components: the **signup portal backend** (for PII-touching operations: WebAuthn credentials, OAuth tokens, K_server_X operations) and the **directory** (for public reads: trust signal hashes, Merkle proofs, discovery). The distinction is critical — PII (phone numbers, WebAuthn credentials, OAuth tokens) lives only in the signup portal backend and must never reach directory nodes. The directory holds only public keys, trust signal hashes, and Merkle trees.
 
 ---
 
@@ -55,7 +55,7 @@ The session token issued after phone OTP is scoped: it permits reading and low-s
 
 **[GAP F-1]**: Portal session lifecycle is not specified. How long does a phone OTP session remain valid? What triggers re-authentication? Does the session step up from phone-OTP to WebAuthn-level for the duration of the session, or does each WebAuthn-required operation issue a fresh challenge even within the same session?
 
-**[GAP F-2]**: The mechanism by which the portal authenticates itself to the home node for PII-touching operations is not specified. What credential does the portal present to the home node? How is that credential issued and rotated?
+**[GAP F-2]**: The mechanism by which the portal web frontend authenticates itself to the signup portal backend for PII-touching operations is not specified. What credential does the frontend present? How is that credential issued and rotated?
 
 ### Registration completion flow
 
@@ -77,7 +77,7 @@ Each trust enrichment flow follows the oracle pattern: portal verifies → produ
 **Async delivery via encrypted pickup queue.** The agent client may not be running — or may not yet be installed — when the human owner completes a trust enrichment flow in the browser. "Returns original JSON to client" cannot be a synchronous handoff; it must be a reliable async delivery. The mechanism:
 
 1. Portal encrypts the JSON blob with the agent's `identity_key` public key (fetched from the directory, always present since bot registration)
-2. Portal stores the encrypted blob in an ephemeral pickup queue (portal-side, 30-day TTL) — this is not the home node; it holds only opaque ciphertext
+2. Portal stores the encrypted blob in an ephemeral pickup queue (portal-side, 30-day TTL) — this is not the signup portal backend PII store; it holds only opaque ciphertext
 3. Portal discards the plaintext immediately
 4. Directory delivers a `TRUST_SIGNAL_PICKUP_PENDING` notification to the agent at next connection
 5. Agent decrypts with its `identity_key`, validates the hash, stores the JSON blob locally, sends ACK
@@ -100,14 +100,14 @@ Enrollment flow:
 1. Portal issues a WebAuthn registration challenge
 2. User activates authenticator (hardware key tap or biometric)
 3. Browser returns `AuthenticatorAttestationResponse`
-4. Portal validates the credential and stores the credential ID + public key on the home node
+4. Portal validates the credential and stores the credential ID + public key in the signup portal backend (not in the directory)
 5. Portal produces a trust signal JSON record, hashes it, writes the hash to the directory, returns the blob to the client's local storage
 
 After enrollment, WebAuthn is required for subsequent sensitive operations. The portal must gracefully handle the case where the registered authenticator is unavailable (lost hardware key, new device) by routing to TOTP recovery.
 
 TOTP 2FA must be enrollable alongside WebAuthn as a backup, not as the primary factor. The portal should not allow TOTP as the sole factor for key rotation — it is weaker than WebAuthn and should be positioned as a recovery path.
 
-**[GAP F-4]**: TOTP enrollment mechanics are not specified. How is the TOTP secret generated? Where is it stored (home node? client-side only?)? The JSON record schema for TOTP as a trust signal is not defined.
+**[GAP F-4]**: TOTP enrollment mechanics are not specified. How is the TOTP secret generated? Where is it stored (signup portal backend? client-side only?)? The JSON record schema for TOTP as a trust signal is not defined.
 
 **LinkedIn, GitHub, Twitter/X, Facebook, Instagram (OAuth)**
 
@@ -152,8 +152,8 @@ The portal handles all sensitive account operations, all of which require WebAut
 **Key rotation**
 1. Owner authenticates with WebAuthn (or TOTP as fallback)
 2. Client generates new K_local
-3. Portal sends a key rotation request to the home node, authenticated with the WebAuthn credential
-4. Home node triggers a new K_server_X ceremony across directory nodes
+3. Portal sends a key rotation request to the signup portal backend, authenticated with the WebAuthn credential
+4. Signup portal backend triggers a new K_server_X ceremony across directory nodes
 5. New derived public keys published; old public keys marked expired with timestamp
 6. Connected agents are notified to refresh their cached key material via a `KEY_ROTATED` notification — distinct from `KEY_ROTATION_RECOMMENDED` (the directory's inbound scheduling nudge to the owner). Note: see **[CONFLICT FC-5]** for the naming conflict; `KEY_ROTATED` is the resolved name for the counterparty-facing type.
 7. Portal displays confirmation with the new public key fingerprint and the rotation timestamp
@@ -166,7 +166,7 @@ Key rotation must happen at a session boundary. If the owner initiates rotation 
 
 **Phone number change**
 
-Requires WebAuthn. The new phone number must go through OTP verification before the change commits. The home node validates the OTP via the WhatsApp/Telegram bot integration. Social proofs and WebAuthn credentials are not affected. The old phone number is no longer usable for portal login after the change commits.
+Requires WebAuthn. The new phone number must go through OTP verification before the change commits. The signup portal backend validates the OTP via the WhatsApp/Telegram bot integration. Social proofs and WebAuthn credentials are not affected. The old phone number is no longer usable for portal login after the change commits.
 
 **Social verifier add/remove**
 
@@ -175,14 +175,14 @@ Requires WebAuthn. Adding a new verifier follows the OAuth enrichment flow above
 **Account deletion**
 
 Requires WebAuthn. Deletion is permanent and irreversible. The portal must present a multi-step confirmation:
-1. Explain what is deleted (home node PII, active public keys, active trust signal entries, bios from live directory index — all wiped or tombstoned)
+1. Explain what is deleted (signup portal PII — phone, WebAuthn credentials, OAuth tokens; active public keys and trust signal entries in the directory index; bios from live directory index — all wiped or tombstoned)
 2. Explain what survives (sealed conversation Merkle hashes are not deleted; counterparties' records are not affected)
 3. Explain the GDPR implication: any data voluntarily published to a public blockchain ledger cannot be deleted — this consent is permanent
 4. Issue a WebAuthn challenge
 5. Write a signed tombstone to the directory
-6. Wipe the home node PII completely
+6. Wipe the signup portal PII completely (phone, WebAuthn credentials, OAuth tokens)
 
-**[GAP F-8]**: What happens to pending escrow stakes or bonds at the time of deletion is not specified. The escrow model uses two custody paths (DeFi smart contract vs. institutional custodian), each requiring a different instruction to release or return funds before the home node is wiped. The portal cannot complete deletion until that state is resolved.
+**[GAP F-8]**: What happens to pending escrow stakes or bonds at the time of deletion is not specified. The escrow model uses two custody paths (DeFi smart contract vs. institutional custodian), each requiring a different instruction to release or return funds before the signup portal PII is wiped. The portal cannot complete deletion until that state is resolved.
 
 **Bio and profile management**
 
@@ -195,19 +195,19 @@ The portal allows the owner to manage per-recipient greetings: contextual messag
 **GDPR and data residency**
 
 The portal must display:
-- The owner's home node jurisdiction (the country in which their PII is stored)
-- A data classification view: which data lives on the home node vs. relay/directory vs. public ledger
+- The signup portal jurisdiction (the country in which their PII is stored — PII lives only in the signup portal, not in directory nodes)
+- A data classification view: which data lives in the signup portal vs. relay/directory vs. public ledger
 - A GDPR consent record: a log of what the owner has voluntarily published (bio, trust signals, public key registrations) with dates and a mechanism to review and withdraw
 
 The portal must provide a bio removal and trust-score erasure request UI. Deletion produces a tombstone entry — not a silent absence. The portal must display the tombstone state after deletion.
 
-The portal must support home node jurisdiction migration. After migration, the portal must reflect the new jurisdiction.
+The portal must support PII jurisdiction migration (migrating the signup portal deployment to a different region). After migration, the portal must reflect the new jurisdiction.
 
 The portal must surface a permanent-consent warning before any data transitions to a public blockchain ledger, explaining that deletion becomes technically impossible after that point.
 
 ### Activity log and audit view
 
-The portal exposes the owner's view of what their agent has been doing. This is a read-only view — no agent activity is initiated here. The portal reads this data from the home node and directory (via `cello_list_sessions` and `cello_poll_notifications`); it does not store this data independently.
+The portal exposes the owner's view of what their agent has been doing. This is a read-only view — no agent activity is initiated here. The portal reads this data from the signup portal backend and directory (via `cello_list_sessions` and `cello_poll_notifications`); it does not store this data independently.
 
 Contents:
 - Sessions opened and sealed: timestamp, counterparty agent ID, session duration, seal status, Merkle root value
@@ -222,7 +222,7 @@ Contents:
 
 The activity log is the same data surfaced by `cello_list_sessions` and `cello_poll_notifications` via the MCP tool surface, presented for a human reader.
 
-**[GAP F-9]**: The retention period for the activity log is not specified. Is the full audit trail available in perpetuity, or is there a rolling window? The answer has implications for storage at the home node.
+**[GAP F-9]**: The retention period for the activity log is not specified. Is the full audit trail available in perpetuity, or is there a rolling window? The answer has implications for storage in the signup portal backend.
 
 **[CONFLICT FC-2 — same as server C-6]**: §4.2 of end-to-end-flow states that "bio — visible to anyone browsing the directory — no connection required." §4.1 states "discovery requires an active authenticated session." If there is a public browse mode, the portal's read path for the activity log and profile data needs to distinguish between data that requires authentication and data that is publicly available. Decision required before the portal's API layer can be designed.
 
@@ -500,8 +500,8 @@ The existing WhatsApp/Telegram escalation channel (configured via `cello_configu
 First-time enrollment:
 1. Owner downloads the mobile app and logs in via phone OTP (same phone number as the registered agent)
 2. App calls the platform attestation API (`DCAppAttestService` on iOS, `PlayIntegrityAPI` on Android)
-3. App generates an attestation and submits it to the home node
-4. Home node verifies the attestation with the platform authority (Apple/Google), extracts the stable device identifier, checks it against the directory for uniqueness (one active binding per device hash)
+3. App generates an attestation and submits it to the signup portal backend
+4. Signup portal backend verifies the attestation with the platform authority (Apple/Google), extracts the stable device identifier, checks it against the directory for uniqueness (one active binding per device hash)
 5. If unique: binding confirmed; device hash written to directory; trust signal hash updated
 6. If already bound to another account: enrollment rejected; owner must release existing binding first
 
@@ -536,8 +536,8 @@ The "Not Me" flow is optimized for speed. When the owner believes their agent is
 
 1. The owner taps a prominently placed "Not Me / Emergency" action — accessible from the app's home screen without navigating menus
 2. The app re-authenticates with phone OTP (phone OTP is sufficient for revocation — WebAuthn is required only for the re-keying step that follows)
-3. The app sends a signed revocation request to the home node
-4. The home node immediately burns the K_server_X shares (blocking new FROST sessions) and fires two parallel abort paths:
+3. The app sends a signed revocation request to the signup portal backend
+4. The signup portal backend immediately instructs the directory to burn the K_server_X shares (blocking new FROST sessions) and fires two parallel abort paths:
    - Sends an `EMERGENCY_SESSION_ABORT` control message to the agent client via its authenticated WebSocket — the client aborts all active P2P sessions, sends signed ABORT leaves with `COMPROMISE_INITIATED` reason code, and disconnects
    - Sends `PEER_COMPROMISED_ABORT` notifications directly to every counterparty of active sessions via their authenticated WebSockets — counterparties seal unilaterally on receipt, regardless of whether an ABORT leaf arrives from the compromised side
 5. The app displays confirmation: "Agent locked. All active conversations have been closed. Visit the portal to re-key."
@@ -567,7 +567,7 @@ When a succession claim is filed against the owner's agent, the directory notifi
 
 ### WebAuthn on mobile
 
-TouchID and FaceID can serve as WebAuthn authenticators on iOS. The app must support WebAuthn operations for the operations that require it (key rotation, social verifier changes) so the owner can perform them from the mobile app without needing a desktop browser session. The app uses the `ASWebAuthenticationSession` / `WKWebView` + WebAuthn flow to authenticate to the home node.
+TouchID and FaceID can serve as WebAuthn authenticators on iOS. The app must support WebAuthn operations for the operations that require it (key rotation, social verifier changes) so the owner can perform them from the mobile app without needing a desktop browser session. The app uses the `ASWebAuthenticationSession` / `WKWebView` + WebAuthn flow to authenticate to the signup portal backend.
 
 ### Companion device connection
 
@@ -628,8 +628,8 @@ The desktop app is the thinnest of the three surfaces. It does not replicate por
 1. Owner installs the desktop app and logs in via phone OTP
 2. App accesses the TPM via the Windows TPM Base Services (TBS) API
 3. App generates an attestation quote using the TPM's Endorsement Key (EK) — globally unique per chip
-4. App submits the EK-based attestation to the home node
-5. Home node verifies the attestation, extracts the stable device identifier (EK hash), checks uniqueness
+4. App submits the EK-based attestation to the signup portal backend
+5. Signup portal backend verifies the attestation, extracts the stable device identifier (EK hash), checks uniqueness
 6. If unique: binding confirmed; trust signal hash updated in directory
 
 **macOS (Secure Enclave via App Attest)**
@@ -743,8 +743,8 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 2. Initiates key rotation from account management
 3. Portal issues a WebAuthn challenge; owner taps hardware key or biometric
 4. Client generates new K_local (at the next session boundary)
-5. Portal sends key rotation request to home node (authenticated with WebAuthn response)
-6. Home node triggers new K_server_X ceremony across directory nodes
+5. Portal sends key rotation request to signup portal backend (authenticated with WebAuthn response)
+6. Signup portal backend triggers new K_server_X ceremony across directory nodes
 7. New public keys published; old keys marked expired; connected agents receive a `KEY_ROTATED` notification telling them to refresh cached key material
 8. Portal shows confirmation: new key fingerprint, rotation timestamp
 9. Desktop app shows a brief "Keys rotated" status update (system tray notification deferred — far future)
@@ -756,7 +756,7 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 3. Owner receives push notification
 4. Owner taps "Not Me / Emergency" in mobile app
 5. App re-authenticates with phone OTP
-6. App sends revocation request to home node; directory simultaneously:
+6. App sends revocation request to signup portal backend; signup portal backend instructs directory to simultaneously:
    - Burns K_server_X shares (no new FROST sessions possible)
    - Sends `EMERGENCY_SESSION_ABORT` to the agent client via its authenticated WebSocket — client aborts all active sessions and disconnects
    - Sends `PEER_COMPROMISED_ABORT` to all counterparties of active sessions via their authenticated WebSockets — counterparties seal unilaterally
@@ -776,13 +776,13 @@ These flows span multiple surfaces. Each is described once here to prevent the s
    - Message to WhatsApp/Telegram escalation channel (always configured as fallback)
 5. Owner reviews the request in either the mobile app (push notification card) or the web portal (escalation queue)
 6. Owner taps Accept or Decline
-7. The decision is submitted to the home node, which calls `cello_accept_connection` or `cello_decline_connection`
+7. The decision is submitted to the signup portal backend, which calls `cello_accept_connection` or `cello_decline_connection`
 8. A `CONNECTION_ESCALATION_RESOLVED` notification is appended to the log
 9. If the `escalation_expires_at` TTL passes with no response: the request auto-declines; owner sees "Auto-declined — timeout" in the dashboard
 
 ### Social recovery
 
-This flow is primarily handled at the protocol level between the home node, directory, and recovery contacts. The frontend's role:
+This flow is primarily handled at the protocol level between the signup portal backend, directory, and recovery contacts. The frontend's role:
 
 1. Owner is locked out (WebAuthn unavailable, phone lost or SIM-swapped)
 2. Owner contacts M-of-N pre-designated recovery contacts out-of-band
@@ -957,7 +957,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-5 | Portal | Liveness probing interval for social verifier freshness not specified |
 | F-6 | Portal | Metadata evaluation criteria for Twitter/X, Facebook, Instagram OAuth not specified |
 | F-7 | Portal | Recommended key rotation schedule (the interval at which the portal should prompt the owner) not specified |
-| F-8 | Portal | Handling of pending escrow stakes or bonds at account deletion time not specified; two distinct custody paths (DeFi smart contract vs. institutional custodian) each require a different instruction to release funds before home node wipe |
+| F-8 | Portal | Handling of pending escrow stakes or bonds at account deletion time not specified; two distinct custody paths (DeFi smart contract vs. institutional custodian) each require a different instruction to release funds before signup portal PII wipe |
 | F-9 | Portal | Retention period for the activity log not specified |
 | F-10 | Portal | Alias short-URL resolver: whether it lives on the portal domain or a separate service not specified |
 | F-11 | Portal | Minimum trust signal floor for recovery contacts not defined |

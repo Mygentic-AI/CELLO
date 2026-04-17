@@ -97,7 +97,7 @@ The mechanism by which the original JSON record is delivered to the client (retu
 
 - Deletion must be authenticated via WebAuthn.
 - Deletion is a signed operation appended to the append-only log (tombstone).
-- Home node: all PII is fully wiped (phone, WebAuthn credentials, OAuth tokens, K_server_X share).
+- Signup portal: all PII is fully wiped (phone, WebAuthn credentials, OAuth tokens). The K_server_X shares held by directory nodes for this agent are also burned/deleted.
 - Directory: active public key, trust signals, and bio are removed from the live index; tombstone appended to hash chain.
 - Conversation records held by counterparties are NOT deleted. The directory does not propagate deletion to third-party Merkle records. The deleted agent's public key points to the tombstone.
 
@@ -133,29 +133,29 @@ On any tombstone (VOLUNTARY, COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED, SU
 
 ## Component 2: Directory Nodes
 
-### Sub-types
+### Three-system separation (home node concept dropped)
 
-Directory nodes divide into two sub-types with different responsibilities:
+The original design described a "home node" — a per-agent directory node storing non-replicated PII alongside the K_server_X share. This was dropped during the design-problems review (Problem 7: home node deanonymization). A node storing both PII and hash relay traffic lets a rogue operator trivially correlate them. See [[cello-design|CELLO Design Document]] — "Federated Node Model" section.
 
-**Connection nodes** — public-facing; handle new authentication, connection setup, FROST ceremonies, registration, and key operations. The internet-facing attack surface.
+**The three systems that replaced it never intersect:**
 
-**Home nodes** — per-agent; store non-replicated PII for each registered agent. One home node per agent (the node the agent registered on). Must be physically located in the agent owner's jurisdiction.
+| System | Holds | Never sees |
+|---|---|---|
+| **Signup portal** | Phone numbers, email, WebAuthn credentials, OAuth tokens | Conversations, hash relay traffic, Merkle trees |
+| **Directory nodes** | Public keys, trust signal hashes, K_server_X shares (envelope-encrypted), Merkle trees | Phone numbers, raw PII |
+| **Relay nodes** | Ephemeral Peer IDs, encrypted traffic | Agent identities, phone numbers, key material |
 
-These sub-types share a common infrastructure (append-only log, Merkle trees, replication, consensus) but have distinct data and operational responsibilities.
+**Directory node data is fully federated** — all core tables replicate to all directory nodes via the append-only log. K_server_X shares are per-agent but stored across all nodes with envelope encryption (one KMS master key per node, 32 bytes per share). No single node has a privileged relationship with any agent.
 
-**[CONFLICT C-2]**: Which sub-type handles the FROST seal ceremony? Session seals occur on established sessions (the relay node's domain), but seals require FROST, which is a connection node / home node operation. The document does not specify which node type handles the seal FROST ceremony.
+**Data residency / jurisdiction**: PII lives entirely in the signup portal. The signup portal must be deployed in a jurisdiction-compliant configuration (EU portal for EU users, UAE portal for UAE users). Directory nodes hold only hashes and public keys — non-PII by construction — and have no jurisdiction constraints.
 
-### Home node data (non-replicated, per-agent)
+**Notification path (privacy-preserving)**: When a directory or relay node needs to alert an agent owner, it sends a public-key event to the signup system. The signup system performs the phone lookup and pushes the notification. The node never learns the phone number; the signup system never learns what triggered the notification.
 
-Each home node stores exclusively for its registered agents:
-- Phone number (for notifications)
-- WebAuthn credentials
-- OAuth tokens
-- K_server_X share (the agent's FROST key share)
+### Directory node sub-type
 
-Everything else (public keys, trust signal hashes, bios, Merkle hashes) replicates to all nodes via the append-only log.
+Connection nodes are the only directory sub-type. They are public-facing and handle authentication, FROST ceremonies, connection setup, registration, and key operations. There is no "home node" sub-type.
 
-**Jurisdiction assignment**: UAE citizens get UAE home nodes; EU citizens get EU home nodes. The mechanism by which the directory selects and assigns a home node based on jurisdiction at registration time is not specified. **[GAP G-7]**
+**[CONFLICT C-2 — partially resolved]**: Which component handles the FROST seal ceremony? Session seals occur on established sessions (which may be on relay nodes), but seals require FROST, which is a directory node operation. Options: (1) The originating connection node handles the seal ceremony regardless of where the session lives; (2) The directory node closest to the sealing agent handles it. A decision is required, but the answer is clearly a directory node — not a relay node.
 
 ### FROST and key management
 
@@ -396,7 +396,7 @@ The privacy design is intentional: an agent may have valid reasons not to disclo
 **Trust-weighted pool selection (under load)**:
 - Under DDoS or heavy traffic, connection nodes use pool-and-sample selection rather than FIFO queuing
 - Selection probability proportional to trust signals: a fully-verified agent (WebAuthn + GitHub + LinkedIn) gets substantially higher weight than a phone-only agent
-- Incubation enforcement: 7-day incubation period with 3 connections/day limit for phone-only new agents. Which node type enforces this (connection node? home node? all nodes?) is not specified. **[GAP G-16]**
+- Incubation enforcement: 7-day incubation period with 3 connections/day limit for phone-only new agents. Which node type enforces this (connection node? all directory nodes?) is not specified. **[GAP G-16]**
 
 **Endorsement infrastructure**:
 - Directory accepts signed endorsements, verifies endorser's signature, hashes the content, stores the hash, discards the content
@@ -752,10 +752,10 @@ In Alpha, some components that will eventually be separated (relay vs. directory
 
 | Data type | Where stored | Replicated | Deletion rule |
 |---|---|---|---|
-| Phone number | Home node only | No | Full wipe on account deletion |
-| WebAuthn credentials | Home node only | No | Full wipe on account deletion |
-| OAuth tokens | Home node only | No | Full wipe on account deletion |
-| K_server_X share | Home node only | No | GDPR row-level delete on tombstone |
+| Phone number | Signup portal only | No | Full wipe on account deletion |
+| WebAuthn credentials | Signup portal only | No | Full wipe on account deletion |
+| OAuth tokens | Signup portal only | No | Full wipe on account deletion |
+| K_server_X share | All directory nodes (envelope-encrypted, per-agent) | Yes — all directory nodes | GDPR row-level delete on tombstone |
 | Trust signal JSON blobs | Client only (portal discards). During connection requests: client bundles blobs with request; directory holds transiently for fraud-filter verification then discards; receiving client gets blobs for independent signature verification then discards after accept/reject. | N/A | Client-side |
 | Trust signal hashes | All directory nodes | Yes (via append-only log) | Tombstone appended; hash remains in log |
 | Public keys | All directory nodes | Yes | Tombstone appended; key remains in log |
@@ -768,7 +768,7 @@ In Alpha, some components that will eventually be separated (relay vs. directory
 | Companion device allowlist | Client only (local allowlist) | N/A | Client-side; **[GAP G-41 — RETIRED]** |
 | Human injection logs | Client only (local SQLCipher) | N/A | Client-side; not in Merkle tree |
 | Anomaly event timestamps | All directory nodes | Yes | Not deleted |
-| Succession packages | Directory (home node?) | TBD — **[GAP G-39]** | Not specified |
+| Succession packages | Directory nodes (encrypted payload, replicated) | Yes — **[GAP G-39]** replication policy and at-rest protection not fully specified | Not specified |
 | Oracle evidence (GPS, photos) | Not specified — **[GAP G-40]** | Not specified | Not specified |
 
 ---
@@ -780,10 +780,10 @@ The following conflicts were identified across source documents. For each, the t
 **C-1: Portal/bot boundary for phone OTP — resolved**
 Registration is entry-point agnostic. Both portal-first and bot-first paths are valid. Phone OTP and email verification are both mandatory. Email OTP is the correlation token linking portal-initiated registration to the subsequent phone ceremony. See agent-client.md AC-C1 (resolved).
 
-**C-2: Which node type handles the session SEAL FROST ceremony (CRITICAL)**
-- Position A (implied by session/relay separation): Established sessions are on relay nodes; relay nodes do not perform FROST.
-- Position B (implied by seal semantics): Sealing a session requires FROST; the directory connection node / home node must be involved.
-- These cannot both be true as written. Options: (1) The FROST seal ceremony is always performed by the originating connection node regardless of where the session currently lives; (2) Sessions migrate back to a connection node for the seal ceremony; (3) Relay nodes are given limited FROST capability for seal only. A decision is required.
+**C-2: Which directory node handles the session SEAL FROST ceremony (CRITICAL)**
+- Relay nodes do not perform FROST — that is not in dispute.
+- The question is which directory node handles it: the originating connection node (Option 1), or the directory node with the lowest latency to the sealing agent at seal time (Option 2).
+- Since all directory node data is fully federated, any directory node holds K_server_X shares and can participate in a FROST ceremony. The answer is: whichever directory node the agent is connected to at seal time handles the ceremony. A decision is still required to confirm this and to specify what happens if the agent migrates between directory nodes between session start and seal.
 
 **C-3: Merkle leaf prefix collision — resolved**
 `0x00` message leaves, `0x01` internal nodes (RFC 6962), `0x02` control leaves. The `0x02` prefix preserves RFC 6962 second-preimage protection while keeping control leaves as first-class Merkle entries. See agent-client.md AC-C3 (resolved).
@@ -816,7 +816,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-4 | Portal | Portal-to-directory write API (endpoint, protocol, auth mechanism) not specified |
 | G-5 | Portal | Mechanism for delivering original JSON record to client not specified |
 | G-6 | Portal | Social proof freeze enforcement: portal check vs. directory check vs. both not specified |
-| G-7 | Directory | Jurisdiction-based home node assignment mechanism at registration not specified |
+| G-7 | Portal | ~~Retired (home node dropped)~~ — jurisdiction is a signup portal deployment concern. PII lives only in the signup portal; directory nodes hold only hashes and are jurisdiction-neutral by construction. The signup portal must be deployed in the correct jurisdiction for each user base. |
 | G-8 | Directory/FROST | K_server rotation notification format, grace period, and epoch identifier format not specified |
 | G-9 | Directory/FROST | Node list signing key ceremony and protection model not specified (flagged high severity) |
 | G-10 | Directory | Timestamp skew check acceptable window not specified |
