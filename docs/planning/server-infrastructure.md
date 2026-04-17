@@ -40,7 +40,7 @@ The signup portal is the only path for human-level identity enrichment. The port
   - **Unverified Number** (VoIP/virtual): trust ceiling at score 2
   - **Provisional** (failed phone intelligence): trust ceiling at score 2, re-evaluated at 60 days
   - When carrier intelligence is not yet integrated, all agents default to Verified Mobile.
-- During the first 7 days (incubation), the portal or directory must enforce: max 3 new outbound connections per day.
+- During the first 7 days (incubation), the directory enforces: max 25 new outbound connections per day.
 
 ### Optional strengthening flows
 
@@ -365,7 +365,7 @@ Control leaves are hashed and signed identically to message leaves and recorded 
 After SEAL: a configurable grace window (`post_seal_grace_seconds`, default `300`) permits late-arriving messages (in-flight before the sender received the SEAL notification) to be accepted as `post_seal: true` record-only leaves. After the grace window expires, any arriving message triggers an auto-REOPEN and is delivered as the first leaf of a continuation session.
 After ABORT: REOPEN is not permitted. Post-ABORT message arrivals are always rejected regardless of timing.
 
-**Session timeout value (N in "no messages for N minutes") is not specified. [GAP G-13]**
+**Session timeout**: 72 hours (3 days). No messages for 72 hours → directory issues EXPIRE control leaf; session moves to quasi-terminal (REOPEN permitted). A conversation quiet over a weekend should not auto-expire. Owners can always manually CLOSE earlier. **[GAP G-13 RESOLVED]**
 
 **REOPEN semantics — [GAP G-14 RESOLVED]**:
 
@@ -428,7 +428,7 @@ The privacy design is intentional: an agent may have valid reasons not to disclo
 **Trust-weighted pool selection (under load)**:
 - Under DDoS or heavy traffic, connection nodes use pool-and-sample selection rather than FIFO queuing
 - Selection probability proportional to trust signals: a fully-verified agent (WebAuthn + GitHub + LinkedIn) gets substantially higher weight than a phone-only agent
-- Incubation enforcement: 7-day incubation period with 3 connections/day limit for phone-only new agents. Which node type enforces this (connection node? all directory nodes?) is not specified. **[GAP G-16]**
+- Incubation enforcement: 7-day incubation period with **25 connections/day limit** for new agents. **Directory nodes enforce** — connection requests happen at session establishment (FROST ceremony), which is a directory operation; relay nodes are not involved until after a session exists. Daily counter lives on the agent record in the directory, incremented on each outbound connection request during incubation. **[GAP G-16 RESOLVED]**
 
 **Endorsement infrastructure**:
 - Directory accepts signed endorsements, verifies endorser's signature, hashes the content, stores the hash, discards the content
@@ -445,7 +445,7 @@ The privacy design is intentional: an agent may have valid reasons not to disclo
 - Phase 2: PSI-CA (cardinality only) for threshold endorsement policies
 - Phase 3: full PSI (identity of matched agents)
 - Directory facilitates PSI computation without learning either party's full set; inputs are discarded after computation, never persisted
-- PSI implementation library selection (Rust `oprf` crate, etc.) and exact API contract are provisional **[GAP G-18]**
+- PSI implementation library and API contract: **deferred pending server stack decision** (language/runtime choice for directory nodes — Rust and Go are the primary candidates). PSI is a Phase 2 feature; Phase 1 ships with direct comparison only. Library selection is downstream of the stack decision. **[GAP G-18 — deferred]**
 - Anti-farming enforcement uses `phone_hash` stored in `agent_registrations` — [GAP G-19 RESOLVED]. This gap was written under the home node model, where `phone_hash` was assumed to live only on the home node. With the home node concept dropped and all core tables fully federated, `phone_hash` replicates to all directory nodes via the append-only log. Every directory node can enforce the same-owner rule directly at endorsement submission time: if endorser and endorsed share a `phone_hash`, the submission is rejected. No additional mechanism required.
 
 **Connection staking (defaults to zero at launch)**:
@@ -917,12 +917,12 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-10 | Directory | ~~Resolved~~ — ±30 seconds. Consistent with NTP-synchronized systems and TOTP tolerance. |
 | G-11 | Directory | ~~Resolved~~ — 10 minutes at Alpha; 5 minutes at Consortium. Sealed conversations enter MMR within one checkpoint window. |
 | G-12 | Directory | ~~Resolved~~ — Most of this dissolves under the relay architecture (relay failure recovery is handled by directory reassignment; directory nodes are peers with no per-session primary). Residual question (FROST ceremony abort/retry) resolved: client is coordinator; 3-second round timeout; exclude non-responders, retry with fresh t-of-n set; max 3 retries; fail with `DIRECTORY_BELOW_THRESHOLD` if fewer than t nodes reachable. |
-| G-13 | Directory | Session timeout value (N in "no messages for N minutes") not specified |
+| G-13 | Directory | ~~Resolved~~ — 72 hours (3 days). No messages → EXPIRE control leaf; session quasi-terminal (REOPEN permitted). |
 | G-14 | Directory | ~~Resolved~~ — REOPEN requires new FROST ceremony; seq# restarts at 1 with genesis `prev_root = SHA-256(previous_sealed_root \|\| session_id \|\| reopen_timestamp)`; unilateral REOPEN not permitted (bilateral by design; use new session request if counterparty non-responsive). Auto-REOPEN (late-arriving post-grace message) is protocol-internal and does not require FROST. |
 | G-15 | Directory | ~~Retired~~ — signals divide by ownership: directory-owned behavioral signals (track record, connection history, anomaly flags) are appended automatically by the directory; client-owned identity signals (social proofs, WebAuthn, device attestation, endorsements) are discretionary disclosures. No mandatory-signal registry; no rejection at submission. Enforcement is the receiving client's `SignalRequirementPolicy`. |
-| G-16 | Directory | Incubation enforcement: which node type enforces 7-day / 3 connections/day limit not specified |
+| G-16 | Directory | ~~Resolved~~ — Directory nodes enforce (connection requests happen at FROST ceremony, a directory operation). Cap updated to 25 outbound connections/day during 7-day incubation. Daily counter on agent record, incremented at each outbound connection request. |
 | G-17 | Directory | Endorsement rate limit N (max new endorsements per month per agent) not specified |
-| G-18 | Directory | PSI implementation library and API contract provisional |
+| G-18 | Directory | ~~Deferred~~ — pending server stack decision (Rust vs. Go for directory nodes). PSI is Phase 2; Phase 1 ships with direct comparison. Library selection is downstream of stack choice. |
 | G-19 | Directory | ~~Resolved~~ — Gap was an artifact of the home node model. `phone_hash` is stored in `agent_registrations` and replicates to all directory nodes. Every node enforces the same-owner rule at endorsement submission time. No additional mechanism required. |
 | G-20 | Directory | Custodian API interface for escrow release/slash not specified |
 | G-21 | Directory | ~~Resolved~~ — Computed at each directory checkpoint (incremental recomputation for changed neighborhoods). Stored on agent record (`conductance_score`, `conductance_computed_at`, `conductance_sample_size`); append-only history table; replicated via append-only log. Not published externally — internal fraud signal only; feeds network graph health signal class in discovery display. |
