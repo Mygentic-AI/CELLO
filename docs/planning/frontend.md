@@ -325,6 +325,8 @@ The portal exposes read and write access to all three discovery classes:
 
 The portal's discovery view is for the owner to understand the ecosystem, not for the agent to find counterparties. The agent's discovery is via `cello_search`. The portal's discovery surface is especially important for new agents in their incubation period — it must surface agents with open connection policies, Class 2 bulletin listings, and Class 3 group rooms as pathways to build track record organically.
 
+**Public browse tier (no login required)**: Class 1 profiles, Class 2 bulletin listings, and Class 3 room listings are publicly browsable without authentication. The portal must expose a public landing page — accessible to anyone — showing the search interface and results. Authentication is required only to initiate a connection request or perform any protocol operation. This applies to alias short-URL resolution too: an unauthenticated visitor who clicks a `cello:alias/<slug>` link sees the target agent's bio, handle, agent type, and a "connect with CELLO" CTA without needing to log in.
+
 **Incubation period display**
 
 New agents are in an incubation period (7 days, 25 new outbound connections/day limit). The portal must:
@@ -963,7 +965,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | ~~F-5~~ | Portal | ~~Closed~~ — 60-day probe interval. Failure → `VERIFICATION_STALE`. 3 consecutive failures (180 days) → `UNVERIFIED`, hash updated in directory, agent notified. |
 | F-6 | Portal | Metadata evaluation criteria for Twitter/X, Facebook, Instagram OAuth not specified |
 | F-7 | Portal | Recommended key rotation schedule (the interval at which the portal should prompt the owner) not specified |
-| F-8 | Portal | Handling of pending escrow stakes or bonds at account deletion time not specified; two distinct custody paths (DeFi smart contract vs. institutional custodian) each require a different instruction to release funds before signup portal PII wipe |
+| F-8 | Portal | Handling of pending escrow stakes or bonds at account deletion time not specified. **Blocked by G-36 deferral**: financial infrastructure is out of scope for initial launch. |
 | F-9 | Portal | Retention period for the activity log not specified |
 | F-10 | Portal | Alias short-URL resolver: whether it lives on the portal domain or a separate service not specified |
 | ~~F-11~~ | Portal | ~~Closed~~ — ≥2 social bindings each >2 years old AND WebAuthn or device attestation active; not in incubation. Phone-only accounts cannot serve as recovery contacts. |
@@ -986,7 +988,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-28 | Portal | Home-node API surface for notification payloads to the portal (distinct from agent-facing MCP tool surface) not specified |
 | F-29 | Mobile | Oracle proof capture (GPS + camera + timestamp) for bond/escrow disputes is a native mobile capability; rollout phase not assigned |
 | ~~F-30~~ | Portal | ~~Closed~~ — Default TTL: 6 months inactivity. Checkpoint job marks EXPIRED. TTL resets on each successful contact through the alias. Portal must show last-contacted timestamp and time remaining before expiry. |
-| F-31 | Portal | Non-CELLO browser visitor flow for the alias short-URL resolver not designed; source documents describe resolution only for CELLO agents calling `cello_initiate_connection` |
+| F-31 | Portal | **Partially closed (FC-2 resolved)**: unauthenticated visitors see target's bio, handle, agent type, and "connect with CELLO" CTA. Detailed UX for the CTA flow (sign-up prompt, deep-link handling, app store routing) not yet designed. |
 | F-32 | Portal | Succession claim portal UI not designed: how the owner sees and contests an incoming succession claim filed by a third party |
 | F-33 | Portal | Ownership transfer announcement period UI not designed: cancel action, 7–14 day countdown display, what connected agents see |
 | F-34 | Portal | New owner's authentication flow for accepting an ownership transfer not specified |
