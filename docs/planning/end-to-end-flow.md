@@ -25,7 +25,7 @@ These principles apply everywhere. If a proposed mechanism violates any of them,
 
 4. **Degraded state raises the guard.** Directory unavailability is not a reason to accept lower-quality connections — it is a reason to be more selective. The default during degraded mode is refuse new unauthenticated connections with a clear reason.
 
-5. **All identity signals are optional enrichment.** Phone OTP and email are the only registration requirements. Every other signal — WebAuthn, social verifiers, device attestation, SIM age scoring, bonds — enriches trust signals but is never a gate. Missing signals are not penalties.
+5. **All identity signals are optional enrichment.** Phone OTP and email are the only registration requirements. Every other signal — WebAuthn, social verifiers, device attestation, SIM age scoring, bonds — enriches trust signals but is never a gate. Missing signals are not penalties. An initiating agent may omit any or all signals from a connection request — the decision to include them is the agent's. Policy enforcement (whether to accept or decline a request) happens at the receiver's evaluation time, not at submission time. The directory does not reject requests for missing signals; the receiving client's `SignalRequirementPolicy` is the enforcer.
 
 6. **Non-repudiation is the foundation of commerce.** The Merkle root is the conversation. A 32-byte hash smaller than a tweet provides a tamper-proof receipt for an entire exchange of any length. Natural language commerce between agents is only possible because disputes are resolvable.
 
@@ -697,7 +697,7 @@ The directory initialises this genesis `prev_root` from public information. It a
 
 ### 6.4 Delivery Failure Handling
 
-The dual-path architecture creates a structured failure space. Each case has a time axis (sub-second → grace period → grace expired, session active → session dead).
+The dual-path architecture creates a structured failure space. Each case has a time axis (sub-second → grace period → grace expired, session active → session dead). The grace period default is 600 seconds (10 minutes), configurable via `delivery_grace_seconds` in `cello_configure`. It applies protocol-wide — there is no per-conversation-type variation.
 
 **Case A — Both hash and message arrive:**
 - A1: They match → normal flow, complete
@@ -884,7 +884,7 @@ Trust is not checked once at connection time. It is continuous throughout the co
 | Activity at unusual hours | Pattern anomaly | Alert owner via phone |
 | Unknown peers | Agent connecting to unfamiliar entities | Alert owner via phone |
 
-The directory sees every hash arrive (it's the hash relay). Activity notifications go to the owner's phone via WhatsApp or Telegram — a channel completely independent from the agent infrastructure that an attacker who compromised the agent's machine cannot intercept.
+The directory sees every hash arrive (it's the hash relay). Activity notifications go to the owner's configured channels — WhatsApp, Telegram, Slack, or native push via the CELLO mobile app. All configured channels fire simultaneously; there is no primary/fallback hierarchy and no suppression based on which apps are installed. The owner's configuration (`cello_configure`) is the sole determinant of which channels are active.
 
 ### 8.2 Activity Monitoring
 
@@ -913,7 +913,7 @@ Owner didn't initiate this?
 
 ### 8.3 Emergency Revocation ("Not Me") — Dual-Path Forced Abort
 
-"Not me" triggers immediate revocation: directory burns K_server_X shares — no new FROST-authenticated sessions can be established, and no conversations can receive a notarized seal.
+"Not me" triggers immediate revocation: directory burns K_server_X shares — no new FROST-authenticated sessions can be established, and no conversations can receive a notarized seal. **All active sessions are terminated immediately — there is no carve-out for K_local-only sessions. The owner does not know what was compromised; a hard stop on everything is the only safe response.**
 
 K_server revocation alone cannot close existing P2P sessions — those are direct libp2p connections not routed through the directory. The attacker retains K_local and could continue operating on live channels. The directory therefore fires two parallel abort paths simultaneously:
 
@@ -936,7 +936,7 @@ Three distinct tombstone types, each producing a different directory record:
 3. **Social recovery-initiated** — M-of-N recovery contacts agree and owner cannot act. Last resort.
 
 **Immediate effects on any tombstone:**
-- K_server burned, all active sessions terminated immediately via dual-path forced abort (§8.3): Path 1 `EMERGENCY_SESSION_ABORT` to agent client, Path 2 `PEER_COMPROMISED_ABORT` to each counterparty → SEAL-UNILATERAL with tombstone reason code
+- K_server burned; directory fires dual-path forced abort simultaneously: Path 1 `EMERGENCY_SESSION_ABORT` to the compromised agent client (cooperative — client sends ABORT leaves and disconnects), Path 2 `PEER_COMPROMISED_ABORT` to each counterparty's WebSocket (non-cooperative — works even if the compromised client is offline or attacker-controlled). All active sessions receive SEAL-UNILATERAL with tombstone reason code. No session continues after any tombstone.
 - Social proofs enter a freeze period (30 days) — cannot be attached to any new account
 - Phone number flagged as "in recovery" — cannot register a new account during freeze
 
@@ -1159,7 +1159,7 @@ Several mechanisms appear separate but are tightly coupled through shared primit
 - [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — full design of the conversation proof ledger referenced in §2.1 and §9; replaces hash chain with MMR for O(log N) inclusion proofs; defines the identity Merkle tree structure behind §2.5 client-side verification
 - [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]] — extends §6.2 (leaf format), §6.3 (sequencing), and §6.6 (seals) from two-party to N-party; authorship/ordering separation, serialized and concurrent modes, client-side receive windows for LLM agents
 - [[2026-04-14_1000_contact-alias-design|Contact Alias Design]] — revocable privacy-preserving identifiers extending §5.1–5.3 connection request flow with alias-routed requests
-- [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — 33 MCP tools implementing Steps 4–8 of this protocol flow; defines the agent-facing interface for sessions, security, discovery, connections, group conversations, and policy
+- [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — 33 MCP tools implementing Steps 4–8 of this protocol flow; defines the agent-facing interface for sessions, security, discovery, connections, group conversations, and policy. The agent client exposes 35 tools total: the 33 from this surface plus `cello_request_human_input` and `cello_acknowledge_receipt` (explicit causal commitment for commerce/multi-party scenarios)
 - [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession and Ownership Transfer]] — resolves the §8 succession gap: voluntary transfer via identity_migration_log + announcement period; involuntary succession via dead-man's switch with pre-designated successor, 30-day waiting period, and M-of-N recovery contact attestation
 - [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow — Trust Data Relay and Selective Disclosure]] — original trust data relay design for §5 connection requests; the relay model was further refined by the AC-C9 resolution (agent-client.md): directory role is verify-then-relay-discard, receiver performs two independent verification steps (Merkle inclusion proof + Alice's own blob signatures)
 - [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] — session establishment and seal (§3 and §6.6) are the only FROST ceremony points affected by K_server rotation; K_local rotation renders stolen keys useless at session boundaries
