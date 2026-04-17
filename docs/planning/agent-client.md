@@ -599,7 +599,7 @@ The scanner's output is constrained via the model API's native structured output
 
 **Recommended invocation points:** connection request greeting text (highest risk — unsolicited, unvetted sender), session messages from newly-connected or low-trust agents, notification payloads containing free text, trust profile data fields if they will be displayed or acted upon.
 
-The client runs in two scan modes: **local** (bundled DeBERTa-v3-small INT8 — zero API cost, offline) and **proxy** (paid tier through the directory — higher accuracy, requires directory connectivity).
+The client runs in two scan modes: **local** (DeBERTa-v3-small INT8, downloaded on first install — zero API cost, offline after download) and **proxy** (paid tier through the directory — higher accuracy, requires directory connectivity).
 
 **[CONFLICT AC-C4]**: The DeBERTa model delivery mechanism is inconsistent across source documents. `open-decisions.md` states the model is bundled in the npm package with SHA-256 pinning. `design-problems.md` states the npm package includes a download script that fetches the model from a fixed Hugging Face URL and verifies it post-download. Both impose SHA-256 verification; the delivery mechanism differs. Decision required: bundle or download-at-install. This is server infrastructure Conflict C-7.
 
@@ -661,10 +661,12 @@ The verification script is itself included in the deployment artifact and its ha
 All incoming connection requests are evaluated against the agent's configured `SignalRequirementPolicy` before the agent sees them. The pipeline runs automatically:
 
 1. **Layer 1 sanitization** fires on the greeting text and all string fields in the trust profile
-2. **Trust profile extraction and signal verification** against the directory — multi-node cross-check with Merkle proof verification
-3. **Policy match** — does the requester satisfy the global policy, or the alias-specific policy override if the request came in via a named alias?
-4. **Automatic outcome**: `cello_accept_connection` or `cello_decline_connection` fired based on policy result, or transition to `PENDING_ESCALATION` if the `human_escalation_fallback` flag is set and the request does not produce a clear accept/reject
-5. **Event surfaced** to the agent via `cello_poll_notifications` as a `connection_request` event with full context, trust profile, and outcome
+2. **Identity verification** — multi-node Merkle inclusion proof confirms Alice's public key is genuinely registered. The client queries multiple directory nodes, recomputes the root locally against the signed checkpoint, and accepts only if all nodes agree. This is independent of the directory's prior fraud-filter check.
+3. **Trust signal verification** — each trust blob submitted by Alice was signed by Alice with her identity key at creation time. The client verifies Alice's own signatures on each blob using the identity key confirmed in step 2. The directory's pre-verification is a fraud filter that stops obviously invalid submissions; it does not vouch for the content and the client does not rely on it. The client is the enforcer.
+4. **Track record stats** are appended by the directory from its authoritative store (keyed to Alice's pseudonymous pubkey). The client accepts these at face value since they are directory-held data, not Alice-submitted data.
+5. **Policy match** — does the requester satisfy the global policy, or the alias-specific policy override if the request came in via a named alias?
+6. **Automatic outcome**: `cello_accept_connection` or `cello_decline_connection` fired based on policy result, or transition to `PENDING_ESCALATION` if the `human_escalation_fallback` flag is set and the request does not produce a clear accept/reject
+7. **Event surfaced** to the agent via `cello_poll_notifications` as a `connection_request` event with full context, trust profile, and outcome
 
 Policy is expressed as named signal requirements (`SignalRequirementPolicy`) — never as numeric thresholds. The client evaluates named signals only. No LLM call is made at the connection gate unless the agent has explicitly configured inference-assisted evaluation.
 
@@ -672,7 +674,11 @@ Policy is expressed as named signal requirements (`SignalRequirementPolicy`) —
 
 ### Trust data relay — one-round negotiation
 
-The directory relays connection requests without re-signing — the requester's original Ed25519 signature arrives intact. The receiving client evaluates the trust data before accepting.
+Alice is the sole custodian of her trust signal JSON blobs. Before a connection exists there is no P2P channel to Bob — the only path for trust data to reach Bob is through the directory. Alice therefore bundles her trust signal blobs with the connection request.
+
+The directory's role is **verify-then-relay-discard**: it checks each submitted blob against the hashes it already holds (fraud filter — stops obviously invalid or tampered submissions), appends track record stats from its own authoritative store, forwards the full package to Bob, then discards the blobs. The directory never stores trust signal data beyond hashes. It does not re-sign the trust data; Alice's original signatures on each blob arrive intact. The directory is not a trust authority — it is a verified relay.
+
+The connection package that arrives at Bob contains: Alice's trust signal blobs (signed by Alice, for Bob's independent verification), Alice's identity key, and track record stats appended by the directory.
 
 One negotiation round is permitted: the receiver can ask for one additional disclosure; the requester provides it or refuses; the receiver accepts or declines. No further rounds.
 
@@ -680,7 +686,7 @@ The client enforces the mandatory vs. discretionary signal distinction. Mandator
 
 **[GAP AC-11]**: The complete classification of all signal types as mandatory or discretionary has not been produced. This is a known open item (server infrastructure Gap G-15). The client cannot enforce the mandatory/discretionary split until the full classification exists. Additionally, what happens when a new mandatory signal is introduced and pre-existing agents lack it (grace period? grandfathering?) is unresolved.
 
-All actual trust data held in memory during relay is cleared after the accept/reject decision — never persisted to disk. The directory's persistent store holds only hashes.
+All trust data held in memory during relay is cleared after the accept/reject decision — never persisted to disk. The directory's persistent store holds only hashes.
 
 ### Human escalation path
 
@@ -1060,7 +1066,7 @@ The client's behavior is identical across deployment models. The calling pattern
 
 **Security:** `cello_scan` invokes the Layer 2 LLM scanner; the client is responsible for enforcing structured output mode and schema validation. `cello_report` submits a signed trust incident report to the directory; the client signs with K_local before submission.
 
-**Trust / Identity:** `cello_verify` performs multi-node cross-check with Merkle proof verification; returns `SignalResult[]` — never a numeric score. `cello_get_trust_profile` returns the agent's own trust profile as it appears to the directory. `cello_check_own_signals` queries the local trust signal store to list all signal states.
+**Trust / Identity:** `cello_verify` performs two independent verification steps: (1) multi-node Merkle inclusion proof confirms the target's public key is genuinely registered — the client recomputes the tree root locally against the signed checkpoint; (2) each trust blob is verified against the target's own identity-key signature, not against the directory's vouch. The directory is a fraud filter, not a trust authority; the client is the enforcer. Returns `SignalResult[]` — never a numeric score. `cello_get_trust_profile` returns the agent's own trust profile as it appears to the directory. `cello_check_own_signals` queries the local trust signal store to list all signal states.
 
 **Discovery:** `cello_search` queries the directory's BM25 + vector similarity + tag/filter stack; requires an active authenticated session. `cello_create_listing` writes to the directory's `directory_listings` table; the client signs the listing creation.
 
@@ -1105,7 +1111,7 @@ The following names are canonical and supersede inconsistencies in earlier docum
 ### Session setup
 
 1. Both agents are online with persistent authenticated WebSockets to their respective directory nodes
-2. Agent A calls `cello_initiate_connection` — directory relays connection request to Agent B
+2. Agent A calls `cello_initiate_connection` — client bundles A's trust signal blobs with the request; directory verifies blobs against held hashes (fraud filter), appends track record stats, forwards package to Agent B, discards blobs
 3. Client B runs the automated policy evaluation pipeline (Layer 1 → signal verification → policy match)
 4. If auto-accepted: Agent B's client calls `cello_accept_connection`; FROST session establishment ceremony runs
 5. Directory performs ephemeral Peer ID exchange on behalf of both clients
@@ -1172,7 +1178,7 @@ The following names are canonical and supersede inconsistencies in earlier docum
 |---|---|---|---|
 | Identity key (K_local) | Yes — in KeyProvider | No | BIP-39 seed phrase backup |
 | K_server_X shares | No | Yes — distributed as FROST threshold shares across nodes | — |
-| Trust signal JSON blobs | Yes — sole copy | No — hashes only | Portal discards after returning to client |
+| Trust signal JSON blobs | Yes — sole copy | No — hashes only | Portal discards after returning to client. During connection requests: client bundles blobs with request; directory holds transiently for fraud-filter verification then discards; receiving client gets blobs for independent signature verification then discards after accept/reject. |
 | Public keys | Yes | Yes — in identity tree | Both hold |
 | Pseudonym + binding proof | Yes | Yes — directory co-signs binding | Both hold |
 | Conversation Merkle trees | Yes — full leaf sequence | Yes — sealed root hash in MMR | Both hold; client has the full tree; directory has the sealed root |
@@ -1205,10 +1211,8 @@ The client's registration path depends on whether registration always begins wit
 **AC-C3: Merkle leaf prefix collision**
 RFC 6962 internal nodes use prefix `0x01`. §6.6 of end-to-end-flow assigns prefix `0x01` to control leaves (CLOSE, SEAL, ABORT, etc.). These are incompatible. The client cannot implement the Merkle tree correctly until this is resolved. See server infrastructure Conflict C-3.
 
-**AC-C4: DeBERTa model delivery — bundled vs. downloaded**
-- `open-decisions.md`: model bundled in npm package, SHA-256 pinned.
-- `design-problems.md`: download script in npm package fetches from a fixed Hugging Face URL, hash-verified post-download.
-Both impose SHA-256 verification; delivery mechanism differs. See server infrastructure Conflict C-7.
+**AC-C4: DeBERTa model delivery — resolved**
+The model is downloaded on first install (not bundled in the npm package). The npm package includes a postinstall download script that fetches DeBERTa-v3-small INT8 from a fixed URL and verifies the SHA-256 hash before the model is used. Bundling was rejected because it would bloat the npm package significantly and make supply chain updates require a full package republish. The hash pin in source code is the security guarantee regardless of delivery mechanism.
 
 **AC-C5: Native push vs. WhatsApp/Telegram escalation relationship**
 Whether the two escalation channels are parallel redundant paths (both fire) or a primary/fallback hierarchy (app supersedes WhatsApp/Telegram once installed) is not decided. Affects the client's escalation dispatch logic. See frontend Conflict FC-3.
@@ -1228,10 +1232,8 @@ The client's behavior on receiving a K_server revocation event is directly contr
 - frontend.md cross-surface escalation flow, step 7: "The decision is submitted to the home node, which calls `cello_accept_connection` or `cello_decline_connection`" — the home node is an intermediary.
 - These are architecturally incompatible. The CELLO client is on the agent operator's private hardware; a home-node-to-client call is unusual and not described elsewhere. Decision required.
 
-**AC-C9: Directory role during connection request relay — relay vs. verify-and-vouch**
-- agent-client.md Part 6: "The directory relays connection requests without re-signing."
-- connection-request-flow-and-trust-relay.md: The directory verifies submitted trust scores against its held hashes before forwarding — "it is not merely relaying, it is vouching that the data is authentic."
-- Whether the receiver's Merkle proof check (pipeline step 2) is redundant given directory pre-verification, or essential because the directory is untrusted, needs explicit statement.
+**AC-C9: Directory role during connection request relay — resolved**
+The directory's role is verify-then-relay-discard. It checks each submitted trust blob against held hashes (fraud filter only), appends track record stats, forwards the full package, and discards the blobs. It does not re-sign trust data and is not a trust authority. The receiver's independent verification (Merkle inclusion proof for identity, Alice's own signatures for trust blobs) is mandatory and non-redundant — the directory could be compromised. The client is the enforcer.
 
 **AC-C10: Companion device identity verification — client vs. directory**
 - agent-client.md Part 9: "The directory does not verify the companion device keypair — the client does that directly."
