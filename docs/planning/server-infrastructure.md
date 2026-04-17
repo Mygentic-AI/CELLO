@@ -353,7 +353,12 @@ After ABORT: REOPEN is not permitted. Post-ABORT message arrivals are always rej
 
 **Session timeout value (N in "no messages for N minutes") is not specified. [GAP G-13]**
 
-**REOPEN semantics incompletely specified**: Whether REOPEN requires a new FROST ceremony, how sequence numbers are handled across the seal boundary, and whether REOPEN can be unilateral are not defined. **[GAP G-14]**
+**REOPEN semantics — [GAP G-14 RESOLVED]**:
+
+- **New FROST ceremony required: yes.** The seal is a definitive notarial act — the directory has attested to a final state. Reopening invalidates that finality. A REOPEN is structurally equivalent to session establishment and carries the same authentication weight. Skipping FROST would leave the directory's sealed record as the last attested state with no new anchor for the continuation.
+- **Sequence numbers: restart at 1, anchored to previous seal.** The new segment's genesis `prev_root` = `SHA-256(previous_sealed_root || session_id || reopen_timestamp)`. This creates a cryptographically linked chain of conversation segments — each segment's genesis commits to the prior seal. History is fully reconstructible; each segment is a clean, unambiguous unit. Continuing sequence numbers across a seal boundary would blur the meaning of the seal.
+- **Unilateral REOPEN: not permitted.** The seal is a bilateral agreement — both parties signed CLOSE and CLOSE-ACK. A unilateral REOPEN would undermine that finality and is a harassment vector (spamming REOPENs against someone who closed to end contact). If one party wants to communicate and the other does not respond to a REOPEN request, they start a new session via the standard connection request flow. REOPEN continues an existing thread; a new session goes through full trust evaluation and policy check.
+- **Auto-REOPEN exception**: Late-arriving messages that trigger an auto-REOPEN (post-grace-window arrival, per the rule above) do not require a new FROST ceremony — the auto-REOPEN is a protocol-level continuity mechanism, not a participant-initiated act. The directory handles it internally.
 
 **Session close attestation** (`conversation_attestations` table — per-participant, N-party):
 - CLEAN | FLAGGED | PENDING | DELIVERED | ABSENT
@@ -427,7 +432,7 @@ The privacy design is intentional: an agent may have valid reasons not to disclo
 - Phase 3: full PSI (identity of matched agents)
 - Directory facilitates PSI computation without learning either party's full set; inputs are discarded after computation, never persisted
 - PSI implementation library selection (Rust `oprf` crate, etc.) and exact API contract are provisional **[GAP G-18]**
-- Anti-farming enforcement requires knowing if endorser and endorsed share a phone-verified owner — but the directory does not store phone numbers in replicated state. How this check is performed without violating the home-node-only PII constraint is not specified. **[GAP G-19]**
+- Anti-farming enforcement uses `phone_hash` stored in `agent_registrations` — [GAP G-19 RESOLVED]. This gap was written under the home node model, where `phone_hash` was assumed to live only on the home node. With the home node concept dropped and all core tables fully federated, `phone_hash` replicates to all directory nodes via the append-only log. Every directory node can enforce the same-owner rule directly at endorsement submission time: if endorser and endorsed share a `phone_hash`, the submission is rejected. No additional mechanism required.
 
 **Connection staking (defaults to zero at launch)**:
 - Hooks exist from day one; institutions opt in
@@ -883,12 +888,12 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-11 | Directory | Checkpoint interval not specified |
 | G-12 | Directory | ~~Resolved~~ — Most of this dissolves under the relay architecture (relay failure recovery is handled by directory reassignment; directory nodes are peers with no per-session primary). Residual question (FROST ceremony abort/retry) resolved: client is coordinator; 3-second round timeout; exclude non-responders, retry with fresh t-of-n set; max 3 retries; fail with `DIRECTORY_BELOW_THRESHOLD` if fewer than t nodes reachable. |
 | G-13 | Directory | Session timeout value (N in "no messages for N minutes") not specified |
-| G-14 | Directory | REOPEN semantics: new FROST ceremony required? Sequence number handling across seal boundary? Unilateral REOPEN permitted? |
+| G-14 | Directory | ~~Resolved~~ — REOPEN requires new FROST ceremony; seq# restarts at 1 with genesis `prev_root = SHA-256(previous_sealed_root \|\| session_id \|\| reopen_timestamp)`; unilateral REOPEN not permitted (bilateral by design; use new session request if counterparty non-responsive). Auto-REOPEN (late-arriving post-grace message) is protocol-internal and does not require FROST. |
 | G-15 | Directory | ~~Retired~~ — signals divide by ownership: directory-owned behavioral signals (track record, connection history, anomaly flags) are appended automatically by the directory; client-owned identity signals (social proofs, WebAuthn, device attestation, endorsements) are discretionary disclosures. No mandatory-signal registry; no rejection at submission. Enforcement is the receiving client's `SignalRequirementPolicy`. |
 | G-16 | Directory | Incubation enforcement: which node type enforces 7-day / 3 connections/day limit not specified |
 | G-17 | Directory | Endorsement rate limit N (max new endorsements per month per agent) not specified |
 | G-18 | Directory | PSI implementation library and API contract provisional |
-| G-19 | Directory | Anti-farming enforcement: how to check same-owner without home-node PII access not specified |
+| G-19 | Directory | ~~Resolved~~ — Gap was an artifact of the home node model. `phone_hash` is stored in `agent_registrations` and replicates to all directory nodes. Every node enforces the same-owner rule at endorsement submission time. No additional mechanism required. |
 | G-20 | Directory | Custodian API interface for escrow release/slash not specified |
 | G-21 | Directory | Conductance score computation frequency, storage location, and publication mechanism not specified |
 | G-22 | Directory | Directory WhatsApp/Telegram authentication, channel unavailability handling, and jurisdiction restrictions not specified |
