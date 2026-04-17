@@ -619,7 +619,7 @@ All tables are append-only unless noted. Mutable tables are marked.
 | `key_rotation_log` | append-only |
 | `identity_migration_log` | append-only |
 | `succession_designations` | append-only |
-| `succession_packages` | append-only; encrypted payload, never plaintext |
+| `succession_packages` | append-only; encrypted payload, never plaintext; envelope-encrypted by node KMS master key (double-encrypted: owner encrypts to successor's `identity_key`, node wraps with KMS) |
 | `succession_events` | append-only |
 | `directory_checkpoints` | append-only |
 | `checkpoint_node_signatures` | append-only |
@@ -851,8 +851,8 @@ In Alpha, some components that will eventually be separated (relay vs. directory
 | Companion device allowlist | Client only (local allowlist) | N/A | Client-side; **[GAP G-41 — RETIRED]** |
 | Human injection logs | Client only (local SQLCipher) | N/A | Client-side; not in Merkle tree |
 | Anomaly event timestamps | All directory nodes | Yes | Not deleted |
-| Succession packages | Directory nodes (encrypted payload, replicated) | Yes — **[GAP G-39]** replication policy and at-rest protection not fully specified | Not specified |
-| Oracle evidence (GPS, photos) | Not specified — **[GAP G-40]** | Not specified | Not specified |
+| Succession packages | Directory nodes only — identity-layer data; needed for authenticated succession ceremonies | Yes — full federation via append-only log, same as all core directory tables | GDPR: encrypted blob wiped on tombstone; hash remains in log. At-rest: envelope-encrypted by node KMS master key (same as K_server_X shares) — double-encrypted: once by owner to successor's `identity_key`, once by node KMS. |
+| Oracle evidence (GPS, photos, video) | Not stored by directory — [GAP G-40 RESOLVED] — follows hash-everything-store-nothing: oracle verifies claim → hash stored in directory → original discarded | N/A — original never held | Client holds original locally; presents to arbitration system if dispute arises; directory verifies hash matches |
 
 ---
 
@@ -927,8 +927,8 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-36 | Directory | ~~Deferred~~ — Financial infrastructure (regulatory compliance, custodian partnerships, stablecoin integration) is out of scope for initial launch. Staking hooks exist architecturally but nothing implemented. Deserves its own design document when prerequisites are in place. |
 | G-37 | Relay | ~~Partially resolved~~ — Relay node authentication: registered public key in directory, same model as directory nodes; relay signs session acceptance, directory verifies. Operator governance/contracts deferred (business development, non-technical). CELLO operates all relay nodes through Alpha. |
 | G-38 | Relay | Group key management for encrypted relay fan-out (establishment, new-joiner distribution, departure revocation) explicitly unresolved |
-| G-39 | Cross | Succession package storage: which node type holds it, replication policy, at-rest protection not specified |
-| G-40 | Cross | Oracle evidence (GPS, photos, video) storage location, retention policy, and post-dispute disposition not specified |
+| G-39 | Cross | ~~Resolved~~ — Directory nodes only; full federation via append-only log. At-rest: double-encrypted (owner encrypts to successor's `identity_key`; node wraps with KMS master key). GDPR: blob wiped on tombstone, hash remains. |
+| G-40 | Cross | ~~Resolved~~ — Oracle evidence is never stored by the directory. Hash-everything-store-nothing applies: oracle verifies → hash stored → original discarded. Client holds original; presents to arbitration if needed; directory verifies hash. |
 | G-41 | Directory | ~~Retired~~ — companion device allowlist is client-held, not directory-stored. See AC-C10 (resolved). Maximum devices per agent remains a client-side configuration decision. |
 
 ---
