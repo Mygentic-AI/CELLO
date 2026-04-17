@@ -517,16 +517,15 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
   - **Probationary period**: track record history is visible but carries reduced weight until the agent completes **3 months AND 200 clean conversations** post-recovery. Both conditions must be met. At that point full weight is reinstated automatically.
 
 **Social recovery**:
-- M-of-N recovery contacts (configured at onboarding; contacts must meet minimum trust signal requirements — exact floor TBD **[GAP G-24]**)
+- M-of-N recovery contacts (configured at onboarding; contacts must meet minimum trust signal requirements — **[GAP G-24 RESOLVED]**: at least 2 social bindings each older than 2 years AND WebAuthn or device attestation active; not currently in incubation. Phone-only accounts cannot serve as recovery contacts. The bar is high enough to prevent attacker-seeded contacts while remaining reachable for legitimate users.)
 - 48-hour mandatory waiting period after M-of-N threshold is met
 - Old key can contest during waiting period
 - Directory logs formal recovery event permanently in trust profile: tombstone type, recovery mechanism, vouching agent identities, declared compromise window, new public key
-- Recovery contacts also used for succession attestation (dual use introduced by the succession design — accountability rules were designed for compromise recovery only; applicability to succession attestation not addressed **[GAP G-25]**)
+- Recovery contacts also used for succession attestation. **[GAP G-25 RESOLVED]**: The same voucher accountability rules apply regardless of ceremony type. A contact who falsely attests to a successor's identity faces the same 6-month lockout and permanent-revocation-on-second-offense consequences as one who falsely attests during compromise recovery. The dual-use nature of recovery contacts does not create a separate accountability track.
 
 **Voucher accountability** (tracked globally, not per-account):
-- First bad outcome within liability window (2–3 months from recovery date — range not resolved to a fixed value **[GAP G-26]**) → 6-month lockout from vouching
+- First bad outcome within 90 days from recovery date → 6-month lockout from vouching. **[GAP G-26 RESOLVED]**: Fixed at 90 days (not "2–3 months"). Voucher cap uses a rolling 2-month window: during the probationary period (first 3 months + 200 clean conversations after reinstatement), a voucher may attest for at most 1 agent per 2-month window; after probation is fully complete, the cap rises to 3 per 2-month window.
 - Second bad outcome after reinstatement → permanent revocation of vouching privileges
-- A vouching agent may participate in at most one recovery per month
 
 ### Dispute resolution
 
@@ -933,9 +932,9 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-21 | Directory | ~~Resolved~~ — Computed at each directory checkpoint (incremental recomputation for changed neighborhoods). Stored on agent record (`conductance_score`, `conductance_computed_at`, `conductance_sample_size`); append-only history table; replicated via append-only log. Not published externally — internal fraud signal only; feeds network graph health signal class in discovery display. |
 | G-22 | Directory | ~~Resolved~~ — Supported channels: WhatsApp, Telegram, WeChat (standard platform APIs). Registration per telephone number, not per messaging client. No fallback beyond these three. Jurisdiction channel restrictions are a deployment concern. |
 | G-23 | Directory | ~~Resolved~~ — Re-verify everything; what you can prove, you get back. Key-dependent signals (WebAuthn, device attestation) re-verified from scratch. Key-independent signals (social bindings) restored on fresh OAuth. Track record and endorsements preserved. Probationary period: 3 months AND 200 clean conversations post-recovery before full weight reinstated. |
-| G-24 | Directory | Minimum trust signal floor for recovery contacts not defined (TBD) |
-| G-25 | Directory | Whether voucher accountability rules apply to succession attestation (vs. compromise recovery only) not addressed |
-| G-26 | Directory | Voucher liability window: 2–3 month range not resolved to a fixed value |
+| G-24 | Directory | ~~Minimum trust signal floor for recovery contacts not defined~~ **RESOLVED**: ≥2 social bindings >2yr + WebAuthn/device attestation active |
+| G-25 | Directory | ~~Voucher accountability applicability to succession attestation not addressed~~ **RESOLVED**: Same rules apply to both ceremony types |
+| G-26 | Directory | ~~Voucher liability window: 2–3 month range not resolved~~ **RESOLVED**: 90-day window; rolling 2-month cap (1 during probation, 3 after) |
 | G-27 | Directory | ~~Resolved~~ — Two-tier: deterministic (regex/pattern detection → auto-UPHELD, no inference) and inference (3 different frontier models, same system prompt, majority verdict). System prompt CELLO-controlled, not published (gaming risk). Privacy disclosure required at submission (content sent to external models). CELLO funds at Alpha and Consortium; user-pays gated on shallow wallets (G-36). No financial penalties until wallets exist — account suspension is the enforcement tool. No separate arbitration node tier needed at these phases. |
 | G-28 | Directory | FLAGGED session without arbitration: whether trust signal impact applies automatically not specified |
 | G-29 | Directory | Bio update rate limit N (hours) not defined |
