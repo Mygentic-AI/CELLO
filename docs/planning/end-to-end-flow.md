@@ -104,18 +104,25 @@ Directory verifies LinkedIn
   → json_blob sent to client, directory discards it
 ```
 
-**Trust signal sharing (on every request from another agent):**
+**Trust signal sharing (at connection request time):**
+
+Before a connection exists there is no P2P channel to the receiver — the only path for trust data is through the directory. The requester (Alice) bundles her trust signal blobs with the connection request:
+
 ```
-Client sends: original JSON records for each verification item
-Directory sends: corresponding hashes
-Recipient: hashes what the client sent, compares against directory hashes
-Match → authentic and unmodified
+Alice bundles trust signal blobs (each signed by Alice at creation time) with the connection request
+  → Directory checks each blob against held hashes (fraud filter — stops invalid/tampered submissions)
+  → Directory appends track record stats from its authoritative store
+  → Directory forwards full package to Bob, then discards the blobs
+  → Bob verifies Alice's identity via Merkle inclusion proof (multi-node cross-check)
+  → Bob verifies Alice's own signature on each blob using the identity key confirmed above
+  → The directory's fraud filter is a first-line check, not a substitute for Bob's independent verification
 ```
 
 **Why this matters:**
-- The directory cannot leak trust signals, bios, or verification details — it doesn't have them
+- The directory cannot leak trust signals, bios, or verification details — it doesn't have them (blobs exist only transiently during relay)
 - A compromised directory node yields hashes, not names or LinkedIn profiles
-- The client cannot modify their trust signals — any change produces a different hash that won't match
+- The client cannot modify their trust signals — each blob is signed by Alice's identity key at creation time; any tampering breaks the signature that the receiver independently verifies
+- A compromised directory could pass fraudulent data; the receiver's independent signature checks are the actual security boundary
 - GDPR right-to-erasure is dramatically simpler: the client deletes local data, and the remaining hash in the directory is meaningless without it
 
 **Attestations — portable signed statements:**
@@ -447,25 +454,38 @@ The greeting is recorded in the conversation Merkle tree at the moment of the co
 ```
 Agent A finds TravelBot in directory
   → Sees public profile only (no connection details exposed)
-  → Sends connection request through directory
-  → Request carries Agent A's original Ed25519 signature
-  → Directory routes the request to TravelBot via TravelBot's authenticated WebSocket
-  → Directory relays, does not re-sign
-  → TravelBot receives the request with Agent A's signature intact
+  → Client bundles A's trust signal blobs (each signed by A at creation time) with the connection request
+  → Directory receives the package:
+      1. Checks each trust blob against held hashes (fraud filter — stops invalid/tampered submissions)
+      2. Appends track record stats from its authoritative store (directory-held data, not A-submitted)
+      3. Forwards full package to TravelBot via TravelBot's authenticated WebSocket
+      4. Discards the trust blobs — never stored beyond hashes
+  → A's original Ed25519 signatures on each blob arrive intact — directory does not re-sign
+  → The package TravelBot receives: A's trust blobs (signed by A), A's identity key, directory-appended track record stats
 ```
 
-Agent A's signature travels to TravelBot directly. The receiver verifies it came from Agent A, not from the directory. The directory cannot forge connection requests.
+The directory is not a trust authority — it is a verified relay with a fraud filter. A compromised directory could pass fraudulent data; TravelBot's independent verification (below) is the actual security boundary.
 
-### 5.2 Identity Cross-Check Before Accepting
+### 5.2 Receiver-Side Verification Before Accepting
 
-Before accepting, TravelBot cross-checks Agent A's public key across multiple directory nodes with Merkle proof verification:
+Before accepting, TravelBot's client performs two independent verification steps — neither relies on the directory's vouch:
 
 ```
-TravelBot queries Agent A's public key from multiple nodes
-  → Verifies each response against consensus checkpoint hash (Merkle proof)
-  → Verifies Agent A's signature on the connection request against the cross-checked key
-  → If all checks pass → proceed to acceptance policy
-  → If any check fails → reject, log, alert owner
+Step 1 — Identity verification (Merkle inclusion proof):
+  TravelBot queries Agent A's public key from multiple directory nodes
+    → Each node provides data + Merkle proof path to consensus checkpoint root
+    → TravelBot recomputes the root locally against the signed checkpoint
+    → All queried nodes must agree
+    → If any check fails → reject, log, alert owner
+
+Step 2 — Trust signal verification (Agent A's own signatures):
+  For each trust blob in the connection package:
+    → TravelBot verifies Agent A's signature on the blob
+    → Using the identity key confirmed in Step 1
+    → The directory's fraud filter is a first-line check, not a substitute for this verification
+    → If any signature fails → reject, log, alert owner
+
+Both steps pass → proceed to acceptance policy
 ```
 
 A compromised node serving a fake public key cannot pass this check — the fake key won't produce the correct Merkle proof against the checkpoint hash the other nodes confirmed.
@@ -791,7 +811,7 @@ A dedicated classification LLM (separate from the agent's main model) takes Laye
 Invoked via the model API's structured output/function-calling mode — not a prompt-level JSON instruction. Schema validation before acting: any response failing schema validation is treated as a block at maximum score.
 
 Two scan modes:
-- **Local**: bundled DeBERTa-v3-small INT8 (~100MB). Free. Deterministic — receiver can re-run and compare.
+- **Local**: DeBERTa-v3-small INT8 (~100MB), downloaded on first install via postinstall script (SHA-256 verified). Free. Deterministic — receiver can re-run and compare.
 - **Proxy (paid tier)**: routes through directory's hosted scanner. Post-Layer-1-sanitized, context-stripped text only. Provides trust badge.
 
 **Layer 3 — Outbound content gate (blocking, instant pattern matching):**
@@ -1104,6 +1124,6 @@ Several mechanisms appear separate but are tightly coupled through shared primit
 - [[2026-04-14_1000_contact-alias-design|Contact Alias Design]] — revocable privacy-preserving identifiers extending §5.1–5.3 connection request flow with alias-routed requests
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — 33 MCP tools implementing Steps 4–8 of this protocol flow; defines the agent-facing interface for sessions, security, discovery, connections, group conversations, and policy
 - [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession and Ownership Transfer]] — resolves the §8 succession gap: voluntary transfer via identity_migration_log + announcement period; involuntary succession via dead-man's switch with pre-designated successor, 30-day waiting period, and M-of-N recovery contact attestation
-- [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow — Trust Data Relay and Selective Disclosure]] — resolves the trust data relay mechanism for §5 connection requests; defines what travels with the request, directory verification against hashes, and mandatory vs. discretionary signal disclosure
+- [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow — Trust Data Relay and Selective Disclosure]] — original trust data relay design for §5 connection requests; the relay model was further refined by the AC-C9 resolution (agent-client.md): directory role is verify-then-relay-discard, receiver performs two independent verification steps (Merkle inclusion proof + Alice's own blob signatures)
 - [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] — session establishment and seal (§3 and §6.6) are the only FROST ceremony points affected by K_server rotation; K_local rotation renders stolen keys useless at session boundaries
 - [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]] — removes §1.5 Layer 0 (TrustRank) and the Trust Seeder cold-start cohort; the discovery system and organic endorsements replace the seeder bootstrapping path
