@@ -1211,32 +1211,27 @@ FROST requires only 2 rounds and is designed for Ed25519. Ed25519's deterministi
 
 **When FROST is used:** FROST ceremonies occur only at session establishment (mutual authentication) and conversation seal (notarized final root). Individual messages within a conversation are signed with K_local alone and verified against pubkey(K_local). The directory's real-time role during a conversation is passive hash-relay notary, not active co-signer. See [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] for the design rationale.
 
-### Home Node Model
+### Federated Node Model (Home Node Concept Dropped)
 
-Each agent has a home node — the node they registered on:
+The original design described a "home node" — a single node per agent that stored PII (phone number, WebAuthn credentials, OAuth tokens) alongside the agent's K_server_X share. This concept was dropped during the design-problems review (Problem 7: home node deanonymization). A home node storing both PII and hash relay traffic would let a rogue operator trivially correlate them.
 
-**Home node stores (not replicated):**
-- K_server share (not the full key — threshold shares are distributed)
-- Phone number for notifications
-- WebAuthn credentials
-- OAuth tokens
+**The architecture that replaced it separates three systems that never intersect:**
 
-**All nodes store (replicated via append-only log):**
-- Public profile
-- Public keys
-- Trust score and verification freshness
-- Message Merkle tree hashes
+| System | What it holds | What it never sees |
+|---|---|---|
+| **Signup portal** | Phone numbers, email, WebAuthn credentials, OAuth tokens | Conversations, hash relay traffic, Merkle trees |
+| **Directory nodes** | Public keys, trust signal hashes, K_server_X shares (envelope-encrypted), Merkle trees | Phone numbers, raw PII |
+| **Relay nodes** | Ephemeral Peer IDs, encrypted traffic | Agent identities, phone numbers, key material |
 
-Registration, key operations, and notifications go through the home node. Discovery and verification work on any node — and every response is verifiable via Merkle proof.
+**Directory node data is fully federated:**
+- All core tables (public keys, trust signal hashes, Merkle trees) replicate to all directory nodes via the append-only log
+- K_server_X shares are per-agent, stored across all directory nodes with envelope encryption (one KMS master key per node; 32 bytes per share; see [[2026-04-15_1100_key-rotation-design|Key Rotation Design]])
+- No single node has a privileged relationship with a specific agent — a client may prefer a recently-used node for latency, but can move to any other node at any time
+- If a node loses its K_server_X share database, the remaining t-of-n nodes regenerate new shares via proactive secret sharing without ever assembling K_server_X
 
-### Node Migration
+**Notification path (privacy-preserving):** When a directory or relay node needs to alert an agent owner, it sends a public-key event to the signup system. The signup system performs the phone lookup and pushes the notification. The node never learns the phone number; the signup system never learns what triggered the notification.
 
-If a home node is permanently compromised or goes down:
-1. Agent reverifies on another node (phone OTP + WebAuthn)
-2. New node becomes the home node
-3. New K_server shares generated across remaining nodes
-4. Old keys revoked (appended to the log, propagated to all nodes)
-5. Existing P2P sessions continue unaffected (they're direct)
+Discovery, verification, FROST ceremonies, and hash relay work on any directory node — every response is verifiable via Merkle proof. There is no node migration procedure because there is no privileged node to migrate from.
 
 ### Enterprise Private Nodes
 
