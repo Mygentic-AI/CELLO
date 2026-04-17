@@ -72,7 +72,25 @@ The portal must make the connection between trust signals and practical outcomes
 
 ### Trust enrichment flows
 
-Each trust enrichment flow follows the oracle pattern: portal verifies → produces structured JSON record → `SHA-256(json_blob)` → writes hash to directory → returns original JSON to client → discards original. The portal retains no trust signal data server-side.
+Each trust enrichment flow follows the oracle pattern: portal verifies → produces structured JSON record → `SHA-256(json_blob)` → writes hash to directory → delivers raw JSON to client → discards original. The portal retains no trust signal data server-side.
+
+**Async delivery via encrypted pickup queue.** The agent client may not be running — or may not yet be installed — when the human owner completes a trust enrichment flow in the browser. "Returns original JSON to client" cannot be a synchronous handoff; it must be a reliable async delivery. The mechanism:
+
+1. Portal encrypts the JSON blob with the agent's `identity_key` public key (fetched from the directory, always present since bot registration)
+2. Portal stores the encrypted blob in an ephemeral pickup queue (portal-side, 30-day TTL) — this is not the home node; it holds only opaque ciphertext
+3. Portal discards the plaintext immediately
+4. Directory delivers a `TRUST_SIGNAL_PICKUP_PENDING` notification to the agent at next connection
+5. Agent decrypts with its `identity_key`, validates the hash, stores the JSON blob locally, sends ACK
+6. Pickup queue entry is deleted on ACK
+
+The `identity_key` is used rather than the signing key (K_local) because K_local can rotate between the time the portal encrypts and the time the agent picks up. The identity key is the stable long-term root and is the correct encryption anchor for deferred delivery.
+
+If the agent does not pick up within 30 days, the encrypted blob is deleted. The hash in the directory becomes an orphaned entry. The agent detects orphaned hashes at next connection and surfaces a "re-verify" prompt. Re-running the OAuth flow creates a fresh blob with a fresh hash, superseding the orphan.
+
+**Portal trust signal state** must distinguish three states (not two):
+- **Active** — hash in directory AND agent has ACK'd receipt of the blob
+- **Pending delivery** — hash in directory, pickup queue entry exists, no ACK yet
+- **Expired / re-verify** — hash in directory, pickup TTL elapsed, no ACK received
 
 **WebAuthn (YubiKey, TouchID, FaceID)**
 
@@ -100,7 +118,7 @@ Each OAuth binding:
 2. Portal receives OAuth token and evaluates the account metadata
 3. Portal creates a structured JSON record: e.g., `{type: "linkedin", connections: 847, account_age_years: 6, verified_at: "2026-04-16T..."}`
 4. Portal hashes the record and the account identifier separately: `SHA-256(json_blob)` and `SHA-256(account_identifier)`
-5. Both hashes written to directory; original JSON returned to client; portal discards everything
+5. Both hashes written to directory; original JSON encrypted with agent's `identity_key` public key and placed in pickup queue; portal discards plaintext immediately
 6. **Social account binding lock applied**: 12-month lockout on rebinding after any subsequent unbinding — directory enforces via `social_binding_releases.rebinding_lockout_until`
 
 The portal must visibly communicate the binding lock to the owner before they confirm an OAuth binding.
@@ -199,7 +217,7 @@ Contents:
 - Endorsement events: endorsements received, endorsements issued, endorsements revoked
 - System events: directory reachability changes, K_local degraded mode entry/exit, key rotation events
 - Anomaly alerts: compromise canary firings, burst activity detections, unusual signing pattern events
-- **Notification events**: tombstone notifications (connected identity tombstoned), trust event notifications (connected agent's trust status changed), recovery event notifications (recovered identity re-entering network), session-close attestation dispute notifications. These come from the formal notification type registry; the event stream must support filtering by type.
+- **Notification events**: tombstone notifications (connected identity tombstoned), trust event notifications (connected agent's trust status changed), recovery event notifications (recovered identity re-entering network), session-close attestation dispute notifications, trust signal pickup pending (agent has an encrypted trust signal blob awaiting retrieval from the portal pickup queue). These come from the formal notification type registry; the event stream must support filtering by type.
 - Delivery failure security events: hash–message mismatch events (tamper detection), hash-without-message events (permanent delivery gap with hash as evidence of intent)
 
 The activity log is the same data surfaced by `cello_list_sessions` and `cello_poll_notifications` via the MCP tool surface, presented for a human reader.
@@ -446,6 +464,7 @@ A chronological event stream showing all notification types from `cello_poll_not
 - Trust event notifications: a connected agent's trust status has changed
 - Recovery event notifications: a recovered identity is re-entering the network
 - Session-close attestation dispute notifications: a counterparty has filed a dispute against a session
+- Trust signal pickup pending: the agent has an encrypted trust signal blob awaiting retrieval; links to the relevant signal in the trust enrichment UI
 
 The event stream is filterable by type. Each event links to its relevant context in the portal (a security block links to the session; an endorsement links to the endorser's trust profile).
 
@@ -1007,3 +1026,4 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 - [[design-problems|Design Problems]]
 - [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — designs the P2P companion connection for mobile/desktop content viewing and human injection into agent conversations
 - [[agent-client|CELLO Agent Client Requirements]] — the locally-running client that the frontend surfaces manage; the portal and apps are the human-owner layer; the client is the protocol layer they interact with via the companion device API and MCP tool surface
+- [[2026-04-17_1000_trust-signal-pickup-queue|Trust Signal Pickup Queue]] — designs the async oracle handoff: encrypted pickup queue using identity_key, TRUST_SIGNAL_PICKUP_PENDING notification type, three-state trust signal UI (active / pending delivery / expired)
