@@ -1082,7 +1082,7 @@ No protected data crosses any border. The architecture satisfies both jurisdicti
 Account deletion is authenticated via WebAuthn. It is a signed operation appended to the append-only log — a tombstone proving the account existed and was deleted, without retaining the data.
 
 **What deletion means at each layer:**
-- **Home node:** Full deletion — phone, WebAuthn credentials, OAuth tokens, K_server share all wiped. Real deletion of real PII.
+- **Signup portal:** Full deletion — phone, WebAuthn credentials, OAuth tokens all wiped. Real deletion of real PII. The K_server_X shares held on directory nodes for this agent are also burned.
 - **Directory:** A deletion marker (tombstone) is appended. The hash chain stays intact. The tombstone proves the account existed without retaining the data.
 - **Key invalidation:** The tombstoned key can never be re-registered.
 
