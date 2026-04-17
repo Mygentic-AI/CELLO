@@ -46,6 +46,7 @@ Device attestation (TPM, Play Integrity, App Attest) requires a native app and i
 **Canonical source:** [[end-to-end-flow|end-to-end-flow.md]] — Part 1: Identity (§1.1–§1.5)
 
 **Key discussion logs:**
+- [[2026-04-17_1000_trust-signal-pickup-queue|Trust Signal Pickup Queue]] — async oracle handoff design; encrypted pickup queue using identity_key; three-state trust signal UI (active / pending delivery / expired)
 - [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]] — removes TrustRank and Trust Seeders; the signal-based model is canonical
 - [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]] — corrects WebAuthn classification; native app required for platform attestation
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — hash-everything model; client as data custodian
@@ -60,13 +61,14 @@ Device attestation (TPM, Play Integrity, App Attest) requires a native app and i
 
 **What's decided.** The directory is an append-only log of signed operations, not a mutable database. Two separate Merkle trees: an identity tree (agent profiles, keys, trust signal hashes — checkpointed periodically) and a message tree (per-conversation hash chain — updated per message). A global meta-Merkle tree (MMR) over all conversation registrations prevents fabricated conversation attacks.
 
-Nodes deploy in three phases: Alpha (~6 CELLO-operated, ~4-of-6), Consortium (~20 vetted multi-cloud, ~11-of-20), Public (50+ permissionless with proof-of-stake, rotating ~5-of-7). Connection nodes (public-facing, handle new auth) are separated from relay nodes (serve established sessions only). Each agent has a home node storing non-replicated data (phone, WebAuthn, OAuth, K_server share). Everything else is replicated via the append-only log.
+Nodes deploy in three phases: Alpha (~6 CELLO-operated, ~4-of-6), Consortium (~20 vetted multi-cloud, ~11-of-20), Public (50+ permissionless with proof-of-stake, rotating ~5-of-7). Directory nodes (public-facing, handle auth, FROST, connection brokering) are separated from relay nodes (session-level Merkle engines: hash relay, sequence numbering, tree building during active sessions, plus NAT traversal). PII lives in the signup portal — directory nodes hold only public keys, trust signal hashes, K_server_X shares (envelope-encrypted), and Merkle trees. All directory data is fully federated across all nodes.
 
 Consensus is only needed for directory state changes and canonical sequence numbers. The real-time path (primary assigns sequence numbers, ACKs agents) is fully separated from consensus (periodic background checkpoints). Primary/backup replication with fire-and-forget to 2-3 lowest-latency nodes ensures no hash loss on primary failure. Client-side latency monitoring with lightweight pings enables proactive session migration.
 
 **Canonical source:** [[end-to-end-flow|end-to-end-flow.md]] — Part 2: The Directory Infrastructure (§2.1–§2.5)
 
 **Key discussion logs:**
+- [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]] — relay nodes as session-level Merkle engines; directory as bookend authority; resolves C-2; supersedes dumb-pipe characterisation
 - [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — MMR for conversation proof ledger; identity tree structure; storage analysis
 - [[2026-04-08_1700_node-architecture-and-replication|Node Architecture and Replication]] — three-phase deployment; primary/backup replication; client-side routing
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — FROST at session/seal only; directory as passive notary
@@ -157,6 +159,7 @@ Agent succession supports voluntary transfer (identity_migration_log + announcem
 **Canonical source:** [[end-to-end-flow|end-to-end-flow.md]] — Part 8: Compromise and Recovery (§8.1–§8.9)
 
 **Key discussion logs:**
+- [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]] — resolves FC-4/AC-C6; all active sessions terminate on "Not Me"; EMERGENCY_SESSION_ABORT + PEER_COMPROMISED_ABORT mechanism
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — social recovery; tombstones; voucher accountability; session attestation; dispute resolution
 - [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession and Ownership Transfer]] — voluntary transfer; dead-man's switch; succession package
 - [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] — per-agent K_server; independent K_local/K_server rotation
@@ -189,9 +192,9 @@ Agents expose bio (static, public, rate-limited changes — stability is a trust
 
 ## Domain 8: Compliance and Privacy
 
-**What's decided.** The architecture naturally satisfies data residency: PII (phone, WebAuthn, OAuth) stays on the home node in the owner's jurisdiction — never replicated. Message content goes P2P — never touches infrastructure. Only hashes (non-PII), public keys (pseudonymous), and voluntarily published bios cross borders.
+**What's decided.** The architecture naturally satisfies data residency: PII (phone, WebAuthn, OAuth) lives in the signup portal, which is deployed in the owner's jurisdiction — never on directory or relay nodes. Message content goes P2P — never touches infrastructure. Directory nodes hold only hashes (non-PII), public keys (pseudonymous), and encrypted K_server_X shares. Only hashes, public keys, and voluntarily published bios cross borders.
 
-GDPR right to erasure is satisfied by the separation: home node PII is fully deleted on account deletion. The append-only log retains only hashes — cryptographically meaningless without the deleted source data. Conversation records belong to both parties — deletion of one account does not erase the counterparty's records (defensible under GDPR Article 6(1)(b)).
+GDPR right to erasure is satisfied by the separation: signup portal PII is fully deleted on account deletion. The append-only log on directory nodes retains only hashes — cryptographically meaningless without the deleted source data. Conversation records belong to both parties — deletion of one account does not erase the counterparty's records (defensible under GDPR Article 6(1)(b)).
 
 Bios are voluntary broadcasts — the owner wrote and published them. Trust signals are associated with pseudonymous public keys — only personal data if you can link key to person, and that link is not in the protocol.
 
@@ -202,7 +205,7 @@ Bios are voluntary broadcasts — the owner wrote and published them. Trust sign
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — hash-everything model; GDPR simplification
 
 **Also see:**
-- [[design-problems|Design Problems]] — Problem 6 (GDPR vs append-only log, closed — not an issue) and Problem 7 (home node deanonymization, closed — architectural non-issue)
+- [[design-problems|Design Problems]] — Problem 6 (GDPR vs append-only log, closed — not an issue) and Problem 7 (home node deanonymization, closed — concept dropped; three-system separation eliminates the attack)
 
 **Readiness: Stable.** No open compliance questions. The architecture resolves GDPR and data residency by design.
 
@@ -255,3 +258,6 @@ All 12 design problems are closed. All 12 open decisions are resolved. The proto
 - [[frontend|CELLO Frontend Requirements]] — complete requirements for portal, mobile app, and desktop app, with all conflicts and gaps identified
 - [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — companion device P2P connection, human injection, and local persistence model
 - [[agent-client|CELLO Agent Client Requirements]] — complete requirements for the locally-running CELLO client: identity and key management, P2P transport, Merkle operations, prompt injection defense, connection management, trust data custody, persistence, companion device API, and MCP tool surface
+- [[2026-04-17_1000_trust-signal-pickup-queue|Trust Signal Pickup Queue]] — async oracle handoff; encrypted pickup queue using identity_key bridges the gap when the agent client is offline during trust enrichment
+- [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]] — resolves FC-4; all active sessions terminated immediately on compromise declaration via EMERGENCY_SESSION_ABORT + PEER_COMPROMISED_ABORT
+- [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]] — relay nodes as session-level Merkle engines; directory as bookend authority; resolves C-2; home node concept dropped
