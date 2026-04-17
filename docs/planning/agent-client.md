@@ -25,6 +25,12 @@ The three other architectural surfaces interact with the client but are distinct
 
 The client is not a proxy between the agent and the protocol. The agent calls MCP tools; the client executes protocol operations on behalf of those calls. The boundary is a tool call interface.
 
+### Parallel sessions
+
+The client supports any number of concurrent sessions running simultaneously. Each session is fully independent: its own relay node assignment, its own Merkle tree, its own sequence numbering, its own `session_id`. A new connection request arriving while other sessions are active is processed normally — the directory WebSocket remains open during active sessions for exactly this purpose (connection requests, notifications, relay assignments). Accepting a new connection runs a FROST ceremony on directory nodes independently of any active relay sessions; there is no contention.
+
+The agent interacts with sessions by `session_id`. All `cello_send`, `cello_receive`, and `cello_close_session` calls are scoped to a specific session. `cello_list_sessions` returns all active sessions. The agent can address sessions in any order; the client routes each call to the correct relay and P2P connection independently.
+
 ### What the client handles automatically (agent never sees this)
 
 - FROST threshold signing at session establishment and conversation seal
