@@ -303,7 +303,7 @@ The portal displays the agent's own trust profile exactly as it appears to other
 Contents:
 - Active signals: displayed by class (Class 1–4), with quality metadata (age, platform, verified_at where applicable). Named signals only — no composite score.
 - Missing signals: what is absent, what it would take to add each, what receiving agents commonly require it
-- Whether each active signal is mandatory (always shared) or discretionary (owner may withhold). **[GAP F-5 note]**: the mandatory/discretionary classification of all signals is explicitly an open question in the connection-request design — not all signals have been classified yet.
+- **Who controls each signal** — the portal must make the ownership model visible to the owner: *behavioral signals* (conversation track record, connection history, anomaly flags) are directory-owned and always visible to counterparties — the owner cannot withhold them, and should not be given a UI that implies they can. *Identity and credential signals* (social proofs, WebAuthn, device attestation, endorsements) are client-owned — the owner chooses whether to disclose each one in a given connection request. The portal must not present these as "required fields." It should explain that including them raises acceptance likelihood, and that the choice not to disclose is valid (the owner may have privacy reasons — not revealing WebAuthn enrollment, avoiding LinkedIn farming, not exposing specific endorsers, etc.).
 - Connection policy indicator: what an unknown agent sees about this agent's openness to connection
 - Conversation statistics: session count, clean-close rate, platform age
 - Succession link indicator: if this agent succeeded another identity, a permanently visible succession record showing tombstone type, recovery mechanism, vouching contact identities, declared compromise window, and new public key. This must be displayed to both the owner and counterparties.
@@ -976,7 +976,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-24 | Portal | Grace period for sealing active sessions under old K_server_X during key rotation not specified; epoch identifier format for FROST ceremony outputs not specified |
 | ~~F-25~~ | Portal | ~~Closed~~ — counterparty-facing key refresh notification named `KEY_ROTATED`; see FC-5 resolution above |
 | F-26 | Dashboard | DELIVERED-to-ABSENT transition timeout in group conversations not specified; portal cannot accurately display participant state without this |
-| F-27 | Dashboard | Notification delivery path (P2P vs. directory-routed) not specified; portal's notification display depends on which backend component delivers payloads |
+| ~~F-27~~ | Dashboard | ~~Retired~~ — two delivery paths resolved: directory WebSocket pushes system/protocol events to the agent; client-to-companion P2P delivers owner-targeted notifications. The portal receives events via the directory WebSocket path (same as the agent). See AC-16 / G-32. |
 | F-28 | Portal | Home-node API surface for notification payloads to the portal (distinct from agent-facing MCP tool surface) not specified |
 | F-29 | Mobile | Oracle proof capture (GPS + camera + timestamp) for bond/escrow disputes is a native mobile capability; rollout phase not assigned |
 | F-30 | Portal | Alias TTL/expiry mechanism not specified: the EXPIRED status exists in directory schema but no TTL field appears; the mechanism to trigger expiry is absent |

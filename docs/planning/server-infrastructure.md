@@ -382,11 +382,16 @@ After ABORT: REOPEN is not permitted. Post-ABORT message arrivals are always rej
 - Proof size: O(log N) — approximately 20 hashes (~640 bytes) for a million-agent directory
 - This is one of two independent verification steps. The other — trust signal verification via the requester's own signatures on each blob — does not involve the directory at all (see connection request flow above)
 
-**Trust signal disclosure — no mandatory signals [GAP G-15 — RETIRED]**:
-- No trust signals are mandatory at the protocol level. The initiating agent chooses what to include in a connection request. Omitting signals increases the likelihood of being declined but is always permitted.
-- The directory does not enforce signal inclusion at submission time — it relays whatever the initiating agent provides (after the fraud-filter check against held hashes).
-- The receiving agent's `SignalRequirementPolicy` determines what it accepts. If the requester doesn't meet the policy, the request is declined. Enforcement is at evaluation time on the receiving client, not at submission time on the directory.
-- See agent-client.md AC-11 (resolved).
+**Trust signal disclosure — directory-owned vs. client-owned [GAP G-15 — RETIRED]**:
+
+Trust signals divide by *who owns them*, not by a mandatory/discretionary registry the directory enforces:
+
+- **Directory-owned (behavioral record)** — conversation track record, connection history metrics, anomaly flags, incubation status. The directory computed these from its own observations. The initiating agent does not submit them; the directory *appends them automatically* to every connection request it relays. The receiving agent always sees them — the initiating agent cannot omit them because they were never the initiating agent's to include or exclude.
+- **Client-owned (identity and credential signals)** — social proofs (LinkedIn, GitHub, etc.), WebAuthn enrollment, device attestation, endorsements. The directory holds only hashes. The initiating agent chooses whether to include these in a given connection request. Absence is not a violation; it may affect the receiving agent's policy evaluation.
+
+The directory does not maintain a mandatory-signal registry or reject at submission for missing signals. It cannot — for client-owned signals, the directory has hashes, not ground truth, and cannot distinguish "Alice chose not to disclose" from "Alice has not verified." Enforcement is entirely at evaluation time on the receiving client via its `SignalRequirementPolicy`.
+
+The privacy design is intentional: an agent may have valid reasons not to disclose that it has WebAuthn enrolled (raises attacker interest), not to disclose LinkedIn (avoids social farming), or not to reveal specific endorsers. Disclosure of additive identity credentials is always the owner's decision.
 
 **Trust-weighted pool selection (under load)**:
 - Under DDoS or heavy traffic, connection nodes use pool-and-sample selection rather than FIFO queuing
@@ -523,7 +528,7 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
 - **Notification hashes**: Stored as standalone events — not chained into a session Merkle tree
 - **Notification type registry**: Enumerated, not freeform. Types include at minimum: `INTRODUCTION`, `ORDER_UPDATE`, `ALERT`, `PROMOTIONAL`, `SYSTEM`, `CONNECTION_REQUEST`, `ENDORSEMENT_RECEIVED`, `SECURITY_BLOCK`, `TOMBSTONE`, `TRUST_EVENT`, `RECOVERY_EVENT`, `SESSION_CLOSE_ATTESTATION_DISPUTE`, `SUCCESSION_CLAIM_FILED`, `HUMAN_INPUT_REQUESTED`, `PEER_COMPROMISED_ABORT`
 - **Note**: `EMERGENCY_SESSION_ABORT` is a directory-to-client control instruction sent via the agent's persistent WebSocket — it is NOT a notification type and does not appear in the notification registry
-- **Whether notifications must route through directory or can go peer-to-peer**: explicitly unresolved **[GAP G-32]**
+- **Notification delivery paths — resolved [GAP G-32 — RETIRED]**: Two paths. (1) Directory-sourced events (connection requests, endorsements, anomaly alerts, system events, PEER_COMPROMISED_ABORT, etc.) push via the recipient agent's authenticated persistent WebSocket — the directory is always involved for these. (2) Owner-targeted notifications (trust signal pickup pending, human input requested, companion content alerts) go direct from the CELLO client to the companion device over P2P — the directory is not in the path for these. The server handles path (1) only; path (2) is client-to-companion and requires no server-side change.
 - **Institutional verification for elevated rate limits**: application process and criteria not specified **[GAP G-33]**
 
 ### Contact aliases
@@ -819,7 +824,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-12 | Directory | Backup node promotion mechanism (election protocol, fencing token, split-brain prevention) not specified |
 | G-13 | Directory | Session timeout value (N in "no messages for N minutes") not specified |
 | G-14 | Directory | REOPEN semantics: new FROST ceremony required? Sequence number handling across seal boundary? Unilateral REOPEN permitted? |
-| G-15 | Directory | ~~Retired~~ — no signals are mandatory at the protocol level. Initiating agent chooses what to include; receiving agent's policy enforced at evaluation time. See AC-11 (resolved). |
+| G-15 | Directory | ~~Retired~~ — signals divide by ownership: directory-owned behavioral signals (track record, connection history, anomaly flags) are appended automatically by the directory; client-owned identity signals (social proofs, WebAuthn, device attestation, endorsements) are discretionary disclosures. No mandatory-signal registry; no rejection at submission. Enforcement is the receiving client's `SignalRequirementPolicy`. |
 | G-16 | Directory | Incubation enforcement: which node type enforces 7-day / 3 connections/day limit not specified |
 | G-17 | Directory | Endorsement rate limit N (max new endorsements per month per agent) not specified |
 | G-18 | Directory | PSI implementation library and API contract provisional |
@@ -836,7 +841,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-29 | Directory | Bio update rate limit N (hours) not defined |
 | G-30 | Directory | Greeting rate limit threshold not specified |
 | G-31 | Directory | Notification rate limit values per trust tier not specified |
-| G-32 | Directory | Whether notifications route through directory or can go peer-to-peer: explicitly unresolved |
+| G-32 | Directory | ~~Retired~~ — two delivery paths resolved: directory WebSocket for system/protocol events to agents; direct client-to-companion P2P for owner-targeted notifications. See AC-16. |
 | G-33 | Directory | Institutional verification process for elevated notification rate limits not specified |
 | G-34 | Directory | Alias creation rate limiting mechanism and thresholds not specified |
 | G-35 | Directory | Alias TTL mechanism: schema has EXPIRED state but no scheduled expiry job or TTL configuration defined |
