@@ -269,7 +269,6 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 - A node with a diverging hash is immediately visible to all peers
 - A compromised node maintaining two copies (honest for peers, tampered for clients) is detectable via client-side Merkle proof verification
 
-**Backup promotion mechanism (election protocol, fencing token, split-brain prevention) not specified. [GAP G-12]**
 
 ### Append-only log and persistence infrastructure
 
@@ -545,7 +544,7 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
   - **Enforcement at Alpha/Consortium**: No financial penalties since wallets don't exist. Worst outcome is account suspension or ban. This is sufficient at these phases — the user base is small and vetted.
   - **Node infrastructure**: CELLO operates arbitration inference at Alpha and Consortium. No separate arbitration node tier needed at these phases — it's API calls to frontier model providers, not a distributed node class.
 
-**FLAGGED sessions without arbitration**: The document says the flagging party "may submit" the transcript — submission is optional. What happens to a FLAGGED session that is never submitted to arbitration (does trust signal impact apply automatically?) is not specified. **[GAP G-28]**
+**FLAGGED sessions without arbitration — [GAP G-28 RESOLVED]**: No automatic trust impact on the flagged party without a verdict. A FLAG that is never submitted to arbitration expires after 7 days with no consequence to either party. However, serial flag-and-abandon is itself a behavioral signal: if a flagging agent abandons more than 3 flags in a rolling 90-day window without submission, that pattern is recorded in the flagger's trust profile. This eliminates the harassment attack vector (flag repeatedly, never submit, cause B reputational damage) while keeping flagging as a zero-cost first step. B is never penalized without a verdict.
 
 ### Discovery
 
@@ -936,7 +935,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-25 | Directory | ~~Voucher accountability applicability to succession attestation not addressed~~ **RESOLVED**: Same rules apply to both ceremony types |
 | G-26 | Directory | ~~Voucher liability window: 2–3 month range not resolved~~ **RESOLVED**: 90-day window; rolling 2-month cap (1 during probation, 3 after) |
 | G-27 | Directory | ~~Resolved~~ — Two-tier: deterministic (regex/pattern detection → auto-UPHELD, no inference) and inference (3 different frontier models, same system prompt, majority verdict). System prompt CELLO-controlled, not published (gaming risk). Privacy disclosure required at submission (content sent to external models). CELLO funds at Alpha and Consortium; user-pays gated on shallow wallets (G-36). No financial penalties until wallets exist — account suspension is the enforcement tool. No separate arbitration node tier needed at these phases. |
-| G-28 | Directory | FLAGGED session without arbitration: whether trust signal impact applies automatically not specified |
+| G-28 | Directory | ~~FLAGGED session without arbitration: trust impact not specified~~ **RESOLVED**: No impact on flagged party without verdict; unsubmitted flags expire after 7 days; serial flag-abandon (>3 in 90 days) recorded in flagger's trust profile |
 | G-29 | Directory | Bio update rate limit N (hours) not defined |
 | G-30 | Directory | Greeting rate limit threshold not specified |
 | G-31 | Directory | Notification rate limit values per trust tier not specified |
