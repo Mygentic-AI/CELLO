@@ -232,8 +232,7 @@ The directory is an **append-only log of signed operations**, not a mutable data
 **What the directory does NOT store:**
 - Message content (ever)
 - LinkedIn profiles, verification data, bios (hashes only — client holds originals)
-- Phone numbers (home node only, not replicated)
-- WebAuthn credentials, OAuth tokens (home node only)
+- Phone numbers, WebAuthn credentials, OAuth tokens (signup portal only — directory nodes never see these)
 
 **Defense against fabricated conversation attacks:**
 
@@ -263,9 +262,9 @@ The permissioned model prevents Sybil attacks at the node level — no one can s
 
 This separation is the first line of defense against the fallback downgrade attack: a DDoS against connection nodes cannot reach relay nodes. Existing sessions continue with K_local signing (the normal per-message mode) regardless of what is happening to the connection layer.
 
-**Home node:**
+**Fully federated — no home node:**
 
-Each agent has a home node — the node they registered on. The home node stores what is NOT replicated: phone number (for notifications), WebAuthn credentials, OAuth tokens, and the agent's K_server share. Everything else (public profile, public keys, trust signal record hashes, message Merkle hashes) is replicated across all nodes via the append-only log.
+PII (phone numbers, WebAuthn credentials, OAuth tokens) lives in the signup portal, which is a separate system from the directory. Directory nodes hold only public keys, trust signal hashes, K_server_X shares (envelope-encrypted), and Merkle trees — all replicated across all nodes via the append-only log. No single node has a privileged relationship with any agent. When a node needs to alert an agent owner, it sends a public-key event to the signup system, which performs the phone lookup — the node never learns the phone number.
 
 ### 2.3 FROST Signing
 
@@ -1053,8 +1052,8 @@ When a session seals with a FLAGGED attestation, the flagging party may submit t
 
 | Data | Where it lives | PII? | Crosses borders? |
 |---|---|---|---|
-| Phone, WebAuthn credentials, OAuth tokens | Home node (placed in owner's jurisdiction) | Yes | No — never leaves home node |
-| K_server share | Home node | Cryptographic | No — never fully assembled |
+| Phone, WebAuthn credentials, OAuth tokens | Signup portal (placed in owner's jurisdiction) | Yes | No — never leaves signup portal |
+| K_server_X shares | All directory nodes (envelope-encrypted) | Cryptographic | Shares replicate across nodes; key is never assembled |
 | Message content | Direct channel (P2P) | Potentially | Never touches infrastructure |
 | SHA-256 hashes | Relay nodes / directory | No | Yes — non-reversible, non-revealing |
 | Public keys | Directory / public ledger | Pseudonymous | Yes — no identity link in protocol |
@@ -1065,8 +1064,9 @@ When a session seals with a FLAGGED attestation, the flagging party may submit t
 ### 10.2 Cross-Jurisdictional Communication
 
 When a UAE agent communicates with an EU agent:
-- UAE citizen's PII stays in their UAE-based home node
-- EU citizen's PII stays in their EU-based home node
+- UAE citizen's PII stays in a signup portal placed in the UAE
+- EU citizen's PII stays in a signup portal placed in the EU
+- Directory nodes hold only hashes, public keys, and encrypted K_server_X shares — no PII
 - Only hashes flow through relay nodes (which can be placed anywhere)
 - Message content goes direct, never touches infrastructure
 - Trust signals and bios are voluntarily published reputation data
