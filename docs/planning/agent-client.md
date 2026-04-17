@@ -280,7 +280,7 @@ The client's registration flow begins with the WhatsApp/Telegram bot. The bot ha
 
 The client is responsible for generating K_local and presenting the public key to the directory during the ceremony. The identity key is generated simultaneously; the BIP-39 seed phrase is produced for the owner to back up.
 
-**[CONFLICT AC-C1]**: Whether the client can complete registration entirely from a portal flow (without a WhatsApp/Telegram bot) is unresolved — this is the same as server infrastructure Conflict C-1 and frontend Conflict FC-1. The client's registration behavior (whether it initiates its own OTP path or always operates downstream of a bot-verified phone) depends on this decision.
+**Registration entry point (AC-C1 resolved):** Registration is entry-point agnostic — neither the bot nor the portal is the privileged starting point. Both mandatory ceremonies (phone OTP and email verification) are always required, but they can be completed in either order through any supported surface. Portal-first path: operator registers via web portal → email OTP completed there → portal initiates the WhatsApp or Telegram phone OTP ceremony. Bot-first path: operator initiates via WhatsApp or Telegram → phone OTP completed there → email verification required (bot prompts for it). The email OTP is the correlation token that ties a portal-initiated registration to the subsequent phone ceremony. Human operators can complete all ceremonies manually; the system makes no assumption that an agent is on the other end.
 
 ### Bootstrap discovery
 
@@ -446,9 +446,7 @@ The sender produces Structure 1 and transmits it with the message content. The d
 
 **[CONFLICT AC-C2]**: This two-structure model is from the multi-party design (2026-04-13). The session-level FROST signing log (2026-04-15) reinstates sender-computed `prev_root`. These three documents are in conflict. The two-structure model is documented here as the current working design, but this is not yet resolved. See AC-C2 in the Conflicts section.
 
-The leaf prefix follows RFC 6962: `0x00` for message leaves, `0x01` for internal nodes.
-
-**[CONFLICT AC-C3]**: §6.6 of end-to-end-flow defines control leaves (CLOSE, SEAL, ABORT, etc.) using prefix `0x01`. RFC 6962 defines internal nodes as `0x01`. These two uses of `0x01` are incompatible — a control leaf with prefix `0x01` is indistinguishable from an internal Merkle tree node under RFC 6962 construction, defeating second-preimage protection. This must be resolved before implementation. Options: (1) control leaves use a distinct prefix (e.g., `0x02`); (2) the leaf/internal distinction uses a different scheme than RFC 6962. This is carried forward from server infrastructure Conflict C-3.
+The leaf prefix scheme follows RFC 6962 with an extension for control leaves (AC-C3 resolved): `0x00` for message leaves, `0x01` for internal nodes (RFC 6962 standard), `0x02` for control leaves (CLOSE, CLOSE-ACK, SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN, RECEIPT). Using `0x01` for both internal nodes and control leaves would defeat RFC 6962's second-preimage protection by making control leaves indistinguishable from internal nodes. The `0x02` prefix keeps control leaves as first-class Merkle entries while preserving the RFC 6962 invariant.
 
 ### Dual-path dispatch
 
@@ -702,7 +700,7 @@ When the policy includes a `human_escalation_fallback` flag and a request reache
 
 The client must handle the mobile app push path and the WhatsApp/Telegram path as equivalent — both produce identical outcomes via the same `cello_accept_connection` / `cello_decline_connection` calls.
 
-**[CONFLICT AC-C5]**: Whether the native push path and the WhatsApp/Telegram path are parallel redundant channels (both fire for every escalation) or a primary/fallback hierarchy (push supersedes WhatsApp/Telegram once the app is installed) is not decided. This is the same as frontend Conflict FC-3. The client's escalation channel dispatch behavior depends on this decision.
+**Escalation channel dispatch (AC-C5 resolved):** All configured escalation channels fire on every escalation event — there is no hierarchy and no suppression logic based on app presence or reachability. The owner explicitly configures which channels they want active via `cello_configure`. If both native push and WhatsApp/Telegram are configured, both always fire. App reachability does not affect routing: the P2P architecture means the companion app's connectivity is independent of the escalation channel decision. The owner's configuration is the sole determinant.
 
 ### Alias-routed connections
 
@@ -1199,8 +1197,8 @@ The following names are canonical and supersede inconsistencies in earlier docum
 
 ## Conflicts Requiring Resolution
 
-**AC-C1: Bot vs. portal boundary for registration**
-The client's registration path depends on whether registration always begins with the WhatsApp/Telegram bot or whether a portal-only path exists. See server infrastructure Conflict C-1 and frontend Conflict FC-1. Until resolved, the client cannot implement a definitive registration flow.
+**AC-C1: Bot vs. portal boundary for registration — resolved**
+Registration is entry-point agnostic. Both mandatory ceremonies (phone OTP + email) are always required but can be completed through any supported surface in either order. Email OTP is the correlation token linking portal and bot paths. Human operators can complete all ceremonies manually.
 
 **AC-C2: Who computes `prev_root` in Merkle leaf** *(three-way conflict — NOT RESOLVED)*
 - Earlier design (2026-04-08): Sender includes `prev_root` in the signed leaf.
@@ -1208,14 +1206,14 @@ The client's registration path depends on whether registration always begins wit
 - Later design (2026-04-15, session-level FROST signing): Sender-computed `prev_root` reinstated — the log explicitly states "A builds a signed Merkle leaf containing: hash(message), prev_root (committing to all previous messages), and A's K_local signature over the leaf."
 - The prior resolution (2026-04-13 supersedes) is now contradicted by the 2026-04-15 document. Requires explicit decision. See also [GAP AC-21] (genesis `prev_root` initialization value).
 
-**AC-C3: Merkle leaf prefix collision**
-RFC 6962 internal nodes use prefix `0x01`. §6.6 of end-to-end-flow assigns prefix `0x01` to control leaves (CLOSE, SEAL, ABORT, etc.). These are incompatible. The client cannot implement the Merkle tree correctly until this is resolved. See server infrastructure Conflict C-3.
+**AC-C3: Merkle leaf prefix collision — resolved**
+`0x00` message leaves, `0x01` internal nodes (RFC 6962), `0x02` control leaves. Assigning `0x02` to control leaves preserves RFC 6962 second-preimage protection while keeping control leaves as first-class Merkle entries.
 
 **AC-C4: DeBERTa model delivery — resolved**
 The model is downloaded on first install (not bundled in the npm package). The npm package includes a postinstall download script that fetches DeBERTa-v3-small INT8 from a fixed URL and verifies the SHA-256 hash before the model is used. Bundling was rejected because it would bloat the npm package significantly and make supply chain updates require a full package republish. The hash pin in source code is the security guarantee regardless of delivery mechanism.
 
-**AC-C5: Native push vs. WhatsApp/Telegram escalation relationship**
-Whether the two escalation channels are parallel redundant paths (both fire) or a primary/fallback hierarchy (app supersedes WhatsApp/Telegram once installed) is not decided. Affects the client's escalation dispatch logic. See frontend Conflict FC-3.
+**AC-C5: Native push vs. WhatsApp/Telegram escalation relationship — resolved**
+All configured channels always fire. No hierarchy, no suppression based on app presence or reachability. Owner's `cello_configure` settings are the sole determinant of which channels are active.
 
 **AC-C6: "Not Me" scope for existing sessions**
 - §8.3: Existing conversations signed with K_local alone remain valid after "Not Me" K_server revocation.
