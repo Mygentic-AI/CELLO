@@ -137,17 +137,14 @@ The portal handles all sensitive account operations, all of which require WebAut
 3. Portal sends a key rotation request to the home node, authenticated with the WebAuthn credential
 4. Home node triggers a new K_server_X ceremony across directory nodes
 5. New derived public keys published; old public keys marked expired with timestamp
-6. Connected agents are notified to refresh their cached key material. Note: this uses a distinct notification type from `KEY_ROTATION_RECOMMENDED` (which is the directory's inbound scheduling nudge to the owner — see **[CONFLICT FC-5]**). **[GAP F-24]**: the exact format and name of the counterparty-facing key refresh notification is deferred in the key rotation design document.
+6. Connected agents are notified to refresh their cached key material via a `KEY_ROTATED` notification — distinct from `KEY_ROTATION_RECOMMENDED` (the directory's inbound scheduling nudge to the owner). Note: see **[CONFLICT FC-5]** for the naming conflict; `KEY_ROTATED` is the resolved name for the counterparty-facing type.
 7. Portal displays confirmation with the new public key fingerprint and the rotation timestamp
 
 Key rotation must be presented to the owner as a routine security operation — not as an emergency. Since the K_server_X rotation is per-agent (not a network-wide event), the portal must not use alarming language about rotation. The portal should prompt rotation on the schedule recommended in the protocol (not yet specified — **[GAP F-7]**) and not only after a compromise event.
 
 Key rotation must happen at a session boundary. If the owner initiates rotation while active sessions exist, the portal must display a grace period indicator showing whether active sessions must be sealed under the old K_server_X before old shares are retired. **[GAP F-24]** covers the unspecified grace period duration.
 
-**[CONFLICT FC-5]**: `KEY_ROTATION_RECOMMENDED` is used with two incompatible meanings across the source corpus:
-- *Definition A* (key-rotation-design.md): the directory's inbound scheduling nudge to the owner-agent, recommending that the owner rotate their own K_local (a scheduled-maintenance alert).
-- *Definition B* (used in this document's earlier key rotation flow): an outbound notification sent to counterparties after a completed rotation, telling them to refresh cached key material.
-These must be distinct notification types. Decision required: name the counterparty-facing key refresh notification (it is not `KEY_ROTATION_RECOMMENDED`).
+**[CONFLICT FC-5 — Resolved]**: `KEY_ROTATION_RECOMMENDED` and `KEY_ROTATED` are now distinct notification types. `KEY_ROTATION_RECOMMENDED` is the directory's inbound scheduling nudge to the owner-agent. `KEY_ROTATED` is the outbound notification sent to counterparty agents after a completed rotation, telling them to refresh cached key material. Gap F-25 is closed.
 
 **Phone number change**
 
@@ -421,8 +418,6 @@ Per-participant attestation states (complete set):
 For group conversations, the dashboard displays a per-participant attestation table (one row per participant) rather than a single pair of party_a / party_b attestation values.
 
 The Merkle root values are displayed as truncated hex (first 8 bytes) with copy-to-clipboard for the full value. They are not decoded or explained beyond "this is the tamper-proof fingerprint of this conversation."
-
-**[CONFLICT FC-6]**: The earlier two-party session vocabulary (MUTUAL / UNILATERAL seal types; CLEAN / FLAGGED / PENDING attestation states) in prior versions of this document is superseded by the multi-party attestation model (five close types; five attestation states; per-participant attestation rows). The multi-party design document (2026-04-13) is the governing specification.
 
 **[CONFLICT FC-7]**: The "Submit to arbitration" trigger condition cannot rely on a conversation-level FLAGGED flag in multi-party conversations, because the FLAGGED state is now per-participant. An action must be available when any participant's individual attestation is FLAGGED, not only when a conversation-level flag is set. Resolution required before the dispute submission UI can be implemented.
 
@@ -734,7 +729,7 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 4. Client generates new K_local (at the next session boundary)
 5. Portal sends key rotation request to home node (authenticated with WebAuthn response)
 6. Home node triggers new K_server_X ceremony across directory nodes
-7. New public keys published; old keys marked expired; connected agents receive a key refresh notification (**[see Conflict FC-5]** for the notification type naming issue)
+7. New public keys published; old keys marked expired; connected agents receive a `KEY_ROTATED` notification telling them to refresh cached key material
 8. Portal shows confirmation: new key fingerprint, rotation timestamp
 9. Desktop app system tray (if running) shows a brief "Keys rotated" notification
 
@@ -924,12 +919,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 **FC-5: `KEY_ROTATION_RECOMMENDED` dual meaning**
 - Definition A (key-rotation-design.md): The directory's inbound scheduling nudge to the owner-agent to rotate K_local. This is an informational/maintenance-class alert received by the agent.
 - Definition B (used in earlier versions of this document): An outbound notification sent to counterparty agents after a completed K_local rotation, telling them to refresh their cached key material.
-- These must be distinct notification types. The portal's key rotation confirmation flow (showing "connected agents notified") depends on knowing which notification type is sent to counterparties. Until the counterparty-facing key refresh notification is named, the cross-surface key rotation flow description is ambiguous.
-
-**FC-6: Two-party seal vocabulary vs. multi-party attestation schema**
-- Position A (earlier versions of this document): Session seal types are MUTUAL / UNILATERAL; attestation states are CLEAN / FLAGGED / PENDING; the seal record is a two-column per-session entry.
-- Position B (multi-party-conversation-design.md, 2026-04-13): Close types are MUTUAL_SEAL / SEAL_UNILATERAL / EXPIRE / ABORT / REOPEN; attestation states are CLEAN / FLAGGED / PENDING / DELIVERED / ABSENT; the seal record is a `conversation_attestations` table with one row per participant.
-- The multi-party design is the governing specification — the two-party case is a degenerate case. This document has been updated accordingly, but any other documentation, database schemas, or API contracts using the two-party vocabulary must be updated.
+- **Resolved**: the counterparty-facing notification is named `KEY_ROTATED`. `KEY_ROTATION_RECOMMENDED` is reserved exclusively for the inbound scheduling nudge. This also closes Gap F-25.
 
 **FC-7: "Submit to arbitration" trigger condition in multi-party context**
 - Position A (implied by earlier FLAGGED-seal framing): The "Submit to arbitration" action triggers when a conversation's seal state is FLAGGED.
@@ -966,7 +956,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-22 | Portal | Bio change rate limit value (X hours) not specified |
 | F-23 | Portal | Greeting per-recipient rate limit and management UI not specified; maximum number of distinct per-recipient greetings maintainable simultaneously not specified |
 | F-24 | Portal | Grace period for sealing active sessions under old K_server_X during key rotation not specified; epoch identifier format for FROST ceremony outputs not specified |
-| F-25 | Portal | Counterparty-facing key refresh notification type name and format not specified (distinct from the inbound `KEY_ROTATION_RECOMMENDED` scheduling nudge — see FC-5) |
+| ~~F-25~~ | Portal | ~~Closed~~ — counterparty-facing key refresh notification named `KEY_ROTATED`; see FC-5 resolution above |
 | F-26 | Dashboard | DELIVERED-to-ABSENT transition timeout in group conversations not specified; portal cannot accurately display participant state without this |
 | F-27 | Dashboard | Notification delivery path (P2P vs. directory-routed) not specified; portal's notification display depends on which backend component delivers payloads |
 | F-28 | Portal | Home-node API surface for notification payloads to the portal (distinct from agent-facing MCP tool surface) not specified |
@@ -983,7 +973,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-39 | Portal | Succession package creation ceremony security not specified: how portal obtains successor's `identity_key`, browser-level security during in-page plaintext encryption, Web Crypto API vs. WASM choice |
 | F-40 | Portal | False-positive appeal initiation UI not designed: when an activity log entry shows a Layer 2/3 scan block, the portal screen for initiating an LLM arbiter appeal (distinct from the general dispute submission flow) is not specified |
 | F-41 | Portal | Portal web security policy has no source document in the vault. CSP, CSRF, OAuth-token no-log, and trust-signal-blob no-log requirements are stated in this document but are not validated by any protocol review or security policy document. A dedicated portal web security spec is needed. |
-| F-42 | Portal | FROST threshold parameters: the directory operates at minimum 3-of-5 (not 2-of-3). Any portal display of threshold parameters or degraded-mode quorum explanations must reflect this baseline, and the planned 5-of-7 target at network maturity. |
+| ~~F-42~~ | Portal | ~~Closed~~ — FROST thresholds are: Alpha ~4-of-6; Consortium ~11-of-20; Public rotating ~5-of-7; minimum at any phase 3-of-5 across different jurisdictions/cloud providers. Portal must use these values, not 2-of-3. |
 | F-43 | Mobile / Desktop | Companion device registration flow not fully specified: how the companion device public key is provisioned to the CELLO client's allowlist during app install; whether this uses the same path as device attestation or a separate ceremony |
 | F-44 | Mobile | libp2p implementation technology for the mobile app constrained by the same decision as F-14; `go-libp2p` via `gomobile` is the most battle-tested path; native app requirement from App Attest simplifies libp2p integration |
 
