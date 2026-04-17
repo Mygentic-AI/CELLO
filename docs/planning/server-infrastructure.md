@@ -193,7 +193,7 @@ Minimum threshold at any phase: 3-of-5 across different jurisdictions and cloud 
 **FROST ceremonies**
 - Occur at **exactly two points**: session establishment (both agents authenticate) and conversation seal (final Merkle root co-signed).
 - NOT used per-message. Individual messages are signed with K_local only.
-- Each ceremony output must include a K_server version/epoch identifier. Verifiers must reject signatures from expired epochs after a grace window. Grace period duration and hard cutoff not specified. **[GAP G-8]**
+- Each ceremony output must include a K_server version/epoch identifier — [GAP G-8 RESOLVED]. Format: monotonic integer appended to the agent ID, e.g. `agent_123:epoch:4`. Simple, sortable, unambiguous. Grace period: 7 days after rotation — long enough for agents offline over a weekend, short enough that a suspected-compromised key cannot be used indefinitely. Hard cutoff: signatures from expired epochs rejected outright after the grace window.
 - When a K_server rotation boundary coincides with an in-flight FROST ceremony, that ceremony must abort and retry with new shares.
 
 **FROST ceremony coordinator and abort/retry — [GAP G-12 RESOLVED for FROST ceremonies]**: The initiating agent client is the FROST coordinator. It has the authenticated WebSocket to the directory and the strongest incentive to drive the ceremony to completion. No directory node is designated coordinator — that would be a single point of failure inside the ceremony itself.
@@ -213,7 +213,7 @@ Minimum threshold at any phase: 3-of-5 across different jurisdictions and cloud 
 
 **Proactive secret sharing**: If a node loses its K_server_X share database, remaining t-of-n nodes regenerate new shares via proactive secret sharing — K_server_X is never assembled. Also used periodically for proactive security.
 
-**K_server rotation notification format**: The exact format, grace period, and epoch identifier format are unspecified. **[GAP G-8]**
+**K_server rotation notification**: `KEY_ROTATION_RECOMMENDED` notification payload includes: `{ agent_id, old_epoch, new_epoch, old_pubkey, new_pubkey, rotation_timestamp, expires_at }`. Epoch identifier: `agent_id:epoch:N` (monotonic integer). Grace period: 7 days. Hard cutoff after grace period.
 
 **Node signing keys — [GAP G-9 RESOLVED]**: The node list signing key uses FROST threshold signing, reusing the same infrastructure as K_server_X. No separate officer class is introduced — the directory node operators are the signers. Phase model:
 
@@ -231,7 +231,7 @@ The node list public key is a constant in client source code (verified at build 
 3. Directory verifies the agent's signature against the registered public key
 4. Directory signs its own challenge response so the agent can verify the directory's identity against consortium-pinned node keys (certificate pinning)
 
-The agent payload binds the challenge to a specific directory_node_ID to prevent cross-node replay. A timestamp skew check is enforced. Acceptable skew threshold is not specified. **[GAP G-10]**
+The agent payload binds the challenge to a specific directory_node_ID to prevent cross-node replay. A timestamp skew check is enforced. Acceptable skew: **±30 seconds** — consistent with NTP-synchronized systems; matches TOTP tolerance; prevents replay without rejecting legitimate requests from agents with minor clock drift. **[GAP G-10 RESOLVED]**
 
 Repeated malformed WebSocket messages: rate limit → disconnect → require reverification.
 
@@ -265,7 +265,7 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 - Clients maintain a live RTT table per node and proactively migrate sessions before degradation is visible
 
 **Divergence detection**:
-- Each node broadcasts a checkpoint hash to all peers at regular intervals (every N minutes — exact interval not specified, **[GAP G-11]**)
+- Each node broadcasts a checkpoint hash to all peers at regular intervals — **10 minutes** at Alpha; tunable to 5 minutes at Consortium as throughput justifies. **[GAP G-11 RESOLVED]**
 - A node with a diverging hash is immediately visible to all peers
 - A compromised node maintaining two copies (honest for peers, tampered for clients) is detectable via client-side Merkle proof verification
 
@@ -329,7 +329,7 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 
 **Checkpoint schema** (`directory_checkpoints`): checkpoint_id (sequential), mmr_leaf_count, mmr_peaks, identity_merkle_root, checkpoint_hash = `SHA-256(mmr_peaks_serialized || identity_merkle_root || checkpoint_id)`, created_at.
 
-**Checkpoint interval**: Not specified. Affects temporal resolution of inclusion proofs. **[GAP G-11]**
+**Checkpoint interval**: 10 minutes at Alpha; 5 minutes at Consortium. A sealed conversation enters the global MMR within one checkpoint window. **[GAP G-11 RESOLVED]**
 
 **Identity Merkle tree**: Sorted sparse Merkle tree over agent state. One leaf per agent keyed by `agent_id`. Leaf hash = `SHA-256(agent_id || signing_pubkey || identity_pubkey || status || trust_score_hash || bio_hash || social_verifications_hash || attestations_hash || endorsements_hash || last_updated)`. Updated on every agent state change (O(log N) recomputation walk). New root = `identity_merkle_root` for next checkpoint.
 
@@ -912,10 +912,10 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-5 | Portal | ~~Resolved~~ — Encrypted async pickup queue. Portal encrypts JSON blob to agent's `identity_key` pubkey, stores ciphertext with 30-day TTL, triggers `TRUST_SIGNAL_PICKUP_PENDING` notification. Agent decrypts, validates hash, ACKs, queue entry deleted. Orphaned hashes (TTL expired) surface re-verify prompt. See [[2026-04-17_1000_trust-signal-pickup-queue\|Trust Signal Pickup Queue]]. |
 | G-6 | Portal | ~~Resolved~~ — Both layers enforce. Portal checks first (prevents wasted OAuth round trips, user-facing error). Directory enforces at hash submission time (cannot be bypassed via direct API call). |
 | G-7 | Portal | ~~Retired (home node dropped)~~ — jurisdiction is a signup portal deployment concern. PII lives only in the signup portal; directory nodes hold only hashes and are jurisdiction-neutral by construction. The signup portal must be deployed in the correct jurisdiction for each user base. |
-| G-8 | Directory/FROST | K_server rotation notification format, grace period, and epoch identifier format not specified |
+| G-8 | Directory/FROST | ~~Resolved~~ — Epoch ID: `agent_id:epoch:N` (monotonic integer). Grace period: 7 days. Hard cutoff after grace. Notification payload: `{ agent_id, old_epoch, new_epoch, old_pubkey, new_pubkey, rotation_timestamp, expires_at }`. |
 | G-9 | Directory/FROST | ~~Resolved~~ — Phase-appropriate FROST threshold over directory node operators. Alpha: 3-of-5 YubiKey PIV officers (CELLO staff). Consortium+: FROST threshold across node operators matching directory threshold (11-of-20). No separate officer class — operators are the signers. Node list public key is a constant in client source, verified at build time via Sigstore/OIDC. |
-| G-10 | Directory | Timestamp skew check acceptable window not specified |
-| G-11 | Directory | Checkpoint interval not specified |
+| G-10 | Directory | ~~Resolved~~ — ±30 seconds. Consistent with NTP-synchronized systems and TOTP tolerance. |
+| G-11 | Directory | ~~Resolved~~ — 10 minutes at Alpha; 5 minutes at Consortium. Sealed conversations enter MMR within one checkpoint window. |
 | G-12 | Directory | ~~Resolved~~ — Most of this dissolves under the relay architecture (relay failure recovery is handled by directory reassignment; directory nodes are peers with no per-session primary). Residual question (FROST ceremony abort/retry) resolved: client is coordinator; 3-second round timeout; exclude non-responders, retry with fresh t-of-n set; max 3 retries; fail with `DIRECTORY_BELOW_THRESHOLD` if fewer than t nodes reachable. |
 | G-13 | Directory | Session timeout value (N in "no messages for N minutes") not specified |
 | G-14 | Directory | ~~Resolved~~ — REOPEN requires new FROST ceremony; seq# restarts at 1 with genesis `prev_root = SHA-256(previous_sealed_root \|\| session_id \|\| reopen_timestamp)`; unilateral REOPEN not permitted (bilateral by design; use new session request if counterparty non-responsive). Auto-REOPEN (late-arriving post-grace message) is protocol-internal and does not require FROST. |
