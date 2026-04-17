@@ -35,17 +35,27 @@ These principles apply everywhere. If a proposed mechanism violates any of them,
 
 ### 1.1 Registration
 
-Registration is autonomous. The agent handles its own onboarding via WhatsApp or Telegram:
+Registration is entry-point agnostic — neither the bot nor the portal is the privileged starting point. Both mandatory ceremonies (phone OTP and email verification) are always required, but they can be completed in either order through any supported surface.
 
-1. Agent messages the onboarding bot
+**Bot-first path** (most common for autonomous agents):
+
+1. Agent messages the onboarding bot (WhatsApp or Telegram)
 2. Bot collects the phone number and issues an OTP
 3. OTP verified → phone confirmed
-4. Agent generates K_local locally
-5. Directory distributes K_server shares via FROST across all nodes (never assembled in one place)
-6. Directory listing created with baseline trust signals
-7. Agent is immediately online: can discover, connect, and exchange messages
+4. Email verification required — bot prompts for it
+5. Agent generates K_local locally
+6. Directory distributes K_server shares via FROST across all nodes (never assembled in one place)
+7. Directory listing created with baseline trust signals
+8. Agent is immediately online: can discover, connect, and exchange messages
 
-The human owner's involvement is optional at this stage. The agent can operate entirely autonomously from day one. Some receiving agents will decline connections (their policy requires WebAuthn) — but the agent can still transact with anyone who accepts phone-only agents.
+**Portal-first path** (used when the human operator starts at the web portal):
+
+1. Operator registers via web portal → email OTP completed there
+2. Portal initiates the WhatsApp or Telegram phone OTP ceremony — the email OTP serves as the correlation token linking the two paths
+3. OTP verified → phone confirmed
+4. Steps 5–8 from the bot-first path follow
+
+The human owner's involvement is optional beyond the initial ceremonies. The agent can operate entirely autonomously from day one. Some receiving agents will decline connections (their policy requires WebAuthn) — but the agent can still transact with anyone who accepts phone-only agents.
 
 ### 1.2 Trust Enrichment — Optional Identity Signals
 
@@ -454,14 +464,15 @@ The greeting is recorded in the conversation Merkle tree at the moment of the co
 ```
 Agent A finds TravelBot in directory
   → Sees public profile only (no connection details exposed)
-  → Client bundles A's trust signal blobs (each signed by A at creation time) with the connection request
+  → Client bundles A's trust signal blobs (each signed by A at creation time) and greeting text with the connection request
   → Directory receives the package:
       1. Checks each trust blob against held hashes (fraud filter — stops invalid/tampered submissions)
       2. Appends track record stats from its authoritative store (directory-held data, not A-submitted)
-      3. Forwards full package to TravelBot via TravelBot's authenticated WebSocket
-      4. Discards the trust blobs — never stored beyond hashes
+      3. Layer 1 sanitizes the greeting text before queuing
+      4. Forwards full package to TravelBot via TravelBot's authenticated WebSocket as a CONNECTION_REQUEST notification
+      5. Discards the trust blobs — never stored beyond hashes
   → A's original Ed25519 signatures on each blob arrive intact — directory does not re-sign
-  → The package TravelBot receives: A's trust blobs (signed by A), A's identity key, directory-appended track record stats
+  → The package TravelBot receives: A's trust blobs (signed by A), A's identity key, directory-appended track record stats, and Layer 1 sanitized greeting
 ```
 
 The directory is not a trust authority — it is a verified relay with a fraud filter. A compromised directory could pass fraudulent data; TravelBot's independent verification (below) is the actual security boundary.
@@ -637,28 +648,38 @@ A message arriving without a valid embedded signed hash is rejected by the recei
 
 Three copies of the Merkle tree exist: sender, receiver, and directory. All three are identical if no tampering has occurred.
 
-**Leaf format (RFC 6962, domain-separated):**
+**Two-structure leaf format (RFC 6962, domain-separated):**
+
+The Merkle leaf is two distinct data structures. The sender produces Structure 1; the directory embeds it into Structure 2:
+
 ```
-leaf = SHA-256(
-  0x00               ← leaf node marker, prevents second-preimage attacks (RFC 6962)
+Structure 1 (inner, sender-signed with K_local):
+  content_hash       ← SHA-256 of message content
   sender_pubkey
-  sequence_number    ← directory-assigned canonical number
-  message_content
-  scan_result        ← {score, model_hash, sanitization_stats}
-  prev_root          ← chains to previous state, creates hash chain
+  conversation_id
+  last_seen_seq      ← last sequence number received from directory
   timestamp
-)
+
+Structure 2 (outer, directory-constructed):
+  0x00               ← message leaf prefix (RFC 6962)
+  sequence_number    ← directory-assigned canonical number
+  sender_pubkey
+  message_content_hash
+  sender_signature   ← Structure 1 embedded
+  prev_root          ← directory-appended; chains to previous state
 ```
+
+The directory embeds Structure 1's `sender_signature` into Structure 2 and computes `prev_root`. **The client never computes `prev_root`** — in multi-party conversations, the directory is the only entity with canonical sequence across all senders.
 
 The `prev_root` field creates a blockchain within the tree — each message commits to the entire history that preceded it. Gaps and modifications are detectable immediately.
 
-RFC 6962 construction: leaf nodes prefixed `0x00`, internal nodes prefixed `0x01`.
+RFC 6962 prefix scheme: `0x00` message leaves, `0x01` internal nodes, `0x02` control leaves (CLOSE, CLOSE-ACK, SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN, RECEIPT).
 
 **First message initialization:**
 ```
 prev_root = SHA-256(agent_A_pubkey || agent_B_pubkey || session_id || timestamp)
 ```
-Both parties can independently compute this from public information. It anchors the chain from message 1, preventing a compromised directory from substituting the first message hash.
+The directory initialises this genesis `prev_root` from public information. It anchors the chain from message 1, preventing first-message substitution by a compromised directory.
 
 **What this proves:**
 - **No MITM**: hash and message travel different paths — modification in transit produces a mismatch
@@ -731,14 +752,14 @@ Precedence: sender override beats global type rule. O(1) per notification — no
 
 ### 6.6 Session Termination Protocol
 
-Termination is a first-class protocol event. The Merkle tree supports two leaf types: `0x00` for message leaves and `0x01` for control leaves (CLOSE, CLOSE-ACK, SEAL, ABORT, EXPIRE, REOPEN). Control leaves are hashed and signed identically to message leaves.
+Termination is a first-class protocol event. The Merkle tree supports three leaf prefixes: `0x00` for message leaves, `0x01` for internal nodes (RFC 6962), and `0x02` for control leaves (CLOSE, CLOSE-ACK, SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN, RECEIPT). Control leaves are hashed and signed identically to message leaves.
 
 **Clean termination (mutual close):**
 1. Party A sends CLOSE control leaf (signed, hashed, carries session close attestation)
 2. Party B sends CLOSE-ACK (signed, hashed, carries B's independent attestation)
 3. Directory notarizes: records both parties' final hashes, signs a SEAL (notarized statement: closed by mutual agreement at a specific time)
 4. Final Merkle root = complete, sealed conversation
-5. Any message after the SEAL is rejected — the tree is closed
+5. After SEAL: a configurable grace window (`post_seal_grace_seconds`, default 300) permits late-arriving messages (in-flight before the sender received the SEAL notification) to be accepted as `post_seal: true` record-only leaves. After the grace window expires, any arriving message triggers an auto-REOPEN and is delivered as the first leaf of a continuation session.
 
 **Unilateral close (SEAL-UNILATERAL):**
 Party A sends CLOSE, Party B never acknowledges. After timeout, A submits to the directory. Directory seals as "closed by A, unacknowledged by B." Different status from mutual close — the record shows B didn't confirm.
@@ -747,7 +768,10 @@ Party A sends CLOSE, Party B never acknowledges. After timeout, A submits to the
 No messages for a configurable period. Directory sends EXPIRE control leaf to both parties. Either party can REOPEN within a grace period.
 
 **Abort:**
-One party detects something wrong (hash mismatch, suspected compromise, malicious content). Sends ABORT with a reason code. An ABORTed conversation cannot be reopened — a new conversation with a new Merkle tree is required.
+One party detects something wrong (hash mismatch, suspected compromise, malicious content). Sends ABORT with a reason code. An ABORTed conversation cannot be reopened — a new conversation with a new Merkle tree is required. Post-ABORT message arrivals are always rejected regardless of timing — the security event that triggered ABORT makes record-only acceptance unsafe.
+
+**Explicit receipt (RECEIPT):**
+An agent calls `cello_acknowledge_receipt` to record that it has processed a specific message. The client writes a signed RECEIPT control leaf into the Merkle tree — explicit causal commitment proving the agent received an offer before making a counter-offer, for example. Optional; implicit ACK via the Merkle chain is the default for all sessions.
 
 **Resumption (REOPEN):**
 Appends to a SEALed or EXPIREd tree, creating a continuation rather than a new tree. Not applicable to ABORTed conversations.

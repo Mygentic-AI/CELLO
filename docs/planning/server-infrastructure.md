@@ -27,13 +27,13 @@ The three server-side components are:
 
 ### What it is
 
-The signup portal is the only path for human-level identity enrichment. Agent registration itself is autonomous via WhatsApp/Telegram bot (phone OTP + basic identity). The portal is where the human owner optionally strengthens the agent's trust profile after that baseline registration.
+The signup portal is the only path for human-level identity enrichment. The portal also serves as an alternative registration entry point alongside the WhatsApp/Telegram bot.
 
-**Note — ambiguous boundary [CONFLICT C-1]:** Multiple documents describe the phone OTP as happening in the WhatsApp/Telegram bot during initial registration. Other passages describe the portal as handling OTP. Whether the portal has a standalone OTP path independent of the bot, or always operates downstream of bot-verified registration, is never made explicit. This boundary needs a formal decision.
+**[CONFLICT C-1 — RESOLVED]:** Registration is entry-point agnostic — neither the bot nor the portal is the privileged starting point. Both mandatory ceremonies (phone OTP and email verification) are always required, but they can be completed in either order through any supported surface. **Portal-first path:** operator registers via web portal → email OTP completed there → portal initiates the WhatsApp or Telegram phone OTP ceremony. **Bot-first path:** operator initiates via WhatsApp or Telegram → phone OTP completed there → email verification required (bot prompts for it). The email OTP is the correlation token that ties a portal-initiated registration to the subsequent phone ceremony. Human operators can complete all ceremonies manually. See agent-client.md AC-C1 (resolved).
 
 ### Registration and OTP flow
 
-- Phone OTP is the only mandatory registration requirement. Phone number is verified via WhatsApp or Telegram bot.
+- Phone OTP and email verification are both mandatory registration requirements. Phone number is verified via WhatsApp or Telegram bot; email is verified via OTP (the email OTP serves as the correlation token between portal-first and bot-first registration paths).
 - The portal must silently run carrier metadata queries (Twilio Lookup / Telesign) alongside OTP verification when that integration is available: SIM tenure, number type, carrier name, porting history. Zero additional user friction.
 - Phone numbers must be classified into three tiers when carrier intelligence is available:
   - **Verified Mobile**: uncapped
@@ -270,15 +270,15 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 
 **Message Merkle tree**:
 - Two separate Merkle trees: Identity tree (checkpointed periodically) and Message tree (per-conversation hash chains, updated per message)
-- RFC 6962 construction: leaf nodes prefixed `0x00`, internal nodes prefixed `0x01`
+- RFC 6962 construction with control leaf extension: `0x00` message leaves, `0x01` internal nodes (RFC 6962 standard), `0x02` control leaves (CLOSE, CLOSE-ACK, SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN, RECEIPT)
 
-**[CONFLICT C-3 — CRITICAL]**: §6.6 defines message leaves as `0x00` and *control leaves* (CLOSE, SEAL, ABORT, etc.) as `0x01`. RFC 6962 defines internal nodes as `0x01`. These two uses of `0x01` are incompatible — a control leaf with prefix `0x01` is indistinguishable from an internal node under RFC 6962 construction, defeating second-preimage protection. This needs an explicit resolution before implementation.
+**[CONFLICT C-3 — RESOLVED]**: The `0x02` prefix for control leaves preserves RFC 6962 second-preimage protection (internal nodes remain `0x01`) while keeping control leaves as first-class Merkle entries distinct from message leaves (`0x00`). See agent-client.md AC-C3 (resolved).
 
-**Leaf format** (N-party canonical form; two-party is a special case):
-- Sender signs: `content_hash || sender_pubkey || conversation_id || last_seen_seq || timestamp`
-- Directory appends `prev_root` and sequence number when building the canonical tree
+**Two-structure leaf format** (N-party canonical form; two-party is a special case):
+- **Structure 1 (inner, sender-signed)**: `content_hash || sender_pubkey || conversation_id || last_seen_seq || timestamp` — signed by sender with K_local
+- **Structure 2 (outer, directory-constructed)**: `sequence_number || sender_pubkey || message_content_hash || sender_signature (Structure 1 embedded) || prev_root` — the directory embeds Structure 1's signature, appends `prev_root` and the canonical sequence number, then hashes into the Merkle tree. The client never computes `prev_root`.
 
-**[CONFLICT C-4]**: Earlier documents (2026-04-08) describe the sender including `prev_root` in its signed leaf. The multi-party design (2026-04-13) explicitly moves `prev_root` computation to the directory. The later document supersedes, but any implementation relying on sender-controlled `prev_root` is wrong.
+**[CONFLICT C-4 — RESOLVED]**: The two-structure model (2026-04-13 multi-party design) is canonical. The 2026-04-15 session-level FROST signing description of sender-computed `prev_root` is superseded — it was written for the two-party case and does not account for multi-party, where the directory is the only entity with canonical sequence across all senders. See agent-client.md AC-C2, AC-C7 (resolved).
 
 **Conversation anchor (N-party)**: `SHA-256(sorted_participant_pubkeys || session_id || timestamp)` — sorting makes it deterministic regardless of join order.
 
@@ -333,9 +333,10 @@ Control leaves are hashed and signed identically to message leaves and recorded 
 | EXPIRE | Directory: no messages for configurable period | Quasi-terminal (REOPEN permitted) |
 | ABORT | Security event | Terminal — REOPEN not permitted |
 | REOPEN | Either party reopens SEALED or EXPIRED tree | Continuation |
+| RECEIPT | Agent explicitly acknowledges processing a specific message | Informational (no state change) |
 
-After SEAL: any subsequent message is rejected.
-After ABORT: REOPEN is not permitted.
+After SEAL: a configurable grace window (`post_seal_grace_seconds`, default `300`) permits late-arriving messages (in-flight before the sender received the SEAL notification) to be accepted as `post_seal: true` record-only leaves. After the grace window expires, any arriving message triggers an auto-REOPEN and is delivered as the first leaf of a continuation session.
+After ABORT: REOPEN is not permitted. Post-ABORT message arrivals are always rejected regardless of timing.
 
 **Session timeout value (N in "no messages for N minutes") is not specified. [GAP G-13]**
 
@@ -357,7 +358,7 @@ After ABORT: REOPEN is not permitted.
 - On receiving the connection request package, the directory:
   1. Checks each submitted trust blob against the hashes it already holds — this is a **fraud filter only**, not a trust authority function. It stops obviously invalid or tampered submissions.
   2. Appends track record stats from its own authoritative store (keyed to Alice's pseudonymous pubkey). These stats are directory-held data, not Alice-submitted data.
-  3. Forwards the full package to Bob via his authenticated WebSocket.
+  3. Forwards the full package — including Alice's greeting text, Layer 1 sanitized before queuing — to Bob via his authenticated WebSocket as a `CONNECTION_REQUEST` notification.
   4. Discards the trust blobs. The directory never stores trust signal data beyond hashes — the blobs exist only transiently during relay.
 - The directory does not re-sign the trust data. Alice's original Ed25519 signatures on each blob arrive at Bob intact. The directory is not a trust authority — it is a verified relay.
 - The connection package that arrives at Bob contains: Alice's trust signal blobs (signed by Alice at creation time), Alice's identity key, and track record stats appended by the directory.
@@ -370,10 +371,9 @@ After ABORT: REOPEN is not permitted.
 - The directory facilitates NAT traversal for companion device connections using the same hole-punching mechanism as agent-to-agent sessions
 - Companion devices are a distinct connection type: the directory sees "companion device D wants to reach CELLO client for owner X" — facilitates the P2P connection, then steps out
 - Companion device authentication is outside the FROST model — the companion device presents a keypair registered at install time (bound via phone OTP), not a FROST-authenticated agent identity
-- The directory must maintain a registry of authorized companion device public keys per agent, alongside the existing device attestation records
+- The CELLO client holds the authoritative companion device allowlist locally and verifies companion devices at connection time. The directory never holds companion device public keys — consistent with the principle that the directory holds hashes, not client data. Registration is a local ceremony between the owner and the client (QR code or equivalent) with no server round-trip. The directory may in future hold hashes of the allowlist for integrity verification; that is not a current requirement. See agent-client.md AC-C10 (resolved). **[GAP G-41 — RETIRED]**
 - Companion device connections are read-only from the directory's perspective: no hashes are submitted, no Merkle tree operations occur, no sequence numbers are assigned
 - The `cello_request_human_input` MCP tool triggers a push notification to the companion device via the directory — the directory sees "send a knock to owner X's companion device," content-free
-- **[GAP G-41]**: Companion device key registration: where the companion device's public key is stored (home node alongside other PII? replicated directory state?), how it is provisioned during app install, and how it is revoked when the owner deregisters a companion device are not specified
 
 **Multi-node public key cross-check** (identity verification — step 1 of receiver-side verification):
 - Receiver cross-checks requester's public key across multiple directory nodes with Merkle inclusion proof
@@ -382,12 +382,11 @@ After ABORT: REOPEN is not permitted.
 - Proof size: O(log N) — approximately 20 hashes (~640 bytes) for a million-agent directory
 - This is one of two independent verification steps. The other — trust signal verification via the requester's own signatures on each blob — does not involve the directory at all (see connection request flow above)
 
-**Mandatory vs. discretionary signals [GAP G-15]**:
-- Connection nodes must enforce a protocol-level registry of which signal types are mandatory
-- A connection request missing mandatory signals is rejected at submission
-- What happens when a client is modified to omit mandatory signals: rejected, per registry
-- Full classification of all signal types as mandatory or discretionary has not been completed. **This is a known open item.**
-- What happens when a new mandatory signal is introduced and pre-existing agents lack it (grace period? grandfathering?) is unresolved.
+**Trust signal disclosure — no mandatory signals [GAP G-15 — RETIRED]**:
+- No trust signals are mandatory at the protocol level. The initiating agent chooses what to include in a connection request. Omitting signals increases the likelihood of being declined but is always permitted.
+- The directory does not enforce signal inclusion at submission time — it relays whatever the initiating agent provides (after the fraud-filter check against held hashes).
+- The receiving agent's `SignalRequirementPolicy` determines what it accepts. If the requester doesn't meet the policy, the request is declined. Enforcement is at evaluation time on the receiving client, not at submission time on the directory.
+- See agent-client.md AC-11 (resolved).
 
 **Trust-weighted pool selection (under load)**:
 - Under DDoS or heavy traffic, connection nodes use pool-and-sample selection rather than FIFO queuing
@@ -524,7 +523,7 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
 - **Notification hashes**: Stored as standalone events — not chained into a session Merkle tree
 - **Notification type registry**: Enumerated, not freeform. Types include at minimum: `INTRODUCTION`, `ORDER_UPDATE`, `ALERT`, `PROMOTIONAL`, `SYSTEM`, `CONNECTION_REQUEST`, `ENDORSEMENT_RECEIVED`, `SECURITY_BLOCK`, `TOMBSTONE`, `TRUST_EVENT`, `RECOVERY_EVENT`, `SESSION_CLOSE_ATTESTATION_DISPUTE`, `SUCCESSION_CLAIM_FILED`, `HUMAN_INPUT_REQUESTED`, `PEER_COMPROMISED_ABORT`
 - **Note**: `EMERGENCY_SESSION_ABORT` is a directory-to-client control instruction sent via the agent's persistent WebSocket — it is NOT a notification type and does not appear in the notification registry
-- **Whether notifications must route through directory or can go peer-to-peer**: explicitly unresolved **[GAP G-32]**
+- **Notification routing (two paths)**: Directory-sourced events (connection requests, tombstones, security alerts, system notifications) push to the agent via its authenticated WebSocket — this is the directory's responsibility. Owner-targeted notifications originating from the client (e.g., escalation prompts, human input requests) go direct to the companion device over P2P — the directory's role is limited to facilitating NAT traversal, not relaying the notification content. See agent-client.md AC-16 (resolved). **[GAP G-32 — RESOLVED]**
 - **Institutional verification for elevated rate limits**: application process and criteria not specified **[GAP G-33]**
 
 ### Contact aliases
@@ -553,10 +552,10 @@ All tables are append-only unless noted. Mutable tables are marked.
 | `social_verification_freshness_checks` | append-only |
 | `social_proof_freezes` | append-only |
 | `device_attestation_records` | append-only; types: TPM, PLAY_INTEGRITY, APP_ATTEST (NOT WEBAUTHN) |
-| `companion_device_registrations` | append-only; companion device public keys authorized to read from the CELLO client via P2P — **[see GAP G-41]** |
+| ~~`companion_device_registrations`~~ | **Removed** — companion device allowlist is held locally by the CELLO client, not the directory. See AC-C10 (resolved). |
 | `bio_history` | append-only; supersession pattern |
 | `pseudonym_bindings` | append-only |
-| `conversation_seals` | append-only; random UUID conversation_id |
+| `conversation_seals` | append-only; random UUID conversation_id; sealed root hash and MMR peak retained indefinitely (survive client-side 2-year pruning) |
 | `conversation_attestations` | append-only; N-party, replaced party_a/party_b columns |
 | `conversation_participation` | append-only; party_pseudonym = SHA-256(agent_id + salt) |
 | `arbitration_verdicts` | append-only; separate from seals |
@@ -709,9 +708,9 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 ### Companion device connection flow
 
 1. Owner opens mobile app or desktop app; app initiates libp2p connection to directory
-2. App presents its registered companion device public key; directory verifies against the owner's companion device registry
-3. Directory facilitates NAT traversal (hole-punching) between the companion device and the owner's CELLO client — same mechanism as agent-to-agent P2P setup
-4. Direct P2P connection established between companion device and CELLO client; directory steps out
+2. Directory facilitates NAT traversal (hole-punching) between the companion device and the owner's CELLO client — same mechanism as agent-to-agent P2P setup. The directory does not verify the companion device identity — it only facilitates the connection.
+3. Direct P2P connection established between companion device and CELLO client; client verifies the companion device's public key against its local allowlist before granting access
+4. Directory steps out after NAT traversal
 5. Companion device reads session metadata and conversation content on demand from the CELLO client's local SQLCipher database
 6. Content flows directly over P2P — the directory never sees it
 7. For human injection: companion device sends `send_human_injection(session_id, content)` to the CELLO client; client delivers to the agent; agent decides what to forward
@@ -761,7 +760,7 @@ In Alpha, some components that will eventually be separated (relay vs. directory
 | Notification hashes | All directory nodes | Yes | Not deleted |
 | Message content | Client only (P2P) | N/A | Client-side |
 | Scan results | Part of Merkle leaf | Yes (in conversation tree) | Not deleted |
-| Companion device public keys | Home node or directory — **[GAP G-41]** | TBD | Revoked on deregistration |
+| Companion device allowlist | Client only (local allowlist) | N/A | Client-side; **[GAP G-41 — RETIRED]** |
 | Human injection logs | Client only (local SQLCipher) | N/A | Client-side; not in Merkle tree |
 | Anomaly event timestamps | All directory nodes | Yes | Not deleted |
 | Succession packages | Directory (home node?) | TBD — **[GAP G-39]** | Not specified |
@@ -773,25 +772,19 @@ In Alpha, some components that will eventually be separated (relay vs. directory
 
 The following conflicts were identified across source documents. For each, the two incompatible positions are stated and the needed decision is described. Items marked **CRITICAL** have implementation-blocking implications.
 
-**C-1: Portal/bot boundary for phone OTP**
-- Position A: Phone OTP happens in the WhatsApp/Telegram bot only; the portal operates downstream of already-verified registration.
-- Position B: The portal also has a standalone OTP path.
-- Needed: Explicit decision on whether the portal accepts un-phone-verified users and guides them through OTP, or always requires prior bot registration.
+**C-1: Portal/bot boundary for phone OTP — resolved**
+Registration is entry-point agnostic. Both portal-first and bot-first paths are valid. Phone OTP and email verification are both mandatory. Email OTP is the correlation token linking portal-initiated registration to the subsequent phone ceremony. See agent-client.md AC-C1 (resolved).
 
 **C-2: Which node type handles the session SEAL FROST ceremony (CRITICAL)**
 - Position A (implied by session/relay separation): Established sessions are on relay nodes; relay nodes do not perform FROST.
 - Position B (implied by seal semantics): Sealing a session requires FROST; the directory connection node / home node must be involved.
 - These cannot both be true as written. Options: (1) The FROST seal ceremony is always performed by the originating connection node regardless of where the session currently lives; (2) Sessions migrate back to a connection node for the seal ceremony; (3) Relay nodes are given limited FROST capability for seal only. A decision is required.
 
-**C-3: Merkle leaf prefix collision (CRITICAL)**
-- RFC 6962 construction: internal nodes use prefix `0x01`
-- §6.6: control leaves (CLOSE, SEAL, ABORT, etc.) use prefix `0x01`
-- A control leaf with prefix `0x01` is indistinguishable from an internal Merkle tree node under RFC 6962, defeating second-preimage protection. One of these must change. Options: (1) Control leaves use a different prefix (e.g., `0x02`); (2) The leaf/internal distinction uses a different scheme than RFC 6962.
+**C-3: Merkle leaf prefix collision — resolved**
+`0x00` message leaves, `0x01` internal nodes (RFC 6962), `0x02` control leaves. The `0x02` prefix preserves RFC 6962 second-preimage protection while keeping control leaves as first-class Merkle entries. See agent-client.md AC-C3 (resolved).
 
-**C-4: Who computes prev_root in Merkle leaf**
-- Earlier design (2026-04-08): Sender includes `prev_root` in its signed leaf.
-- Later design (2026-04-13, multi-party): Sender signs only its authorship proof; directory appends `prev_root`.
-- Resolution: The 2026-04-13 design supersedes. Any implementation relying on sender-controlled `prev_root` is wrong. The end-to-end-flow.md may still reflect the earlier design in some sections.
+**C-4: Who computes prev_root in Merkle leaf — resolved**
+Directory appends `prev_root` to the outer leaf (Structure 2). The client never computes it. The two-structure model (2026-04-13 multi-party design) is canonical; the 2026-04-15 sender-computed description is superseded. Genesis `prev_root` = `SHA-256(A_pubkey || B_pubkey || session_id || timestamp)`. See agent-client.md AC-C2, AC-C7 (resolved).
 
 **C-5: "Not Me" scope for existing sessions — resolved**
 All active sessions are terminated immediately on "Not Me." K_server revocation alone cannot close existing P2P sessions, so the directory fires a dual-path forced abort: Path 1 (`EMERGENCY_SESSION_ABORT` to the agent client) and Path 2 (`PEER_COMPROMISED_ABORT` to each counterparty). Path 2 is the authoritative path — it works regardless of whether the compromised client is online. The earlier §8.3 language ("existing conversations remain valid") is superseded. See [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]].
@@ -826,7 +819,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-12 | Directory | Backup node promotion mechanism (election protocol, fencing token, split-brain prevention) not specified |
 | G-13 | Directory | Session timeout value (N in "no messages for N minutes") not specified |
 | G-14 | Directory | REOPEN semantics: new FROST ceremony required? Sequence number handling across seal boundary? Unilateral REOPEN permitted? |
-| G-15 | Directory | Mandatory vs. discretionary signal classification: complete list not produced; versioning/grandfathering for new mandatory signals not designed |
+| G-15 | Directory | ~~Retired~~ — no signals are mandatory at the protocol level. Initiating agent chooses what to include; receiving agent's policy enforced at evaluation time. See AC-11 (resolved). |
 | G-16 | Directory | Incubation enforcement: which node type enforces 7-day / 3 connections/day limit not specified |
 | G-17 | Directory | Endorsement rate limit N (max new endorsements per month per agent) not specified |
 | G-18 | Directory | PSI implementation library and API contract provisional |
@@ -843,7 +836,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-29 | Directory | Bio update rate limit N (hours) not defined |
 | G-30 | Directory | Greeting rate limit threshold not specified |
 | G-31 | Directory | Notification rate limit values per trust tier not specified |
-| G-32 | Directory | Whether notifications route through directory or can go peer-to-peer: explicitly unresolved |
+| G-32 | Directory | ~~Resolved~~ — directory-sourced events push via WebSocket; owner-targeted client notifications go direct to companion over P2P. Directory facilitates NAT traversal only. See AC-16 (resolved). |
 | G-33 | Directory | Institutional verification process for elevated notification rate limits not specified |
 | G-34 | Directory | Alias creation rate limiting mechanism and thresholds not specified |
 | G-35 | Directory | Alias TTL mechanism: schema has EXPIRED state but no scheduled expiry job or TTL configuration defined |
@@ -852,7 +845,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-38 | Relay | Group key management for encrypted relay fan-out (establishment, new-joiner distribution, departure revocation) explicitly unresolved |
 | G-39 | Cross | Succession package storage: which node type holds it, replication policy, at-rest protection not specified |
 | G-40 | Cross | Oracle evidence (GPS, photos, video) storage location, retention policy, and post-dispute disposition not specified |
-| G-41 | Directory | Companion device key registration: storage location (home node vs. replicated), provisioning during app install, revocation on deregistration, and maximum number of companion devices per agent not specified |
+| G-41 | Directory | ~~Retired~~ — companion device allowlist is client-held, not directory-stored. See AC-C10 (resolved). Maximum devices per agent remains a client-side configuration decision. |
 
 ---
 
@@ -869,6 +862,6 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 - [[open-decisions|Open Decisions]]
 - [[design-problems|Design Problems]]
 - [[frontend|CELLO Frontend Requirements]] — the web portal, mobile app, and desktop app requirements that the server infrastructure must support; the two documents together define the full client-server contract
-- [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — designs the companion device P2P connection that the directory must facilitate; introduces a new connection type, new notification type, and companion device key registry
-- [[agent-client|CELLO Agent Client Requirements]] — the client-side counterpart to this document; the client and directory together implement the full protocol; shared conflicts (C-1, C-3, C-4, C-6; C-5 and C-7 resolved) are cross-referenced throughout both documents
+- [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — designs the companion device P2P connection that the directory must facilitate; introduces a new connection type and new notification type; companion device allowlist is client-held (AC-C10)
+- [[agent-client|CELLO Agent Client Requirements]] — the client-side counterpart to this document; the client and directory together implement the full protocol; shared conflicts (C-6 open; C-1, C-3, C-4, C-5, C-7 resolved) are cross-referenced throughout both documents
 - [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]] — resolves C-5; designs the dual-path mechanism (EMERGENCY_SESSION_ABORT + PEER_COMPROMISED_ABORT) that closes existing P2P sessions K_server revocation alone cannot reach
