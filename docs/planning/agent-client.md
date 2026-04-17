@@ -1154,7 +1154,7 @@ The following names are canonical and supersede inconsistencies in earlier docum
 2. Directory fires `FALLBACK_CANARY` anomaly event; pushes push notification to owner's WhatsApp/Telegram
 3. Owner taps "Not Me" in mobile app or portal
 4. Mobile app sends revocation request to home node; K_server_X shares immediately burned
-5. No new FROST sessions possible — all new connection requests rejected
+5. All active sessions receive SEAL-UNILATERAL immediately with tombstone reason code — no active session continues after "Not Me". No new FROST sessions possible — all new connection requests rejected.
 6. Owner authenticates with WebAuthn at portal; generates new K_local; new K_server_X ceremony
 7. New keys published; connected agents receive key refresh notification
 
@@ -1212,10 +1212,8 @@ The model is downloaded on first install (not bundled in the npm package). The n
 **AC-C5: Native push vs. WhatsApp/Telegram escalation relationship — resolved**
 All configured channels always fire. No hierarchy, no suppression based on app presence or reachability. Owner's `cello_configure` settings are the sole determinant of which channels are active.
 
-**AC-C6: "Not Me" scope for existing sessions**
-- §8.3: Existing conversations signed with K_local alone remain valid after "Not Me" K_server revocation.
-- §8.4: All active sessions receive SEAL-UNILATERAL with tombstone reason code on any tombstone.
-The client's behavior on receiving a K_server revocation event is directly contradicted across two sections. Decision required before the client can implement the "Not Me" response path. See server infrastructure Conflict C-5.
+**AC-C6: "Not Me" scope for existing sessions — resolved**
+§8.4 is correct and §8.3 is superseded. All active sessions receive SEAL-UNILATERAL immediately on "Not Me" — no active session continues after the owner has declared a compromise. The threat model is: the owner doesn't know what was compromised, so a hard stop on everything is the only safe response. Allowing existing sessions to continue (§8.3) trades security for continuity in exactly the scenario where continuity must not be trusted.
 
 **AC-C7: Leaf inner authorship proof vs. outer directory leaf — resolved**
 Two distinct structures. Structure 1 (inner): what the sender signs with K_local — content_hash, sender_pubkey, conversation_id, last_seen_seq, timestamp. Structure 2 (outer): what the directory hashes into the Merkle tree — sequence_number, sender_pubkey, message_content_hash, sender_signature (Structure 1 embedded), prev_root (directory-appended). See Part 4 for full specification.
@@ -1233,10 +1231,8 @@ The directory's role is verify-then-relay-discard. It checks each submitted trus
 - server-infrastructure.md: "The directory must maintain a registry of authorized companion device public keys per agent."
 - Who performs the verification (client allowlist vs. directory registry) is contradicted. Decision required.
 
-**AC-C11: "Not Me" revocation from desktop tray — unhoused capability**
-- frontend.md Surface 4: Desktop app system tray includes "Not Me / Emergency" shortcut, routed through the companion connection.
-- agent-client.md Part 9: The companion device API exposes only `list_sessions()`, `fetch_session_content()`, and `send_human_injection()` — no revocation endpoint.
-- Emergency revocation from the desktop companion has no path in the companion API. Either the API needs a revocation endpoint, or the desktop tray routes via a different channel. Decision required.
+**AC-C11: "Not Me" revocation from desktop tray — deferred, not a current requirement**
+A desktop tray app is far-future scope. "Not Me" emergency revocation is handled exclusively via the mobile app or web portal. Designing a desktop tray protocol before a line of code exists is premature. This conflict is closed: no desktop tray revocation path is required in the current design. If a desktop companion app is built in the future, the revocation path will be designed then.
 
 ---
 
