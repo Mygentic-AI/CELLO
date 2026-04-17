@@ -52,9 +52,20 @@ The portal supports the following as optional, additive signals. None are regist
 - One device can register WebAuthn for many accounts; this is by design.
 - Required for: key rotation, phone number change, account deletion, fund withdrawal, adding/removing social verifiers.
 
-**TOTP 2FA**
-- Optional strengthening. Standard authenticator app enrollment.
-- Mechanics not fully specified in source documents — oracle pattern (verify → hash → return to client) assumed. **[GAP G-1]**
+**TOTP 2FA** — [GAP G-1 RESOLVED]
+- Standard RFC 6238 TOTP (30-second window, 1-step tolerance). Authenticator app enrollment via QR code.
+- Flow: portal generates TOTP secret → encodes as QR code → user scans → portal verifies 6-digit code → signal activated.
+- JSON record: standard portal-issued envelope used for all signal types:
+  ```json
+  {
+    "signal_class": "totp",
+    "verified_at": "<ISO8601>",
+    "verifier": "cello-portal-v1",
+    "payload": { "activated_at": "<ISO8601>" },
+    "portal_signature": "..."
+  }
+  ```
+- Portal signs the record, hashes it, writes hash to directory, returns signed JSON to client, discards TOTP secret. This envelope is the canonical schema for all portal-issued signal records.
 
 **LinkedIn, GitHub, Twitter/X, Facebook, Instagram (OAuth)**
 - For LinkedIn and GitHub: portal evaluates connection count, account age, activity (commits, stars, follower history) at OAuth time.
@@ -66,10 +77,13 @@ The portal supports the following as optional, additive signals. None are regist
   5. Return the original JSON to the client
   6. Discard the original — nothing is retained server-side
 - **Social account binding lock**: Once bound, a 12-month lockout applies to rebinding after unbinding. The directory enforces this via `social_binding_releases.rebinding_lockout_until`.
-- **Liveness probing**: Portal must periodically require fresh activity (new commit, new LinkedIn post) to maintain verification weight. Purchased dormant accounts must decay. Polling interval not specified. **[GAP G-2]**
+- **Liveness probing** — [GAP G-2 RESOLVED]: 60-day probe interval. On failure: mark signal `VERIFICATION_STALE` (grace period — account may be temporarily inaccessible). After 3 consecutive failed probes (180 days): mark `UNVERIFIED`, update hash in directory, notify agent. This prevents purchased dormant accounts from retaining full verification weight indefinitely while avoiding false revocations from transient API failures.
 
-**Email verification**
-- Named in design documents as a mandatory registration requirement alongside phone OTP, but the mechanics are never specified. Oracle pattern assumed. **[GAP G-3]**
+**Email verification** — [GAP G-3 RESOLVED]
+- 6-digit OTP delivered to the email address. 15-minute expiry. Max 3 attempts before requiring a new OTP. Rate-limited to 5 sends per hour per email address (prevents email bombing).
+- Oracle pattern applies: CELLO verifies ownership, stores hash, discards the email address.
+- JSON record payload: `{ "email_domain": "gmail.com" }` — domain only, never the full address. The full address never leaves the portal.
+- Serves dual purpose: standalone signal and correlation token between portal-first and bot-first registration paths.
 
 **Device attestation (TPM, Play Integrity, App Attest)**
 - NOT available from the web portal.
@@ -891,9 +905,9 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 
 | ID | Domain | Gap |
 |---|---|---|
-| G-1 | Portal | TOTP verification mechanics and JSON record schema not specified |
-| G-2 | Portal | Social verification liveness probing interval not specified |
-| G-3 | Portal | Email verification mechanics not specified (oracle pattern assumed) |
+| G-1 | Portal | ~~Resolved~~ — RFC 6238 TOTP (30-sec window, 1-step tolerance). QR code enrollment. Canonical portal-issued JSON record envelope established for all signal types: `signal_class`, `verified_at`, `verifier`, `payload`, `portal_signature`. Hash written to directory; signed JSON returned to client; secret discarded. |
+| G-2 | Portal | ~~Resolved~~ — 60-day liveness probe interval. Failure → `VERIFICATION_STALE`. 3 consecutive failures (180 days) → `UNVERIFIED`, hash updated in directory, agent notified. |
+| G-3 | Portal | ~~Resolved~~ — 6-digit OTP, 15-min expiry, 3 attempts, 5 sends/hour rate limit. Domain only in JSON record (never full address). Dual purpose: standalone signal + registration correlation token. |
 | G-4 | Portal | Portal-to-directory write API (endpoint, protocol, auth mechanism) not specified |
 | G-5 | Portal | Mechanism for delivering original JSON record to client not specified |
 | G-6 | Portal | Social proof freeze enforcement: portal check vs. directory check vs. both not specified |
