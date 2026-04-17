@@ -559,7 +559,7 @@ The client handles all branches of the delivery failure tree automatically, with
 | C: Message arrives, hash does not | Wait for grace period; query directory; accept provisionally if directory is down and message has embedded valid K_local signature. |
 | D: Neither arrives | Silent from receiver's perspective. Sender's delivery failure surfaces via `cello_send` return value. |
 
-**[GAP AC-9]**: Grace period values for delivery failure branches B and C are not specified. Whether they are configurable per conversation type or protocol-wide is not decided.
+**Delivery failure grace period (AC-9 resolved):** Grace periods for branches B and C are configurable via `cello_configure` (`delivery_grace_seconds`, default `600` — 10 minutes). The same value applies protocol-wide; per-conversation-type configuration is not supported in the current design.
 
 ---
 
@@ -680,9 +680,7 @@ The connection package that arrives at Bob contains: Alice's trust signal blobs 
 
 One negotiation round is permitted: the receiver can ask for one additional disclosure; the requester provides it or refuses; the receiver accepts or declines. No further rounds.
 
-The client enforces the mandatory vs. discretionary signal distinction. Mandatory signals must always be included in a connection request; their absence causes the request to be rejected at submission. Discretionary signals are owner's choice — the owner may withhold them while sharing only the count.
-
-**[GAP AC-11]**: The complete classification of all signal types as mandatory or discretionary has not been produced. This is a known open item (server infrastructure Gap G-15). The client cannot enforce the mandatory/discretionary split until the full classification exists. Additionally, what happens when a new mandatory signal is introduced and pre-existing agents lack it (grace period? grandfathering?) is unresolved.
+**Trust signal disclosure policy (AC-11 resolved):** No trust signals are mandatory in a connection request — there is no classification of signals as required vs. optional at the protocol level. The only data the directory holds authoritatively about an agent is track record stats (conversation history); everything else is voluntarily provided by the agent. An initiating agent is under no obligation to include any trust signals. Choosing not to include them increases the likelihood of being declined, but that is the agent's decision to make. The receiving agent's `SignalRequirementPolicy` determines what it accepts — if the requester doesn't meet the policy, the request is declined. The client enforces the policy at evaluation time, not at submission time.
 
 All trust data held in memory during relay is cleared after the accept/reject decision — never persisted to disk. The directory's persistent store holds only hashes.
 
@@ -751,7 +749,7 @@ Each social verification produces two independent hashes:
 
 This separation allows attribute-only disclosure. The client can present the data blob and its hash — "I have a LinkedIn account that is 8 years old with 4,000 followers" — without revealing which LinkedIn account it is. If the receiving agent's policy requires identity proof, the client additionally presents the account identifier and its hash. That reveal is the owner's choice, not a protocol default.
 
-The client enforces this distinction at connection time: for each signal, the owner's configured mandatory/discretionary flag (once fully specified — **[GAP AC-11]**) determines whether the account identifier is included automatically or withheld unless requested.
+The client enforces disclosure at connection time based on the owner's configured policy: for each signal, the owner's settings determine whether the account identifier is included automatically or withheld unless explicitly requested by the receiver. No signals are mandatory at the protocol level — inclusion is always the agent's choice.
 
 ### Pseudonym binding proof
 
@@ -991,7 +989,7 @@ The client maintains a notification queue. Events arrive from two sources:
 
 The agent polls this queue via `cello_poll_notifications`. Events are returned in receipt order. The agent acknowledges events by passing `ack_previous: true` on the next poll.
 
-**[GAP AC-16]**: Whether notifications must route through the directory or can go peer-to-peer is explicitly unresolved (server infrastructure Gap G-32). The client's notification delivery path — and therefore the latency and availability characteristics of notifications — depends on this decision.
+**Notification routing (AC-16 resolved):** Two delivery paths exist and are not mutually exclusive. System-generated notifications (directory events: connection requests, endorsements, anomaly alerts, key rotation nudges, tombstone events, etc.) are pushed by the directory to the client via the persistent authenticated WebSocket — this is the primary path for all protocol-level notifications. Client-generated notifications destined for the owner's mobile app are sent directly by the client to the companion device over the P2P companion connection — since the client can always reach its own owner's mobile app, this path is always available. The distinction: directory-sourced events come via WebSocket; owner-targeted events from the client go direct to companion.
 
 ### Notification type registry
 
@@ -1248,14 +1246,14 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-6 | Merkle | Session inactivity timeout value not specified |
 | AC-7 | Merkle | REOPEN semantics: new FROST ceremony required? Sequence numbers across seal boundary? Unilateral REOPEN permitted? |
 | AC-8 | Group rooms | Offline catch-up for group rooms not designed: client rejoining mid-conversation receives `current_message_count` but no replay mechanism |
-| AC-9 | Delivery | Grace period values for delivery failure Cases B and C not specified; whether configurable per conversation type or protocol-wide not decided |
+| AC-9 | Delivery | ~~Resolved~~ — `delivery_grace_seconds` default 600 (10 min), configurable via `cello_configure`. Protocol-wide; no per-conversation-type variation. |
 | AC-10 | Layer 5 | Runtime governance state persistence across restarts: in-memory counters reset on restart; upgrade path to Redis/DynamoDB not specified as a requirement |
-| AC-11 | Connection | Complete mandatory vs. discretionary signal classification not produced; versioning/grandfathering for new mandatory signals not designed |
+| AC-11 | Connection | ~~Resolved~~ — no signals are mandatory at protocol level. Initiating agent chooses what to include; omitting signals increases decline likelihood but is permitted. Receiving agent's policy enforced at evaluation time, not submission time. |
 | AC-12 | Endorsements | `cello_request_endorsement` and `cello_revoke_endorsement` MCP tools are missing from the tool surface; client logic for requesting and revoking endorsements not designed |
 | AC-13 | Companion | Companion device registration ceremony (how keypair is provisioned to client allowlist during app install) not fully specified |
 | AC-14 | Companion | Maximum number of companion devices per agent not specified |
 | AC-15 | Companion | Human injection delivery mechanism to agent input channel for Deployment Model A (direct MCP) not designed; `cello_receive` returns protocol messages, not owner-injected content |
-| AC-16 | Notifications | Whether notifications route through directory or can go peer-to-peer is explicitly unresolved |
+| AC-16 | Notifications | ~~Resolved~~ — directory-sourced events push via authenticated WebSocket; owner-targeted client notifications go direct to companion over P2P. Two paths, not mutually exclusive. |
 | AC-17 | Notifications | ~~Resolved~~ — response routes directly to client via channel's own reply mechanism: WhatsApp/Telegram bot reply handler, Slack webhook reply, CELLO mobile app over companion P2P. No home node intermediary. |
 | AC-18 | Status | `cello_status` does not distinguish between "directory temporarily unreachable" and "agent locked post-Not-Me revocation"; these are meaningfully different states |
 | AC-19 | Registration | Incubation period (7-day, 3 outbound connections/day for phone-only agents) not mentioned anywhere; client must track incubation state locally and enforce outbound rate limits |
