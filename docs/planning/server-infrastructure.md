@@ -629,7 +629,7 @@ All tables are append-only unless noted. Mutable tables are marked.
 | `identity_tree_leaves` | **mutable** (derived) |
 | `identity_tree_nodes` | **mutable** (derived) |
 
-**Financial schema** (bonds, stakes, payment method references): deferred. Schema skeleton needed before staking infrastructure is designed. **[GAP G-36]**
+**Financial schema** (bonds, stakes, payment method references): **[GAP G-36 — DEFERRED]**. Financial infrastructure involves regulatory compliance, custodian partnerships, security audits, and stablecoin integration — far beyond the current build scope. Launch proceeds without any financial infrastructure. Staking hooks exist architecturally (connection challenge mechanism, CLEAN/FLAGGED attestations as escrow triggers) but nothing is implemented. Financial infrastructure deserves its own design document(s) when the prerequisites (shallow wallets, custodian partnership, regulatory clarity) are in place.
 
 ---
 
@@ -647,7 +647,9 @@ See [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay 
 
 **Relay nodes must be operated by different entities from directory nodes.** This is a protocol constraint, not a preference. An operator controlling both could correlate ephemeral Peer IDs (seen at relay) against the directory signaling record (which maps Peer IDs to real agent identities). Separation requires compromising two independent systems to achieve correlation.
 
-**Governance model**: Three options identified (dedicated CELLO relay infrastructure, consortium operators under a separate relay agreement, or hybrid). The constraint is decided; the specific operating model is deferred. **[GAP G-37]**
+**Relay node authentication — [GAP G-37 partially resolved]**: Relay nodes have a registered public key in the directory, identical in model to directory node keys. When a relay connects to accept sessions, it signs its session acceptance with its private key; the directory verifies against the registered relay public key. At Alpha, CELLO registers its own relay node keys as a static permissioned list. At Consortium, relay operator onboarding includes registering their relay node public key — same mechanism as directory node onboarding.
+
+**Governance model**: Operator onboarding, contracts, and relay operator agreements are out-of-band business development concerns — not a current technical blocker. CELLO operates all relay nodes through Alpha. Consortium relay operators join under a separate relay agreement (lower barrier than directory operators — no key material, no audit requirements, but commits to: no traffic logging, no Peer ID correlation, libp2p circuit relay v2 with no time/data caps, DDoS mitigation at infrastructure level). Specific governance process deferred. **[GAP G-37 — operator governance deferred; authentication mechanism resolved]**
 
 ### What relay nodes see and don't see
 
@@ -922,8 +924,8 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-33 | Directory | Institutional verification process for elevated notification rate limits not specified |
 | G-34 | Directory | Alias creation rate limiting mechanism and thresholds not specified |
 | G-35 | Directory | Alias TTL mechanism: schema has EXPIRED state but no scheduled expiry job or TTL configuration defined |
-| G-36 | Directory | Financial schema (bonds, stakes, payment method references) deferred; skeleton needed |
-| G-37 | Relay | Relay node governance/operating model deferred |
+| G-36 | Directory | ~~Deferred~~ — Financial infrastructure (regulatory compliance, custodian partnerships, stablecoin integration) is out of scope for initial launch. Staking hooks exist architecturally but nothing implemented. Deserves its own design document when prerequisites are in place. |
+| G-37 | Relay | ~~Partially resolved~~ — Relay node authentication: registered public key in directory, same model as directory nodes; relay signs session acceptance, directory verifies. Operator governance/contracts deferred (business development, non-technical). CELLO operates all relay nodes through Alpha. |
 | G-38 | Relay | Group key management for encrypted relay fan-out (establishment, new-joiner distribution, departure revocation) explicitly unresolved |
 | G-39 | Cross | Succession package storage: which node type holds it, replication policy, at-rest protection not specified |
 | G-40 | Cross | Oracle evidence (GPS, photos, video) storage location, retention policy, and post-dispute disposition not specified |
