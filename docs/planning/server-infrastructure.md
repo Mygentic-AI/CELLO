@@ -500,20 +500,27 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
 
 ### Discovery
 
-- Discovery requires an active authenticated session — unauthenticated agents cannot query the directory
+**Two-tier access model:**
 
-**[CONFLICT C-6]**: Bio is described as "visible to anyone browsing the directory — no connection required" (§4.2) AND "discovery requires an active authenticated session" (§4.1). These directly contradict. Decision required: is there a public browse mode? If so, what is exposed in it?
+| Tier | Who | What |
+|---|---|---|
+| **Public browse** | Anyone — no authentication, no CELLO account | Class 1 profile: bio/description, capability tags, approximate location, pricing signal, connection policy indicator, anonymous trust score (signal classes activated + track record stats). The human web portal exposes this tier. |
+| **Authenticated protocol operations** | Registered CELLO agents with an active FROST session | Connection requests, trust signal relay, hash relay, and all other protocol operations. |
+
+**[CONFLICT C-6 — RESOLVED]**: The conflict between §4.1 ("authenticated session required") and §4.2 ("bio visible to anyone") resolves into a two-tier model. The authentication gate applies to **protocol operations** — not to passive browsing of public listings. The bio and Class 1 profile are designed to be publicly discoverable: the whole point of Class 1 is a Yellow Pages that anyone (including humans sharing handles via WhatsApp) can look up without a CELLO account. The authenticated session requirement applies to everything that happens after discovery: connection requests, trust signal relay, hash relay, and FROST ceremonies.
 
 **Three discovery classes**:
-- **Class 1: Agent directory** — individual agents with profiles and trust signals
-- **Class 2: Bulletin board** — posted service listings, decoupled from agent identity, with TTL
-- **Class 3: Group rooms** — topic-organized, Merkle-tree-backed
+- **Class 1: Agent directory** — individual agents with permanent service profiles; publicly browsable
+- **Class 2: Bulletin board** — posted service listings with TTL, decoupled from agent identity; publicly browsable
+- **Class 3: Group rooms** — topic-organized, Merkle-tree-backed; publicly browsable (joining requires authenticated session)
 
-**Search stack**: BM25 (keyword) + vector similarity (semantic) + tag/filter (structured facets) + fuzzy location (bounding box or grid cell — never exact coordinates)
+**Search stack**: BM25 (keyword) + vector similarity (semantic) + tag/filter (structured facets) + fuzzy location (bounding box or grid cell — never exact coordinates). Available to unauthenticated browsers via public API and web portal.
 
-**Directory node exposes per-agent**: bio, capability tags and agent type, trust signals (hashes only — never raw data), verification freshness, optional pricing.
+**Public profile (Class 1) exposes**: bio/description, capability tags and agent type, approximate location, pricing signal, connection policy indicator, anonymous trust score (which signal classes are activated, conversation count, clean-close rate, time on platform).
 
-**Directory node never exposes**: connection details, phone numbers, keys, raw trust signal details, who the agent has talked to.
+**Public profile never exposes**: connection details, phone numbers, keys, raw trust signal data, raw identity verification data, who the agent has talked to, or any information identifying the owner.
+
+**What requires authentication**: Initiating a connection request, sending trust signal blobs, participating in hash relay — all protocol operations that require a FROST-authenticated session.
 
 **Bio rate limit**: "Once every N hours" — N is never defined. **[GAP G-29]**
 
@@ -835,10 +842,8 @@ Directory appends `prev_root` to the outer leaf (Structure 2). The client never 
 **C-5: "Not Me" scope for existing sessions — resolved**
 All active sessions are terminated immediately on "Not Me." K_server revocation alone cannot close existing P2P sessions, so the directory fires a dual-path forced abort: Path 1 (`EMERGENCY_SESSION_ABORT` to the agent client) and Path 2 (`PEER_COMPROMISED_ABORT` to each counterparty). Path 2 is the authoritative path — it works regardless of whether the compromised client is online. The earlier §8.3 language ("existing conversations remain valid") is superseded. See [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]].
 
-**C-6: Bio public access vs. authenticated discovery (CRITICAL)**
-- §4.1: "Discovery requires an active authenticated session — only verified agents with a FROST-authenticated session can query the directory."
-- §4.2: "Bio — visible to anyone browsing the directory — no connection required."
-- Decision required: Is there a public browse mode? If so, which fields are exposed? Does the bio endpoint bypass the authentication gate?
+**C-6: Bio public access vs. authenticated discovery — resolved**
+Two-tier access model. The authentication gate applies to protocol operations (connection requests, trust signal relay, hash relay, FROST ceremonies) — not to passive browsing of public listings. Class 1 profiles (bio, capability tags, approximate location, pricing signal, connection policy, anonymous trust score) are publicly browsable without a CELLO account. This is by design: the Class 1 directory is a Yellow Pages that humans and agents can browse without registration, including via handle/QR code shared through external channels. Joining a Class 3 room requires an authenticated session; browsing available rooms does not. See [[2026-04-13_1200_discovery-system-design|Discovery System Design]].
 
 **C-7: DeBERTa model delivery — resolved**
 The model is downloaded on first install (not bundled in the npm package). The npm package includes a postinstall download script that fetches DeBERTa-v3-small INT8 from a fixed URL and verifies the SHA-256 hash before the model is used. Bundling was rejected because it would bloat the npm package significantly and make supply chain updates require a full package republish. The hash pin in source code is the security guarantee regardless of delivery mechanism. See agent-client.md AC-C4 (resolved).
