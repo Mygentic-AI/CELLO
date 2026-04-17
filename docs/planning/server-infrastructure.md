@@ -96,9 +96,9 @@ The portal supports the following as optional, additive signals. None are regist
 - **Trust signal record hashes only.** The portal writes `SHA-256(json_blob)` for each verification item and `SHA-256(account_identifier)` for social bindings.
 - **Never**: raw LinkedIn profiles, OAuth tokens, phone numbers, bios, WebAuthn credentials, or any other source data.
 
-The portal-to-directory write API (endpoint, protocol, authentication mechanism) is not specified anywhere. **[GAP G-4]**
+**Portal-to-directory write API — [GAP G-4 RESOLVED]**: HTTPS POST to a dedicated internal directory endpoint, not exposed on the public WebSocket port. The portal authenticates with its own registered keypair — same model as relay nodes. The portal signs each write request; the directory verifies the portal signature before writing. Payload: `{ agent_id, signal_class, signal_hash, account_identifier_hash (if social), portal_signature, timestamp }`.
 
-The mechanism by which the original JSON record is delivered to the client (returned in OAuth callback? pushed separately?) is also not specified. **[GAP G-5]**
+**JSON record delivery to client — [GAP G-5 RESOLVED]**: Encrypted async pickup queue. The agent client may not be running when the portal completes verification. The portal encrypts the JSON blob to the agent's `identity_key` public key (stable long-term root — not K_local, which can rotate), stores the ciphertext in a short-lived pickup queue (portal-side ephemeral storage, 30-day TTL), and triggers a `TRUST_SIGNAL_PICKUP_PENDING` notification to the agent via the directory WebSocket. The agent downloads the encrypted blob, decrypts with its identity_key, validates `SHA-256(decrypted_blob) == stored_hash`, stores the JSON locally, and sends ACK. Pickup queue entry deleted on ACK. The portal never holds plaintext after encryption. If TTL expires without ACK, the hash remains in the directory as an orphaned entry; the agent client detects orphaned hashes and surfaces a re-verify prompt to the owner. See [[2026-04-17_1000_trust-signal-pickup-queue|Trust Signal Pickup Queue — Async Oracle Handoff]].
 
 ### Key rotation and key operations
 
@@ -131,7 +131,7 @@ On any tombstone (VOLUNTARY, COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED, SU
 - Phone number flagged as "in recovery": cannot register a new account during freeze
 - 12-month rebinding lockout applies to all previously-bound social account identifiers
 
-**[GAP G-6]**: The mechanism for checking whether a social account is currently frozen at registration time — whether this check happens at the portal, the directory, or both — is not specified.
+**Social proof freeze enforcement — [GAP G-6 RESOLVED]**: Both layers enforce, with clear ownership. The **portal checks first** before initiating any OAuth flow — it queries the directory for `social_binding_releases.rebinding_lockout_until` and `social_proof_freezes` and rejects immediately if under lockout (fast, user-facing, prevents wasted OAuth round trips and clear error message to owner). The **directory enforces at hash submission time** — it rejects any write for a social binding that is under lockout, regardless of source. Portal-first prevents wasted work; directory-second ensures the constraint cannot be bypassed by calling the write API directly.
 
 ### Financial UI (later phase only)
 
@@ -908,9 +908,9 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-1 | Portal | ~~Resolved~~ — RFC 6238 TOTP (30-sec window, 1-step tolerance). QR code enrollment. Canonical portal-issued JSON record envelope established for all signal types: `signal_class`, `verified_at`, `verifier`, `payload`, `portal_signature`. Hash written to directory; signed JSON returned to client; secret discarded. |
 | G-2 | Portal | ~~Resolved~~ — 60-day liveness probe interval. Failure → `VERIFICATION_STALE`. 3 consecutive failures (180 days) → `UNVERIFIED`, hash updated in directory, agent notified. |
 | G-3 | Portal | ~~Resolved~~ — 6-digit OTP, 15-min expiry, 3 attempts, 5 sends/hour rate limit. Domain only in JSON record (never full address). Dual purpose: standalone signal + registration correlation token. |
-| G-4 | Portal | Portal-to-directory write API (endpoint, protocol, auth mechanism) not specified |
-| G-5 | Portal | Mechanism for delivering original JSON record to client not specified |
-| G-6 | Portal | Social proof freeze enforcement: portal check vs. directory check vs. both not specified |
+| G-4 | Portal | ~~Resolved~~ — HTTPS POST to internal directory endpoint (not public WebSocket port). Portal authenticates with registered keypair (same model as relay nodes). Payload: `agent_id, signal_class, signal_hash, account_identifier_hash, portal_signature, timestamp`. |
+| G-5 | Portal | ~~Resolved~~ — Encrypted async pickup queue. Portal encrypts JSON blob to agent's `identity_key` pubkey, stores ciphertext with 30-day TTL, triggers `TRUST_SIGNAL_PICKUP_PENDING` notification. Agent decrypts, validates hash, ACKs, queue entry deleted. Orphaned hashes (TTL expired) surface re-verify prompt. See [[2026-04-17_1000_trust-signal-pickup-queue\|Trust Signal Pickup Queue]]. |
+| G-6 | Portal | ~~Resolved~~ — Both layers enforce. Portal checks first (prevents wasted OAuth round trips, user-facing error). Directory enforces at hash submission time (cannot be bypassed via direct API call). |
 | G-7 | Portal | ~~Retired (home node dropped)~~ — jurisdiction is a signup portal deployment concern. PII lives only in the signup portal; directory nodes hold only hashes and are jurisdiction-neutral by construction. The signup portal must be deployed in the correct jurisdiction for each user base. |
 | G-8 | Directory/FROST | K_server rotation notification format, grace period, and epoch identifier format not specified |
 | G-9 | Directory/FROST | ~~Resolved~~ — Phase-appropriate FROST threshold over directory node operators. Alpha: 3-of-5 YubiKey PIV officers (CELLO staff). Consortium+: FROST threshold across node operators matching directory threshold (11-of-20). No separate officer class — operators are the signers. Node list public key is a constant in client source, verified at build time via Sigstore/OIDC. |
