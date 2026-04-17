@@ -196,7 +196,11 @@ The portal allows the owner to manage per-recipient greetings: contextual messag
 
 The portal must display:
 - The signup portal jurisdiction (the country in which their PII is stored — PII lives only in the signup portal, not in directory nodes)
-- A data classification view: which data lives in the signup portal vs. relay/directory vs. public ledger
+- A data classification view showing all three backend tiers:
+  - **Signup portal** — PII only (phone, WebAuthn credentials, OAuth tokens). Persistent. Full wipe on deletion.
+  - **Directory nodes** — public keys, trust signal hashes, K_server_X shares, identity tree, global MMR, sealed conversation roots. Persistent, federated across all nodes. Tombstone on deletion; hashes remain in append-only log.
+  - **Relay nodes** — ephemeral per-session Merkle state only. Destroyed after seal handoff to directory. No persistence beyond the active session; no PII, no key material.
+  - **Public ledger** — any data voluntarily committed to an on-chain record. Permanent; cannot be deleted.
 - A GDPR consent record: a log of what the owner has voluntarily published (bio, trust signals, public key registrations) with dates and a mechanism to review and withdraw
 
 The portal must provide a bio removal and trust-score erasure request UI. Deletion produces a tombstone entry — not a silent absence. The portal must display the tombstone state after deletion.
@@ -466,6 +470,7 @@ A chronological event stream showing all notification types from `cello_poll_not
 - Session-close attestation dispute notifications: a counterparty has filed a dispute against a session
 - Trust signal pickup pending: the agent has an encrypted trust signal blob awaiting retrieval; links to the relevant signal in the trust enrichment UI
 - Peer compromised abort (`PEER_COMPROMISED_ABORT`): a connected agent's owner has declared a compromise; the active session with that agent has been unilaterally sealed
+- Relay session reassigned: the relay node handling an active session failed; the directory has assigned a new relay and the session has resumed from the last confirmed sequence number
 
 The event stream is filterable by type. Each event links to its relevant context in the portal (a security block links to the session; an endorsement links to the endorser's trust profile).
 
@@ -554,7 +559,7 @@ The app receives push notifications for all anomaly events the directory has fla
 - `BURST_ACTIVITY` (warning)
 - `ATYPICAL_HOURS` (informational unless combined with other signals)
 - `WIDESPREAD_REJECTION_PATTERN` (warning)
-- `K_LOCAL_DEGRADED_MODE` (informational — directory unreachable; existing sessions continue)
+- `K_LOCAL_DEGRADED_MODE` (informational — directory unreachable; existing sessions continue because relay nodes handle active sessions independently; new session establishment is blocked)
 - `KEY_ROTATION_RECOMMENDED` (scheduled maintenance — directory nudging the agent to rotate K_local)
 - Tombstone notifications, trust event notifications, recovery event notifications (same as event stream)
 - Bond/escrow alerts: approaching lock expiry, stake slashing events (FLAGGED session close), oracle proof deadline reminders — at OS-alert level
@@ -645,7 +650,7 @@ No native device sacrifice is available. Server agents sit at the base trust lev
 The desktop app provides a management interface for the locally-running CELLO client:
 
 - **Start / stop / restart** the MCP server process
-- **View server status**: directory reachability, active P2P peers, active sessions, pending notifications, K_local_only mode — the same data returned by `cello_status`. The status must distinguish two qualitatively different states: "directory unreachable — existing sessions continue" vs. "agent locked — all sessions closed, re-keying required"
+- **View server status**: directory reachability, active P2P peers, active sessions, pending notifications, K_local_only mode — the same data returned by `cello_status`. The status must distinguish two qualitatively different states: "directory unreachable — relay nodes are handling active sessions; new sessions blocked" vs. "agent locked — all sessions closed, re-keying required"
 - **View server logs**: recent MCP server output for troubleshooting
 - **Update the server**: when a new CELLO client version is available, the desktop app handles the download, hash verification (SHA-256 pinned to the npm package signature), and process restart
 - **Configuration**: scan sensitivity, P2P bootstrap nodes, escalation channels, directory fallback behavior — a GUI layer over the settings that `cello_configure` manages programmatically
@@ -994,6 +999,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | ~~F-42~~ | Portal | ~~Closed~~ — FROST thresholds are: Alpha ~4-of-6; Consortium ~11-of-20; Public rotating ~5-of-7; minimum at any phase 3-of-5 across different jurisdictions/cloud providers. Portal must use these values, not 2-of-3. |
 | F-43 | Mobile / Desktop | Companion device registration flow not fully specified: how the companion device public key is provisioned to the CELLO client's allowlist during app install; whether this uses the same path as device attestation or a separate ceremony |
 | F-44 | Mobile | libp2p implementation technology for the mobile app constrained by the same decision as F-14; `go-libp2p` via `gomobile` is the most battle-tested path; native app requirement from App Attest simplifies libp2p integration |
+| F-45 | Dashboard | Relay failure recovery is not surfaced as a user-visible event. When a relay node fails mid-session the directory reassigns the session to a new relay; the portal/app should show a `RELAY_SESSION_REASSIGNED` system event in the activity log so the owner can see that a disruption occurred and was recovered. The notification type and payload are not yet specified. |
 
 ---
 
@@ -1027,3 +1033,4 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 - [[agent-client|CELLO Agent Client Requirements]] — the locally-running client that the frontend surfaces manage; the portal and apps are the human-owner layer; the client is the protocol layer they interact with via the companion device API and MCP tool surface
 - [[2026-04-17_1000_trust-signal-pickup-queue|Trust Signal Pickup Queue]] — designs the async oracle handoff: encrypted pickup queue using identity_key, TRUST_SIGNAL_PICKUP_PENDING notification type, three-state trust signal UI (active / pending delivery / expired)
 - [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination]] — resolves FC-4; dual-path forced abort mechanism (EMERGENCY_SESSION_ABORT to agent client, PEER_COMPROMISED_ABORT to counterparties) that closes existing P2P sessions K_server revocation cannot reach
+- [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]] — relay nodes as session-level Merkle engines; directory dormant during active sessions; relay failure recovery flow; data classification split between signup portal / directory / relay
