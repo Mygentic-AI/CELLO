@@ -1008,6 +1008,7 @@ The client implements the complete notification type registry. Types are enumera
 | `security_block` | Client (Layer 1) | Layer 1 fired on a received message |
 | `system` | Directory / client | Directory reachability change, K_local degraded mode entry/exit, key rotation nudge |
 | `tombstone` | Directory | A connected identity has been tombstoned |
+| `peer_compromised_abort` | Directory | A peer agent has declared "Not Me" — directory instructs client to seal the session unilaterally immediately. Payload: `{ compromised_agent_id, tombstone_id, notified_at }`. Client seals regardless of whether an ABORT leaf arrives from the compromised side. |
 | `trust_event` | Directory | A connected agent's trust status has changed |
 | `recovery_event` | Directory | A recovered identity is re-entering the network |
 | `session_close_attestation_dispute` | Directory | A counterparty has filed a dispute against a session |
@@ -1155,10 +1156,15 @@ The following names are canonical and supersede inconsistencies in earlier docum
 1. Directory detects anomaly (e.g., FROST session establishment failure from unexpected source)
 2. Directory fires `FALLBACK_CANARY` anomaly event; pushes push notification to owner's WhatsApp/Telegram
 3. Owner taps "Not Me" in mobile app or portal
-4. Mobile app sends revocation request to home node; K_server_X shares immediately burned
-5. All active sessions receive SEAL-UNILATERAL immediately with tombstone reason code — no active session continues after "Not Me". No new FROST sessions possible — all new connection requests rejected.
-6. Owner authenticates with WebAuthn at portal; generates new K_local; new K_server_X ceremony
-7. New keys published; connected agents receive key refresh notification
+4. Mobile app sends revocation request to home node; K_server_X shares immediately burned; `COMPROMISE_INITIATED` tombstone filed
+5. **All active sessions are terminated immediately via two parallel abort paths:**
+   - **Path 1 — cooperative (directory → compromised client):** Directory sends `EMERGENCY_SESSION_ABORT` control message to the client's existing authenticated WebSocket. Client sends a signed ABORT control leaf (`COMPROMISE_INITIATED` reason code) to each active counterparty via existing P2P channels, then disconnects all sessions and drops its own WebSocket. This is the clean path — both parties get a signed, reason-coded close in their Merkle trees.
+   - **Path 2 — non-cooperative (directory → each counterparty):** Simultaneously, the directory sends a `PEER_COMPROMISED_ABORT` notification directly to every counterparty's authenticated WebSocket. Each counterparty client seals unilaterally on receipt, regardless of whether an ABORT leaf arrives from the compromised side. This path executes regardless of the state of the compromised client — it works even if the client is offline, crashed, or actively controlled by the attacker. **Path 2 is the more important path.** Path 1 is an optimisation that produces a cleaner Merkle record when available.
+6. No new FROST sessions possible — all new connection requests rejected
+7. Owner authenticates with WebAuthn at portal; generates new K_local; new K_server_X ceremony
+8. New keys published; connected agents receive key refresh notification
+
+**Client handling of `EMERGENCY_SESSION_ABORT`:** The client must treat this as the highest-priority control message. On receipt: (1) send signed ABORT control leaf with `COMPROMISE_INITIATED` reason code to each active counterparty via P2P; (2) disconnect all P2P sessions; (3) drop the WebSocket connection to the directory. No user confirmation required — the owner already confirmed "Not Me" at step 3.
 
 ### Companion device connection
 
@@ -1345,9 +1351,11 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 - [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — three-class discovery; `cello_search`, `cello_create_listing`, `cello_create_room`
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — notification primitive; type registry
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — compromise detection, "Not Me" flow, social recovery
+- [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]] — dual-path abort mechanism: EMERGENCY_SESSION_ABORT (directory→client) and PEER_COMPROMISED_ABORT (directory→counterparties); operationalises AC-C6
 - [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession and Ownership Transfer]] — succession package creation and voluntary transfer; client encrypts the succession package client-side
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — anti-Sybil architecture; the client's trust signal handling must be consistent with these defenses
 - [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]] — confirms the signal-based trust model: `cello_verify` returns `SignalResult[]` not a score; TrustRank and Trust Seeders are removed from the protocol
 - [[open-decisions|Open Decisions]] — 12 resolved cryptographic and protocol decisions the client implements
 - [[server-infrastructure|CELLO Server Infrastructure Requirements]] — the server-side counterpart; shared conflicts and gaps are cross-referenced throughout this document
 - [[frontend|CELLO Frontend Requirements]] — the human-owner surfaces; the portal and mobile/desktop apps are the client's counterparts for identity management and companion device content viewing
+- [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]] — resolves AC-C6; the client must handle EMERGENCY_SESSION_ABORT (abort all sessions, send ABORT leaves, disconnect) and fire SEAL-UNILATERAL for the non-cooperative path
