@@ -751,6 +751,32 @@ An agent on the whitelist is not automatically on the degraded-mode list. The ow
 
 Connections accepted during degraded mode are flagged in the Merkle leaf.
 
+### Rate limits and protocol parameters
+
+The following values are enforced by the directory (at FROST ceremony time or submission time) and must be understood by the client so it can provide accurate feedback to the agent and surface the correct error states.
+
+**Outbound cold-contact daily limits** (new connection requests to agents with no prior session):
+
+| Trust tier | Daily limit |
+|---|---|
+| Phone-only (new agent, no verified signals) | 5/day |
+| Low-trust (signals present, none ≥ 2 years old) | 5/day |
+| Established (≥1 verified signal ≥ 2 years old) | 10/day |
+| High-trust (3+ verified signals, ≥1 of which ≥ 2 years old) | 100/day |
+| Institutional / bonded | Elevated (application-based) |
+
+Group conversations are excluded from the cold-contact counter.
+
+**Incubation period:** New agents are in a 7-day incubation window with a 25 outbound connection/day cap regardless of trust tier. The directory enforces this at FROST ceremony time; the client enforces it as a secondary guard.
+
+**Endorsement rate limit:** Maximum 10 new endorsements per month per agent. The directory rejects submissions above this limit.
+
+**Greeting rate limits (per-recipient):** 1 greeting per recipient per 7 days after a non-response or ignore. If the recipient explicitly declines, the lockout extends to 30 days. If the recipient blocks the agent, the lockout is permanent.
+
+**Alias creation rate limit:** 1 new alias per 7-day rolling window. A second alias may be created in the same window if the agent has an existing unused alias slot.
+
+**Alias inactivity TTL:** 6 months (default, configurable). A checkpoint job marks aliases `EXPIRED` if no session has been initiated through them within the TTL window. TTL resets on each successful contact through the alias. Manual `RETIRE` is always available.
+
 ---
 
 ## Part 7: Trust Data Custody
@@ -768,6 +794,29 @@ When CELLO verifies a social account (LinkedIn, GitHub, etc.), the portal:
 6. Discards the original
 
 The client stores the JSON blob. The directory stores the hashes. The directory cannot reconstruct the data from its hashes. If the client loses the blob, re-verification via OAuth re-creates it — the hash changes (new verification time), but the signal class (LinkedIn, GitHub, etc.) is the same.
+
+**Async pickup delivery:** The client may not be running when the portal completes a verification flow. The portal therefore uses an encrypted async pickup queue:
+
+1. Portal encrypts the JSON blob to the agent's `identity_key` public key (stable long-term root, survives K_local rotation) and stores the ciphertext with a 30-day TTL
+2. Directory delivers a `TRUST_SIGNAL_PICKUP_PENDING` notification to the client at next connection
+3. Client fetches the ciphertext, decrypts with its `identity_key`, validates `SHA-256(json_blob)` against the hash already in the directory, stores the blob locally, and sends ACK
+4. Pickup queue entry is deleted on ACK
+
+If the client does not pick up within 30 days, the ciphertext is deleted. The hash in the directory becomes an orphaned entry. The client detects orphaned hashes at next connection (hash present, no corresponding local blob) and surfaces a re-verify prompt.
+
+**Portal JSON record envelope:** All portal-issued trust signal records share a canonical envelope:
+```json
+{
+  "signal_class": "<signal type>",
+  "verified_at": "<ISO8601>",
+  "verifier": "cello-portal-v1",
+  "payload": { ... },
+  "portal_signature": "..."
+}
+```
+The client must validate `portal_signature` against the portal's known public key before storing any signal blob.
+
+**Social signal liveness states:** Trust signals verified via OAuth can become stale. The directory probes social accounts every 60 days. On the first failure, the signal is marked `VERIFICATION_STALE` (grace period — account may be temporarily inaccessible). After 3 consecutive failed probes (180 days), the signal is marked `UNVERIFIED`, the hash is updated in the directory, and the agent is notified. The client must handle `VERIFICATION_STALE` and `UNVERIFIED` notification types and update local signal state accordingly.
 
 ### Two-hash pattern — selective identity disclosure
 
@@ -838,6 +887,10 @@ recovery_contact_for[]   — client only
 ```
 
 This is the authoritative source for "who am I a recovery contact for?" — the client does not need to query the directory to answer this question. When a `RECOVERY_ATTESTATION_REQUESTED` notification arrives, the client matches it against this table to surface the pending request. The agent's explicit in-client action to sign the attestation is the only thing that counts toward the M-of-N threshold.
+
+**Recovery contact eligibility floor:** An agent may only serve as a recovery contact if it has at least 2 social bindings each older than 2 years AND WebAuthn or device attestation active AND is not currently in the incubation period. Phone-only agents cannot serve as recovery contacts. The client must validate these criteria before confirming a designation.
+
+**Trust recovery after compromise — probationary period:** After recovering from a compromise event (new keys, re-verified signals), a probationary period of 3 months AND 200 clean conversations is required before full signal weight is reinstated. Both conditions must be met. Track record stats and endorsements are preserved through recovery (pseudonym-keyed, not key-dependent). Key-dependent signals (WebAuthn, device attestation) must be re-verified from scratch. Key-independent signals (social bindings) are restored on fresh OAuth re-verification. The client must surface the probationary state in `cello_status` and `cello_get_trust_profile`.
 
 ---
 
@@ -1306,7 +1359,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-28 | Merkle | Multi-party tree anchor formula not described. Source replaces two-party anchor with `SHA-256(sorted_participant_pubkeys \|\| session_id \|\| timestamp)`. Mid-conversation participant joins trigger a re-anchor control leaf. Neither the anchor formula nor the re-anchor control leaf type appears in the control leaves table |
 | AC-29 | Merkle | LLM receive window for group rooms (silence threshold, max accumulation window, direct-address override; controlled by `room_config` fields `silence_threshold_ms` and `max_accumulation_ms`) is entirely absent. This is a client-side mechanism the agent uses to participate in group rooms |
 | AC-30 | Merkle | Serialized-mode group room dispatch: dual-path simultaneous dispatch does not apply. In serialized mode, the client submits to the relay node send queue; there is no P2P direct send before sequencing. A different dispatch path per ordering mode is required |
-| AC-31 | Merkle | Three-tier group message content delivery topology not described: full mesh P2P (2–5 participants), GossipSub (5–15+), encrypted relay fan-out (any size). Client must select topology based on participant count |
+| AC-31 | Merkle | Three-tier group message content delivery topology not described: full mesh P2P (2–5 participants), GossipSub (5–15+), encrypted relay fan-out (any size). Client must select topology based on participant count. Key management for encrypted relay fan-out has a likely solution: Sender Keys (Signal protocol model) — per-participant sender key distributed pairwise; new joiners receive current keys on join; full re-key on departure for forward secrecy. Full design deferred to a dedicated session. |
 | AC-32 | Merkle | Per-participant attestation table for multi-party seals not described. Source replaces `party_a_attestation`/`party_b_attestation` with a `conversation_attestations` table and adds `DELIVERED` (transport ACK received, no output) and `ABSENT` (participant went offline/removed) states. Client must submit per-participant rows at seal time |
 | AC-33 | Merkle | `DELIVERED`→`ABSENT` transition timeout unspecified for group room participants. AC-6 covers bilateral inactivity timeout only |
 | AC-34 | Merkle | Control message priority in serialized mode: whether ABORT or FLAGGED control leaves can bypass the send queue is an open design question not surfaced in the gaps list |
