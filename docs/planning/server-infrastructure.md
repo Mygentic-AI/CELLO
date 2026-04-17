@@ -182,6 +182,14 @@ Minimum threshold at any phase: 3-of-5 across different jurisdictions and cloud 
 - Each ceremony output must include a K_server version/epoch identifier. Verifiers must reject signatures from expired epochs after a grace window. Grace period duration and hard cutoff not specified. **[GAP G-8]**
 - When a K_server rotation boundary coincides with an in-flight FROST ceremony, that ceremony must abort and retry with new shares.
 
+**FROST ceremony coordinator and abort/retry — [GAP G-12 RESOLVED for FROST ceremonies]**: The initiating agent client is the FROST coordinator. It has the authenticated WebSocket to the directory and the strongest incentive to drive the ceremony to completion. No directory node is designated coordinator — that would be a single point of failure inside the ceremony itself.
+
+- **Round timeout**: 3 seconds per round. Gives 15× the worst-case RTT at Alpha (North America ↔ Asia ~200ms). A node that does not respond within 3 seconds is treated as absent for this ceremony.
+- **On timeout**: abort the ceremony, exclude non-responding nodes from the participant set, select a fresh set of t participants from the remaining pool, retry.
+- **Max retries**: 3 attempts with different participant sets. After 3 failures, surface a clear error to the agent: the problem is systemic, not transient.
+- **Below-threshold failure**: If fewer than t directory nodes are reachable at all, fail immediately with `DIRECTORY_BELOW_THRESHOLD` — do not attempt and hang. The client surfaces this to the agent owner.
+- **Split-brain / duplicate promotion**: Not applicable to FROST ceremonies — there is no "primary" directory node for signing purposes. Any t-of-n nodes can participate; the client selects the set.
+
 **K_server rotation (directory-only operation)**
 - No agent involvement. The directory rotates K_server_X internally when shares are suspected compromised.
 - The directory generates new shares, publishes new derived public keys, marks old public keys expired with timestamp, and notifies all agents that cached old keys.
@@ -193,7 +201,13 @@ Minimum threshold at any phase: 3-of-5 across different jurisdictions and cloud 
 
 **K_server rotation notification format**: The exact format, grace period, and epoch identifier format are unspecified. **[GAP G-8]**
 
-**Node signing keys**: Who holds the consortium node signing keys, how they are protected, and what key ceremony establishes them is flagged as a high-severity gap (equivalent to "keys to the kingdom"). Standard AWS KMS is insufficient because the cloud provider has physical access. **[GAP G-9]**
+**Node signing keys — [GAP G-9 RESOLVED]**: The node list signing key uses FROST threshold signing, reusing the same infrastructure as K_server_X. No separate officer class is introduced — the directory node operators are the signers. Phase model:
+
+- **Alpha**: 3-of-5 CELLO staff officers, each holding a YubiKey PIV hardware token. Updating the node list requires 3 officers to independently co-sign the new manifest. AWS KMS is explicitly insufficient — cloud provider physical access makes it inappropriate for a root trust key. The ceremony is documented and produces an auditable record.
+- **Consortium+**: Transition to a FROST threshold across consortium node operators. Each operator's FROST share of the node list signing key is part of the onboarding ceremony when joining the consortium. Updating the node list requires t-of-n operators to co-sign — matching the directory node threshold (11-of-20 at Consortium phase). A rogue CELLO employee cannot update the node list unilaterally; it requires a threshold of independent operators.
+- **Public**: Same model; threshold rises with the operator pool.
+
+The node list public key is a constant in client source code (verified at build time via Sigstore/OIDC provenance). The client verifies every node list manifest against this key before trusting any node.
 
 ### Authentication
 
@@ -864,10 +878,10 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-6 | Portal | Social proof freeze enforcement: portal check vs. directory check vs. both not specified |
 | G-7 | Portal | ~~Retired (home node dropped)~~ — jurisdiction is a signup portal deployment concern. PII lives only in the signup portal; directory nodes hold only hashes and are jurisdiction-neutral by construction. The signup portal must be deployed in the correct jurisdiction for each user base. |
 | G-8 | Directory/FROST | K_server rotation notification format, grace period, and epoch identifier format not specified |
-| G-9 | Directory/FROST | Node list signing key ceremony and protection model not specified (flagged high severity) |
+| G-9 | Directory/FROST | ~~Resolved~~ — Phase-appropriate FROST threshold over directory node operators. Alpha: 3-of-5 YubiKey PIV officers (CELLO staff). Consortium+: FROST threshold across node operators matching directory threshold (11-of-20). No separate officer class — operators are the signers. Node list public key is a constant in client source, verified at build time via Sigstore/OIDC. |
 | G-10 | Directory | Timestamp skew check acceptable window not specified |
 | G-11 | Directory | Checkpoint interval not specified |
-| G-12 | Directory | Backup node promotion mechanism (election protocol, fencing token, split-brain prevention) not specified |
+| G-12 | Directory | ~~Resolved~~ — Most of this dissolves under the relay architecture (relay failure recovery is handled by directory reassignment; directory nodes are peers with no per-session primary). Residual question (FROST ceremony abort/retry) resolved: client is coordinator; 3-second round timeout; exclude non-responders, retry with fresh t-of-n set; max 3 retries; fail with `DIRECTORY_BELOW_THRESHOLD` if fewer than t nodes reachable. |
 | G-13 | Directory | Session timeout value (N in "no messages for N minutes") not specified |
 | G-14 | Directory | REOPEN semantics: new FROST ceremony required? Sequence number handling across seal boundary? Unilateral REOPEN permitted? |
 | G-15 | Directory | ~~Retired~~ — signals divide by ownership: directory-owned behavioral signals (track record, connection history, anomaly flags) are appended automatically by the directory; client-owned identity signals (social proofs, WebAuthn, device attestation, endorsements) are discretionary disclosures. No mandatory-signal registry; no rejection at submission. Enforcement is the receiving client's `SignalRequirementPolicy`. |
