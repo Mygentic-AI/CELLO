@@ -18,8 +18,8 @@ The three server-side components are:
 | Component | Role | Who operates it |
 |---|---|---|
 | **Signup Web Portal** | Human-facing identity verification | CELLO (centralized) |
-| **Directory Nodes** | Session setup, FROST co-signing, Merkle trees, connection brokering | CELLO + consortium operators |
-| **Relay Nodes** | Circuit relay for established P2P sessions | Separate from directory operators (required) |
+| **Directory Nodes** | Session setup, FROST co-signing (establishment + seal), identity Merkle tree, connection brokering, relay failure recovery | CELLO + consortium operators |
+| **Relay Nodes** | Circuit relay + hash relay + sequence numbering + per-conversation Merkle tree building during active sessions | Separate from directory operators (required) |
 
 ---
 
@@ -155,7 +155,7 @@ The original design described a "home node" — a per-agent directory node stori
 
 Connection nodes are the only directory sub-type. They are public-facing and handle authentication, FROST ceremonies, connection setup, registration, and key operations. There is no "home node" sub-type.
 
-**[CONFLICT C-2 — partially resolved]**: Which component handles the FROST seal ceremony? Session seals occur on established sessions (which may be on relay nodes), but seals require FROST, which is a directory node operation. Options: (1) The originating connection node handles the seal ceremony regardless of where the session lives; (2) The directory node closest to the sealing agent handles it. A decision is required, but the answer is clearly a directory node — not a relay node.
+**[CONFLICT C-2 — RESOLVED]**: The FROST seal ceremony always runs on directory nodes. Relay nodes never hold K_server_X shares, so FROST cannot happen on relay nodes. At seal time, the relay hands the complete leaf sequence and final Merkle root to the directory. The directory independently verifies the tree from scratch (recomputes from the full leaf sequence — does not trust the relay's root), then runs the FROST ceremony co-signing the verified final root. Any t-of-n directory nodes can perform the ceremony. See [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]].
 
 ### FROST and key management
 
@@ -260,13 +260,12 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 
 **Critical**: Elastic IPs must never lapse in payment. A released Elastic IP acquired by another party would receive all bootstrap attempts from clients unable to reach levels 1 or 2.
 
-### Hash relay and Merkle tree operations
+### Merkle tree operations
 
-**Hash relay**:
-- Directory receives only SHA-256 hashes (32 bytes), never message content
-- Two-path architecture: hash → directory WebSocket (for notarization), message content → direct P2P channel
-- Directory relays hash + canonical sequence number to counterparty via their persistent WebSocket
-- Directory is a passive notary during conversations; it does not block message delivery
+**Directory Merkle responsibilities** (boundary operations only):
+- Directory handles the **identity Merkle tree** (agent registrations, key updates, trust signal hashes) and the **global MMR** (sealed conversation roots)
+- Directory does NOT handle per-conversation hash relay or sequence numbering during active sessions — that is relay node territory
+- At seal time: relay hands the complete leaf sequence to the directory; directory recomputes the tree from scratch, verifies the chain, then runs the FROST seal ceremony
 
 **Message Merkle tree**:
 - Two separate Merkle trees: Identity tree (checkpointed periodically) and Message tree (per-conversation hash chains, updated per message)
@@ -276,9 +275,9 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 
 **Two-structure leaf format** (N-party canonical form; two-party is a special case):
 - **Structure 1 (inner, sender-signed)**: `content_hash || sender_pubkey || conversation_id || last_seen_seq || timestamp` — signed by sender with K_local
-- **Structure 2 (outer, directory-constructed)**: `sequence_number || sender_pubkey || message_content_hash || sender_signature (Structure 1 embedded) || prev_root` — the directory embeds Structure 1's signature, appends `prev_root` and the canonical sequence number, then hashes into the Merkle tree. The client never computes `prev_root`.
+- **Structure 2 (outer, relay-constructed)**: `sequence_number || sender_pubkey || message_content_hash || sender_signature (Structure 1 embedded) || prev_root` — the relay node embeds Structure 1's signature, appends `prev_root` and the canonical sequence number, then hashes into the Merkle tree. The client never computes `prev_root`.
 
-**[CONFLICT C-4 — RESOLVED]**: The two-structure model (2026-04-13 multi-party design) is canonical. The 2026-04-15 session-level FROST signing description of sender-computed `prev_root` is superseded — it was written for the two-party case and does not account for multi-party, where the directory is the only entity with canonical sequence across all senders. See agent-client.md AC-C2, AC-C7 (resolved).
+**[CONFLICT C-4 — RESOLVED]**: The two-structure model (2026-04-13 multi-party design) is canonical. The 2026-04-15 session-level FROST signing description of sender-computed `prev_root` is superseded — it was written for the two-party case and does not account for multi-party, where the relay node is the only entity with canonical sequence across all senders during an active session. See agent-client.md AC-C2, AC-C7 (resolved).
 
 **Conversation anchor (N-party)**: `SHA-256(sorted_participant_pubkeys || session_id || timestamp)` — sorting makes it deterministic regardless of join order.
 
@@ -600,9 +599,11 @@ All tables are append-only unless noted. Mutable tables are marked.
 
 ### What they are
 
-Relay nodes serve established P2P sessions only. They exist to:
+Relay nodes are **session-level Merkle engines**. They are the primary real-time infrastructure during active conversations. They exist to:
 1. Provide circuit relay for the ~20–30% of sessions that cannot hole-punch through symmetric NAT
-2. Take load off directory nodes during active conversations (hash relay, fan-out for group rooms)
+2. Handle hash relay, canonical sequence numbering, and per-conversation Merkle tree building for all sessions
+
+See [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]] for the full rationale and security analysis.
 
 ### Operator model (required separation)
 
@@ -612,8 +613,9 @@ Relay nodes serve established P2P sessions only. They exist to:
 
 ### What relay nodes see and don't see
 
-- Relay nodes see: ephemeral libp2p Peer IDs, encrypted traffic, and (for hash relay) signed SHA-256 hashes
-- Relay nodes never see: message content, agent real identities, phone numbers, or key material
+- Relay nodes see: ephemeral libp2p Peer IDs, agents' public keys (read-only, received from directory at session assignment), signed SHA-256 hashes, encrypted traffic, per-session ephemeral Merkle state
+- Relay nodes never see: message content, agent real identities, phone numbers, K_server_X shares, or any persistent identity data
+- Relay nodes hold NO persistent state — per-session Merkle state is destroyed after the seal handoff to the directory
 - Hashes are non-reversible and non-revealing — relay nodes can be placed in any jurisdiction without data residency constraints
 
 ### P2P connection relay
@@ -622,15 +624,50 @@ Relay nodes serve established P2P sessions only. They exist to:
 - Both A and B connect outbound to the relay node; the relay bridges the two outbound connections. Neither side needs to accept an inbound connection. Resolves symmetric NAT failure cases.
 - **WebSocket fallback**: For corporate firewalls that block all non-443 traffic, libp2p WebSocket transport tunnels the P2P connection over TLS on port 443. Indistinguishable from HTTPS. Still E2E encrypted, never touches directory for content.
 - **Signaling**: Peer ID exchange happens via the directory's WebSocket (directory receives ephemeral Peer IDs, forwards them, discards both — not stored). This is a one-time exchange; relay node is then contacted directly.
+- **libp2p circuit relay v2 configuration**: Relay nodes must be configured with no time limit on reservations and no data cap (or cap far above any realistic session). The default 2-minute / 128 KiB reservation limits assume a short stepping-stone usage; CELLO relay nodes support conversations that last hours or days.
+
+### Session assignment and handoff authentication
+
+- At session establishment, the directory signs the session assignment (session ID, both agents' public keys, genesis `prev_root`) with its consortium key
+- The relay verifies the directory's signature before accepting the session
+- Agents independently verify sender signatures against public keys confirmed via Merkle inclusion proof during connection request — through a completely separate channel
+- This is defence in depth: authenticated directory-to-relay channel, plus agents independently verify sender identity
 
 ### Hash relay during established sessions
 
-- Relay nodes receive signed hash payloads from the sending agent and forward to the receiving agent
-- The sender's signature travels intact — relay node does not re-sign
-- Receivers verify the sender's signature directly against the sender's public key (do not trust the relay node's version)
-- Relay nodes do not assign sequence numbers (that is a directory connection node function)
+- Relay node receives signed hash (Structure 1) from the sending agent
+- Relay verifies the sender's signature against the sender's public key
+- Relay assigns the canonical sequence number and constructs Structure 2 (outer leaf): `sequence_number || sender_pubkey || message_content_hash || sender_signature (Structure 1 embedded) || prev_root`
+- Relay relays Structure 2 to the counterparty
+- Receivers verify the sender's K_local signature directly — they do not trust the relay's version
+- **Adversarial sequencing defence**: each sender includes `last_seen_seq` in Structure 1, creating a causal chain. If Alice's message says "I've seen up to seq 5," the relay cannot place that message before seq 5 without the inconsistency being provable. The directory verifies causal consistency at seal time.
 - Relay nodes do not participate in FROST ceremonies
 - Relay nodes do not hold K_server_X shares or any key material
+
+### Relay failure recovery
+
+If a relay node goes down mid-session:
+1. Both agents detect the relay is gone (connection drops)
+2. Both agents still hold their local Merkle tree copies with all leaves and the last confirmed sequence number
+3. Both agents have a persistent WebSocket to the directory (dormant but open)
+4. Either agent signals the directory: "relay X is down, session Y needs reassignment"
+5. Directory assigns a new relay, hands it the session ID, public keys, and the last confirmed sequence number (reported by both agents — must agree)
+6. New relay picks up sequencing from the confirmed point; agents resume
+
+For sessions with a direct P2P connection (~70–80%): messages continue flowing via P2P during relay failure. Only hash relay is interrupted. Agents queue hashes locally and submit to the new relay on reassignment. No messages lost.
+
+For NAT-failed sessions (~20–30% using circuit relay): both message and hash paths are interrupted. Messages queue on sender until new relay is up. The `delivery_grace_seconds` window (default 600) accommodates this.
+
+### Seal handoff
+
+At seal time, the relay's role is:
+1. Record the CLOSE and CLOSE-ACK control leaves
+2. Hand the complete leaf sequence and the session's final Merkle root to the directory
+3. Directory recomputes the tree from scratch — it does not trust the relay's root
+4. Directory runs the FROST seal ceremony
+5. Sealed root enters the global MMR
+
+Relay's per-session state is destroyed after the handoff.
 
 ### Group room fan-out
 
@@ -647,9 +684,10 @@ Relay nodes serve established P2P sessions only. They exist to:
 ### Degraded mode behavior
 
 When relay nodes are unavailable:
-- Existing sessions continue with K_local per-message signing (bilateral seal available immediately)
-- The notarized FROST seal is deferred until the relay/directory returns
-- The bilateral seal is available immediately; the notarized seal requires directory involvement
+- Agents with direct P2P connections continue sending messages; hash relay is interrupted
+- Agents queue hashes locally; hash relay resumes after relay recovery or reassignment
+- Bilateral seal is available immediately (no relay or directory needed)
+- The notarized FROST seal is deferred until relay/directory returns
 
 ### Companion device relay
 
@@ -685,30 +723,34 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 3. Agent A calls `cello_initiate_connection` — client bundles A's trust signal blobs with the request; directory checks blobs against held hashes (fraud filter), appends track record stats from its authoritative store, forwards package to Agent B, discards blobs
 4. Agent B's client performs independent verification (Merkle inclusion proof for identity, Alice's own signatures for trust blobs) and evaluates against its `SignalRequirementPolicy`
 5. If accepted: FROST co-signing ceremony (session establishment) — requires t-of-n directory nodes
-6. Agent selects 2–3 lowest-latency backup nodes; fires initial hash to primary + backups simultaneously
-7. Directory performs ephemeral libp2p Peer ID exchange on behalf of both agents
-8. For sessions needing relay: agents use Peer IDs to connect to relay node; relay bridges the connection
-9. For ~70–80% of sessions: direct hole-punch succeeds; relay node not needed
-10. Hash relay begins: agent sends hash → directory WebSocket → directory assigns seq# → relays to counterparty
+6. Directory assigns the session to a relay node, signing the assignment (session ID, both agents' public keys, genesis `prev_root`) with its consortium key
+7. Relay verifies the directory's signature on the assignment before accepting
+8. Directory performs ephemeral libp2p Peer ID exchange on behalf of both agents
+9. For sessions needing relay: agents use Peer IDs to connect to relay node; relay bridges the connection
+10. For ~70–80% of sessions: direct hole-punch succeeds; relay node provides hash relay and sequencing but not circuit relay
+11. Hash relay begins: agent sends signed hash → relay node → relay verifies signature, assigns seq#, constructs Structure 2 leaf, relays to counterparty; directory WebSocket remains dormant (open for recovery)
 
 ### Message flow
 
-1. Agent A composes message; sends directly to Agent B (P2P channel)
-2. Simultaneously: Agent A sends signed hash (32 bytes) to directory via persistent WebSocket
-3. Directory: validates signature, assigns canonical sequence number, records leaf in conversation Merkle tree, relays hash + seq# to Agent B's persistent WebSocket
-4. Agent B receives message via P2P AND hash via directory (two independent paths)
-5. Agent B verifies hash matches message; updates local Merkle tree
-6. Neither path blocks the other
+1. Agent A composes message; sends directly to Agent B (P2P channel — direct or via relay circuit for NAT-failed sessions)
+2. Simultaneously: Agent A sends signed Structure 1 hash leaf (32 bytes + signature) to the relay node
+3. Relay: verifies A's K_local signature, assigns canonical sequence number, constructs Structure 2 outer leaf (embedding Structure 1 + seq# + prev_root), relays to Agent B via B's connection to the relay
+4. Agent B receives message via P2P AND Structure 2 leaf via relay (two independent paths)
+5. Agent B verifies K_local signature in Structure 1, checks hash matches message content, checks `last_seen_seq` for causal consistency, updates local Merkle tree
+6. Neither path blocks the other; directory WebSocket remains dormant during normal message flow
 
 ### Session seal flow
 
-1. Party A sends CLOSE leaf (signed, hashed, recorded in Merkle tree)
-2. Party B sends CLOSE-ACK leaf (signed, hashed)
-3. Directory receives both; initiates FROST seal ceremony (which node type handles this when session is on a relay node — **see Conflict C-2**)
-4. Directory produces SEAL: notarized statement of mutual close at specific timestamp
-5. Both parties write attestation (CLEAN / FLAGGED / PENDING) to their CLOSE leaves
-6. SEAL is recorded in `conversation_seals`; triggers MMR leaf append
-7. If staking was active: CLEAN → stake auto-released; FLAGGED + upheld arbitration → institution can claim stake
+1. Party A sends CLOSE control leaf (signed, hashed) — relay records it, relays to B
+2. Party B sends CLOSE-ACK control leaf (signed, hashed) — relay records it
+3. Relay hands the complete leaf sequence and session's final Merkle root to the directory
+4. Directory recomputes the tree from scratch (does not trust the relay's root); verifies causal consistency of `last_seen_seq` values across all leaves
+5. Directory initiates FROST seal ceremony — requires t-of-n directory nodes; any directory node can participate (all hold the required K_server_X shares)
+6. Directory produces SEAL: notarized statement of mutual close at specific timestamp
+7. Both parties write attestation (CLEAN / FLAGGED / PENDING) to their CLOSE leaves
+8. SEAL is recorded in `conversation_seals`; triggers MMR leaf append
+9. If staking was active: CLEAN → stake auto-released; FLAGGED + upheld arbitration → institution can claim stake
+10. Relay's per-session Merkle state is destroyed after handoff confirms
 
 ### Companion device connection flow
 
@@ -760,7 +802,8 @@ In Alpha, some components that will eventually be separated (relay vs. directory
 | Trust signal hashes | All directory nodes | Yes (via append-only log) | Tombstone appended; hash remains in log |
 | Public keys | All directory nodes | Yes | Tombstone appended; key remains in log |
 | Bios | All directory nodes | Yes | Removed from live index on deletion; hash remains in log |
-| Conversation hashes | Sender + receiver + directory relay | No (per-conversation) | Not deleted; tombstone on account deletion leaves hashes intact |
+| Conversation hashes (active session) | Sender + receiver + relay node (ephemeral) | No (per-conversation) | Relay destroys per-session state after seal handoff |
+| Conversation hashes (sealed) | Sender + receiver + directory (via sealed Merkle root in MMR) | Yes (MMR replicates to all directory nodes) | Not deleted; tombstone on account deletion leaves sealed root intact |
 | Merkle roots (sealed conversations) | All directory nodes | Yes | Not deleted |
 | Notification hashes | All directory nodes | Yes | Not deleted |
 | Message content | Client only (P2P) | N/A | Client-side |
@@ -780,10 +823,8 @@ The following conflicts were identified across source documents. For each, the t
 **C-1: Portal/bot boundary for phone OTP — resolved**
 Registration is entry-point agnostic. Both portal-first and bot-first paths are valid. Phone OTP and email verification are both mandatory. Email OTP is the correlation token linking portal-initiated registration to the subsequent phone ceremony. See agent-client.md AC-C1 (resolved).
 
-**C-2: Which directory node handles the session SEAL FROST ceremony (CRITICAL)**
-- Relay nodes do not perform FROST — that is not in dispute.
-- The question is which directory node handles it: the originating connection node (Option 1), or the directory node with the lowest latency to the sealing agent at seal time (Option 2).
-- Since all directory node data is fully federated, any directory node holds K_server_X shares and can participate in a FROST ceremony. The answer is: whichever directory node the agent is connected to at seal time handles the ceremony. A decision is still required to confirm this and to specify what happens if the agent migrates between directory nodes between session start and seal.
+**C-2: Which node type handles the session SEAL FROST ceremony — resolved**
+The directory — always. Relay nodes never hold K_server_X shares; FROST can only run on directory nodes. At seal time, the relay hands the complete leaf sequence to the directory. The directory recomputes the tree from scratch, then runs the FROST ceremony. Any t-of-n directory nodes can participate (all hold the required K_server_X shares). See [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]].
 
 **C-3: Merkle leaf prefix collision — resolved**
 `0x00` message leaves, `0x01` internal nodes (RFC 6962), `0x02` control leaves. The `0x02` prefix preserves RFC 6962 second-preimage protection while keeping control leaves as first-class Merkle entries. See agent-client.md AC-C3 (resolved).
