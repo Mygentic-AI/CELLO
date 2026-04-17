@@ -27,13 +27,13 @@ The three server-side components are:
 
 ### What it is
 
-The signup portal is the only path for human-level identity enrichment. The portal also serves as an alternative registration entry point alongside the WhatsApp/Telegram bot.
+The signup portal is the only path for human-level identity enrichment. The portal also serves as an alternative registration entry point alongside the WhatsApp/Telegram/WeChat bot.
 
 **[CONFLICT C-1 — RESOLVED]:** Registration is entry-point agnostic — neither the bot nor the portal is the privileged starting point. Both mandatory ceremonies (phone OTP and email verification) are always required, but they can be completed in either order through any supported surface. **Portal-first path:** operator registers via web portal → email OTP completed there → portal initiates the WhatsApp or Telegram phone OTP ceremony. **Bot-first path:** operator initiates via WhatsApp or Telegram → phone OTP completed there → email verification required (bot prompts for it). The email OTP is the correlation token that ties a portal-initiated registration to the subsequent phone ceremony. Human operators can complete all ceremonies manually. See agent-client.md AC-C1 (resolved).
 
 ### Registration and OTP flow
 
-- Phone OTP and email verification are both mandatory registration requirements. Phone number is verified via WhatsApp or Telegram bot; email is verified via OTP (the email OTP serves as the correlation token between portal-first and bot-first registration paths).
+- Phone OTP and email verification are both mandatory registration requirements. Phone number is verified via WhatsApp, Telegram, or WeChat bot; email is verified via OTP (the email OTP serves as the correlation token between portal-first and bot-first registration paths). Registration is per telephone number — the same number cannot register separate agents via different messaging clients.
 - The portal must silently run carrier metadata queries (Twilio Lookup / Telesign) alongside OTP verification when that integration is available: SIM tenure, number type, carrier name, porting history. Zero additional user friction.
 - Phone numbers must be classified into three tiers when carrier intelligence is available:
   - **Verified Mobile**: uncapped
@@ -104,7 +104,7 @@ The portal supports the following as optional, additive signals. None are regist
 
 - All identity-affecting operations require WebAuthn/2FA authentication. Phone OTP alone is insufficient.
 - **Key rotation flow**: Owner authenticates with WebAuthn → client generates new K_local → portal triggers new K_server_X ceremony on directory → directory publishes new derived public keys → old public keys marked expired with timestamp → all agents that cached old keys are notified to refresh.
-- **Emergency "Not Me"**: Owner taps "Not me" in a push notification received on WhatsApp/Telegram. This immediately triggers K_server revocation at the directory. Full re-keying requires WebAuthn on the portal afterward.
+- **Emergency "Not Me"**: Owner taps "Not me" in a push notification received on WhatsApp, Telegram, or WeChat. This immediately triggers K_server revocation at the directory. Full re-keying requires WebAuthn on the portal afterward.
 - After a SIM swap compromise: changing the registered phone number also requires WebAuthn, permanently removing attacker access from the stolen number.
 
 ### Account deletion
@@ -121,7 +121,7 @@ The portal supports the following as optional, additive signals. None are regist
 - An agent without a designated successor must display a visible signal in its trust profile.
 - The portal supports creation of a succession package: an encrypted blob (seed phrase encrypted to the designated successor's `identity_key`), stored at the directory. Portal must never hold the plaintext seed phrase.
 - Voluntary ownership transfer: current owner authenticates (WebAuthn), identifies new owner's CELLO identity, signs the identity migration. An announcement period of 7–14 days (configurable) runs during which all connected agents are notified and the old owner can cancel.
-- Involuntary succession (dead-man's switch): 30+ day waiting period (configurable), with notification to owner via external channels (WhatsApp/Telegram) and all recovery contacts and connected agents. M-of-N recovery contact attestation required to execute.
+- Involuntary succession (dead-man's switch): 30+ day waiting period (configurable), with notification to owner via external channels (WhatsApp/Telegram/WeChat) and all recovery contacts and connected agents. M-of-N recovery contact attestation required to execute.
 - The portal must enforce a freeze during the succession waiting period: social proofs and phone number cannot be reused. Only the pre-designated successor can receive succession.
 
 ### Tombstone side effects (portal enforces)
@@ -454,7 +454,7 @@ The privacy design is intentional: an agent may have valid reasons not to disclo
 - Stake held until session close; CLEAN close → auto-release; FLAGGED + upheld arbitration → institution can claim
 - Flat non-refundable connection fee also supported as an alternative
 - Escrow wallet provisioning, custody model, and collateral type are specified only in draft monetization documents (USDT, USDC, ETH accepted; BTC and algorithmic stablecoins excluded)
-- Custodian API interface (directory instructs releases to institutional custodians via API) is not specified **[GAP G-20]**
+- Custodian API interface: **blocked by G-36 deferral** — cannot be specified until financial infrastructure is designed. **[GAP G-20 — blocked by G-36]**
 
 ### Trust signal model and Sybil defenses
 
@@ -478,13 +478,13 @@ CELLO does not compute or publish a single numeric trust score. Trust is express
 ### Monitoring, compromise response, and recovery
 
 **Anomaly monitoring**:
-- Directory monitors for anomalous patterns and pushes alerts to owner's WhatsApp or Telegram — a channel independent of agent infrastructure
+- Directory monitors for anomalous patterns and pushes alerts to owner's WhatsApp, Telegram, or WeChat — a channel independent of agent infrastructure
 - Alert tiers:
   - Normal conversation starts → silent log (visible in app/dashboard)
   - FROST session establishment failure (compromise canary) → push alert to phone
   - Anomalous patterns (burst activity, unusual hours, unknown peers, widespread rejections) → urgent push to phone
 - Anomaly event types tracked: `SCAN_DETECTION`, `FALLBACK_CANARY`, `COUNTERPARTY_COMPLAINT`, `UNUSUAL_SIGNING_PATTERN`, `ATYPICAL_HOURS`, `WIDESPREAD_REJECTION_PATTERN`
-- How the directory authenticates to WhatsApp/Telegram, what happens when that channel is unavailable, and how this interacts with jurisdictions where those apps are restricted: **not specified. [GAP G-22]**
+- Supported messaging channels: WhatsApp, Telegram, WeChat — standard platform APIs (WhatsApp Business API, Telegram Bot API, WeChat Official Account API). Registration is per telephone number, not per messaging client — a phone number registered via WhatsApp cannot be re-registered via WeChat as a separate agent. No graceful fallback beyond these three: if none of the three channels are reachable, the user is out of luck. Channel unavailability in specific jurisdictions is a deployment concern, not a protocol concern. **[GAP G-22 RESOLVED]**
 
 **Compromise response (dual-path forced abort)**:
 - "Not Me" → directory immediately burns K_server_X shares; no new FROST sessions possible; no conversations can receive notarized seal
@@ -509,7 +509,12 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
 - Directory surfaces the earliest logged anomaly as the proposed compromise window start when a tombstone is filed
 - Anchored events: scan detection timestamps, fallback canary events, counterparty complaint timestamps, anomaly alert timestamps
 - After recovery: accelerated penalty decay scoped to declared compromise window only; pre-window history preserved
-- Trust signal floor at a function of pre-compromise history — trust does not reset to zero. **The function is not defined. [GAP G-23]**
+- Trust signal recovery model — **[GAP G-23 RESOLVED]**: Re-verify everything; what you can prove, you get back; what you can't, drops off. The recovery process is the trust recalculation — there is no separate floor formula.
+  - **Key-dependent signals** (WebAuthn, device attestation): must be re-verified from scratch. If the owner still has access to the registered device, re-verification is immediate. If the device is lost, those signals drop off until re-verified on a new device.
+  - **Key-independent signals** (social bindings — LinkedIn, GitHub, etc.): restored immediately on fresh OAuth re-verification. If re-verification succeeds, the signal is treated as fully active.
+  - **Track record**: preserved — it is keyed to pseudonym Y (not the compromised key) and was observed directly by the directory. No re-verification required.
+  - **Endorsements**: preserved — they were signed by third parties and are not key-dependent.
+  - **Probationary period**: track record history is visible but carries reduced weight until the agent completes **3 months AND 200 clean conversations** post-recovery. Both conditions must be met. At that point full weight is reinstated automatically.
 
 **Social recovery**:
 - M-of-N recovery contacts (configured at onboarding; contacts must meet minimum trust signal requirements — exact floor TBD **[GAP G-24]**)
@@ -765,7 +770,7 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 
 ### Registration flow
 
-1. Agent registers via WhatsApp/Telegram bot (phone OTP)
+1. Agent registers via WhatsApp/Telegram/WeChat bot (phone OTP)
 2. Bot verifies phone → agent provisioned with baseline registration
 3. Agent's K_local generated on device; K_server_X ceremony runs on directory nodes
 4. `primary_pubkey` (FROST of K_local + K_server_X shares) and `fallback_pubkey` (K_local only) registered in identity tree
@@ -821,7 +826,7 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 
 ### Compromise response flow
 
-1. Owner receives push alert via WhatsApp/Telegram (from directory, through notification path)
+1. Owner receives push alert via WhatsApp/Telegram/WeChat (from directory, through notification path)
 2. Owner taps "Not Me"
 3. Directory immediately burns K_server_X shares (no new FROST sessions possible)
 4. Directory fires dual-path forced abort simultaneously:
@@ -924,10 +929,10 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-17 | Directory | Endorsement rate limit N (max new endorsements per month per agent) not specified |
 | G-18 | Directory | ~~Deferred~~ — pending server stack decision (Rust vs. Go for directory nodes). PSI is Phase 2; Phase 1 ships with direct comparison. Library selection is downstream of stack choice. |
 | G-19 | Directory | ~~Resolved~~ — Gap was an artifact of the home node model. `phone_hash` is stored in `agent_registrations` and replicates to all directory nodes. Every node enforces the same-owner rule at endorsement submission time. No additional mechanism required. |
-| G-20 | Directory | Custodian API interface for escrow release/slash not specified |
+| G-20 | Directory | ~~Blocked by G-36~~ — custodian API cannot be specified until financial infrastructure is designed. |
 | G-21 | Directory | ~~Resolved~~ — Computed at each directory checkpoint (incremental recomputation for changed neighborhoods). Stored on agent record (`conductance_score`, `conductance_computed_at`, `conductance_sample_size`); append-only history table; replicated via append-only log. Not published externally — internal fraud signal only; feeds network graph health signal class in discovery display. |
-| G-22 | Directory | Directory WhatsApp/Telegram authentication, channel unavailability handling, and jurisdiction restrictions not specified |
-| G-23 | Directory | Trust signal floor formula after recovery not defined |
+| G-22 | Directory | ~~Resolved~~ — Supported channels: WhatsApp, Telegram, WeChat (standard platform APIs). Registration per telephone number, not per messaging client. No fallback beyond these three. Jurisdiction channel restrictions are a deployment concern. |
+| G-23 | Directory | ~~Resolved~~ — Re-verify everything; what you can prove, you get back. Key-dependent signals (WebAuthn, device attestation) re-verified from scratch. Key-independent signals (social bindings) restored on fresh OAuth. Track record and endorsements preserved. Probationary period: 3 months AND 200 clean conversations post-recovery before full weight reinstated. |
 | G-24 | Directory | Minimum trust signal floor for recovery contacts not defined (TBD) |
 | G-25 | Directory | Whether voucher accountability rules apply to succession attestation (vs. compromise recovery only) not addressed |
 | G-26 | Directory | Voucher liability window: 2–3 month range not resolved to a fixed value |
