@@ -871,8 +871,11 @@ Directory sees hash signed by TravelBot's key
 
 Owner didn't initiate this?
   → Taps "Not me"
-  → Directory revokes K_server instantly
-  → Attacker locked out in milliseconds
+  → Directory burns K_server_X shares (no new FROST sessions)
+  → Directory fires dual-path forced abort (see §8.3):
+      Path 1: EMERGENCY_SESSION_ABORT to agent client → client ABORTs all sessions
+      Path 2: PEER_COMPROMISED_ABORT to each counterparty → counterparties seal unilaterally
+  → All active sessions terminated — attacker locked out of both new and existing sessions
   → Full re-keying later via WebAuthn on web portal
 ```
 
@@ -884,9 +887,19 @@ Owner didn't initiate this?
 | FROST session establishment fails | Push alert to phone |
 | Anomalous pattern | Urgent push to phone |
 
-### 8.3 Emergency Revocation ("Not Me")
+### 8.3 Emergency Revocation ("Not Me") — Dual-Path Forced Abort
 
-"Not me" triggers immediate revocation: directory invalidates K_server — no new FROST-authenticated sessions can be established, and no conversations can receive a notarized seal. The attacker retains K_local but cannot start new sessions or produce FROST-sealed conversation records. Existing conversations signed with K_local alone remain valid but the attacker cannot establish new ones. Re-keying requires WebAuthn/2FA.
+"Not me" triggers immediate revocation: directory burns K_server_X shares — no new FROST-authenticated sessions can be established, and no conversations can receive a notarized seal.
+
+K_server revocation alone cannot close existing P2P sessions — those are direct libp2p connections not routed through the directory. The attacker retains K_local and could continue operating on live channels. The directory therefore fires two parallel abort paths simultaneously:
+
+**Path 1 — cooperative (directory → compromised agent client):** The directory sends an `EMERGENCY_SESSION_ABORT` control message to the agent's persistent WebSocket. The client sends a signed ABORT control leaf (K_local, `COMPROMISE_INITIATED` reason code) to each active counterparty via the existing P2P channels, then disconnects all sessions and drops the WebSocket. This path applies when the legitimate agent process is still running — e.g., K_local was stolen and is being used from elsewhere, but the original process is still connected.
+
+**Path 2 — non-cooperative (directory → each counterparty):** For every active session the directory has on record, the directory sends a `PEER_COMPROMISED_ABORT` notification to each counterparty's authenticated WebSocket. The counterparty client seals unilaterally on receipt — regardless of whether an ABORT leaf arrives from the compromised side. This path applies when the agent process is offline, crashed, or attacker-controlled. The directory knows every session it facilitated and can always execute Path 2. **Path 2 is the more important path** — Path 1 is an optimisation that produces a cleaner Merkle record when available.
+
+**What goes in the Merkle tree:** If Path 1 executes, an ABORT control leaf (K_local signed, `COMPROMISE_INITIATED` reason code) is appended to each conversation tree — both parties have a signed, reason-coded close. If only Path 2 executes, counterparties record SEAL-UNILATERAL from their side with no ABORT leaf from the compromised agent. The absence of an ABORT leaf from the compromised side is itself meaningful — it confirms the client was unresponsive at termination time.
+
+Re-keying requires WebAuthn/2FA.
 
 **SIM-swap risk:** An attacker who ports the phone number could use "Not me" to disrupt the legitimate agent. Mitigation: re-keying requires WebAuthn/2FA — a SIM-swap attacker can disrupt but cannot take over. This is the same tradeoff as every phone-based system, with the same mitigation.
 
@@ -899,7 +912,7 @@ Three distinct tombstone types, each producing a different directory record:
 3. **Social recovery-initiated** — M-of-N recovery contacts agree and owner cannot act. Last resort.
 
 **Immediate effects on any tombstone:**
-- K_server burned, all active sessions receive SEAL-UNILATERAL with tombstone reason code
+- K_server burned, all active sessions terminated immediately via dual-path forced abort (§8.3): Path 1 `EMERGENCY_SESSION_ABORT` to agent client, Path 2 `PEER_COMPROMISED_ABORT` to each counterparty → SEAL-UNILATERAL with tombstone reason code
 - Social proofs enter a freeze period (30 days) — cannot be attached to any new account
 - Phone number flagged as "in recovery" — cannot register a new account during freeze
 
@@ -1127,3 +1140,4 @@ Several mechanisms appear separate but are tightly coupled through shared primit
 - [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow — Trust Data Relay and Selective Disclosure]] — original trust data relay design for §5 connection requests; the relay model was further refined by the AC-C9 resolution (agent-client.md): directory role is verify-then-relay-discard, receiver performs two independent verification steps (Merkle inclusion proof + Alice's own blob signatures)
 - [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] — session establishment and seal (§3 and §6.6) are the only FROST ceremony points affected by K_server rotation; K_local rotation renders stolen keys useless at session boundaries
 - [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]] — removes §1.5 Layer 0 (TrustRank) and the Trust Seeder cold-start cohort; the discovery system and organic endorsements replace the seeder bootstrapping path
+- [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]] — resolves the §8.3/§8.4 contradiction (C-5); all active sessions terminated immediately on "Not Me" via dual-path mechanism since K_server revocation alone cannot close existing P2P sessions

@@ -348,7 +348,7 @@ After ABORT: REOPEN is not permitted.
 - CLEAN close → "last known good" timestamp, anchored for compromise window determination; also serves as escrow release trigger
 - FLAGGED close → arbitration trigger (flagging party may submit transcript)
 
-**[CONFLICT C-5 — CRITICAL]**: §8.3 states "existing conversations signed with K_local alone remain valid" after a "Not Me" K_server revocation. §8.4 states "all active sessions receive SEAL-UNILATERAL with tombstone reason code" on any tombstone. "Not Me" triggers a Compromise-initiated tombstone (type 2). These directly contradict each other. Decision required: do existing sessions survive or are they immediately sealed on "Not Me"?
+**[CONFLICT C-5 — RESOLVED]**: All active sessions are terminated immediately on "Not Me." K_server revocation alone cannot close existing P2P sessions (they are direct libp2p connections, not routed through the directory). The directory fires two parallel abort paths simultaneously — see "Compromise response" and "Compromise response flow" below. Resolution source: [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]].
 
 ### Connection infrastructure
 
@@ -447,14 +447,17 @@ CELLO does not compute or publish a single numeric trust score. Trust is express
 - Anomaly event types tracked: `SCAN_DETECTION`, `FALLBACK_CANARY`, `COUNTERPARTY_COMPLAINT`, `UNUSUAL_SIGNING_PATTERN`, `ATYPICAL_HOURS`, `WIDESPREAD_REJECTION_PATTERN`
 - How the directory authenticates to WhatsApp/Telegram, what happens when that channel is unavailable, and how this interacts with jurisdictions where those apps are restricted: **not specified. [GAP G-22]**
 
-**Compromise response**:
+**Compromise response (dual-path forced abort)**:
 - "Not Me" → directory immediately burns K_server_X shares; no new FROST sessions possible; no conversations can receive notarized seal
-- *(See Conflict C-5 for what happens to existing sessions)*
+- K_server revocation alone cannot close existing P2P sessions — they are direct libp2p connections not routed through the directory. Two additional abort paths fire simultaneously:
+  - **Path 1 — cooperative (directory → compromised agent client)**: Directory sends `EMERGENCY_SESSION_ABORT` control message via the agent's persistent WebSocket. The client sends a signed ABORT control leaf (`COMPROMISE_INITIATED` reason code) to each active counterparty via existing P2P channels, then disconnects all sessions and drops the WebSocket. Applies when the legitimate agent process is still running.
+  - **Path 2 — non-cooperative (directory → each counterparty)**: For every active session on record, the directory sends a `PEER_COMPROMISED_ABORT` notification to each counterparty's authenticated WebSocket. Counterparty seals unilaterally on receipt. Applies regardless of whether the compromised client is online, responsive, or attacker-controlled. **Path 2 is the more important path** — Path 1 is an optimisation that produces a cleaner Merkle record.
+- `EMERGENCY_SESSION_ABORT` is a directory control instruction, not a notification type. `PEER_COMPROMISED_ABORT` is added to the formal notification type registry.
 - After recovery via WebAuthn: changing the registered phone number also requires WebAuthn, removing attacker access from a SIM-swapped number
 
 **Tombstone effects** (all types: VOLUNTARY, COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED, SUCCESSION_INITIATED):
 - K_server_X burned
-- All active sessions → SEAL-UNILATERAL with tombstone reason code
+- All active sessions terminated immediately via dual-path forced abort (Path 1: `EMERGENCY_SESSION_ABORT` to agent client; Path 2: `PEER_COMPROMISED_ABORT` to each counterparty) → SEAL-UNILATERAL with tombstone reason code
 - Social proofs → 30-day freeze
 - Phone number → "in recovery" flag (cannot register new account during freeze)
 - 12-month rebinding lockout on all social account identifiers
@@ -519,7 +522,8 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
 - **Rate limits**: Per-sending-agent, gated by trust tier (fewer trust signals = stricter limits). Verified businesses can apply for elevated limits. Recipient opt-out always overrides. **Specific rate limit values: not specified. [GAP G-31]**
 - **Delivery**: Via recipient's persistent authenticated WebSocket
 - **Notification hashes**: Stored as standalone events — not chained into a session Merkle tree
-- **Notification type registry**: Enumerated, not freeform. Types include at minimum: `INTRODUCTION`, `ORDER_UPDATE`, `ALERT`, `PROMOTIONAL`, `SYSTEM`, `CONNECTION_REQUEST`, `ENDORSEMENT_RECEIVED`, `SECURITY_BLOCK`, `TOMBSTONE`, `TRUST_EVENT`, `RECOVERY_EVENT`, `SESSION_CLOSE_ATTESTATION_DISPUTE`, `SUCCESSION_CLAIM_FILED`, `HUMAN_INPUT_REQUESTED`
+- **Notification type registry**: Enumerated, not freeform. Types include at minimum: `INTRODUCTION`, `ORDER_UPDATE`, `ALERT`, `PROMOTIONAL`, `SYSTEM`, `CONNECTION_REQUEST`, `ENDORSEMENT_RECEIVED`, `SECURITY_BLOCK`, `TOMBSTONE`, `TRUST_EVENT`, `RECOVERY_EVENT`, `SESSION_CLOSE_ATTESTATION_DISPUTE`, `SUCCESSION_CLAIM_FILED`, `HUMAN_INPUT_REQUESTED`, `PEER_COMPROMISED_ABORT`
+- **Note**: `EMERGENCY_SESSION_ABORT` is a directory-to-client control instruction sent via the agent's persistent WebSocket — it is NOT a notification type and does not appear in the notification registry
 - **Whether notifications must route through directory or can go peer-to-peer**: explicitly unresolved **[GAP G-32]**
 - **Institutional verification for elevated rate limits**: application process and criteria not specified **[GAP G-33]**
 
@@ -718,10 +722,13 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 1. Owner receives push alert via WhatsApp/Telegram (from directory, through notification path)
 2. Owner taps "Not Me"
 3. Directory immediately burns K_server_X shares (no new FROST sessions possible)
-4. *(Whether existing sessions are immediately sealed or allowed to continue — see Conflict C-5)*
-5. Owner authenticates via WebAuthn on Signup Portal
-6. Owner generates new K_local; portal triggers new K_server_X ceremony
-7. New keys published; old keys marked expired; connected agents notified to refresh
+4. Directory fires dual-path forced abort simultaneously:
+   - **Path 1** (cooperative): sends `EMERGENCY_SESSION_ABORT` control message to the agent's persistent WebSocket; client sends signed ABORT leaves (`COMPROMISE_INITIATED`) to all counterparties via P2P, then disconnects
+   - **Path 2** (non-cooperative): for every active session on record, sends `PEER_COMPROMISED_ABORT` notification to each counterparty's WebSocket; counterparty seals unilaterally on receipt
+5. All active sessions terminated — either via Path 1 ABORT leaves (clean record) or Path 2 counterparty SEAL-UNILATERAL (no ABORT from compromised side; absence is itself evidentiary)
+6. Owner authenticates via WebAuthn on Signup Portal
+7. Owner generates new K_local; portal triggers new K_server_X ceremony
+8. New keys published; old keys marked expired; connected agents notified to refresh
 
 ---
 
@@ -786,10 +793,8 @@ The following conflicts were identified across source documents. For each, the t
 - Later design (2026-04-13, multi-party): Sender signs only its authorship proof; directory appends `prev_root`.
 - Resolution: The 2026-04-13 design supersedes. Any implementation relying on sender-controlled `prev_root` is wrong. The end-to-end-flow.md may still reflect the earlier design in some sections.
 
-**C-5: "Not Me" scope for existing sessions (CRITICAL)**
-- §8.3: "Existing conversations signed with K_local alone remain valid" after "Not Me" K_server revocation.
-- §8.4: "All active sessions receive SEAL-UNILATERAL with tombstone reason code" on any tombstone. "Not Me" triggers a Compromise-initiated tombstone.
-- These directly contradict. Decision required.
+**C-5: "Not Me" scope for existing sessions — resolved**
+All active sessions are terminated immediately on "Not Me." K_server revocation alone cannot close existing P2P sessions, so the directory fires a dual-path forced abort: Path 1 (`EMERGENCY_SESSION_ABORT` to the agent client) and Path 2 (`PEER_COMPROMISED_ABORT` to each counterparty). Path 2 is the authoritative path — it works regardless of whether the compromised client is online. The earlier §8.3 language ("existing conversations remain valid") is superseded. See [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]].
 
 **C-6: Bio public access vs. authenticated discovery (CRITICAL)**
 - §4.1: "Discovery requires an active authenticated session — only verified agents with a FROST-authenticated session can query the directory."
@@ -865,4 +870,5 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 - [[design-problems|Design Problems]]
 - [[frontend|CELLO Frontend Requirements]] — the web portal, mobile app, and desktop app requirements that the server infrastructure must support; the two documents together define the full client-server contract
 - [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — designs the companion device P2P connection that the directory must facilitate; introduces a new connection type, new notification type, and companion device key registry
-- [[agent-client|CELLO Agent Client Requirements]] — the client-side counterpart to this document; the client and directory together implement the full protocol; shared conflicts (C-1, C-3, C-4, C-5, C-6, C-7) are cross-referenced throughout both documents
+- [[agent-client|CELLO Agent Client Requirements]] — the client-side counterpart to this document; the client and directory together implement the full protocol; shared conflicts (C-1, C-3, C-4, C-6; C-5 and C-7 resolved) are cross-referenced throughout both documents
+- [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]] — resolves C-5; designs the dual-path mechanism (EMERGENCY_SESSION_ABORT + PEER_COMPROMISED_ABORT) that closes existing P2P sessions K_server revocation alone cannot reach
