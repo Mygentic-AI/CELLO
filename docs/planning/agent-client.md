@@ -694,7 +694,7 @@ When the policy includes a `human_escalation_fallback` flag and a request reache
 2. Client fires a notification to the configured escalation channel: WhatsApp, Telegram, or Slack webhook (configured via `cello_configure`)
 3. The owner reviews the pending request in the escalation channel or via the web portal / mobile app push notification
 4. Owner responds ACCEPT or DECLINE
-5. The channel callback triggers `cello_accept_connection` or `cello_decline_connection`
+5. The owner's response routes directly back to the client via the same channel the client used to send the notification — WhatsApp/Telegram bot reply handler, Slack webhook reply, or CELLO mobile app over the companion P2P connection. The client's reply handler fires `cello_accept_connection` or `cello_decline_connection` directly. No home node intermediary is involved.
 6. Client appends a `CONNECTION_ESCALATION_RESOLVED` notification to the queue
 7. If `escalation_expires_at` passes without a response: request auto-declines
 
@@ -893,9 +893,9 @@ The companion device API is a separate surface from the MCP tool surface. It is:
 
 ### Companion device allowlist
 
-The client maintains an allowlist of authorized companion device public keys. Each entry represents a device whose keypair was generated at app install time and registered via phone OTP verification (same phone number as the registered agent).
+The client maintains an allowlist of authorised companion device public keys — this is the sole authoritative list, held locally, checked by the client at connection time. No directory involvement in verification. The directory facilitates NAT traversal for the companion connection (hole-punching, the same mechanism as agent-to-agent connections) but plays no role in access control.
 
-Only registered companion devices can establish a P2P companion connection. The directory facilitates NAT traversal for the companion connection (hole-punching, the same mechanism as agent-to-agent connections) but does not verify the companion device keypair — the client does that directly.
+The allowlist is the client's data, consistent with the principle that the directory holds hashes and the client is custodian of its own identity data. The registration ceremony (GAP AC-13) is a local exchange between the owner and the client — a QR code scan or equivalent — with no server round-trip required for approval. The owner may back up the allowlist to the mobile app as local storage on the device; the directory may in future hold hashes of the allowlist for integrity verification, but that is not a current requirement. The directory never holds companion device public keys.
 
 **[GAP AC-13]**: The companion device registration ceremony — how the companion device public key is provisioned to the client's allowlist during app install — is not fully specified. Whether this uses a dedicated registration flow distinct from device attestation enrollment, or piggybacks on the same path, is not decided. This is carried from frontend Gap F-43.
 
@@ -1025,7 +1025,7 @@ escalation_channels:
 
 The notification must include: the requester's handle, top trust signals (named, never a numeric score), the greeting text (post-Layer-1), the time remaining before auto-decline.
 
-The owner's response via any configured channel must route back to the client and trigger `cello_accept_connection` or `cello_decline_connection`. The exact callback mechanism for each channel is not specified in source documents. **[GAP AC-17]**
+The owner's response routes directly to the client via the channel's own reply mechanism (AC-C8 resolved, AC-17 resolved): WhatsApp/Telegram bot reply handler, Slack incoming webhook reply, CELLO mobile app over companion P2P. No home node intermediary. The client maintains the connection for each configured channel and the reply handler fires `cello_accept_connection` or `cello_decline_connection` directly.
 
 ---
 
@@ -1218,18 +1218,14 @@ All configured channels always fire. No hierarchy, no suppression based on app p
 **AC-C7: Leaf inner authorship proof vs. outer directory leaf — resolved**
 Two distinct structures. Structure 1 (inner): what the sender signs with K_local — content_hash, sender_pubkey, conversation_id, last_seen_seq, timestamp. Structure 2 (outer): what the directory hashes into the Merkle tree — sequence_number, sender_pubkey, message_content_hash, sender_signature (Structure 1 embedded), prev_root (directory-appended). See Part 4 for full specification.
 
-**AC-C8: Escalation resolution routing — client callback vs. home node proxy**
-- agent-client.md Part 6, step 5: "The channel callback triggers `cello_accept_connection` or `cello_decline_connection`" — the callback routes directly to the client.
-- frontend.md cross-surface escalation flow, step 7: "The decision is submitted to the home node, which calls `cello_accept_connection` or `cello_decline_connection`" — the home node is an intermediary.
-- These are architecturally incompatible. The CELLO client is on the agent operator's private hardware; a home-node-to-client call is unusual and not described elsewhere. Decision required.
+**AC-C8: Escalation resolution routing — resolved**
+Owner responses route directly to the client via the channel's own reply mechanism. WhatsApp/Telegram: bot reply handler. Slack: incoming webhook reply. CELLO mobile app: companion P2P connection. No home node intermediary. The client maintains the connection for each configured channel. frontend.md's description of the home node as intermediary is incorrect and must be corrected there. Also resolves GAP AC-17.
 
 **AC-C9: Directory role during connection request relay — resolved**
 The directory's role is verify-then-relay-discard. It checks each submitted trust blob against held hashes (fraud filter only), appends track record stats, forwards the full package, and discards the blobs. It does not re-sign trust data and is not a trust authority. The receiver's independent verification (Merkle inclusion proof for identity, Alice's own signatures for trust blobs) is mandatory and non-redundant — the directory could be compromised. The client is the enforcer.
 
-**AC-C10: Companion device identity verification — client vs. directory**
-- agent-client.md Part 9: "The directory does not verify the companion device keypair — the client does that directly."
-- server-infrastructure.md: "The directory must maintain a registry of authorized companion device public keys per agent."
-- Who performs the verification (client allowlist vs. directory registry) is contradicted. Decision required.
+**AC-C10: Companion device identity verification — resolved**
+The client holds the authoritative allowlist locally and verifies companion devices at connection time. The directory never holds companion device public keys — consistent with the principle that the directory holds hashes, not client data. The directory may in future hold hashes of the allowlist for integrity verification; that is not a current requirement. server-infrastructure.md's claim that the directory maintains a companion device registry must be corrected there.
 
 **AC-C11: "Not Me" revocation from desktop tray — deferred, not a current requirement**
 A desktop tray app is far-future scope. "Not Me" emergency revocation is handled exclusively via the mobile app or web portal. Designing a desktop tray protocol before a line of code exists is premature. This conflict is closed: no desktop tray revocation path is required in the current design. If a desktop companion app is built in the future, the revocation path will be designed then.
@@ -1256,7 +1252,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-14 | Companion | Maximum number of companion devices per agent not specified |
 | AC-15 | Companion | Human injection delivery mechanism to agent input channel for Deployment Model A (direct MCP) not designed; `cello_receive` returns protocol messages, not owner-injected content |
 | AC-16 | Notifications | Whether notifications route through directory or can go peer-to-peer is explicitly unresolved |
-| AC-17 | Notifications | Escalation channel callback mechanism (how owner's WhatsApp/Telegram/Slack response routes back to client to trigger accept/decline) not specified |
+| AC-17 | Notifications | ~~Resolved~~ — response routes directly to client via channel's own reply mechanism: WhatsApp/Telegram bot reply handler, Slack webhook reply, CELLO mobile app over companion P2P. No home node intermediary. |
 | AC-18 | Status | `cello_status` does not distinguish between "directory temporarily unreachable" and "agent locked post-Not-Me revocation"; these are meaningfully different states |
 | AC-19 | Registration | Incubation period (7-day, 3 outbound connections/day for phone-only agents) not mentioned anywhere; client must track incubation state locally and enforce outbound rate limits |
 | AC-20 | Registration | Email verification is a mandatory registration requirement (per server-infrastructure) but is entirely absent from the client — not in registration flow, trust signal types, data ownership map, or storage tiers |
