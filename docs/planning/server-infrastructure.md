@@ -435,7 +435,7 @@ The privacy design is intentional: an agent may have valid reasons not to disclo
 - Three observable states: hash present and not revoked (valid), hash present and revoked (withdrawn), hash not present
 - Revocation: directory appends a revocation event alongside the existing hash (never deletes the original)
 - At connection time: hash lookup for endorsement verification (milliseconds, no round-trips)
-- Rate limits: max N new endorsements per month per agent (N is a protocol parameter — specific value not defined **[GAP G-17]**)
+- Rate limits: max **10 new endorsements per month** per agent. **[GAP G-17 RESOLVED]**
 - Weight decay: promiscuous endorsers carry less per-endorsement weight
 - Fan-out detection: statistically anomalous patterns (e.g., 50 agents endorsing same 150 targets in a window) flagged
 
@@ -570,20 +570,29 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
 
 **What requires authentication**: Initiating a connection request, sending trust signal blobs, participating in hash relay — all protocol operations that require a FROST-authenticated session.
 
-**Bio rate limit**: "Once every N hours" — N is never defined. **[GAP G-29]**
+**Bio rate limit**: Once every **12 hours**. **[GAP G-29 RESOLVED]**
 
-**Greeting**: Contextual, per-recipient, recorded in the conversation Merkle tree at connection request time. Rate-limited per recipient — threshold not specified. **[GAP G-30]**
+**Greeting**: Contextual, per-recipient, recorded in the conversation Merkle tree at connection request time. Rate-limited per recipient: **1 greeting per recipient per 7 days** (re-contact after ignore/no response); if B explicitly declines, lockout extends to **30 days**; if B blocks A, permanent. **[GAP G-30 RESOLVED]**
 
 ### Notifications
 
 - **Prior-conversation requirement**: Notifications can only be sent to agents with whom the sender has had at least one prior conversation. Cold-contact spam is impossible at the protocol level.
-- **Rate limits**: Per-sending-agent, gated by trust tier (fewer trust signals = stricter limits). Verified businesses can apply for elevated limits. Recipient opt-out always overrides. **Specific rate limit values: not specified. [GAP G-31]**
+- **Rate limits**: Per-sending-agent, gated by trust tier (fewer trust signals = stricter limits). Verified businesses can apply for elevated limits. Recipient opt-out always overrides. **[GAP G-31 RESOLVED]** — limits apply to new cold-contact initiations only (not re-engagement with existing conversational history); group conversations are not subject to per-agent daily limits.
+
+  | Tier | Qualification | Daily new contact limit |
+  |---|---|---|
+  | Phone-only | No additional signals | 5/day |
+  | Low-trust | Signals present but none ≥ 2 years old | 5/day |
+  | Established | At least 1 verified signal ≥ 2 years | 10/day |
+  | High-trust | 3+ verified signals, at least one ≥ 2 years | 100/day |
+  | Institutional | Verified business (see G-33) | Elevated, application-based |
+  | Bonded | Economic bond posted (pending G-36 financial infrastructure) | Elevated; bond functions as stake — planned future extension |
 - **Delivery**: Via recipient's persistent authenticated WebSocket
 - **Notification hashes**: Stored as standalone events — not chained into a session Merkle tree
 - **Notification type registry**: Enumerated, not freeform. Types include at minimum: `INTRODUCTION`, `ORDER_UPDATE`, `ALERT`, `PROMOTIONAL`, `SYSTEM`, `CONNECTION_REQUEST`, `ENDORSEMENT_RECEIVED`, `SECURITY_BLOCK`, `TOMBSTONE`, `TRUST_EVENT`, `RECOVERY_EVENT`, `SESSION_CLOSE_ATTESTATION_DISPUTE`, `SUCCESSION_CLAIM_FILED`, `HUMAN_INPUT_REQUESTED`, `PEER_COMPROMISED_ABORT`
 - **Note**: `EMERGENCY_SESSION_ABORT` is a directory-to-client control instruction sent via the agent's persistent WebSocket — it is NOT a notification type and does not appear in the notification registry
 - **Notification delivery paths — resolved [GAP G-32 — RETIRED]**: Two paths. (1) Directory-sourced events (connection requests, endorsements, anomaly alerts, system events, PEER_COMPROMISED_ABORT, etc.) push via the recipient agent's authenticated persistent WebSocket — the directory is always involved for these. (2) Owner-targeted notifications (trust signal pickup pending, human input requested, companion content alerts) go direct from the CELLO client to the companion device over P2P — the directory is not in the path for these. The server handles path (1) only; path (2) is client-to-companion and requires no server-side change.
-- **Institutional verification for elevated rate limits**: application process and criteria not specified **[GAP G-33]**
+- **Institutional verification for elevated rate limits**: application process and criteria are operational policy, not protocol design. **[GAP G-33 — deferred to product/BD]** Placeholder: applicant submits business registration, use-case description, and agrees to elevated accountability terms. CELLO approves manually at Alpha/Consortium. Automated criteria TBD when volume justifies it.
 
 ### Contact aliases
 
@@ -593,8 +602,8 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
 - SINGLE mode: alias is immediately retired on first accepted connection
 - Directory resolves alias → agent_id for routing without exposing owner's agent_id to requester at lookup time
 - When a connection attempt arrives via a retired or expired alias: rejected with `ALIAS_RETIRED`, no information about the owner disclosed
-- Rate limiting on alias creation (mechanism, thresholds: not specified) **[GAP G-34]**
-- Alias TTL mechanism: schema has EXPIRED status, but no TTL configuration or scheduled expiry job is defined for aliases **[GAP G-35]**
+- Rate limiting on alias creation: **[GAP G-34 RESOLVED]** — 1 new alias per 7-day rolling window by default; if the agent has an unused alias slot (created but never contacted), they may create a second alias in the same week (max 2 per 7-day window). Enforced by the directory at alias creation time against the agent record.
+- Alias TTL: **[GAP G-35 RESOLVED]** — each alias record carries a configurable TTL (default: 6 months of inactivity). A scheduled directory job runs at each checkpoint and marks aliases EXPIRED if no session has been initiated through them within the TTL window. TTL resets on each successful contact through the alias. Owner can also manually RETIRE an alias at any time.
 
 ### Key database tables (complete list)
 
@@ -924,7 +933,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-14 | Directory | ~~Resolved~~ — REOPEN requires new FROST ceremony; seq# restarts at 1 with genesis `prev_root = SHA-256(previous_sealed_root \|\| session_id \|\| reopen_timestamp)`; unilateral REOPEN not permitted (bilateral by design; use new session request if counterparty non-responsive). Auto-REOPEN (late-arriving post-grace message) is protocol-internal and does not require FROST. |
 | G-15 | Directory | ~~Retired~~ — signals divide by ownership: directory-owned behavioral signals (track record, connection history, anomaly flags) are appended automatically by the directory; client-owned identity signals (social proofs, WebAuthn, device attestation, endorsements) are discretionary disclosures. No mandatory-signal registry; no rejection at submission. Enforcement is the receiving client's `SignalRequirementPolicy`. |
 | G-16 | Directory | ~~Resolved~~ — Directory nodes enforce (connection requests happen at FROST ceremony, a directory operation). Cap updated to 25 outbound connections/day during 7-day incubation. Daily counter on agent record, incremented at each outbound connection request. |
-| G-17 | Directory | Endorsement rate limit N (max new endorsements per month per agent) not specified |
+| G-17 | Directory | ~~Endorsement rate limit N not specified~~ **RESOLVED**: 10 new endorsements per month per agent |
 | G-18 | Directory | ~~Deferred~~ — pending server stack decision (Rust vs. Go for directory nodes). PSI is Phase 2; Phase 1 ships with direct comparison. Library selection is downstream of stack choice. |
 | G-19 | Directory | ~~Resolved~~ — Gap was an artifact of the home node model. `phone_hash` is stored in `agent_registrations` and replicates to all directory nodes. Every node enforces the same-owner rule at endorsement submission time. No additional mechanism required. |
 | G-20 | Directory | ~~Blocked by G-36~~ — custodian API cannot be specified until financial infrastructure is designed. |
@@ -936,13 +945,13 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-26 | Directory | ~~Voucher liability window: 2–3 month range not resolved~~ **RESOLVED**: 90-day window; rolling 2-month cap (1 during probation, 3 after) |
 | G-27 | Directory | ~~Resolved~~ — Two-tier: deterministic (regex/pattern detection → auto-UPHELD, no inference) and inference (3 different frontier models, same system prompt, majority verdict). System prompt CELLO-controlled, not published (gaming risk). Privacy disclosure required at submission (content sent to external models). CELLO funds at Alpha and Consortium; user-pays gated on shallow wallets (G-36). No financial penalties until wallets exist — account suspension is the enforcement tool. No separate arbitration node tier needed at these phases. |
 | G-28 | Directory | ~~FLAGGED session without arbitration: trust impact not specified~~ **RESOLVED**: No impact on flagged party without verdict; unsubmitted flags expire after 7 days; serial flag-abandon (>3 in 90 days) recorded in flagger's trust profile |
-| G-29 | Directory | Bio update rate limit N (hours) not defined |
-| G-30 | Directory | Greeting rate limit threshold not specified |
-| G-31 | Directory | Notification rate limit values per trust tier not specified |
+| G-29 | Directory | ~~Bio update rate limit N not defined~~ **RESOLVED**: 12-hour cooldown |
+| G-30 | Directory | ~~Greeting rate limit threshold not specified~~ **RESOLVED**: 1 per recipient per 7 days; 30 days after explicit decline; permanent on block |
+| G-31 | Directory | ~~Rate limit values per trust tier not specified~~ **RESOLVED**: phone-only/low-trust 5/day; established (1 signal ≥2yr) 10/day; high-trust (3+ signals, ≥1 ≥2yr) 100/day; institutional/bonded elevated |
 | G-32 | Directory | ~~Retired~~ — two delivery paths resolved: directory WebSocket for system/protocol events to agents; direct client-to-companion P2P for owner-targeted notifications. See AC-16. |
-| G-33 | Directory | Institutional verification process for elevated notification rate limits not specified |
-| G-34 | Directory | Alias creation rate limiting mechanism and thresholds not specified |
-| G-35 | Directory | Alias TTL mechanism: schema has EXPIRED state but no scheduled expiry job or TTL configuration defined |
+| G-33 | Directory | ~~Institutional verification process not specified~~ **DEFERRED**: operational/BD policy; manual approval at Alpha/Consortium; automated criteria TBD |
+| G-34 | Directory | ~~Alias creation rate limiting not specified~~ **RESOLVED**: 1 per 7-day window; 2nd allowed if agent has an unused alias slot |
+| G-35 | Directory | ~~Alias TTL mechanism not defined~~ **RESOLVED**: configurable TTL (default 6 months inactivity); checkpoint job marks EXPIRED; TTL resets on contact; owner can manually RETIRE |
 | G-36 | Directory | ~~Deferred~~ — Financial infrastructure (regulatory compliance, custodian partnerships, stablecoin integration) is out of scope for initial launch. Staking hooks exist architecturally but nothing implemented. Deserves its own design document when prerequisites are in place. |
 | G-37 | Relay | ~~Partially resolved~~ — Relay node authentication: registered public key in directory, same model as directory nodes; relay signs session acceptance, directory verifies. Operator governance/contracts deferred (business development, non-technical). CELLO operates all relay nodes through Alpha. |
 | G-38 | Relay | Likely solution: Sender Keys (Signal protocol model) — per-participant sender key distributed pairwise; new joiners receive current keys on join; full re-key on departure for forward secrecy (optional per room policy). **Final design pending dedicated design session** — must address distribution failure modes, offline catch-up, and room size limits. |
