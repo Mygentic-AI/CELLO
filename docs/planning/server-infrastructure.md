@@ -352,11 +352,19 @@ After ABORT: REOPEN is not permitted.
 
 ### Connection infrastructure
 
-**Connection request flow**:
-- Directory routes connection requests to the receiving agent via their authenticated WebSocket
-- Directory relays without re-signing — the requester's original Ed25519 signature arrives intact
+**Connection request flow (verify-then-relay-discard)**:
+- The requester (Alice) is the sole custodian of her trust signal JSON blobs. Before a connection exists there is no P2P channel to the receiver (Bob) — the only path for trust data to reach Bob is through the directory. Alice therefore bundles her trust signal blobs with the connection request.
+- On receiving the connection request package, the directory:
+  1. Checks each submitted trust blob against the hashes it already holds — this is a **fraud filter only**, not a trust authority function. It stops obviously invalid or tampered submissions.
+  2. Appends track record stats from its own authoritative store (keyed to Alice's pseudonymous pubkey). These stats are directory-held data, not Alice-submitted data.
+  3. Forwards the full package to Bob via his authenticated WebSocket.
+  4. Discards the trust blobs. The directory never stores trust signal data beyond hashes — the blobs exist only transiently during relay.
+- The directory does not re-sign the trust data. Alice's original Ed25519 signatures on each blob arrive at Bob intact. The directory is not a trust authority — it is a verified relay.
+- The connection package that arrives at Bob contains: Alice's trust signal blobs (signed by Alice at creation time), Alice's identity key, and track record stats appended by the directory.
+- Bob's client performs two independent verification steps — neither relies on the directory's vouch:
+  1. **Identity verification via Merkle inclusion proof**: Bob queries multiple directory nodes for a Merkle proof that Alice's public key is genuinely registered. He recomputes the root locally against the signed checkpoint. All nodes must agree.
+  2. **Trust signal verification via Alice's own signatures**: Each trust blob was signed by Alice with her identity key when she originally created it. Bob verifies Alice's signature on each blob using the identity key confirmed in step 1. The directory's fraud filter is a first-line check, not a substitute for Bob's independent verification.
 - One negotiation round permitted: Bob can ask for one additional disclosure; Alice provides or refuses; Bob accepts or declines. No further rounds.
-- All actual trust data held in memory during relay is cleared after the accept/reject decision — never persisted to disk. Directory's persistent store holds only hashes.
 
 **Companion device connections**:
 - The directory facilitates NAT traversal for companion device connections using the same hole-punching mechanism as agent-to-agent sessions
@@ -367,10 +375,12 @@ After ABORT: REOPEN is not permitted.
 - The `cello_request_human_input` MCP tool triggers a push notification to the companion device via the directory — the directory sees "send a knock to owner X's companion device," content-free
 - **[GAP G-41]**: Companion device key registration: where the companion device's public key is stored (home node alongside other PII? replicated directory state?), how it is provisioned during app install, and how it is revoked when the owner deregisters a companion device are not specified
 
-**Multi-node public key cross-check**:
-- Receiver cross-checks requester's public key across multiple nodes with Merkle proof verification
+**Multi-node public key cross-check** (identity verification — step 1 of receiver-side verification):
+- Receiver cross-checks requester's public key across multiple directory nodes with Merkle inclusion proof
 - Each node provides data + Merkle proof path from entry to consensus checkpoint root
+- Receiver recomputes the root locally against the signed checkpoint; all queried nodes must agree
 - Proof size: O(log N) — approximately 20 hashes (~640 bytes) for a million-agent directory
+- This is one of two independent verification steps. The other — trust signal verification via the requester's own signatures on each blob — does not involve the directory at all (see connection request flow above)
 
 **Mandatory vs. discretionary signals [GAP G-15]**:
 - Connection nodes must enforce a protocol-level registry of which signal types are mandatory
@@ -664,12 +674,14 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 
 1. Agent connects to a directory connection node via persistent WebSocket (TLS port 443)
 2. Bidirectional challenge-response authentication (agent ↔ directory node)
-3. FROST co-signing ceremony (session establishment) — requires t-of-n directory nodes
-4. Agent selects 2–3 lowest-latency backup nodes; fires initial hash to primary + backups simultaneously
-5. Directory performs ephemeral libp2p Peer ID exchange on behalf of both agents
-6. For sessions needing relay: agents use Peer IDs to connect to relay node; relay bridges the connection
-7. For ~70–80% of sessions: direct hole-punch succeeds; relay node not needed
-8. Hash relay begins: agent sends hash → directory WebSocket → directory assigns seq# → relays to counterparty
+3. Agent A calls `cello_initiate_connection` — client bundles A's trust signal blobs with the request; directory checks blobs against held hashes (fraud filter), appends track record stats from its authoritative store, forwards package to Agent B, discards blobs
+4. Agent B's client performs independent verification (Merkle inclusion proof for identity, Alice's own signatures for trust blobs) and evaluates against its `SignalRequirementPolicy`
+5. If accepted: FROST co-signing ceremony (session establishment) — requires t-of-n directory nodes
+6. Agent selects 2–3 lowest-latency backup nodes; fires initial hash to primary + backups simultaneously
+7. Directory performs ephemeral libp2p Peer ID exchange on behalf of both agents
+8. For sessions needing relay: agents use Peer IDs to connect to relay node; relay bridges the connection
+9. For ~70–80% of sessions: direct hole-punch succeeds; relay node not needed
+10. Hash relay begins: agent sends hash → directory WebSocket → directory assigns seq# → relays to counterparty
 
 ### Message flow
 
@@ -733,7 +745,7 @@ In Alpha, some components that will eventually be separated (relay vs. directory
 | WebAuthn credentials | Home node only | No | Full wipe on account deletion |
 | OAuth tokens | Home node only | No | Full wipe on account deletion |
 | K_server_X share | Home node only | No | GDPR row-level delete on tombstone |
-| Trust signal JSON blobs | Client only (portal discards) | N/A | Client-side |
+| Trust signal JSON blobs | Client only (portal discards). During connection requests: client bundles blobs with request; directory holds transiently for fraud-filter verification then discards; receiving client gets blobs for independent signature verification then discards after accept/reject. | N/A | Client-side |
 | Trust signal hashes | All directory nodes | Yes (via append-only log) | Tombstone appended; hash remains in log |
 | Public keys | All directory nodes | Yes | Tombstone appended; key remains in log |
 | Bios | All directory nodes | Yes | Removed from live index on deletion; hash remains in log |
@@ -784,10 +796,8 @@ The following conflicts were identified across source documents. For each, the t
 - §4.2: "Bio — visible to anyone browsing the directory — no connection required."
 - Decision required: Is there a public browse mode? If so, which fields are exposed? Does the bio endpoint bypass the authentication gate?
 
-**C-7: DeBERTa model delivery (bundled vs. downloaded)**
-- open-decisions.md: "The model is bundled in the npm package; SHA-256 pinned."
-- design-problems.md: "The npm package includes a download script that fetches the model from a fixed Hugging Face URL; hash-verified post-download."
-- Both documents impose SHA-256 verification; the delivery mechanism differs. Decision required: bundle or download-at-install.
+**C-7: DeBERTa model delivery — resolved**
+The model is downloaded on first install (not bundled in the npm package). The npm package includes a postinstall download script that fetches DeBERTa-v3-small INT8 from a fixed URL and verifies the SHA-256 hash before the model is used. Bundling was rejected because it would bloat the npm package significantly and make supply chain updates require a full package republish. The hash pin in source code is the security guarantee regardless of delivery mechanism. See agent-client.md AC-C4 (resolved).
 
 ---
 
