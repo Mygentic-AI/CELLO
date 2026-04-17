@@ -258,7 +258,7 @@ The permissioned model prevents Sybil attacks at the node level — no one can s
 
 **Connection nodes** — public-facing. Handle new connection requests, authentication, registration, and key operations. The noisy surface exposed to the internet.
 
-**Relay nodes** — not directly reachable from cold inbound traffic. Serve only established, already-authenticated sessions. Handle hash relay and Merkle tree operations for ongoing conversations.
+**Relay nodes** — not directly reachable from cold inbound traffic. Serve only established, already-authenticated sessions. Session-level Merkle engines: handle hash relay, canonical sequence numbering, and per-conversation Merkle tree building during active conversations. Circuit relay for NAT-failed sessions. No persistent state — per-session Merkle state is handed to the directory at seal time and destroyed.
 
 This separation is the first line of defense against the fallback downgrade attack: a DDoS against connection nodes cannot reach relay nodes. Existing sessions continue with K_local signing (the normal per-message mode) regardless of what is happening to the connection layer.
 
@@ -294,7 +294,7 @@ FROST ceremonies occur at two points in the protocol — not on every message:
 1. **Session establishment** — both agents authenticate to the directory via FROST. The directory co-signs the session. This proves both identities are legitimate.
 2. **Conversation seal** — the final Merkle root is co-signed via FROST. The directory attests to the conversation's existence and final state. The sealed root enters the MMR.
 
-Individual messages are signed with **K_local alone** and verified against **pubkey(K_local)**. The directory receives signed Merkle leaves (containing message hashes, not content) as a passive notary. It records them but does not co-sign them.
+Individual messages are signed with **K_local alone** and verified against **pubkey(K_local)**. The relay node receives signed Merkle leaves (containing message hashes, not content), assigns sequence numbers, and relays them to the counterparty. The directory is dormant during the session — it returns as the active authority only at seal time.
 
 **Dual public keys — the compromise canary:**
 
@@ -317,17 +317,13 @@ The compromise canary operates at **session boundaries**: if the FROST ceremony 
 
 **The real-time and consensus paths are fully separated:**
 
-- **Real-time path**: One primary node per session receives hashes, assigns sequence numbers, ACKs to agents. On the critical path — agents never wait for consensus.
-- **Propagation**: Primary pushes hashes to other nodes asynchronously. Not on the critical path.
-- **Consensus**: Periodic checkpoint where nodes agree on ledger state. Background, agents unaffected.
+- **Real-time path**: The assigned relay node receives hashes, assigns sequence numbers, relays Structure 2 leaves to the counterparty. On the critical path — agents never wait for consensus.
+- **Propagation**: Directory nodes propagate identity state changes asynchronously. Not on the critical path.
+- **Consensus**: Periodic checkpoint where directory nodes agree on ledger state (global MMR). Background, agents unaffected.
 
-**Primary/backup replication:**
+**Relay failure recovery:**
 
-At session establishment, the agent simultaneously sends signed hashes to the primary AND 2–3 backup nodes (fire and forget — no latency cost, no waiting for backup ACK). Backups store hashes tagged PENDING — received but no canonical sequence number yet.
-
-If the primary fails before propagating: backups already hold all hashes. One backup promotes to primary for this session, sequences the accumulated PENDING hashes. Agents reconnect and continue — no resubmission required.
-
-Backup selection is dynamic per session: the agent picks the 2–3 lowest-latency nodes at session establishment. Different conversations use different backup sets. Load spreads naturally.
+Both agents maintain their local Merkle tree copies throughout the session. Their persistent WebSocket to the directory is dormant but open. If the relay fails: either agent signals the directory via the dormant WebSocket; the directory assigns a new relay; the new relay picks up sequencing from the last confirmed sequence number. For sessions with a direct P2P connection (~70–80%), message delivery continues during relay failure — only hash relay is interrupted. For NAT-failed sessions (~20–30%), both paths are interrupted; messages queue until the new relay is up.
 
 **Client-side latency monitoring:**
 
@@ -382,7 +378,7 @@ This is a login using K_local alone — a proof of possession. The directory the
 
 ### 3.2 What "Online" Means
 
-After authentication, the agent has an active WebSocket session with the directory, can receive and send connection requests, and can submit message hashes via the hash relay. Agents always initiate connections to directory nodes — no node can cold-call an agent.
+After authentication, the agent has an active WebSocket session with the directory, can receive and send connection requests. Once a session is established, hash relay goes to the assigned relay node (not the directory). The directory WebSocket remains dormant during active sessions — open for connection requests and relay failure recovery. Agents always initiate connections to directory nodes — no node can cold-call an agent.
 
 ### 3.3 Degraded Mode — When the Directory Is Unavailable
 
@@ -390,7 +386,11 @@ The client detects degraded mode from its live latency table. Three degradation 
 
 **1. Relay nodes unavailable (existing sessions affected):**
 
-Existing sessions continue normally — individual messages are already signed with K_local, which is the standard per-message signing mechanism. The Merkle hash chain (each leaf commits to prev_root) provides ordering and tamper detection without the directory. The directory's notarial record falls behind but can be backfilled on recovery. The bilateral seal (both parties sign the final root with K_local) is available immediately; the notarized seal (FROST co-signature) is deferred until the directory recovers.
+For sessions with a direct P2P connection (~70–80%): message delivery continues uninterrupted; only hash relay is down. Agents queue hashes locally. When the directory assigns a new relay, agents submit queued hashes and resume sequencing.
+
+For NAT-failed sessions (~20–30%): both message and hash paths are interrupted. Messages queue on sender; delivery resumes when a new relay is assigned (within the `delivery_grace_seconds` window, default 600 seconds).
+
+Bilateral seal remains available immediately — no relay or directory needed. The notarized FROST seal is deferred until a relay and the directory are both available.
 
 **2. Connection nodes unavailable (new sessions affected):**
 
@@ -606,7 +606,7 @@ On acceptance:
   → Both agents generate ephemeral libp2p peer IDs
   → Peer IDs exchanged through directory (one-time, not stored)
   → Direct P2P connection established on ephemeral IDs
-  → Both agents send hashes to directory on persistent WebSocket
+  → Both agents connect to the assigned relay node for hash relay
 
 Session ends:
   → Ephemeral peer IDs destroyed on both sides
@@ -631,15 +631,15 @@ Agent B hashes what arrived from Slack and compares against the hash from the di
 
 ### 6.1 Hash Relay Mechanics — Dual-Path Architecture
 
-The directory is a hash relay. It receives only SHA-256 hashes (32 bytes per message) — never content.
+The relay node is the hash relay during active sessions. It receives only SHA-256 hashes (32 bytes per message) — never content.
 
 Every message follows two paths simultaneously:
 1. **Direct channel** — message + embedded signed hash → receiver (fast)
-2. **Directory relay** — signed hash only → directory (for notarization)
+2. **Relay node** — signed hash only → relay node (for sequencing and notarization)
 
 Because the paths are independent, delivery order is non-deterministic. The client handles all failure modes (§6.4).
 
-**Signed hashes:** Every hash payload is signed by the sender (Ed25519). The receiver verifies the sender's signature directly — it does not trust the directory's version. Signed hashes travel both routes: via the relay for third-party notarization, and embedded in the direct channel message for local verification.
+**Signed hashes:** Every hash payload is signed by the sender (Ed25519). The receiver verifies the sender's signature directly — it does not trust the relay node's version. Signed hashes travel both routes: via the relay for third-party notarization, and embedded in the direct channel message for local verification.
 
 A message arriving without a valid embedded signed hash is rejected by the receiver's client. This means even if the directory is completely down, the receiver can still verify message integrity from the embedded signed hash — and the conversation can continue locally until reconciliation.
 
@@ -649,26 +649,26 @@ Three copies of the Merkle tree exist: sender, receiver, and directory. All thre
 
 **Two-structure leaf format (RFC 6962, domain-separated):**
 
-The Merkle leaf is two distinct data structures. The sender produces Structure 1; the directory embeds it into Structure 2:
+The Merkle leaf is two distinct data structures. The sender produces Structure 1; the relay node embeds it into Structure 2:
 
 ```
 Structure 1 (inner, sender-signed with K_local):
   content_hash       ← SHA-256 of message content
   sender_pubkey
   conversation_id
-  last_seen_seq      ← last sequence number received from directory
+  last_seen_seq      ← last sequence number received from relay
   timestamp
 
-Structure 2 (outer, directory-constructed):
+Structure 2 (outer, relay-constructed):
   0x00               ← message leaf prefix (RFC 6962)
-  sequence_number    ← directory-assigned canonical number
+  sequence_number    ← relay-assigned canonical number
   sender_pubkey
   message_content_hash
   sender_signature   ← Structure 1 embedded
-  prev_root          ← directory-appended; chains to previous state
+  prev_root          ← relay-appended; chains to previous state
 ```
 
-The directory embeds Structure 1's `sender_signature` into Structure 2 and computes `prev_root`. **The client never computes `prev_root`** — in multi-party conversations, the directory is the only entity with canonical sequence across all senders.
+The relay node embeds Structure 1's `sender_signature` into Structure 2 and computes `prev_root`. **The client never computes `prev_root`** — in multi-party conversations, the relay node is the only entity with canonical sequence across all senders during the session.
 
 The `prev_root` field creates a blockchain within the tree — each message commits to the entire history that preceded it. Gaps and modifications are detectable immediately.
 
@@ -678,7 +678,7 @@ RFC 6962 prefix scheme: `0x00` message leaves, `0x01` internal nodes, `0x02` con
 ```
 prev_root = SHA-256(agent_A_pubkey || agent_B_pubkey || session_id || timestamp)
 ```
-The directory initialises this genesis `prev_root` from public information. It anchors the chain from message 1, preventing first-message substitution by a compromised directory.
+The directory computes this genesis `prev_root` and includes it in the signed session assignment handed to the relay. It anchors the chain from message 1, preventing first-message substitution by a compromised relay.
 
 **What this proves:**
 - **No MITM**: hash and message travel different paths — modification in transit produces a mismatch
@@ -688,11 +688,11 @@ The directory initialises this genesis `prev_root` from public information. It a
 
 ### 6.3 Sequence Numbers
 
-**Normal (directory available):** The directory assigns canonical sequence numbers when hashes arrive. Both parties wait for the directory's acknowledgment before computing their local tree update. Strongest ordering guarantee.
+**Normal (relay available):** The relay node assigns canonical sequence numbers when hashes arrive. Both parties wait for the relay's Structure 2 leaf before computing their local tree update. Strongest ordering guarantee.
 
-**Degraded (directory unavailable):** Both parties assign local sequence numbers from their own message order. The hash chain (prev_root embedded in each leaf) provides ordering even without an authoritative timestamp — the sequence is in the math.
+**Degraded (relay unavailable):** Both parties have their local Merkle tree copies up to the last confirmed sequence. The directory assigns a new relay (see §3.3). Until reassignment, agents with direct P2P connections queue hashes locally. Agents without direct P2P (NAT-failed sessions) queue messages on the sender.
 
-**Reconciliation (when directory returns):** Both parties submit their locally-sequenced hashes. If chains agree (same hashes, same order), the directory assigns canonical numbers retroactively. If they disagree, the discrepancy is flagged for investigation.
+**Reconciliation (after relay reassignment):** Agents submit any queued hashes to the new relay, which picks up sequencing from the last confirmed point. Both agents' trees must agree on the sequence before the new relay resumes.
 
 ### 6.4 Delivery Failure Handling
 
@@ -1055,7 +1055,8 @@ When a session seals with a FLAGGED attestation, the flagging party may submit t
 | Phone, WebAuthn credentials, OAuth tokens | Signup portal (placed in owner's jurisdiction) | Yes | No — never leaves signup portal |
 | K_server_X shares | All directory nodes (envelope-encrypted) | Cryptographic | Shares replicate across nodes; key is never assembled |
 | Message content | Direct channel (P2P) | Potentially | Never touches infrastructure |
-| SHA-256 hashes | Relay nodes / directory | No | Yes — non-reversible, non-revealing |
+| SHA-256 hashes (active session) | Relay node (ephemeral — destroyed after seal handoff) | No | Yes — non-reversible, non-revealing |
+| SHA-256 hashes (sealed) | Directory (via sealed Merkle root in global MMR) | No | Yes — non-reversible, non-revealing |
 | Public keys | Directory / public ledger | Pseudonymous | Yes — no identity link in protocol |
 | Trust signal record hashes | Directory / public ledger | No — hashes only | Yes |
 | Trust signal records (original verification data) | Client-side only | Yes | Only if client chooses to share |
