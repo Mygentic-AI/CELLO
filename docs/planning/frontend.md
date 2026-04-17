@@ -23,7 +23,7 @@ The three frontend surfaces are:
 |---|---|---|
 | **Web Portal** | Identity verification, trust enrichment, key management, escalation review, account oversight | Day one |
 | **Mobile App** | Device attestation (Apple ecosystem / Android), push-based escalation, emergency revocation, companion device content viewer | Phase two |
-| **Desktop App** | Device attestation (Windows/TPM, macOS Secure Enclave), local MCP server management, system tray presence, companion device content viewer | Phase three |
+| **Desktop App** | Device attestation (Windows/TPM, macOS Secure Enclave), local MCP server management, companion device content viewer | Phase three (system tray deferred — far future) |
 
 The portal communicates with two backend components: the **home node** (for PII-touching operations: WebAuthn credentials, OAuth tokens, K_server_X operations) and the **directory** (for public reads: trust signal hashes, Merkle proofs, discovery). The distinction is critical — the portal must route identity-sensitive calls only to the home node and must never send PII to replicated directory state.
 
@@ -465,6 +465,7 @@ A chronological event stream showing all notification types from `cello_poll_not
 - Recovery event notifications: a recovered identity is re-entering the network
 - Session-close attestation dispute notifications: a counterparty has filed a dispute against a session
 - Trust signal pickup pending: the agent has an encrypted trust signal blob awaiting retrieval; links to the relevant signal in the trust enrichment UI
+- Peer compromised abort (`PEER_COMPROMISED_ABORT`): a connected agent's owner has declared a compromise; the active session with that agent has been unilaterally sealed
 
 The event stream is filterable by type. Each event links to its relevant context in the portal (a security block links to the session; an endorsement links to the endorser's trust profile).
 
@@ -536,12 +537,14 @@ The "Not Me" flow is optimized for speed. When the owner believes their agent is
 1. The owner taps a prominently placed "Not Me / Emergency" action — accessible from the app's home screen without navigating menus
 2. The app re-authenticates with phone OTP (phone OTP is sufficient for revocation — WebAuthn is required only for the re-keying step that follows)
 3. The app sends a signed revocation request to the home node
-4. The home node immediately burns the K_server_X shares — no new FROST sessions are possible
-5. The app displays confirmation: "Agent locked. No new authenticated sessions can be established. Visit the portal to re-key."
+4. The home node immediately burns the K_server_X shares (blocking new FROST sessions) and fires two parallel abort paths:
+   - Sends an `EMERGENCY_SESSION_ABORT` control message to the agent client via its authenticated WebSocket — the client aborts all active P2P sessions, sends signed ABORT leaves with `COMPROMISE_INITIATED` reason code, and disconnects
+   - Sends `PEER_COMPROMISED_ABORT` notifications directly to every counterparty of active sessions via their authenticated WebSockets — counterparties seal unilaterally on receipt, regardless of whether an ABORT leaf arrives from the compromised side
+5. The app displays confirmation: "Agent locked. All active conversations have been closed. Visit the portal to re-key."
+
+The confirmation screen must make clear that **all active sessions are terminated immediately** — not just future sessions. The owner must not be left with the impression that ongoing conversations are unaffected.
 
 The re-keying step (issuing new K_local and K_server_X) requires WebAuthn and is done via the web portal or the app's WebAuthn path. The "Not Me" flow deliberately does not proceed to re-keying in one step — the owner needs to be at a trusted device with their authenticator in hand, which may not be true at the moment of emergency revocation.
-
-**[CONFLICT FC-4 — same as server C-5]**: §8.3 states "existing conversations signed with K_local alone remain valid" after "Not Me" K_server revocation. §8.4 states "all active sessions receive SEAL-UNILATERAL with tombstone reason code" on any tombstone, and "Not Me" triggers a Compromise-initiated tombstone. These directly contradict. The mobile app's "Not Me" confirmation screen must show either "this will close all active sessions" or "existing sessions continue" — it cannot show both. Decision required before the app can be implemented.
 
 ### Security alerts
 
@@ -642,7 +645,7 @@ No native device sacrifice is available. Server agents sit at the base trust lev
 The desktop app provides a management interface for the locally-running CELLO client:
 
 - **Start / stop / restart** the MCP server process
-- **View server status**: directory reachability, active P2P peers, active sessions, pending notifications, K_local_only mode — the same data returned by `cello_status`. The status must distinguish two qualitatively different states: "directory unreachable — existing sessions continue" vs. "agent locked — no new sessions possible"
+- **View server status**: directory reachability, active P2P peers, active sessions, pending notifications, K_local_only mode — the same data returned by `cello_status`. The status must distinguish two qualitatively different states: "directory unreachable — existing sessions continue" vs. "agent locked — all sessions closed, re-keying required"
 - **View server logs**: recent MCP server output for troubleshooting
 - **Update the server**: when a new CELLO client version is available, the desktop app handles the download, hash verification (SHA-256 pinned to the npm package signature), and process restart
 - **Configuration**: scan sensitivity, P2P bootstrap nodes, escalation channels, directory fallback behavior — a GUI layer over the settings that `cello_configure` manages programmatically
@@ -653,15 +656,9 @@ The desktop app does not replace the MCP server — it manages it. The agent sti
 
 ### System tray / menubar presence
 
-The desktop app runs as a system tray icon (Windows) or menubar icon (macOS). The icon provides ambient status at a glance:
+**Deferred — far future scope.** The system tray / menubar icon is not part of the current desktop app design. Emergency revocation ("Not Me") is handled via the mobile app (Phase 2) or web portal (Phase 1). The desktop app's Phase 3 scope is limited to device attestation, local MCP server management, and companion device content viewing.
 
-- Green: directory reachable, all sessions clean, no pending escalations
-- Yellow: directory unreachable (K_local_only mode), or pending escalation waiting
-- Red: compromise canary fired, or agent locked
-
-Left-click opens the status dashboard. Right-click shows a quick menu: "View status", "Open portal", "Not Me / Emergency", "Quit".
-
-The "Not Me" action from the system tray follows the same flow as from the mobile app: re-authenticate via phone OTP or WebAuthn, send revocation request, confirm lock.
+When the system tray is eventually implemented, the intended design is: tray icon with green/yellow/red ambient status, left-click to open status dashboard, right-click quick menu. The "Not Me / Emergency" shortcut in the tray menu is explicitly excluded from Phase 3 — it depends on the tray existing and on resolving the full "Not Me" flow for desktop, which has not been designed.
 
 ### Relationship to the web portal
 
@@ -750,7 +747,7 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 6. Home node triggers new K_server_X ceremony across directory nodes
 7. New public keys published; old keys marked expired; connected agents receive a `KEY_ROTATED` notification telling them to refresh cached key material
 8. Portal shows confirmation: new key fingerprint, rotation timestamp
-9. Desktop app system tray (if running) shows a brief "Keys rotated" notification
+9. Desktop app shows a brief "Keys rotated" status update (system tray notification deferred — far future)
 
 ### Compromise detection and "Not Me"
 
@@ -759,13 +756,15 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 3. Owner receives push notification
 4. Owner taps "Not Me / Emergency" in mobile app
 5. App re-authenticates with phone OTP
-6. App sends revocation request to home node; K_server_X immediately burned
-7. App displays: "Agent locked. Visit portal to re-key."
+6. App sends revocation request to home node; directory simultaneously:
+   - Burns K_server_X shares (no new FROST sessions possible)
+   - Sends `EMERGENCY_SESSION_ABORT` to the agent client via its authenticated WebSocket — client aborts all active sessions and disconnects
+   - Sends `PEER_COMPROMISED_ABORT` to all counterparties of active sessions via their authenticated WebSockets — counterparties seal unilaterally
+7. App displays: "Agent locked. All active conversations have been closed. Visit the portal to re-key."
 8. Owner opens portal (on desktop/laptop, at a trusted device with their YubiKey or biometric authenticator)
 9. Owner authenticates with WebAuthn
 10. Owner generates new K_local; portal triggers new K_server_X ceremony
 11. New keys published; old keys marked expired
-12. All counterparties with active sessions notified
 
 ### Human escalation for connection requests
 
@@ -828,7 +827,7 @@ Operations are listed in ascending order of required authentication strength. Th
 | View activity log | Phone OTP | ✓ | — | — |
 | Browse discovery | Phone OTP | ✓ | — | — |
 | Approve escalated connection | Phone OTP | ✓ (queue) | ✓ (push) | — |
-| Emergency revocation ("Not me") | Phone OTP | ✓ | ✓ | ✓ (tray shortcut) |
+| Emergency revocation ("Not me") | Phone OTP | ✓ | ✓ | — (tray shortcut deferred) |
 | View sessions and seal status | Phone OTP | ✓ | — | — |
 | Manage contact aliases | Phone OTP | ✓ | — | — |
 | Manage discovery listings | Phone OTP | ✓ | — | — |
@@ -878,7 +877,7 @@ The consistency check. A capability that appears in a requirement but has no sur
 | Human injection into conversations | — | ✓ (via companion connection) | ✓ (via companion connection) |
 | System tray / ambient status | — | ✓ (notification badges) | ✓ (tray icon) |
 | Escalation approval | ✓ (queue) | ✓ (push) | — |
-| "Not Me" emergency revocation | ✓ | ✓ | ✓ (tray shortcut) |
+| "Not Me" emergency revocation | ✓ | ✓ | — (tray shortcut deferred) |
 | Recovery contact vouching | ✓ | — | — |
 | Succession package creation | ✓ | — | — |
 | Alias short-URL resolution | ✓ (resolver on portal domain — **[see F-10, F-31]**) | — | — |
@@ -901,7 +900,7 @@ The consistency check. A capability that appears in a requirement but has no sur
 | Phase 1 | Web portal: registration completion, WebAuthn enrollment, OAuth flows, key rotation, activity log, connection oversight, escalation queue (web-based), policy configuration, alias management, notification filtering configuration, GDPR/data residency display, whitelist/degraded-mode list management | Mobile app, desktop app |
 | Phase 1 | WhatsApp/Telegram as the only out-of-band escalation path | Native push via mobile app |
 | Phase 2 | Mobile app: device attestation (iOS/Android), push-based escalation, "Not Me" shortcut, security alerts, succession claim alerts, companion device content viewing and human injection | Desktop app, TPM attestation, oracle proof capture |
-| Phase 3 | Desktop app: TPM attestation (Windows), macOS Secure Enclave via App Attest, local MCP server management, system tray presence, companion device content viewing and human injection | Financial UI, oracle proof capture |
+| Phase 3 | Desktop app: TPM attestation (Windows), macOS Secure Enclave via App Attest, local MCP server management, companion device content viewing and human injection | Financial UI, oracle proof capture, system tray (far future) |
 | Phase 3+ | Financial UI (stablecoin deposits, fiat on-ramp, stake configuration, bond management, delegation market, yield display) | Oracle proof capture (phase TBD) |
 
 In Phase 1, escalation approvals are web-based: the WhatsApp/Telegram message directs the owner to the portal's escalation queue. The native push path (mobile app) is additive in Phase 2 and should be designed to be fully redundant with the Phase 1 path.
@@ -929,11 +928,11 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 - Position B: The mobile app push path supersedes the WhatsApp/Telegram path once the app is installed. The WhatsApp/Telegram channel is only used when the app is not installed.
 - The decision affects: whether both channels must produce consistent state when both fire; whether double-response (both paths responding) is possible and what happens; and how the owner configures the escalation channel after installing the app.
 
-**FC-4: "Not Me" scope for existing sessions**
-- Position A (end-to-end-flow §8.3): Existing conversations signed with K_local alone remain valid after "Not Me" K_server revocation.
-- Position B (end-to-end-flow §8.4): All active sessions receive SEAL-UNILATERAL with tombstone reason code on any tombstone. "Not Me" triggers a Compromise-initiated tombstone.
-- These directly contradict. The mobile app's "Not Me" confirmation screen must display accurate consequences. Decision required before the app can be implemented.
-- This is the same as server infrastructure Conflict C-5.
+**FC-4: "Not Me" scope for existing sessions — Resolved**
+- **Position B is correct**: all active sessions receive SEAL-UNILATERAL immediately on "Not Me". No session continues after the owner declares a compromise.
+- K_server revocation alone cannot close existing P2P sessions; two parallel abort paths are required. See [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination]] for the full mechanism (`EMERGENCY_SESSION_ABORT` to the agent client; `PEER_COMPROMISED_ABORT` to counterparties).
+- The confirmation screen must state: "All active conversations have been closed."
+- §8.3 ("existing K_local-signed sessions remain valid") is superseded and must not be referenced anywhere.
 
 **FC-5: `KEY_ROTATION_RECOMMENDED` dual meaning**
 - Definition A (key-rotation-design.md): The directory's inbound scheduling nudge to the owner-agent to rotate K_local. This is an informational/maintenance-class alert received by the agent.
@@ -1027,3 +1026,4 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 - [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — designs the P2P companion connection for mobile/desktop content viewing and human injection into agent conversations
 - [[agent-client|CELLO Agent Client Requirements]] — the locally-running client that the frontend surfaces manage; the portal and apps are the human-owner layer; the client is the protocol layer they interact with via the companion device API and MCP tool surface
 - [[2026-04-17_1000_trust-signal-pickup-queue|Trust Signal Pickup Queue]] — designs the async oracle handoff: encrypted pickup queue using identity_key, TRUST_SIGNAL_PICKUP_PENDING notification type, three-state trust signal UI (active / pending delivery / expired)
+- [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination]] — resolves FC-4; dual-path forced abort mechanism (EMERGENCY_SESSION_ABORT to agent client, PEER_COMPROMISED_ABORT to counterparties) that closes existing P2P sessions K_server revocation cannot reach
