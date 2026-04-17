@@ -444,7 +444,7 @@ leaf = SHA-256(
 
 The sender produces Structure 1 and transmits it with the message content. The directory embeds Structure 1's `sender_signature` into Structure 2 and computes `prev_root`. The client never computes `prev_root`.
 
-**[CONFLICT AC-C2]**: This two-structure model is from the multi-party design (2026-04-13). The session-level FROST signing log (2026-04-15) reinstates sender-computed `prev_root`. These three documents are in conflict. The two-structure model is documented here as the current working design, but this is not yet resolved. See AC-C2 in the Conflicts section.
+**AC-C2 and AC-C7 resolved:** The two-structure model is canonical. The 2026-04-15 session-level FROST signing document's description of sender-computed `prev_root` is superseded — it was written with the two-party case in mind and does not account for multi-party, where the directory is the only entity that knows canonical sequence across all senders. The directory always appends `prev_root` to Structure 2. The client never computes `prev_root`. For the genesis leaf (first message of a conversation), the directory initialises `prev_root` as `SHA-256(agent_A_pubkey || agent_B_pubkey || session_id || timestamp)` per open-decisions.md Decision 7 — this also resolves GAP AC-21.
 
 The leaf prefix scheme follows RFC 6962 with an extension for control leaves (AC-C3 resolved): `0x00` for message leaves, `0x01` for internal nodes (RFC 6962 standard), `0x02` for control leaves (CLOSE, CLOSE-ACK, SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN, RECEIPT). Using `0x01` for both internal nodes and control leaves would defeat RFC 6962's second-preimage protection by making control leaves indistinguishable from internal nodes. The `0x02` prefix keeps control leaves as first-class Merkle entries while preserving the RFC 6962 invariant.
 
@@ -1200,11 +1200,8 @@ The following names are canonical and supersede inconsistencies in earlier docum
 **AC-C1: Bot vs. portal boundary for registration — resolved**
 Registration is entry-point agnostic. Both mandatory ceremonies (phone OTP + email) are always required but can be completed through any supported surface in either order. Email OTP is the correlation token linking portal and bot paths. Human operators can complete all ceremonies manually.
 
-**AC-C2: Who computes `prev_root` in Merkle leaf** *(three-way conflict — NOT RESOLVED)*
-- Earlier design (2026-04-08): Sender includes `prev_root` in the signed leaf.
-- Middle design (2026-04-13, multi-party): Sender signs only the authorship proof; directory appends `prev_root`.
-- Later design (2026-04-15, session-level FROST signing): Sender-computed `prev_root` reinstated — the log explicitly states "A builds a signed Merkle leaf containing: hash(message), prev_root (committing to all previous messages), and A's K_local signature over the leaf."
-- The prior resolution (2026-04-13 supersedes) is now contradicted by the 2026-04-15 document. Requires explicit decision. See also [GAP AC-21] (genesis `prev_root` initialization value).
+**AC-C2: Who computes `prev_root` in Merkle leaf — resolved**
+Directory appends `prev_root` to the outer leaf (Structure 2). The client never computes it. The 2026-04-13 multi-party design is canonical; the 2026-04-15 description of sender-computed `prev_root` is superseded. Also resolves GAP AC-21: genesis `prev_root` = `SHA-256(agent_A_pubkey || agent_B_pubkey || session_id || timestamp)` per open-decisions.md Decision 7, initialised by the directory.
 
 **AC-C3: Merkle leaf prefix collision — resolved**
 `0x00` message leaves, `0x01` internal nodes (RFC 6962), `0x02` control leaves. Assigning `0x02` to control leaves preserves RFC 6962 second-preimage protection while keeping control leaves as first-class Merkle entries.
@@ -1220,10 +1217,8 @@ All configured channels always fire. No hierarchy, no suppression based on app p
 - §8.4: All active sessions receive SEAL-UNILATERAL with tombstone reason code on any tombstone.
 The client's behavior on receiving a K_server revocation event is directly contradicted across two sections. Decision required before the client can implement the "Not Me" response path. See server infrastructure Conflict C-5.
 
-**AC-C7: Leaf inner authorship proof vs. outer directory leaf — two separate structures**
-- Part 4 uses "Merkle leaf" to refer both to the sender's inner signed payload (content_hash, sender_pubkey, conversation_id, last_seen_seq, timestamp) and to the outer directory-constructed leaf (sequence_number, sender_pubkey, message_content_hash, sender_signature, prev_root) per multi-party design §4.
-- These are two distinct data structures. The document conflates them throughout (cross-cutting message flow, leaf format specification). Implementors cannot construct the correct leaf format without a clear separation between what the sender signs and what the directory hashes.
-- Requires explicit two-structure specification before implementation. See multi-party-conversation-design.md §4.
+**AC-C7: Leaf inner authorship proof vs. outer directory leaf — resolved**
+Two distinct structures. Structure 1 (inner): what the sender signs with K_local — content_hash, sender_pubkey, conversation_id, last_seen_seq, timestamp. Structure 2 (outer): what the directory hashes into the Merkle tree — sequence_number, sender_pubkey, message_content_hash, sender_signature (Structure 1 embedded), prev_root (directory-appended). See Part 4 for full specification.
 
 **AC-C8: Escalation resolution routing — client callback vs. home node proxy**
 - agent-client.md Part 6, step 5: "The channel callback triggers `cello_accept_connection` or `cello_decline_connection`" — the callback routes directly to the client.
@@ -1269,7 +1264,7 @@ The directory's role is verify-then-relay-discard. It checks each submitted trus
 | AC-18 | Status | `cello_status` does not distinguish between "directory temporarily unreachable" and "agent locked post-Not-Me revocation"; these are meaningfully different states |
 | AC-19 | Registration | Incubation period (7-day, 3 outbound connections/day for phone-only agents) not mentioned anywhere; client must track incubation state locally and enforce outbound rate limits |
 | AC-20 | Registration | Email verification is a mandatory registration requirement (per server-infrastructure) but is entirely absent from the client — not in registration flow, trust signal types, data ownership map, or storage tiers |
-| AC-21 | Merkle | Genesis `prev_root` initialization value not specified. open-decisions.md Decision 7 defines it as `hash(agent_A_pubkey \|\| agent_B_pubkey \|\| session_id \|\| timestamp)`. Without this, independent implementations diverge at the first message of every conversation. Blocked by AC-C2 resolution |
+| AC-21 | Merkle | ~~Resolved~~ — directory initialises genesis `prev_root` as `SHA-256(agent_A_pubkey \|\| agent_B_pubkey \|\| session_id \|\| timestamp)` per open-decisions.md Decision 7. Unblocked by AC-C2 resolution. |
 | AC-22 | Merkle | `scan_result` is listed in the data ownership map as part of the signed Merkle leaf, but the leaf construction spec in Part 4 does not include it as a field. libp2p-dht-and-peer-connectivity.md explicitly includes `scan_result` in the leaf format |
 | AC-23 | Merkle | Degraded-mode leaf construction unspecified: `last_seen_seq` is defined as "the last sequence number received from the directory" — which is unavailable when the directory is unreachable. How the client constructs valid leaves during degraded operation is not specified |
 | AC-24 | Merkle | Degraded-mode session flag ("flagged in Merkle leaf") has no specified leaf field. The Merkle leaf structure in Part 4 has no `degraded_mode_session` field or equivalent |
