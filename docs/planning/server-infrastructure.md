@@ -712,7 +712,9 @@ Relay's per-session state is destroyed after the handoff.
 ### Group room fan-out
 
 - For large group conversations (Option 3 — encrypted relay fan-out): relay node receives an encrypted ciphertext from the sender (encrypted with a shared group key) and fans it out to all participants. Relay sees ciphertext, not plaintext.
-- Group key management (establishment, new-joiner distribution, departure revocation): **explicitly unresolved. [GAP G-38]**
+- Group key management (establishment, new-joiner distribution, departure revocation): **likely solution known, final design pending dedicated design session. [GAP G-38]**
+
+  **Likely solution — Sender Keys (Signal protocol model)**: Each participant generates a sender key and distributes it to all current members via pairwise E2E-encrypted channels (using the existing CELLO session layer). Each sender encrypts their own outbound messages with their sender key. New joiners receive all current sender keys from existing members on join. Departure: forward secrecy on departure requires a full re-key (all remaining members generate new sender keys and redistribute) — expensive but correct. For casual rooms where forward secrecy on departure is not required, old sender keys can be left in place and departure is just membership list removal. Room creator selects the security policy at creation time. Final design must address: key distribution failure modes, offline member catch-up, and maximum room size constraints.
 
 ### DDoS isolation requirement
 
@@ -926,7 +928,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-35 | Directory | Alias TTL mechanism: schema has EXPIRED state but no scheduled expiry job or TTL configuration defined |
 | G-36 | Directory | ~~Deferred~~ — Financial infrastructure (regulatory compliance, custodian partnerships, stablecoin integration) is out of scope for initial launch. Staking hooks exist architecturally but nothing implemented. Deserves its own design document when prerequisites are in place. |
 | G-37 | Relay | ~~Partially resolved~~ — Relay node authentication: registered public key in directory, same model as directory nodes; relay signs session acceptance, directory verifies. Operator governance/contracts deferred (business development, non-technical). CELLO operates all relay nodes through Alpha. |
-| G-38 | Relay | Group key management for encrypted relay fan-out (establishment, new-joiner distribution, departure revocation) explicitly unresolved |
+| G-38 | Relay | Likely solution: Sender Keys (Signal protocol model) — per-participant sender key distributed pairwise; new joiners receive current keys on join; full re-key on departure for forward secrecy (optional per room policy). **Final design pending dedicated design session** — must address distribution failure modes, offline catch-up, and room size limits. |
 | G-39 | Cross | ~~Resolved~~ — Directory nodes only; full federation via append-only log. At-rest: double-encrypted (owner encrypts to successor's `identity_key`; node wraps with KMS master key). GDPR: blob wiped on tombstone, hash remains. |
 | G-40 | Cross | ~~Resolved~~ — Oracle evidence is never stored by the directory. Hash-everything-store-nothing applies: oracle verifies → hash stored → original discarded. Client holds original; presents to arbitration if needed; directory verifies hash. |
 | G-41 | Directory | ~~Retired~~ — companion device allowlist is client-held, not directory-stored. See AC-C10 (resolved). Maximum devices per agent remains a client-side configuration decision. |
