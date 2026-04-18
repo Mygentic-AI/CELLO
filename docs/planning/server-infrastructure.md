@@ -29,7 +29,7 @@ The three server-side components are:
 
 The signup portal is the only path for human-level identity enrichment. The portal also serves as an alternative registration entry point alongside the WhatsApp/Telegram/WeChat bot.
 
-**[CONFLICT C-1 — RESOLVED]:** Registration is entry-point agnostic — neither the bot nor the portal is the privileged starting point. Both mandatory ceremonies (phone OTP and email verification) are always required, but they can be completed in either order through any supported surface. **Portal-first path:** operator registers via web portal → email OTP completed there → portal initiates the WhatsApp or Telegram phone OTP ceremony. **Bot-first path:** operator initiates via WhatsApp or Telegram → phone OTP completed there → email verification required (bot prompts for it). The email OTP is the correlation token that ties a portal-initiated registration to the subsequent phone ceremony. Human operators can complete all ceremonies manually. See agent-client.md AC-C1 (resolved).
+**[CONFLICT C-1 — RESOLVED]:** Registration is entry-point agnostic — neither the bot nor the portal is the privileged starting point. Both mandatory ceremonies (phone OTP and email verification) are always required, but they can be completed in either order through any supported surface. **Portal-first path:** operator registers via web portal → email OTP completed there → portal initiates the WhatsApp, Telegram, or WeChat phone OTP ceremony. **Bot-first path:** operator initiates via WhatsApp, Telegram, or WeChat → phone OTP completed there → email verification required (bot prompts for it). The email OTP is the correlation token that ties a portal-initiated registration to the subsequent phone ceremony. Human operators can complete all ceremonies manually. See agent-client.md AC-C1 (resolved).
 
 ### Registration and OTP flow
 
@@ -589,7 +589,38 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
   | Bonded | Economic bond posted (pending G-36 financial infrastructure) | Elevated; bond functions as stake — planned future extension |
 - **Delivery**: Via recipient's persistent authenticated WebSocket
 - **Notification hashes**: Stored as standalone events — not chained into a session Merkle tree
-- **Notification type registry**: Enumerated, not freeform. Types include at minimum: `INTRODUCTION`, `ORDER_UPDATE`, `ALERT`, `PROMOTIONAL`, `SYSTEM`, `CONNECTION_REQUEST`, `ENDORSEMENT_RECEIVED`, `SECURITY_BLOCK`, `TOMBSTONE`, `TRUST_EVENT`, `RECOVERY_EVENT`, `SESSION_CLOSE_ATTESTATION_DISPUTE`, `SUCCESSION_CLAIM_FILED`, `HUMAN_INPUT_REQUESTED`, `PEER_COMPROMISED_ABORT`
+- **Notification type registry**: Enumerated, not freeform. Full type list:
+
+  | Type | Source | Description |
+  |---|---|---|
+  | `INTRODUCTION` | Agent | Web-of-trust introduction from a mutual contact |
+  | `ORDER_UPDATE` | Agent | Order or task status update from a counterparty agent |
+  | `ALERT` | Agent | Operational alert from a counterparty agent |
+  | `PROMOTIONAL` | Agent | Promotional content (subject to rate limits and recipient opt-out) |
+  | `SYSTEM` | Directory | Protocol-level system message |
+  | `CONNECTION_REQUEST` | Directory | Inbound connection request from another agent |
+  | `CONNECTION_ACCEPTED` | Directory | Outbound connection request was accepted by the recipient |
+  | `CONNECTION_DECLINED` | Directory | Outbound connection request was declined by the recipient |
+  | `ENDORSEMENT_RECEIVED` | Directory | Another agent issued an endorsement for this agent |
+  | `ENDORSEMENT_REVOKED` | Directory | A previously received endorsement was withdrawn |
+  | `SECURITY_BLOCK` | Directory | A message was blocked at Layer 1 (prompt injection detection) or a per-message tamper detection event fired |
+  | `TOMBSTONE` | Directory | Tombstone event (compromise, succession, deletion) affecting this agent or a counterparty |
+  | `TRUST_EVENT` | Directory | A counterparty's trust status has changed |
+  | `VERIFICATION_STALE` | Directory | A social signal's liveness probe failed — signal is in grace period (`VERIFICATION_STALE`); agent should re-verify |
+  | `UNVERIFIED` | Directory | Third consecutive liveness probe failure — signal is now `UNVERIFIED`; hash updated in directory |
+  | `RECOVERY_EVENT` | Directory | Recovery-related event (claim filed, contact designated, attestation requested) |
+  | `RECOVERY_CONTACT_DESIGNATED` | Directory | This agent has been designated as a recovery contact by another agent |
+  | `RECOVERY_ATTESTATION_REQUESTED` | Directory | M-of-N threshold met; this recovery contact's attestation is being requested |
+  | `SESSION_CLOSE_ATTESTATION_DISPUTE` | Directory | A counterparty has disputed this agent's FLAGGED attestation |
+  | `SUCCESSION_CLAIM_FILED` | Directory | A succession claim has been filed (sent to owner, recovery contacts, and connected agents) |
+  | `SUCCESSION_PACKAGE_AVAILABLE` | Directory | Succession package is available for pickup (sent to designated successor after waiting period completes) |
+  | `OWNERSHIP_TRANSFER_ANNOUNCED` | Directory | Agent is entering a voluntary ownership transfer announcement period |
+  | `OWNERSHIP_TRANSFER_CANCELLED` | Directory | A previously announced voluntary ownership transfer has been cancelled |
+  | `HUMAN_INPUT_REQUESTED` | Client | Agent has requested human input via `cello_request_human_input` (knock signal to companion device) |
+  | `TRUST_SIGNAL_PICKUP_PENDING` | Portal | An encrypted trust signal blob is waiting in the pickup queue for this agent |
+  | `KEY_ROTATION_RECOMMENDED` | Directory | Directory is nudging the agent to rotate K_local; payload: `{ agent_id, old_epoch, new_epoch, old_pubkey, new_pubkey, rotation_timestamp, expires_at }` |
+  | `KEY_ROTATED` | Directory | This agent has completed a key rotation; counterparty agents should refresh cached key material |
+  | `PEER_COMPROMISED_ABORT` | Directory | A counterparty agent has been compromised and all sessions with them are terminated; payload: `{ compromised_agent_id, tombstone_id, notified_at }` |
 - **Note**: `EMERGENCY_SESSION_ABORT` is a directory-to-client control instruction sent via the agent's persistent WebSocket — it is NOT a notification type and does not appear in the notification registry
 - **Notification delivery paths — resolved [GAP G-32 — RETIRED]**: Two paths. (1) Directory-sourced events (connection requests, endorsements, anomaly alerts, system events, PEER_COMPROMISED_ABORT, etc.) push via the recipient agent's authenticated persistent WebSocket — the directory is always involved for these. (2) Owner-targeted notifications (trust signal pickup pending, human input requested, companion content alerts) go direct from the CELLO client to the companion device over P2P — the directory is not in the path for these. The server handles path (1) only; path (2) is client-to-companion and requires no server-side change.
 - **Institutional verification for elevated rate limits**: application process and criteria are operational policy, not protocol design. **[GAP G-33 — deferred to product/BD]** Placeholder: applicant submits business registration, use-case description, and agrees to elevated accountability terms. CELLO approves manually at Alpha/Consortium. Automated criteria TBD when volume justifies it.
@@ -898,7 +929,7 @@ The directory — always. Relay nodes never hold K_server_X shares; FROST can on
 `0x00` message leaves, `0x01` internal nodes (RFC 6962), `0x02` control leaves. The `0x02` prefix preserves RFC 6962 second-preimage protection while keeping control leaves as first-class Merkle entries. See agent-client.md AC-C3 (resolved).
 
 **C-4: Who computes prev_root in Merkle leaf — resolved**
-Directory appends `prev_root` to the outer leaf (Structure 2). The client never computes it. The two-structure model (2026-04-13 multi-party design) is canonical; the 2026-04-15 sender-computed description is superseded. Genesis `prev_root` = `SHA-256(A_pubkey || B_pubkey || session_id || timestamp)`. See agent-client.md AC-C2, AC-C7 (resolved).
+The relay node appends `prev_root` to the outer leaf (Structure 2). The client never computes it. The two-structure model (2026-04-13 multi-party design) is canonical; the 2026-04-15 sender-computed description is superseded. Genesis `prev_root` = `SHA-256(A_pubkey || B_pubkey || session_id || timestamp)`. See agent-client.md AC-C2, AC-C7 (resolved).
 
 **C-5: "Not Me" scope for existing sessions — resolved**
 All active sessions are terminated immediately on "Not Me." K_server revocation alone cannot close existing P2P sessions, so the directory fires a dual-path forced abort: Path 1 (`EMERGENCY_SESSION_ABORT` to the agent client) and Path 2 (`PEER_COMPROMISED_ABORT` to each counterparty). Path 2 is the authoritative path — it works regardless of whether the compromised client is online. The earlier §8.3 language ("existing conversations remain valid") is superseded. See [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]].
