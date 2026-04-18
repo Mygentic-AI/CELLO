@@ -92,3 +92,4 @@ No session state required. No directory involvement. Pure client-side enforcemen
 - [[2026-04-18_1407_push-publish-subscription-model|Push-Publish Subscription Model]] — free sample tracking is a natural companion to push-publish; merchant stores subscription preferences and trial status in the stash
 - [[2026-04-18_1148_cac-and-revenue-streams|CAC and Revenue Streams]] — free samples are a conversion mechanism for micropublishing and inference verticals; stash makes them enforceable without directory overhead
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — stash follows the same client-as-custodian principle; merchant owns their own CRM data, directory never sees it
+- [[2026-04-18_1620_commerce-attestation-and-fraud-detection|Commerce Attestation and Fraud Detection]] — per-contact interaction history in the stash feeds into seller-side track record signals used for anomaly detection
