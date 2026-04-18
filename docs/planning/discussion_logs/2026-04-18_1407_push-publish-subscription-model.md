@@ -75,3 +75,4 @@ Push-publish solves both. It is the correct model for any content or data stream
 - [[2026-04-18_1357_connection-bond-usage-and-policy|Connection Bond Usage and Policy]] — subscription agreement establishes prior consent; publisher's push deliveries are pre-authorized and do not require a bond per message
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — subscription records need schema entries; payment triggers per delivery need to hook into the commerce/escrow layer
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — subscription management (create, cancel, list) and push delivery are missing MCP tools; need to be added to the tool surface
+- [[2026-04-18_1454_merchant-crm-data-stash-and-free-samples|Merchant CRM Data Stash and Free Sample Tracking]] — free sample tracking is a natural companion to push-publish; merchant stores subscription preferences and trial status in the stash
