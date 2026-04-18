@@ -42,7 +42,7 @@ The portal is operated by CELLO (centralized). It is not a protocol-level depend
 
 ### Session bootstrapping and authentication
 
-Portal sessions are bootstrapped via phone OTP, which links the browser session to the phone number already registered to the agent. This is the same phone number used at agent registration via the WhatsApp/Telegram/WeChat bot.
+Portal sessions are bootstrapped via phone OTP, which links the browser session to the phone number already registered to the agent. This is the same phone number used at agent registration via the WhatsApp/Telegram/WeChat bot. **Email OTP is a mandatory registration ceremony** — if it has not been completed at the time the owner first visits the portal, the portal must gate the session on completing email verification before proceeding to any enrichment or oversight screens.
 
 Authentication levels during a portal session:
 
@@ -51,7 +51,7 @@ Authentication levels during a portal session:
 
 The session token issued after phone OTP is scoped: it permits reading and low-stakes writes, but the backend rejects WebAuthn-required operations presented with only a phone-OTP-level session token regardless of how recent the OTP was.
 
-**[CONFLICT FC-1 — same as server C-1]**: Multiple documents describe phone OTP as happening exclusively in the WhatsApp/Telegram/WeChat bot during initial registration. Other passages describe the portal handling OTP. Whether the portal has a standalone OTP path (so a new user can start from the portal directly) or always operates downstream of prior bot-verified registration is never made explicit. Decision required: can the portal onboard an un-phone-verified user from scratch, or must the user always pass through the WhatsApp/Telegram/WeChat bot first?
+**[CONFLICT FC-1 — Resolved]**: Registration is entry-point agnostic. Both phone OTP and email OTP are mandatory ceremonies for all registration paths. The portal and the WhatsApp/Telegram/WeChat bot are co-equal entry points — neither is privileged. **Portal-first path**: owner registers via portal → email OTP completed there → portal initiates the bot phone OTP ceremony. **Bot-first path**: owner initiates via bot → phone OTP completed there → email OTP required (bot or portal prompts for it). The email OTP is the correlation token linking the two paths. Owners can complete all ceremonies manually without an agent being installed.
 
 **[GAP F-1]**: Portal session lifecycle is not specified. How long does a phone OTP session remain valid? What triggers re-authentication? Does the session step up from phone-OTP to WebAuthn-level for the duration of the session, or does each WebAuthn-required operation issue a fresh challenge even within the same session?
 
@@ -59,12 +59,14 @@ The session token issued after phone OTP is scoped: it permits reading and low-s
 
 ### Registration completion flow
 
-When an agent registers via the WhatsApp/Telegram/WeChat bot, the human owner receives a link to the portal. The portal recognizes the new registration and presents:
+When an agent registers via the WhatsApp/Telegram/WeChat bot (or via the portal-first path), the human owner receives a link to the portal. The portal recognizes the new registration and presents:
 
-1. A summary of what the agent currently has (phone verified, baseline keys issued)
+1. A summary of what the agent currently has (phone verified, email verified, baseline keys issued)
 2. The trust enrichment paths available, with an explanation of what each adds and what receiving agents may require
 3. A prominent prompt to designate M-of-N recovery contacts (not a hard gate but difficult to skip — see recovery contact designation below)
 4. An optional prompt to install the mobile app for device attestation and push-based alerts
+
+If email verification has not yet been completed (bot-first path where email was not yet collected), the portal must surface the email OTP screen as a mandatory step before proceeding to optional enrichment. The portal must make clear that email is required, not optional.
 
 The portal must make the connection between trust signals and practical outcomes concrete: the owner must see which connection policy tiers their current trust profile opens and closes. The exact statistics are a product decision and must be derived from real network data — the portal must not display fabricated placeholder numbers.
 
@@ -109,6 +111,16 @@ TOTP 2FA must be enrollable alongside WebAuthn as a backup, not as the primary f
 
 **TOTP 2FA enrollment**: RFC 6238 (30-second window, 1-step tolerance). Portal generates TOTP secret, encodes as QR code, user scans with authenticator app, portal verifies 6-digit code. Secret discarded after activation; only the hash of the JSON record is stored. Canonical JSON record envelope applies: `{ signal_class, verified_at, verifier, payload, portal_signature }`. TOTP is a fallback for WebAuthn, not a substitute — it does not satisfy WebAuthn-required operations as a primary factor.
 
+**Email verification**
+
+Email verification is a **mandatory registration ceremony** (not optional enrichment), but it is also a standalone Class 1 trust signal that appears in the trust profile. The portal surfaces it in both contexts:
+
+- **As a registration gate**: 6-digit OTP to the email address, 15-minute expiry, max 3 attempts, rate-limited to 5 sends/hour per address. The portal must not proceed to optional enrichment steps until email is verified.
+- **As a trust signal**: JSON record payload contains the email domain only — never the full address (`{ "email_domain": "gmail.com" }`). The portal discards the address after verification; only the domain hash is retained in the directory.
+- **Re-verification**: not required (email is not subject to liveness probing). However, if an owner changes their email, the new address must go through OTP verification before the change commits.
+
+The portal must clearly communicate that storing the email domain (not the full address) in the trust record is a privacy feature — counterparties can see "verified email from gmail.com" but not the actual address.
+
 **LinkedIn, GitHub, Twitter/X, Facebook, Instagram (OAuth)**
 
 The portal conducts the OAuth flow. For LinkedIn and GitHub, it evaluates connection count, account age, and activity (commits, stars, follower history) at OAuth time using the APIs available at the time of binding. For Twitter/X, Facebook, and Instagram, the evaluation criteria are less specified.
@@ -138,7 +150,7 @@ Device attestation is not available from the web portal. The portal's role here 
 
 The portal must display trust signals using the four-class taxonomy — these must appear as distinct named categories, never collapsed into a single score:
 
-- **Class 1 — Identity proofs**: Two sub-classes that must be visually distinguished: (a) *Account security* (WebAuthn — phishing-resistant login, tethering) and (b) *Device sacrifice* (App Attest / Play Integrity / TPM — Sybil defense, native app required). Phone verification, TOTP, OAuth social proofs also in Class 1.
+- **Class 1 — Identity proofs**: Two sub-classes that must be visually distinguished: (a) *Account security* (WebAuthn — phishing-resistant login, tethering) and (b) *Device sacrifice* (App Attest / Play Integrity / TPM — Sybil defense, native app required). Phone verification, email verification (domain only — mandatory), TOTP, OAuth social proofs also in Class 1.
 - **Class 2 — Network graph signals**: Endorsement count, conductance-based cluster score, counterparty diversity ratio, temporal anomaly flags. All are named signals displayed as present/absent/value — never aggregated into a score.
 - **Class 3 — Track record**: Conversation count, clean-close rate, time on platform.
 - **Class 4 — Economic stake**: Bond status, connection staking level.
@@ -160,9 +172,18 @@ The portal handles all sensitive account operations, all of which require WebAut
 
 Key rotation must be presented to the owner as a routine security operation — not as an emergency. Since the K_server_X rotation is per-agent (not a network-wide event), the portal must not use alarming language about rotation. The portal should prompt rotation on the schedule recommended in the protocol (not yet specified — **[GAP F-7]**) and not only after a compromise event.
 
-Key rotation must happen at a session boundary. If the owner initiates rotation while active sessions exist, the portal must display a grace period indicator: the old K_server_X epoch (`agent_id:epoch:N` format) remains valid for **7 days** after rotation. The `expires_at` field in the `KEY_ROTATION_RECOMMENDED` notification payload gives the exact hard cutoff. Sessions that seal within the grace window use the old epoch normally; signatures from the old epoch are rejected after the hard cutoff. If any sessions remain open as the cutoff approaches, the portal must surface a clear warning.
+Key rotation must happen at a session boundary. If the owner initiates rotation while active sessions exist, the portal must display a grace period indicator: the old K_server_X epoch (`agent_id:epoch:N` format) remains valid for **7 days** after rotation. The `expires_at` field in the `KEY_ROTATION_COMPLETED` notification payload (sent after the rotation ceremony completes) gives the exact hard cutoff. This is distinct from `KEY_ROTATION_RECOMMENDED` (the pre-rotation scheduling nudge which carries no epoch data). Sessions that seal within the grace window use the old epoch normally; signatures from the old epoch are rejected after the hard cutoff. If any sessions remain open as the cutoff approaches, the portal must surface a clear warning.
 
 **[CONFLICT FC-5 — Resolved]**: `KEY_ROTATION_RECOMMENDED` and `KEY_ROTATED` are now distinct notification types. `KEY_ROTATION_RECOMMENDED` is the directory's inbound scheduling nudge to the owner-agent. `KEY_ROTATED` is the outbound notification sent to counterparty agents after a completed rotation, telling them to refresh cached key material. Gap F-25 is closed.
+
+**Identity key rotation (exceptional path)**
+
+Distinct from K_local signing key rotation (routine). The identity key is the long-term root — it is backed by the BIP-39 seed phrase and anchors the pseudonym and track record. Rotating it changes the pseudonym, which creates a migration event. The portal must make this distinction explicit:
+
+- **K_local rotation** (what "Key rotation" above covers): routine, pseudonym unchanged, track record unaffected
+- **Identity key rotation**: exceptional — only available while the old key is still accessible; changes the pseudonym; the directory records `old_pseudonym → new_pseudonym` in `identity_migration_log`; both pseudonyms remain queryable for continuity; the portal must display this event permanently in the trust profile as a pseudonym migration record
+
+The portal must not present identity key rotation in the same UI flow as K_local rotation. It should be in a distinct "Advanced" section with a clear warning: "This will change your agent's cryptographic identity. Your track record will be preserved but linked under a new identity. This action cannot be undone."
 
 **Phone number change**
 
@@ -177,6 +198,7 @@ Requires WebAuthn. Adding a new verifier follows the OAuth enrichment flow above
 Requires WebAuthn. Deletion is permanent and irreversible. The portal must present a multi-step confirmation:
 1. Explain what is deleted (signup portal PII — phone, WebAuthn credentials, OAuth tokens; active public keys and trust signal entries in the directory index; bios from live directory index — all wiped or tombstoned)
 2. Explain what survives (sealed conversation Merkle hashes are not deleted; counterparties' records are not affected)
+2a. Explain tombstone side effects: social proofs enter a **30-day freeze** (cannot be attached to any new account — distinct from the 12-month rebinding lockout which applies to the specific account identifiers); phone number flagged as "in recovery" (cannot register a new account during freeze). The portal must show these freeze timers post-deletion so the owner understands their re-registration constraints.
 3. Explain the GDPR implication: any data voluntarily published to a public blockchain ledger cannot be deleted — this consent is permanent
 4. Issue a WebAuthn challenge
 5. Write a signed tombstone to the directory
@@ -221,8 +243,8 @@ Contents:
 - Endorsement events: endorsements received, endorsements issued, endorsements revoked
 - System events: directory reachability changes, K_local degraded mode entry/exit, key rotation events
 - Anomaly alerts: compromise canary firings, burst activity detections, unusual signing pattern events
-- **Notification events**: tombstone notifications (connected identity tombstoned), trust event notifications (connected agent's trust status changed), recovery event notifications (recovered identity re-entering network), session-close attestation dispute notifications, trust signal pickup pending (agent has an encrypted trust signal blob awaiting retrieval from the portal pickup queue). These come from the formal notification type registry; the event stream must support filtering by type.
-- Delivery failure security events: hash–message mismatch events (tamper detection), hash-without-message events (permanent delivery gap with hash as evidence of intent)
+- **Notification events**: tombstone notifications (connected identity tombstoned), trust event notifications (connected agent's trust status changed), recovery event notifications (recovered identity re-entering network), session-close attestation dispute notifications, trust signal pickup pending (agent has an encrypted trust signal blob awaiting retrieval from the portal pickup queue), succession claim filed (urgent — links to contest UI), human input requested (agent waiting for owner input during an active conversation), Merkle tree pruning scheduled (30-day warning before leaf-level proofs are pruned). These come from the formal notification type registry; the event stream must support filtering by type.
+- Security events (`security_block` type): covers both Layer 1 sanitization fires (injection pattern detected) and hash–message mismatch events (tamper detection — received message does not match the hash the directory has on record). Both surface as `security_block` events with a subtype field distinguishing them. Hash-without-message events (permanent delivery gap — directory has a hash but message never arrived) are a distinct sub-event within the same type.
 
 The activity log is the same data surfaced by `cello_list_sessions` and `cello_poll_notifications` via the MCP tool surface, presented for a human reader.
 
@@ -266,8 +288,8 @@ The portal must also display a table showing how inbound agents are handled duri
 **Alias management**
 
 The portal is the primary surface for managing contact aliases:
-- Create aliases: slug, connection mode (SINGLE / OPEN), context note, per-alias policy override
-- View active aliases: alias URI (shareable), connection count, status, context note
+- Create aliases: slug, connection mode (SINGLE / OPEN), context note, per-alias policy override. **Rate limited to 1 new alias per 7-day rolling window**; a second alias in the same window is permitted only if the agent has an existing unused alias slot. The portal must display the creation cooldown and explain the exception rule.
+- View active aliases: alias URI (shareable), connection count, status, context note, last-contacted timestamp, time remaining before expiry (6-month inactivity TTL)
 - Retire aliases: one-click revocation; portal appends revocation event to directory
 
 The alias URI takes the form `cello:alias/<slug>`. The portal must expose a short-URL resolver so a browser can resolve this to a connection request flow for non-CELLO visitors. **[GAP F-10]**: whether this resolver lives on the portal domain or a separate service is not specified.
@@ -298,7 +320,7 @@ The portal must expose a notification filtering rule engine:
 
 The precedence must be visually clear (sender override beats global type rule). The owner must be able to set a recipient-side opt-out that overrides any sender's permitted rate limit.
 
-The portal must display each sender agent's notification rate-limit tier and whether they have institutional verification (elevated rate limits). The portal must provide a UI for the owner to apply for institutional verification to obtain elevated rate limits.
+The portal must display each sender agent's notification rate-limit tier. Tiers (daily new cold-contact initiation limits): phone-only/low-trust 5/day; established (≥1 signal ≥2yr) 10/day; high-trust (3+ signals, ≥1 ≥2yr) 100/day; institutional/bonded: elevated (manual approval at Alpha/Consortium). Rate limits apply to new cold-contact initiations only — re-engagement with existing conversational history is not subject to these limits. The portal must provide a UI for the owner to apply for institutional verification to obtain elevated rate limits.
 
 ### Trust profile self-view
 
@@ -308,6 +330,8 @@ Contents:
 - Active signals: displayed by class (Class 1–4), with quality metadata (age, platform, verified_at where applicable). Named signals only — no composite score.
 - Missing signals: what is absent, what it would take to add each, what receiving agents commonly require it
 - **Who controls each signal** — the portal must make the ownership model visible to the owner: *behavioral signals* (conversation track record, connection history, anomaly flags) are directory-owned and always visible to counterparties — the owner cannot withhold them, and should not be given a UI that implies they can. *Identity and credential signals* (social proofs, WebAuthn, device attestation, endorsements) are client-owned — the owner chooses whether to disclose each one in a given connection request. The portal must not present these as "required fields." It should explain that including them raises acceptance likelihood, and that the choice not to disclose is valid (the owner may have privacy reasons — not revealing WebAuthn enrollment, avoiding LinkedIn farming, not exposing specific endorsers, etc.).
+- **Phone number tier**: Verified Mobile (uncapped) / Unverified Number (VoIP/virtual — trust ceiling applies) / Provisional (failed phone intelligence — re-evaluated at 60 days). The portal must display the tier clearly since it affects what trust signals are achievable and what connection policies the agent can satisfy. An owner with a VoIP number must see why certain policies refuse their agent.
+- **Outbound cold-contact daily limit** (post-incubation): displayed by trust tier — phone-only/low-trust 5/day, established (≥1 signal ≥2yr) 10/day, high-trust (3+ signals, ≥1 ≥2yr) 100/day, institutional/bonded elevated. The portal must show the owner's current tier and daily usage so they can understand why connection requests may be blocked.
 - Connection policy indicator: what an unknown agent sees about this agent's openness to connection
 - Conversation statistics: session count, clean-close rate, platform age
 - Succession link indicator: if this agent succeeded another identity, a permanently visible succession record showing tombstone type, recovery mechanism, vouching contact identities, declared compromise window, and new public key. This must be displayed to both the owner and counterparties.
@@ -369,7 +393,7 @@ The portal should make designation of M-of-N recovery contacts prominent and dif
 The portal also supports:
 - Viewing and updating the recovery contact list
 - Configuring the M-of-N threshold (configurable at registration)
-- Creating and viewing the succession package (encrypted blob for the designated successor — the portal handles the encryption client-side using the successor's `identity_key`; the portal must never handle the plaintext seed phrase). **[GAP F-39]**: the portal must defend against XSS access to the in-page plaintext during encryption; the specific ceremony (Web Crypto API vs. WASM) and how the portal obtains the successor's `identity_key` are not specified.
+- Creating and viewing the succession package (double-encrypted blob: the portal encrypts the seed phrase to the successor's `identity_key` first; the directory node then wraps that ciphertext with its KMS master key for storage). The portal must never handle the plaintext seed phrase and must confirm to the owner that once submitted, only the designated successor (with their `identity_key`) can decrypt the inner layer. **[GAP F-39]**: the portal must defend against XSS access to the in-page plaintext during encryption; the specific ceremony (Web Crypto API vs. WASM) and how the portal obtains the successor's `identity_key` are not specified.
 
 ### Succession and ownership transfer
 
@@ -392,6 +416,7 @@ The portal exposes a separate successor designation: a specific CELLO identity t
 
 The activity log displays endorsement events (received, issued, revoked). The portal must:
 - Show the endorsement count on the trust profile self-view as a discretionary signal (the owner may withhold specific endorser identities while sharing the count)
+- Display the monthly endorsement rate limit (**10 new endorsements per month per agent**) and current month's usage, so the owner knows when they are approaching the cap
 - Reflect revocation notifications from the directory in the activity log
 
 **[GAP F-35]**: Endorsement request management UI is not specified. The MCP tool surface document explicitly lists `cello_request_endorsement` and `cello_revoke_endorsement` as missing from the 33-tool surface. The portal has no specified UI for: requesting endorsements from contacts, reviewing incoming endorsement requests, or bootstrapping endorsements when creating a second agent.
@@ -430,7 +455,7 @@ Session close types (complete set):
 - **SEAL_UNILATERAL** — one party closed without the other's acknowledgment
 - **EXPIRE** — session expired without explicit close
 - **ABORT** — session aborted; reason code and timestamp displayed
-- **REOPEN** — a previously sealed session was reopened
+- **REOPEN** — a previously sealed session was reopened. Two distinct origins the dashboard must distinguish: (a) *bilateral-initiated* — both parties agreed to reopen; new FROST ceremony; sequence numbers restart at 1; (b) *auto-REOPEN* — a message arrived after the post-seal grace window (300s default) and the client automatically reopened the session to receive it; no FROST, no participant consent required; displayed as a system event with `origin: auto`
 
 Per-participant attestation states (complete set):
 - **CLEAN** — participant attested no issues
@@ -453,6 +478,8 @@ Session details additionally show:
 - Seal mode (bilateral-only vs. notarized-FROST seal)
 - Whether seal notarization is PENDING (directory was unavailable at seal time; FROST ceremony deferred until directory recovers)
 - For aborted sessions: abort reason code and timestamp
+- Post-seal leaves: if a message arrived within 300 seconds after SEAL (the post-seal grace window), it is appended as a `post_seal: true` leaf — the dashboard must display these distinctly from normal leaves, labeled "Received after seal" with a timestamp
+- Relay failure events: if a relay node failure caused a session interruption, the dashboard must show the interruption window with a note that messages were queued and delivered on relay reassignment; for circuit-relay sessions (~20–30%), messages may have been delayed by up to the `delivery_grace_seconds` window (default 600s)
 
 **[GAP F-26]**: The DELIVERED-to-ABSENT transition timeout in group conversations is not specified. Until resolved, the dashboard cannot accurately display participant state.
 
@@ -460,19 +487,22 @@ Session details additionally show:
 
 A chronological event stream showing all notification types from `cello_poll_notifications`. Types derived from the formal notification type registry:
 
-- Security blocks (Layer 1 sanitization fires): what triggered it, from which session
+- Security blocks (`security_block` events — covers Layer 1 sanitization fires, hash–message mismatch tamper detection, and hash-without-message delivery gaps): subtype, what triggered it, from which session
 - Endorsements received, issued, and revoked
 - Connection events (accepted, declined, escalation resolved)
 - System events: directory reachability changes, K_local degraded mode
 - Key rotation events
 - Anomaly alerts (these are also sent to phone — the dashboard shows the same events)
-- Tombstone notifications: a connected identity has been tombstoned
+- Tombstone notifications: a connected identity has been tombstoned — the dashboard must display the tombstone type with distinct urgency: `VOLUNTARY` (informational), `COMPROMISE_INITIATED` (warning — the agent you were talking to may have been used by an attacker), `SOCIAL_RECOVERY_INITIATED` (warning — account compromise confirmed by social consensus). Each type links to different follow-up actions.
 - Trust event notifications: a connected agent's trust status has changed
 - Recovery event notifications: a recovered identity is re-entering the network
 - Session-close attestation dispute notifications: a counterparty has filed a dispute against a session
 - Trust signal pickup pending: the agent has an encrypted trust signal blob awaiting retrieval; links to the relevant signal in the trust enrichment UI
 - Peer compromised abort (`PEER_COMPROMISED_ABORT`): a connected agent's owner has declared a compromise; the active session with that agent has been unilaterally sealed
 - Relay session reassigned: the relay node handling an active session failed; the directory has assigned a new relay and the session has resumed from the last confirmed sequence number
+- Succession claim filed (`SUCCESSION_CLAIM_FILED`): a third party has filed a succession claim against this agent; the owner must authenticate and contest within the announcement window — links directly to the contest UI. **Urgent** — must break through Do Not Disturb on mobile.
+- Human input requested (`HUMAN_INPUT_REQUESTED`): the agent called `cello_request_human_input` during a conversation and is waiting for owner input; links to the companion app content view for the relevant session
+- Merkle tree pruning scheduled (`MERKLE_PRUNE_SCHEDULED`): the client will prune conversation Merkle trees in 30 days; after pruning, leaf-level dispute proofs are no longer available from the local client. The portal must display a countdown and offer an export-before-deletion action.
 
 The event stream is filterable by type. Each event links to its relevant context in the portal (a security block links to the session; an endorsement links to the endorser's trust profile).
 
@@ -498,9 +528,9 @@ The mobile app serves three capabilities that the web portal cannot provide:
 
 The mobile app is not a full portal replica. For everything except device attestation, push-based responses, and companion device content viewing, the owner uses the web portal. The mobile app is an oversight, security response, and conversation visibility tool.
 
-The existing WhatsApp/Telegram/WeChat escalation channel (configured via `cello_configure`) is the Phase 1 out-of-band path before the mobile app exists. The mobile app adds a native push path alongside it, not replacing it.
+The existing WhatsApp/Telegram/WeChat/Slack escalation channel (configured via `cello_configure`) is the Phase 1 out-of-band path before the mobile app exists. The mobile app adds a native push path alongside it, not replacing it.
 
-**[CONFLICT FC-3]**: Whether the native push path and the WhatsApp/Telegram/WeChat path must both be configured, or whether the mobile app supersedes the WhatsApp/Telegram/WeChat channel once installed, is not specified. They must produce the same outcomes (same `CONNECTION_ESCALATION_RESOLVED` notification), but whether they are redundant paths or a primary/fallback hierarchy is not decided. Decision required.
+**[CONFLICT FC-3 — Resolved]**: All configured escalation channels always fire simultaneously. No channel is suppressed based on whether the mobile app is installed. The owner's `cello_configure` settings determine which channels are active — installing the mobile app does not change or remove any other channel. Double-response (owner responding via both app and WhatsApp, for instance) is handled idempotently: first valid response wins, subsequent responses are no-ops.
 
 ### Device attestation enrollment
 
@@ -564,6 +594,8 @@ The app receives push notifications for all anomaly events the directory has fla
 - `K_LOCAL_DEGRADED_MODE` (informational — directory unreachable; existing sessions continue because relay nodes handle active sessions independently; new session establishment is blocked)
 - `KEY_ROTATION_RECOMMENDED` (scheduled maintenance — directory nudging the agent to rotate K_local)
 - Tombstone notifications, trust event notifications, recovery event notifications (same as event stream)
+- `SUCCESSION_CLAIM_FILED` (urgent — breaks through Do Not Disturb; time-sensitive contest window)
+- `MERKLE_PRUNE_SCHEDULED` (informational — 30-day warning before local Merkle tree pruning)
 - Bond/escrow alerts: approaching lock expiry, stake slashing events (FLAGGED session close), oracle proof deadline reminders — at OS-alert level
 
 The app displays these in a prioritized alert list. Urgent alerts (FROST failure, unusual signing) use OS-level alerts that break through Do Not Disturb.
@@ -589,11 +621,11 @@ The companion connection operates on a separate channel from push notifications:
 
 **Agent-requests-human-input.** The agent can request owner input mid-conversation via `cello_request_human_input` (a new MCP tool). The client asks the directory to send a push notification to the companion device — no content, just a knock. The owner receives a push notification ("Your agent is requesting input"), opens the app, sees the conversation context via the content channel, and responds. Alternatively, the agent can reach the owner via WhatsApp/Telegram/WeChat directly.
 
-**Authentication.** The companion device does not use FROST — it is not an agent session. A keypair is generated at app install time, bound to the owner via phone OTP verification (same phone number as the registered agent). The CELLO client maintains an allowlist of authorized companion device public keys. Only registered companion devices can connect.
+**Authentication.** The companion device does not use FROST — it is not an agent session. A keypair is generated at app install time. Registration is a **local ceremony between the owner and the client** — the CELLO client displays a QR code or equivalent; the owner scans it on the mobile or desktop app. No server round-trip, no directory involvement, no phone OTP required. The CELLO client maintains the authoritative allowlist locally. Only registered companion devices can connect.
 
 **Local persistence.** Conversation content viewed through the companion app is fetched on demand from the CELLO client's local SQLCipher database. The client's local log is a superset of the Merkle record — it contains both protocol messages (which have a `merkle_leaf_hash`) and local-only events (human injections, agent-requested-input events, which have `merkle_leaf_hash = null`). The companion app reads from this log; it does not maintain its own copy.
 
-**[GAP F-43]**: The companion device registration flow — how the owner's companion device public key is provisioned to the CELLO client's allowlist during app install — is not fully specified. Whether this uses the same enrollment path as device attestation or a separate registration ceremony is not decided.
+**Companion device registration (F-43 — Resolved)**: Registration is a local QR-code ceremony between the CELLO client and the companion device. The client displays a QR code; the companion app scans it; the keypair is registered in the client's local allowlist. No server round-trip, no directory involvement, no phone OTP. This is distinct from device attestation enrollment (which does involve the signup portal backend).
 
 **[GAP F-44]**: The libp2p implementation technology for the mobile app is constrained by the same decision as **[GAP F-14]**. `go-libp2p` via `gomobile` is the most battle-tested path for iOS/Android; `rust-libp2p` is viable but requires more FFI. React Native cannot access App Attest natively, which already pushes toward native — and native also simplifies libp2p integration.
 
@@ -655,7 +687,7 @@ The desktop app provides a management interface for the locally-running CELLO cl
 - **View server status**: directory reachability, active P2P peers, active sessions, pending notifications, K_local_only mode — the same data returned by `cello_status`. The status must distinguish two qualitatively different states: "directory unreachable — relay nodes are handling active sessions; new sessions blocked" vs. "agent locked — all sessions closed, re-keying required"
 - **View server logs**: recent MCP server output for troubleshooting
 - **Update the server**: when a new CELLO client version is available, the desktop app handles the download, hash verification (SHA-256 pinned to the npm package signature), and process restart
-- **Configuration**: scan sensitivity, P2P bootstrap nodes, escalation channels, directory fallback behavior — a GUI layer over the settings that `cello_configure` manages programmatically
+- **Configuration**: scan sensitivity, P2P bootstrap nodes, escalation channels (WhatsApp/Telegram/WeChat/Slack webhook), directory fallback behavior — a GUI layer over the settings that `cello_configure` manages programmatically
 
 The desktop app does not replace the MCP server — it manages it. The agent still calls MCP tools directly; the desktop app is a management surface, not a proxy.
 
@@ -675,7 +707,7 @@ The desktop app is not a portal replacement. Navigation from the desktop app alw
 
 The desktop app uses the same companion P2P connection as the mobile app (see Surface 3 for the full design). When the CELLO client runs on the same machine, the connection is localhost — no NAT traversal needed. When the client runs on a remote VPS, the directory facilitates hole-punching identically to the mobile app path.
 
-The desktop app's companion connection supports the same capabilities: session list viewing, on-demand content fetching, human injection, and agent-requested-input responses. The authentication model is the same: a keypair generated at install, bound via phone OTP, registered in the client's companion device allowlist.
+The desktop app's companion connection supports the same capabilities: session list viewing, on-demand content fetching, human injection, and agent-requested-input responses. The authentication model is the same: a keypair generated at install, registered in the client's local allowlist via a QR-code ceremony (no server round-trip).
 
 The desktop app is the natural primary surface for companion device content viewing when the agent runs locally — the machine is already on, the client is already reachable, and the connection is trivial.
 
@@ -702,15 +734,15 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 
 ### Registration and first-use
 
-1. Agent registers via WhatsApp/Telegram/WeChat bot — phone OTP, K_local and K_server_X generated, agent listed in directory
-2. Bot sends the owner a link to the web portal
-3. Owner opens the portal, logs in via phone OTP (bootstrapping the web session from the bot-verified phone number)
-4. Portal presents the registration completion flow: current trust signals, available enrichment paths, recovery contact prompt
+1. Agent registers via WhatsApp/Telegram/WeChat bot (bot-first) or portal (portal-first) — both phone OTP and email OTP are mandatory; email OTP is the correlation token between paths
+2. Bot-first: bot sends the owner a link to the portal; portal may prompt for email OTP if not yet completed
+3. Owner opens the portal, logs in via phone OTP; if email OTP not yet done, portal gates on completing it first
+4. Portal presents the registration completion flow: current trust signals (phone verified, email verified), available enrichment paths, recovery contact prompt
 5. Owner completes desired enrichment steps (WebAuthn, OAuth, etc.)
 6. Owner optionally installs the mobile app — portal shows QR code / download link
 7. Mobile app: owner logs in, optionally completes device attestation enrollment
 8. Owner optionally installs the desktop app for TPM attestation or server management
-9. During mobile or desktop app install: companion device keypair generated, registered with the CELLO client's allowlist via phone OTP verification
+9. During mobile or desktop app install: companion device keypair generated; registered with the CELLO client's local allowlist via QR-code scan (client displays QR code, app scans — no server round-trip)
 
 ### Companion device content viewing
 
@@ -780,7 +812,7 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 3. If `human_escalation_fallback` is set and the request does not produce a clear accept/reject: request transitions to PENDING_ESCALATION
 4. Two parallel notifications fire:
    - Push notification to mobile app (if installed and registered)
-   - Message to WhatsApp/Telegram/WeChat escalation channel (always configured as fallback)
+   - Message to WhatsApp/Telegram/WeChat/Slack escalation channel (always configured as fallback)
 5. Owner reviews the request in either the mobile app (push notification card) or the web portal (escalation queue)
 6. Owner taps Accept or Decline
 7. The decision is submitted to the signup portal backend, which calls `cello_accept_connection` or `cello_decline_connection`
@@ -876,7 +908,7 @@ The consistency check. A capability that appears in a requirement but has no sur
 | Play Integrity (Android) | — | ✓ (Android) | — |
 | TPM attestation (Windows) | — | — | ✓ (Windows) |
 | Native push notifications | — | ✓ | ✓ (system tray + OS notification) |
-| Out-of-band escalation | ✓ (WhatsApp/Telegram/WeChat fallback, configured separately) | ✓ | ✓ |
+| Out-of-band escalation | ✓ (WhatsApp/Telegram/WeChat/Slack, configured via cello_configure) | ✓ | ✓ |
 | OAuth flows (LinkedIn, GitHub, etc.) | ✓ | ✓ (in-app browser / native OAuth SDK) | — |
 | Merkle proof export | ✓ | — | — |
 | Dispute submission | ✓ | — | — |
@@ -906,12 +938,12 @@ The consistency check. A capability that appears in a requirement but has no sur
 | Phase | What ships | What is deferred |
 |---|---|---|
 | Phase 1 | Web portal: registration completion, WebAuthn enrollment, OAuth flows, key rotation, activity log, connection oversight, escalation queue (web-based), policy configuration, alias management, notification filtering configuration, GDPR/data residency display, whitelist/degraded-mode list management | Mobile app, desktop app |
-| Phase 1 | WhatsApp/Telegram/WeChat as the only out-of-band escalation path | Native push via mobile app |
+| Phase 1 | WhatsApp/Telegram/WeChat/Slack as the out-of-band escalation path | Native push via mobile app |
 | Phase 2 | Mobile app: device attestation (iOS/Android), push-based escalation, "Not Me" shortcut, security alerts, succession claim alerts, companion device content viewing and human injection | Desktop app, TPM attestation, oracle proof capture |
 | Phase 3 | Desktop app: TPM attestation (Windows), macOS Secure Enclave via App Attest, local MCP server management, companion device content viewing and human injection | Financial UI, oracle proof capture, system tray (far future) |
 | Phase 3+ | Financial UI (stablecoin deposits, fiat on-ramp, stake configuration, bond management, delegation market, yield display) | Oracle proof capture (phase TBD) |
 
-In Phase 1, escalation approvals are web-based: the WhatsApp/Telegram/WeChat message directs the owner to the portal's escalation queue. The native push path (mobile app) is additive in Phase 2 and should be designed to be fully redundant with the Phase 1 path.
+In Phase 1, escalation approvals are web-based: the WhatsApp/Telegram/WeChat/Slack message directs the owner to the portal's escalation queue. The native push path (mobile app) is additive in Phase 2 and should be designed to be fully redundant with the Phase 1 path.
 
 In Phase 1, the desktop app's server management features are replaced by CLI tooling (`cello-server start|stop|status`). The desktop app wraps these operations in a GUI.
 
@@ -919,11 +951,8 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 
 ## Conflicts Requiring Resolution
 
-**FC-1: Portal/bot boundary for phone OTP**
-- Position A: Phone OTP happens exclusively in the WhatsApp/Telegram/WeChat bot; the portal always operates downstream of an already-verified phone number. The portal login flow assumes a bot-registered agent exists and bootstraps from it.
-- Position B: The portal also supports a standalone OTP path, allowing an owner to register entirely through the browser without installing WhatsApp or Telegram.
-- The decision affects: whether the portal needs its own OTP delivery mechanism, whether bot registration is mandatory, and whether the portal's onboarding flow can be self-contained.
-- This is the same as server infrastructure Conflict C-1, but the frontend must resolve it before the portal's registration flow can be implemented.
+**FC-1: Portal/bot boundary for phone OTP — Resolved**
+- Registration is entry-point agnostic. Both phone OTP and **email OTP** are mandatory for all paths. Portal-first and bot-first paths are co-equal. Email OTP is the correlation token. See the FC-1 resolution note in the session bootstrapping section above.
 
 **FC-2: Bio public access vs. authenticated discovery — Resolved**
 - **Two-tier access model**: Class 1 profiles (bio, capability tags, approximate location, pricing signal, connection policy indicator, anonymous trust score) are publicly browsable without authentication. Search, browse, and Class 3 room listing are also publicly accessible. Authentication gates only protocol operations (connection requests, trust signal relay, FROST ceremonies).
@@ -931,10 +960,8 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 - Joining a Class 3 room requires an authenticated session; browsing available rooms does not.
 - This closes F-31 in part: the alias resolver CTA design for non-CELLO visitors is now specified at the concept level. Detailed UX for the CTA flow remains a gap.
 
-**FC-3: Native push vs. WhatsApp/Telegram/WeChat escalation relationship**
-- Position A: The mobile app push path and the WhatsApp/Telegram/WeChat path are parallel, redundant channels. Both fire for every escalation event. The owner can respond via either.
-- Position B: The mobile app push path supersedes the WhatsApp/Telegram/WeChat path once the app is installed. The WhatsApp/Telegram/WeChat channel is only used when the app is not installed.
-- The decision affects: whether both channels must produce consistent state when both fire; whether double-response (both paths responding) is possible and what happens; and how the owner configures the escalation channel after installing the app.
+**FC-3: Native push vs. WhatsApp/Telegram/WeChat/Slack escalation relationship — Resolved**
+- All configured channels always fire simultaneously. Installing the mobile app does not suppress any other channel. Double-response is handled idempotently — first valid response wins. The owner controls active channels via `cello_configure`. See the FC-3 resolution note in the mobile app section above.
 
 **FC-4: "Not Me" scope for existing sessions — Resolved**
 - **Position B is correct**: all active sessions receive SEAL-UNILATERAL immediately on "Not Me". No session continues after the owner declares a compromise.
@@ -981,7 +1008,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-21 | Portal | Whitelist vs. degraded-mode list configuration UI not designed: minimum trust signal floor for degraded-mode list, UI for add/remove, whether both lists are managed in portal only or also in desktop app |
 | ~~F-22~~ | Portal | ~~Closed~~ — 12-hour cooldown. Portal must disable the bio edit button and display time remaining until cooldown expires. |
 | F-23 | Portal | Greeting rate limits now specified: 1 per recipient per 7 days; 30 days after explicit decline; permanent on block. **Still open**: maximum number of distinct per-recipient greetings maintainable simultaneously not specified. |
-| ~~F-24~~ | Portal | ~~Closed~~ — Epoch ID format: `agent_id:epoch:N`. Grace period: 7 days. Hard cutoff after grace. `expires_at` in `KEY_ROTATION_RECOMMENDED` payload. Portal must display countdown to hard cutoff if sessions remain open. |
+| ~~F-24~~ | Portal | ~~Closed~~ — Epoch ID format: `agent_id:epoch:N`. Grace period: 7 days. Hard cutoff after grace. `expires_at` in `KEY_ROTATION_COMPLETED` payload (post-rotation notification — distinct from `KEY_ROTATION_RECOMMENDED` which is the pre-rotation nudge). Portal must display countdown to hard cutoff if sessions remain open. |
 | ~~F-25~~ | Portal | ~~Closed~~ — counterparty-facing key refresh notification named `KEY_ROTATED`; see FC-5 resolution above |
 | F-26 | Dashboard | DELIVERED-to-ABSENT transition timeout in group conversations not specified; portal cannot accurately display participant state without this |
 | ~~F-27~~ | Dashboard | ~~Retired~~ — two delivery paths resolved: directory WebSocket pushes system/protocol events to the agent; client-to-companion P2P delivers owner-targeted notifications. The portal receives events via the directory WebSocket path (same as the agent). See AC-16 / G-32. |
@@ -1000,7 +1027,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-40 | Portal | False-positive appeal initiation UI not designed: when an activity log entry shows a Layer 2/3 scan block, the portal screen for initiating an LLM arbiter appeal (distinct from the general dispute submission flow) is not specified |
 | F-41 | Portal | Portal web security policy has no source document in the vault. CSP, CSRF, OAuth-token no-log, and trust-signal-blob no-log requirements are stated in this document but are not validated by any protocol review or security policy document. A dedicated portal web security spec is needed. |
 | ~~F-42~~ | Portal | ~~Closed~~ — FROST thresholds are: Alpha ~4-of-6; Consortium ~11-of-20; Public rotating ~5-of-7; minimum at any phase 3-of-5 across different jurisdictions/cloud providers. Portal must use these values, not 2-of-3. |
-| F-43 | Mobile / Desktop | Companion device registration flow not fully specified: how the companion device public key is provisioned to the CELLO client's allowlist during app install; whether this uses the same path as device attestation or a separate ceremony |
+| ~~F-43~~ | Mobile / Desktop | ~~Closed~~ — Local QR-code ceremony. Client displays QR code; companion app scans; keypair registered in client's local allowlist. No server round-trip, no directory involvement, no phone OTP. Distinct from device attestation enrollment. |
 | F-44 | Mobile | libp2p implementation technology for the mobile app constrained by the same decision as F-14; `go-libp2p` via `gomobile` is the most battle-tested path; native app requirement from App Attest simplifies libp2p integration |
 | F-45 | Dashboard | Relay failure recovery is not surfaced as a user-visible event. When a relay node fails mid-session the directory reassigns the session to a new relay; the portal/app should show a `RELAY_SESSION_REASSIGNED` system event in the activity log so the owner can see that a disruption occurred and was recovered. The notification type and payload are not yet specified. |
 
