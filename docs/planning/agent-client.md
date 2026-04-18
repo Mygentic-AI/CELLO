@@ -540,7 +540,7 @@ After `ABORT`: `REOPEN` is not permitted. Post-`ABORT` message arrivals are alwa
 
 **Session inactivity timeout (AC-6 resolved):** 72 hours (3 days) with no messages triggers an `EXPIRE` control leaf. The session moves to quasi-terminal state; `REOPEN` is permitted. The 72-hour window is weekend-safe — a Friday afternoon session won't expire over the weekend.
 
-**[GAP AC-7]**: `REOPEN` semantics are incompletely specified: whether REOPEN requires a new FROST ceremony, how sequence numbers are handled across the seal boundary, and whether REOPEN can be unilateral are not defined. This is server infrastructure Gap G-14.
+**REOPEN semantics (AC-7 resolved):** `REOPEN` requires a new FROST ceremony — the session is re-authenticated from scratch at the boundary. On `REOPEN`, sequence numbers restart at 1. The genesis `prev_root` for the continuation session is `SHA-256(previous_sealed_root || session_id || reopen_timestamp)` — this chains the new session cryptographically to the sealed predecessor. Unilateral `REOPEN` is not permitted: if only one party wants to reopen, they must initiate a new connection request. The one exception is auto-`REOPEN`: a late-arriving message that triggers the post-grace auto-reopen (see above) is protocol-internal and does not require FROST — the client handles it automatically.
 
 ### Session attestation
 
@@ -564,6 +564,8 @@ The client participates in FROST at exactly two points, as described in Part 1:
 **Conversation seal:** After CLOSE/CLOSE-ACK exchange, the client participates in a FROST ceremony co-signing the final Merkle root. The sealed root enters the MMR (Merkle Mountain Range) via `cello_close_session`, which returns the `sealed_root_hash` and the new `mmr_peak`.
 
 If the directory is unavailable at seal time, the bilateral seal (both parties sign final root with K_local) is completed immediately. The notarized FROST seal is queued and completed when the directory returns.
+
+**FROST coordinator role (G-12 resolved):** The initiating agent client is the FROST coordinator. It drives the ceremony to completion. No directory node is designated coordinator — that would be a single point of failure inside the ceremony itself. The client enforces: 3-second per-round timeout (15× worst-case RTT for North America ↔ Asia); on timeout, abort ceremony, exclude non-responding directory nodes, select a fresh set of t participants, and retry. Maximum 3 retry attempts with different participant sets. If fewer than t directory nodes are reachable at all, the client fails immediately with `DIRECTORY_BELOW_THRESHOLD` and surfaces the error to the agent owner.
 
 ### Multi-party sessions
 
@@ -816,6 +818,21 @@ If the client does not pick up within 30 days, the ciphertext is deleted. The ha
 ```
 The client must validate `portal_signature` against the portal's known public key before storing any signal blob.
 
+**Trust signal classes (portal-issued):** The client must recognise and store the following `signal_class` values from portal-issued records:
+
+| Class | Verification method | Liveness probing |
+|---|---|---|
+| `linkedin` | OAuth | Every 60 days |
+| `github` | OAuth | Every 60 days |
+| `twitter` | OAuth | Every 60 days |
+| `email` | OTP link | On significant account events |
+| `phone` | SMS/WhatsApp OTP at registration | At re-verification only |
+| `totp` | RFC 6238 TOTP — 30-second window, 1-step tolerance; QR code enrollment via portal | No probing needed — activation_at recorded |
+| `webauthn` | WebAuthn authenticator challenge at portal | No probing — hardware-bound |
+| `device_attestation` | TPM / Secure Enclave / platform attestation | On certificate expiry |
+
+The `totp` signal class indicates the owner has enrolled an authenticator app. The portal discards the TOTP secret after enrollment; the JSON record contains only `{"activated_at": "<ISO8601>"}`. The liveness probing model for OAuth-based signals (VERIFICATION_STALE / UNVERIFIED cycle) does not apply to `totp`, `webauthn`, or `device_attestation` — these signals are not periodically probed and do not have a stale state.
+
 **Social signal liveness states:** Trust signals verified via OAuth can become stale. The directory probes social accounts every 60 days. On the first failure, the signal is marked `VERIFICATION_STALE` (grace period — account may be temporarily inaccessible). After 3 consecutive failed probes (180 days), the signal is marked `UNVERIFIED`, the hash is updated in the directory, and the agent is notified. The client must handle `VERIFICATION_STALE` and `UNVERIFIED` notification types and update local signal state accordingly.
 
 ### Two-hash pattern — selective identity disclosure
@@ -891,6 +908,10 @@ This is the authoritative source for "who am I a recovery contact for?" — the 
 **Recovery contact eligibility floor:** An agent may only serve as a recovery contact if it has at least 2 social bindings each older than 2 years AND WebAuthn or device attestation active AND is not currently in the incubation period. Phone-only agents cannot serve as recovery contacts. The client must validate these criteria before confirming a designation.
 
 **Trust recovery after compromise — probationary period:** After recovering from a compromise event (new keys, re-verified signals), a probationary period of 3 months AND 200 clean conversations is required before full signal weight is reinstated. Both conditions must be met. Track record stats and endorsements are preserved through recovery (pseudonym-keyed, not key-dependent). Key-dependent signals (WebAuthn, device attestation) must be re-verified from scratch. Key-independent signals (social bindings) are restored on fresh OAuth re-verification. The client must surface the probationary state in `cello_status` and `cello_get_trust_profile`.
+
+The client must track the 200-conversation probation counter locally in the persistence tier. This counter increments on each `SEAL` (clean close) during the post-recovery probationary period and persists across restarts. The client may not remove the probation flag from `cello_status` until both the 3-month wall-clock condition and the 200-conversation counter condition are met.
+
+**Voucher accountability (G-26 resolved):** When an agent vouches as a recovery contact and the recovered identity incurs a bad outcome, accountability rules apply to the voucher. The relevant windows are tracked globally (not per account). The first bad outcome within 90 days of the recovery date triggers a 6-month lockout from vouching. During the probationary period (first 3 months + 200 clean conversations after reinstatement), the voucher cap is 1 attestation per 2-month rolling window. After probation is fully complete, the cap rises to 3 per 2-month rolling window. The client must check its own vouching lockout and rolling-window cap before signing a `RECOVERY_ATTESTATION_REQUESTED` and must refuse to sign while locked out, returning a clear error to the agent owner. The 90-day bad-outcome window is distinct from the serial flag-and-abandon 90-day window (G-28) — the latter tracks unsubmitted arbitration flags on the flagger, not vouching accountability.
 
 ---
 
@@ -1096,6 +1117,13 @@ The client implements the complete notification type registry. Types are enumera
 | `session_close_attestation_dispute` | Directory | A counterparty has filed a dispute against a session |
 | `succession_claim_filed` | Directory | A succession claim has been filed against this agent |
 | `human_input_requested` | Client | Internal signal used to coordinate the `cello_request_human_input` knock delivery |
+| `trust_signal_pickup_pending` | Directory | An async trust signal pickup is waiting in the encrypted queue; client must fetch and ACK |
+| `verification_stale` | Directory | A social signal failed its 60-day probe — grace period before UNVERIFIED; client updates local signal state |
+| `unverified` | Directory | A social signal failed 3 consecutive 60-day probes (180 days); signal marked UNVERIFIED; directory hash updated; client updates local signal state |
+| `merkle_prune_scheduled` | Client | A batch of conversation Merkle trees is scheduled for pruning within 30 days; owner may export or extend retention |
+| `relay_sequencing_attack` | Client | Relay-assigned sequence numbers are inconsistent with local state or `last_seen_seq` causal chain; session flagged for review |
+| `trust_signal_orphaned` | Client | A hash exists in the directory for this agent but no corresponding local blob — re-verification required |
+| `alias_expiry` | Directory | An alias has reached its 6-month inactivity TTL and has been marked `EXPIRED` |
 
 ### Escalation channel routing
 
@@ -1150,7 +1178,7 @@ The client's behavior is identical across deployment models. The calling pattern
 
 **Security:** `cello_scan` invokes the Layer 2 LLM scanner; the client is responsible for enforcing structured output mode and schema validation. `cello_report` submits a signed trust incident report to the directory; the client signs with K_local before submission.
 
-**Trust / Identity:** `cello_verify` performs two independent verification steps: (1) multi-node Merkle inclusion proof confirms the target's public key is genuinely registered — the client recomputes the tree root locally against the signed checkpoint; (2) each trust blob is verified against the target's own identity-key signature, not against the directory's vouch. The directory is a fraud filter, not a trust authority; the client is the enforcer. Returns `SignalResult[]` — never a numeric score. `cello_get_trust_profile` returns the agent's own trust profile as it appears to the directory. `cello_check_own_signals` queries the local trust signal store to list all signal states.
+**Trust / Identity:** `cello_verify` performs two independent verification steps: (1) multi-node Merkle inclusion proof confirms the target's public key is genuinely registered — the client recomputes the tree root locally against the signed checkpoint; (2) each trust blob is verified against the target's own identity-key signature, not against the directory's vouch. The directory is a fraud filter, not a trust authority; the client is the enforcer. Returns `SignalResult[]` — never a numeric score. `cello_get_trust_profile` returns the agent's own trust profile as it appears to the directory. `cello_check_own_signals` queries the local trust signal store to list all signal states and returns the derived cold-contact trust tier (phone-only / low-trust / established / high-trust / institutional) computed from the current signal set — the tier is derived locally, never fetched as a number from the directory.
 
 **Discovery:** `cello_search` queries the directory's BM25 + vector similarity + tag/filter stack; requires an active authenticated session. `cello_create_listing` writes to the directory's `directory_listings` table; the client signs the listing creation.
 
@@ -1335,7 +1363,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-4 | Transport | ~~Resolved~~ — reuse same ephemeral Peer ID on brief disconnect; new ID generated only on deliberate close, restart, or reconnection window expiry (AC-5). |
 | AC-5 | Transport | How many P2P session drops before conversation is considered abandoned; retry vs. escalate to relay behavior |
 | AC-6 | Merkle | ~~Resolved~~ — 72 hours (3 days). No messages → `EXPIRE` control leaf; quasi-terminal (REOPEN permitted). Weekend-safe. |
-| AC-7 | Merkle | REOPEN semantics: new FROST ceremony required? Sequence numbers across seal boundary? Unilateral REOPEN permitted? |
+| AC-7 | Merkle | ~~Resolved~~ — REOPEN requires new FROST ceremony; seq# restarts at 1; genesis `prev_root = SHA-256(previous_sealed_root \|\| session_id \|\| reopen_timestamp)`; bilateral-only (unilateral → new connection request); auto-REOPEN (late post-grace) is protocol-internal, no FROST required. |
 | AC-8 | Group rooms | Offline catch-up for group rooms not designed: client rejoining mid-conversation receives `current_message_count` but no replay mechanism |
 | AC-9 | Delivery | ~~Resolved~~ — `delivery_grace_seconds` default 600 (10 min), configurable via `cello_configure`. Protocol-wide; no per-conversation-type variation. |
 | AC-10 | Layer 5 | Runtime governance state persistence across restarts: in-memory counters reset on restart; upgrade path to Redis/DynamoDB not specified as a requirement |
@@ -1347,7 +1375,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-16 | Notifications | ~~Resolved~~ — directory-sourced events push via authenticated WebSocket; owner-targeted client notifications go direct to companion over P2P. Two paths, not mutually exclusive. |
 | AC-17 | Notifications | ~~Resolved~~ — response routes directly to client via channel's own reply mechanism: WhatsApp/Telegram/WeChat bot reply handler, Slack webhook reply, CELLO mobile app over companion P2P. No directory node intermediary. |
 | AC-18 | Status | `cello_status` does not distinguish between "directory temporarily unreachable" and "agent locked post-Not-Me revocation"; these are meaningfully different states |
-| AC-19 | Registration | Incubation period (7-day, **25** outbound connections/day limit for new agents) not mentioned anywhere in the body of the document; client must track incubation state locally and enforce outbound rate limits. Directory enforces at FROST ceremony time; client-side enforcement is a secondary guard. |
+| AC-19 | Registration | ~~Partially resolved~~ — Incubation body text added (Part 6, 7-day / 25 outbound/day cap). Client must track incubation state locally; directory enforces at FROST ceremony time. Open: the directory rejection error code for exceeding the incubation cap is not specified. |
 | AC-20 | Registration | Email verification is a mandatory registration requirement (per server-infrastructure) but is entirely absent from the client — not in registration flow, trust signal types, data ownership map, or storage tiers |
 | AC-21 | Merkle | ~~Resolved~~ — relay node initialises genesis `prev_root` as `SHA-256(agent_A_pubkey \|\| agent_B_pubkey \|\| session_id \|\| timestamp)` per open-decisions.md Decision 7, using the session assignment data received from the directory. Unblocked by AC-C2 resolution. |
 | AC-22 | Merkle | `scan_result` is listed in the data ownership map as part of the signed Merkle leaf, but the leaf construction spec in Part 4 does not include it as a field. libp2p-dht-and-peer-connectivity.md explicitly includes `scan_result` in the leaf format |
@@ -1406,7 +1434,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-75 | Persistence | Companion app install while CELLO client is offline: keypair registration ceremony requires the client to be reachable to update the allowlist. This failure mode is unaddressed |
 | AC-76 | Persistence | Discovery search results (`cello_search`) not listed as a Layer 1 fire surface. Bio text and capability tags are user-generated strings that will be presented to the agent as actionable text |
 | AC-77 | Recovery | Three tombstone types (VOLUNTARY, COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED) not specified in client. Client must set the correct type on initiation and react differently to each incoming type |
-| AC-78 | Recovery | Voucher accountability enforcement absent: client has no mechanism to check its own vouching lockout status before signing a `RECOVERY_ATTESTATION_REQUESTED`, and no behavior for refusing to sign while locked out |
+| AC-78 | Recovery | ~~Resolved~~ — 90-day bad-outcome lockout (6 months on trigger); rolling 2-month cap: 1 attestation during probation (3 months + 200 clean conversations), 3 after probation complete. Client must check lockout and rolling cap before signing; refuse with clear error if locked out. |
 | AC-79 | Recovery | Client post-recovery state transition unspecified: what the client does after its own recovery completes (clear locked state, present recovery record in `cello_status`, reconnect to prior contacts at reduced trust) is not described |
 | AC-80 | Recovery | Compromise window presentation and owner contest flow absent: client has no mechanism to receive, display, or contest the proposed compromise window when a tombstone is filed |
 | AC-81 | Recovery | Succession package creation (encrypt seed phrase to successor's identity key, upload blob to directory) and decryption (successor uses own identity key to decrypt, then performs identity migration) are client-side crypto operations with no coverage. The Part 8 backup section and related documents mention succession only by reference |
