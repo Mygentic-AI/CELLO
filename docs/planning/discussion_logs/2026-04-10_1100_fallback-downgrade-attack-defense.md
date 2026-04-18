@@ -117,3 +117,4 @@ The three-part mechanism addresses the attack at every stage:
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — PSI and the asymmetric whitelist principle here are complementary defenses; PSI prevents contact graph leakage during connection attempts
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — fallback severity reduced: existing conversations unaffected by directory outage because K_local is the normal per-message signing mode
 - [[frontend|CELLO Frontend Requirements]] — K_LOCAL_DEGRADED_MODE banner, whitelist/degraded-mode-list tier UI, and fallback-state connection policy display sourced from this log
+- [[2026-04-18_1357_connection-bond-usage-and-policy|Connection Bond Usage and Policy]] — bond requirements interact with degraded-mode policy; receiver-mandated bonds are part of the connection gate this log's tiered policy extends

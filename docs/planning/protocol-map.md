@@ -99,6 +99,7 @@ Trust data relay during connection requests follows a one-round negotiation with
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — staking mechanics; gate pyramid
 - [[2026-04-14_1000_contact-alias-design|Contact Alias Design]] — revocable aliases for external sharing
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — degraded-mode connection policy; trust-weighted pool selection
+- [[2026-04-18_1357_connection-bond-usage-and-policy|Connection Bond Usage and Policy]] — two-mode bond model; mandatory intent declaration; policy-first connection flow; updates required for §5.1–§5.7
 
 **Readiness: Stable with deferred items.**
 - *PSI*: Not a day-one requirement. Endorsement mechanism first → PSI-CA second phase → full PSI third.
@@ -261,3 +262,4 @@ All 12 design problems are closed. All 12 open decisions are resolved. The proto
 - [[2026-04-17_1000_trust-signal-pickup-queue|Trust Signal Pickup Queue]] — async oracle handoff; encrypted pickup queue using identity_key bridges the gap when the agent client is offline during trust enrichment
 - [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]] — resolves FC-4; all active sessions terminated immediately on compromise declaration via EMERGENCY_SESSION_ABORT + PEER_COMPROMISED_ABORT
 - [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]] — relay nodes as session-level Merkle engines; directory as bookend authority; resolves C-2; home node concept dropped
+- [[2026-04-18_1357_connection-bond-usage-and-policy|Connection Bond Usage and Policy]] — two-mode bond design (voluntary trust signal vs. defensive receiver requirement); mandatory intent declaration and policy-first connection flow; protocol update required for §5.1–§5.7
