@@ -40,7 +40,7 @@ The signup portal is the only path for human-level identity enrichment. The port
   - **Unverified Number** (VoIP/virtual): trust ceiling at score 2
   - **Provisional** (failed phone intelligence): trust ceiling at score 2, re-evaluated at 60 days
   - When carrier intelligence is not yet integrated, all agents default to Verified Mobile.
-- During the first 7 days (incubation), the directory enforces: max 25 new outbound connections per day.
+- During the first 7 days (provisional period), the directory enforces: max 25 new outbound connections per day.
 
 ### Optional strengthening flows
 
@@ -278,7 +278,7 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 - Federation nodes compare chain hashes during sync; divergence indicates tampering
 - All core tables replicate to all federation nodes via PostgreSQL logical replication
 - All access and INSERT audit logs ship via pgaudit to external append-only storage — a compromised node cannot erase its own access history
-- Redis for operational rate-limit counters (notification rate, endorsement rate, connection attempt rate, incubation daily limit, bio update rate) — reset on restart without consequence; append-only event logs are authoritative history
+- Redis for operational rate-limit counters (notification rate, endorsement rate, connection attempt rate, provisional period daily limit, bio update rate) — reset on restart without consequence; append-only event logs are authoritative history
 
 **Bootstrap (three-level fallback)**:
 1. Signed manifest bundled in npm package (consortium private key signature; consortium public key is a constant in client source; Sigstore/OIDC provenance)
@@ -417,7 +417,7 @@ After ABORT: REOPEN is not permitted. Post-ABORT message arrivals are always rej
 
 Trust signals divide by *who owns them*, not by a mandatory/discretionary registry the directory enforces:
 
-- **Directory-owned (behavioral record)** — conversation track record, connection history metrics, anomaly flags, incubation status. The directory computed these from its own observations. The initiating agent does not submit them; the directory *appends them automatically* to every connection request it relays. The receiving agent always sees them — the initiating agent cannot omit them because they were never the initiating agent's to include or exclude.
+- **Directory-owned (behavioral record)** — conversation track record, connection history metrics, anomaly flags, provisional period status. The directory computed these from its own observations. The initiating agent does not submit them; the directory *appends them automatically* to every connection request it relays. The receiving agent always sees them — the initiating agent cannot omit them because they were never the initiating agent's to include or exclude.
 - **Client-owned (identity and credential signals)** — social proofs (LinkedIn, GitHub, etc.), WebAuthn enrollment, device attestation, endorsements. The directory holds only hashes. The initiating agent chooses whether to include these in a given connection request. Absence is not a violation; it may affect the receiving agent's policy evaluation.
 
 The directory does not maintain a mandatory-signal registry or reject at submission for missing signals. It cannot — for client-owned signals, the directory has hashes, not ground truth, and cannot distinguish "Alice chose not to disclose" from "Alice has not verified." Enforcement is entirely at evaluation time on the receiving client via its `SignalRequirementPolicy`.
@@ -427,7 +427,7 @@ The privacy design is intentional: an agent may have valid reasons not to disclo
 **Trust-weighted pool selection (under load)**:
 - Under DDoS or heavy traffic, connection nodes use pool-and-sample selection rather than FIFO queuing
 - Selection probability proportional to trust signals: a fully-verified agent (WebAuthn + GitHub + LinkedIn) gets substantially higher weight than a phone-only agent
-- Incubation enforcement: 7-day incubation period with **25 connections/day limit** for new agents. **Directory nodes enforce** — connection requests happen at session establishment (FROST ceremony), which is a directory operation; relay nodes are not involved until after a session exists. Daily counter lives on the agent record in the directory, incremented on each outbound connection request during incubation. **[GAP G-16 RESOLVED]**
+- Incubation enforcement: 7-day provisional period period with **25 connections/day limit** for new agents. **Directory nodes enforce** — connection requests happen at session establishment (FROST ceremony), which is a directory operation; relay nodes are not involved until after a session exists. Daily counter lives on the agent record in the directory, incremented on each outbound connection request during provisional period. **[GAP G-16 RESOLVED]**
 
 **Endorsement infrastructure**:
 - Directory accepts signed endorsements, verifies endorser's signature, hashes the content, stores the hash, discards the content
@@ -516,7 +516,7 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
   - **Probationary period**: track record history is visible but carries reduced weight until the agent completes **3 months AND 200 clean conversations** post-recovery. Both conditions must be met. At that point full weight is reinstated automatically.
 
 **Social recovery**:
-- M-of-N recovery contacts (configured at onboarding; contacts must meet minimum trust signal requirements — **[GAP G-24 RESOLVED]**: at least 2 social bindings each older than 2 years AND WebAuthn or device attestation active; not currently in incubation. Phone-only accounts cannot serve as recovery contacts. The bar is high enough to prevent attacker-seeded contacts while remaining reachable for legitimate users.)
+- M-of-N recovery contacts (configured at onboarding; contacts must meet minimum trust signal requirements — **[GAP G-24 RESOLVED]**: at least 2 social bindings each older than 2 years AND WebAuthn or device attestation active; not currently in provisional period. Phone-only accounts cannot serve as recovery contacts. The bar is high enough to prevent attacker-seeded contacts while remaining reachable for legitimate users.)
 - 48-hour mandatory waiting period after M-of-N threshold is met
 - Old key can contest during waiting period
 - Directory logs formal recovery event permanently in trust profile: tombstone type, recovery mechanism, vouching agent identities, declared compromise window, new public key
@@ -964,7 +964,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-13 | Directory | ~~Resolved~~ — 72 hours (3 days). No messages → EXPIRE control leaf; session quasi-terminal (REOPEN permitted). |
 | G-14 | Directory | ~~Resolved~~ — REOPEN requires new FROST ceremony; seq# restarts at 1 with genesis `prev_root = SHA-256(previous_sealed_root \|\| session_id \|\| reopen_timestamp)`; unilateral REOPEN not permitted (bilateral by design; use new session request if counterparty non-responsive). Auto-REOPEN (late-arriving post-grace message) is protocol-internal and does not require FROST. |
 | G-15 | Directory | ~~Retired~~ — signals divide by ownership: directory-owned behavioral signals (track record, connection history, anomaly flags) are appended automatically by the directory; client-owned identity signals (social proofs, WebAuthn, device attestation, endorsements) are discretionary disclosures. No mandatory-signal registry; no rejection at submission. Enforcement is the receiving client's `SignalRequirementPolicy`. |
-| G-16 | Directory | ~~Resolved~~ — Directory nodes enforce (connection requests happen at FROST ceremony, a directory operation). Cap updated to 25 outbound connections/day during 7-day incubation. Daily counter on agent record, incremented at each outbound connection request. |
+| G-16 | Directory | ~~Resolved~~ — Directory nodes enforce (connection requests happen at FROST ceremony, a directory operation). Cap updated to 25 outbound connections/day during 7-day provisional period. Daily counter on agent record, incremented at each outbound connection request. |
 | G-17 | Directory | ~~Endorsement rate limit N not specified~~ **RESOLVED**: 10 new endorsements per month per agent |
 | G-18 | Directory | ~~Deferred~~ — pending server stack decision (Rust vs. Go for directory nodes). PSI is Phase 2; Phase 1 ships with direct comparison. Library selection is downstream of stack choice. |
 | G-19 | Directory | ~~Resolved~~ — Gap was an artifact of the home node model. `phone_hash` is stored in `agent_registrations` and replicates to all directory nodes. Every node enforces the same-owner rule at endorsement submission time. No additional mechanism required. |
@@ -1014,7 +1014,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — social recovery model, tombstone types, voucher accountability, 48-hour waiting period, and arbitration system that the directory implements; G-23, G-24, G-25, G-26, G-27 all derive from this session
 - [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession and Ownership Transfer]] — succession package storage (G-39 resolved), recovery contact dual-use for succession attestation (G-25), dead-man's switch and succession_claim_filed notification type
 - [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — the three-class discovery system (agent directory, bulletin board, group rooms) that the directory serves; C-6 two-tier access model resolves the auth vs. public browse conflict from this session
-- [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow — Trust Data Relay and Selective Disclosure]] — the directory's verify-then-relay-discard pattern for connection requests; incubation cap (G-16) and trust signal mandatory/discretionary split resolved here
+- [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow — Trust Data Relay and Selective Disclosure]] — the directory's verify-then-relay-discard pattern for connection requests; provisional period cap (G-16) and trust signal mandatory/discretionary split resolved here
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — the pre-computed endorsement system, same-owner anti-farming rule (G-19), and endorsement rate limit (G-17) resolved here
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — the notification primitive and type registry; rate limits by trust tier (G-31), bio rate limit (G-29), greeting rate limit (G-30) all resolved here
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — conductance score (G-21), device attestation floor for recovery contacts (G-24), and endorsement weight decay that the directory computes

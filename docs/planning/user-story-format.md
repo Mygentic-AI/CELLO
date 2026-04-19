@@ -46,7 +46,7 @@ Domains are scoped to work units — small enough for an AI coder to complete in
 | Registration & Onboarding | `REG` | Phone OTP, email, K_local generation, directory listing creation | client, directory |
 | Trust Enrichment | `ENRICH` | WebAuthn, TOTP 2FA, OAuth providers (LinkedIn, GitHub, etc.), device attestation | web-portal, client, directory |
 | Trust Evaluation | `EVAL` | Signal evaluation, SignalRequirementPolicy, no-numeric-score model, hash-everything verification | client, directory |
-| Anti-Sybil | `SYBIL` | Conductance scoring, diminishing returns, incubation period, carrier signals, endorsement rate limiting | directory |
+| Anti-Sybil | `SYBIL` | Conductance scoring, diminishing returns, provisional period, carrier signals, endorsement rate limiting | directory |
 | Authentication | `AUTH` | Challenge-response, FROST session establishment, mutual auth, nonce management | client, directory |
 | Connection Requests | `CONNREQ` | Sending/receiving requests, trust data relay, selective disclosure, one-round negotiation | client, directory |
 | Connection Policies | `CONNPOL` | Acceptance rules (Open/Selective/Guarded/etc.), endorsement requirements, verification freshness gates | client, web-portal |

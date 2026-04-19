@@ -76,15 +76,15 @@ An agent can optionally post a refundable bond to strengthen their trust profile
 
 **Why optional rather than mandatory:** A mandatory bond is a speed bump that loses legitimate users before they see any value. It also creates a hard dependency on payment infrastructure at launch — accepting payments globally (mobile money, prepaid cards, Lightning Network) is a significant technical and regulatory undertaking that requires funding and time to set up. The bond mechanism lights up when payment infrastructure arrives for marketplace transactions, staking, and other features that already require it.
 
-**Why it still helps:** When available, the bond makes batch Sybil economics unfavorable. At $0.20/identity, 20,000 agents costs $4,000 in locked capital with a 90-day exposure window. But the network does not depend on it — graph analysis, incubation period, and whatever other trust signals are available at that point work without any payment infrastructure.
+**Why it still helps:** When available, the bond makes batch Sybil economics unfavorable. At $0.20/identity, 20,000 agents costs $4,000 in locked capital with a 90-day exposure window. But the network does not depend on it — graph analysis, provisional period, and whatever other trust signals are available at that point work without any payment infrastructure.
 
 **Risk:** PPP tiers can be gamed (US attacker uses Nigerian numbers). Mitigated by VoIP detection and carrier-country-based pricing (not IP geolocation).
 
 ### Incubation period
 
-Phone-only agents get minimal trust signals and a 7-day incubation period with a rate limit of 3 new outbound connections per day. After 7 days with no flags, baseline trust signals are established.
+Phone-only agents get minimal trust signals and a 7-day provisional period with a rate limit of 25 new outbound connections per day. After 7 days with no flags, baseline trust signals are established.
 
-**Why this helps:** 10 Sybil agents at 3 connections/day/agent takes weeks instead of hours to build any meaningful graph. Each day is a day the graph analysis system can inspect them.
+**Why this helps:** 10 Sybil agents at 25 connections/day/agent takes weeks instead of hours to build any meaningful graph. Each day is a day the graph analysis system can inspect them.
 
 **Why this does not hurt legitimate users:** A real restaurant owner connecting to 2-3 agents on Day 1 does not notice the limit. The friction is invisible to the real user and visible only to the attacker.
 
@@ -210,7 +210,7 @@ The legitimate user's cost for each defense: organic transactions, endorsements 
 
 **Multi-SIM identity sprawl + round-robin.** Buys 2,000 prepaid SIMs, registers 2,000 agents, cross-endorses between different phone hashes (bypasses same-owner rule entirely), runs closed-loop transactions.
 
-**Blocked by:** SIM age scoring (near-zero base trust signals), device attestation (need physical phones), conductance scoring (insular cluster), incubation period (slows graph building). When available, optional bonds add further economic cost.
+**Blocked by:** SIM age scoring (near-zero base trust signals), device attestation (need physical phones), conductance scoring (insular cluster), provisional period (slows graph building). When available, optional bonds add further economic cost.
 
 ### Tier 2: Funded attacker ($10K-$50K)
 

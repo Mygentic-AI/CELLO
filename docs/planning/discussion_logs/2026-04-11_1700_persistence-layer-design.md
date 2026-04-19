@@ -711,7 +711,7 @@ agent_registrations                  — append-only
   initial_signing_key_hash           — the signing key at registration time
   initial_fallback_pubkey_hash       — SHA-256 of pubkey(K_local) (per-message signing key; also used for FROST session establishment)
   trust_tier:                        PROVISIONAL | VERIFIED_MOBILE | VERIFIED_DEVICE
-  incubation_start                   — timestamp; incubation enforcement keyed from here
+  provisional period_start                   — timestamp; provisional period enforcement keyed from here
   registered_at
 ```
 
@@ -722,7 +722,7 @@ The `initial_fallback_pubkey_hash` records the K_local public key at registratio
 - `VERIFIED_MOBILE` — phone OTP + SIM age scoring above threshold; standard floor
 - `VERIFIED_DEVICE` — phone OTP + WebAuthn or TPM attestation; elevated trust floor
 
-The tier affects day-one rate limits during the incubation period. After incubation, tier constrains initial connection acceptance policies but the agent builds its own track record from that point.
+The tier affects day-one rate limits during the provisional period. After provisional period, tier constrains initial connection acceptance policies but the agent builds its own track record from that point.
 
 ---
 

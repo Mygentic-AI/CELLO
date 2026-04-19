@@ -209,7 +209,7 @@ When payment infrastructure is live, agents can optionally post a PPP-adjusted b
 
 **Incubation period for new agents:**
 
-Phone-only agents start with minimal trust signals and a 7-day incubation with a rate limit of 3 new outbound connections per day. After 7 clean days, incubation ends and normal operation resumes. Invisible to legitimate users (who connect to 2–3 agents on day one without noticing). Significant friction for bulk farm operations that need to build connection graphs fast.
+Phone-only agents start with minimal trust signals and a 7-day provisional period with a rate limit of 25 new outbound connections per day. After 7 clean days, provisional period ends and normal operation resumes. Invisible to legitimate users (who connect to 2–3 agents on day one without noticing). Significant friction for bulk farm operations that need to build connection graphs fast.
 
 ---
 

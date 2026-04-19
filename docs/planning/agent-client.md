@@ -769,7 +769,7 @@ The following values are enforced by the directory (at FROST ceremony time or su
 
 Group conversations are excluded from the cold-contact counter.
 
-**Incubation period:** New agents are in a 7-day incubation window with a 25 outbound connection/day cap regardless of trust tier. The directory enforces this at FROST ceremony time; the client enforces it as a secondary guard.
+**Incubation period:** New agents are in a 7-day provisional period window with a 25 outbound connection/day cap regardless of trust tier. The directory enforces this at FROST ceremony time; the client enforces it as a secondary guard.
 
 **Endorsement rate limit:** Maximum 10 new endorsements per month per agent. The directory rejects submissions above this limit.
 
@@ -905,7 +905,7 @@ recovery_contact_for[]   — client only
 
 This is the authoritative source for "who am I a recovery contact for?" — the client does not need to query the directory to answer this question. When a `RECOVERY_ATTESTATION_REQUESTED` notification arrives, the client matches it against this table to surface the pending request. The agent's explicit in-client action to sign the attestation is the only thing that counts toward the M-of-N threshold.
 
-**Recovery contact eligibility floor:** An agent may only serve as a recovery contact if it has at least 2 social bindings each older than 2 years AND WebAuthn or device attestation active AND is not currently in the incubation period. Phone-only agents cannot serve as recovery contacts. The client must validate these criteria before confirming a designation.
+**Recovery contact eligibility floor:** An agent may only serve as a recovery contact if it has at least 2 social bindings each older than 2 years AND WebAuthn or device attestation active AND is not currently in the provisional period. Phone-only agents cannot serve as recovery contacts. The client must validate these criteria before confirming a designation.
 
 **Trust recovery after compromise — probationary period:** After recovering from a compromise event (new keys, re-verified signals), a probationary period of 3 months AND 200 clean conversations is required before full signal weight is reinstated. Both conditions must be met. Track record stats and endorsements are preserved through recovery (pseudonym-keyed, not key-dependent). Key-dependent signals (WebAuthn, device attestation) must be re-verified from scratch. Key-independent signals (social bindings) are restored on fresh OAuth re-verification. The client must surface the probationary state in `cello_status` and `cello_get_trust_profile`.
 
@@ -1375,7 +1375,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-16 | Notifications | ~~Resolved~~ — directory-sourced events push via authenticated WebSocket; owner-targeted client notifications go direct to companion over P2P. Two paths, not mutually exclusive. |
 | AC-17 | Notifications | ~~Resolved~~ — response routes directly to client via channel's own reply mechanism: WhatsApp/Telegram/WeChat bot reply handler, Slack webhook reply, CELLO mobile app over companion P2P. No directory node intermediary. |
 | AC-18 | Status | `cello_status` does not distinguish between "directory temporarily unreachable" and "agent locked post-Not-Me revocation"; these are meaningfully different states |
-| AC-19 | Registration | ~~Partially resolved~~ — Incubation body text added (Part 6, 7-day / 25 outbound/day cap). Client must track incubation state locally; directory enforces at FROST ceremony time. Open: the directory rejection error code for exceeding the incubation cap is not specified. |
+| AC-19 | Registration | ~~Partially resolved~~ — Incubation body text added (Part 6, 7-day / 25 outbound/day cap). Client must track provisional period state locally; directory enforces at FROST ceremony time. Open: the directory rejection error code for exceeding the provisional period cap is not specified. |
 | AC-20 | Registration | Email verification is a mandatory registration requirement (per server-infrastructure) but is entirely absent from the client — not in registration flow, trust signal types, data ownership map, or storage tiers |
 | AC-21 | Merkle | ~~Resolved~~ — relay node initialises genesis `prev_root` as `SHA-256(agent_A_pubkey \|\| agent_B_pubkey \|\| session_id \|\| timestamp)` per open-decisions.md Decision 7, using the session assignment data received from the directory. Unblocked by AC-C2 resolution. |
 | AC-22 | Merkle | `scan_result` is listed in the data ownership map as part of the signed Merkle leaf, but the leaf construction spec in Part 4 does not include it as a field. libp2p-dht-and-peer-connectivity.md explicitly includes `scan_result` in the leaf format |

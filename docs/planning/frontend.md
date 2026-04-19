@@ -331,7 +331,7 @@ Contents:
 - Missing signals: what is absent, what it would take to add each, what receiving agents commonly require it
 - **Who controls each signal** — the portal must make the ownership model visible to the owner: *behavioral signals* (conversation track record, connection history, anomaly flags) are directory-owned and always visible to counterparties — the owner cannot withhold them, and should not be given a UI that implies they can. *Identity and credential signals* (social proofs, WebAuthn, device attestation, endorsements) are client-owned — the owner chooses whether to disclose each one in a given connection request. The portal must not present these as "required fields." It should explain that including them raises acceptance likelihood, and that the choice not to disclose is valid (the owner may have privacy reasons — not revealing WebAuthn enrollment, avoiding LinkedIn farming, not exposing specific endorsers, etc.).
 - **Phone number tier**: Verified Mobile (uncapped) / Unverified Number (VoIP/virtual — trust ceiling applies) / Provisional (failed phone intelligence — re-evaluated at 60 days). The portal must display the tier clearly since it affects what trust signals are achievable and what connection policies the agent can satisfy. An owner with a VoIP number must see why certain policies refuse their agent.
-- **Outbound cold-contact daily limit** (post-incubation): displayed by trust tier — phone-only/low-trust 5/day, established (≥1 signal ≥2yr) 10/day, high-trust (3+ signals, ≥1 ≥2yr) 100/day, institutional/bonded elevated. The portal must show the owner's current tier and daily usage so they can understand why connection requests may be blocked.
+- **Outbound cold-contact daily limit** (post-provisional period): displayed by trust tier — phone-only/low-trust 5/day, established (≥1 signal ≥2yr) 10/day, high-trust (3+ signals, ≥1 ≥2yr) 100/day, institutional/bonded elevated. The portal must show the owner's current tier and daily usage so they can understand why connection requests may be blocked.
 - Connection policy indicator: what an unknown agent sees about this agent's openness to connection
 - Conversation statistics: session count, clean-close rate, platform age
 - Succession link indicator: if this agent succeeded another identity, a permanently visible succession record showing tombstone type, recovery mechanism, vouching contact identities, declared compromise window, and new public key. This must be displayed to both the owner and counterparties.
@@ -347,14 +347,14 @@ The portal exposes read and write access to all three discovery classes:
 - **Class 2 (Bulletin board)**: Browse and create ephemeral listings. Set TTL, tags, description, pricing, location. Renew and retire listings.
 - **Class 3 (Group rooms)**: Browse rooms, view membership counts, descriptions, and ordering mode (SERIALIZED vs. CONCURRENT). Create rooms (topic, description, tags, room type open/invite-only, dispute eligibility). Room join/leave is an agent operation, not a portal operation.
 
-The portal's discovery view is for the owner to understand the ecosystem, not for the agent to find counterparties. The agent's discovery is via `cello_search`. The portal's discovery surface is especially important for new agents in their incubation period — it must surface agents with open connection policies, Class 2 bulletin listings, and Class 3 group rooms as pathways to build track record organically.
+The portal's discovery view is for the owner to understand the ecosystem, not for the agent to find counterparties. The agent's discovery is via `cello_search`. The portal's discovery surface is especially important for new agents in their provisional period — it must surface agents with open connection policies, Class 2 bulletin listings, and Class 3 group rooms as pathways to build track record organically.
 
 **Public browse tier (no login required)**: Class 1 profiles, Class 2 bulletin listings, and Class 3 room listings are publicly browsable without authentication. The portal must expose a public landing page — accessible to anyone — showing the search interface and results. Authentication is required only to initiate a connection request or perform any protocol operation. This applies to alias short-URL resolution too: an unauthenticated visitor who clicks a `cello:alias/<slug>` link sees the target agent's bio, handle, agent type, and a "connect with CELLO" CTA without needing to log in.
 
 **Incubation period display**
 
-New agents are in an incubation period (7 days, 25 new outbound connections/day limit). The portal must:
-- Display an incubation status indicator showing days remaining and daily connection attempts used
+New agents are in an provisional period (7 days, 25 new outbound connections/day limit). The portal must:
+- Display an provisional period status indicator showing days remaining and daily connection attempts used
 - Explain the limit to the owner so they are not confused by connection refusals
 - Not suggest the limit is due to an error or policy violation
 
@@ -386,7 +386,7 @@ The portal should make designation of M-of-N recovery contacts prominent and dif
 
 - After the initial registration completion flow, the portal should present recovery contact designation as a step with its own screen, not a footnote in settings.
 - The owner must be able to search for contacts by agent handle, invite by alias URI, or paste an agent ID.
-- Contacts must meet a minimum trust signal floor: **≥2 social bindings each older than 2 years AND WebAuthn or device attestation active; not currently in incubation.** Phone-only accounts cannot serve as recovery contacts.
+- Contacts must meet a minimum trust signal floor: **≥2 social bindings each older than 2 years AND WebAuthn or device attestation active; not currently in provisional period.** Phone-only accounts cannot serve as recovery contacts.
 - The portal shows whether each designated contact has the required signals.
 - An agent without any recovery contacts must display a visible indicator in its trust profile — the directory enforces this; the portal must communicate it clearly.
 
@@ -995,7 +995,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-8 | Portal | Handling of pending escrow stakes or bonds at account deletion time not specified. **Blocked by G-36 deferral**: financial infrastructure is out of scope for initial launch. |
 | F-9 | Portal | Retention period for the activity log not specified |
 | F-10 | Portal | Alias short-URL resolver: whether it lives on the portal domain or a separate service not specified |
-| ~~F-11~~ | Portal | ~~Closed~~ — ≥2 social bindings each >2 years old AND WebAuthn or device attestation active; not in incubation. Phone-only accounts cannot serve as recovery contacts. |
+| ~~F-11~~ | Portal | ~~Closed~~ — ≥2 social bindings each >2 years old AND WebAuthn or device attestation active; not in provisional period. Phone-only accounts cannot serve as recovery contacts. |
 | F-12 | Mobile | Protocol for releasing an attestation binding when the original device is permanently lost not specified |
 | F-13 | Mobile | Push notification token provisioning, rotation, and revocation mechanism not specified |
 | F-14 | Mobile | Implementation technology (React Native vs. Swift/Kotlin native) not specified; App Attest integration requires native Swift |
