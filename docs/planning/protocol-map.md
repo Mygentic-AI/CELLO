@@ -113,7 +113,7 @@ Trust data relay during connection requests follows a one-round negotiation with
 
 Session termination is first-class: CLOSE/CLOSE-ACK → SEAL (mutual), SEAL-UNILATERAL (timeout), EXPIRE (inactivity), ABORT (security event). Control leaves (`0x01`) are hashed and signed identically to message leaves. Session close attestations (CLEAN/FLAGGED/PENDING) serve triple duty: "last known good" timestamp for compromise detection, forced LLM self-audit, and escrow release trigger. Notification messages are fire-and-forget: self-contained, self-sealing, no session, prior conversation required.
 
-Multi-party (N>2) conversations separate authorship from ordering. Two modes: serialized (single-speaker token) and concurrent (per-sender sequence + merge points). Client-side receive windows handle LLM agent participation.
+Multi-party (N>2) conversations separate authorship from ordering. Two modes: serialized (single-speaker token) and concurrent (per-sender sequence + merge points). Client-side receive windows handle LLM agent participation. Group rooms are the primary multi-party venue: invite-only and selective configurations, owner/admin model, throttle manifest with cost protection, violation enforcement, and CONCURRENT+GCD conversation mode.
 
 **Canonical source:** [[end-to-end-flow|end-to-end-flow.md]] — Part 6: The Conversation (§6.1–§6.7); Part 3: Coming Online (§3.1–§3.3)
 
@@ -123,8 +123,9 @@ Multi-party (N>2) conversations separate authorship from ordering. Two modes: se
 - [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]] — N-party Merkle; serialized and concurrent modes
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — fire-and-forget primitive; filtering rule engine
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — dual-path hash relay; Merkle chain as implicit ACK
+- [[2026-04-19_2045_group-room-design|Group Room Design]] — complete group room specification: room configuration, ownership/admin model, violation enforcement with auto-mute, CONCURRENT+GCD mode, attention modes, wallet protection, 20-participant cap
 
-**Readiness: Stable.** Delivery failure handling, termination protocol, multi-party support, and notification system are fully designed.
+**Readiness: Stable.** Delivery failure handling, termination protocol, multi-party support, group rooms, and notification system are fully designed.
 
 ---
 
@@ -178,7 +179,7 @@ Agent succession supports voluntary transfer (identity_migration_log + announcem
 
 **What's decided.** Three-class discoverable entity model: agent directory (individual agents with profiles and trust signals), bulletin board (posted service listings, decoupled from agent identity), and group chat rooms (topic-organized, Merkle-tree-backed). Unified search stack: BM25 for text retrieval + vector similarity for semantic matching. Discovery requires an active FROST-authenticated session — the directory cannot be scraped anonymously.
 
-Agents expose bio (static, public, rate-limited changes — stability is a trust signal), capability tags, trust signal hashes, verification freshness, and optional pricing. Greeting is contextual, per-recipient, sent at connection request time — recorded in the Merkle tree. Contact aliases extend discovery with revocable identifiers shareable outside the directory.
+Agents expose bio (static, public, rate-limited changes — stability is a trust signal), capability tags, trust signal hashes, verification freshness, and optional pricing. Greeting is contextual, per-recipient, sent at connection request time — recorded in the Merkle tree. Contact aliases extend discovery with revocable identifiers shareable outside the directory. Group rooms are discoverable (if configured) with the two-flag model (discoverable / private) and appear in search results with participant count, trust signal requirements, and pricing signals.
 
 **Canonical source:** [[end-to-end-flow|end-to-end-flow.md]] — Part 4: Discovery (§4.1–§4.2)
 
@@ -186,6 +187,7 @@ Agents expose bio (static, public, rate-limited changes — stability is a trust
 - [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — three-class model; search architecture; location privacy; QR codes
 - [[2026-04-14_1000_contact-alias-design|Contact Alias Design]] — revocable aliases for external sharing
 - [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]] — discovery and organic endorsements replace seeder bootstrapping
+- [[2026-04-19_2045_group-room-design|Group Room Design]] — group room discovery via two-flag model; discoverable rooms appear in search results with manifest information
 
 **Readiness: Stable.** Discovery model is fully designed. Search implementation details (index technology, ranking weights) are engineering decisions.
 
@@ -209,6 +211,24 @@ Bios are voluntary broadcasts — the owner wrote and published them. Trust sign
 - [[design-problems|Design Problems]] — Problem 6 (GDPR vs append-only log, closed — not an issue) and Problem 7 (home node deanonymization, closed — concept dropped; three-system separation eliminates the attack)
 
 **Readiness: Stable.** No open compliance questions. The architecture resolves GDPR and data residency by design.
+
+---
+
+## Domain 9: Commerce
+
+**What's decided.** Micropublishing via push-publish: subscribed agents receive scheduled content pushes from publishers without maintaining persistent sessions. Subscription agreements store publisher/subscriber, content type, frequency, price, and personalization. Each push delivery triggers a micropayment (per-delivery or periodic billing). Human-relay agent tier enables humans to sell services to AI agents — task requests, completion verification, skill signals via LinkedIn/credentials. Merchant CRM data stash: per-contact JSON blobs for tracking free samples, interaction history, personalization parameters. All merchant data is client-side only; directory never sees it. Purchase attestations capture what is being delivered, at what price, on what schedule — signed by both parties, hashed into Merkle records. Fraud detection via behavioral anomalies: seller concentration, transaction velocity, lifecycle patterns. Flagged accounts above $500+ thresholds may be required to submit raw attestations and chat logs for ephemeral inference review. KYC on sellers (not buyers) limits attack surface for money transfer abuse.
+
+**Canonical source:** No unified end-to-end section yet; see discussion logs for detailed designs.
+
+**Key discussion logs:**
+- [[2026-04-18_1407_push-publish-subscription-model|Push-Publish Subscription Model]] — micropublishing delivery mechanism; subscription records; per-delivery payment triggers; cancellation and refunds
+- [[2026-04-18_1412_human-agent-marketplace|Human-Agent Marketplace]] — humans selling skills to AI agents; hosted lightweight relay agent tier; task verification; skill signals
+- [[2026-04-18_1454_merchant-crm-data-stash-and-free-samples|Merchant CRM Data Stash and Free Sample Tracking]] — client-side per-contact JSON blobs; universal identifier (identity_key); key rotation continuity
+- [[2026-04-18_1620_commerce-attestation-and-fraud-detection|Commerce Attestation and Fraud Detection]] — signed purchase attestations; behavioral fraud detection model; ephemeral chat log review for flagged accounts; KYC on sellers
+
+**Readiness: Stable with deferred items.**
+- *Multi-party escrow*: Not yet designed. Group commerce is an open item — requires multi-party escrow before group rooms support commerce transactions.
+- *CAC and revenue streams*: Economic model and hosted agent tiers (referenced but not yet written as a design document).
 
 ---
 
@@ -241,6 +261,7 @@ These documents span multiple domains and are important for understanding how th
 | 6. Compromise & Recovery | **Stable** | — |
 | 7. Discovery | **Stable** | — |
 | 8. Compliance & Privacy | **Stable** | — |
+| 9. Commerce | **Stable** | Multi-party escrow (requires design); CAC & revenue streams (model document); group commerce blind spots (fraud detection in multi-party contexts) |
 
 All 12 design problems are closed. All 12 open decisions are resolved. The protocol is ready for user story development across all domains.
 
@@ -250,6 +271,7 @@ All 12 design problems are closed. All 12 open decisions are resolved. The proto
 
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]]
 - [[cello-design|CELLO Design Document]]
+- [[user-story-format|CELLO User Story Format]] — formal template for all user stories combining intent with EARS behavioral rigor, designed for TDD with AI coders
 - [[server-infrastructure|Server Infrastructure Requirements]] — complete requirements for signup portal, directory nodes, and relay nodes, with all conflicts and gaps identified
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]]
 - [[open-decisions|Open Decisions]]
@@ -263,4 +285,8 @@ All 12 design problems are closed. All 12 open decisions are resolved. The proto
 - [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]] — resolves FC-4; all active sessions terminated immediately on compromise declaration via EMERGENCY_SESSION_ABORT + PEER_COMPROMISED_ABORT
 - [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]] — relay nodes as session-level Merkle engines; directory as bookend authority; resolves C-2; home node concept dropped
 - [[2026-04-18_1357_connection-bond-usage-and-policy|Connection Bond Usage and Policy]] — two-mode bond design (voluntary trust signal vs. defensive receiver requirement); mandatory intent declaration and policy-first connection flow; protocol update required for §5.1–§5.7
+- [[2026-04-18_1407_push-publish-subscription-model|Push-Publish Subscription Model]] — micropublishing via scheduled content pushes; subscription agreements; per-delivery and periodic billing
+- [[2026-04-18_1412_human-agent-marketplace|Human-Agent Marketplace]] — humans selling skills to AI agents; lightweight relay agent tier; task verification and skill signals
+- [[2026-04-18_1454_merchant-crm-data-stash-and-free-samples|Merchant CRM Data Stash and Free Sample Tracking]] — client-side per-contact JSON storage; universal identifier via identity_key; key rotation continuity
+- [[2026-04-18_1620_commerce-attestation-and-fraud-detection|Commerce Attestation and Fraud Detection]] — signed purchase attestations; behavioral fraud detection; ephemeral chat log review for flagged accounts; KYC on sellers
 - [[2026-04-19_2045_group-room-design|Group Room Design]] — complete design of Class 3 group rooms: two-flag room model, ownership/admin structure, CONCURRENT+GCD conversation mode, digest batching, attention modes, violation enforcement with logarithmic auto-mute, wallet protection, relay defense, and 20-participant cap
