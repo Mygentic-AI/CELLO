@@ -112,6 +112,10 @@ When the owner sends a `LEAVE` control leaf, ownership transfers automatically:
 2. Otherwise to the **highest-trust admin** currently in the room (by trust signal profile)
 3. Otherwise to a **custodial state** — no agent holds owner privileges; existing room settings are frozen; no configuration changes can be made; any admin can claim ownership; if no admin claims within **7 days**, the room dissolves with a forced seal. The 7-day window (not 72 hours) is intentional: a 72-hour window is an attack surface — a malicious admin can claim ownership within that window and immediately dissolve the room, terminating the coordination venue mid-conversation. 7 days gives legitimate admins time to notice and act.
 
+**Custodial claim requirements:** To claim ownership during the custodial window, an admin must meet the minimum participation threshold **at claim time** — not just at designation time. An admin who was designated but has never sent a message in the room cannot claim. This closes the attack where an attacker parks a muted agent, engineers admin designation, and exploits the custodial window.
+
+**Simultaneous claim race:** If multiple admins submit ownership claims at the same time, the relay uses first-received sequence number as the tiebreaker — the same mechanism used for all room event ordering. The first claim to arrive at the relay wins. Subsequent claimants receive: `{ error: "ownership_claimed", by: "<agent_id>", claimed_at: "<timestamp>" }`. No new machinery required — relay ordering is already canonical.
+
 **The earliest-joiner rule is explicitly rejected.** It is trivially exploitable: an attacker parks a muted agent in every discoverable room at zero inference cost, waits for the owner to depart, and inherits ownership. Succession must require either explicit designation or meaningful participation (admin status).
 
 ### Room dissolution
@@ -227,9 +231,11 @@ Short, machine-readable, no verbose explanation. The client then enforces: Agent
 
 **What receiving clients do with manifest violations:** If a message somehow reaches a receiving client that violates a manifest parameter (oversized, GCD violation, etc.), the receiving client drops it silently and logs a protocol violation event. It does not send any acknowledgement back to the relay or the sender — silence is the response. This is intentional: sending a violation acknowledgement would itself burn receiver tokens and create a new DoS surface. The sender gets no confirmation that their violation was detected; they simply observe that their message produced no responses.
 
-### Adaptive silence threshold
+### Adaptive silence threshold with jitter
 
 Each participant's client can adaptively tune its personal silence threshold within the immutable bounds set by the room (`silence_threshold_ms` as the floor, `max_accumulation_ms` as the ceiling). The client uses the `current_activity_msgs_per_day_7d_avg` field from the manifest and the `wait_duration_ms` from recent batch metadata to adjust: high-activity rooms warrant shorter personal thresholds; low-activity rooms warrant longer ones. This is a client-side optimization — no protocol coordination required. The room's immutable floor and ceiling always bound the result.
+
+**Jitter against collusion reset attacks:** Each client applies a ±20% random variation to its personal silence threshold, generated locally and not disclosed to any other party. This breaks coordinated collusion attacks where N agents rotate sends at just below `max_room_messages_per_second` to perpetually reset all clients' silence windows. With jitter, different clients fire at slightly different times — an attacker cannot know in advance which client has which threshold variation. They cannot reliably reset all clients' windows simultaneously when each client fires at a different moment. The worst case is `max_accumulation_ms` still fires as the hard backstop, but the attacker cannot prevent all clients from ever completing a batch.
 
 ### Why this and not the others
 
@@ -354,7 +360,7 @@ These are not protocol requirements — they are suggested starting values for r
 | `max_room_messages_per_second` | 2 | Aggregate room ceiling; adjust upward for larger active rooms |
 | `checkpoint_message_threshold` | 100 | May need upward revision for high-activity rooms based on stress test results |
 | `attention_mode_default` | `passive` | Conservative default; agents that want active mode opt in themselves |
-| `max_participants` | 15 | Conservative below the 25 protocol maximum; revisit based on topology stress tests |
+| `max_participants` | 15 | Conservative below the 20 protocol maximum; revisit based on topology stress tests |
 
 The `checkpoint_message_threshold` default of 100 is a starting point. In genuinely high-activity rooms (hundreds of messages per day), 100 may trigger CHECKPOINTs too frequently and create unnecessary Merkle overhead. Stress testing will inform whether this default should be raised.
 
@@ -392,11 +398,11 @@ Three natural use cases, each with a different parameter profile. These are star
 | `attention_mode_default` | `active` |
 | `dispute_eligible` | true |
 
-**Archetype 3 — Monitored feed / marketplace** *(10–25 participants, most passive)*
+**Archetype 3 — Monitored feed / marketplace** *(10–20 participants, most passive)*
 
 | Parameter | Value |
 |---|---|
-| `max_participants` | 25 |
+| `max_participants` | 20 |
 | `silence_threshold_ms` | 10,000 |
 | `max_accumulation_ms` | 60,000 |
 | `global_cooldown_ms` | 10,000 |
@@ -433,6 +439,8 @@ Each participant's client enforces a per-room daily inference budget cap. On bre
 
 The push alert fires at **50% of daily budget consumption** — early enough to take action, not just an autopsy notification. The alert offers an "approve 2× budget" option with a 5-minute response window before auto-mute kicks in.
 
+**One approval per billing day:** The 2× budget approval can be granted once per 24-hour billing window only. After the first approval, subsequent 50% alerts in the same billing window are informational only — the approve option is unavailable until the next billing day resets. This prevents the budget approval loop where a burst room repeatedly triggers 50% alerts and the owner keeps approving, compounding indefinitely. After the first approval is consumed, auto-mute is the only protection remaining until the next day.
+
 ### Pre-join transparency
 
 Before `cello_join_room` completes, the agent's client fetches the full throttle manifest via `cello_get_room_info` and presents it. The client computes a projected worst-case inference cost based on the manifest parameters and current participant count. If projected cost exceeds the agent's configured room budget threshold, the client warns before completing the join.
@@ -452,7 +460,7 @@ All room parameters disclosed pre-join. Split by mutability:
 | `global_cooldown_ms` | GCD — minimum wait after any send (room floor; agents may raise but not lower) |
 | `gcd_scope` | `per_sender` (default) or `room` |
 | `max_room_messages_per_second` | Room-level message rate ceiling, relay-enforced, independent of per-sender GCD |
-| `checkpoint_message_threshold` | Messages since last CHECKPOINT before a new one is triggered (default: 100) |
+| `checkpoint_message_threshold` | Messages since last CHECKPOINT before a new one is triggered (default: 100; protocol minimum: 50) |
 | `silence_threshold_ms` | Room-level floor for digest window |
 | `max_accumulation_ms` | Hard cap on batch accumulation regardless of silence |
 | `max_message_size_chars` | Maximum characters per message |
@@ -466,7 +474,7 @@ All room parameters disclosed pre-join. Split by mutability:
 | `discoverable` | Discovery visibility |
 | `private` | Admission requirement |
 | `dispute_eligible` | Whether full Merkle tree is maintained for dispute |
-| `max_participants` | Hard ceiling on participant count — protocol maximum is 25 (see below) |
+| `max_participants` | Hard ceiling on participant count — protocol maximum is 20 (see below) |
 
 ### Mutable parameters (owner can change post-creation)
 
@@ -488,17 +496,17 @@ All room parameters disclosed pre-join. Split by mutability:
 
 ## 8. Participant Cap
 
-Group rooms have a **hard protocol maximum of 25 participants**. This is a protocol constant, not a per-room configurable ceiling — no room can exceed 25 regardless of what `max_participants` is set to. The owner may set `max_participants` to any value from 2 to 25; the protocol enforces the 25 upper bound.
+Group rooms have a **hard protocol maximum of 20 participants**. This is a protocol constant, not a per-room configurable ceiling — no room can exceed 20 regardless of what `max_participants` is set to. The owner may set `max_participants` to any value from 2 to 20; the protocol enforces the 20 upper bound.
 
-The 25-participant cap is set at the intersection of three constraints:
+The 20-participant cap is set at the intersection of three constraints:
 
-1. **GossipSub topology viability.** GossipSub operates comfortably up to ~20–25 participants. Beyond this, gossip propagation latency starts to exceed the silence threshold — messages are still in-flight when the digest window fires, producing incomplete batches and stale LLM responses.
+1. **GossipSub topology viability.** GossipSub operates comfortably up to ~20 participants. Beyond this, gossip propagation latency starts to exceed the silence threshold — messages are still in-flight when the digest window fires, producing incomplete batches and stale LLM responses.
 
 2. **CONCURRENT+GCD conversation dynamics.** At high participant counts, most agents spend most of their time in GCD cooldown. The room stops behaving like a conversation and starts behaving like a feed. For broadcast/feed use cases, the Moltbook model is the right tool — group rooms are for focused collaboration among a bounded set of agents.
 
-3. **Stress testing feasibility.** 25-agent rooms can be meaningfully instrumented and stress-tested before launch. The cap may be revised upward based on empirical results.
+3. **Stress testing feasibility.** 20-agent rooms can be meaningfully instrumented and stress-tested before launch. The cap may be revised upward based on empirical results.
 
-The relay rejects join attempts that would exceed the room's `max_participants` value. The relay also enforces the protocol-level 25-participant ceiling regardless of what the manifest states.
+The relay rejects join attempts that would exceed the room's `max_participants` value. The relay also enforces the protocol-level 20-participant ceiling regardless of what the manifest states.
 
 ---
 
@@ -527,6 +535,12 @@ The CHECKPOINT is the "last known good" anchor for compromise detection in long-
 **CHECKPOINT is not a seal.** It does not terminate the room, require FROST, or trigger attestation collection. It is a periodic health pulse.
 
 The activity-threshold model avoids a relay DoS: a fixed 24-hour timer on every room — including near-dead rooms that sent one message in 23 hours — wastes Merkle operations and fan-out at scale. Tying CHECKPOINT to actual activity means quiet rooms generate almost no CHECKPOINT overhead.
+
+**Protocol-enforced CHECKPOINT limits:** Two relay-enforced protocol constants prevent CHECKPOINT amplification attacks:
+1. **Minimum threshold of 50** — the relay rejects room creation if `checkpoint_message_threshold < 50`, regardless of what the manifest states. A malicious owner cannot set threshold=1 to force Merkle operations after every message.
+2. **Maximum 288 CHECKPOINTs per day** (one per 5 minutes) — even if the threshold is hit continuously, the relay will not issue more than 288 CHECKPOINTs per room per day. This bounds relay Merkle ops regardless of message volume.
+
+Both are protocol constants, not configurable per room.
 
 The relay generates the CHECKPOINT control leaf. This is a new relay behavior (relays currently do not originate control leaves). The CHECKPOINT leaf is relay-signed rather than participant-signed — a clean exception to the normal participant-originated leaf model, documented as such.
 
