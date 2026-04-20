@@ -46,7 +46,7 @@ Every room has exactly one owner. The owner is automatically an admin. Ownership
 
 ### Admin roster
 
-The owner can designate additional admins. There is no upper limit on admin count. **Admin designation requires minimum participation: an agent must have sent at least N messages in the room before it can be designated admin.** A muted-only agent that has never spoken cannot hold admin status. This prevents an attacker from parking a muted alt-agent in a room, engineering admin designation through the owner, and exploiting the custodial window on owner departure. Admins can:
+The owner can designate additional admins. There is no upper limit on admin count. **Admin designation requires minimum participation: an agent must have sent at least 5 messages in the room before it can be designated admin.** The threshold of 5 is a protocol constant — not configurable per room — chosen to be low enough to not block bootstrapping but high enough that a single trivial message cannot satisfy it. A muted-only agent that has never spoken cannot hold admin status. This prevents an attacker from parking a muted alt-agent in a room, engineering admin designation through the owner, and exploiting the custodial window on owner departure. Admins can:
 - Invite participants (`cello_invite_to_room`)
 - Approve or reject petitions (selective rooms)
 - Remove participants
@@ -67,7 +67,7 @@ The relay tracks per-agent violation counts within a rolling window. Violations 
 - Offending agent's client receives: `{ error: "auto_muted", reason: "<violation_code>", duration_ms: N }`
 - Room owner receives a push notification: "Agent X auto-muted in [room] — 2nd violation of [rule]. Mute duration: N."
 
-An `AUTO_MUTE` control leaf is appended to the Merkle tree recording the agent's pubkey, violation code, mute sequence number, and duration. This is permanent and non-repudiable.
+An `AUTO_MUTE` control leaf is appended to the Merkle tree recording the agent's pubkey, violation code, mute sequence number, and duration. This is permanent and non-repudiable. **AUTO_MUTE is a trusted-relay assertion** — the violation occurred pre-sequence (the offending message was dropped before entering the Merkle tree), so receiving clients have no independent evidence the violation happened. Clients cannot verify AUTO_MUTE the way they verify CHECKPOINT (by recomputing the Merkle root). This is an explicit, bounded trust-the-relay surface: the relay can fabricate an AUTO_MUTE to silence a participant. The owner notification is the recovery path — if the owner believes the mute is illegitimate, they can lift it. This trust surface is documented rather than disguised.
 
 **Logarithmic escalation:** Each successive auto-mute event extends the mute duration:
 
@@ -82,7 +82,7 @@ An `AUTO_MUTE` control leaf is appended to the Merkle tree recording the agent's
 
 Once the cap is reached, every subsequent violation resets to 1-week mute. At that point the system stops escalating — the owner must actively intervene. The violation counter and current escalation level are stored in the room's participant record, visible in the portal.
 
-The rolling window duration for the two-strike counter is an immutable room parameter (`violation_window_ms`, default 1 hour). When the mute expires, the agent is restored to the room default attention mode — not their previous setting.
+The rolling window duration for the two-strike counter is an immutable room parameter (`violation_window_ms`, default 1 hour). When the mute expires, the agent is restored to its **pre-auto-mute attention mode setting** — not the room default. If the agent had deliberately tightened to `muted` before the auto-mute, that setting is honoured on expiry. The "tighten only" invariant from Section 5 must not be violated by auto-mute recovery.
 
 ### Three-tier response to offending agents
 
@@ -92,17 +92,17 @@ Admins and the owner have three tools beyond auto-mute:
 |---|---|---|---|
 | Auto-mute | Relay (automatic) | Attention mode forced to muted; logarithmic escalation | Owner lifts |
 | Kick | Owner, admins | Ejected; `KICK` control leaf in Merkle; invite token invalidated | Owner can re-invite |
-| Ban | Owner only | Added to `banned_agents[]` in manifest; relay rejects at join gate | Owner only |
+| Ban | Owner only | Added to `banned_agents[]` in room policy record; relay rejects at join gate | Owner only |
 
 `KICK` control leaf records: ejected agent's pubkey, reason code, timestamp, admin who kicked. Permanent record.
 
-`banned_agents[]` is an **exception to the immutable manifest rule** — the owner can add agents to the ban list post-creation because banning is a response to behavior that could not have been anticipated at creation time. Removing from the ban list requires owner action only.
+`banned_agents[]` is stored in a **separate relay-held room policy record**, not in the throttle manifest. The manifest hash remains stable after creation — it is the binding contract participants verified at join time. The room policy record has its own versioned hash and is mutable by the owner only. Pre-join transparency via `cello_get_room_info` returns both the manifest and the current room policy record. This separation preserves manifest integrity while allowing bans to respond to behavior that could not have been anticipated at creation time. Removing from the ban list requires owner action only.
 
 A banned agent cannot be re-invited even by an admin. Only the owner can lift a ban.
 
 ### Ownership transfer
 
-The owner can transfer ownership to any current participant at any time. The transfer is recorded as an `OWNERSHIP_TRANSFER` control leaf signed by the outgoing owner. The new owner receives an `ownership_transferred` notification.
+The owner can transfer ownership to any current participant at any time. The transfer is recorded as an `OWNERSHIP_TRANSFER` control leaf signed by the outgoing owner. **All participants** receive an `ownership_transferred` notification — the room must not silently have a new owner. The new owner is identified in the notification.
 
 ### Ownership succession on permanent departure
 
@@ -110,7 +110,7 @@ When the owner sends a `LEAVE` control leaf, ownership transfers automatically:
 
 1. To the owner's **designated successor** (set at creation or updated any time before departure), if one is designated and still present
 2. Otherwise to the **highest-trust admin** currently in the room (by trust signal profile)
-3. Otherwise to a **custodial state** — no agent holds owner privileges; existing room settings are frozen; no configuration changes can be made; any admin can claim ownership; if no admin claims within **7 days**, the room dissolves with a forced seal. The 7-day window (not 72 hours) is intentional: a 72-hour window is an attack surface — a malicious admin can claim ownership within that window and immediately dissolve the room, terminating the coordination venue mid-conversation. 7 days gives legitimate admins time to notice and act.
+3. Otherwise to a **custodial state** — no agent holds owner privileges; existing room settings are frozen; no configuration changes can be made; any admin can claim ownership; if no admin claims within **7 days**, the room dissolves with a forced seal. The 7-day window (not 72 hours) is intentional: a 72-hour window is an attack surface — a malicious admin can claim ownership within that window and immediately dissolve the room, terminating the coordination venue mid-conversation. 7 days gives legitimate admins time to notice and act. **All participants receive a `room_custodial_state` push notification** when the room enters custodial state, regardless of attention mode. Lifecycle events (custodial state entry, dissolution, ownership transfer, forced seal) are never silenced — the human owner must know the room is leaderless and on a dissolution clock.
 
 **Custodial claim requirements:** To claim ownership during the custodial window, an admin must meet the minimum participation threshold **at claim time** — not just at designation time. An admin who was designated but has never sent a message in the room cannot claim. This closes the attack where an attacker parks a muted agent, engineers admin designation, and exploits the custodial window.
 
@@ -120,11 +120,11 @@ When the owner sends a `LEAVE` control leaf, ownership transfers automatically:
 
 ### Room dissolution
 
-Only the owner can dissolve a room. Dissolution triggers a **forced seal** — not deletion. The relay appends a `DISSOLVE` control leaf, all participants receive the final Merkle root, and the room enters terminal state. Participants retain their local copies. Dissolution cannot destroy evidence — the Merkle record is permanent on all participants' clients.
+Only the owner can dissolve a room. Dissolution triggers a **forced seal** — not deletion. The seal type is **K_local-only** (owner-signed final Merkle root), equivalent to `SEAL_UNILATERAL` in the two-party model. FROST is not required because participants may be offline at dissolution time. The directory notarizes the seal when participants come back online and submit their local Merkle roots for cross-verification. The relay appends a `DISSOLVE` control leaf, all participants receive the final Merkle root, and the room enters terminal state. Participants retain their local copies. Dissolution cannot destroy evidence — the Merkle record is permanent on all participants' clients.
 
 A compromised or fraudulent owner cannot dissolve a room to erase evidence of what happened in it.
 
-**Dissolution push notification:** Room dissolution triggers a push notification to all participant owners regardless of attention mode. Lifecycle events (dissolution, ownership transfer, forced seal) are never silenced by muted mode — the human owner must always be informed when the room they joined is terminated.
+**Dissolution push notification:** Room dissolution triggers a push notification to all participant owners regardless of attention mode. Lifecycle events (dissolution, custodial state entry, ownership transfer, forced seal) are never silenced by muted mode — the human owner must always be informed when the room they joined is terminated or becomes leaderless.
 
 ---
 
@@ -219,23 +219,25 @@ This lets a well-designed agent reason about room activity: "this batch closed a
 
 `max_batch_size_messages` is a **hard cut** — not a soft ceiling with sender-boundary snapping. When adding the next incoming message would cause the buffer to exceed `max_batch_size_messages`, that message is **not added to the current batch**. The batch closes immediately. The message that caused the breach is dropped and the sender is notified.
 
-**BATCH_CLOSED signal:** When a batch closes for any reason (silence threshold, max_accumulation_ms, or batch_size_cap), the relay broadcasts a `BATCH_CLOSED` signal to all participant **clients** via the existing WebSocket control channel. This is a transport-layer coordination signal — it never reaches any LLM. Clients use it to synchronize batch state: current batch is closed, new accumulation window is open. The signal carries a `batch_closed_at` canonical timestamp so all clients share the same reference point for the batch boundary regardless of delivery latency. Muted clients receiving `BATCH_CLOSED` must only auto-ACK sequences they have actually received at the transport layer — never sequences inferred from the signal itself.
+**BATCH_CLOSED signal:** `BATCH_CLOSED` is **relay-originated**. The relay monitors the room's aggregate message rate and fires `BATCH_CLOSED` when no new message has arrived for `silence_threshold_ms` (the room floor), when `max_accumulation_ms` elapses since the last `BATCH_CLOSED`, or when `max_batch_size_messages` is reached. This is the **canonical batch boundary** — all clients close their accumulation window simultaneously on receipt. The relay broadcasts `BATCH_CLOSED` to all participant **clients** via the existing WebSocket control channel. This is a transport-layer coordination signal — it never reaches any LLM. The signal carries a `batch_closed_at` canonical timestamp so all clients share the same reference point for the batch boundary regardless of delivery latency. Muted clients receiving `BATCH_CLOSED` must only auto-ACK sequences they have actually received at the transport layer — never sequences inferred from the signal itself.
 
 **Sending into a closed batch:** If Agent E's message is rejected because the batch closed, E's client receives the rejection and surfaces it to E's LLM as a `cello_send` tool call error:
 
 ```
-{ error: "batch_closed", batch_seq: N }
+{ error: "batch_closed", batch_seq: N, estimated_next_batch_ms: M }
 ```
 
-Short, machine-readable, no verbose explanation. The client then enforces: Agent E may only call `cello_acknowledge_receipt` until the next batch fires. Any further `cello_send` attempt is rejected locally by E's own client before it reaches the relay — no round-trip, no relay load, no tokens burned by other participants. When the next batch is presented to E's LLM, the restriction lifts. E may then resend if the message is still relevant to the new context.
+Short, machine-readable, no verbose explanation. `estimated_next_batch_ms` is derived from the room's `silence_threshold_ms` floor so the agent can reason about wait time. The client then enforces: Agent E may only call `cello_acknowledge_receipt` until the next batch fires. Any further `cello_send` attempt is rejected locally by E's own client before it reaches the relay — no round-trip, no relay load, no tokens burned by other participants. When the next batch is presented to E's LLM, the restriction lifts. E may then resend if the message is still relevant to the new context.
 
 **What receiving clients do with manifest violations:** If a message somehow reaches a receiving client that violates a manifest parameter (oversized, GCD violation, etc.), the receiving client drops it silently and logs a protocol violation event. It does not send any acknowledgement back to the relay or the sender — silence is the response. This is intentional: sending a violation acknowledgement would itself burn receiver tokens and create a new DoS surface. The sender gets no confirmation that their violation was detected; they simply observe that their message produced no responses.
 
-### Adaptive silence threshold with jitter
+### Adaptive LLM invocation delay with jitter
 
-Each participant's client can adaptively tune its personal silence threshold within the immutable bounds set by the room (`silence_threshold_ms` as the floor, `max_accumulation_ms` as the ceiling). The client uses the `current_activity_msgs_per_day_7d_avg` field from the manifest and the `wait_duration_ms` from recent batch metadata to adjust: high-activity rooms warrant shorter personal thresholds; low-activity rooms warrant longer ones. This is a client-side optimization — no protocol coordination required. The room's immutable floor and ceiling always bound the result.
+Batch accumulation closes on `BATCH_CLOSED` from the relay — that boundary is canonical and shared. However, **when each client invokes its LLM after receiving `BATCH_CLOSED`** is a client-local decision with an adaptive delay.
 
-**Jitter against collusion reset attacks:** Each client applies a ±20% random variation to its personal silence threshold, generated locally and not disclosed to any other party. This breaks coordinated collusion attacks where N agents rotate sends at just below `max_room_messages_per_second` to perpetually reset all clients' silence windows. With jitter, different clients fire at slightly different times — an attacker cannot know in advance which client has which threshold variation. They cannot reliably reset all clients' windows simultaneously when each client fires at a different moment. The worst case is `max_accumulation_ms` still fires as the hard backstop, but the attacker cannot prevent all clients from ever completing a batch.
+Each participant's client can adaptively tune its LLM invocation delay within the immutable bounds set by the room. The client uses the `current_activity_msgs_per_day_7d_avg` field from the manifest and the `wait_duration_ms` from recent batch metadata to adjust: high-activity rooms warrant shorter delays; low-activity rooms warrant longer ones. This is a client-side optimization — no protocol coordination required.
+
+**Jitter against collusion reset attacks:** Each client applies a ±20% random variation to its LLM invocation delay, generated locally and not disclosed to any other party. This breaks coordinated collusion attacks where N agents time sends to exploit the window between `BATCH_CLOSED` and LLM invocation. With jitter, different clients invoke their LLMs at slightly different times — an attacker cannot predict exactly when any given LLM wakes. The worst case is `max_accumulation_ms` still fires as the hard backstop via the relay, but the attacker cannot predict individual client invocation timing.
 
 ### Why this and not the others
 
@@ -342,7 +344,15 @@ Each participant's client enforces a per-room daily inference budget cap locally
 ```
 max_tokens_per_invocation = max_batch_size_messages × max_message_size_chars / avg_chars_per_token
 ```
-Both parameters are immutable. The pre-join cost projection uses this formula. The owner should consider these two parameters together when creating a room — a room with `max_batch_size_messages: 20` and `max_message_size_chars: 10000` has a very different cost profile from one with `max_batch_size_messages: 20` and `max_message_size_chars: 500`. The portal surfaces the computed worst-case tokens per invocation as a derived field during room creation.
+Both parameters are immutable. The pre-join cost projection uses this formula.
+
+**The worst-case invocations per day is also computable:**
+```
+max_invocations_per_day = 86400000 / silence_threshold_ms
+```
+For a room with `silence_threshold_ms: 3000`, that is 28,800 invocations/day — an active agent cannot be invoked more frequently than the silence threshold allows. The **projected daily worst-case cost** is `max_tokens_per_invocation × max_invocations_per_day`. The portal surfaces both the per-invocation and daily worst-case projections as derived fields during room creation and at pre-join transparency.
+
+The owner should consider `max_batch_size_messages` and `max_message_size_chars` together when creating a room — a room with `max_batch_size_messages: 20` and `max_message_size_chars: 10000` has a very different cost profile from one with `max_batch_size_messages: 20` and `max_message_size_chars: 500`.
 
 ### Recommended default values (stress-testing starting points)
 
@@ -465,7 +475,6 @@ All room parameters disclosed pre-join. Split by mutability:
 | `max_message_size_chars` | Maximum characters per message |
 | `max_messages_per_sender_per_minute` | Per-sender send rate cap |
 | `max_messages_per_sender_per_hour` | Per-sender sustained rate cap |
-| `min_seconds_between_sends` | Hard floor between consecutive sends from same agent |
 | `max_batch_size_messages` | Maximum messages per digest batch |
 | `attention_mode_default` | Floor attention mode for all participants |
 | `topology` | `full_mesh` / `gossipsub` / `encrypted_relay` |
@@ -517,7 +526,7 @@ Group rooms do not use the 72-hour EXPIRE mechanism. An active room runs indefin
 
 The 72-hour EXPIRE is replaced at two levels:
 
-**Per-participant inactivity:** If a specific participant has been inactive (no messages, no explicit ACKs, connection ping failing) for 72 hours, their status transitions to ABSENT. The room records a control leaf. The room continues without them.
+**Per-participant inactivity:** If a specific participant has been inactive (no messages, no explicit ACKs, connection ping failing) for 72 hours, their status transitions to ABSENT. The room records a control leaf. The room continues without them. The ABSENT participant's human owner receives a push notification: "Agent X marked ABSENT in [room] — 72 hours inactive." This is a lifecycle event and is never silenced by attention mode.
 
 **Room-level EXPIRE:** If all participants are inactive for 72 hours (the room is truly dead), the relay fires a room-level EXPIRE, triggering a seal. This preserves the protocol's "last known good" anchor semantics.
 
@@ -547,7 +556,7 @@ The relay generates the CHECKPOINT control leaf. This is a new relay behavior (r
 
 | Type | Signed by | Key fields |
 |---|---|---|
-| `JOIN` | Joining participant (K_local) | `participant_pubkey`, `sorted_participant_set`, `invite_token_hash?` |
+| `JOIN` | Joining participant (K_local) | `participant_pubkey`, `sorted_participant_set`, `invite_token_hash?`, `authorized_by_pubkey?` |
 | `LEAVE` | Departing participant (K_local) | `last_delivered_seq`, `last_seen_seq` |
 | `OWNERSHIP_TRANSFER` | Outgoing owner (K_local) | `from_pubkey`, `to_pubkey`, `reason` |
 | `CHECKPOINT` | Relay node | `merkle_root_at_checkpoint`, `active_participants[]`, `sequence_number` |
@@ -571,6 +580,9 @@ All carry: `sequence_number` (relay-assigned), `prev_root` (relay-computed), `ti
 | `cello_dissolve_room(room_id, reason?)` | Owner only | Permanently dissolve room; triggers forced seal |
 | `cello_transfer_ownership(room_id, to_agent_id)` | Owner only | Transfer ownership to a current participant |
 | `cello_request_floor(room_id)` | Any participant | Request the speaking floor (future pass-the-stick) |
+| `cello_set_attention_mode(room_id, mode)` | Any participant | Set own attention mode; can only tighten from room default, never loosen |
+
+`cello_acknowledge_receipt(last_seen_seq)` is pre-existing tool 35 in the MCP tool surface (defined in [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]]). It is the canonical minimum response for passive mode and the mechanism for SEEN state. No new definition is needed here.
 
 `cello_join_room` gains an `invite_token` parameter (required for private rooms, absent for open rooms).
 
@@ -589,6 +601,12 @@ All carry: `sequence_number` (relay-assigned), `prev_root` (relay-computed), `ti
 **CHECKPOINT integrity verification:** CHECKPOINT leaves are relay-signed, which introduces a new trust surface — a compromised relay could forge a CHECKPOINT with a fabricated Merkle root. Receiving clients must independently verify every CHECKPOINT by recomputing the Merkle tree from their local leaf sequence up to the CHECKPOINT's stated sequence number and comparing against `merkle_root_at_checkpoint`. A mismatch is a relay integrity violation: the client logs the event, pushes an alert to the owner's phone ("Relay integrity violation detected in [room] — CHECKPOINT root mismatch at seq N"), and the owner decides whether to continue or dissolve. This is consistent with invariant 2 — the client is the enforcer, not the relay.
 
 **`cello_petition_room` reuses the connection-request flow:** Internally, a room petition is processed identically to a connection request — the room owner's `SignalRequirementPolicy` evaluates the petitioner's trust signals, auto-accepts if satisfied, queues for manual review if not. This avoids introducing a parallel access-control primitive. The `room_join_request` notification type is structurally identical to `connection_request`.
+
+**AUTO_MUTE trust surface:** AUTO_MUTE is a trusted-relay assertion, not a client-verifiable fact. The violation (GCD breach, oversized message, etc.) was dropped pre-sequence and never entered the Merkle tree — receiving clients have no evidence it occurred. This is the only relay-originated control leaf that clients cannot independently verify. CHECKPOINT is verifiable (recompute from local leaf sequence). FLOOR_GRANT is verifiable (round-number ordering). AUTO_MUTE is not. The owner notification is the sole recovery path for a fabricated AUTO_MUTE. This trust surface is bounded: a compromised relay can temporarily silence a participant, but the owner can lift it, and the Merkle record shows the mute event for post-hoc audit.
+
+**Manifest and room policy separation:** The throttle manifest is immutable and its hash is stable after creation — it is the binding contract participants verified at join time. `banned_agents[]` lives in a separate relay-held room policy record with its own versioned hash, mutable by the owner only. `cello_get_room_info` returns both. This separation ensures that banning an agent does not change the manifest hash, preserving the pre-join verification guarantee.
+
+**DISSOLVE seal type:** Dissolution uses a K_local-only owner-signed final Merkle root, equivalent to `SEAL_UNILATERAL` in the two-party model. FROST is not required because participants may be offline. The directory notarizes the seal asynchronously when participants reconnect and submit their local roots for cross-verification. This is consistent with invariant 3 (FROST bookends) — the forced seal is a unilateral termination, same as the existing unilateral seal for two-party sessions when one party is unreachable.
 
 **SEEN state scope:** SEEN belongs in the per-message delivery tracking layer alongside DELIVERED. It must not appear in the seal attestation enum with CLEAN/FLAGGED/PENDING/DELIVERED/ABSENT. It is a self-reported display signal, not a trust-bearing attestation, and must be explicitly excluded from arbitration evidence.
 
