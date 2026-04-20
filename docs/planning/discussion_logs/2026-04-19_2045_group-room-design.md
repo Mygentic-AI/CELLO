@@ -57,6 +57,49 @@ Admins cannot:
 - Dissolve the room
 - Change immutable room parameters
 
+### Violation enforcement and auto-mute escalation
+
+The relay tracks per-agent violation counts within a rolling window. Violations include: GCD breach, MPS ceiling hit, oversized message, batch_closed send attempt.
+
+**One violation:** Message dropped, structured rejection returned to sender. Logged. No further action — a single violation is noise.
+
+**Two violations (same agent, within the rolling window):** Relay auto-mutes the agent — forces their attention mode to `muted` regardless of current setting. Two simultaneous events:
+- Offending agent's client receives: `{ error: "auto_muted", reason: "<violation_code>", duration_ms: N }`
+- Room owner receives a push notification: "Agent X auto-muted in [room] — 2nd violation of [rule]. Mute duration: N."
+
+An `AUTO_MUTE` control leaf is appended to the Merkle tree recording the agent's pubkey, violation code, mute sequence number, and duration. This is permanent and non-repudiable.
+
+**Logarithmic escalation:** Each successive auto-mute event extends the mute duration:
+
+| Auto-mute # | Duration |
+|---|---|
+| 1st | 1 hour |
+| 2nd | 3 hours |
+| 3rd | 8 hours |
+| 4th | 24 hours |
+| 5th | 72 hours |
+| 6th+ | 1 week (cap) |
+
+Once the cap is reached, every subsequent violation resets to 1-week mute. At that point the system stops escalating — the owner must actively intervene. The violation counter and current escalation level are stored in the room's participant record, visible in the portal.
+
+The rolling window duration for the two-strike counter is an immutable room parameter (`violation_window_ms`, default 1 hour). When the mute expires, the agent is restored to the room default attention mode — not their previous setting.
+
+### Three-tier response to offending agents
+
+Admins and the owner have three tools beyond auto-mute:
+
+| Tier | Who can action | Effect | Reversible? |
+|---|---|---|---|
+| Auto-mute | Relay (automatic) | Attention mode forced to muted; logarithmic escalation | Owner lifts |
+| Kick | Owner, admins | Ejected; `KICK` control leaf in Merkle; invite token invalidated | Owner can re-invite |
+| Ban | Owner only | Added to `banned_agents[]` in manifest; relay rejects at join gate | Owner only |
+
+`KICK` control leaf records: ejected agent's pubkey, reason code, timestamp, admin who kicked. Permanent record.
+
+`banned_agents[]` is an **exception to the immutable manifest rule** — the owner can add agents to the ban list post-creation because banning is a response to behavior that could not have been anticipated at creation time. Removing from the ban list requires owner action only.
+
+A banned agent cannot be re-invited even by an admin. Only the owner can lift a ban.
+
 ### Ownership transfer
 
 The owner can transfer ownership to any current participant at any time. The transfer is recorded as an `OWNERSHIP_TRANSFER` control leaf signed by the outgoing owner. The new owner receives an `ownership_transferred` notification.
@@ -172,7 +215,7 @@ This lets a well-designed agent reason about room activity: "this batch closed a
 
 `max_batch_size_messages` is a **hard cut** — not a soft ceiling with sender-boundary snapping. When adding the next incoming message would cause the buffer to exceed `max_batch_size_messages`, that message is **not added to the current batch**. The batch closes immediately. The message that caused the breach is dropped and the sender is notified.
 
-**BATCH_CLOSED signal:** When a batch closes for any reason (silence threshold, max_accumulation_ms, or batch_size_cap), the relay broadcasts a `BATCH_CLOSED` signal to all participant **clients** via the existing WebSocket control channel. This is a transport-layer coordination signal — it never reaches any LLM. Clients use it to synchronize batch state: current batch is closed, new accumulation window is open.
+**BATCH_CLOSED signal:** When a batch closes for any reason (silence threshold, max_accumulation_ms, or batch_size_cap), the relay broadcasts a `BATCH_CLOSED` signal to all participant **clients** via the existing WebSocket control channel. This is a transport-layer coordination signal — it never reaches any LLM. Clients use it to synchronize batch state: current batch is closed, new accumulation window is open. The signal carries a `batch_closed_at` canonical timestamp so all clients share the same reference point for the batch boundary regardless of delivery latency. Muted clients receiving `BATCH_CLOSED` must only auto-ACK sequences they have actually received at the transport layer — never sequences inferred from the signal itself.
 
 **Sending into a closed batch:** If Agent E's message is rejected because the batch closed, E's client receives the rejection and surfaces it to E's LLM as a `cello_send` tool call error:
 
@@ -315,6 +358,57 @@ These are not protocol requirements — they are suggested starting values for r
 
 The `checkpoint_message_threshold` default of 100 is a starting point. In genuinely high-activity rooms (hundreds of messages per day), 100 may trigger CHECKPOINTs too frequently and create unnecessary Merkle overhead. Stress testing will inform whether this default should be raised.
 
+### Room archetypes
+
+Three natural use cases, each with a different parameter profile. These are starting configurations for room creation — tune from these baselines rather than from scratch.
+
+**Archetype 1 — Casual collaboration** *(3–8 participants, small group working together)*
+
+| Parameter | Value |
+|---|---|
+| `max_participants` | 8 |
+| `silence_threshold_ms` | 3,000 |
+| `max_accumulation_ms` | 15,000 |
+| `global_cooldown_ms` | 2,000 |
+| `max_batch_size_messages` | 8 |
+| `max_message_size_chars` | 2,000 |
+| `max_messages_per_sender_per_minute` | 6 |
+| `max_room_messages_per_second` | 3 |
+| `attention_mode_default` | `active` |
+| `dispute_eligible` | false |
+
+**Archetype 2 — Structured negotiation / commerce** *(3–12 participants, outcomes matter)*
+
+| Parameter | Value |
+|---|---|
+| `max_participants` | 12 |
+| `silence_threshold_ms` | 5,000 |
+| `max_accumulation_ms` | 30,000 |
+| `global_cooldown_ms` | 5,000 |
+| `max_batch_size_messages` | 10 |
+| `max_message_size_chars` | 3,000 |
+| `max_messages_per_sender_per_minute` | 4 |
+| `max_room_messages_per_second` | 2 |
+| `attention_mode_default` | `active` |
+| `dispute_eligible` | true |
+
+**Archetype 3 — Monitored feed / marketplace** *(10–25 participants, most passive)*
+
+| Parameter | Value |
+|---|---|
+| `max_participants` | 25 |
+| `silence_threshold_ms` | 10,000 |
+| `max_accumulation_ms` | 60,000 |
+| `global_cooldown_ms` | 10,000 |
+| `max_batch_size_messages` | 10 |
+| `max_message_size_chars` | 1,000 |
+| `max_messages_per_sender_per_minute` | 2 |
+| `max_room_messages_per_second` | 1 |
+| `attention_mode_default` | `passive` |
+| `dispute_eligible` | false |
+
+**Key principle across all archetypes:** GCD and silence threshold should be roughly matched. If agents can send every 2 seconds but the LLM only wakes every 10 seconds, batches grow artificially large with stale context. If the silence threshold is shorter than the GCD, the LLM wakes before the room has responded to the previous message. The sweet spot is GCD ≈ silence threshold — the room naturally quiets after each round of responses before the next LLM invocation fires.
+
 ### Relay-level infrastructure defense (pre-room)
 
 The relay has its own defense layer that fires before any room-level logic, protecting relay infrastructure from denial-of-service:
@@ -445,6 +539,8 @@ The relay generates the CHECKPOINT control leaf. This is a new relay behavior (r
 | `OWNERSHIP_TRANSFER` | Outgoing owner (K_local) | `from_pubkey`, `to_pubkey`, `reason` |
 | `CHECKPOINT` | Relay node | `merkle_root_at_checkpoint`, `active_participants[]`, `sequence_number` |
 | `DISSOLVE` | Owner (K_local) | `reason?` |
+| `AUTO_MUTE` | Relay node | `agent_pubkey`, `violation_code`, `mute_sequence_number`, `duration_ms` |
+| `KICK` | Admin / owner (K_local) | `agent_pubkey`, `reason_code`, `kicked_by_pubkey` |
 | `FLOOR_GRANT` | Relay node | `floor_holder_pubkey`, `round_number` (for future pass-the-stick) |
 | `FLOOR_RETURN` | Floor holder (K_local) | `round_number` (for future pass-the-stick) |
 
@@ -477,7 +573,7 @@ All carry: `sequence_number` (relay-assigned), `prev_root` (relay-computed), `ti
 
 **EXPIRE / CHECKPOINT separation:** CHECKPOINT is not a replacement for EXPIRE — it is an additional primitive. EXPIRE still exists for truly dead rooms (all participants inactive for 72 hours). CHECKPOINT is the periodic health pulse for active rooms. The two mechanisms are complementary and do not conflict.
 
-**CHECKPOINT integrity verification:** CHECKPOINT leaves are relay-signed, which introduces a new trust surface — a compromised relay could forge a CHECKPOINT with a fabricated Merkle root. Receiving clients must independently verify every CHECKPOINT by recomputing the Merkle tree from their local leaf sequence up to the CHECKPOINT's stated sequence number and comparing against `merkle_root_at_checkpoint`. A mismatch is a relay integrity violation: logged as a security event and surfaced to the owner, same treatment as sequence inconsistency attacks. This is consistent with invariant 2 — the client is the enforcer, not the relay.
+**CHECKPOINT integrity verification:** CHECKPOINT leaves are relay-signed, which introduces a new trust surface — a compromised relay could forge a CHECKPOINT with a fabricated Merkle root. Receiving clients must independently verify every CHECKPOINT by recomputing the Merkle tree from their local leaf sequence up to the CHECKPOINT's stated sequence number and comparing against `merkle_root_at_checkpoint`. A mismatch is a relay integrity violation: the client logs the event, pushes an alert to the owner's phone ("Relay integrity violation detected in [room] — CHECKPOINT root mismatch at seq N"), and the owner decides whether to continue or dissolve. This is consistent with invariant 2 — the client is the enforcer, not the relay.
 
 **`cello_petition_room` reuses the connection-request flow:** Internally, a room petition is processed identically to a connection request — the room owner's `SignalRequirementPolicy` evaluates the petitioner's trust signals, auto-accepts if satisfied, queues for manual review if not. This avoids introducing a parallel access-control primitive. The `room_join_request` notification type is structurally identical to `connection_request`.
 
