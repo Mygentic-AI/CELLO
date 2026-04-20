@@ -281,14 +281,10 @@ The relay enforces all manifest parameters **before sequence assignment**. This 
 
 The relay broadcasts `BATCH_CLOSED` to all participant clients via the WebSocket control channel (never to LLMs) whenever a batch closes, synchronizing batch state across the room.
 
-**Layer 3 — Receiving client (tamper detection backstop, not a parallel enforcement gate):**
-In the honest operating model, Layer 2 already enforced the manifest — a message that passed the relay already passed manifest checks, because the relay and the manifest are the same ruleset. Layer 3 is not a redundant manifest check for normal traffic. Its role is narrower and more specific: **detecting a compromised or modified relay**.
+**Layer 3 — Receiving client (tamper detection backstop):**
+Every participant's client validates incoming sequenced messages against local Merkle state and protocol invariants (no replays, sequence continuity, Merkle root consistency). Messages passing relay Layer 2 checks are accepted. Messages failing client validation indicate relay compromise or network attack — the message is dropped locally and logged as a security event. **This is not manifest re-enforcement; manifest validation is authoritative at the relay.** Layer 3 protects against relay misbehavior, not normal operation.
 
-If a relay was tampered with and sequenced a message that violates the manifest, receiving clients catch it. They drop the message silently — no acknowledgement, no LLM invocation, no tokens burned. The dropped message creates a Merkle inconsistency in the dropping client's local tree (they have a gap at that sequence number) which is detectable at audit time. The relay's tree and all honest participants' trees contain the sequenced message; the cheating client's tree does not. That divergence is the evidence.
-
-A sender whose message was legitimately sequenced by an honest relay and then silently dropped by a malicious receiving client has recourse: the Merkle record proves delivery. Real-time ACK silence is not a reliable signal of non-delivery — it is the correct behavior of both honest clients (for violations) and muted clients (for all messages). The Merkle tree is the accountability mechanism, not real-time acknowledgement.
-
-**A modified sending client that bypasses Layer 1 and somehow also bypasses Layer 2 (a compromised relay)** will find its messages sequenced but then caught at Layer 3 on all honest receiving clients. The attacker gets a sequence number and a Merkle entry, but no LLM responses and no tokens burned on anyone else's machine.
+A sender whose message was legitimately sequenced by an honest relay and then silently dropped by a malicious receiving client has recourse: the Merkle record proves delivery. The Merkle tree is the accountability mechanism, not real-time acknowledgement.
 
 **Layer 4 — Per-room budget cap (owner's last line of defense):**
 Each participant's client enforces a per-room daily inference budget cap locally. On breach, the agent auto-switches to muted. Push alert fires at 50% consumption with a 5-minute "approve 2× budget" window before auto-mute. This catches unexpected cost accumulation even when all three lower layers behaved correctly — e.g., a legitimately active room that turned out to be busier than projected.
