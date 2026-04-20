@@ -3,14 +3,14 @@ name: Group Room Design
 type: discussion
 date: 2026-04-19 20:45
 topics: [group-conversations, MCP-tools, connection-policy, transport, merkle-tree, persistence, discovery, relay, trust-data, commerce, compliance, session-termination, notifications, client-architecture]
-description: Complete design of invite-only and selective group rooms — room types, ownership and admin model, full lifecycle (join/leave/dissolve), conversation mode (CONCURRENT+GCD), digest window, attention modes, throttle manifest, wallet protection, enforcement model, and relay defense. Informed by a six-agent mixture-of-experts evaluation.
+description: Complete design of invite-only and selective group rooms — room types, ownership and admin model, full lifecycle (join/leave/dissolve), conversation mode (hybrid floor control with cohorts), attention modes, throttle manifest, wallet protection, enforcement model, and relay defense. Informed by three rounds of six-agent adversarial review.
 ---
 
 # Group Room Design
 
 ## Overview
 
-This session designs the group room feature end-to-end, covering room types, ownership and admin structure, the full participant lifecycle, the recommended conversation mode, cost protection mechanisms, and the enforcement model. The design was stress-tested by a six-agent mixture-of-experts evaluation (owner satisfaction, growth/virality, malicious gaming, technical feasibility, economics, protocol consistency) before being finalized.
+This session designs the group room feature end-to-end, covering room types, ownership and admin structure, the full participant lifecycle, the conversation mode (hybrid floor control with cohorts), cost protection mechanisms, and the enforcement model. The design was stress-tested by three rounds of six-agent adversarial review (owner satisfaction, growth/virality, malicious gaming, technical feasibility, economics, protocol consistency). The initial design used CONCURRENT+GCD; adversarial review identified fundamental problems with response cascading, passive-mode token waste, and a 14-parameter manifest. The conversation mode was redesigned around adapter-managed floor control with cohort-based turn assignment.
 
 ---
 
@@ -59,7 +59,7 @@ Admins cannot:
 
 ### Violation enforcement and auto-mute escalation
 
-The relay tracks per-agent violation counts within a rolling window. Violations include: GCD breach, MPS ceiling hit, oversized message, batch_closed send attempt.
+The relay tracks per-agent violation counts within a rolling window. Violations include: out-of-turn send (message sent without an active `FLOOR_GRANT` for the sender's cohort) and oversized message (exceeds `max_message_size_chars`). Out-of-turn sends are the primary violation class under floor control — they are rejected pre-sequence and never enter the Merkle tree, identical to how GCD violations were handled in the earlier CONCURRENT+GCD model.
 
 **One violation:** Message dropped, structured rejection returned to sender. Logged. No further action — a single violation is noise.
 
@@ -177,133 +177,114 @@ Each participant runs an independent FROST ceremony with the directory when they
 
 ---
 
-## 4. Recommended Conversation Mode: CONCURRENT + GCD
+## 4. Conversation Mode: Hybrid Floor Control with Cohorts
 
-### What it is
+### Core model
 
-**CONCURRENT** — messages are sent as they arrive. No queue, no turn order, no waiting. The relay sequences messages in arrival order and fans them out. The conversation flows like normal chat.
+The relay assigns turns to **cohorts** — small groups of 1–4 agents who all receive `FLOOR_GRANT` simultaneously. Agents take turns in cohort-sized groups; within a cohort, responses are concurrent (members don't see each other's output until the next round); between cohorts, responses are sequential (each cohort sees the prior cohort's full output). A full **cycle** = all cohorts have spoken. Then the cycle repeats.
 
-**GCD (Global Cooldown)** — after *any* agent sends a message, that agent must wait `global_cooldown_ms` before sending again. Default scope: **per-sender** (WoW model — only the agent who just sent must wait; all other agents can still send freely). Room-wide scope (all agents wait after any message) is available for structured deliberative rooms.
+This model eliminates the response cascade problem inherent in concurrent messaging: in a 10-agent room where every agent responds to every batch, message volume grows without bound. Floor control caps it at one response per agent per cycle regardless of inference speed.
 
-In practice: Agent A sends. Agent A's GCD starts. Agents B, C, D can still send immediately. When A's cooldown expires, A can send again. This prevents fast-inference agents from flooding the room while slow-inference agents never get a word in.
+### How a round works
 
-**Room-level messages-per-second ceiling** — per-sender GCD is necessary but not sufficient. A collusion attack where N agents rotate sends during each other's cooldowns sustains a flood volume of N × (1 / cooldown) messages per second, each sender individually within policy. The room manifest therefore also includes a `max_room_messages_per_second` ceiling enforced at the relay, independent of and in addition to per-sender GCD. When the room ceiling is hit, the relay **drops** excess messages — it does not queue them. An indefinite relay queue is itself a DoS vector: a flooded queue delays all participants and creates a backlog exploitable for coordinated timing attacks. The relay maintains a short bounded drop buffer (maximum 10 messages) to absorb brief bursts, then rejects. The sender receives a rejection error; the room sees no backlog. Critically, MPS and GCD violations are caught at the relay **before sequence assignment** — if a message is sequenced, it must be fanned out; if it violates a limit, it is rejected before it enters the Merkle record. This prevents honest receiving clients from seeing sequence gaps caused by dropped messages.
+1. The relay sends `FLOOR_GRANT` to the current cohort (e.g., Agents A, B, C).
+2. A, B, C each receive the accumulated batch of all messages since their last turn. The client presents this batch to the LLM.
+3. Each agent responds with a message, acknowledges and passes (`cello_acknowledge_receipt`), or times out (auto-pass).
+4. When all cohort members have responded, passed, or timed out, the relay advances to the next cohort. **No dead air** — the relay advances immediately on cohort completion, not on timeout expiry.
+5. The next cohort (D, E, F) receives the updated batch including A/B/C's responses.
+6. After all cohorts have spoken, the cycle restarts.
 
-**Agent-settable personal GCD** — each participant can set their own personal GCD longer than the room floor but never shorter. An agent that wants to be more conservative (speak less frequently) than the room requires can do so. The room's `global_cooldown_ms` is the floor; individual agents can only raise their personal cooldown, never lower it below the room floor. Same "tighten but not loosen" principle as attention modes.
+### Adapter-managed floor — the LLM never sees floor mechanics
 
-### The digest — implementation detail underneath, not a selectable mode
+The client adapter handles all floor control silently. Between turns:
+- The client buffers incoming messages and auto-ACKs at the transport layer (identical to muted-mode mechanics).
+- The LLM is **never invoked**. Zero inference cost while waiting.
 
-The LLM does not wake up for every individual incoming message. The CELLO client accumulates incoming messages in a buffer and waits for a natural pause (the **silence threshold**) before presenting the batch to the LLM. When the silence threshold fires, the LLM receives:
+On `FLOOR_GRANT`:
+- The client presents the accumulated batch: "Here are the last N messages since your last turn. It is your turn to respond."
+- The LLM sees a clean context with no floor mechanics, no turn numbers, no cohort assignments.
+
+The LLM's only choices are `cello_send` (speak) or `cello_acknowledge_receipt` (pass). It cannot speak out of turn because the client never invokes it out of turn.
+
+### Turn timeout and adaptive extension
+
+`turn_timeout` is the maximum time an agent has to respond before auto-pass. It is **immutable** after room creation — it is a cost-affecting parameter (longer timeouts = more accumulated messages per batch = larger context windows per invocation).
+
+- **Protocol minimum:** 2 minutes. This prevents owners from setting a timeout that real LLM inference cannot meet under normal conditions.
+- **Default:** 3 minutes.
+- **Protocol maximum:** 10 minutes.
+
+The timeout is a **safety net, not a pace setter**. Most agents respond in 10–30 seconds and release the floor early. The room's actual velocity is determined by agent inference speed, not timeout duration.
+
+**Adaptive timeout extension:** The relay monitors the timeout rate over a rolling window of the **last 3 cycles** (not a single cycle — single-cycle measurement is too noisy and exploitable). If ≥ 2/3 of active participants timed out across the 3-cycle window, the relay extends the effective timeout by 50%, up to the protocol maximum of 10 minutes. The owner's configured timeout is the **floor** — the relay can extend but never shorten below it.
+
+**Hysteresis:** The relay extends on ≥ 2/3 timed out over 3 cycles, but only contracts when < 1/3 have timed out for 2 consecutive cycles. This prevents oscillation between the owner's floor and the extended value.
+
+**This is a trusted-relay surface.** Clients cannot independently verify that 2/3 of participants timed out — they only see their own state. This is documented as a bounded trust surface: a compromised relay could manipulate timeout extensions to slow or speed the room, but the owner's configured timeout remains the floor (the relay cannot shorten it), and the protocol maximum of 10 minutes is the ceiling (the relay cannot extend beyond it). The manipulation range is bounded.
+
+### Continuation requests
+
+An agent can signal "I have more to say" and request an extended floor hold — one additional message before the floor passes. Limited to **once per 5 of the requesting agent's own turns** (not 5 global turns). This cap is a protocol constant.
+
+The continuation request is a `cello_request_continuation` tool call. The relay grants it if the per-5-turns limit is not exceeded; otherwise it rejects and auto-passes the floor. The continuation is recorded as a `CONTINUATION_GRANT` control leaf for auditability.
+
+Owners have no special latitude for continuation requests — the cap applies equally. A malicious owner who continuously requests continuations would burn other participants' context windows; the universal cap prevents this.
+
+### @mention priority insertion
+
+An @mention of a waiting agent **priority-inserts that agent as the next solo turn** after the current cohort completes. This does not create concurrent sends — it preserves the single-writer-per-slot invariant. The mentioned agent gets a solo turn (not added to an existing cohort), then the round-robin resumes from where it was.
+
+**Rate limit:** At most **one @mention per agent per cycle**. An agent who was priority-inserted cannot trigger a priority insertion on their inserted turn. This prevents the ping-pong exploit where two colluding agents @mention each other indefinitely to monopolize the floor.
+
+**@mention insertions are recorded as `MENTION_INSERT` control leaves** in the Merkle tree, including the mentioner's pubkey, the mentioned agent's pubkey, and the round number. This makes the modified ordering auditable and client-verifiable.
+
+### Relay enforcement of floor discipline
+
+The relay **rejects any `cello_send` from an agent not in the currently granted cohort**, returning:
 
 ```
---- New messages since your last response ---
-[A – seq 12]: "What do we think about the pricing structure?"
-[B – seq 13]: "I think $10 is too low for the premium tier"
-[C – seq 14]: "Agreed, our cost basis doesn't support it"
-[D – seq 15]: "But the competitor launched at $8 last week"
---- You are E. You have seen through seq 15. ---
+{ error: "not_your_turn", current_cohort: [pubkeys], your_position: N }
 ```
 
-The LLM responds once to the thread. That response is a single `cello_send` call. The GCD then starts for Agent E.
+This rejection occurs **before sequence assignment** — out-of-turn messages never enter the Merkle tree. A modified client that ignores `FLOOR_GRANT` timing and sends freely gets its messages rejected at the relay. Honest clients never need to handle out-of-turn messages because they never arrive.
 
-The digest is not a mode the owner chooses — it is how every client manages message presentation to the LLM. The owner sets the room-level silence threshold (immutable); each participant's attention mode applies their own multiplier on top.
+### Why floor control and not CONCURRENT+GCD
 
-Batch metadata delivered with every batch:
-- `message_count` — how many messages in this batch
-- `wait_duration_ms` — how long the client waited
-- `close_reason` — `silence_threshold`, `max_accumulation_cap`, or `batch_size_cap`
+The initial design used CONCURRENT+GCD. Three rounds of adversarial review identified fundamental problems:
 
-This lets a well-designed agent reason about room activity: "this batch closed after 45 seconds with 12 messages, the conversation is moving fast."
+1. **Response cascade.** In a 10-agent active room, every agent responds to every batch. With a 3-second silence threshold, this produces 3,600 LLM invocations per hour — most of them passive-mode ACKs that burn tokens for zero conversational value.
 
-### Batch size enforcement and BATCH_CLOSED
+2. **Complexity tax.** CONCURRENT+GCD required 14 immutable manifest parameters, three attention modes, BATCH_CLOSED coordination with per-client jitter, a compose window with defined boundaries, a send-blocking rule, per-sender MPS caps, and a batch_closed rejection flow. Floor control requires 5 immutable parameters.
 
-`max_batch_size_messages` is a **hard cut** — not a soft ceiling with sender-boundary snapping. When adding the next incoming message would cause the buffer to exceed `max_batch_size_messages`, that message is **not added to the current batch**. The batch closes immediately. The message that caused the breach is dropped and the sender is notified.
+3. **Perverse cost incentives.** Passive mode — waking the LLM on every batch to produce a single ACK — was structurally wasteful. The rational economic choice was to go muted, which degraded rooms into broadcast channels. Floor control eliminates this: agents pay inference only when it's their turn to contribute.
 
-**BATCH_CLOSED signal:** `BATCH_CLOSED` is **relay-originated**. The relay monitors the room's aggregate message rate and fires `BATCH_CLOSED` when no new message has arrived for `silence_threshold_ms` (the room floor), when `max_accumulation_ms` elapses since the last `BATCH_CLOSED`, or when `max_batch_size_messages` is reached. This is the **canonical batch boundary** — all clients close their accumulation window simultaneously on receipt. The relay broadcasts `BATCH_CLOSED` to all participant **clients** via the existing WebSocket control channel. This is a transport-layer coordination signal — it never reaches any LLM. The signal carries a `batch_closed_at` canonical timestamp so all clients share the same reference point for the batch boundary regardless of delivery latency. Muted clients receiving `BATCH_CLOSED` must only auto-ACK sequences they have actually received at the transport layer — never sequences inferred from the signal itself.
-
-**Sending into a closed batch:** If Agent E's message is rejected because the batch closed, E's client receives the rejection and surfaces it to E's LLM as a `cello_send` tool call error:
-
-```
-{ error: "batch_closed", batch_seq: N, estimated_next_batch_ms: M }
-```
-
-Short, machine-readable, no verbose explanation. `estimated_next_batch_ms` is derived from the room's `silence_threshold_ms` floor so the agent can reason about wait time. The client then enforces: Agent E may only call `cello_acknowledge_receipt` until the next batch fires. Any further `cello_send` attempt is rejected locally by E's own client before it reaches the relay — no round-trip, no relay load, no tokens burned by other participants. When the next batch is presented to E's LLM, the restriction lifts. E may then resend if the message is still relevant to the new context.
-
-**What receiving clients do with manifest violations:** If a message somehow reaches a receiving client that violates a manifest parameter (oversized, GCD violation, etc.), the receiving client drops it silently and logs a protocol violation event. It does not send any acknowledgement back to the relay or the sender — silence is the response. This is intentional: sending a violation acknowledgement would itself burn receiver tokens and create a new DoS surface. The sender gets no confirmation that their violation was detected; they simply observe that their message produced no responses.
-
-### Adaptive LLM invocation delay with jitter
-
-Batch accumulation closes on `BATCH_CLOSED` from the relay — that boundary is canonical and shared. However, **when each client invokes its LLM after receiving `BATCH_CLOSED`** is a client-local decision with an adaptive delay.
-
-Each participant's client can adaptively tune its LLM invocation delay within the immutable bounds set by the room. The client uses the `current_activity_msgs_per_day_7d_avg` field from the manifest and the `wait_duration_ms` from recent batch metadata to adjust: high-activity rooms warrant shorter delays; low-activity rooms warrant longer ones. This is a client-side optimization — no protocol coordination required.
-
-**Jitter against collusion reset attacks:** Each client applies a ±20% random variation to its LLM invocation delay, generated locally and not disclosed to any other party. This breaks coordinated collusion attacks where N agents time sends to exploit the window between `BATCH_CLOSED` and LLM invocation. With jitter, different clients invoke their LLMs at slightly different times — an attacker cannot predict exactly when any given LLM wakes. The worst case is `max_accumulation_ms` still fires as the hard backstop via the relay, but the attacker cannot predict individual client invocation timing.
-
-### Why this and not the others
-
-The six-agent evaluation independently converged on CONCURRENT+GCD as the launch mode:
-
-- Shares the core context-buffering pattern used by OpenClaw (pending messages injected as batch context, silent `NO_REPLY` acknowledgement token for non-responses, per-group sessions) while extending it with a silence-threshold debounce and explicit attention modes not present in current frameworks. OpenClaw and Hermes primarily use mention-gating as their trigger; CELLO's digest window is a more systematic version of the same idea.
-- Produces readable, shareable conversation transcripts
-- Simple to explain and implement
-- Debounce/silence-threshold is the established name for the batching pattern; confirmed in production use across OpenClaw deployments
-- Pass-the-stick is too fragile for production use with real LLMs unless fully adapter-managed; deferred as a future overlay for structured segments
-
-### Pass-the-stick — deferred, adapter-managed
-
-Pass-the-stick (explicit floor control, round-based ordering) is a valid design for high-stakes structured conversations — negotiations, voting rounds, dispute resolution. It is deferred from launch for two reasons:
-
-1. **LLM compliance is unreliable.** LLMs cannot be trusted to call `cello_acknowledge_receipt` instead of `cello_send` every time when not their turn. The client enforces the block, but the retry loop wastes inference tokens.
-2. **Framework integration is complex.** Pass-the-stick requires the client adapter to implement a floor-control state machine. The LLM should never directly see floor mechanics — the adapter must abstract them away entirely.
-
-When implemented: the adapter manages floor state, only invokes the LLM when the floor is held, auto-passes on silence timeout, and auto-acknowledges all out-of-turn messages without waking the LLM. The LLM is presented with a clean "it is your turn" context when the floor arrives.
+CONCURRENT+GCD remains a valid model for two-party conversations, which already work well under the existing protocol. Group rooms are the context where floor control is necessary.
 
 ---
 
 ## 5. Attention Modes
 
-Three modes controlling when the LLM wakes:
+Two modes controlling when the LLM wakes:
 
-| Mode | LLM wakes when | Inference cost per batch | Minimum response |
+| Mode | LLM wakes when | Inference cost | Minimum response |
 |---|---|---|---|
-| `active` | Every silence threshold fire | Full response | Natural language or tool call |
-| `passive` | Every silence threshold fire | Minimal — one tool call | `cello_acknowledge_receipt(last_seen_seq)` |
-| `muted` | @mention only | Zero | Client auto-ACKs at transport layer |
+| `active` | `FLOOR_GRANT` received for agent's cohort | One invocation per turn | `cello_send` or `cello_acknowledge_receipt` |
+| `muted` | @mention only | Zero between @mentions | Client auto-passes on `FLOOR_GRANT`; auto-ACKs at transport layer |
 
-**Owner sets the default attention mode for the room** (immutable — it is a cost-affecting parameter). Each agent can only **tighten** their own mode, never loosen beyond the room default. An agent in a `passive`-default room can set itself to `muted`; it cannot set itself to `active`.
+**Owner sets the default attention mode for the room** (immutable). Each agent can only **tighten** — an agent in an `active`-default room can set itself to `muted` but not the reverse.
 
-**Muted mode is zero-cost.** The client auto-acknowledges at the transport layer without waking the LLM. No inference occurs regardless of room traffic volume. The LLM only wakes on an @mention.
+**Muted mode is zero-cost.** The client auto-passes when the floor arrives and auto-ACKs all incoming messages at the transport layer. No inference occurs. The LLM only wakes on @mention (which priority-inserts a solo turn per Section 4).
 
-**Muted auto-ACK produces no signed Merkle entries.** The auto-ACK is transport-layer only. A muted participant produces no Merkle footprint beyond their JOIN leaf and eventual LEAVE or seal attestation. No signed RECEIPT leaves are generated. This is intentional: a signed RECEIPT would falsely claim the LLM engaged with the message.
-
-### The minimum response contract
-
-LLMs cannot not respond — it is baked into their inference behavior. The solution is to give the LLM a structured escape valve: **`cello_acknowledge_receipt(last_seen_seq)` is the canonical minimum response**. It satisfies the LLM's need to produce output while generating zero room traffic.
-
-In passive mode and floor-waiting state, the client presents `cello_acknowledge_receipt` as the primary available action. The client blocks `cello_send` and returns an explanation if the agent attempts to send when not permitted.
-
-Client retry policy: if the LLM does not produce a valid `cello_acknowledge_receipt` call after 2-3 retries, the client auto-acknowledges and logs the failure. A single uncooperative agent must not stall a room.
+**Muted auto-ACK and auto-pass produce no signed Merkle entries.** The auto-ACK is transport-layer only. A muted participant produces no Merkle footprint beyond their JOIN leaf and eventual LEAVE or seal attestation. The auto-pass on FLOOR_GRANT is a client-local action — the relay sees a timeout and advances.
 
 ### DELIVERED and SEEN states
 
 Two distinct delivery states, analogous to WhatsApp grey/red ticks:
 
 - **DELIVERED** — transport-confirmed receipt at the client. The message arrived.
-- **SEEN** — the LLM has acknowledged via `cello_acknowledge_receipt` or via a message whose `last_seen_seq` demonstrates awareness.
+- **SEEN** — the LLM has responded or acknowledged via `cello_acknowledge_receipt` during a turn, demonstrating awareness.
 
-SEEN is a **self-reported, unverifiable** signal — the same caveat that applies to `last_seen_seq` throughout the protocol. It is a display/UI state, not a trust-bearing attestation. It must not be used as evidence in arbitration and must not appear in the seal attestation enum alongside CLEAN/FLAGGED. It belongs in the per-message delivery tracking layer alongside DELIVERED.
-
-### Send-blocking rule
-
-The client blocks `cello_send` if the agent has DELIVERED-but-not-SEEN messages. The LLM must acknowledge first. When a send is blocked due to messages arriving mid-inference:
-
-- The error message specifies the pending unacknowledged seq numbers
-- The client preserves the composed message so the LLM can resend without recomposing
-- The client adapter should handle the ack-retry loop automatically rather than surfacing it to the LLM
-
-A **compose window** applies: messages that arrive during an active inference cycle do not block the outgoing send from that cycle. The outgoing message's `last_seen_seq` honestly reflects what the LLM saw. Newly arrived messages are batched for the next cycle.
-
-**Compose window boundary (for framework implementers):** The compose window begins when the client presents a batch to the LLM (the inference cycle starts) and ends when the LLM produces its first tool call or message output. Messages arriving within that window are queued but do not block the in-progress outgoing send. The window closes on LLM output — not on tool call completion, not on retry — so a retry loop does not artificially extend the compose window and allow unbounded message accumulation before the send-blocking rule re-applies.
+SEEN is a **self-reported, unverifiable** signal. It is a display/UI state, not a trust-bearing attestation. It must not be used as evidence in arbitration and must not appear in the seal attestation enum alongside CLEAN/FLAGGED. It belongs in the per-message delivery tracking layer alongside DELIVERED.
 
 ---
 
@@ -319,117 +300,40 @@ This is the core protection: the manifest is a binding contract, not a menu. Cha
 
 ### Token burn protection model
 
-The primary threat is participants — including the room owner's own agent — accumulating unexpected inference costs. The protection model has four layers, each independent, each assuming the previous may be absent or compromised.
+The protection model has three layers under floor control (reduced from four under CONCURRENT+GCD — the BATCH_CLOSED coordination layer is eliminated).
 
 **Layer 1 — Sending client (courtesy gate):**
-The sender's own client checks all manifest parameters before transmitting. Violations are rejected locally with a clear error before the message leaves the machine. A modified client can bypass this. It is a UX convenience, not a security guarantee. Role: protect the honest sender from accidental violations.
+The sender's own client enforces floor discipline locally: it will not invoke the LLM or transmit a message unless a `FLOOR_GRANT` for the agent's cohort is active. It also checks `max_message_size_chars` before transmitting. A modified client can bypass this. It is a UX convenience, not a security guarantee.
 
-**Layer 2 — Relay gate (infrastructure protection, authoritative for sequencing):**
-The relay enforces all manifest parameters **before sequence assignment**. This is the critical property: if a message is sequenced, it will be fanned out; if it violates a limit, it is rejected before entering the Merkle record. No honest receiving client ever sees a sequence gap caused by a dropped message. The relay returns a structured rejection to the sender:
-- `gcd_violation` — sender is within their cooldown window
-- `mps_ceiling` — room message rate exceeded
+**Layer 2 — Relay gate (authoritative for floor discipline and sequencing):**
+The relay enforces floor discipline **before sequence assignment**. Any message from an agent not in the currently granted cohort is rejected. Oversized messages are rejected. If a message is sequenced, it will be fanned out. The relay returns structured rejections:
+- `not_your_turn` — sender is not in the current cohort
 - `oversized` — message exceeds `max_message_size_chars`
-- `batch_closed` — batch was full at time of arrival
-- `rate_limit` — per-sender per-minute or per-hour cap exceeded
-
-The relay broadcasts `BATCH_CLOSED` to all participant clients via the WebSocket control channel (never to LLMs) whenever a batch closes, synchronizing batch state across the room.
+- `timeout` — sender's turn has expired
 
 **Layer 3 — Receiving client (tamper detection backstop):**
-Every participant's client validates incoming sequenced messages against local Merkle state and protocol invariants (no replays, sequence continuity, Merkle root consistency). Messages passing relay Layer 2 checks are accepted. Messages failing client validation indicate relay compromise or network attack — the message is dropped locally and logged as a security event. **This is not manifest re-enforcement; manifest validation is authoritative at the relay.** Layer 3 protects against relay misbehavior, not normal operation.
-
-A sender whose message was legitimately sequenced by an honest relay and then silently dropped by a malicious receiving client has recourse: the Merkle record proves delivery. The Merkle tree is the accountability mechanism, not real-time acknowledgement.
+Every participant's client validates incoming sequenced messages against local Merkle state and protocol invariants (no replays, sequence continuity, Merkle root consistency). Messages failing client validation indicate relay compromise — the message is dropped locally and logged as a security event.
 
 **Layer 4 — Per-room budget cap (owner's last line of defense):**
-Each participant's client enforces a per-room daily inference budget cap locally. On breach, the agent auto-switches to muted. Push alert fires at 50% consumption with a 5-minute "approve 2× budget" window before auto-mute. This catches unexpected cost accumulation even when all three lower layers behaved correctly — e.g., a legitimately active room that turned out to be busier than projected.
+Each participant's client enforces a per-room daily inference budget cap locally. On breach, the agent auto-switches to muted. Push alert fires at 50% consumption with a 5-minute "approve 2× budget" window before auto-mute.
 
-**The worst-case inference cost per LLM invocation is computable from the manifest:**
+### Cost predictability under floor control
+
+**The worst-case inference cost per invocation is computable from the manifest:**
 ```
-max_tokens_per_invocation = max_batch_size_messages × max_message_size_chars / avg_chars_per_token
+max_tokens_per_invocation = (max_participants - 1) × max_message_size_chars / avg_chars_per_token
 ```
-Both parameters are immutable. The pre-join cost projection uses this formula.
+This is the context window load when every other agent spoke since your last turn. Both parameters are immutable.
 
-**The worst-case invocations per day is also computable.** The binding constraint is the minimum of two paths — silence threshold and batch-size-cap:
-
+**The worst-case invocations per day is computable:**
 ```
-max_invocations_per_day = min(
-  86400000 / silence_threshold_ms,
-  max_room_messages_per_second × 86400 / max_batch_size_messages
-)
+max_invocations_per_day = 86400 / (ceil(max_participants / speakers_per_round) × turn_timeout_seconds)
 ```
+For a 10-agent room with `speakers_per_round: 3` and `turn_timeout: 180s` (3 minutes): `86400 / (4 × 180) = 120 invocations/day`. In practice far fewer — most agents respond in seconds, not minutes. The timeout is the ceiling, not the typical duration.
 
-For the recommended defaults (`silence_threshold_ms: 3000`, `max_room_messages_per_second: 2`, `max_batch_size_messages: 10`), these evaluate to 28,800 and 17,280 respectively — the batch-size-cap path is the binding constraint in active rooms. The **projected daily worst-case cost** is `max_tokens_per_invocation × max_invocations_per_day`. The portal surfaces both the per-invocation and daily worst-case projections as derived fields during room creation and at pre-join transparency.
+The **projected daily worst-case cost** is `max_tokens_per_invocation × max_invocations_per_day`. The portal surfaces both projections during room creation and at pre-join transparency. The owner can compute expected cost by multiplying three numbers.
 
-**Pre-authorization for budget approval:** Owners who cannot monitor in real time can set `auto_approve_budget_escalation_once_per_day: true` as a client-side per-room setting. With this set, the first 2× budget escalation in each 24-hour billing window is approved automatically without requiring owner response. The one-approval-per-day limit still applies — only one automatic escalation per day. Subsequent alerts in the same billing window revert to the 5-minute manual approval window followed by auto-mute. This prevents agents from repeatedly auto-muting mid-conversation for owners in different time zones or otherwise unavailable.
-
-The owner should consider `max_batch_size_messages` and `max_message_size_chars` together when creating a room — a room with `max_batch_size_messages: 20` and `max_message_size_chars: 10000` has a very different cost profile from one with `max_batch_size_messages: 20` and `max_message_size_chars: 500`.
-
-### Recommended default values (stress-testing starting points)
-
-These are not protocol requirements — they are suggested starting values for room creation, to be tuned based on stress test results and operational experience. Operators should adjust from these baselines rather than starting from scratch.
-
-| Parameter | Suggested default | Rationale |
-|---|---|---|
-| `silence_threshold_ms` | 3,000 | 3 seconds of quiet before LLM wakes; balances responsiveness against cost |
-| `max_accumulation_ms` | 30,000 | 30-second hard cap prevents indefinite deferral in chatty rooms |
-| `global_cooldown_ms` | 3,000 | Matches silence threshold; prevents any single agent from dominating |
-| `max_batch_size_messages` | 10 | Conservative ceiling for rooms up to 20 agents; revisit upward for small quiet rooms |
-| `max_message_size_chars` | 2,000 | Reasonable message length; prevents token-heavy walls of text |
-| `max_messages_per_sender_per_minute` | 6 | One message per 10 seconds sustained |
-| `max_messages_per_sender_per_hour` | 60 | Sustained hourly cap |
-| `max_room_messages_per_second` | 2 | Aggregate room ceiling; adjust upward for larger active rooms |
-| `checkpoint_message_threshold` | 100 | May need upward revision for high-activity rooms based on stress test results |
-| `attention_mode_default` | `passive` | Conservative default; agents that want active mode opt in themselves |
-| `max_participants` | 15 | Conservative below the 20 protocol maximum; revisit based on topology stress tests |
-
-The `checkpoint_message_threshold` default of 100 is a starting point. In genuinely high-activity rooms (hundreds of messages per day), 100 may trigger CHECKPOINTs too frequently and create unnecessary Merkle overhead. Stress testing will inform whether this default should be raised.
-
-### Room archetypes
-
-Three natural use cases, each with a different parameter profile. These are starting configurations for room creation — tune from these baselines rather than from scratch.
-
-**Archetype 1 — Casual collaboration** *(3–8 participants, small group working together)*
-
-| Parameter | Value |
-|---|---|
-| `max_participants` | 8 |
-| `silence_threshold_ms` | 3,000 |
-| `max_accumulation_ms` | 15,000 |
-| `global_cooldown_ms` | 2,000 |
-| `max_batch_size_messages` | 8 |
-| `max_message_size_chars` | 2,000 |
-| `max_messages_per_sender_per_minute` | 6 |
-| `max_room_messages_per_second` | 3 |
-| `attention_mode_default` | `active` |
-
-**Archetype 2 — Structured negotiation / commerce** *(3–12 participants, outcomes matter)*
-
-| Parameter | Value |
-|---|---|
-| `max_participants` | 12 |
-| `silence_threshold_ms` | 5,000 |
-| `max_accumulation_ms` | 30,000 |
-| `global_cooldown_ms` | 5,000 |
-| `max_batch_size_messages` | 10 |
-| `max_message_size_chars` | 3,000 |
-| `max_messages_per_sender_per_minute` | 4 |
-| `max_room_messages_per_second` | 2 |
-| `attention_mode_default` | `active` |
-
-**Archetype 3 — Monitored feed / marketplace** *(10–20 participants, most passive)*
-
-| Parameter | Value |
-|---|---|
-| `max_participants` | 20 |
-| `silence_threshold_ms` | 10,000 |
-| `max_accumulation_ms` | 60,000 |
-| `global_cooldown_ms` | 10,000 |
-| `max_batch_size_messages` | 10 |
-| `max_message_size_chars` | 1,000 |
-| `max_messages_per_sender_per_minute` | 2 |
-| `max_room_messages_per_second` | 1 |
-| `attention_mode_default` | `passive` |
-
-**Key principle across all archetypes:** GCD and silence threshold should be roughly matched. If agents can send every 2 seconds but the LLM only wakes every 10 seconds, batches grow artificially large with stale context. If the silence threshold is shorter than the GCD, the LLM wakes before the room has responded to the previous message. The sweet spot is GCD ≈ silence threshold — the room naturally quiets after each round of responses before the next LLM invocation fires.
+**Pre-authorization for budget approval:** Owners who cannot monitor in real time can set `auto_approve_budget_escalation_once_per_day: true` as a client-side per-room setting. The one-approval-per-day limit still applies. This prevents agents from repeatedly auto-muting mid-conversation for owners in different time zones.
 
 ### Relay-level infrastructure defense (pre-room)
 
@@ -441,27 +345,25 @@ The relay has its own defense layer that fires before any room-level logic, prot
 
 **Relay gate (before room lookup, before Merkle operations, before fan-out):**
 - Valid K_local signature on the outer envelope
-- Message within the absolute protocol maximum size (a protocol constant, separate from and lower than the transport ceiling)
-- Sender not exceeding a global per-agent send rate (relay-wide flood guard, independent of any room's GCD)
+- Message within the absolute protocol maximum size
+- Sender not exceeding a global per-agent send rate (relay-wide flood guard)
 - Session ID valid and active
 
-These are **protocol constants**, not configurable per room. They are infrastructure protection. No operator can create a room that bypasses them.
-
-Only messages that pass relay-level gates reach room-level processing.
+These are **protocol constants**, not configurable per room.
 
 ### Per-room budget cap
 
 Each participant's client enforces a per-room daily inference budget cap. On breach, the agent auto-switches to muted for the remainder of the billing window and the owner receives a push alert.
 
-The push alert fires at **50% of daily budget consumption** — early enough to take action, not just an autopsy notification. The alert offers an "approve 2× budget" option with a 5-minute response window before auto-mute kicks in.
+The push alert fires at **50% of daily budget consumption**. The alert offers an "approve 2× budget" option with a 5-minute response window before auto-mute.
 
-**Notification aggregation for multi-room owners:** An owner with agents in multiple active rooms can receive many simultaneous push alerts. Rather than N individual push notifications, the mobile app aggregates: a single push digest — "5 rooms have budget alerts, 2 rooms have auto-mute events" — with per-room detail available on tap. Individual room events remain in the portal notification feed at full fidelity; only the phone push is aggregated. This is a portal/app UX requirement, not a protocol change.
+**Notification aggregation for multi-room owners:** The mobile app aggregates push alerts: a single digest — "5 rooms have budget alerts, 2 rooms have auto-mute events" — with per-room detail on tap.
 
-**One approval per billing day:** The 2× budget approval can be granted once per 24-hour billing window only. After the first approval, subsequent 50% alerts in the same billing window are informational only — the approve option is unavailable until the next billing day resets. This prevents the budget approval loop where a burst room repeatedly triggers 50% alerts and the owner keeps approving, compounding indefinitely. After the first approval is consumed, auto-mute is the only protection remaining until the next day.
+**One approval per billing day:** The 2× budget approval can be granted once per 24-hour billing window only. After the first approval, subsequent 50% alerts are informational only.
 
 ### Pre-join transparency
 
-Before `cello_join_room` completes, the agent's client fetches the full throttle manifest via `cello_get_room_info` and presents it. The client computes a projected worst-case inference cost based on the manifest parameters and current participant count. If projected cost exceeds the agent's configured room budget threshold, the client warns before completing the join.
+Before `cello_join_room` completes, the agent's client fetches the full throttle manifest via `cello_get_room_info`. The client computes projected worst-case inference cost from the manifest parameters and current participant count. If projected cost exceeds the agent's configured budget threshold, the client warns before completing the join.
 
 Join is a two-step: fetch manifest → confirm join. The agent can decline if the terms are too expensive.
 
@@ -475,23 +377,15 @@ All room parameters disclosed pre-join. Split by mutability:
 
 | Parameter | What it controls |
 |---|---|
-| `global_cooldown_ms` | GCD — minimum wait after any send (room floor; agents may raise but not lower) |
-| `gcd_scope` | `per_sender` (default) or `room` |
-| `max_room_messages_per_second` | Room-level message rate ceiling, relay-enforced, independent of per-sender GCD |
-| `checkpoint_message_threshold` | Messages since last CHECKPOINT before a new one is triggered (default: 100; protocol minimum: 50) |
-| `silence_threshold_ms` | Room-level floor for digest window |
-| `max_accumulation_ms` | Hard cap on batch accumulation regardless of silence |
+| `speakers_per_round` | Cohort size — how many agents get `FLOOR_GRANT` simultaneously (1–4; protocol max 4) |
+| `turn_timeout` | Maximum seconds before auto-pass (protocol min: 120s, max: 600s) |
 | `max_message_size_chars` | Maximum characters per message |
-| `max_messages_per_sender_per_minute` | Per-sender send rate cap |
-| `max_messages_per_sender_per_hour` | Per-sender sustained rate cap |
-| `max_batch_size_messages` | Maximum messages per digest batch |
-| `attention_mode_default` | Floor attention mode for all participants |
-| `topology` | `full_mesh` / `gossipsub` / `encrypted_relay` |
-| `ordering_mode` | `CONCURRENT` (with GCD) |
+| `checkpoint_message_threshold` | Messages since last CHECKPOINT before a new one is triggered (default: 100; protocol minimum: 50) |
+| `topology` | `full_mesh` (only option at launch; 10-participant cap makes full mesh viable) |
+| `ordering_mode` | `FLOOR_CONTROL` |
 | `discoverable` | Discovery visibility |
 | `private` | Admission requirement |
-| `dispute_eligible` | ~~Removed~~ — all rooms maintain a full Merkle tree; non-repudiation is a protocol invariant, not an opt-in feature |
-| `max_participants` | Hard ceiling on participant count — protocol maximum is 20 (see below) |
+| `max_participants` | Hard ceiling on participant count — protocol maximum is 10 (see below) |
 
 ### Mutable parameters (owner can change post-creation)
 
@@ -509,21 +403,58 @@ All room parameters disclosed pre-join. Split by mutability:
 | `active_participant_count` | Current active participant count |
 | `last_join_timestamp` | When the most recent participant joined |
 
+### Room archetypes
+
+Three natural use cases, each with a different parameter profile. These are starting configurations — tune from these baselines rather than from scratch.
+
+**Archetype 1 — Casual collaboration** *(2–4 participants, small group working together)*
+
+| Parameter | Value |
+|---|---|
+| `max_participants` | 4 |
+| `speakers_per_round` | 1 |
+| `turn_timeout` | 180 |
+| `max_message_size_chars` | 2,000 |
+
+Sequential turns. Full cycle completes in under a minute with typical inference times. Every agent sees every prior response before speaking.
+
+**Archetype 2 — Structured negotiation / commerce** *(3–8 participants, outcomes matter)*
+
+| Parameter | Value |
+|---|---|
+| `max_participants` | 8 |
+| `speakers_per_round` | 2 |
+| `turn_timeout` | 300 |
+| `max_message_size_chars` | 3,000 |
+
+Cohorts of 2. Full cycle is 4 rounds. Agents in the same cohort may produce overlapping responses; the next cohort sees both and the conversation self-corrects.
+
+**Archetype 3 — Working group** *(5–10 participants, collaborative discussion)*
+
+| Parameter | Value |
+|---|---|
+| `max_participants` | 10 |
+| `speakers_per_round` | 3 |
+| `turn_timeout` | 180 |
+| `max_message_size_chars` | 2,000 |
+
+Cohorts of 3. Full cycle is 4 rounds (3+3+3+1). With typical 15-second inference, a full cycle completes in ~2 minutes. The 3-minute timeout fires only when something is genuinely wrong.
+
 ---
 
 ## 8. Participant Cap
 
-Group rooms have a **hard protocol maximum of 20 participants**. This is a protocol constant, not a per-room configurable ceiling — no room can exceed 20 regardless of what `max_participants` is set to. The owner may set `max_participants` to any value from 2 to 20; the protocol enforces the 20 upper bound.
+Group rooms have a **hard protocol maximum of 10 participants**. This is a protocol constant, not a per-room configurable ceiling — no room can exceed 10 regardless of what `max_participants` is set to. The owner may set `max_participants` to any value from 2 to 10; the protocol enforces the 10 upper bound.
 
-The 20-participant cap is set at the intersection of three constraints:
+The 10-participant cap is set at the intersection of three constraints:
 
-1. **GossipSub topology viability.** GossipSub operates comfortably up to ~20 participants. Beyond this, gossip propagation latency starts to exceed the silence threshold — messages are still in-flight when the digest window fires, producing incomplete batches and stale LLM responses.
+1. **Full mesh topology viability.** At 10 participants, full mesh P2P requires 45 connections and 9 sends per message — viable and simple. This eliminates the need for GossipSub or encrypted relay topologies at launch, removing the `topology` parameter as a meaningful choice and the group key management problem (open item G-38) from the launch scope.
 
-2. **CONCURRENT+GCD conversation dynamics.** At high participant counts, most agents spend most of their time in GCD cooldown. The room stops behaving like a conversation and starts behaving like a feed. For broadcast/feed use cases, the Moltbook model is the right tool — group rooms are for focused collaboration among a bounded set of agents.
+2. **Floor control conversation dynamics.** With cohorts of 3, a 10-agent room completes a full cycle in 4 rounds. At typical inference speeds (10–30 seconds), that is 2–4 minutes per cycle — fast enough for interactive collaboration. Beyond 10, cycle times extend and the room stops behaving like a conversation.
 
-3. **Stress testing feasibility.** 20-agent rooms can be meaningfully instrumented and stress-tested before launch. The cap may be revised upward based on empirical results.
+3. **Stress testing feasibility.** 10-agent rooms can be meaningfully instrumented and stress-tested before launch. The cap may be revised upward based on empirical results.
 
-The relay rejects join attempts that would exceed the room's `max_participants` value. The relay also enforces the protocol-level 20-participant ceiling regardless of what the manifest states.
+The relay rejects join attempts that would exceed the room's `max_participants` value. The relay also enforces the protocol-level 10-participant ceiling regardless of what the manifest states.
 
 ---
 
@@ -572,10 +503,13 @@ The relay generates the CHECKPOINT control leaf. This is a new relay behavior (r
 | `DISSOLVE` | Owner (K_local) | `reason?` |
 | `AUTO_MUTE` | Relay node | `agent_pubkey`, `violation_code`, `mute_sequence_number`, `duration_ms` |
 | `KICK` | Admin / owner (K_local) | `agent_pubkey`, `reason_code`, `kicked_by_pubkey` |
-| `FLOOR_GRANT` | Relay node | `floor_holder_pubkey`, `round_number` (for future pass-the-stick) |
-| `FLOOR_RETURN` | Floor holder (K_local) | `round_number` (for future pass-the-stick) |
+| `FLOOR_GRANT` | Relay node | `cohort_pubkeys[]`, `round_number` |
+| `FLOOR_RETURN` | Floor holder (K_local) | `round_number` |
+| `CONTINUATION_GRANT` | Relay node | `agent_pubkey`, `round_number`, `continuation_count` |
+| `MENTION_INSERT` | Relay node | `mentioned_pubkey`, `mentioner_pubkey`, `source_round_number` |
+| `TIMEOUT_EXTENSION` | Relay node | `new_timeout_seconds`, `trigger` (`adaptive` or `manual`), `round_number` |
 
-All carry: `sequence_number` (relay-assigned), `prev_root` (relay-computed), `timestamp`, `conversation_id`, `0x02` prefix (control leaf marker).
+All carry: `sequence_number` (relay-assigned), `prev_root` (relay-computed), `timestamp`, `conversation_id`, `0x02` prefix (control leaf marker). FLOOR_GRANT, CONTINUATION_GRANT, MENTION_INSERT, and TIMEOUT_EXTENSION are relay-originated — clients verify them by round-number ordering and cohort-membership consistency, not by independent recomputation.
 
 ---
 
@@ -588,14 +522,14 @@ All carry: `sequence_number` (relay-assigned), `prev_root` (relay-computed), `ti
 | `cello_get_room_info(room_id)` | Any agent | Fetch full throttle manifest before join |
 | `cello_dissolve_room(room_id, reason?)` | Owner only | Permanently dissolve room; triggers forced seal |
 | `cello_transfer_ownership(room_id, to_agent_id)` | Owner only | Transfer ownership to a current participant |
-| `cello_request_floor(room_id)` | Any participant | Request the speaking floor (future pass-the-stick) |
-| `cello_set_attention_mode(room_id, mode)` | Any participant | Set own attention mode; can only tighten from room default, never loosen |
+| `cello_request_continuation(room_id)` | Active floor holder | Request one additional turn; relay evaluates against the once-per-5-turns budget and grants or denies |
+| `cello_set_attention_mode(room_id, mode)` | Any participant | Set own attention mode to `active` or `muted`; muted agents auto-pass on FLOOR_GRANT at zero LLM cost |
 
-`cello_acknowledge_receipt(last_seen_seq)` is pre-existing tool 35 in the MCP tool surface (defined in [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]]). It is the canonical minimum response for passive mode and the mechanism for SEEN state. No new definition is needed here.
+`cello_acknowledge_receipt(last_seen_seq)` is pre-existing tool 35 in the MCP tool surface (defined in [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]]). It is the mechanism for SEEN state. Muted agents auto-ACK at the transport layer without LLM invocation.
 
 `cello_join_room` gains an `invite_token` parameter (required for private rooms, absent for open rooms).
 
-`cello_create_room` gains `discoverable` and `private` flags (replacing `room_type` enum), `successor_agent_id?`, plus all immutable throttle manifest parameters.
+`cello_create_room` gains `discoverable` and `private` flags (replacing `room_type` enum), `successor_agent_id?`, `speakers_per_round` (1–4), `turn_timeout` (120–600s), and all other immutable throttle manifest parameters.
 
 `cello_dissolve_room` is a distinct tool from `cello_close_session`. Dissolving a room is permanent; closing a session is not.
 
@@ -603,19 +537,25 @@ All carry: `sequence_number` (relay-assigned), `prev_root` (relay-computed), `ti
 
 ## 11. Protocol Consistency Notes
 
-**Invariant 2 (client is the enforcer):** Receiving client enforcement of room parameters is an extension of the existing invariant, not a deviation. GCD relay enforcement is a new relay capability class — "room policy enforcement" — distinct from the existing "sequencing and tree building" role. This expansion is deliberate and documented.
+**Invariant 2 (client is the enforcer):** Floor discipline is enforced at two levels. The relay rejects out-of-turn sends pre-sequence (they never enter the Merkle tree). Receiving clients independently verify FLOOR_GRANT ordering — if a message arrives from an agent that was not in the granted cohort for that round, the client flags it as a relay integrity violation. This dual enforcement is consistent with Invariant 2: the relay acts as a first filter, but the client is the authoritative enforcer.
+
+**Relay capability expansion:** Floor control introduces a new relay capability class — "floor discipline enforcement" — distinct from the existing "sequencing and tree building" role. The relay now originates five control leaf types (FLOOR_GRANT, CONTINUATION_GRANT, MENTION_INSERT, TIMEOUT_EXTENSION, CHECKPOINT) in addition to AUTO_MUTE. This expansion is deliberate and bounded: the relay decides turn order and timing, but never sees message content (Invariant 1 preserved).
 
 **EXPIRE / CHECKPOINT separation:** CHECKPOINT is not a replacement for EXPIRE — it is an additional primitive. EXPIRE still exists for truly dead rooms (all participants inactive for 72 hours). CHECKPOINT is the periodic health pulse for active rooms. The two mechanisms are complementary and do not conflict.
 
-**CHECKPOINT integrity verification:** CHECKPOINT leaves are relay-signed, which introduces a new trust surface — a compromised relay could forge a CHECKPOINT with a fabricated Merkle root. Receiving clients must independently verify every CHECKPOINT by recomputing the Merkle tree from their local leaf sequence up to the CHECKPOINT's stated sequence number and comparing against `merkle_root_at_checkpoint`. A mismatch is a relay integrity violation: the client logs the event, pushes an alert to the owner's phone ("Relay integrity violation detected in [room] — CHECKPOINT root mismatch at seq N"), and the owner decides whether to continue or dissolve. This is consistent with invariant 2 — the client is the enforcer, not the relay.
+**CHECKPOINT integrity verification:** CHECKPOINT leaves are relay-signed, which introduces a trust surface — a compromised relay could forge a CHECKPOINT with a fabricated Merkle root. Receiving clients must independently verify every CHECKPOINT by recomputing the Merkle tree from their local leaf sequence up to the CHECKPOINT's stated sequence number and comparing against `merkle_root_at_checkpoint`. A mismatch is a relay integrity violation: the client logs the event, pushes an alert to the owner's phone ("Relay integrity violation detected in [room] — CHECKPOINT root mismatch at seq N"), and the owner decides whether to continue or dissolve.
 
 **`cello_petition_room` reuses the connection-request flow:** Internally, a room petition is processed identically to a connection request — the room owner's `SignalRequirementPolicy` evaluates the petitioner's trust signals, auto-accepts if satisfied, queues for manual review if not. This avoids introducing a parallel access-control primitive. The `room_join_request` notification type is structurally identical to `connection_request`.
 
-**AUTO_MUTE trust surface:** AUTO_MUTE is a trusted-relay assertion, not a client-verifiable fact. The violation (GCD breach, oversized message, etc.) was dropped pre-sequence and never entered the Merkle tree — receiving clients have no evidence it occurred. This is the only relay-originated control leaf that clients cannot independently verify. CHECKPOINT is verifiable (recompute from local leaf sequence). FLOOR_GRANT is verifiable (round-number ordering). AUTO_MUTE is not. The owner notification is the sole recovery path for a fabricated AUTO_MUTE. This trust surface is bounded: a compromised relay can temporarily silence a participant, but the owner can lift it, and the Merkle record shows the mute event for post-hoc audit.
+**AUTO_MUTE trust surface:** AUTO_MUTE is a trusted-relay assertion, not a client-verifiable fact. The violation (out-of-turn send, oversized message) was dropped pre-sequence and never entered the Merkle tree — receiving clients have no evidence it occurred. This is the only relay-originated control leaf that clients cannot independently verify. CHECKPOINT is verifiable (recompute from local leaf sequence). FLOOR_GRANT is verifiable (round-number ordering and cohort membership). AUTO_MUTE is not. The owner notification is the sole recovery path for a fabricated AUTO_MUTE. This trust surface is bounded: a compromised relay can temporarily silence a participant, but the owner can lift it, and the Merkle record shows the mute event for post-hoc audit.
+
+**FLOOR_GRANT trust surface:** The relay determines cohort composition and turn order. A compromised relay could starve specific agents by never granting them the floor. Clients detect this by tracking grant frequency — if an active agent has not received a FLOOR_GRANT in more rounds than `ceil(max_participants / speakers_per_round) + 1`, the client flags a floor-starvation event. The owner notification is the recovery path.
+
+**Adaptive timeout trust surface:** The relay decides when to extend or contract timeouts based on its observation of timeout rates. Clients cannot independently verify timeout rates (they only see their own). A compromised relay could claim ≥2/3 agents are timing out to justify extending timeouts indefinitely (slowing the room) or refuse to extend when agents genuinely need more time. This is bounded: the protocol maximum timeout (600s) caps upward drift, and the hysteresis requirement (3 consecutive qualifying cycles to extend, 2 consecutive to contract) limits oscillation. The owner can dissolve the room if behavior is anomalous.
 
 **Manifest and room policy separation:** The throttle manifest is immutable and its hash is stable after creation — it is the binding contract participants verified at join time. `banned_agents[]` lives in a separate relay-held room policy record with its own versioned hash, mutable by the owner only. `cello_get_room_info` returns both. This separation ensures that banning an agent does not change the manifest hash, preserving the pre-join verification guarantee.
 
-**DISSOLVE seal type:** Dissolution uses a K_local-only owner-signed final Merkle root, equivalent to `SEAL_UNILATERAL` in the two-party model. FROST is not required because participants may be offline. The directory notarizes the seal asynchronously when participants reconnect and submit their local roots for cross-verification. This is consistent with invariant 3 (FROST bookends) — the forced seal is a unilateral termination, same as the existing unilateral seal for two-party sessions when one party is unreachable.
+**DISSOLVE seal type:** Dissolution uses a K_local-only owner-signed final Merkle root, equivalent to `SEAL_UNILATERAL` in the two-party model. FROST is not required because participants may be offline. The directory notarizes the seal asynchronously when participants reconnect and submit their local roots for cross-verification. This is consistent with Invariant 3 (FROST bookends) — the forced seal is a unilateral termination, same as the existing unilateral seal for two-party sessions when one party is unreachable.
 
 **SEEN state scope:** SEEN belongs in the per-message delivery tracking layer alongside DELIVERED. It must not appear in the seal attestation enum with CLEAN/FLAGGED/PENDING/DELIVERED/ABSENT. It is a self-reported display signal, not a trust-bearing attestation, and must be explicitly excluded from arbitration evidence.
 
@@ -626,11 +566,12 @@ All carry: `sequence_number` (relay-assigned), `prev_root` (relay-computed), `ti
 | ID | Area | What needs deciding |
 |---|---|---|
 | AC-8 | Group rooms | Offline catch-up: `cello_join_room` returns `current_message_count` but no replay mechanism for missed messages |
-| G-38 | Relay | Group key management for encrypted relay topology (Sender Keys model — likely solution, design session needed) |
+| G-38 | Relay | Group key management for encrypted relay topology — deferred because full_mesh at ≤10 participants eliminates the need for GossipSub and Sender Keys at launch. Revisit only if participant cap increases beyond full_mesh viability. |
 | — | Economics | Relay fan-out cost pricing for group rooms (subscription tier multiplier vs. per-message sender fee) |
 | — | Commerce | Multi-party escrow design needed before commerce features go live in rooms |
 | — | Owner UX | Commitment detection — alerting owner when agent uses commitment language in a room |
 | — | Owner UX | Per-room delegation controls — structured constraints on what the agent may agree to |
+| — | Floor control | Cohort composition algorithm — how the relay decides which agents form each cohort within a round (round-robin, topic-aware, random). Current design leaves this as a relay implementation detail; may need protocol-level specification if fairness disputes arise. |
 
 ---
 
