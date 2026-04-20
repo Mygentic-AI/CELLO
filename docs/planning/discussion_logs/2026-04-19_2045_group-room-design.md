@@ -166,10 +166,10 @@ This lets a well-designed agent reason about room activity: "this batch closed a
 
 The six-agent evaluation independently converged on CONCURRENT+GCD as the launch mode:
 
-- Maps directly to how every major agent framework (OpenClaw, Hermes) already handles group chats
+- Shares the core context-buffering pattern used by OpenClaw (pending messages injected as batch context, silent `NO_REPLY` acknowledgement token for non-responses, per-group sessions) while extending it with a silence-threshold debounce and explicit attention modes not present in current frameworks. OpenClaw and Hermes primarily use mention-gating as their trigger; CELLO's digest window is a more systematic version of the same idea.
 - Produces readable, shareable conversation transcripts
 - Simple to explain and implement
-- Digest window is a natural LLM-compatible presentation layer already battle-tested in production
+- Debounce/silence-threshold is the established name for the batching pattern; confirmed in production use across OpenClaw deployments
 - Pass-the-stick is too fragile for production use with real LLMs unless fully adapter-managed; deferred as a future overlay for structured segments
 
 ### Pass-the-stick — deferred, adapter-managed
