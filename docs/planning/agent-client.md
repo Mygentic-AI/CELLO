@@ -288,6 +288,8 @@ The client is responsible for generating K_local and presenting the public key t
 
 **Registration entry point (AC-C1 resolved):** Registration is entry-point agnostic — neither the bot nor the portal is the privileged starting point. Both mandatory ceremonies (phone OTP and email verification) are always required, but they can be completed in either order through any supported surface. Portal-first path: operator registers via web portal → email OTP completed there → portal initiates the WhatsApp, Telegram, or WeChat phone OTP ceremony. Bot-first path: operator initiates via WhatsApp, Telegram, or WeChat → phone OTP completed there → email verification required (bot prompts for it). The email OTP is the correlation token that ties a portal-initiated registration to the subsequent phone ceremony. Human operators can complete all ceremonies manually; the system makes no assumption that an agent is on the other end.
 
+**Email verification (AC-20 resolved):** Email verification is a mandatory registration requirement — equal in status to phone OTP. The client must treat registration as incomplete until both ceremonies have been confirmed. Email verification follows the oracle pattern: the portal sends a 6-digit OTP to the email address (15-minute expiry, max 3 attempts, 5 sends/hour rate limit). On success, the portal stores `SHA-256(email_domain_only)` in the directory and returns the signed JSON record to the client. The full email address is discarded server-side; only the domain hash is retained. The client stores the JSON blob in the identity signals store (same tier as social verification records). The `email_verified` signal appears in the client's trust data ownership map and is presented during connection requests according to the owner's disclosure policy.
+
 ### Bootstrap discovery
 
 On first startup — and whenever the cached node list is stale — the client discovers directory nodes via a three-level fallback:
@@ -464,6 +466,7 @@ leaf = SHA-256(
   sender_pubkey
   message_content_hash
   sender_signature      the authorship proof above, embedded as a field
+  scan_result           Layer 2 scanner result: { score, verdict, model_hash } — sender's scan is an honesty signal recorded in the leaf; receiver's scan is the security boundary
   prev_root             previous Merkle root, computed by relay
 )
 ```
@@ -552,6 +555,16 @@ When the agent sends a CLOSE leaf, it includes a session attestation:
 A `FLAGGED` attestation that is never submitted to arbitration expires after **7 days** with no consequence to either party. Serial flag-and-abandon (flagging agent abandons more than 3 flags in a rolling 90-day window without submitting) is recorded as a behavioral signal on the flagger's trust profile — this eliminates the harassment attack vector where an agent repeatedly flags counterparties without intending to pursue arbitration.
 
 The attestation is part of the CLOSE leaf — signed and in the Merkle tree. It serves triple duty: "last known good" timestamp for compromise window determination if something goes wrong later, forced LLM self-audit (the agent must evaluate the session before it can close cleanly), and escrow release trigger (CLEAN → stake returned; FLAGGED + upheld arbitration → institution can claim).
+
+**Multi-party attestation (AC-32):** For N-party conversations, the two-party `party_a_attestation`/`party_b_attestation` model does not apply. Each participant submits an individual attestation row at seal time. The client must submit one row per participant it is aware of to the `conversation_attestations` table. Per-participant states (complete set):
+
+- `CLEAN` — participant attested no issues
+- `FLAGGED` — participant flagged the session for dispute
+- `PENDING` — attestation not yet received (waiting for counterparty's CLOSE leaf)
+- `DELIVERED` — transport-confirmed receipt with no output (participant received but did not produce content)
+- `ABSENT` — participant went offline or was removed; no delivery confirmation received
+
+The two-party case is the degenerate N=2 case of this model. The client submits its own attestation row (CLEAN or FLAGGED) as part of sending the CLOSE leaf; it populates counterparty rows as their CLOSE leaves arrive. The `DELIVERED`→`ABSENT` transition timeout for group room participants is not yet specified — see GAP AC-33.
 
 The Layer 3 outbound gate's self-check log (produced before every `cello_send`) provides the evidentiary basis for the agent's attestation. If the self-check consistently passed, the agent can attest CLEAN.
 
@@ -835,6 +848,8 @@ The `totp` signal class indicates the owner has enrolled an authenticator app. T
 
 **Social signal liveness states:** Trust signals verified via OAuth can become stale. The directory probes social accounts every 60 days. On the first failure, the signal is marked `VERIFICATION_STALE` (grace period — account may be temporarily inaccessible). After 3 consecutive failed probes (180 days), the signal is marked `UNVERIFIED`, the hash is updated in the directory, and the agent is notified. The client must handle `VERIFICATION_STALE` and `UNVERIFIED` notification types and update local signal state accordingly.
 
+**Social account binding lock (AC-58 resolved):** Once a social account (LinkedIn, GitHub, Twitter, etc.) is bound to an agent, a 12-month lockout applies before that account identifier can be rebound to any agent after unbinding. The directory enforces this via `social_binding_releases.rebinding_lockout_until`. The client must surface a clear error if the owner attempts to bind an account that is in its lockout window — and must not retry or attempt to circumvent the lockout. This rule also activates on tombstone: if any tombstone is filed, all previously-bound social identifiers enter the 12-month lockout regardless of whether the owner initiated the unbinding. The purpose is Sybil defense — preventing marketplace resale of aged, verified social accounts to new identities.
+
 ### Two-hash pattern — selective identity disclosure
 
 Each social verification produces two independent hashes:
@@ -1108,7 +1123,7 @@ The client implements the complete notification type registry. Types are enumera
 | `endorsement_revoked` | Directory | A previously received endorsement was revoked |
 | `attestation_received` | Directory | Another agent issued an attestation |
 | `room_invite` | Directory | Invited to a group room |
-| `security_block` | Client (Layer 1) | Layer 1 fired on a received message |
+| `security_block` | Client | Layer 1 sanitization fire, hash–message mismatch (Case A2 tamper detection), or hash-without-message delivery gap — subtype distinguishes which trigger fired |
 | `system` | Directory / client | Directory reachability change, K_local degraded mode entry/exit, key rotation nudge |
 | `tombstone` | Directory | A connected identity has been tombstoned |
 | `peer_compromised_abort` | Directory | A peer agent has declared "Not Me" — directory instructs client to seal the session unilaterally immediately. Payload: `{ compromised_agent_id, tombstone_id, notified_at }`. Client seals regardless of whether an ABORT leaf arrives from the compromised side. |
@@ -1124,6 +1139,10 @@ The client implements the complete notification type registry. Types are enumera
 | `relay_sequencing_attack` | Client | Relay-assigned sequence numbers are inconsistent with local state or `last_seen_seq` causal chain; session flagged for review |
 | `trust_signal_orphaned` | Client | A hash exists in the directory for this agent but no corresponding local blob — re-verification required |
 | `alias_expiry` | Directory | An alias has reached its 6-month inactivity TTL and has been marked `EXPIRED` |
+| `introduction` | Agent | Web-of-trust introduction from a mutual contact; subject to rate limits per trust tier |
+| `order_update` | Agent | Order or task status update from a counterparty agent |
+| `alert` | Agent | Operational alert from a counterparty agent |
+| `promotional` | Agent | Promotional content; subject to rate limits per trust tier and recipient opt-out |
 
 ### Escalation channel routing
 
@@ -1279,6 +1298,18 @@ The following names are canonical and supersede inconsistencies in earlier docum
 
 **Client handling of `EMERGENCY_SESSION_ABORT`:** The client must treat this as the highest-priority control message. On receipt: (1) send signed ABORT control leaf with `COMPROMISE_INITIATED` reason code to each active counterparty via P2P; (2) disconnect all P2P sessions; (3) drop the WebSocket connection to the directory. No user confirmation required — the owner already confirmed "Not Me" at step 3.
 
+**Tombstone types (AC-77 resolved):** The client must handle three tombstone types with distinct behaviors:
+
+| Type | When the client initiates it | When the client receives it (incoming `tombstone` notification) |
+|---|---|---|
+| `VOLUNTARY` | Owner initiates a planned shutdown or identity retirement via the portal. Client sends a signed voluntary tombstone request. No waiting period. | Informational. The counterparty has retired their agent. Log the event; display to owner as low-urgency. Active sessions continue until natural close — no forced abort. |
+| `COMPROMISE_INITIATED` | Owner taps "Not Me." Triggered via the dual-path abort flow above. | **Warning.** The counterparty's agent may have been used by an attacker. The active session with that agent has already been force-sealed via `PEER_COMPROMISED_ABORT`. Any content from the post-compromise window should be treated as potentially attacker-authored. The client surfaces this prominently in the session view. |
+| `SOCIAL_RECOVERY_INITIATED` | M-of-N recovery contacts file a recovery attestation (agent is confirmed compromised; owner cannot act). 48-hour waiting period before new key ceremony. Old key can contest during window. | **Warning.** Account compromise confirmed by social consensus. Equivalent handling to `COMPROMISE_INITIATED` — the active session has been force-sealed; post-compromise content is suspect. |
+
+Tombstone effects are identical across all three types: K_server_X burned, all active sessions terminated, social proofs enter 30-day freeze, phone flagged as "in recovery," 12-month rebinding lockout on all previously-bound social identifiers. `COMPROMISE_INITIATED` and `SOCIAL_RECOVERY_INITIATED` additionally enforce a 48-hour waiting period before re-keying.
+
+The `SUCCESSION_INITIATED` type exists for voluntary ownership transfer; this is handled separately in the succession section.
+
 ### Companion device connection
 
 1. Owner opens mobile app or desktop app
@@ -1376,9 +1407,9 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-17 | Notifications | ~~Resolved~~ — response routes directly to client via channel's own reply mechanism: WhatsApp/Telegram/WeChat bot reply handler, Slack webhook reply, CELLO mobile app over companion P2P. No directory node intermediary. |
 | AC-18 | Status | `cello_status` does not distinguish between "directory temporarily unreachable" and "agent locked post-Not-Me revocation"; these are meaningfully different states |
 | AC-19 | Registration | ~~Partially resolved~~ — Incubation body text added (Part 6, 7-day / 25 outbound/day cap). Client must track provisional period state locally; directory enforces at FROST ceremony time. Open: the directory rejection error code for exceeding the provisional period cap is not specified. |
-| AC-20 | Registration | Email verification is a mandatory registration requirement (per server-infrastructure) but is entirely absent from the client — not in registration flow, trust signal types, data ownership map, or storage tiers |
+| AC-20 | Registration | ~~Resolved~~ — Email verification added to Part 2 registration flow. Oracle pattern: portal stores domain hash only; client stores signed JSON blob. `email_verified` signal added to identity signals store; presented at connection per disclosure policy. |
 | AC-21 | Merkle | ~~Resolved~~ — relay node initialises genesis `prev_root` as `SHA-256(agent_A_pubkey \|\| agent_B_pubkey \|\| session_id \|\| timestamp)` per open-decisions.md Decision 7, using the session assignment data received from the directory. Unblocked by AC-C2 resolution. |
-| AC-22 | Merkle | `scan_result` is listed in the data ownership map as part of the signed Merkle leaf, but the leaf construction spec in Part 4 does not include it as a field. libp2p-dht-and-peer-connectivity.md explicitly includes `scan_result` in the leaf format |
+| AC-22 | Merkle | ~~Resolved~~ — `scan_result` added to the Structure 2 leaf construction spec in Part 4. Fields: `{ score, verdict, model_hash }`. Sender's scan is an honesty signal; receiver's scan is the security boundary. |
 | AC-23 | Merkle | Degraded-mode leaf construction (partially updated): `last_seen_seq` is the last sequence number received from the relay node — which remains available when the directory is unreachable (the relay is independent of the directory during active sessions). However, if both the directory AND the relay are unavailable, the client holds hashes locally with no sequence authority. How the client constructs valid leaves in that dual-failure scenario is not fully specified |
 | AC-24 | Merkle | Degraded-mode session flag ("flagged in Merkle leaf") has no specified leaf field. The Merkle leaf structure in Part 4 has no `degraded_mode_session` field or equivalent |
 | AC-25 | Merkle | MMR inclusion proof verification not described. Client must implement the five-step inclusion proof algorithm (recompute leaf → walk sibling hashes → reconstruct checkpoint → verify federation signatures → accept/reject) for fabricated conversation defense. Distinct from per-message cross-check |
@@ -1388,7 +1419,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-29 | Merkle | LLM receive window for group rooms (silence threshold, max accumulation window, direct-address override; controlled by `room_config` fields `silence_threshold_ms` and `max_accumulation_ms`) is entirely absent. This is a client-side mechanism the agent uses to participate in group rooms |
 | AC-30 | Merkle | Serialized-mode group room dispatch: dual-path simultaneous dispatch does not apply. In serialized mode, the client submits to the relay node send queue; there is no P2P direct send before sequencing. A different dispatch path per ordering mode is required |
 | AC-31 | Merkle | Three-tier group message content delivery topology not described: full mesh P2P (2–5 participants), GossipSub (5–15+), encrypted relay fan-out (any size). Client must select topology based on participant count. Key management for encrypted relay fan-out has a likely solution: Sender Keys (Signal protocol model) — per-participant sender key distributed pairwise; new joiners receive current keys on join; full re-key on departure for forward secrecy. Full design deferred to a dedicated session. |
-| AC-32 | Merkle | Per-participant attestation table for multi-party seals not described. Source replaces `party_a_attestation`/`party_b_attestation` with a `conversation_attestations` table and adds `DELIVERED` (transport ACK received, no output) and `ABSENT` (participant went offline/removed) states. Client must submit per-participant rows at seal time |
+| AC-32 | Merkle | ~~Resolved~~ — Per-participant attestation model added to Session Attestation section. Client submits one row per participant; two-party case is N=2 degenerate. Full state set: CLEAN, FLAGGED, PENDING, DELIVERED, ABSENT. |
 | AC-33 | Merkle | `DELIVERED`→`ABSENT` transition timeout unspecified for group room participants. AC-6 covers bilateral inactivity timeout only |
 | AC-34 | Merkle | Control message priority in serialized mode: whether ABORT or FLAGGED control leaves can bypass the send queue is an open design question not surfaced in the gaps list |
 | AC-35 | Merkle | Delivery Case B: hash-arrives-first-then-message handling path is absent. The delivery failure table only covers message-arrives-first (Case C) for the asymmetric case. session-level-frost-signing.md identifies directory-first arrival as a common case requiring distinct handling |
@@ -1414,18 +1445,18 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-55 | Connections | PSI (Private Set Intersection) completely absent from client requirements — no mention, no gap marker, not in related documents. Client is an active participant in the OPRF blinding step for endorser intersection. Phase 2 but needs a design stub and related documents pointer |
 | AC-56 | Connections | Negotiation round abuse logging: the one-round negotiation request should be logged as a non-repudiable event. Requesting-then-rejecting patterns feed into trust scoring per connection-request-flow-and-trust-relay.md open question #4. Not currently a requirement |
 | AC-57 | Connections | Mandatory signal partial disclosure: what exactly constitutes "including" a mandatory signal is not specified. The source document tentatively concludes all-or-nothing, but the client enforcement logic depends on this definition |
-| AC-58 | Connections | Social account binding lock: once a GitHub/LinkedIn account is bound, it cannot be rebound for 12 months. This is a client-side enforcement obligation per sybil-floor-and-trust-farming-defenses.md. Not mentioned in Part 7 |
+| AC-58 | Connections | ~~Resolved~~ — 12-month rebinding lockout added to Part 7 Trust Data Custody section. Client enforces lockout on rebind attempt; lockout also triggers on any tombstone. Directory enforces via `social_binding_releases.rebinding_lockout_until`. |
 | AC-59 | Connections | Endorsement dual-dispatch: when issuing an endorsement, the client sends the signed record to both the endorsed agent (P2P) and the directory (hash registration) simultaneously. This dispatch architecture is not described for when AC-12 tools are built |
 | AC-60 | Notifications | Fire-and-forget notification outbound gate: client must enforce prior-conversation requirement before sending a notification. No MCP tool for outbound notification send is defined (no `cello_send_notification` or equivalent) |
 | AC-61 | Notifications | Inbound notification filter stack absent: three-layer receiver-side filter (global type rules, per-sender overrides, whitelist/blacklist precedence) not described. This must be LLM-free to prevent compute DoS |
-| AC-62 | Notifications | Agent-to-agent notification types (`introduction`, `order-update`, `alert`, `promotional`) absent from the notification type registry. These are the most common application-layer types per notification-message-type.md |
+| AC-62 | Notifications | ~~Resolved~~ — `introduction`, `order_update`, `alert`, `promotional` added to the notification type registry above. Types are agent-sourced; subject to trust-tier rate limits and recipient opt-out (promotional). |
 | AC-63 | Notifications | Outbound notification signing path not described. Fire-and-forget notifications are not session messages — they produce a single-entry directory record, not a Merkle leaf. The signing and hash submission path for this structure is absent |
 | AC-64 | Notifications | ~~Resolved~~ — `connection_request` surfaces via `cello_poll_notifications` only. Greeting is included but Layer 1 sanitized before queuing. Agent evaluates greeting + trust signals, optionally calls `cello_scan`, then accepts/declines. `cello_receive` is session messages only; greeting is not re-delivered. |
 | AC-65 | Notifications | `cello_retire_alias` behavior with in-flight connection requests not specified. Source states: accepted connections complete; unacted requests are rejected on alias retirement. This behavior belongs in the Part 11 implementation note for `cello_retire_alias` |
 | AC-66 | Notifications | Alias-scoped policy variants not described in `cello_manage_policy` implementation note. Alias policies are named variants scoped to one alias, distinct from the global policy. The tool's Part 11 note is incomplete |
 | AC-67 | Notifications | `list_sessions()` pagination/retention window unspecified. On long-running agents, returning full session history will violate the "always loads quickly" guarantee. Neither a window nor pagination is defined |
-| AC-68 | Notifications | Tamper detection notification type missing. frontend.md activity log requires a distinct event type for hash–message mismatch (Case A2 tamper detection). `security_block` is defined as Layer 1 only and does not cover message-level tamper events |
-| AC-69 | Notifications | No tamper detection notification type for `trust_event` level mismatch. Case A2 delivery failure fires `security_block` via `cello_receive` per Part 4, but `security_block` in the registry is labeled Layer 1 only — the label contradicts the Part 4 description |
+| AC-68 | Notifications | ~~Resolved~~ — `security_block` registry entry broadened to cover Layer 1 sanitization fires, Case A2 hash–message mismatch (tamper detection), and hash-without-message delivery gaps. Subtype field distinguishes which trigger fired. Aligns with frontend.md activity log specification. |
+| AC-69 | Notifications | ~~Resolved~~ — subsumed by AC-68 resolution. The `security_block` label now matches the Part 4 description. |
 | AC-70 | Persistence | Client-side hash chain on INSERT not required. persistence-layer-design.md specifies a running `chain_entry = SHA-256(record_contents \|\| previous_chain_hash)` on all protected tables. agent-client.md's append-only enforcement uses application convention only — weaker than the cryptographic chain the source requires |
 | AC-71 | Persistence | Social verification freshness records not in persistence tier. persistence-layer-design.md defines `social_verification_freshness_checks` table (checked_at, check_result: FRESH/STALE/FAILED). Client holds the only copy; directory holds only the hash. Without freshness records, the oracle pattern breaks for freshness signals |
 | AC-72 | Persistence | Companion device allowlist schema not defined anywhere. The allowlist is a security boundary but has no documented schema (device name, registered_at, revocation mechanism, binding proof reference) in any requirements document |
@@ -1433,7 +1464,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-74 | Persistence | `cello_request_human_input` routing when both companion and WhatsApp/Telegram/WeChat are configured: does the client send a knock only to the companion device, or also to the escalation channel? If the companion is unreachable and no WhatsApp/Telegram/WeChat fallback fires, the agent's input request is silently lost |
 | AC-75 | Persistence | Companion app install while CELLO client is offline: keypair registration ceremony requires the client to be reachable to update the allowlist. This failure mode is unaddressed |
 | AC-76 | Persistence | Discovery search results (`cello_search`) not listed as a Layer 1 fire surface. Bio text and capability tags are user-generated strings that will be presented to the agent as actionable text |
-| AC-77 | Recovery | Three tombstone types (VOLUNTARY, COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED) not specified in client. Client must set the correct type on initiation and react differently to each incoming type |
+| AC-77 | Recovery | ~~Resolved~~ — Tombstone types table added to Compromise Detection section. VOLUNTARY, COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED each have distinct initiation paths and inbound reaction behaviors. Tombstone effects (K_server burn, session termination, social freeze, rebinding lockout) are universal; waiting period applies to COMPROMISE and SOCIAL_RECOVERY only. |
 | AC-78 | Recovery | ~~Resolved~~ — 90-day bad-outcome lockout (6 months on trigger); rolling 2-month cap: 1 attestation during probation (3 months + 200 clean conversations), 3 after probation complete. Client must check lockout and rolling cap before signing; refuse with clear error if locked out. |
 | AC-79 | Recovery | Client post-recovery state transition unspecified: what the client does after its own recovery completes (clear locked state, present recovery record in `cello_status`, reconnect to prior contacts at reduced trust) is not described |
 | AC-80 | Recovery | Compromise window presentation and owner contest flow absent: client has no mechanism to receive, display, or contest the proposed compromise window when a tombstone is filed |

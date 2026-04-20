@@ -250,7 +250,7 @@ The activity log is the same data surfaced by `cello_list_sessions` and `cello_p
 
 **[GAP F-9]**: The retention period for the activity log is not specified. Is the full audit trail available in perpetuity, or is there a rolling window? The answer has implications for storage in the signup portal backend.
 
-**[CONFLICT FC-2 — same as server C-6]**: §4.2 of end-to-end-flow states that "bio — visible to anyone browsing the directory — no connection required." §4.1 states "discovery requires an active authenticated session." If there is a public browse mode, the portal's read path for the activity log and profile data needs to distinguish between data that requires authentication and data that is publicly available. Decision required before the portal's API layer can be designed.
+**[CONFLICT FC-2 — Resolved]**: Two-tier access model. Class 1 profiles (bio, capability tags, approximate location, pricing signal, connection policy indicator, anonymous trust score) are publicly browsable without authentication. Authentication gates only protocol operations (connection requests, trust signal relay, FROST ceremonies). The portal must expose a public browse tier. See FC-2 resolution in the Conflicts section below.
 
 ### Connection oversight
 
@@ -337,7 +337,7 @@ Contents:
 - Succession link indicator: if this agent succeeded another identity, a permanently visible succession record showing tombstone type, recovery mechanism, vouching contact identities, declared compromise window, and new public key. This must be displayed to both the owner and counterparties.
 - Recovery contact status: a visible "no recovery contacts" indicator when none are designated
 
-**[CONFLICT FC-2 noted above applies here]**: Whether the trust profile self-view reflects a public or private view of the profile depends on the authenticated vs. public browse mode decision.
+**[FC-2 resolved — see above]**: The trust profile self-view reflects the owner's private view. Class 1 data (bio, capability tags, pricing signal, connection policy indicator, anonymous trust score) is the public-facing subset; the owner's portal view additionally shows private fields (WebAuthn status, social bindings with account identifiers, TOTP state, device attestation status) not visible to unauthenticated visitors.
 
 ### Discovery and listing management
 
@@ -468,7 +468,7 @@ For group conversations, the dashboard displays a per-participant attestation ta
 
 The Merkle root values are displayed as truncated hex (first 8 bytes) with copy-to-clipboard for the full value. They are not decoded or explained beyond "this is the tamper-proof fingerprint of this conversation."
 
-**[CONFLICT FC-7]**: The "Submit to arbitration" trigger condition cannot rely on a conversation-level FLAGGED flag in multi-party conversations, because the FLAGGED state is now per-participant. An action must be available when any participant's individual attestation is FLAGGED, not only when a conversation-level flag is set. Resolution required before the dispute submission UI can be implemented.
+**[CONFLICT FC-7 — Resolved]**: The "Submit to arbitration" action is available whenever any participant's individual attestation is FLAGGED — the action does not require a conversation-level FLAGGED flag. The trigger is: at least one row in the per-participant attestation table has state FLAGGED. For the two-party degenerate case this is equivalent to the old conversation-level flag; for N>2 it activates on any single participant's flag regardless of others' states.
 
 A FLAGGED individual attestation is highlighted. If the owner wants to submit the session to arbitration, the dashboard provides a "Submit to arbitration" action (see Dispute Submission in Cross-Surface Flows below). If the flag is not submitted within **7 days**, it expires automatically with no consequence to either party. The dashboard must display the 7-day countdown on any open FLAGGED attestation and confirm expiry when the deadline passes. Note: if the same agent flags and abandons more than 3 sessions in a rolling 90-day window, that pattern is recorded in the flagger's own trust profile as a behavioral signal.
 
@@ -506,7 +506,7 @@ A chronological event stream showing all notification types from `cello_poll_not
 
 The event stream is filterable by type. Each event links to its relevant context in the portal (a security block links to the session; an endorsement links to the endorser's trust profile).
 
-**[GAP F-27]**: The notification delivery path (P2P vs. directory-routed) is not specified. The portal's notification display depends on which backend component delivers notification payloads. **[GAP F-28]**: The home-node API surface for notification payloads to the portal (distinct from the agent-facing MCP tool surface) is not specified.
+**[~~GAP F-27~~ — Retired]**: Two delivery paths resolved: directory WebSocket pushes system/protocol events to the agent; client-to-companion P2P delivers owner-targeted notifications. The portal receives events via the directory WebSocket path (same as the agent). See AC-16 / G-32. **[GAP F-28]**: The home-node API surface for notification payloads to the portal (distinct from the agent-facing MCP tool surface) is not specified.
 
 ### What the dashboard does NOT do
 
