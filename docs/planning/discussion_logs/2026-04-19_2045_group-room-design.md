@@ -46,7 +46,7 @@ Every room has exactly one owner. The owner is automatically an admin. Ownership
 
 ### Admin roster
 
-The owner can designate additional admins. There is no upper limit on admin count. Admins can:
+The owner can designate additional admins. There is no upper limit on admin count. **Admin designation requires minimum participation: an agent must have sent at least N messages in the room before it can be designated admin.** A muted-only agent that has never spoken cannot hold admin status. This prevents an attacker from parking a muted alt-agent in a room, engineering admin designation through the owner, and exploiting the custodial window on owner departure. Admins can:
 - Invite participants (`cello_invite_to_room`)
 - Approve or reject petitions (selective rooms)
 - Remove participants
@@ -76,6 +76,8 @@ When the owner sends a `LEAVE` control leaf, ownership transfers automatically:
 Only the owner can dissolve a room. Dissolution triggers a **forced seal** — not deletion. The relay appends a `DISSOLVE` control leaf, all participants receive the final Merkle root, and the room enters terminal state. Participants retain their local copies. Dissolution cannot destroy evidence — the Merkle record is permanent on all participants' clients.
 
 A compromised or fraudulent owner cannot dissolve a room to erase evidence of what happened in it.
+
+**Dissolution push notification:** Room dissolution triggers a push notification to all participant owners regardless of attention mode. Lifecycle events (dissolution, ownership transfer, forced seal) are never silenced by muted mode — the human owner must always be informed when the room they joined is terminated.
 
 ---
 
@@ -138,7 +140,7 @@ Each participant runs an independent FROST ceremony with the directory when they
 
 In practice: Agent A sends. Agent A's GCD starts. Agents B, C, D can still send immediately. When A's cooldown expires, A can send again. This prevents fast-inference agents from flooding the room while slow-inference agents never get a word in.
 
-**Room-level messages-per-second ceiling** — per-sender GCD is necessary but not sufficient. A collusion attack where N agents rotate sends during each other's cooldowns sustains a flood volume of N × (1 / cooldown) messages per second, each sender individually within policy. The room manifest therefore also includes a `max_room_messages_per_second` ceiling enforced at the relay, independent of and in addition to per-sender GCD. When the room ceiling is hit, the relay queues messages in arrival order and releases them at the ceiling rate.
+**Room-level messages-per-second ceiling** — per-sender GCD is necessary but not sufficient. A collusion attack where N agents rotate sends during each other's cooldowns sustains a flood volume of N × (1 / cooldown) messages per second, each sender individually within policy. The room manifest therefore also includes a `max_room_messages_per_second` ceiling enforced at the relay, independent of and in addition to per-sender GCD. When the room ceiling is hit, the relay **drops** excess messages — it does not queue them. An indefinite relay queue is itself a DoS vector: a flooded queue delays all participants and creates a backlog exploitable for coordinated timing attacks. The relay maintains a short bounded drop buffer (maximum 10 messages) to absorb brief bursts, then rejects. The sender receives a rejection error; the room sees no backlog. Critically, MPS and GCD violations are caught at the relay **before sequence assignment** — if a message is sequenced, it must be fanned out; if it violates a limit, it is rejected before it enters the Merkle record. This prevents honest receiving clients from seeing sequence gaps caused by dropped messages.
 
 **Agent-settable personal GCD** — each participant can set their own personal GCD longer than the room floor but never shorter. An agent that wants to be more conservative (speak less frequently) than the room requires can do so. The room's `global_cooldown_ms` is the floor; individual agents can only raise their personal cooldown, never lower it below the room floor. Same "tighten but not loosen" principle as attention modes.
 
@@ -313,7 +315,7 @@ All room parameters disclosed pre-join. Split by mutability:
 | `discoverable` | Discovery visibility |
 | `private` | Admission requirement |
 | `dispute_eligible` | Whether full Merkle tree is maintained for dispute |
-| `max_participants` | Hard ceiling on participant count |
+| `max_participants` | Hard ceiling on participant count — protocol maximum is 25 (see below) |
 
 ### Mutable parameters (owner can change post-creation)
 
@@ -333,7 +335,23 @@ All room parameters disclosed pre-join. Split by mutability:
 
 ---
 
-## 8. Session Lifecycle for Group Rooms
+## 8. Participant Cap
+
+Group rooms have a **hard protocol maximum of 25 participants**. This is a protocol constant, not a per-room configurable ceiling — no room can exceed 25 regardless of what `max_participants` is set to. The owner may set `max_participants` to any value from 2 to 25; the protocol enforces the 25 upper bound.
+
+The 25-participant cap is set at the intersection of three constraints:
+
+1. **GossipSub topology viability.** GossipSub operates comfortably up to ~20–25 participants. Beyond this, gossip propagation latency starts to exceed the silence threshold — messages are still in-flight when the digest window fires, producing incomplete batches and stale LLM responses.
+
+2. **CONCURRENT+GCD conversation dynamics.** At high participant counts, most agents spend most of their time in GCD cooldown. The room stops behaving like a conversation and starts behaving like a feed. For broadcast/feed use cases, the Moltbook model is the right tool — group rooms are for focused collaboration among a bounded set of agents.
+
+3. **Stress testing feasibility.** 25-agent rooms can be meaningfully instrumented and stress-tested before launch. The cap may be revised upward based on empirical results.
+
+The relay rejects join attempts that would exceed the room's `max_participants` value. The relay also enforces the protocol-level 25-participant ceiling regardless of what the manifest states.
+
+---
+
+## 9. Session Lifecycle for Group Rooms
 
 ### No automatic session timeout
 
@@ -377,7 +395,7 @@ All carry: `sequence_number` (relay-assigned), `prev_root` (relay-computed), `ti
 
 ---
 
-## 9. New MCP Tools
+## 10. New MCP Tools
 
 | Tool | Who can call | Purpose |
 |---|---|---|
@@ -396,7 +414,7 @@ All carry: `sequence_number` (relay-assigned), `prev_root` (relay-computed), `ti
 
 ---
 
-## 10. Protocol Consistency Notes
+## 11. Protocol Consistency Notes
 
 **Invariant 2 (client is the enforcer):** Receiving client enforcement of room parameters is an extension of the existing invariant, not a deviation. GCD relay enforcement is a new relay capability class — "room policy enforcement" — distinct from the existing "sequencing and tree building" role. This expansion is deliberate and documented.
 
@@ -408,7 +426,7 @@ All carry: `sequence_number` (relay-assigned), `prev_root` (relay-computed), `ti
 
 ---
 
-## 11. Open Items Not Resolved in This Session
+## 12. Open Items Not Resolved in This Session
 
 | ID | Area | What needs deciding |
 |---|---|---|
