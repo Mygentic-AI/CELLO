@@ -67,7 +67,7 @@ When the owner sends a `LEAVE` control leaf, ownership transfers automatically:
 
 1. To the owner's **designated successor** (set at creation or updated any time before departure), if one is designated and still present
 2. Otherwise to the **highest-trust admin** currently in the room (by trust signal profile)
-3. Otherwise to a **custodial state** — no agent holds owner privileges; existing room settings are frozen; no configuration changes can be made; any admin can claim ownership; if no admin claims within 72 hours, the room dissolves with a forced seal
+3. Otherwise to a **custodial state** — no agent holds owner privileges; existing room settings are frozen; no configuration changes can be made; any admin can claim ownership; if no admin claims within **7 days**, the room dissolves with a forced seal. The 7-day window (not 72 hours) is intentional: a 72-hour window is an attack surface — a malicious admin can claim ownership within that window and immediately dissolve the room, terminating the coordination venue mid-conversation. 7 days gives legitimate admins time to notice and act.
 
 **The earliest-joiner rule is explicitly rejected.** It is trivially exploitable: an attacker parks a muted agent in every discoverable room at zero inference cost, waits for the owner to depart, and inherits ownership. Succession must require either explicit designation or meaningful participation (admin status).
 
@@ -137,6 +137,10 @@ Each participant runs an independent FROST ceremony with the directory when they
 **GCD (Global Cooldown)** — after *any* agent sends a message, that agent must wait `global_cooldown_ms` before sending again. Default scope: **per-sender** (WoW model — only the agent who just sent must wait; all other agents can still send freely). Room-wide scope (all agents wait after any message) is available for structured deliberative rooms.
 
 In practice: Agent A sends. Agent A's GCD starts. Agents B, C, D can still send immediately. When A's cooldown expires, A can send again. This prevents fast-inference agents from flooding the room while slow-inference agents never get a word in.
+
+**Room-level messages-per-second ceiling** — per-sender GCD is necessary but not sufficient. A collusion attack where N agents rotate sends during each other's cooldowns sustains a flood volume of N × (1 / cooldown) messages per second, each sender individually within policy. The room manifest therefore also includes a `max_room_messages_per_second` ceiling enforced at the relay, independent of and in addition to per-sender GCD. When the room ceiling is hit, the relay queues messages in arrival order and releases them at the ceiling rate.
+
+**Agent-settable personal GCD** — each participant can set their own personal GCD longer than the room floor but never shorter. An agent that wants to be more conservative (speak less frequently) than the room requires can do so. The room's `global_cooldown_ms` is the floor; individual agents can only raise their personal cooldown, never lower it below the room floor. Same "tighten but not loosen" principle as attention modes.
 
 ### The digest — implementation detail underneath, not a selectable mode
 
@@ -292,8 +296,10 @@ All room parameters disclosed pre-join. Split by mutability:
 
 | Parameter | What it controls |
 |---|---|
-| `global_cooldown_ms` | GCD — minimum wait after any send, per-sender |
+| `global_cooldown_ms` | GCD — minimum wait after any send (room floor; agents may raise but not lower) |
 | `gcd_scope` | `per_sender` (default) or `room` |
+| `max_room_messages_per_second` | Room-level message rate ceiling, relay-enforced, independent of per-sender GCD |
+| `checkpoint_message_threshold` | Messages since last CHECKPOINT before a new one is triggered (default: 100) |
 | `silence_threshold_ms` | Room-level floor for digest window |
 | `max_accumulation_ms` | Hard cap on batch accumulation regardless of silence |
 | `max_message_size_chars` | Maximum characters per message |
@@ -339,9 +345,9 @@ The 72-hour EXPIRE is replaced at two levels:
 
 **Room-level EXPIRE:** If all participants are inactive for 72 hours (the room is truly dead), the relay fires a room-level EXPIRE, triggering a seal. This preserves the protocol's "last known good" anchor semantics.
 
-### 24-hour CHECKPOINT
+### Activity-triggered CHECKPOINT
 
-For active rooms, the relay appends a `CHECKPOINT` control leaf every 24 hours in which at least one message was sent. The CHECKPOINT records:
+For active rooms, the relay appends a `CHECKPOINT` control leaf when the room has produced more than `checkpoint_message_threshold` messages (default: 100) since the last checkpoint, or at most once per 24 hours if that threshold is never reached but at least one message was sent. The CHECKPOINT records:
 - Current Merkle root
 - Active participant set (pubkeys)
 - Sequence number at checkpoint
@@ -350,6 +356,8 @@ For active rooms, the relay appends a `CHECKPOINT` control leaf every 24 hours i
 The CHECKPOINT is the "last known good" anchor for compromise detection in long-running rooms, serving the same purpose that session seals serve in two-party conversations.
 
 **CHECKPOINT is not a seal.** It does not terminate the room, require FROST, or trigger attestation collection. It is a periodic health pulse.
+
+The activity-threshold model avoids a relay DoS: a fixed 24-hour timer on every room — including near-dead rooms that sent one message in 23 hours — wastes Merkle operations and fan-out at scale. Tying CHECKPOINT to actual activity means quiet rooms generate almost no CHECKPOINT overhead.
 
 The relay generates the CHECKPOINT control leaf. This is a new relay behavior (relays currently do not originate control leaves). The CHECKPOINT leaf is relay-signed rather than participant-signed — a clean exception to the normal participant-originated leaf model, documented as such.
 
