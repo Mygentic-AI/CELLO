@@ -164,9 +164,29 @@ The digest is not a mode the owner chooses — it is how every client manages me
 Batch metadata delivered with every batch:
 - `message_count` — how many messages in this batch
 - `wait_duration_ms` — how long the client waited
-- `close_reason` — `silence_threshold` or `max_accumulation_cap`
+- `close_reason` — `silence_threshold`, `max_accumulation_cap`, or `batch_size_cap`
 
 This lets a well-designed agent reason about room activity: "this batch closed after 45 seconds with 12 messages, the conversation is moving fast."
+
+### Batch size enforcement and BATCH_CLOSED
+
+`max_batch_size_messages` is a **hard cut** — not a soft ceiling with sender-boundary snapping. When adding the next incoming message would cause the buffer to exceed `max_batch_size_messages`, that message is **not added to the current batch**. The batch closes immediately. The message that caused the breach is dropped and the sender is notified.
+
+**BATCH_CLOSED signal:** When a batch closes for any reason (silence threshold, max_accumulation_ms, or batch_size_cap), the relay broadcasts a `BATCH_CLOSED` signal to all participant **clients** via the existing WebSocket control channel. This is a transport-layer coordination signal — it never reaches any LLM. Clients use it to synchronize batch state: current batch is closed, new accumulation window is open.
+
+**Sending into a closed batch:** If Agent E's message is rejected because the batch closed, E's client receives the rejection and surfaces it to E's LLM as a `cello_send` tool call error:
+
+```
+{ error: "batch_closed", batch_seq: N }
+```
+
+Short, machine-readable, no verbose explanation. The client then enforces: Agent E may only call `cello_acknowledge_receipt` until the next batch fires. Any further `cello_send` attempt is rejected locally by E's own client before it reaches the relay — no round-trip, no relay load, no tokens burned by other participants. When the next batch is presented to E's LLM, the restriction lifts. E may then resend if the message is still relevant to the new context.
+
+**What receiving clients do with manifest violations:** If a message somehow reaches a receiving client that violates a manifest parameter (oversized, GCD violation, etc.), the receiving client drops it silently and logs a protocol violation event. It does not send any acknowledgement back to the relay or the sender — silence is the response. This is intentional: sending a violation acknowledgement would itself burn receiver tokens and create a new DoS surface. The sender gets no confirmation that their violation was detected; they simply observe that their message produced no responses.
+
+### Adaptive silence threshold
+
+Each participant's client can adaptively tune its personal silence threshold within the immutable bounds set by the room (`silence_threshold_ms` as the floor, `max_accumulation_ms` as the ceiling). The client uses the `current_activity_msgs_per_day_7d_avg` field from the manifest and the `wait_duration_ms` from recent batch metadata to adjust: high-activity rooms warrant shorter personal thresholds; low-activity rooms warrant longer ones. This is a client-side optimization — no protocol coordination required. The room's immutable floor and ceiling always bound the result.
 
 ### Why this and not the others
 
@@ -244,19 +264,36 @@ Every parameter that affects participants' inference or infrastructure costs is 
 
 This is the core protection: the manifest is a binding contract, not a menu. Changing cost-affecting parameters after join would be a bait-and-switch.
 
-### Enforcement model: three independent layers
+### Token burn protection model
 
-Every room parameter is enforced at three independent layers, each assuming the previous might be compromised:
+The primary threat is participants — including the room owner's own agent — accumulating unexpected inference costs. The protection model has four layers, each independent, each assuming the previous may be absent or compromised.
 
-**Layer 1 — Sending client:** Rejects the send before it goes out. Pure UX — gives the sender a clear error. A modified client can bypass this. It is a courtesy, not a security guarantee.
+**Layer 1 — Sending client (courtesy gate):**
+The sender's own client checks all manifest parameters before transmitting. Violations are rejected locally with a clear error before the message leaves the machine. A modified client can bypass this. It is a UX convenience, not a security guarantee. Role: protect the honest sender from accidental violations.
 
-**Layer 2 — Relay gate:** Enforces room parameters before fan-out. Protects relay resources. Not the authoritative gate.
+**Layer 2 — Relay gate (infrastructure protection, authoritative for sequencing):**
+The relay enforces all manifest parameters **before sequence assignment**. This is the critical property: if a message is sequenced, it will be fanned out; if it violates a limit, it is rejected before entering the Merkle record. No honest receiving client ever sees a sequence gap caused by a dropped message. The relay returns a structured rejection to the sender:
+- `gcd_violation` — sender is within their cooldown window
+- `mps_ceiling` — room message rate exceeded
+- `oversized` — message exceeds `max_message_size_chars`
+- `batch_closed` — batch was full at time of arrival
+- `rate_limit` — per-sender per-minute or per-hour cap exceeded
 
-**Layer 3 — Receiving client (the security boundary):** Every participant's client independently validates every incoming message against the room manifest. An oversized message, a GCD violation, a rate-limit breach — all are dropped regardless of whether the relay checked them. This layer cannot be bypassed by the sender because the sender does not control the recipient's machine.
+The relay broadcasts `BATCH_CLOSED` to all participant clients via the WebSocket control channel (never to LLMs) whenever a batch closes, synchronizing batch state across the room.
 
-**Principle:** A malicious actor who modifies their sending client to bypass any limit simply finds that their messages are dropped by every other participant's client. They burned their own inference tokens sending messages nobody received.
+**Layer 3 — Receiving client (security boundary, authoritative for token protection):**
+Every participant's client independently validates every incoming message against the manifest before presenting it to the LLM. A message that passed the relay but is invalid under the manifest is dropped silently — no acknowledgement sent back, no LLM invocation, no tokens burned. Silence is the response to violations at this layer. Sending an acknowledgement would itself burn receiver tokens and create a DoS surface.
 
-The room manifest is therefore both a disclosure document and a verification specification. Every receiving client loads the manifest at join time and uses it as the ruleset for validating every subsequent message.
+This layer cannot be bypassed by the sender — the sender does not control the recipient's machine. A malicious actor who modifies their sending client to bypass limits finds their messages dropped at every other participant's client. They burned their own tokens; nobody else did.
+
+**Layer 4 — Per-room budget cap (owner's last line of defense):**
+Each participant's client enforces a per-room daily inference budget cap locally. On breach, the agent auto-switches to muted. Push alert fires at 50% consumption with a 5-minute "approve 2× budget" window before auto-mute. This catches unexpected cost accumulation even when all three lower layers behaved correctly — e.g., a legitimately active room that turned out to be busier than projected.
+
+**The worst-case inference cost per LLM invocation is computable from the manifest:**
+```
+max_tokens_per_invocation = max_batch_size_messages × max_message_size_chars / avg_chars_per_token
+```
+Both parameters are immutable. The pre-join cost projection uses this formula. The owner should consider these two parameters together when creating a room — a room with `max_batch_size_messages: 20` and `max_message_size_chars: 10000` has a very different cost profile from one with `max_batch_size_messages: 20` and `max_message_size_chars: 500`. The portal surfaces the computed worst-case tokens per invocation as a derived field during room creation.
 
 ### Relay-level infrastructure defense (pre-room)
 
@@ -419,6 +456,8 @@ All carry: `sequence_number` (relay-assigned), `prev_root` (relay-computed), `ti
 **Invariant 2 (client is the enforcer):** Receiving client enforcement of room parameters is an extension of the existing invariant, not a deviation. GCD relay enforcement is a new relay capability class — "room policy enforcement" — distinct from the existing "sequencing and tree building" role. This expansion is deliberate and documented.
 
 **EXPIRE / CHECKPOINT separation:** CHECKPOINT is not a replacement for EXPIRE — it is an additional primitive. EXPIRE still exists for truly dead rooms (all participants inactive for 72 hours). CHECKPOINT is the periodic health pulse for active rooms. The two mechanisms are complementary and do not conflict.
+
+**CHECKPOINT integrity verification:** CHECKPOINT leaves are relay-signed, which introduces a new trust surface — a compromised relay could forge a CHECKPOINT with a fabricated Merkle root. Receiving clients must independently verify every CHECKPOINT by recomputing the Merkle tree from their local leaf sequence up to the CHECKPOINT's stated sequence number and comparing against `merkle_root_at_checkpoint`. A mismatch is a relay integrity violation: logged as a security event and surfaced to the owner, same treatment as sequence inconsistency attacks. This is consistent with invariant 2 — the client is the enforcer, not the relay.
 
 **`cello_petition_room` reuses the connection-request flow:** Internally, a room petition is processed identically to a connection request — the room owner's `SignalRequirementPolicy` evaluates the petitioner's trust signals, auto-accepts if satisfied, queues for manual review if not. This avoids introducing a parallel access-control primitive. The `room_join_request` notification type is structurally identical to `connection_request`.
 
