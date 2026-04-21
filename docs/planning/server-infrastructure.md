@@ -769,10 +769,31 @@ Relay's per-session state is destroyed after the handoff.
 
 ### Group room fan-out
 
-- For large group conversations (Option 3 — encrypted relay fan-out): relay node receives an encrypted ciphertext from the sender (encrypted with a shared group key) and fans it out to all participants. Relay sees ciphertext, not plaintext.
-- Group key management (establishment, new-joiner distribution, departure revocation): **likely solution known, final design pending dedicated design session. [GAP G-38]**
+Two topologies, selected at room creation time via the immutable `topology` manifest parameter:
 
-  **Likely solution — Sender Keys (Signal protocol model)**: Each participant generates a sender key and distributes it to all current members via pairwise E2E-encrypted channels (using the existing CELLO session layer). Each sender encrypts their own outbound messages with their sender key. New joiners receive all current sender keys from existing members on join. Departure: forward secrecy on departure requires a full re-key (all remaining members generate new sender keys and redistribute) — expensive but correct. For casual rooms where forward secrecy on departure is not required, old sender keys can be left in place and departure is just membership list removal. Room creator selects the security policy at creation time. Final design must address: key distribution failure modes, offline member catch-up, and maximum room size constraints.
+- **`full_mesh`** (launch topology): Each sender encrypts N-1 copies over existing pairwise E2E channels. Relay routes opaque blobs. Viable at ≤10 participants (45 connections, 9 sends per message). No group key management needed.
+- **`sender_keys`** (required for >10 participants, specifically the broadcast archetype): Each speaker generates a Sender Key and distributes it to all participants over pairwise channels. Speaker encrypts once; relay fans out one opaque blob to all recipients. Relay sees ciphertext, not plaintext. Key rotation on participant departure is O(N) pairwise messages for forward secrecy. **[GAP G-38 — design session needed before sender_keys ships]**
+
+The relay's role is identical in both topologies: route opaque encrypted blobs. The relay never holds decryption keys. Invariant 1 (hash relay, not content relay) is preserved in both modes.
+
+### Relay floor discipline enforcement
+
+The relay enforces floor control for group rooms — a new capability class distinct from "sequencing and tree building":
+
+- **FLOOR_GRANT origination**: Relay assigns cohorts (1-4 speakers) and issues `FLOOR_GRANT` control leaves with `cohort_pubkeys[]` and `round_number`.
+- **Out-of-turn rejection**: Any `cello_send` from an agent not in the currently granted cohort is rejected pre-sequence — the message never enters the Merkle tree.
+- **Participant role enforcement**: Any `cello_send` from a `listener`-role participant is rejected pre-sequence.
+- **Adaptive timeout**: Relay monitors timeout rates over 3-cycle rolling windows; extends timeout by 50% (up to protocol max 600s) when ≥2/3 of active speakers time out; contracts when <1/3 for 2 consecutive cycles.
+- **Continuation grants**: Relay evaluates `cello_request_continuation` against the per-5-turns budget and issues or denies `CONTINUATION_GRANT` control leaves.
+- **@mention insertion**: Relay priority-inserts mentioned agents, rate-limited to 1 per agent per cycle, recorded as `MENTION_INSERT` control leaves.
+
+### Manifest constraint validation
+
+The relay validates room manifests at creation time and rejects degenerate configurations:
+- `max_speakers` ≤ 10 (floor control ceiling)
+- `speakers_per_round` ≤ `max_speakers`
+- `max_participants` > 10 requires `default_role: listener` and `topology: sender_keys`
+- `max_speakers` ≥ 1
 
 ### DDoS isolation requirement
 
@@ -986,7 +1007,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-35 | Directory | ~~Alias TTL mechanism not defined~~ **RESOLVED**: configurable TTL (default 6 months inactivity); checkpoint job marks EXPIRED; TTL resets on contact; owner can manually RETIRE |
 | G-36 | Directory | ~~Deferred~~ — Financial infrastructure (regulatory compliance, custodian partnerships, stablecoin integration) is out of scope for initial launch. Staking hooks exist architecturally but nothing implemented. Deserves its own design document when prerequisites are in place. |
 | G-37 | Relay | ~~Partially resolved~~ — Relay node authentication: registered public key in directory, same model as directory nodes; relay signs session acceptance, directory verifies. Operator governance/contracts deferred (business development, non-technical). CELLO operates all relay nodes through Alpha. |
-| G-38 | Relay | Likely solution: Sender Keys (Signal protocol model) — per-participant sender key distributed pairwise; new joiners receive current keys on join; full re-key on departure for forward secrecy (optional per room policy). **Final design pending dedicated design session** — must address distribution failure modes, offline catch-up, and room size limits. |
+| G-38 | Relay | Sender Keys protocol for `sender_keys` topology — required for the broadcast archetype (>10 participants). Signal model: each speaker generates a Sender Key, distributes to all participants over pairwise channels, encrypts once per send. Key rotation on departure is O(N). CELLO-specific design work: key distribution/rotation as control leaves in Merkle tree, FROST ceremony interaction, non-repudiation chain continuity. **Deferred at launch** — `full_mesh` serves all conversation-mode rooms (≤10 participants). Required before broadcast archetype ships. |
 | G-39 | Cross | ~~Resolved~~ — Directory nodes only; full federation via append-only log. At-rest: double-encrypted (owner encrypts to successor's `identity_key`; node wraps with KMS master key). GDPR: blob wiped on tombstone, hash remains. |
 | G-40 | Cross | ~~Resolved~~ — Oracle evidence is never stored by the directory. Hash-everything-store-nothing applies: oracle verifies → hash stored → original discarded. Client holds original; presents to arbitration if needed; directory verifies hash. |
 | G-41 | Directory | ~~Retired~~ — companion device allowlist is client-held, not directory-stored. See AC-C10 (resolved). Maximum devices per agent remains a client-side configuration decision. |
@@ -1021,4 +1042,4 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — connection staking hooks and escrow mechanics that the directory supports architecturally from day one; bonded rate limit tier (G-31) noted as future extension pending G-36
 - [[2026-04-14_1000_contact-alias-design|Contact Alias Design]] — the contact_aliases schema, SINGLE/OPEN modes, alias TTL (G-35), and alias creation rate limits (G-34) resolved here
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — G-18 deferred pending stack decision; PSI is Phase 2; the endorsement intersection the directory facilitates without learning either party's set
-- [[2026-04-19_2045_group-room-design|Group Room Design]] — adds relay-level room policy enforcement (new relay capability class): GCD/MPS pre-sequence enforcement, BATCH_CLOSED broadcast, CHECKPOINT with protocol-enforced minimum threshold and daily cap, AUTO_MUTE and KICK control leaves, violation tracking, and relay pre-room gate requirements
+- [[2026-04-19_2045_group-room-design|Group Room Design]] — adds relay-level floor discipline enforcement (new relay capability class): FLOOR_GRANT cohort assignment, out-of-turn and listener-role rejection pre-sequence, adaptive timeout extension, continuation grants, @mention priority insertion, CHECKPOINT with protocol-enforced minimum threshold and daily cap, AUTO_MUTE and KICK control leaves, participant role enforcement, manifest creation-time constraint validation, two topology modes (full_mesh launch / sender_keys for broadcast), and relay pre-room gate requirements
