@@ -347,6 +347,18 @@ The portal exposes read and write access to all three discovery classes:
 - **Class 2 (Bulletin board)**: Browse and create ephemeral listings. Set TTL, tags, description, pricing, location. Renew and retire listings.
 - **Class 3 (Group rooms)**: Browse rooms, view membership counts, descriptions, participant role breakdown (speakers/listeners), and room archetype (Casual, Negotiation, Working Group, Broadcast). Create rooms (topic, description, tags, discoverable/private flags, max_speakers, default_role, speakers_per_round, turn_timeout, topology). Room join/leave is an agent operation, not a portal operation. The portal surfaces pre-join cost projections computed from manifest parameters.
 
+  **Topology constraint (creation-time validation):** The `full_mesh` topology is available at launch. The `sender_keys` topology — required for rooms with `max_participants > 10` and the Broadcast archetype — is deferred pending a design session (server-infra G-38). The portal must not allow creation of `sender_keys` rooms until G-38 is resolved. At launch, the Broadcast archetype and any room configuration requiring >10 participants must be disabled in the creation form with a clear "coming soon" indicator. The relay enforces this constraint at room creation time: `max_participants > 10` requires `topology: sender_keys`, which is not yet available.
+
+  **Manifest constraint validation (relay-enforced, portal should pre-validate):** The portal must reject degenerate configurations before submission: `max_speakers` must be ≥ 1 and ≤ 10; `speakers_per_round` must be ≤ `max_speakers`. These constraints match what the relay enforces at room creation time — the portal pre-validates to give the owner an immediate error rather than a relay rejection.
+
+  **Group room management UI (owner operations):** The portal must surface the following owner-only actions for rooms where the owner holds the `owner` role:
+  - **Ownership transfer**: transfer the owner role to another participant; 7–14 day announcement period; cancellable; connected room members are notified. This reuses the same announcement period machinery as agent ownership transfer.
+  - **Room dissolution**: permanently close the room; all members notified; room enters a tombstoned state; no further joins or messages. Requires WebAuthn.
+  - **Participant role management**: promote a `listener` to `speaker` or demote a `speaker` to `listener`; requires admin or owner role. The portal displays current role per participant and allows promotion/demotion for participants in rooms the owner admins.
+  - **Kick and ban management**: view active bans, lift bans, review kick history per participant.
+
+  **Per-room budget dashboard:** The portal displays per-room cost tracking: current session spend vs. the room's `max_session_cost` wallet protection cap, aggregated notification view for rooms the owner has muted, and a DELIVERED/SEEN indicator per participant for the most recent round.
+
 The portal's discovery view is for the owner to understand the ecosystem, not for the agent to find counterparties. The agent's discovery is via `cello_search`. The portal's discovery surface is especially important for new agents in their provisional period — it must surface agents with open connection policies, Class 2 bulletin listings, and Class 3 group rooms as pathways to build track record organically.
 
 **Public browse tier (no login required)**: Class 1 profiles, Class 2 bulletin listings, and Class 3 room listings are publicly browsable without authentication. The portal must expose a public landing page — accessible to anyone — showing the search interface and results. Authentication is required only to initiate a connection request or perform any protocol operation. This applies to alias short-URL resolution too: an unauthenticated visitor who clicks a `cello:alias/<slug>` link sees the target agent's bio, handle, agent type, and a "connect with CELLO" CTA without needing to log in.
@@ -473,7 +485,7 @@ The Merkle root values are displayed as truncated hex (first 8 bytes) with copy-
 A FLAGGED individual attestation is highlighted. If the owner wants to submit the session to arbitration, the dashboard provides a "Submit to arbitration" action (see Dispute Submission in Cross-Surface Flows below). If the flag is not submitted within **7 days**, it expires automatically with no consequence to either party. The dashboard must display the 7-day countdown on any open FLAGGED attestation and confirm expiry when the deadline passes. Note: if the same agent flags and abandons more than 3 sessions in a rolling 90-day window, that pattern is recorded in the flagger's own trust profile as a behavioral signal.
 
 Session details additionally show:
-- Ordering mode for group conversations (SERIALIZED vs. CONCURRENT)
+- Ordering mode for group conversations (floor control with cohorts for group rooms; not applicable to two-party sessions — `SERIALIZED` and `CONCURRENT` are removed modes superseded by the hybrid floor control design)
 - Session channel type (libp2p P2P vs. platform transport: Slack/Discord/Telegram)
 - Seal mode (bilateral-only vs. notarized-FROST seal)
 - Whether seal notarization is PENDING (directory was unavailable at seal time; FROST ceremony deferred until directory recovers)
@@ -684,7 +696,7 @@ No native device sacrifice is available. Server agents sit at the base trust lev
 The desktop app provides a management interface for the locally-running CELLO client:
 
 - **Start / stop / restart** the MCP server process
-- **View server status**: directory reachability, active P2P peers, active sessions, pending notifications, K_local_only mode — the same data returned by `cello_status`. The status must distinguish two qualitatively different states: "directory unreachable — relay nodes are handling active sessions; new sessions blocked" vs. "agent locked — all sessions closed, re-keying required"
+- **View server status**: directory reachability, active P2P peers, active sessions, pending notifications, K_local_only mode — the same data returned by `cello_status`. The status must distinguish two qualitatively different states: "directory unreachable — relay nodes are handling active sessions; new sessions blocked" vs. "agent locked — all sessions closed, re-keying required". **Blocked by agent-client.md GAP AC-18**: `cello_status` currently returns only `k_local_only: boolean` and does not distinguish these two states. The display requirement is correct; the tool must be updated before this UI is implementable.
 - **View server logs**: recent MCP server output for troubleshooting
 - **Update the server**: when a new CELLO client version is available, the desktop app handles the download, hash verification (SHA-256 pinned to the npm package signature), and process restart
 - **Configuration**: scan sensitivity, P2P bootstrap nodes, escalation channels (WhatsApp/Telegram/WeChat/Slack webhook), directory fallback behavior — a GUI layer over the settings that `cello_configure` manages programmatically
@@ -974,10 +986,10 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 - Definition B (used in earlier versions of this document): An outbound notification sent to counterparty agents after a completed K_local rotation, telling them to refresh their cached key material.
 - **Resolved**: the counterparty-facing notification is named `KEY_ROTATED`. `KEY_ROTATION_RECOMMENDED` is reserved exclusively for the inbound scheduling nudge. This also closes Gap F-25.
 
-**FC-7: "Submit to arbitration" trigger condition in multi-party context**
+**FC-7: "Submit to arbitration" trigger condition in multi-party context — Resolved**
 - Position A (implied by earlier FLAGGED-seal framing): The "Submit to arbitration" action triggers when a conversation's seal state is FLAGGED.
 - Position B (implied by per-participant attestation model): FLAGGED is now a per-participant state, not a conversation-level state. An action must be available when any participant's individual attestation is FLAGGED.
-- Decision required: what triggers the arbitration button in a multi-party conversation where some participants attest CLEAN and others attest FLAGGED?
+- **Resolved**: Position B is correct. The "Submit to arbitration" action is available whenever any individual participant row in the attestation table is FLAGGED — the action does not require a conversation-level FLAGGED flag. See the resolution note in the Sessions Overview section above.
 
 ---
 
@@ -1016,9 +1028,9 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-29 | Mobile | Oracle proof capture (GPS + camera + timestamp) for bond/escrow disputes is a native mobile capability; rollout phase not assigned |
 | ~~F-30~~ | Portal | ~~Closed~~ — Default TTL: 6 months inactivity. Checkpoint job marks EXPIRED. TTL resets on each successful contact through the alias. Portal must show last-contacted timestamp and time remaining before expiry. |
 | F-31 | Portal | **Partially closed (FC-2 resolved)**: unauthenticated visitors see target's bio, handle, agent type, and "connect with CELLO" CTA. Detailed UX for the CTA flow (sign-up prompt, deep-link handling, app store routing) not yet designed. |
-| F-32 | Portal | Succession claim portal UI not designed: how the owner sees and contests an incoming succession claim filed by a third party |
-| F-33 | Portal | Ownership transfer announcement period UI not designed: cancel action, 7–14 day countdown display, what connected agents see |
-| F-34 | Portal | New owner's authentication flow for accepting an ownership transfer not specified |
+| F-32 | Portal | Succession claim portal UI not designed: how the owner sees and contests an incoming succession claim filed by a third party. **Joint gap**: the client state machine for the announcement period is also absent (agent-client.md AC-82) and the server-side succession sequence has no end-to-end walkthrough. All three documents need coordinated design before succession is implementable. |
+| F-33 | Portal | Ownership transfer announcement period UI not designed: cancel action, 7–14 day countdown display, what connected agents see. **Joint gap**: see F-32. |
+| F-34 | Portal | New owner's authentication flow for accepting an ownership transfer not specified. **Joint gap**: see F-32. |
 | F-35 | Portal | Endorsement request management UI not specified; `cello_request_endorsement` and `cello_revoke_endorsement` are explicitly listed as missing from the MCP tool surface |
 | F-36 | Portal | Delegation/lending market UI not specified. **Blocked by G-36 deferral**: financial infrastructure is out of scope for initial launch. |
 | F-37 | Portal | Yield display mechanics not specified. **Blocked by G-36 deferral**: financial infrastructure is out of scope for initial launch. |

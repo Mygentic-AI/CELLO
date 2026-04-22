@@ -124,6 +124,8 @@ The portal supports the following as optional, additive signals. None are regist
 - Involuntary succession (dead-man's switch): 30+ day waiting period (configurable), with notification to owner via external channels (WhatsApp/Telegram/WeChat) and all recovery contacts and connected agents. M-of-N recovery contact attestation required to execute.
 - The portal must enforce a freeze during the succession waiting period: social proofs and phone number cannot be reused. Only the pre-designated successor can receive succession.
 
+**[GAP G-44 — Joint gap]**: The succession feature is not implementable end-to-end from current documents. The server-side mechanics above are specified, but the following are absent: (1) the client-side state machine for the voluntary transfer announcement period (agent-client.md AC-82); (2) the portal UI for the owner to see and contest an incoming succession claim (frontend.md F-32); (3) the portal announcement period management UI with cancel action and countdown (frontend.md F-33); (4) the new owner's portal authentication flow for accepting a transfer (frontend.md F-34). All three documents require coordinated design before succession can be built.
+
 ### Tombstone side effects (portal enforces)
 
 On any tombstone (VOLUNTARY, COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED, SUCCESSION_INITIATED):
@@ -336,6 +338,8 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 
 **Persistent WebSocket per agent**: Outbound TLS on port 443, kept open for the entire online session. Directory can push data (hash relay, connection requests, notifications) without initiating a new connection.
 
+**[GAP G-43]**: The portal requires a distinct notification delivery channel to display the agent's event stream (activity log, escalation queue, notification feed) without running the CELLO client itself. The WebSocket described above is the agent-client channel — the portal cannot authenticate against it as if it were the agent. A separate portal-facing API surface (authenticated by the portal's own keypair, scoped to read-only event stream access for the owner's agent) is not yet specified. This is cross-referenced as frontend.md GAP F-28.
+
 **Degraded mode — connection nodes unavailable**:
 - Connection nodes must refuse new connection requests when unavailable and send a reason: "directory unreachable, not accepting unauthenticated sessions — retry when available"
 - Agents with a pre-established degraded-mode list can be accepted at reduced trust, flagged in Merkle leaf
@@ -438,6 +442,7 @@ The privacy design is intentional: an agent may have valid reasons not to disclo
 - Rate limits: max **10 new endorsements per month** per agent. **[GAP G-17 RESOLVED]**
 - Weight decay: promiscuous endorsers carry less per-endorsement weight
 - Fan-out detection: statistically anomalous patterns (e.g., 50 agents endorsing same 150 targets in a window) flagged
+- **[GAP G-42]**: `cello_request_endorsement` and `cello_revoke_endorsement` MCP tools are absent from the client's tool surface (see agent-client.md AC-12 and frontend.md F-35). The directory endorsement endpoints are fully specified above, but the client and portal cannot exercise them until those tools are built. This is a shared incompleteness — the server-side infrastructure is ready; the client-side call path is not.
 
 **PSI (Private Set Intersection) — phased rollout**:
 - Phase 1 (day one): endorsement mechanism without PSI (direct comparison)
@@ -601,6 +606,7 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
   | `CONNECTION_REQUEST` | Directory | Inbound connection request from another agent |
   | `CONNECTION_ACCEPTED` | Directory | Outbound connection request was accepted by the recipient |
   | `CONNECTION_DECLINED` | Directory | Outbound connection request was declined by the recipient |
+  | `ROOM_INVITE` | Directory | This agent has been invited to a group room by an existing member or owner |
   | `ENDORSEMENT_RECEIVED` | Directory | Another agent issued an endorsement for this agent |
   | `ENDORSEMENT_REVOKED` | Directory | A previously received endorsement was withdrawn |
   | `SECURITY_BLOCK` | Directory | A message was blocked at Layer 1 (prompt injection detection) or a per-message tamper detection event fired |

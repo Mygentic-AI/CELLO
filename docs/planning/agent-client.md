@@ -1024,7 +1024,7 @@ The allowlist is the client's data, consistent with the principle that the direc
 
 **[GAP AC-13]**: The companion device registration ceremony — how the companion device public key is provisioned to the client's allowlist during app install — is not fully specified. Whether this uses a dedicated registration flow distinct from device attestation enrollment, or piggybacks on the same path, is not decided. This is carried from frontend Gap F-43.
 
-**[GAP AC-14]**: Maximum number of companion devices per agent is not specified. The companion device registry table in the server infrastructure (`companion_device_registrations`) has no cardinality constraint documented.
+**[GAP AC-14]**: Maximum number of companion devices per agent is not specified. The `companion_device_registrations` directory table was removed (see AC-C10) — the allowlist is now local to the client. The local allowlist schema is also undocumented (see AC-72). Neither document specifies a cardinality limit on how many companion devices an agent may register simultaneously.
 
 ### Owner-facing API
 
@@ -1140,6 +1140,9 @@ The client implements the complete notification type registry. Types are enumera
 | `trust_signal_pickup_pending` | Directory | An async trust signal pickup is waiting in the encrypted queue; client must fetch and ACK |
 | `verification_stale` | Directory | A social signal failed its 60-day probe — grace period before UNVERIFIED; client updates local signal state |
 | `unverified` | Directory | A social signal failed 3 consecutive 60-day probes (180 days); signal marked UNVERIFIED; directory hash updated; client updates local signal state |
+| `key_rotation_completed` | Directory | K_server_X rotation has completed; client must update its epoch tracking and use the new epoch at the next session boundary. Payload: `{ agent_id, old_epoch, new_epoch, old_pubkey, new_pubkey, rotation_timestamp, expires_at }`. Grace period: 7 days from `rotation_timestamp`; hard cutoff at `expires_at`. |
+| `key_rotated` | Directory | A counterparty agent has completed a K_local rotation; client must refresh cached key material for that agent. Payload: `{ agent_id, new_pubkey }`. |
+| `key_rotation_recommended` | Directory | Directory nudging this agent to rotate K_local (pre-rotation scheduling nudge); payload: `{ agent_id, recommended_at }` — no epoch data, rotation has not yet occurred. |
 | `merkle_prune_scheduled` | Client | A batch of conversation Merkle trees is scheduled for pruning within 30 days; owner may export or extend retention |
 | `relay_sequencing_attack` | Client | Relay-assigned sequence numbers are inconsistent with local state or `last_seen_seq` causal chain; session flagged for review |
 | `trust_signal_orphaned` | Client | A hash exists in the directory for this agent but no corresponding local blob — re-verification required |
@@ -1406,7 +1409,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-11 | Connection | ~~Resolved~~ — no signals are mandatory at protocol level. Initiating agent chooses what to include; omitting signals increases decline likelihood but is permitted. Receiving agent's policy enforced at evaluation time, not submission time. |
 | AC-12 | Endorsements | `cello_request_endorsement` and `cello_revoke_endorsement` MCP tools are missing from the tool surface; client logic for requesting and revoking endorsements not designed |
 | AC-13 | Companion | Companion device registration ceremony (how keypair is provisioned to client allowlist during app install) not fully specified |
-| AC-14 | Companion | Maximum number of companion devices per agent not specified |
+| AC-14 | Companion | Maximum number of companion devices per agent not specified; `companion_device_registrations` table removed (AC-C10); local allowlist schema also undocumented (AC-72) |
 | AC-15 | Companion | Human injection delivery mechanism to agent input channel for Deployment Model A (direct MCP) not designed; `cello_receive` returns protocol messages, not owner-injected content |
 | AC-16 | Notifications | ~~Resolved~~ — directory-sourced events push via authenticated WebSocket; owner-targeted client notifications go direct to companion over P2P. Two paths, not mutually exclusive. |
 | AC-17 | Notifications | ~~Resolved~~ — response routes directly to client via channel's own reply mechanism: WhatsApp/Telegram/WeChat bot reply handler, Slack webhook reply, CELLO mobile app over companion P2P. No directory node intermediary. |
@@ -1474,7 +1477,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-79 | Recovery | Client post-recovery state transition unspecified: what the client does after its own recovery completes (clear locked state, present recovery record in `cello_status`, reconnect to prior contacts at reduced trust) is not described |
 | AC-80 | Recovery | Compromise window presentation and owner contest flow absent: client has no mechanism to receive, display, or contest the proposed compromise window when a tombstone is filed |
 | AC-81 | Recovery | Succession package creation (encrypt seed phrase to successor's identity key, upload blob to directory) and decryption (successor uses own identity key to decrypt, then performs identity migration) are client-side crypto operations with no coverage. The Part 8 backup section and related documents mention succession only by reference |
-| AC-82 | Recovery | Voluntary transfer announcement period client state machine absent: client must notify connected agents, maintain cancellable state, and execute or abort transfer on expiry. No client behavior is specified for the 7–14 day announcement period |
+| AC-82 | Recovery | Voluntary transfer announcement period client state machine absent: client must notify connected agents, maintain cancellable state, and execute or abort transfer on expiry. No client behavior is specified for the 7–14 day announcement period. **Joint gap**: the corresponding portal UIs are also absent (frontend.md F-32, F-33, F-34). All three documents need coordinated design before succession is implementable end-to-end. |
 | AC-83 | Recovery | Asymmetric whitelist knowledge not stated as an explicit prohibition. The client must never store or cache information about which agents have it on their whitelists. Easy to accidentally violate; must be an explicit requirement |
 | AC-84 | Recovery | Arbitration submission flow has no MCP tool. `cello_report` submits a trust incident report; there is no tool for submitting a FLAGGED session transcript to threshold arbitration, checking arbitration status, or receiving an arbitration verdict notification type |
 
