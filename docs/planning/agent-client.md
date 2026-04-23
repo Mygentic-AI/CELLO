@@ -536,6 +536,12 @@ Control leaves (CLOSE, CLOSE-ACK, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN) are ha
 | `EXPIRE` | No messages for 72 hours (3 days) | Quasi-terminal (REOPEN permitted) |
 | `ABORT` | Security event or policy breach | Yes — REOPEN not permitted |
 | `REOPEN` | Either party reopens a SEALED or EXPIRED session | Continuation |
+| `FLOOR_GRANT` | Relay assigns a turn cohort (group rooms only) — `cohort_pubkeys[]` + `round_number` | No — floor management |
+| `CONTINUATION_GRANT` | Relay grants or denies a `cello_request_continuation` request (group rooms only) | No — floor management |
+| `AUTO_MUTE` | Relay-enforced mute after 2nd violation within rolling window (group rooms only) — trusted-relay assertion; cannot be independently verified by clients | No — enforcement |
+| `KICK` | Admin- or owner-initiated ejection of a participant (group rooms only) — records ejected agent's pubkey, reason code, timestamp, and admin who kicked | Terminal for the ejected participant |
+| `MENTION_INSERT` | Relay priority-inserts a mentioned agent into the next cohort (group rooms only) — rate-limited to 1 per agent per cycle | No — floor management |
+| `ROLE_CHANGE` | Participant role change from `speaker` to `listener` or vice versa, initiated by owner or admin (group rooms only) | No — room management |
 
 After `SEAL`: any subsequent message is rejected — with one time-windowed exception (AC-36 resolved). If a message arrives after `SEAL` but within a configurable grace window (`post_seal_grace_seconds`, default `300`), the client accepts it as a record-only leaf appended to the sealed tree. This handles in-flight messages that were dispatched before the sender received the `SEAL` notification. After the grace window expires, any arriving message triggers a new conversation: the client auto-initiates a `REOPEN` and delivers the message as the first leaf of the continuation session. The grace window is configurable via `cello_configure`. Messages accepted during the grace window are flagged `post_seal: true` in the local leaf record and surfaced to the agent via `cello_receive` with a `post_seal_arrival` flag so the agent can handle them appropriately.
 
@@ -1022,9 +1028,9 @@ The allowlist is the client's data, consistent with the principle that the direc
 
 **Human approval gate for allowlist additions:** Whether adding a new device to the companion allowlist requires explicit human approval is owner-configurable policy. The default is human-approval-required — the owner must explicitly confirm a new device before it can connect. The owner can relax this in their policy settings if they choose. This applies to companion devices; the agent itself never adds devices to its own companion allowlist autonomously without owner intent.
 
-**[GAP AC-13]**: The companion device registration ceremony — how the companion device public key is provisioned to the client's allowlist during app install — is not fully specified. Whether this uses a dedicated registration flow distinct from device attestation enrollment, or piggybacks on the same path, is not decided. This is carried from frontend Gap F-43.
+**[~~GAP AC-13~~ — Resolved]**: The companion device registration ceremony is a local QR-code exchange between the CELLO client and the companion device. The client displays a QR code; the companion app scans it; the keypair is registered in the client's local allowlist. No server round-trip, no directory involvement, no phone OTP required. This is a distinct flow from device attestation enrollment (which does involve the signup portal backend). See frontend.md F-43 (resolved).
 
-**[GAP AC-14]**: Maximum number of companion devices per agent is not specified. The `companion_device_registrations` directory table was removed (see AC-C10) — the allowlist is now local to the client. The local allowlist schema is also undocumented (see AC-72). Neither document specifies a cardinality limit on how many companion devices an agent may register simultaneously.
+**[GAP AC-14]**: Maximum number of companion devices per agent is not specified. The `companion_device_registrations` directory table was removed (see AC-C10) — the allowlist is now local to the client. The local allowlist schema is also undocumented (see AC-72). Neither document specifies a cardinality limit on how many companion devices an agent may register simultaneously. This gap has cross-document impact: the portal needs to display and allow revocation of registered companion devices, which requires a defined limit and an enumeration mechanism. See server-infrastructure.md G-47 and frontend.md.
 
 ### Owner-facing API
 
@@ -1147,6 +1153,8 @@ The client implements the complete notification type registry. Types are enumera
 | `relay_sequencing_attack` | Client | Relay-assigned sequence numbers are inconsistent with local state or `last_seen_seq` causal chain; session flagged for review |
 | `trust_signal_orphaned` | Client | A hash exists in the directory for this agent but no corresponding local blob — re-verification required |
 | `alias_expiry` | Directory | An alias has reached its 6-month inactivity TTL and has been marked `EXPIRED` |
+| `relay_session_reassigned` | Directory | A relay node failed mid-session; the directory has assigned a new relay and resumed from the last confirmed sequence number. Payload: `{ session_id, old_relay_node_id, new_relay_node_id, resumed_from_seq, reassigned_at }`. See frontend.md F-45. |
+| `room_auto_mute` | Directory (from relay) | A participant in a group room has been auto-muted after a 2nd violation; sent to the room owner only. Payload: `{ room_id, muted_agent_id, violation_code, mute_sequence_number, duration_ms, muted_at }`. |
 | `introduction` | Agent | Web-of-trust introduction from a mutual contact; subject to rate limits per trust tier |
 | `order_update` | Agent | Order or task status update from a counterparty agent |
 | `alert` | Agent | Operational alert from a counterparty agent |
@@ -1191,13 +1199,13 @@ The client's behavior is identical across deployment models. The calling pattern
 | Trust / Identity | `cello_verify`, `cello_get_trust_profile`, `cello_check_own_signals` | 3 |
 | Discovery & Listings | `cello_search`, `cello_create_listing`, `cello_update_listing`, `cello_renew_listing`, `cello_retire_listing` | 5 |
 | Connection Management | `cello_initiate_connection`, `cello_accept_connection`, `cello_decline_connection`, `cello_disconnect` | 4 |
-| Group Conversations | `cello_create_room`, `cello_join_room`, `cello_leave_room` | 3 |
+| Group Conversations | `cello_create_room`, `cello_join_room`, `cello_leave_room`, `cello_invite_to_room`, `cello_set_participant_role`, `cello_request_continuation`, `cello_get_room_info` | 7 |
 | Notifications | `cello_poll_notifications` | 1 |
 | Policy & Configuration | `cello_manage_policy`, `cello_configure` | 2 |
 | Status | `cello_status` | 1 |
 | Contact Aliases | `cello_create_alias`, `cello_list_aliases`, `cello_retire_alias` | 3 |
 | Human Input | `cello_request_human_input` | 1 |
-| **Total** | | **35** |
+| **Total** | | **39** |
 
 ### Key client-side implementation notes per group
 
@@ -1408,7 +1416,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-10 | Layer 5 | Runtime governance state persistence across restarts: in-memory counters reset on restart; upgrade path to Redis/DynamoDB not specified as a requirement |
 | AC-11 | Connection | ~~Resolved~~ — no signals are mandatory at protocol level. Initiating agent chooses what to include; omitting signals increases decline likelihood but is permitted. Receiving agent's policy enforced at evaluation time, not submission time. |
 | AC-12 | Endorsements | `cello_request_endorsement` and `cello_revoke_endorsement` MCP tools are missing from the tool surface; client logic for requesting and revoking endorsements not designed |
-| AC-13 | Companion | Companion device registration ceremony (how keypair is provisioned to client allowlist during app install) not fully specified |
+| ~~AC-13~~ | Companion | ~~Resolved~~ — local QR-code ceremony; client displays QR code; companion app scans; keypair registered in client's local allowlist; no server round-trip, no directory involvement, no phone OTP. Distinct from device attestation enrollment. See frontend.md F-43. |
 | AC-14 | Companion | Maximum number of companion devices per agent not specified; `companion_device_registrations` table removed (AC-C10); local allowlist schema also undocumented (AC-72) |
 | AC-15 | Companion | Human injection delivery mechanism to agent input channel for Deployment Model A (direct MCP) not designed; `cello_receive` returns protocol messages, not owner-injected content |
 | AC-16 | Notifications | ~~Resolved~~ — directory-sourced events push via authenticated WebSocket; owner-targeted client notifications go direct to companion over P2P. Two paths, not mutually exclusive. |

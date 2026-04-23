@@ -37,8 +37,8 @@ The signup portal is the only path for human-level identity enrichment. The port
 - The portal must silently run carrier metadata queries (Twilio Lookup / Telesign) alongside OTP verification when that integration is available: SIM tenure, number type, carrier name, porting history. Zero additional user friction.
 - Phone numbers must be classified into three tiers when carrier intelligence is available:
   - **Verified Mobile**: uncapped
-  - **Unverified Number** (VoIP/virtual): trust ceiling at score 2
-  - **Provisional** (failed phone intelligence): trust ceiling at score 2, re-evaluated at 60 days
+  - **Unverified Number** (VoIP/virtual): trust ceiling applies
+  - **Provisional** (failed phone intelligence): trust ceiling applies, re-evaluated at 60 days
   - When carrier intelligence is not yet integrated, all agents default to Verified Mobile.
 - During the first 7 days (provisional period), the directory enforces: max 25 new outbound connections per day.
 
@@ -124,7 +124,7 @@ The portal supports the following as optional, additive signals. None are regist
 - Involuntary succession (dead-man's switch): 30+ day waiting period (configurable), with notification to owner via external channels (WhatsApp/Telegram/WeChat) and all recovery contacts and connected agents. M-of-N recovery contact attestation required to execute.
 - The portal must enforce a freeze during the succession waiting period: social proofs and phone number cannot be reused. Only the pre-designated successor can receive succession.
 
-**[GAP G-44 — Joint gap]**: The succession feature is not implementable end-to-end from current documents. The server-side mechanics above are specified, but the following are absent: (1) the client-side state machine for the voluntary transfer announcement period (agent-client.md AC-82); (2) the portal UI for the owner to see and contest an incoming succession claim (frontend.md F-32); (3) the portal announcement period management UI with cancel action and countdown (frontend.md F-33); (4) the new owner's portal authentication flow for accepting a transfer (frontend.md F-34). All three documents require coordinated design before succession can be built.
+**[GAP G-44 — Joint gap]**: The succession feature is not implementable end-to-end from current documents. The server-side mechanics above are specified, but the following remain absent: (1) ~~client-side state machine for the voluntary transfer announcement period~~ — **resolved**: fully documented in agent-client.md Part 1 (TRANSFER_PENDING state machine, session blocking, cancellation flow, notifications); (2) the portal UI for the owner to see and contest an incoming succession claim (frontend.md F-32); (3) the portal announcement period management UI with cancel action and countdown (frontend.md F-33); (4) the new owner's portal authentication flow for accepting a transfer (frontend.md F-34). Items (2)–(4) require coordinated design before succession can be built.
 
 ### Tombstone side effects (portal enforces)
 
@@ -364,6 +364,12 @@ Control leaves are hashed and signed identically to message leaves and recorded 
 | ABORT | Security event | Terminal — REOPEN not permitted |
 | REOPEN | Either party reopens SEALED or EXPIRED tree | Continuation |
 | RECEIPT | Agent explicitly acknowledges processing a specific message | Informational (no state change) |
+| FLOOR_GRANT | Relay assigns a turn cohort (group rooms only) — `cohort_pubkeys[]` + `round_number` | No — floor management |
+| CONTINUATION_GRANT | Relay grants or denies a `cello_request_continuation` request (group rooms only) | No — floor management |
+| AUTO_MUTE | Relay-enforced mute after 2nd violation within rolling window (group rooms only) — trusted-relay assertion recorded in Merkle tree | No — enforcement |
+| KICK | Admin- or owner-initiated ejection of a participant (group rooms only) — records ejected agent's pubkey, reason code, timestamp, and admin who kicked | Terminal for ejected participant |
+| MENTION_INSERT | Relay priority-inserts a mentioned agent into the next cohort (group rooms only) — rate-limited to 1 per agent per cycle | No — floor management |
+| ROLE_CHANGE | Participant role change (speaker ↔ listener), initiated by owner or admin (group rooms only) | No — room management |
 
 After SEAL: a configurable grace window (`post_seal_grace_seconds`, default `300`) permits late-arriving messages (in-flight before the sender received the SEAL notification) to be accepted as `post_seal: true` record-only leaves. After the grace window expires, any arriving message triggers an auto-REOPEN and is delivered as the first leaf of a continuation session.
 After ABORT: REOPEN is not permitted. Post-ABORT message arrivals are always rejected regardless of timing.
@@ -628,6 +634,8 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
   | `KEY_ROTATION_COMPLETED` | Directory | K_server_X rotation has completed; agents should use new epoch at next session boundary; payload: `{ agent_id, old_epoch, new_epoch, old_pubkey, new_pubkey, rotation_timestamp, expires_at }` — grace period starts from `rotation_timestamp`, hard cutoff at `expires_at` |
   | `KEY_ROTATED` | Directory | This agent has completed a K_local rotation; counterparty agents should refresh cached key material; payload: `{ agent_id, new_pubkey }` |
   | `PEER_COMPROMISED_ABORT` | Directory | A counterparty agent has been compromised and all sessions with them are terminated; payload: `{ compromised_agent_id, tombstone_id, notified_at }` |
+  | `RELAY_SESSION_REASSIGNED` | Directory | A relay node failure caused the directory to assign a new relay and resume the session from the last confirmed sequence number; payload: `{ session_id, old_relay_node_id, new_relay_node_id, resumed_from_seq, reassigned_at }`. Surfaced in the portal activity log so the owner can see disruption and recovery. See frontend.md F-45. |
+  | `ROOM_AUTO_MUTE` | Directory (from relay) | A participant in a group room has been auto-muted by the relay after a 2nd violation within the rolling window; sent to the room owner. Payload: `{ room_id, muted_agent_id, violation_code, mute_sequence_number, duration_ms, muted_at }`. The relay reports the event to the directory; the directory forwards to the room owner's authenticated WebSocket. |
 - **Note**: `EMERGENCY_SESSION_ABORT` is a directory-to-client control instruction sent via the agent's persistent WebSocket — it is NOT a notification type and does not appear in the notification registry
 - **Notification delivery paths — resolved [GAP G-32 — RETIRED]**: Two paths. (1) Directory-sourced events (connection requests, endorsements, anomaly alerts, system events, PEER_COMPROMISED_ABORT, etc.) push via the recipient agent's authenticated persistent WebSocket — the directory is always involved for these. (2) Owner-targeted notifications (trust signal pickup pending, human input requested, companion content alerts) go direct from the CELLO client to the companion device over P2P — the directory is not in the path for these. The server handles path (1) only; path (2) is client-to-companion and requires no server-side change.
 - **Institutional verification for elevated rate limits**: application process and criteria are operational policy, not protocol design. **[GAP G-33 — deferred to product/BD]** Placeholder: applicant submits business registration, use-case description, and agrees to elevated accountability terms. CELLO approves manually at Alpha/Consortium. Automated criteria TBD when volume justifies it.
@@ -1017,6 +1025,12 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-39 | Cross | ~~Resolved~~ — Directory nodes only; full federation via append-only log. At-rest: double-encrypted (owner encrypts to successor's `identity_key`; node wraps with KMS master key). GDPR: blob wiped on tombstone, hash remains. |
 | G-40 | Cross | ~~Resolved~~ — Oracle evidence is never stored by the directory. Hash-everything-store-nothing applies: oracle verifies → hash stored → original discarded. Client holds original; presents to arbitration if needed; directory verifies hash. |
 | G-41 | Directory | ~~Retired~~ — companion device allowlist is client-held, not directory-stored. See AC-C10 (resolved). Maximum devices per agent remains a client-side configuration decision. |
+| G-42 | Directory | ~~See above~~ — `cello_request_endorsement` and `cello_revoke_endorsement` client tool paths absent; directory endorsement endpoints are fully specified; client-side call path is not. |
+| G-43 | Directory | Portal-facing notification API not specified — the portal requires a read-only event stream for the owner's agent (activity log, escalation queue, notification feed) authenticated by the portal's own keypair. This is distinct from the agent-client's authenticated WebSocket. See frontend.md F-28. |
+| G-44 | Cross | See Recovery contacts and succession section above. Items (2)–(4) remain open: portal succession claim contest UI (F-32), announcement period management UI (F-33), new owner acceptance flow (F-34). |
+| G-45 | Relay | Group room catch-up mechanism not designed. When an agent rejoins a group room mid-conversation (`cello_join_room`), the relay must be able to serve historical room content for the session. The delivery mechanism, how far back history is available, and whether the relay holds it or the directory serves it are not specified. See agent-client.md AC-8. |
+| G-46 | Relay | Group room persistent state between sessions: the throttle manifest and room policy record (including `banned_agents[]`) must survive relay node restarts and session boundaries. The relay holds no persistent state by design, but group rooms are long-lived entities. Where this state lives between active sessions — and how the relay loads it at room activation — is not specified. This is the server-side counterpart to the relay persistence conflict identified in the audit (conflict #1). |
+| G-47 | Directory | Maximum companion devices per agent is not specified. The companion device allowlist is client-held (AC-C10), so the directory does not enforce a cap directly. However, the portal needs to display registered companion devices and allow the owner to revoke them, which requires a defined limit and a way to enumerate them. See agent-client.md AC-14. |
 
 ---
 
