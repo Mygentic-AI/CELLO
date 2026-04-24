@@ -527,14 +527,19 @@ CELLO does not compute or publish a single numeric trust score. Trust is express
 
 **Tombstone effects** (all types: VOLUNTARY, COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED, SUCCESSION_INITIATED):
 - K_server_X burned
-- All active sessions terminated immediately via dual-path forced abort (Path 1: `EMERGENCY_SESSION_ABORT` to agent client; Path 2: `PEER_COMPROMISED_ABORT` to each counterparty) → SEAL-UNILATERAL with tombstone reason code
 - Social proofs → 30-day freeze
 - Phone number → "in recovery" flag (cannot register new account during freeze)
 - 12-month rebinding lockout on all social account identifiers
 
-For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
+For COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED, and SUCCESSION_INITIATED additionally:
+- All active sessions terminated immediately via dual-path forced abort (Path 1: `EMERGENCY_SESSION_ABORT` to agent client; Path 2: `PEER_COMPROMISED_ABORT` to each counterparty) → SEAL-UNILATERAL with tombstone reason code
+
+For VOLUNTARY:
+- Active sessions are NOT force-aborted — they continue until natural close, subject to the normal 72-hour EXPIRE timeout. No new sessions can be established (K_server_X is burned). This avoids disrupting mid-conversation or mid-commerce counterparties when there is no security threat.
+
+For SOCIAL_RECOVERY_INITIATED additionally:
 - 48-hour mandatory waiting period before new key ceremony executes
-- Old key can contest during the 48-hour window
+- Old key can contest during the 48-hour window (the owner may not have initiated this recovery)
 
 **Compromise window anchoring**:
 - Directory surfaces the earliest logged anomaly as the proposed compromise window start when a tombstone is filed

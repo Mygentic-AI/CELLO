@@ -68,6 +68,8 @@ When an agent registers via the WhatsApp/Telegram/WeChat bot (or via the portal-
 
 If email verification has not yet been completed (bot-first path where email was not yet collected), the portal must surface the email OTP screen as a mandatory step before proceeding to optional enrichment. The portal must make clear that email is required, not optional.
 
+**WebAuthn/TOTP enrollment warning**: If the owner has not enrolled WebAuthn or TOTP, the portal must display a persistent warning explaining that without a second factor, they will be unable to rotate their signing key (K_local), cancel ownership transfers, or perform other identity-affecting operations. This warning should appear on the registration completion screen and persist in the portal dashboard until at least one second factor is enrolled.
+
 The portal must make the connection between trust signals and practical outcomes concrete: the owner must see which connection policy tiers their current trust profile opens and closes. The exact statistics are a product decision and must be derived from real network data — the portal must not display fabricated placeholder numbers.
 
 **[GAP F-3]**: The portal's routing path for a new registration (how does the portal identify that this is a first-time visit vs. a returning owner?) is not specified. The onboarding link from the bot, its format, and its expiry are not specified.

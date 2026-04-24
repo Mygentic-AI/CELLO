@@ -167,7 +167,7 @@ K_local rotation is agent-controlled. The directory sends a `KEY_ROTATION_RECOMM
 Rotation flow:
 1. Agent completes or seals any active sessions
 2. Client generates new K_local_v2
-3. Client registers K_local_v2 with the directory (authenticated via WebAuthn or phone OTP)
+3. Client registers K_local_v2 with the directory (authenticated via WebAuthn or TOTP — phone OTP alone is insufficient for identity-affecting operations)
 4. Directory retires K_local_v1 — no further FROST co-signing for the old key
 5. A new K_server_X ceremony runs to produce shares paired with K_local_v2
 6. Old K_server_X shares are retired
@@ -266,7 +266,7 @@ TRANSFER_EXECUTING → IDLE (migration complete — new owner holds the identity
 
 **On cancellation within the window:**
 
-1. Owner authenticates (WebAuthn or phone OTP) and submits a signed cancellation: `sign("CANCEL_TRANSFER" || transfer_id || timestamp, identity_key)`
+1. Owner authenticates (WebAuthn — a second WebAuthn tap is required for cancellation of this security-critical operation) and submits a signed cancellation: `sign("CANCEL_TRANSFER" || transfer_id || timestamp, identity_key)`
 2. Client transitions from `TRANSFER_PENDING` back to `IDLE`
 3. Directory records the cancellation; connected agents receive a `OWNERSHIP_TRANSFER_CANCELLED` notification
 4. Session establishment resumes normally
@@ -1302,7 +1302,7 @@ The following names are canonical and supersede inconsistencies in earlier docum
 1. Directory sends `KEY_ROTATION_RECOMMENDED` notification to agent
 2. Agent/operator decides to rotate (typically at the next session boundary)
 3. Client seals any active sessions
-4. Owner authenticates via WebAuthn or phone OTP at the portal
+4. Owner authenticates via WebAuthn or TOTP at the portal (phone OTP alone is insufficient)
 5. Client generates new K_local_v2
 6. Client registers K_local_v2 with directory; directory retires K_local_v1
 7. New K_server_X ceremony runs paired with K_local_v2; old K_server_X shares retired
@@ -1331,7 +1331,7 @@ The following names are canonical and supersede inconsistencies in earlier docum
 | `COMPROMISE_INITIATED` | Owner taps "Not Me." Triggered via the dual-path abort flow above. | **Warning.** The counterparty's agent may have been used by an attacker. The active session with that agent has already been force-sealed via `PEER_COMPROMISED_ABORT`. Any content from the post-compromise window should be treated as potentially attacker-authored. The client surfaces this prominently in the session view. |
 | `SOCIAL_RECOVERY_INITIATED` | M-of-N recovery contacts file a recovery attestation (agent is confirmed compromised; owner cannot act). 48-hour waiting period before new key ceremony. Old key can contest during window. | **Warning.** Account compromise confirmed by social consensus. Equivalent handling to `COMPROMISE_INITIATED` — the active session has been force-sealed; post-compromise content is suspect. |
 
-Tombstone effects are identical across all three types: K_server_X burned, all active sessions terminated, social proofs enter 30-day freeze, phone flagged as "in recovery," 12-month rebinding lockout on all previously-bound social identifiers. `COMPROMISE_INITIATED` and `SOCIAL_RECOVERY_INITIATED` additionally enforce a 48-hour waiting period before re-keying.
+Tombstone effects shared across all three types: K_server_X burned, social proofs enter 30-day freeze, phone flagged as "in recovery," 12-month rebinding lockout on all previously-bound social identifiers. `COMPROMISE_INITIATED` and `SOCIAL_RECOVERY_INITIATED` additionally terminate all active sessions immediately via dual-path forced abort. `VOLUNTARY` does NOT force-abort active sessions — they continue until natural close, subject to the normal 72-hour EXPIRE timeout (no new sessions can be established). `SOCIAL_RECOVERY_INITIATED` additionally enforces a 48-hour waiting period before re-keying (old key can contest — the owner may not have initiated this recovery). `COMPROMISE_INITIATED` does NOT enforce a waiting period — the owner themselves declared compromise via "Not Me" and already authenticated; immediate re-keying is permitted.
 
 The `SUCCESSION_INITIATED` type exists for voluntary ownership transfer; this is handled separately in the succession section.
 
