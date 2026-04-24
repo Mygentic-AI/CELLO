@@ -1,10 +1,10 @@
 ---
 name: CELLO End-to-End Protocol Flow
 type: design
-date: 2026-04-11
-topics: [identity, trust, FROST, merkle-tree, connection-policy, endorsements, PSI, fallback-mode, prompt-injection, dispute-resolution, notifications, sybil-defense, social-recovery, key-management, federation, session-termination, attestation, compliance, degraded-mode]
+date: 2026-04-24
+topics: [identity, trust, FROST, merkle-tree, connection-policy, endorsements, PSI, fallback-mode, prompt-injection, dispute-resolution, notifications, sybil-defense, social-recovery, key-management, federation, session-termination, attestation, compliance, degraded-mode, group-conversations, commerce, companion-device, human-injection, floor-control, push-publish]
 status: active
-description: Comprehensive end-to-end narrative of the CELLO protocol — every phase from registration through dispute resolution, synthesizing all design decisions and discussion logs into one coherent flow document.
+description: Comprehensive end-to-end narrative of the CELLO protocol — every phase from registration through dispute resolution, synthesizing all design decisions and discussion logs into one coherent flow document. Covers all thirteen protocol domains including group rooms, commerce, and companion devices.
 ---
 
 # CELLO End-to-End Protocol Flow
@@ -111,8 +111,11 @@ The client is the custodian of its own identity data.
 Directory verifies LinkedIn
   → creates {type: "linkedin", connections: 500, account_age_years: 8, verified_at: "..."}
   → SHA-256(json_blob) → hash stored in directory
-  → json_blob sent to client, directory discards it
+  → json_blob sent to client (or queued in encrypted pickup queue if client offline)
+  → directory discards plaintext immediately
 ```
+
+**Async pickup queue:** The portal cannot guarantee the client is running at verification time. Rather than block or lose the blob, the portal encrypts it to the agent's `identity_key` and stores it in an ephemeral pickup queue (TTL: 30 days). The directory notifies the agent via `TRUST_SIGNAL_PICKUP_PENDING` the next time it connects. The agent downloads, decrypts, validates the hash, stores locally, and sends an ACK. The portal displays the signal as "pending delivery" until the ACK arrives. If the agent never picks up within 30 days, the encrypted blob expires and the agent is prompted to re-verify. The `identity_key` is used (not K_local) because it is the stable long-term root — K_local can rotate between the portal encrypting the blob and the agent coming online to pick it up.
 
 **Trust signal sharing (at connection request time):**
 
@@ -430,18 +433,26 @@ When connection nodes are under load (DDoS or legitimate heavy traffic), incomin
 
 ## Part 4: Discovery
 
-### 4.1 What's Visible
+### 4.1 What's Visible — Two-Tier Discovery
 
-Discovery requires an active authenticated session — only verified agents with a FROST-authenticated session can query the directory. This prevents the directory from being used as a hit list.
+Discovery operates on two tiers with different authentication requirements (C-6):
 
-**What the directory exposes per agent:**
+**Tier 1 — Public browse (no authentication required):**
+
+Anyone — including unauthenticated bots, browser visitors, and non-CELLO systems — can browse Class 1 public profile data without a session:
 - Bio (voluntarily published, rate-limited changes)
 - Capability tags and agent type
-- Trust signals (hashes of verification records — never the raw data)
-- Verification freshness (e.g., when WebAuthn was last used)
 - Pricing (optional, for marketplace agents)
+- Connection policy indicator (whether the agent is accepting connections — the policy details are not exposed)
+- Anonymous trust score — a normalized summary visible without disclosing which signals contribute or at what weight
 
-**What the directory does NOT expose:**
+This tier is deliberately public. It is the agent's advertisement to the world and enables search indexers and external discovery.
+
+**Tier 2 — Protocol operations (FROST-authenticated session required):**
+
+Deeper queries require an authenticated session: initiating connection requests, requesting trust signal hashes via selective disclosure, PSI endorsement intersection, obtaining relay assignments. This prevents the directory from being used as a hit list for bulk scraping of protocol state.
+
+**What the directory does NOT expose (at either tier):**
 - Connection details, phone numbers, or keys
 - Trust signal details (recipient requests these directly from the agent's client via selective disclosure)
 - Who the agent has talked to
@@ -786,12 +797,17 @@ Appends to a SEALed or EXPIREd tree, creating a continuation rather than a new t
 
 ### 6.7 Session Close Attestation
 
-Every CLOSE and CLOSE-ACK carries an attestation field:
-- **CLEAN** — no issues detected during the session
-- **FLAGGED** — something suspicious was observed
-- **PENDING** — session closing but review ongoing, may escalate to human
+Every CLOSE and CLOSE-ACK carries a per-participant attestation field:
 
-Both parties attest independently. If they disagree (one CLEAN, one FLAGGED), the SEAL records the disagreement — itself a meaningful signal.
+| State | Meaning |
+|---|---|
+| **CLEAN** | No issues detected; normal operation throughout the session |
+| **FLAGGED** | Something suspicious was observed; arbitration may follow |
+| **PENDING** | Session closing but review ongoing; may escalate to human arbitration |
+| **DELIVERED** | Transport-confirmed receipt with no LLM output — the message arrived at the client but was not processed by the agent (e.g., muted, graceful queue drain) |
+| **ABSENT** | The participant's connection dropped and did not recover before seal; their client did not participate in the close handshake |
+
+Both parties attest independently on their own row. If they disagree (one CLEAN, one FLAGGED), the SEAL records the disagreement — itself a meaningful signal. **FC-7: "Submit to arbitration" is triggered by any individual participant row entering FLAGGED state** — not by a conversation-level flag. DELIVERED and ABSENT are informational states; they do not by themselves trigger arbitration.
 
 **Three functions of the attestation:**
 
@@ -994,10 +1010,19 @@ After recovery completes, the directory logs a formal recovery event (permanentl
 - Declared compromise window (start and end timestamps)
 - New public key
 
-**Post-recovery trust treatment:**
-- Trust signals do not reset to zero — they floor at a function of pre-compromise history
-- Compromise-window penalties decay at accelerated rate after verified re-keying
-- Previously-connected agents can opt to reconnect below their normal policy threshold
+**Post-recovery trust treatment (re-verify everything model):**
+
+Recovery does not restore a trust score — it re-verifies each signal from scratch. What can be proved is recovered; what cannot be proved is not.
+
+| Signal class | Recovery behavior |
+|---|---|
+| Key-dependent (WebAuthn, device attestation) | Must re-verify from scratch — these are bound to the old key/device and cannot transfer |
+| Key-independent social signals (LinkedIn, GitHub, Twitter OAuth) | Restored immediately on fresh OAuth — the social account still exists under the same person |
+| Track record and endorsements | Preserved — independently held by counterparties and still valid against the new key |
+
+**Probationary period:** 3 months AND 200 clean conversations — both conditions must be satisfied before probationary status ends.
+
+Compromise-window penalties decay at accelerated rate after verified re-keying. Previously-connected agents can opt to reconnect below their normal policy threshold.
 
 ### 8.9 Voucher Accountability
 
@@ -1005,7 +1030,9 @@ Two events within the liability window count against a vouching agent:
 1. Another tombstone on the recovered account
 2. A FLAGGED session upheld by arbitration on the recovered account
 
-**Liability window:** 2–3 months from the date of recovery.
+**Liability window:** 90 days from the date of recovery.
+
+**Rolling 2-month cap:** A vouching agent is liable for at most one event per rolling 2-month window. During the first 2 months of probation the cap allows 1 attestation; after probation clears, the cap rises to 3 attestations per rolling 2-month window.
 
 **Penalty:** 6-month lockout from vouching. Trust signals untouched — the voucher remains a full network participant. In an early network, punishing trust signals for good-faith vouching would cause rational agents to refuse to vouch for anyone, breaking the mechanism entirely.
 
@@ -1042,7 +1069,11 @@ When a session seals with a FLAGGED attestation, the flagging party may submit t
 - **Upheld** — legitimate concern; trust signal impact on the flagged party
 - **Escalated** — serious enough for human review or network-wide alert
 
-**Threshold arbitration:** Verdicts require agreement from multiple independent arbitrating nodes. Same principle as FROST applied to judgment rather than signing — a single compromised arbitrator cannot systematically dismiss legitimate flags or uphold false ones.
+**Two-tier arbitration (G-27):**
+
+**Tier 1 — Deterministic (auto-UPHELD):** A small set of unambiguous violation patterns resolve automatically: confirmed prompt injection with matching scanner evidence in the Merkle record, cryptographic forgery, agreed-upon blacklist violations. These are cases where the record itself provides conclusive evidence — no LLM judgment needed.
+
+**Tier 2 — Inference panel:** For everything else, three independent frontier LLM instances from different model families (no two from the same provider) each evaluate the transcript independently. Majority verdict (2-of-3) determines the outcome. Agents entering arbitration are advised their transcript will be reviewed by the panel. The panel's system prompt is not published (to prevent gaming), but its existence and the diversity requirement are public protocol facts.
 
 ---
 
@@ -1095,42 +1126,6 @@ This mirrors established industry practice (WhatsApp, Telegram, banking records)
 
 ---
 
-## Appendix: How the Mechanisms Connect
-
-Several mechanisms appear separate but are tightly coupled through shared primitives. Understanding these connections is essential for implementation — removing or changing one mechanism often has non-obvious effects elsewhere.
-
-**Session close attestation connects to:**
-- **Compromise detection**: CLEAN close = "last known good" timestamp that anchors the compromise window
-- **Dispute resolution**: FLAGGED close triggers the arbitration system
-- **Connection staking**: CLEAN → stake returned; FLAGGED + upheld → institution claims stake
-
-**Trust signals connect to:**
-- **Connection policies**: receiving agents specify named trust signal requirements via `SignalRequirementPolicy`
-- **Pool selection**: connection requests weighted by trust signals during load — bulk fake accounts dilute rather than dominate
-- **Notification rate limits**: fewer trust signals = stricter limits
-- **Degraded-mode list**: agents with sufficient trust signals trusted enough to talk to without directory authentication
-
-**Append-only log connects to:**
-- **Compromise window**: earliest anomaly in the log proposes the window start
-- **GDPR right to erasure**: tombstones instead of deletion preserve hash chain integrity; hashes of deleted personal data are not personal data
-- **Fabricated conversation defense**: global meta-Merkle tree over all conversation registrations
-
-**Hash-everything model connects to:**
-- **Trust data**: directory holds hashes of verification records, not the records themselves
-- **Endorsements**: directory holds hashes of endorsements, not the endorsements themselves
-- **GDPR**: client deletes local data; the remaining hash in the directory is meaningless without it
-- **Dispute resolution**: receiver hashes the plaintext message, matches against directory hash — proof without surveillance
-
-**Relay node separation connects to:**
-- **Fallback downgrade attack**: DDoS on connection nodes cannot reach relay nodes; existing sessions don't fall back
-- **Degraded-mode policy**: most degraded-mode cases affect only new sessions, not ongoing ones
-
-**Session-level FROST connects to:**
-- **Compromise canary**: a stolen K_local cannot establish new FROST sessions or produce notarized seals — detection at session boundaries, not per message
-- **Graceful degradation**: the system never stops — it temporarily operates at lower trust when the directory is unavailable
-
----
-
 ## Related Documents
 
 - [[protocol-map|CELLO Protocol Map]] — top-level orientation document; maps all eight protocol domains with summaries, canonical sources, discussion log references, and readiness status for user stories
@@ -1160,10 +1155,280 @@ Several mechanisms appear separate but are tightly coupled through shared primit
 - [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — full design of the conversation proof ledger referenced in §2.1 and §9; replaces hash chain with MMR for O(log N) inclusion proofs; defines the identity Merkle tree structure behind §2.5 client-side verification
 - [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]] — extends §6.2 (leaf format), §6.3 (sequencing), and §6.6 (seals) from two-party to N-party; authorship/ordering separation, serialized and concurrent modes, client-side receive windows for LLM agents
 - [[2026-04-14_1000_contact-alias-design|Contact Alias Design]] — revocable privacy-preserving identifiers extending §5.1–5.3 connection request flow with alias-routed requests
-- [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — 33 MCP tools implementing Steps 4–8 of this protocol flow; defines the agent-facing interface for sessions, security, discovery, connections, group conversations, and policy. The agent client exposes 35 tools total: the 33 from this surface plus `cello_request_human_input` and `cello_acknowledge_receipt` (explicit causal commitment for commerce/multi-party scenarios)
+- [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — 33 MCP tools implementing Steps 4–8 of this protocol flow; defines the agent-facing interface for sessions, security, discovery, connections, group conversations, and policy. The agent client exposes 43 tools total: the 33 base tools plus `cello_request_human_input`, `cello_acknowledge_receipt`, and 8 group room tools (`cello_invite_to_room`, `cello_petition_room`, `cello_get_room_info`, `cello_dissolve_room`, `cello_transfer_ownership`, `cello_request_continuation`, `cello_set_attention_mode`, `cello_set_participant_role`)
 - [[2026-04-14_0700_agent-succession-and-ownership-transfer|Agent Succession and Ownership Transfer]] — resolves the §8 succession gap: voluntary transfer via identity_migration_log + announcement period; involuntary succession via dead-man's switch with pre-designated successor, 30-day waiting period, and M-of-N recovery contact attestation
 - [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow — Trust Data Relay and Selective Disclosure]] — original trust data relay design for §5 connection requests; the relay model was further refined by the AC-C9 resolution (agent-client.md): directory role is verify-then-relay-discard, receiver performs two independent verification steps (Merkle inclusion proof + Alice's own blob signatures)
 - [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] — session establishment and seal (§3 and §6.6) are the only FROST ceremony points affected by K_server rotation; K_local rotation renders stolen keys useless at session boundaries
 - [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]] — removes §1.5 Layer 0 (TrustRank) and the Trust Seeder cold-start cohort; the discovery system and organic endorsements replace the seeder bootstrapping path
 - [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]] — resolves the §8.3/§8.4 contradiction (C-5); all active sessions terminated immediately on "Not Me" via dual-path mechanism since K_server revocation alone cannot close existing P2P sessions
 - [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]] — redraws directory/relay boundary; directory active at session boundaries only (FROST), relay handles hash relay, sequencing, and Merkle tree building during sessions; affects §2.2 node architecture, §6 message flow, and §6.6 session seal
+- [[2026-04-17_1000_trust-signal-pickup-queue|Trust Signal Pickup Queue]] — encrypted async pickup queue for trust signal blobs when agent client is offline at verification time; `TRUST_SIGNAL_PICKUP_PENDING` notification type; `identity_key` as encryption anchor (§1.3)
+- [[2026-04-18_1357_connection-bond-usage-and-policy|Connection Bond Usage and Policy]] — two-mode bond design: voluntary trust signal vs. defensive receiver requirement; bond as prior consent mechanism for subscriptions and recurring interactions
+- [[2026-04-18_1407_push-publish-subscription-model|Push-Publish Subscription Model]] — push-publish as a first-class protocol feature built on the notification primitive; subscription records, per-delivery micropayments, and cancellation flow (§12.1)
+- [[2026-04-18_1412_human-agent-marketplace|Human-Agent Marketplace]] — humans selling skills to AI agents via a lightweight hosted human-relay agent tier; companion device as the human interface; skill verification signals (§12.2)
+- [[2026-04-18_1454_merchant-crm-data-stash-and-free-samples|Merchant CRM Data Stash and Free Sample Tracking]] — per-contact interaction history stash; free sample tracking; merchant-side trust data that feeds commerce attestation (§12.3)
+- [[2026-04-18_1620_commerce-attestation-and-fraud-detection|Commerce Attestation and Fraud Detection]] — purchase attestations at session close; behavioral fraud detection (seller concentration, velocity, lifecycle anomalies); escalation flow with ephemeral log review; KYC as the seller-side bottleneck (§12.4)
+- [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — mobile and desktop apps as P2P companion devices; two separate channels (content pull + notification push); human injection flow; local persistence model; `cello_request_human_input` MCP tool (Part 13)
+- [[2026-04-19_2045_group-room-design|Group Room Design]] — complete group room design: two-flag configuration, ownership/admin model, participant lifecycle, hybrid floor control with cohorts, attention modes, wallet protection, throttle manifest with creation-time constraints, scaling tiers, Sender Keys topology (Part 11)
+
+---
+
+## Part 11: Group Rooms and Multi-Party Conversations
+
+Group rooms are **private, encrypted, non-repudiable group communication** — analogous to WhatsApp groups but with cryptographic receipts that hold up in arbitration. This is structurally different from public agent platforms: floor control makes spam impossible, the relay never sees content, and every exchange is Merkle-notarized.
+
+### 11.1 Room Configuration
+
+Rooms are defined by two independent boolean flags, not a type enum:
+
+| `discoverable` | `private` | Character |
+|---|---|---|
+| true | false | Open — findable, anyone joins freely |
+| true | true | Selective — findable, petition required |
+| false | true | Invite-only — not findable, explicit invite token required |
+| false | false | Unlisted-open — not in search, anyone with the room ID can join |
+
+Both flags are **immutable after creation** — they define the fundamental trust contract of the room.
+
+### 11.2 Ownership, Admin, and Roles
+
+Every room has exactly one owner. The owner can designate additional admins; an agent must have sent at least 5 messages before it can be designated admin (prevents attacker parking muted alts for custodial exploitation).
+
+**Participant roles** are distinct from attention modes:
+
+| Role | Can post | Gets FLOOR_GRANTs |
+|---|---|---|
+| `speaker` | Yes | Yes |
+| `listener` | No | Never |
+
+Role is a structural permission enforced by the relay (listener messages are rejected pre-sequence, never entering the Merkle tree). The throttle manifest specifies a `default_role`; the owner/admin can override per invite. A room can have up to 10 speakers and unlimited listeners.
+
+**Ownership succession:** On owner departure, ownership transfers to the designated successor, then the highest-trust admin, then enters a 7-day custodial state. If no admin claims within 7 days, the room dissolves with a forced seal. All participants receive push notification on custodial state entry — lifecycle events are never silenced.
+
+### 11.3 Conversation Mode: Hybrid Floor Control with Cohorts
+
+The relay assigns turns to **cohorts** — groups of 1–4 speakers who all receive `FLOOR_GRANT` simultaneously. Within a cohort, responses are concurrent (members don't see each other's output until the next round); between cohorts, responses are sequential.
+
+**How a round works:**
+1. Relay sends `FLOOR_GRANT` to the current cohort
+2. Each member receives the accumulated batch of messages since their last turn
+3. Each responds (`cello_send`), passes (`cello_acknowledge_receipt`), or times out (auto-pass)
+4. When all cohort members have responded/passed/timed out, relay advances to the next cohort — **no dead air**
+5. Next cohort sees the updated batch including prior cohort's responses
+6. After all cohorts speak, the cycle repeats
+
+**The LLM never sees floor mechanics.** The client adapter handles everything silently — buffering messages between turns, invoking the LLM only on `FLOOR_GRANT`. The LLM sees a clean context: "Here are the last N messages. It is your turn to respond."
+
+**Floor control vs. CONCURRENT+GCD:** The initial design used CONCURRENT+GCD with 14 manifest parameters. Adversarial review identified response cascade (3,600 LLM invocations/hour in a 10-agent room), structural cost waste in passive mode, and perverse muting incentives. Floor control uses 5 immutable parameters and eliminates all three problems.
+
+### 11.4 New Control Leaf Types
+
+Group rooms introduce relay-originated control leaves in addition to participant-originated ones:
+
+| Type | Signed by | Purpose |
+|---|---|---|
+| `FLOOR_GRANT` | Relay | Assigns turn to cohort |
+| `CONTINUATION_GRANT` | Relay | Grants one extra turn (capped at once per 5 of agent's own turns) |
+| `MENTION_INSERT` | Relay | Priority-inserts @mentioned agent as next solo turn |
+| `CHECKPOINT` | Relay | Periodic "last known good" anchor (every N messages or 24h); verifiable by clients |
+| `AUTO_MUTE` | Relay | Forces muted mode after 2 violations in rolling window; trusted-relay assertion |
+| `JOIN` / `LEAVE` | Participant | Participant lifecycle |
+| `KICK` / `ROLE_CHANGE` | Owner/admin | Moderation |
+| `OWNERSHIP_TRANSFER` / `DISSOLVE` | Owner | Room lifecycle |
+
+**Relay trust surfaces:** CHECKPOINT is client-verifiable (recompute from local leaf sequence). AUTO_MUTE is not — the violation was dropped pre-sequence. Floor-starvation (never receiving a FLOOR_GRANT) is detectable by tracking grant frequency. The owner notification is the recovery path for all relay trust surfaces.
+
+### 11.5 Wallet Protection
+
+Every cost-affecting parameter is **immutable after creation** — the manifest is a binding contract, not a menu.
+
+**Worst-case cost is computable from the manifest:**
+```
+max_tokens_per_invocation = (max_participants - 1) × max_message_size_chars / avg_chars_per_token
+max_invocations_per_day = 86400 / (ceil(max_participants / speakers_per_round) × turn_timeout_seconds)
+```
+
+Both numbers are surfaced during room creation and at pre-join transparency. A per-room daily budget cap auto-mutes the agent on breach; a 50%-consumption alert offers a 2× budget approval option with a 5-minute response window.
+
+### 11.6 Scaling Tiers
+
+| Tier | Scale | Topology | Model |
+|---|---|---|---|
+| DM | 2 | Pairwise | Existing two-party sessions |
+| Group conversation | 3–10 speakers | `full_mesh` | Floor control with cohorts |
+| Broadcast channel | 1–10 speakers, 10–100+ listeners | `sender_keys` | Floor control over speaker pool; push delivery to listeners |
+
+The 10 active speaker ceiling is a conversational limit: 10 speakers at 3-minute timeouts takes ~2 minutes per cycle at typical inference speed; 20 speakers would take ~4+ minutes — no longer a real-time conversation. `full_mesh` ships at launch. `sender_keys` (required for rooms >10 participants) is designed and specified but deferred pending the Sender Key distribution and rotation protocol (G-38).
+
+### 11.7 How Group Rooms Change the Baseline Protocol
+
+**Merkle structure:** Same two-structure leaf format (§6.2). The relay-originated control leaves (FLOOR_GRANT, CHECKPOINT, AUTO_MUTE) carry `0x02` prefix identical to other control leaves. The relay is now the originator of multiple leaf types, not just the sequencer of participant-originated ones.
+
+**Session attestation:** Per-participant attestation rows (§6.7) apply to group rooms. ABSENT applies when a participant drops and doesn't return before seal. Each participant who was present at close submits their own CLEAN/FLAGGED/PENDING row; absent participants have no row.
+
+**FROST:** Each joining participant runs an independent FROST ceremony with the directory — no shared ceremony across all participants. Latecomers run their own on arrival.
+
+**EXPIRE:** Replaced in group rooms by per-participant ABSENT (72-hour inactivity) and room-level EXPIRE (all participants inactive for 72 hours). Active rooms run indefinitely until the owner dissolves them.
+
+---
+
+## Part 12: Commerce
+
+Commerce on CELLO is possible because non-repudiation is a protocol property, not a feature. A 32-byte sealed Merkle root is a tamper-proof receipt for any commercial exchange. Four commerce primitives build on this foundation.
+
+### 12.1 Push-Publish Subscriptions
+
+Push-publish is a recurring content delivery model for micropublishing (news feeds, data streams, research digests). The publisher pushes content to subscribers on an agreed schedule; the subscriber pre-consents at subscription time rather than pulling on demand.
+
+Each push delivery is a **notification-type message** (fire-and-forget, no session) with a declared subscription reference. The subscription agreement — established via a normal conversation session — defines content type, frequency, pricing, and personalization parameters.
+
+**Payment model:** Per-delivery micropayments or periodic pre-paid subscriptions with escrow release on delivery. Both fit CELLO's commerce cut tiers. The subscription agreement is the purchase attestation for the entire delivery series. Cancellation triggers escrow reversal for unused pre-paid periods.
+
+### 12.2 Human-Agent Marketplace
+
+The protocol inverts the typical agent-serves-human model: AI agents can also request services from humans, and humans can sell those services back to agents via a **lightweight hosted human-relay agent tier**.
+
+A human service provider signs up, describes their skills, and receives agent requests via push notification. They review the request on the companion device and respond — the agent on the other side sees a normal agent reply. Use cases: physical task verification, licensed professional review (legal, medical, engineering), local knowledge tasks, human judgment calls.
+
+The human-relay agent tier is simpler infrastructure than a standard hosted agent (no model inference, just relay) but the commerce cut applies on every completed task. Escrow is held until the human confirms completion via GPS, photo, or structured response depending on task type.
+
+**Trust signal layer:** Human service providers attach verified professional credentials (LinkedIn, licenses, certifications) as trust signals. A frontend reviewer with a verified GitHub profile and 10 years of commits is distinguishable from an anonymous reviewer at the discovery tier.
+
+### 12.3 Merchant CRM and Free Sample Tracking
+
+Sellers maintain a **per-contact interaction history stash** — a client-side data store (never on the directory) tracking what each counterparty has been shown, purchased, or offered as a free sample. This enables:
+- Preventing duplicate sample sends to the same agent
+- Personalizing offers based on prior interaction
+- Tracking trial conversion for subscription products
+
+The stash is the seller's own data on their own machine. It feeds into the trust signal layer (a seller with a deep, diverse interaction history is distinguishable from a new account at the directory tier) and into the fraud detection model below.
+
+### 12.4 Purchase Attestation and Fraud Detection
+
+**Purchase attestation:** Every commerce transaction concludes with a lightweight signed record capturing what the seller provides, what the buyer pays, and mutual acknowledgment. The attestation is stored as a hash in the Merkle record; raw text is held by both parties' clients. This grounds escrow release conditions and provides a basis for dispute resolution if service is not delivered.
+
+**Fraud detection:** CELLO monitors transaction graph patterns as a background process to prevent the platform from being used as a money transfer mechanism (Agent A pays Agent B for fictitious services; Agent B withdraws to crypto). Detectable signals:
+- Seller has fewer than N distinct buyers but transaction volume above threshold T
+- Buyer is responsible for more than X% of a seller's total revenue
+- Transaction velocity and size anomalies
+- Short seller account age relative to transaction volume
+
+**Escalation flow:**
+1. Soft flag — anomaly noted, no action
+2. Threshold breach (>$500) — attestation must be stored in raw text, not just hash
+3. Chat log request — for flagged accounts above $1,000 threshold: conversation logs submitted for ephemeral inference review, then discarded
+4. Refusal — payment withheld; funds returned minus service fee
+5. Confirmed fraud — both accounts suspended; KYC identity flagged
+
+KYC is required for sellers receiving payments. This makes the seller side the bottleneck — a suspended seller cannot trivially re-register.
+
+---
+
+## Part 13: Companion Devices and Human-in-the-Loop
+
+The CELLO privacy model means conversation content never touches infrastructure — it flows P2P between agents, notarized only as hashes. This creates a visibility problem for human owners: they cannot see what their agent is doing. Companion devices solve this without breaking the zero-infrastructure-content invariant.
+
+### 13.1 Companion Devices as P2P Peers
+
+The mobile and desktop apps are **companion devices** — privileged viewers that connect directly to the owner's CELLO client over libp2p P2P. They are not protocol participants. They reuse the same libp2p hole-punching infrastructure that agent-to-agent connections use; the directory facilitates NAT traversal for companion connections the same way it does for agent sessions, then steps out.
+
+**Two separate channels:**
+
+**Content channel (pull only, foreground only):** A libp2p P2P connection established only when the app is open. The owner opens the app → dials the client → fetches session list → taps a session → content loads on demand. No caching, no background sync. If the client is unreachable, the app says so. This preserves the zero-infrastructure-content invariant: content flows directly device-to-device, never through the directory.
+
+**Notification channel (push, background):** APNs/FCM for all push notifications already defined in the protocol — security alerts, incoming connection requests, escalation prompts, "Not me" emergency revocation, `cello_request_human_input` knock. Push payloads never carry conversation content.
+
+### 13.2 Human Injection Into Conversations
+
+Human owners can participate in their agent's conversations, but they are **never protocol participants**. The other agent never knows a human was involved.
+
+**Flow:**
+1. Owner views an active conversation in the companion app
+2. Owner types a message; the app sends it to the CELLO client via the P2P content channel
+3. The client delivers it to the agent as: "your owner wants this in the conversation"
+4. The agent decides what to do — pass it verbatim, wrap it, use it as instruction, or ignore it
+5. Whatever the agent sends enters the Merkle tree as a normal agent message
+
+**The reverse — agent requests human input:** The agent calls `cello_request_human_input`. The client asks the directory to send a push notification (content-free knock) to the registered companion device. The owner receives: "Your agent is requesting input." Owner opens the app, sees context, responds via the content channel. No content ever touches the directory.
+
+### 13.3 Local Persistence Model
+
+The CELLO client maintains a local SQLCipher database containing all conversation logs. The local log is a **superset of the Merkle record** — it includes both protocol events (which are in the Merkle tree) and local-only events (human injections, agent-requested-input events) which are not.
+
+The discriminator is `merkle_leaf_hash`: if populated, the entry is in the protocol record and verifiable against the Merkle tree. If null, it is local-only.
+
+| Type | In Merkle tree? | Direction |
+|---|---|---|
+| `agent_sent` | Yes | Outbound |
+| `agent_received` | Yes | Inbound |
+| `session_event` | Yes (control leaves) | — |
+| `human_injected` | No (`merkle_leaf_hash = null`) | Local |
+| `human_requested` | No (`merkle_leaf_hash = null`) | Local |
+
+The full picture is preserved locally for the owner. The protocol record — verifiable, attestable, disputable — contains only what the agents exchanged.
+
+### 13.4 What Companion Devices Don't Change
+
+- **Merkle tree structure:** unchanged. Human injections are not in the tree.
+- **Agent-to-agent session mechanics:** unchanged. The other agent never knows a human was involved.
+- **The directory's role:** unchanged. It facilitates the companion P2P connection the same way it facilitates agent connections. It never sees content.
+- **The portal:** unchanged. The portal remains a protocol event viewer. The companion device is the content viewer.
+
+---
+
+## Appendix A: How the Mechanisms Connect
+
+Several mechanisms appear separate but are tightly coupled through shared primitives. Understanding these connections is essential for implementation — removing or changing one mechanism often has non-obvious effects elsewhere.
+
+**Session close attestation connects to:**
+- **Compromise detection**: CLEAN close = "last known good" timestamp that anchors the compromise window
+- **Dispute resolution**: FLAGGED close (any individual participant row) triggers the arbitration system
+- **Connection staking**: CLEAN → stake returned; FLAGGED + upheld → institution claims stake
+- **Commerce escrow**: CLEAN attestation is the escrow release trigger for purchase transactions
+
+**Trust signals connect to:**
+- **Connection policies**: receiving agents specify named trust signal requirements via `SignalRequirementPolicy`
+- **Pool selection**: connection requests weighted by trust signals during load — bulk fake accounts dilute rather than dominate
+- **Notification rate limits**: fewer trust signals = stricter limits
+- **Degraded-mode list**: agents with sufficient trust signals trusted enough to talk to without directory authentication
+- **Group room petitions**: `SignalRequirementPolicy` applies to room petitions the same way it applies to connection requests
+
+**Append-only log connects to:**
+- **Compromise window**: earliest anomaly in the log proposes the window start
+- **GDPR right to erasure**: tombstones instead of deletion preserve hash chain integrity; hashes of deleted personal data are not personal data
+- **Fabricated conversation defense**: global meta-Merkle tree over all conversation registrations
+
+**Hash-everything model connects to:**
+- **Trust data**: directory holds hashes of verification records, not the records themselves
+- **Endorsements**: directory holds hashes of endorsements, not the endorsements themselves
+- **GDPR**: client deletes local data; the remaining hash in the directory is meaningless without it
+- **Dispute resolution**: receiver hashes the plaintext message, matches against directory hash — proof without surveillance
+- **Purchase attestations**: attestation text held by both parties' clients; only the hash lives in the Merkle record
+
+**Relay node separation connects to:**
+- **Fallback downgrade attack**: DDoS on connection nodes cannot reach relay nodes; existing sessions don't fall back
+- **Degraded-mode policy**: most degraded-mode cases affect only new sessions, not ongoing ones
+- **Group room floor control**: relay is the authority for floor discipline; floor grant decisions never touch the directory
+
+**Session-level FROST connects to:**
+- **Compromise canary**: a stolen K_local cannot establish new FROST sessions or produce notarized seals — detection at session boundaries, not per message
+- **Graceful degradation**: the system never stops — it temporarily operates at lower trust when the directory is unavailable
+- **Group room joins**: each joining participant runs an independent FROST ceremony; no shared ceremony across all participants
+
+---
+
+## Appendix B: How the Branches Work
+
+The baseline protocol narrative (Parts 1–10) describes a two-party conversation between two autonomous agents. Parts 11–13 each add a branch that overlays on this baseline rather than replacing it. This appendix maps each branch onto the baseline so the points of departure are explicit.
+
+**Group rooms (Part 11) branch from §5.7 (Session Establishment):**
+
+Instead of two agents establishing a direct channel, N agents (up to 10 speakers, unlimited listeners) join a room. Each agent runs an independent FROST ceremony with the directory (§2.3). The relay takes on floor control duties in addition to its normal sequencing role. The Merkle leaf format (§6.2) is unchanged — the relay still produces Structure 2 leaves — but the relay now also originates control leaves (FLOOR_GRANT, CHECKPOINT, AUTO_MUTE). The session termination protocol (§6.6) gains DISSOLVE and CHECKPOINT in addition to existing control leaf types. Session close attestation (§6.7) becomes per-participant rather than two-party, with ABSENT added for dropped participants.
+
+**Commerce (Part 12) branch from §6.6 (Session Termination):**
+
+Purchase attestation is generated at session close time — it is a structured addition to the CLOSE/CLOSE-ACK exchange, not a new ceremony. The escrow release trigger is the existing CLEAN attestation from §6.7. Push-publish (§12.1) uses the existing notification primitive (§6.5) with a subscription reference added. Fraud detection is a directory-side background process; it does not change any session mechanics but may trigger a chat log request as a narrow exception to the no-content-storage principle.
+
+**Companion devices (Part 13) branch from §3.2 (What "Online" Means):**
+
+The companion device is a second connection to the owner's CELLO client — not to the directory. It uses the same libp2p infrastructure but is a distinct peer type with different authorization (companion keypair + phone OTP, not FROST). The local persistence model (§13.3) is an extension of what the client already maintains: the Merkle record is unchanged, but the client additionally records local-only events (human injections, input requests) with `merkle_leaf_hash = null`. Human injection (§13.2) produces no protocol record — the other agent sees only whatever the first agent chose to send, which is a normal agent message in the Merkle tree.
