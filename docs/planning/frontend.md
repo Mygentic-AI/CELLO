@@ -488,7 +488,7 @@ A FLAGGED individual attestation is highlighted. If the owner wants to submit th
 
 Session details additionally show:
 - Ordering mode for group conversations (floor control with cohorts for group rooms; not applicable to two-party sessions — `SERIALIZED` and `CONCURRENT` are removed modes superseded by the hybrid floor control design)
-- Session channel type (libp2p P2P vs. platform transport: Slack/Discord/Telegram)
+- Session channel type (libp2p P2P vs. platform transport)
 - Seal mode (bilateral-only vs. notarized-FROST seal)
 - Whether seal notarization is PENDING (directory was unavailable at seal time; FROST ceremony deferred until directory recovers)
 - For aborted sessions: abort reason code and timestamp
@@ -507,7 +507,7 @@ A chronological event stream showing all notification types from `cello_poll_not
 - System events: directory reachability changes, K_local degraded mode
 - Key rotation events
 - Anomaly alerts (these are also sent to phone — the dashboard shows the same events)
-- Tombstone notifications: a connected identity has been tombstoned — the dashboard must display the tombstone type with distinct urgency: `VOLUNTARY` (informational), `COMPROMISE_INITIATED` (warning — the agent you were talking to may have been used by an attacker), `SOCIAL_RECOVERY_INITIATED` (warning — account compromise confirmed by social consensus), `SUCCESSION_INITIATED` (informational — the agent's ownership is being transferred to a designated successor). Each type links to different follow-up actions.
+- Tombstone notifications: a connected identity has been tombstoned — the dashboard must display the tombstone type with distinct urgency: `VOLUNTARY` (informational — agent retired; active sessions continue until natural close), `COMPROMISE_INITIATED` (warning — the agent you were talking to may have been used by an attacker; sessions already force-sealed), `SOCIAL_RECOVERY_INITIATED` (warning — account compromise confirmed by social consensus; sessions already force-sealed), `SUCCESSION_INITIATED` (informational — the agent's ownership is being transferred to a designated successor; active sessions continue until natural close; display the successor's handle). Each type links to different follow-up actions.
 - Trust event notifications: a connected agent's trust status has changed
 - Recovery event notifications: a recovered identity is re-entering the network
 - Session-close attestation dispute notifications: a counterparty has filed a dispute against a session
@@ -555,7 +555,7 @@ The mobile app serves three capabilities that the web portal cannot provide:
 
 The mobile app is not a full portal replica. For everything except device attestation, push-based responses, and companion device content viewing, the owner uses the web portal. The mobile app is an oversight, security response, and conversation visibility tool.
 
-The existing WhatsApp/Telegram/WeChat/Slack escalation channel (configured via `cello_configure`) is the Phase 1 out-of-band path before the mobile app exists. The mobile app adds a native push path alongside it, not replacing it.
+The existing WhatsApp/Telegram/WeChat escalation channel (configured via `cello_configure`) is the Phase 1 out-of-band path before the mobile app exists. The mobile app adds a native push path alongside it, not replacing it.
 
 **[CONFLICT FC-3 — Resolved]**: All configured escalation channels always fire simultaneously. No channel is suppressed based on whether the mobile app is installed. The owner's `cello_configure` settings determine which channels are active — installing the mobile app does not change or remove any other channel. Double-response (owner responding via both app and WhatsApp, for instance) is handled idempotently: first valid response wins, subsequent responses are no-ops.
 
@@ -714,7 +714,7 @@ The desktop app provides a management interface for the locally-running CELLO cl
 - **View server status**: directory reachability, active P2P peers, active sessions, pending notifications, K_local_only mode — the same data returned by `cello_status`. The status must distinguish two qualitatively different states: "directory unreachable — relay nodes are handling active sessions; new sessions blocked" vs. "agent locked — all sessions closed, re-keying required". **Blocked by agent-client.md GAP AC-18**: `cello_status` currently returns only `k_local_only: boolean` and does not distinguish these two states. The display requirement is correct; the tool must be updated before this UI is implementable.
 - **View server logs**: recent MCP server output for troubleshooting
 - **Update the server**: when a new CELLO client version is available, the desktop app handles the download, hash verification (SHA-256 pinned to the npm package signature), and process restart
-- **Configuration**: scan sensitivity, P2P bootstrap nodes, escalation channels (WhatsApp/Telegram/WeChat/Slack webhook), directory fallback behavior — a GUI layer over the settings that `cello_configure` manages programmatically
+- **Configuration**: scan sensitivity, P2P bootstrap nodes, escalation channels (WhatsApp/Telegram/WeChat webhook), directory fallback behavior — a GUI layer over the settings that `cello_configure` manages programmatically
 
 The desktop app does not replace the MCP server — it manages it. The agent still calls MCP tools directly; the desktop app is a management surface, not a proxy.
 
@@ -840,7 +840,7 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 3. If `human_escalation_fallback` is set and the request does not produce a clear accept/reject: request transitions to PENDING_ESCALATION
 4. Two parallel notifications fire:
    - Push notification to mobile app (if installed and registered)
-   - Message to WhatsApp/Telegram/WeChat/Slack escalation channel (always configured as fallback)
+   - Message to WhatsApp/Telegram/WeChat escalation channel (always configured as fallback)
 5. Owner reviews the request in either the mobile app (push notification card) or the web portal (escalation queue)
 6. Owner taps Accept or Decline
 7. The decision is submitted via the portal WebSocket (G-43) to the directory, which forwards it as a `portal_instruction` to the agent client for execution
@@ -936,7 +936,7 @@ The consistency check. A capability that appears in a requirement but has no sur
 | Play Integrity (Android) | — | ✓ (Android) | — |
 | TPM attestation (Windows) | — | — | ✓ (Windows) |
 | Native push notifications | — | ✓ | ✓ (system tray + OS notification) |
-| Out-of-band escalation | ✓ (WhatsApp/Telegram/WeChat/Slack, configured via cello_configure) | ✓ | ✓ |
+| Out-of-band escalation | ✓ (WhatsApp/Telegram/WeChat, configured via cello_configure) | ✓ | ✓ |
 | OAuth flows (LinkedIn, GitHub, etc.) | ✓ | — (portal-only until app matures; see "What the mobile app does NOT do") | — |
 | Merkle proof export | ✓ | — | — |
 | Dispute submission | ✓ | — | — |
@@ -966,12 +966,12 @@ The consistency check. A capability that appears in a requirement but has no sur
 | Phase | What ships | What is deferred |
 |---|---|---|
 | Phase 1 | Web portal: registration completion, WebAuthn enrollment, OAuth flows, key rotation, activity log, connection oversight, escalation queue (web-based), policy configuration, alias management, notification filtering configuration, GDPR/data residency display, whitelist/degraded-mode list management | Mobile app, desktop app |
-| Phase 1 | WhatsApp/Telegram/WeChat/Slack as the out-of-band escalation path | Native push via mobile app |
+| Phase 1 | WhatsApp/Telegram/WeChat as the out-of-band escalation path | Native push via mobile app |
 | Phase 2 | Mobile app: device attestation (iOS/Android), push-based escalation, "Not Me" shortcut, security alerts, succession claim alerts, companion device content viewing and human injection | Desktop app, TPM attestation, oracle proof capture |
 | Phase 3 | Desktop app: TPM attestation (Windows), macOS Secure Enclave via App Attest, local MCP server management, companion device content viewing and human injection | Financial UI, oracle proof capture, system tray (far future) |
 | Phase 3+ | Financial UI (stablecoin deposits, fiat on-ramp, stake configuration, bond management, delegation market, yield display) | Oracle proof capture (phase TBD) |
 
-In Phase 1, escalation approvals are web-based: the WhatsApp/Telegram/WeChat/Slack message directs the owner to the portal's escalation queue. The native push path (mobile app) is additive in Phase 2 and should be designed to be fully redundant with the Phase 1 path.
+In Phase 1, escalation approvals are web-based: the WhatsApp/Telegram/WeChat message directs the owner to the portal's escalation queue. The native push path (mobile app) is additive in Phase 2 and should be designed to be fully redundant with the Phase 1 path.
 
 In Phase 1, the desktop app's server management features are replaced by CLI tooling (`cello-server start|stop|status`). The desktop app wraps these operations in a GUI.
 
@@ -988,7 +988,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 - Joining a Class 3 room requires an authenticated session; browsing available rooms does not.
 - This closes F-31 in part: the alias resolver CTA design for non-CELLO visitors is now specified at the concept level. Detailed UX for the CTA flow remains a gap.
 
-**FC-3: Native push vs. WhatsApp/Telegram/WeChat/Slack escalation relationship — Resolved**
+**FC-3: Native push vs. WhatsApp/Telegram/WeChat escalation relationship — Resolved**
 - All configured channels always fire simultaneously. Installing the mobile app does not suppress any other channel. Double-response is handled idempotently — first valid response wins. The owner controls active channels via `cello_configure`. See the FC-3 resolution note in the mobile app section above.
 
 **FC-4: "Not Me" scope for existing sessions — Resolved**

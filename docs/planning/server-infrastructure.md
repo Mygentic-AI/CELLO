@@ -402,7 +402,7 @@ After ABORT: REOPEN is not permitted. Post-ABORT message arrivals are always rej
 - **New FROST ceremony required: yes.** The seal is a definitive notarial act — the directory has attested to a final state. Reopening invalidates that finality. A REOPEN is structurally equivalent to session establishment and carries the same authentication weight. Skipping FROST would leave the directory's sealed record as the last attested state with no new anchor for the continuation.
 - **Sequence numbers: restart at 1, anchored to previous seal.** The new segment's genesis `prev_root` = `SHA-256(previous_sealed_root || session_id || reopen_timestamp)`. This creates a cryptographically linked chain of conversation segments — each segment's genesis commits to the prior seal. History is fully reconstructible; each segment is a clean, unambiguous unit. Continuing sequence numbers across a seal boundary would blur the meaning of the seal.
 - **Unilateral REOPEN: not permitted.** The seal is a bilateral agreement — both parties signed CLOSE and CLOSE-ACK. A unilateral REOPEN would undermine that finality and is a harassment vector (spamming REOPENs against someone who closed to end contact). If one party wants to communicate and the other does not respond to a REOPEN request, they start a new session via the standard connection request flow. REOPEN continues an existing thread; a new session goes through full trust evaluation and policy check.
-- **Auto-REOPEN exception**: Late-arriving messages that trigger an auto-REOPEN (post-grace-window arrival, per the rule above) do not require a new FROST ceremony — the auto-REOPEN is a protocol-level continuity mechanism, not a participant-initiated act. The directory handles it internally.
+- **Auto-REOPEN exception**: Late-arriving messages that trigger an auto-REOPEN (post-grace-window arrival, per the rule above) do not require a new FROST ceremony — the auto-REOPEN is a protocol-level continuity mechanism, not a participant-initiated act. The client initiates it: the receiving client detects that a P2P message arrived after the grace window closed, creates and signs a REOPEN control leaf (`origin: auto`, no FROST), and submits the leaf hash to the directory via the normal hash submission path. The directory validates, notarizes the REOPEN leaf, re-provisions a relay for the continuation session (since the sealed relay destroyed its per-session state), and extends the Merkle record. The directory does not detect the late arrival — only the receiving client can see P2P message timing.
 
 **Session close attestation** (`conversation_attestations` table — per-participant, N-party):
 - CLEAN | FLAGGED | PENDING | DELIVERED | ABSENT
@@ -526,20 +526,24 @@ CELLO does not compute or publish a single numeric trust score. Trust is express
 - After recovery via WebAuthn: changing the registered phone number also requires WebAuthn, removing attacker access from a SIM-swapped number
 
 **Tombstone effects** (all types: VOLUNTARY, COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED, SUCCESSION_INITIATED):
-- K_server_X burned
+- K_server_X burned (after any applicable waiting or announcement period)
 - Social proofs → 30-day freeze
 - Phone number → "in recovery" flag (cannot register new account during freeze)
 - 12-month rebinding lockout on all social account identifiers
 
-For COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED, and SUCCESSION_INITIATED additionally:
+For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
 - All active sessions terminated immediately via dual-path forced abort (Path 1: `EMERGENCY_SESSION_ABORT` to agent client; Path 2: `PEER_COMPROMISED_ABORT` to each counterparty) → SEAL-UNILATERAL with tombstone reason code
 
-For VOLUNTARY:
-- Active sessions are NOT force-aborted — they continue until natural close, subject to the normal 72-hour EXPIRE timeout. No new sessions can be established (K_server_X is burned). This avoids disrupting mid-conversation or mid-commerce counterparties when there is no security threat.
+For VOLUNTARY and SUCCESSION_INITIATED:
+- Active sessions are NOT force-aborted — they continue until natural close, subject to the normal 72-hour EXPIRE timeout. No new sessions can be established (K_server_X is burned, or scheduled to burn at the end of the announcement period). This avoids disrupting mid-conversation or mid-commerce counterparties when there is no security threat.
 
 For SOCIAL_RECOVERY_INITIATED additionally:
 - 48-hour mandatory waiting period before new key ceremony executes
 - Old key can contest during the 48-hour window (the owner may not have initiated this recovery)
+
+For SUCCESSION_INITIATED additionally:
+- Announcement period runs (7–14 days for voluntary ownership transfer, 30+ days for involuntary dead-man's-switch succession)
+- Connected agents notified during the announcement period; transfer can be cancelled by the old owner (WebAuthn required) until the period elapses
 
 **Compromise window anchoring**:
 - Directory surfaces the earliest logged anomaly as the proposed compromise window start when a tombstone is filed

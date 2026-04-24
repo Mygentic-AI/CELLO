@@ -552,7 +552,7 @@ After `ABORT`: `REOPEN` is not permitted. Post-`ABORT` message arrivals are alwa
 
 **Session inactivity timeout (AC-6 resolved):** 72 hours (3 days) with no messages triggers an `EXPIRE` control leaf. The session moves to quasi-terminal state; `REOPEN` is permitted. The 72-hour window is weekend-safe — a Friday afternoon session won't expire over the weekend.
 
-**REOPEN semantics (AC-7 resolved):** `REOPEN` requires a new FROST ceremony — the session is re-authenticated from scratch at the boundary. On `REOPEN`, sequence numbers restart at 1. The genesis `prev_root` for the continuation session is `SHA-256(previous_sealed_root || session_id || reopen_timestamp)` — this chains the new session cryptographically to the sealed predecessor. Unilateral `REOPEN` is not permitted: if only one party wants to reopen, they must initiate a new connection request. The one exception is auto-`REOPEN`: a late-arriving message that triggers the post-grace auto-reopen (see above) is protocol-internal and does not require FROST — the client handles it automatically.
+**REOPEN semantics (AC-7 resolved):** `REOPEN` requires a new FROST ceremony — the session is re-authenticated from scratch at the boundary. On `REOPEN`, sequence numbers restart at 1. The genesis `prev_root` for the continuation session is `SHA-256(previous_sealed_root || session_id || reopen_timestamp)` — this chains the new session cryptographically to the sealed predecessor. Unilateral `REOPEN` is not permitted: if only one party wants to reopen, they must initiate a new connection request. The one exception is auto-`REOPEN`: a late-arriving message that triggers the post-grace auto-reopen (see above) is protocol-internal and does not require FROST — the client initiates it automatically. Specifically: the receiving client detects that a P2P message arrived after the `post_seal_grace_seconds` window closed, creates and signs a REOPEN control leaf (`origin: auto`), and submits the leaf hash to the directory via the normal hash submission path. The directory notarizes and re-provisions a relay for the continuation session (the sealed relay destroyed its per-session state at seal).
 
 ### Session attestation
 
@@ -747,10 +747,10 @@ All trust data held in memory during relay is cleared after the accept/reject de
 When the policy includes a `human_escalation_fallback` flag and a request reaches `PENDING_ESCALATION` state:
 
 1. Client transitions the request to `PENDING_ESCALATION` in `connection_requests` (with `escalation_expires_at` set)
-2. Client fires a notification to the configured escalation channel: WhatsApp, Telegram, WeChat, or Slack webhook (configured via `cello_configure`)
+2. Client fires a notification to the configured escalation channel: WhatsApp, Telegram, or WeChat (configured via `cello_configure`). Only channels with strong phone-number binding are supported — Slack and other workspace-scoped platforms are not valid escalation channels because they lack a verifiable link to the registered phone number.
 3. The owner reviews the pending request in the escalation channel or via the web portal / mobile app push notification
 4. Owner responds ACCEPT or DECLINE
-5. The owner's response routes directly back to the client via the same channel the client used to send the notification — WhatsApp/Telegram/WeChat bot reply handler, Slack webhook reply, or CELLO mobile app over the companion P2P connection. The client's reply handler fires `cello_accept_connection` or `cello_decline_connection` directly. No home node intermediary is involved.
+5. The owner's response routes directly back to the client via the same channel the client used to send the notification — WhatsApp/Telegram/WeChat bot reply handler, or CELLO mobile app over the companion P2P connection. The client's reply handler fires `cello_accept_connection` or `cello_decline_connection` directly. No home node intermediary is involved.
 6. Client appends a `CONNECTION_ESCALATION_RESOLVED` notification to the queue
 7. If `escalation_expires_at` passes without a response: request auto-declines
 
@@ -1180,12 +1180,11 @@ escalation_channels:
   whatsapp?:      phone number or recipient identifier
   telegram?:      chat ID or recipient identifier
   wechat?:        WeChat recipient identifier
-  slack_webhook?: Slack incoming webhook URL
 ```
 
 The notification must include: the requester's handle, top trust signals (named, never a numeric score), the greeting text (post-Layer-1), the time remaining before auto-decline.
 
-The owner's response routes directly to the client via the channel's own reply mechanism (AC-C8 resolved, AC-17 resolved): WhatsApp/Telegram/WeChat bot reply handler, Slack incoming webhook reply, CELLO mobile app over companion P2P. No directory node intermediary. The client maintains the connection for each configured channel and the reply handler fires `cello_accept_connection` or `cello_decline_connection` directly.
+The owner's response routes directly to the client via the channel's own reply mechanism (AC-C8 resolved, AC-17 resolved): WhatsApp/Telegram/WeChat bot reply handler, or CELLO mobile app over companion P2P. No directory node intermediary. The client maintains the connection for each configured channel and the reply handler fires `cello_accept_connection` or `cello_decline_connection` directly.
 
 ---
 
@@ -1326,17 +1325,18 @@ The following names are canonical and supersede inconsistencies in earlier docum
 
 **Client handling of `EMERGENCY_SESSION_ABORT`:** The client must treat this as the highest-priority control message. On receipt: (1) send signed ABORT control leaf with `COMPROMISE_INITIATED` reason code to each active counterparty via P2P; (2) disconnect all P2P sessions; (3) drop the WebSocket connection to the directory. No user confirmation required — the owner already confirmed "Not Me" at step 3.
 
-**Tombstone types (AC-77 resolved):** The client must handle three tombstone types with distinct behaviors:
+**Tombstone types (AC-77 resolved):** The client must handle four tombstone types with distinct behaviors:
 
 | Type | When the client initiates it | When the client receives it (incoming `tombstone` notification) |
 |---|---|---|
 | `VOLUNTARY` | Owner initiates a planned shutdown or identity retirement via the portal. Client sends a signed voluntary tombstone request. No waiting period. | Informational. The counterparty has retired their agent. Log the event; display to owner as low-urgency. Active sessions continue until natural close — no forced abort. |
 | `COMPROMISE_INITIATED` | Owner taps "Not Me." Triggered via the dual-path abort flow above. | **Warning.** The counterparty's agent may have been used by an attacker. The active session with that agent has already been force-sealed via `PEER_COMPROMISED_ABORT`. Any content from the post-compromise window should be treated as potentially attacker-authored. The client surfaces this prominently in the session view. |
 | `SOCIAL_RECOVERY_INITIATED` | M-of-N recovery contacts file a recovery attestation (agent is confirmed compromised; owner cannot act). 48-hour waiting period before new key ceremony. Old key can contest during window. | **Warning.** Account compromise confirmed by social consensus. Equivalent handling to `COMPROMISE_INITIATED` — the active session has been force-sealed; post-compromise content is suspect. |
+| `SUCCESSION_INITIATED` | Owner initiates voluntary ownership transfer via the portal, or the dead-man's-switch window elapses and M-of-N recovery contacts attest. Client enters the announcement period state machine (see succession section). No forced abort. | Informational. The counterparty's agent is being transferred to a designated successor. Active sessions continue until natural close — no forced abort. Display the successor's handle so the owner knows who will inherit the connection after the transfer completes. |
 
-Tombstone effects shared across all three types: K_server_X burned, social proofs enter 30-day freeze, phone flagged as "in recovery," 12-month rebinding lockout on all previously-bound social identifiers. `COMPROMISE_INITIATED` and `SOCIAL_RECOVERY_INITIATED` additionally terminate all active sessions immediately via dual-path forced abort. `VOLUNTARY` does NOT force-abort active sessions — they continue until natural close, subject to the normal 72-hour EXPIRE timeout (no new sessions can be established). `SOCIAL_RECOVERY_INITIATED` additionally enforces a 48-hour waiting period before re-keying (old key can contest — the owner may not have initiated this recovery). `COMPROMISE_INITIATED` does NOT enforce a waiting period — the owner themselves declared compromise via "Not Me" and already authenticated; immediate re-keying is permitted.
+Tombstone effects shared across all four types: K_server_X burned (after any applicable waiting period), social proofs enter 30-day freeze, phone flagged as "in recovery," 12-month rebinding lockout on all previously-bound social identifiers. `COMPROMISE_INITIATED` and `SOCIAL_RECOVERY_INITIATED` additionally terminate all active sessions immediately via dual-path forced abort. `VOLUNTARY` and `SUCCESSION_INITIATED` do NOT force-abort active sessions — they continue until natural close, subject to the normal 72-hour EXPIRE timeout (no new sessions can be established). `SOCIAL_RECOVERY_INITIATED` additionally enforces a 48-hour waiting period before re-keying (old key can contest — the owner may not have initiated this recovery). `COMPROMISE_INITIATED` does NOT enforce a waiting period — the owner themselves declared compromise via "Not Me" and already authenticated; immediate re-keying is permitted. `SUCCESSION_INITIATED` carries an announcement period (7–14 days for voluntary, 30+ days for involuntary) during which connected agents are notified and the transfer can be cancelled.
 
-The `SUCCESSION_INITIATED` type exists for voluntary ownership transfer; this is handled separately in the succession section.
+See the succession section for the full `SUCCESSION_INITIATED` state machine and announcement-period behaviour.
 
 ### Companion device connection
 
@@ -1400,7 +1400,7 @@ All configured channels always fire. No hierarchy, no suppression based on app p
 Two distinct structures. Structure 1 (inner): what the sender signs with K_local — content_hash, sender_pubkey, conversation_id, last_seen_seq, timestamp. Structure 2 (outer): what the relay node hashes into the conversation Merkle tree — sequence_number, sender_pubkey, message_content_hash, sender_signature (Structure 1 embedded), prev_root (relay-appended). At seal time, the relay hands the full leaf sequence to the directory, which recomputes the tree independently. See Part 4 for full specification.
 
 **AC-C8: Escalation resolution routing — resolved**
-Owner responses route directly to the client via the channel's own reply mechanism. WhatsApp/Telegram/WeChat: bot reply handler. Slack: incoming webhook reply. CELLO mobile app: companion P2P connection. No directory node intermediary. The client maintains the connection for each configured channel. Also resolves GAP AC-17.
+Owner responses route directly to the client via the channel's own reply mechanism. WhatsApp/Telegram/WeChat: bot reply handler. CELLO mobile app: companion P2P connection. No directory node intermediary. The client maintains the connection for each configured channel. Also resolves GAP AC-17.
 
 **AC-C9: Directory role during connection request relay — resolved**
 The directory's role is verify-then-relay-discard. It checks each submitted trust blob against held hashes (fraud filter only), appends track record stats, forwards the full package, and discards the blobs. It does not re-sign trust data and is not a trust authority. The receiver's independent verification (Merkle inclusion proof for identity, Alice's own signatures for trust blobs) is mandatory and non-redundant — the directory could be compromised. The client is the enforcer.
@@ -1433,7 +1433,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-14 | Companion | Maximum number of companion devices per agent not specified; `companion_device_registrations` table removed (AC-C10); local allowlist schema also undocumented (AC-72) |
 | AC-15 | Companion | Human injection delivery mechanism to agent input channel for Deployment Model A (direct MCP) not designed; `cello_receive` returns protocol messages, not owner-injected content |
 | AC-16 | Notifications | ~~Resolved~~ — directory-sourced events push via authenticated WebSocket; owner-targeted client notifications go direct to companion over P2P. Two paths, not mutually exclusive. |
-| AC-17 | Notifications | ~~Resolved~~ — response routes directly to client via channel's own reply mechanism: WhatsApp/Telegram/WeChat bot reply handler, Slack webhook reply, CELLO mobile app over companion P2P. No directory node intermediary. |
+| AC-17 | Notifications | ~~Resolved~~ — response routes directly to client via channel's own reply mechanism: WhatsApp/Telegram/WeChat bot reply handler, or CELLO mobile app over companion P2P. No directory node intermediary. Slack and other workspace-scoped platforms are not supported as escalation channels because they lack verifiable phone-number binding. |
 | AC-18 | Status | `cello_status` does not distinguish between "directory temporarily unreachable" and "agent locked post-Not-Me revocation"; these are meaningfully different states |
 | AC-19 | Registration | ~~Partially resolved~~ — Incubation body text added (Part 6, 7-day / 25 outbound/day cap). Client must track provisional period state locally; directory enforces at FROST ceremony time. Open: the directory rejection error code for exceeding the provisional period cap is not specified. |
 | AC-20 | Registration | ~~Resolved~~ — Email verification added to Part 2 registration flow. Oracle pattern: portal stores domain hash only; client stores signed JSON blob. `email_verified` signal added to identity signals store; presented at connection per disclosure policy. |
