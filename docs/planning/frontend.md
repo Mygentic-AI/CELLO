@@ -613,7 +613,7 @@ The re-keying step (issuing new K_local and K_server_X) requires WebAuthn and is
 ### Security alerts
 
 The app receives push notifications for all anomaly events the directory has flagged for this agent:
-- `FROST_SESSION_FAILURE` (compromise canary — urgent; breaks through Do Not Disturb)
+- `FALLBACK_CANARY` (compromise canary — urgent; breaks through Do Not Disturb. Fired when the directory detects two competing FROST participation attempts for the same agent from different sources, indicating K_local may have been stolen)
 - `UNUSUAL_SIGNING_PATTERN` (urgent; breaks through Do Not Disturb)
 - `BURST_ACTIVITY` (warning)
 - `ATYPICAL_HOURS` (informational unless combined with other signals)

@@ -1170,6 +1170,7 @@ The client implements the complete notification type registry. Types are enumera
 | `alert` | Agent | Operational alert from a counterparty agent |
 | `promotional` | Agent | Promotional content; subject to rate limits per trust tier and recipient opt-out |
 | `portal_instruction` | Directory (forwarded from portal) | Owner-initiated action forwarded by the directory from the portal WebSocket (G-43). Payload: `{ action, agent_id, target_id?, room_id?, portal_signature, issued_at }`. Action types: `accept_connection`, `decline_connection`, `ban_participant`, `mute_participant`, `unmute_participant`, `initiate_rotation`, `create_succession_package`. The client executes without additional owner confirmation — portal owner already confirmed the action. The client validates `portal_signature` against the portal's known public key before acting. See server-infrastructure.md G-43. |
+| `fallback_canary` | Directory | **Highest-urgency security event.** Directory detected two competing FROST participation attempts for the same agent from different sources — strong indicator K_local has been stolen. Pushed to the owner via WhatsApp/Telegram/WeChat; breaks through Do Not Disturb. Payload: `{ agent_id, session_attempt_ids[], detected_at }`. Tapping "Not Me" triggers the compromise response flow. |
 
 ### Escalation channel routing
 
@@ -1369,7 +1370,7 @@ See the succession section for the full `SUCCESSION_INITIATED` state machine and
 | Alias context notes | Yes — local only | No | `context_note` is local-only; alias registry entry is in directory |
 | Recovery contact obligations | Yes — local only | No | Client records on receiving `RECOVERY_CONTACT_DESIGNATED` notification |
 | Human injection logs | Yes — local only | No | `merkle_leaf_hash = null`; not in protocol record |
-| Bio text | Yes | No — hash only | Portal discards after return |
+| Bio text | Yes — sole editable copy | No — hash only | Signup portal backend also holds a read-only copy for public browse, keyed by `agent_id`; client publishes bio updates to signup portal backend; integrity verifiable against directory hash; signup portal backend copy wiped on account deletion |
 | Track record stats | No — derived | Yes — authoritative | Client queries live at connection time |
 | Message content | Yes (P2P) | No | P2P only; directory never sees content |
 | Scan results | Yes — in local leaf | Yes — embedded in Merkle leaf | Both hold (scan result is part of the signed leaf) |

@@ -111,8 +111,8 @@ The portal supports the following as optional, additive signals. None are regist
 
 - Deletion must be authenticated via WebAuthn.
 - Deletion is a signed operation appended to the append-only log (tombstone).
-- Signup portal: all PII is fully wiped (phone, WebAuthn credentials, OAuth tokens). The K_server_X shares held by directory nodes for this agent are also burned/deleted.
-- Directory: active public key, trust signals, and bio are removed from the live index; tombstone appended to hash chain.
+- Signup portal backend: all PII is fully wiped (phone, WebAuthn credentials, OAuth tokens, bio text). The K_server_X shares held by directory nodes for this agent are also burned/deleted.
+- Directory: active public key, trust signal hashes, and bio hash are removed from the live index; tombstone appended to hash chain. Hashes remain in the append-only log as cryptographically meaningless entries once the source data is wiped from the signup portal backend.
 - Conversation records held by counterparties are NOT deleted. The directory does not propagate deletion to third-party Merkle records. The deleted agent's public key points to the tombstone.
 
 ### Recovery contacts and succession
@@ -613,6 +613,8 @@ For SUCCESSION_INITIATED additionally:
 
 **Bio rate limit**: Once every **12 hours**. **[GAP G-29 RESOLVED]**
 
+**Bio storage model**: Bios are the one voluntarily-published Class 1 field whose text must be servable to unauthenticated browsers. To preserve the "directory sees hashes only" invariant, bio text lives on the **signup portal backend**, not on directory nodes. The directory holds only the SHA-256 hash of the bio, written to the identity Merkle tree. Public browse requests hit a read-only CDN-friendly endpoint on the signup portal backend, keyed by `agent_id`. The browsing client (or any third party) can verify the served bio text against the directory hash to detect tampering. When an owner updates a bio, the client publishes the new text to the signup portal backend (authenticated via the portal's standard owner auth), the signup portal backend hashes it, writes the hash to the directory, and serves the new text. This is the same oracle pattern used for trust signals, extended to the one field that must be publicly readable. On account deletion, the signup portal backend wipes the bio text; the hash in the directory log is cryptographically meaningless without the source text. Bios are voluntary broadcasts (the owner composed and chose to publish them) and are defensible under GDPR as published content, not held PII.
+
 **Greeting**: Contextual, per-recipient, recorded in the conversation Merkle tree at connection request time. Rate-limited per recipient: **1 greeting per recipient per 7 days** (re-contact after ignore/no response); if B explicitly declines, lockout extends to **30 days**; if B blocks A, permanent. **[GAP G-30 RESOLVED]**
 
 ### Notifications
@@ -670,6 +672,7 @@ For SUCCESSION_INITIATED additionally:
   | `ROOM_AUTO_MUTE` | Directory (from relay) | A participant in a group room has been auto-muted by the relay after a 2nd violation within the rolling window; sent to the room owner. Payload: `{ room_id, muted_agent_id, violation_code, mute_sequence_number, duration_ms, muted_at }`. The relay reports the event to the directory; the directory forwards to the room owner's authenticated WebSocket. |
   | `ALIAS_EXPIRY` | Directory | An alias has reached its 6-month inactivity TTL and has been marked `EXPIRED`. Payload: `{ alias_id, alias_slug, expired_at }`. |
   | `PORTAL_INSTRUCTION` | Directory (forwarded from portal) | Owner-initiated action forwarded by the directory from the portal WebSocket (G-43). Payload: `{ action, agent_id, target_id?, room_id?, portal_signature, issued_at }`. Action types: `accept_connection`, `decline_connection`, `ban_participant`, `mute_participant`, `unmute_participant`, `initiate_rotation`, `create_succession_package`. The client validates `portal_signature` before acting. See G-43. |
+  | `FALLBACK_CANARY` | Directory | **Highest-urgency security event.** Fired when the directory detects two competing FROST participation attempts for the same agent from different sources within a short window — a strong indicator that K_local has been stolen and an attacker is attempting to open a session concurrently with the legitimate agent. Pushes to the owner via WhatsApp/Telegram/WeChat and breaks through Do Not Disturb on mobile. Tapping "Not Me" triggers the compromise response flow. Payload: `{ agent_id, session_attempt_ids[], detected_at }`. |
 - **Note**: `EMERGENCY_SESSION_ABORT` is a directory-to-client control instruction sent via the agent's persistent WebSocket — it is NOT a notification type and does not appear in the notification registry
 - **Notification delivery paths — resolved [GAP G-32 — RETIRED]**: Two paths. (1) Directory-sourced events (connection requests, endorsements, anomaly alerts, system events, PEER_COMPROMISED_ABORT, etc.) push via the recipient agent's authenticated persistent WebSocket — the directory is always involved for these. (2) Owner-targeted notifications (trust signal pickup pending, human input requested, companion content alerts) go direct from the CELLO client to the companion device over P2P — the directory is not in the path for these. The server handles path (1) only; path (2) is client-to-companion and requires no server-side change.
 - **Institutional verification for elevated rate limits**: application process and criteria are operational policy, not protocol design. **[GAP G-33 — deferred to product/BD]** Placeholder: applicant submits business registration, use-case description, and agrees to elevated accountability terms. CELLO approves manually at Alpha/Consortium. Automated criteria TBD when volume justifies it.
@@ -973,7 +976,8 @@ In Alpha, some components that will eventually be separated (relay vs. directory
 | Trust signal JSON blobs | Client only (portal discards). During connection requests: client bundles blobs with request; directory holds transiently for fraud-filter verification then discards; receiving client gets blobs for independent signature verification then discards after accept/reject. | N/A | Client-side |
 | Trust signal hashes | All directory nodes | Yes (via append-only log) | Tombstone appended; hash remains in log |
 | Public keys | All directory nodes | Yes | Tombstone appended; key remains in log |
-| Bios | All directory nodes | Yes | Removed from live index on deletion; hash remains in log |
+| Bio text | Signup portal backend (served for public browse) + client (sole editable copy) | No — hash only | Full wipe from signup portal backend on account deletion; hash remains in directory log |
+| Bio hash | All directory nodes | Yes | Hash remains in log after deletion; live index entry removed |
 | Conversation hashes (active session) | Sender + receiver + relay node (ephemeral) | No (per-conversation) | Relay destroys per-session state after seal handoff |
 | Conversation hashes (sealed) | Sender + receiver + directory (via sealed Merkle root in MMR) | Yes (MMR replicates to all directory nodes) | Not deleted; tombstone on account deletion leaves sealed root intact |
 | Merkle roots (sealed conversations) | All directory nodes | Yes | Not deleted |
