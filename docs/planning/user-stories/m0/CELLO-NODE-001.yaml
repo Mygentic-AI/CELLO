@@ -22,6 +22,8 @@ behavior:
     action: "the directory shall return a structured error and not relay the message"
   - trigger: "When a client disconnects"
     action: "the directory shall remove the client from its connection registry and notify any active session counterparties"
+  - trigger: "When a client sends a MessageEnvelope whose sender_pubkey does not match the client's WebSocket-registered public key"
+    action: "the directory shall reject the envelope with a structured error and not relay it"
   - trigger: "While relaying a message"
     action: "the directory shall never inspect, store, or log the content field of the MessageEnvelope — only the content_hash, sender_pubkey, session_id, and sequence_number"
 
@@ -66,6 +68,13 @@ acceptance_criteria:
     given: "A directory stub is running"
     when: "A client connects with a malformed public key (wrong length)"
     then: "The connection is rejected with a structured error"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "Client A is connected and registered with public key K_A"
+    when: "Client A sends a MessageEnvelope with sender_pubkey set to a different key K_X"
+    then: "The directory rejects the envelope and does not relay it"
     test_type: integration
     component_under_test: directory
 

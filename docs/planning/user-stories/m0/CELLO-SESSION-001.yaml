@@ -78,6 +78,12 @@ security_invariants:
     test_type: integration
     component_under_test: directory
 
+  - id: SI-002
+    statement: "The directory shall never issue a session_id that collides with an existing active or recently-closed session"
+    adversarial_condition: "even when 1000 sessions are created in rapid succession"
+    test_type: integration
+    component_under_test: directory
+
 # ─── References ─────────────────────────────────────────────
 references:
   protocol_map: "Conversations"

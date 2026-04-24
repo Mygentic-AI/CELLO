@@ -3,7 +3,7 @@ name: CELLO User Story Format
 type: design
 date: 2026-04-16
 topics: [user-stories, EARS, requirements, TDD, testing, specification]
-status: draft
+status: active
 description: Formal specification for CELLO user stories — unified template combining user story intent with EARS behavioral rigor, designed for TDD with AI coders.
 ---
 

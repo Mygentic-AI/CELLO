@@ -15,7 +15,7 @@ story: >
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
   - trigger: "When the client hashes data for a Merkle leaf"
-    action: "the crypto module shall prepend the leaf domain separator (0x00) before the data and compute SHA-256 over the prefixed bytes"
+    action: "the crypto module shall prepend the leaf domain separator (0x00) before the data and compute SHA-256 over the prefixed bytes. The module wraps @noble/hashes SHA-256, concatenating the domain separator and data before calling the hash — there is no built-in leaf-hash primitive in the library."
   - trigger: "When the client hashes data for a Merkle internal node"
     action: "the crypto module shall prepend the internal node domain separator (0x01) before the concatenated child hashes and compute SHA-256 over the prefixed bytes"
   - trigger: "When the client hashes arbitrary data without domain separation"
@@ -45,8 +45,8 @@ acceptance_criteria:
     component_under_test: crypto
 
   - id: AC-004
-    given: "Known test vectors from RFC 6962 Section 2.1"
-    when: "The client computes leaf and internal node hashes"
+    given: "Known test vectors derived from the Certificate Transparency reference implementation (google/certificate-transparency-go test suite)"
+    when: "The client computes leaf and internal node hashes for the reference inputs"
     then: "The outputs match the expected test vector values"
     test_type: unit
     component_under_test: crypto

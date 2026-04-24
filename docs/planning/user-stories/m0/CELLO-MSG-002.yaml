@@ -27,6 +27,8 @@ behavior:
     action: "the client shall reject the message and log a sequence gap or replay with the expected and received values"
   - trigger: "When a message arrives without a signature field"
     action: "the client shall reject the message unconditionally"
+  - trigger: "When multiple sends are requested concurrently on the same session"
+    action: "the client shall serialize them through a per-session queue so that sequence numbers are assigned atomically and never skip or repeat"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -95,8 +97,8 @@ security_invariants:
 
   - id: SI-003
     statement: "The client shall never send a MessageEnvelope with a sequence number that skips or repeats"
-    adversarial_condition: "even under concurrent send calls on the same session"
-    test_type: unit
+    adversarial_condition: "even when 100 concurrent send calls are fired on the same session simultaneously"
+    test_type: integration
     component_under_test: client
 
 # ─── References ─────────────────────────────────────────────

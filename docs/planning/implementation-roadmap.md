@@ -23,6 +23,8 @@ For the design source, see [[protocol-map|CELLO Protocol Map]]. For the user sto
 
 - **Persistence:** In-memory stores behind interfaces initially. A `Store` interface per component, with `InMemoryStore` as the first implementation. The protocol logic — FROST ceremonies, Merkle tree operations, hash relay, connection brokering — is identical regardless of where the bytes live. Deferring real persistence keeps the e2e tests fast (no database setup/teardown, no file cleanup) and focuses early milestones on getting the protocol right. When SQLite/SQLCipher is added, it's a new `Store` implementation behind the same interface. The protocol tests never change; the store layer gets its own focused integration test suite.
 
+- **Wire encoding:** Canonical CBOR (RFC 8949). Signatures are computed over CBOR-encoded bytes, so all implementations must produce identical serialization for the same logical structure. CBOR over JSON because binary fields (public keys, signatures, hashes) are first-class in CBOR; JSON would require base64 encoding and a canonicalization spec.
+
 - **Test harness:** The e2e test package spins up directory, relay, and clients in a single Vitest process. No Docker, no ports, no inter-process coordination during development. The in-memory stores make this possible.
 
 - **Initial agent integration:** Claude Code sessions. OpenClaw, Hermes, and IronClaw come later per the integration stages in the day-0 plan.
@@ -48,16 +50,16 @@ For the design source, see [[protocol-map|CELLO Protocol Map]]. For the user sto
 ### Dependencies
 
 ```
-M0 → M1 → M2   (core message path — each builds on the last)
+M0 → M1 → M2   (Walking Skeleton → Merkle Notarization → FROST Ceremonies)
        ↓
-      M3 → M5 → M6   (identity → discovery → social trust)
+      M3 → M5 → M6   (Connections & Policy → Discovery & Notifications → Social Trust)
        ↓
-      M4   (can start after M0 — needs the message pipeline, independent otherwise)
+      M4   (Prompt Injection Defense — can start after M0, independent otherwise)
       
-M2 + M3 → M7   (recovery needs FROST and identity)
-M1 + M3 → M8   (groups need Merkle and connections)
-M3 + M5 → M9   (commerce needs identity and discovery)
-M2 → M10        (federation needs FROST working on a single node first)
+M2 + M3 → M7   (Compromise & Recovery needs FROST and connections)
+M1 + M3 → M8   (Group Rooms need Merkle and connections)
+M3 + M5 → M9   (Commerce needs connections and discovery)
+M2 → M10        (Federation needs FROST working on a single node first)
 ```
 
 M4 is the most parallelizable with other milestones — the scanning pipeline is almost entirely client-side and each layer is independent.
@@ -99,6 +101,8 @@ Fully specified stories live in `docs/planning/user-stories/m0/`. The table belo
 | CELLO-MCP-001 | M0 MCP tool surface | MCP Tool Surface | AGENT | P0 | client | SESSION-001, MSG-002 |
 
 Seven stories, all P0, strict dependency chain. A TDD agent pulls the stories in order, writes failing tests from the acceptance criteria, and implements until green.
+
+M0 already hashes message content as Merkle leaves (SHA-256 with 0x00 domain separator) even though no tree is constructed until M1. This is intentional — pre-committing to the leaf hash format means M1 adds the tree without changing the envelope format or invalidating M0 signatures.
 
 ---
 
