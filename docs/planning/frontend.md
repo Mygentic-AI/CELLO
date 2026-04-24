@@ -518,9 +518,7 @@ A chronological event stream showing all notification types from `cello_poll_not
 
 The event stream is filterable by type. Each event links to its relevant context in the portal (a security block links to the session; an endorsement links to the endorser's trust profile).
 
-**[~~GAP F-27~~ — Retired]**: Two delivery paths resolved: directory WebSocket pushes system/protocol events to the agent; client-to-companion P2P delivers owner-targeted notifications. The portal receives events via the directory WebSocket path (same as the agent). See AC-16 / G-32.
-
-**[~~GAP F-28~~ — Resolved]**: The portal uses a two-WebSocket design. At login, the portal opens a second authenticated WebSocket to the directory using the portal's own registered keypair, scoped to the owner's `agent_id`. The directory fans out the owner-relevant event subset to both the portal WebSocket and the agent-client WebSocket. The portal receives: connection requests and escalations, key rotation nudges, anomaly alerts, tombstones, trust signal pickups, succession claims, and relay reassignment events. Session-level security events are agent-WebSocket-only. Portal writes (escalation decisions, room ban/mute, rotation initiation) are submitted to the directory via the portal API channel and forwarded by the directory to the agent client as `portal_instruction` messages. See server-infrastructure.md G-43 for full specification.
+**[~~GAP F-27~~ — Retired]**: Two delivery paths resolved: directory WebSocket pushes system/protocol events to the agent; client-to-companion P2P delivers owner-targeted notifications. The portal receives events via the directory WebSocket path (same as the agent). See AC-16 / G-32. **[GAP F-28]**: The home-node API surface for notification payloads to the portal (distinct from the agent-facing MCP tool surface) is not specified.
 
 ### What the dashboard does NOT do
 
@@ -1026,7 +1024,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | ~~F-25~~ | Portal | ~~Closed~~ — counterparty-facing key refresh notification named `KEY_ROTATED`; see FC-5 resolution above |
 | F-26 | Dashboard | DELIVERED-to-ABSENT transition timeout in group conversations not specified; portal cannot accurately display participant state without this |
 | ~~F-27~~ | Dashboard | ~~Retired~~ — two delivery paths resolved: directory WebSocket pushes system/protocol events to the agent; client-to-companion P2P delivers owner-targeted notifications. The portal receives events via the directory WebSocket path (same as the agent). See AC-16 / G-32. |
-| ~~F-28~~ | Portal | ~~Resolved~~ — Two-WebSocket design. Portal opens second authenticated WebSocket (portal keypair, scoped to agent_id) at login; directory fans out owner-relevant event subset. Portal writes (escalation decisions, room actions, rotation) submitted via portal API channel and forwarded by directory as `portal_instruction` messages to agent client. See server-infrastructure.md G-43. |
+| F-28 | Portal | Home-node API surface for notification payloads to the portal (distinct from agent-facing MCP tool surface) not specified |
 | F-29 | Mobile | Oracle proof capture (GPS + camera + timestamp) for bond/escrow disputes is a native mobile capability; rollout phase not assigned |
 | ~~F-30~~ | Portal | ~~Closed~~ — Default TTL: 6 months inactivity. Checkpoint job marks EXPIRED. TTL resets on each successful contact through the alias. Portal must show last-contacted timestamp and time remaining before expiry. |
 | F-31 | Portal | **Partially closed (FC-2 resolved)**: unauthenticated visitors see target's bio, handle, agent type, and "connect with CELLO" CTA. Detailed UX for the CTA flow (sign-up prompt, deep-link handling, app store routing) not yet designed. |
