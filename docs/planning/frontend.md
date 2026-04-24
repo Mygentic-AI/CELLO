@@ -405,7 +405,7 @@ The portal should make designation of M-of-N recovery contacts prominent and dif
 The portal also supports:
 - Viewing and updating the recovery contact list
 - Configuring the M-of-N threshold (configurable at registration)
-- Creating and viewing the succession package (double-encrypted blob: the portal encrypts the seed phrase to the successor's `identity_key` first; the directory node then wraps that ciphertext with its KMS master key for storage). The portal must never handle the plaintext seed phrase and must confirm to the owner that once submitted, only the designated successor (with their `identity_key`) can decrypt the inner layer. **[GAP F-39]**: the portal must defend against XSS access to the in-page plaintext during encryption; the specific ceremony (Web Crypto API vs. WASM) and how the portal obtains the successor's `identity_key` are not specified.
+- Creating and viewing the succession package (double-encrypted blob: the portal encrypts the seed phrase to the successor's `identity_key` first; the directory node then wraps that ciphertext with its KMS master key for storage). The portal must never handle the plaintext seed phrase and must confirm to the owner that once submitted, only the designated successor (with their `identity_key`) can decrypt the inner layer. Ceremony security: encryption is performed using the **Web Crypto API** (browser-native, no external library) inside a **Web Worker** — the seed phrase never touches the main page's JavaScript context, eliminating XSS access to the plaintext. The successor's `identity_key` is resolved from the directory **at designation time** (when the owner names their successor in settings), confirmed to the owner by CELLO handle, and stored — not fetched at package creation time.
 
 ### Succession and ownership transfer
 
@@ -418,11 +418,11 @@ The portal exposes a separate successor designation: a specific CELLO identity t
 4. Transfer completes; succession link is recorded in the directory's identity Merkle tree
 5. Old identity's connections can see the succession link and choose to reconnect with the new identity
 
-**[GAP F-32]**: Portal UI for contesting an incoming succession claim filed by a third party is not designed. The succession log specifies that the directory notifies the owner and recovery contacts via external channels when a claim is filed, and the owner can contest — but the portal screen for doing so does not exist.
+**Contesting an incoming succession claim (F-32):** When `SUCCESSION_CLAIM_FILED` is received, the portal presents a full-screen urgent takeover view — not a banner or notification. Displays: who filed the claim, when it was filed, and a hard countdown to window expiry. **WebAuthn required** to contest — the living owner's presence must be cryptographically proven. On submission the claim is immediately rejected; the filer is notified. No arbitration state; the authenticated owner's contestation is final. This screen is also reachable from the mobile app's break-through-DND notification.
 
-**[GAP F-33]**: The announcement period management UI (cancel action, 7–14 day countdown display) is not designed.
+**Announcement period management (F-33):** A persistent status banner appears across the entire portal during the 7–14 day window, linking to a dedicated announcement period screen. The screen shows: countdown timer, the new owner's CELLO handle and verified identity, and a count of connected agents notified (aggregate, not per-agent). Cancel button is prominent on this screen; a second **WebAuthn tap** is required to confirm cancellation.
 
-**[GAP F-34]**: The new owner's authentication flow for accepting an ownership transfer is not specified. The portal must support the receiving side of the handshake.
+**New owner acceptance (F-34):** The designated new owner receives a notification and lands on a "Pending transfer" screen in their portal. Before accepting, they see a summary of what they are inheriting: handle, trust signal summary, approximate connection count, and confirmation that track record continuity is preserved. **WebAuthn required** to accept. If the new owner does not accept within the announcement window, the transfer **cancels and returns to IDLE** — no auto-extension. The old owner is notified and may reinitiate.
 
 ### Endorsement management
 
@@ -1030,14 +1030,14 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-29 | Mobile | Oracle proof capture (GPS + camera + timestamp) for bond/escrow disputes is a native mobile capability; rollout phase not assigned |
 | ~~F-30~~ | Portal | ~~Closed~~ — Default TTL: 6 months inactivity. Checkpoint job marks EXPIRED. TTL resets on each successful contact through the alias. Portal must show last-contacted timestamp and time remaining before expiry. |
 | F-31 | Portal | **Partially closed (FC-2 resolved)**: unauthenticated visitors see target's bio, handle, agent type, and "connect with CELLO" CTA. Detailed UX for the CTA flow (sign-up prompt, deep-link handling, app store routing) not yet designed. |
-| F-32 | Portal | Succession claim portal UI not designed: how the owner sees and contests an incoming succession claim filed by a third party. Client state machine (AC-82) and server-side mechanics are resolved; only the portal screen remains. |
-| F-33 | Portal | Ownership transfer announcement period UI not designed: cancel action, 7–14 day countdown display, what connected agents see. Client state machine (AC-82) resolved; only the portal screen remains. |
-| F-34 | Portal | New owner's authentication flow for accepting an ownership transfer not specified. Client and server mechanics resolved; only the portal screen remains. |
+| ~~F-32~~ | Portal | ~~Resolved~~ — Full-screen urgent takeover view on `SUCCESSION_CLAIM_FILED`; shows filer, timestamp, countdown; WebAuthn required to contest; contestation is immediately final; no arbitration state. |
+| ~~F-33~~ | Portal | ~~Resolved~~ — Persistent status banner across portal during announcement window; dedicated screen with countdown, new owner identity, aggregate notification count; cancel requires second WebAuthn tap. |
+| ~~F-34~~ | Portal | ~~Resolved~~ — New owner sees "Pending transfer" screen with inherited identity summary (handle, trust signals, connection count, track record continuity note); WebAuthn required to accept; no-accept within window cancels transfer and returns to IDLE; old owner notified. |
 | F-35 | Portal | Endorsement request management UI not specified; `cello_request_endorsement` and `cello_revoke_endorsement` are explicitly listed as missing from the MCP tool surface |
 | F-36 | Portal | Delegation/lending market UI not specified. **Blocked by G-36 deferral**: financial infrastructure is out of scope for initial launch. |
 | F-37 | Portal | Yield display mechanics not specified. **Blocked by G-36 deferral**: financial infrastructure is out of scope for initial launch. |
 | F-38 | Mobile | Oracle data flow now specified (G-40): oracle verifies → hash stored → original discarded; client holds original and presents to arbitration. Native capture implementation and rollout phase assignment still open. |
-| F-39 | Portal | Succession package creation ceremony security not specified: how portal obtains successor's `identity_key`, browser-level security during in-page plaintext encryption, Web Crypto API vs. WASM choice |
+| ~~F-39~~ | Portal | ~~Resolved~~ — Web Crypto API (browser-native) inside a Web Worker; seed phrase never touches main page JS context; successor's `identity_key` resolved from directory at designation time, not at package creation time. |
 | F-40 | Portal | False-positive appeal initiation UI not designed: when an activity log entry shows a Layer 2/3 scan block, the portal screen for initiating an LLM arbiter appeal (distinct from the general dispute submission flow) is not specified |
 | F-41 | Portal | Portal web security policy has no source document in the vault. CSP, CSRF, OAuth-token no-log, and trust-signal-blob no-log requirements are stated in this document but are not validated by any protocol review or security policy document. A dedicated portal web security spec is needed. |
 | ~~F-42~~ | Portal | ~~Closed~~ — FROST thresholds are: Alpha ~4-of-6; Consortium ~11-of-20; Public rotating ~5-of-7; minimum at any phase 3-of-5 across different jurisdictions/cloud providers. Portal must use these values, not 2-of-3. |
