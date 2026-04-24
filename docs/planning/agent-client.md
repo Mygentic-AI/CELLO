@@ -2,7 +2,7 @@
 name: CELLO Agent Client Requirements
 type: design
 date: 2026-04-16
-topics: [identity, key-management, FROST, K_local, K_server, libp2p, transport, merkle-tree, prompt-injection, connection-policy, persistence, SQLCipher, MCP-tools, companion-device, notifications, endorsements, contact-aliases, discovery, session-termination, recovery, sybil-defense, human-injection]
+topics: [identity, key-management, FROST, K_local, K_server, libp2p, transport, merkle-tree, prompt-injection, connection-policy, persistence, SQLCipher, MCP-tools, companion-device, notifications, endorsements, contact-aliases, discovery, session-termination, recovery, sybil-defense, human-injection, inference, commerce, token-pricing, rate-card, tokenizer]
 status: active
 description: Complete requirements for the CELLO agent client — the locally-running MCP server that handles all protocol mechanics on behalf of the agent. Covers identity and key management, P2P transport, message signing and Merkle operations, prompt injection defense, connection management, trust data custody, local persistence, companion device API, and the full MCP tool surface.
 ---
@@ -329,6 +329,8 @@ This ceremony is the compromise canary. If K_local has been stolen and an attack
 
 The canary fires at session establishment boundaries. It does not fire per message (individual messages are signed K_local-only). A K_local extraction during an active session is therefore detected at the next session start, not message by message.
 
+**Session policy binding at FROST bookend:** Session establishment signs more than authentication — it also binds the session's commercial terms. For inference-priced sessions, the `InferenceRateCard` (input/output rates per 1K tokens, tokenizer_id, tokenizer_hash, currency, optional cache_discount and caps) is declared by the seller and co-signed by both parties as part of the FROST session bookend. The rate card hash is embedded in every inference response Merkle leaf, preventing retroactive price changes. Rate card changes require closing the current session and establishing a new one — there is no mid-session rate modification.
+
 ### Degraded mode — directory unavailable
 
 When the directory connection drops:
@@ -477,7 +479,9 @@ The sender produces Structure 1 and transmits it with the message content. The r
 
 **AC-C2 and AC-C7 resolved:** The two-structure model is canonical. The 2026-04-15 session-level FROST signing document's description of sender-computed `prev_root` is superseded — it was written with the two-party case in mind and does not account for multi-party, where the relay node is the only entity that knows canonical sequence across all senders during a session. The relay always appends `prev_root` to Structure 2. The client never computes `prev_root`. For the genesis leaf (first message of a conversation), the relay initialises `prev_root` as `SHA-256(agent_A_pubkey || agent_B_pubkey || session_id || timestamp)` per open-decisions.md Decision 7 — this also resolves GAP AC-21. (The directory receives the full leaf sequence from the relay at seal time and recomputes the tree independently — it does not trust the relay's root.)
 
-The leaf prefix scheme follows RFC 6962 with an extension for control leaves (AC-C3 resolved): `0x00` for message leaves, `0x01` for internal nodes (RFC 6962 standard), `0x02` for control leaves (CLOSE, CLOSE-ACK, SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN, RECEIPT). Using `0x01` for both internal nodes and control leaves would defeat RFC 6962's second-preimage protection by making control leaves indistinguishable from internal nodes. The `0x02` prefix keeps control leaves as first-class Merkle entries while preserving the RFC 6962 invariant.
+**Inference response metadata (application-layer recommendation):** For inference-priced sessions, each response leaf carries structured billing metadata alongside the standard leaf fields: `input_tokens_this_message`, `output_tokens_this_message`, `cached_input_tokens_this_message` (optional), `cost_this_message`, cumulative totals for tokens and cost, `rate_card_hash`, `model_id`, and `tokenizer_id`. This schema is an application-layer recommendation at launch — sellers who follow it get full dispute coverage; sellers who do not fall back to manual arbitration. Promotion to first-class protocol fields is deferred pending vertical growth. See [[2026-04-24_1530_inference-billing-protocol|Inference Billing Protocol]].
+
+The leaf prefix scheme follows RFC 6962 with an extension for control leaves (AC-C3 resolved): `0x00` for message leaves, `0x01` for internal nodes (RFC 6962 standard), `0x02` for control leaves (CLOSE, CLOSE-ACK, SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, ABORT-BILLING, REOPEN, RECEIPT). Using `0x01` for both internal nodes and control leaves would defeat RFC 6962's second-preimage protection by making control leaves indistinguishable from internal nodes. The `0x02` prefix keeps control leaves as first-class Merkle entries while preserving the RFC 6962 invariant.
 
 ### Dual-path dispatch
 
@@ -527,7 +531,7 @@ No separate ACK mechanism is needed for mid-conversation messages. The final mes
 
 ### Control leaves
 
-Control leaves (CLOSE, CLOSE-ACK, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN) are hashed and signed identically to message leaves and recorded in the Merkle tree. They are first-class protocol events, not out-of-band signals.
+Control leaves (CLOSE, CLOSE-ACK, SEAL-UNILATERAL, EXPIRE, ABORT, ABORT-BILLING, REOPEN) are hashed and signed identically to message leaves and recorded in the Merkle tree. They are first-class protocol events, not out-of-band signals.
 
 | Control type | Trigger | Terminal? |
 |---|---|---|
@@ -537,6 +541,7 @@ Control leaves (CLOSE, CLOSE-ACK, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN) are ha
 | `SEAL-UNILATERAL` | Timeout — B did not send CLOSE-ACK | Yes |
 | `EXPIRE` | No messages for 72 hours (3 days) | Quasi-terminal (REOPEN permitted) |
 | `ABORT` | Security event or policy breach | Yes — REOPEN not permitted |
+| `ABORT-BILLING` | Billing dispute: session/per-message cost cap exceeded, seller token count diverges from buyer verification, or rate card hash mismatch | Yes — REOPEN not permitted |
 | `REOPEN` | Either party reopens a SEALED or EXPIRED session | Continuation |
 | `FLOOR_GRANT` | Relay assigns a turn cohort (group rooms only) — `cohort_pubkeys[]` + `round_number` | No — floor management |
 | `CONTINUATION_GRANT` | Relay grants or denies a `cello_request_continuation` request (group rooms only) | No — floor management |
@@ -682,6 +687,8 @@ Secret redaction catches API keys and tokens across 8 common formats. PII redact
 Four mechanisms: sliding-window spend limit (calculated from actual API token counts, not upfront estimates), raw call volume limit (global cap with per-caller carve-outs), per-process lifetime call counter, and duplicate detection (TTL-based prompt hash cache, 60-second window, per-process scope).
 
 This is engineering hygiene, not an injection defense. It protects against bugs, retry storms, and billing runaway. In-memory counters reset on process restart.
+
+**Inference cost cap enforcement (extends existing spend/volume limits):** For sessions with an `InferenceRateCard` declared at session establishment, the buyer's client runs a per-response verification pipeline: (1) verify the seller's signature on the leaf; (2) verify `rate_card_hash` matches the session's declared rate card; (3) optionally re-tokenize the content to verify reported token counts (see tokenizer verification modes below); (4) compute expected `cost_this_message` from counts and rate card; (5) verify cumulative fields equal previous cumulative plus this message; (6) check `cost_cumulative` against session caps; (7) if any check fails or caps are exceeded, trigger `ABORT-BILLING`. Spot-check verification (re-tokenizing 10% of turns randomly plus anomalous turns) is sufficient — every count is signed and chained, making any lie permanent evidence. The verification mode (strict, spot-check, trust-only) is a buyer-side client policy, not a protocol field.
 
 **[GAP AC-10]**: For deployments with frequent restarts (crash loops, auto-scaling), the in-memory spend and lifetime limits may not hold across restart boundaries. The upgrade path (persist sliding-window state to Redis/DynamoDB with conditional writes) is described but not specified as a requirement.
 
@@ -1502,6 +1509,10 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | ~~AC-82~~ | Recovery | ~~Resolved~~ — Voluntary transfer announcement period client state machine fully specified in Part 1 §Voluntary transfer announcement period: `IDLE → TRANSFER_PENDING → TRANSFER_EXECUTING → IDLE` with cancellation path, session blocking, contact notification, and `cello_status` surface. **Remaining joint gap**: the corresponding portal UIs are still absent (frontend.md F-32, F-33, F-34). See G-44. |
 | AC-83 | Recovery | Asymmetric whitelist knowledge not stated as an explicit prohibition. The client must never store or cache information about which agents have it on their whitelists. Easy to accidentally violate; must be an explicit requirement |
 | AC-84 | Recovery | Arbitration submission flow has no MCP tool. `cello_report` submits a trust incident report; there is no tool for submitting a FLAGGED session transcript to threshold arbitration, checking arbitration status, or receiving an arbitration verdict notification type |
+| AC-85 | Layer 5 | Tokenizer verification modes (local bundled, local lazy download, hosted opt-in, trust-only) are a client-side policy setting — mode selection UI and default-per-trust-tier logic not specified |
+| AC-86 | Layer 5 | Spot-check verification rate (10% random + anomaly-triggered) and anomaly detection heuristics for token count divergence not specified |
+| AC-87 | Commerce | InferenceResponseMetadata schema is application-layer at launch — promotion criteria to first-class protocol fields not defined |
+| AC-88 | Commerce | Hosted tokenizer API (`tokenize_inference_content` MCP tool) deferred — design specified in inference billing protocol but build timeline and constrained-client demand threshold not set |
 
 ---
 
@@ -1535,3 +1546,4 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 - [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination — Dual-Path Forced Abort]] — resolves AC-C6; the client must handle EMERGENCY_SESSION_ABORT (abort all sessions, send ABORT leaves, disconnect) and fire SEAL-UNILATERAL for the non-cooperative path
 - [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]] — relay nodes handle hash relay, sequencing, and Merkle tree building during sessions; client must validate relay sequencing against `last_seen_seq` and handle relay failure recovery (signal directory, resume on new relay)
 - [[2026-04-19_2045_group-room-design|Group Room Design]] — complete group room design; client requirements include: hybrid floor control with cohorts (adapter-managed, LLM never sees floor mechanics), two attention modes (active/muted), participant role enforcement (speaker/listener), FLOOR_GRANT verification, continuation requests, @mention handling, adaptive timeout awareness, auto-mute escalation, per-room budget cap, CHECKPOINT integrity verification, manifest pre-join cost projection, and eight MCP tools (cello_invite_to_room, cello_petition_room, cello_get_room_info, cello_dissolve_room, cello_transfer_ownership, cello_request_continuation, cello_set_attention_mode, cello_set_participant_role)
+- [[2026-04-24_1530_inference-billing-protocol|Inference Billing Protocol]] — token-based pricing for specialized inference; rate card extension, ABORT-BILLING termination reason, Layer 5 cost cap enforcement, three tokenizer verification modes

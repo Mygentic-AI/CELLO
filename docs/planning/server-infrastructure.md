@@ -215,6 +215,8 @@ Minimum threshold at any phase: 3-of-5 across different jurisdictions and cloud 
 
 **Proactive secret sharing**: If a node loses its K_server_X share database, remaining t-of-n nodes regenerate new shares via proactive secret sharing — K_server_X is never assembled. Also used periodically for proactive security.
 
+**Session policy binding at FROST bookend:** The FROST session bookend signs more than authentication. For inference-priced sessions, the `InferenceRateCard` (input/output rates per 1K tokens, tokenizer_id, tokenizer_hash, currency, optional cache_discount and caps) is declared by the seller and co-signed by both parties at session establishment. The rate card hash is embedded in every inference response Merkle leaf — the seller cannot retroactively change prices. Rate card changes require closing the current session and establishing a new one. The directory does not interpret the rate card; it is opaque session policy carried in the FROST-signed session record.
+
 **K_server rotation notification**: When rotation completes, a `KEY_ROTATION_COMPLETED` notification is sent with payload `{ agent_id, old_epoch, new_epoch, old_pubkey, new_pubkey, rotation_timestamp, expires_at }`. Epoch identifier: `agent_id:epoch:N` (monotonic integer). Grace period: 7 days. Hard cutoff after grace period. `KEY_ROTATION_RECOMMENDED` is a separate, earlier notification (the scheduling nudge) with no epoch data — rotation has not yet occurred when that notification fires.
 
 **Node signing keys — [GAP G-9 RESOLVED]**: The node list signing key uses FROST threshold signing, reusing the same infrastructure as K_server_X. No separate officer class is introduced — the directory node operators are the signers. Phase model:
@@ -300,7 +302,7 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 
 **Message Merkle tree**:
 - Two separate Merkle trees: Identity tree (checkpointed periodically) and Message tree (per-conversation hash chains, updated per message)
-- RFC 6962 construction with control leaf extension: `0x00` message leaves, `0x01` internal nodes (RFC 6962 standard), `0x02` control leaves (CLOSE, CLOSE-ACK, SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN, RECEIPT)
+- RFC 6962 construction with control leaf extension: `0x00` message leaves, `0x01` internal nodes (RFC 6962 standard), `0x02` control leaves (CLOSE, CLOSE-ACK, SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, ABORT-BILLING, REOPEN, RECEIPT)
 
 **[CONFLICT C-3 — RESOLVED]**: The `0x02` prefix for control leaves preserves RFC 6962 second-preimage protection (internal nodes remain `0x01`) while keeping control leaves as first-class Merkle entries distinct from message leaves (`0x00`). See agent-client.md AC-C3 (resolved).
 
@@ -383,6 +385,7 @@ Control leaves are hashed and signed identically to message leaves and recorded 
 | SEAL-UNILATERAL | Timeout — B did not ack | Terminal |
 | EXPIRE | Directory: no messages for configurable period | Quasi-terminal (REOPEN permitted) |
 | ABORT | Security event | Terminal — REOPEN not permitted |
+| ABORT-BILLING | Billing dispute: cost cap exceeded, token count divergence, or rate card hash mismatch | Terminal — REOPEN not permitted |
 | REOPEN | Either party reopens SEALED or EXPIRED tree | Continuation |
 | RECEIPT | Agent explicitly acknowledges processing a specific message | Informational (no state change) |
 | FLOOR_GRANT | Relay assigns a turn cohort (group rooms only) — `cohort_pubkeys[]` + `round_number` | No — floor management |
@@ -979,6 +982,8 @@ In Alpha, some components that will eventually be separated (relay vs. directory
 | Bio text | Signup portal backend (served for public browse) + client (sole editable copy) | No — hash only | Full wipe from signup portal backend on account deletion; hash remains in directory log |
 | Bio hash | All directory nodes | Yes | Hash remains in log after deletion; live index entry removed |
 | Conversation hashes (active session) | Sender + receiver + relay node (ephemeral) | No (per-conversation) | Relay destroys per-session state after seal handoff |
+| Inference rate card | Session record (sender + receiver + directory) | Yes (part of FROST-signed session policy) | Retained with session seal record |
+| Tokenizer hash manifest | Client only (bundled or lazy-downloaded from CELLO CDN; hash-pinned) | No | N/A — client-side artifact |
 | Conversation hashes (sealed) | Sender + receiver + directory (via sealed Merkle root in MMR) | Yes (MMR replicates to all directory nodes) | Not deleted; tombstone on account deletion leaves sealed root intact |
 | Merkle roots (sealed conversations) | All directory nodes | Yes | Not deleted |
 | Notification hashes | All directory nodes | Yes | Not deleted |
@@ -1003,7 +1008,7 @@ Registration is entry-point agnostic. Both portal-first and bot-first paths are 
 The directory — always. Relay nodes never hold K_server_X shares; FROST can only run on directory nodes. At seal time, the relay hands the complete leaf sequence to the directory. The directory recomputes the tree from scratch, then runs the FROST ceremony. Any t-of-n directory nodes can participate (all hold the required K_server_X shares). See [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]].
 
 **C-3: Merkle leaf prefix collision — resolved**
-`0x00` message leaves, `0x01` internal nodes (RFC 6962), `0x02` control leaves. The `0x02` prefix preserves RFC 6962 second-preimage protection while keeping control leaves as first-class Merkle entries. See agent-client.md AC-C3 (resolved).
+`0x00` message leaves, `0x01` internal nodes (RFC 6962), `0x02` control leaves (including ABORT-BILLING). The `0x02` prefix preserves RFC 6962 second-preimage protection while keeping control leaves as first-class Merkle entries. See agent-client.md AC-C3 (resolved).
 
 **C-4: Who computes prev_root in Merkle leaf — resolved**
 The relay node appends `prev_root` to the outer leaf (Structure 2). The client never computes it. The two-structure model (2026-04-13 multi-party design) is canonical; the 2026-04-15 sender-computed description is superseded. Genesis `prev_root` = `SHA-256(A_pubkey || B_pubkey || session_id || timestamp)`. See agent-client.md AC-C2, AC-C7 (resolved).
@@ -1104,3 +1109,4 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 - [[2026-04-14_1000_contact-alias-design|Contact Alias Design]] — the contact_aliases schema, SINGLE/OPEN modes, alias TTL (G-35), and alias creation rate limits (G-34) resolved here
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — G-18 deferred pending stack decision; PSI is Phase 2; the endorsement intersection the directory facilitates without learning either party's set
 - [[2026-04-19_2045_group-room-design|Group Room Design]] — adds relay-level floor discipline enforcement (new relay capability class): FLOOR_GRANT cohort assignment, out-of-turn and listener-role rejection pre-sequence, adaptive timeout extension, continuation grants, @mention priority insertion, CHECKPOINT with protocol-enforced minimum threshold and daily cap, AUTO_MUTE and KICK control leaves, participant role enforcement, manifest creation-time constraint validation, two topology modes (full_mesh launch / sender_keys for broadcast), and relay pre-room gate requirements
+- [[2026-04-24_1530_inference-billing-protocol|Inference Billing Protocol]] — token-based pricing for specialized inference; rate card binding at FROST bookend, ABORT-BILLING termination reason, data residency for rate cards and tokenizer manifests

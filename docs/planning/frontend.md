@@ -322,6 +322,8 @@ The portal must expose a notification filtering rule engine:
 
 The precedence must be visually clear (sender override beats global type rule). The owner must be able to set a recipient-side opt-out that overrides any sender's permitted rate limit.
 
+**Tokenizer verification settings:** For sessions with token-priced inference, the owner configures the buyer's verification mode: **Local bundled** (tokenizer runs in-process; default for desktop), **Local lazy download** (fetched on first use, hash-verified; default for mobile), **Hosted CELLO API** (opt-in for constrained devices; bytes transit CELLO servers ephemerally), or **Trust-only** (seller's counts accepted; disputes fall back to arbitration). Mode is configurable globally or per-connection. When hosted mode is enabled, the portal displays a privacy disclosure: "Verification running on CELLO servers — message bytes are processed ephemerally and not retained."
+
 The portal must display each sender agent's notification rate-limit tier. Tiers (daily new cold-contact initiation limits): phone-only/low-trust 5/day; established (≥1 signal ≥2yr) 10/day; high-trust (3+ signals, ≥1 ≥2yr) 100/day; institutional/bonded: elevated (manual approval at Alpha/Consortium). Rate limits apply to new cold-contact initiations only — re-engagement with existing conversational history is not subject to these limits. The portal must provide a UI for the owner to apply for institutional verification to obtain elevated rate limits.
 
 ### Trust profile self-view
@@ -469,6 +471,7 @@ Session lifecycle events (complete set):
 - **SEAL_UNILATERAL** — one party closed without the other's acknowledgment
 - **EXPIRE** — session expired without explicit close (72-hour inactivity timeout). For active sessions, the dashboard must display time-remaining until expiry and warn the owner when a session is within 12 hours of the timeout threshold
 - **ABORT** — session aborted; reason code and timestamp displayed
+- **ABORT-BILLING** — session aborted due to billing dispute: cost cap exceeded, seller token count diverged from buyer verification, or rate card hash mismatch. Reason code and timestamp displayed. REOPEN not permitted. Links to session detail view showing the divergent leaf and declared rate card for dispute submission
 - **REOPEN** — a previously sealed session was reopened. Two distinct origins the dashboard must distinguish: (a) *bilateral-initiated* — both parties agreed to reopen; new FROST ceremony; sequence numbers restart at 1; (b) *auto-REOPEN* — a message arrived after the post-seal grace window (300s default) and the client automatically reopened the session to receive it; no FROST, no participant consent required; displayed as a system event with `origin: auto`
 
 Per-participant attestation states (complete set):
@@ -496,6 +499,8 @@ Session details additionally show:
 - Relay failure events: if a relay node failure caused a session interruption, the dashboard must show the interruption window with a note that messages were queued and delivered on relay reassignment; for circuit-relay sessions (~20–30%), messages may have been delayed by up to the `delivery_grace_seconds` window (default 600s)
 
 **[GAP F-26]**: The DELIVERED-to-ABSENT transition timeout in group conversations is not specified. Until resolved, the dashboard cannot accurately display participant state.
+
+**Inference session rate card display:** For sessions declaring an `InferenceRateCard`, the portal displays the seller's rate card before the buyer commits: input rate per 1K tokens, output rate per 1K tokens, cache discount (if applicable), per-message cost cap, per-session cost cap, tokenizer ID, and currency. The rate card is immutable for the session — changes require closing the current session and establishing a new one. The dashboard links the rate card to the session detail view.
 
 ### Notifications and event stream
 
@@ -528,6 +533,7 @@ A chronological event stream showing all notification types from `cello_poll_not
 - Ownership transfer announced (`OWNERSHIP_TRANSFER_ANNOUNCED`): a voluntary ownership transfer announcement period has started for a connected agent
 - Ownership transfer cancelled (`OWNERSHIP_TRANSFER_CANCELLED`): a previously announced ownership transfer was cancelled
 - Succession package available (`SUCCESSION_PACKAGE_AVAILABLE`): a succession package is available for pickup by the designated successor
+- Billing dispute notifications (`ABORT-BILLING`): a session has been terminated due to a billing verification failure — links to the session detail view showing rate card, reported vs. verified token counts, and the divergent Merkle leaf
 
 The event stream is filterable by type. Each event links to its relevant context in the portal (a security block links to the session; an endorsement links to the endorser's trust profile).
 
@@ -1060,6 +1066,10 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | ~~F-45~~ | Dashboard | ~~Resolved~~ — `RELAY_SESSION_REASSIGNED` is a fully specified notification type. Payload: `{ session_id, old_relay_node_id, new_relay_node_id, resumed_from_seq, reassigned_at }`. Both agent-client.md and server-infrastructure.md specify this type; it is included in the server-infra notification registry and the agent-client registry. The portal activity log and event stream must display it as a system event. |
 | F-46 | Portal / Mobile / Desktop | Companion device management UI is not designed. agent-client.md AC-14 and server-infrastructure.md G-47 both flag that the portal must display registered companion devices and allow the owner to revoke them, but frontend.md has no corresponding gap or UI spec. Requires: enumeration view (device name, registered_at, last connected), revocation action, and a defined cardinality limit (max devices per agent). |
 | F-47 | Dashboard / Companion | Group room catch-up has no frontend treatment. When a participant rejoins a group room mid-conversation, the underlying mechanism for serving historical content is not yet designed (agent-client.md AC-8, server-infrastructure.md G-45). Until that gap is resolved, the portal and companion app cannot accurately show a participant's view of a room they rejoined mid-session. The portal/companion should display a "history not available from this join point" indicator rather than an incomplete or misleading view. |
+| F-48 | Portal / Settings | Tokenizer verification mode UI not designed — client-side policy controls (local vs. hosted vs. trust-only), but portal UI for mode selection per session or global default is not specified |
+| F-49 | Portal / Commerce | Inference rate card display and cap configuration UI not designed — seller perspective (publishing rate card) and buyer perspective (reviewing before session start) both unspecified |
+| F-50 | Portal / Notifications | ABORT-BILLING notification type and dispute initiation flow not designed — when a session terminates with ABORT-BILLING, portal UI for surfacing billing dispute details and routing to arbitration is unspecified |
+| F-51 | Dashboard / Sessions | Inference response metadata visualization not designed — display of token counts, cumulative costs, and spot-check verification results for multi-turn inference sessions is unspecified |
 
 ---
 
@@ -1095,3 +1105,4 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 - [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination]] — resolves FC-4; dual-path forced abort mechanism (EMERGENCY_SESSION_ABORT to agent client, PEER_COMPROMISED_ABORT to counterparties) that closes existing P2P sessions K_server revocation cannot reach
 - [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]] — relay nodes as session-level Merkle engines; directory dormant during active sessions; relay failure recovery flow; data classification split between signup portal / directory / relay
 - [[2026-04-19_2045_group-room-design|Group Room Design]] — complete group room design; frontend requirements include: throttle manifest display with creation-time constraint validation, pre-join cost projection, four room archetype presets (Casual, Negotiation, Working Group, Broadcast), participant role management (speaker/listener promotion/demotion), ownership transfer UI, dissolution UI, per-room budget dashboard with notification aggregation, DELIVERED/SEEN display states, violation/auto-mute indicators, kick/ban management, and scaling tier display (full_mesh vs sender_keys topology)
+- [[2026-04-24_1530_inference-billing-protocol|Inference Billing Protocol]] — token-based pricing for specialized inference; rate card display, ABORT-BILLING termination reason, tokenizer verification mode settings
