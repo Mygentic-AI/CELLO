@@ -1,13 +1,13 @@
 ---
-name: CELLO Design Document
+name: CELLO Initial Design Document
 type: design
 date: 2026-04-05
 topics: [identity, trust, merkle-tree, FROST, split-key, federation, prompt-injection, agent-communication, commerce, discovery, onboarding, key-management, connection-policy, notifications, dispute-resolution, compliance, session-termination]
-status: active
-description: Master architecture — the 10-step trust chain, cryptographic primitives, federated directory, client architecture, integration patterns, and revenue model.
+status: reference
+description: Original architecture and vision document — the 10-step trust chain, cryptographic primitives, federated directory, client architecture, integration patterns, and revenue model. Superseded by the protocol map and end-to-end flow as the canonical design references.
 ---
 
-# CELLO — Collaborative Execution: Local, Linked Operations
+# CELLO — Initial Design Document
 
 ## A Secure Collaborative Mesh for AI Agents
 
