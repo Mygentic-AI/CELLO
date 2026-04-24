@@ -1170,6 +1170,7 @@ This mirrors established industry practice (WhatsApp, Telegram, banking records)
 - [[2026-04-18_1620_commerce-attestation-and-fraud-detection|Commerce Attestation and Fraud Detection]] — purchase attestations at session close; behavioral fraud detection (seller concentration, velocity, lifecycle anomalies); escalation flow with ephemeral log review; KYC as the seller-side bottleneck (§12.4)
 - [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — mobile and desktop apps as P2P companion devices; two separate channels (content pull + notification push); human injection flow; local persistence model; `cello_request_human_input` MCP tool (Part 13)
 - [[2026-04-19_2045_group-room-design|Group Room Design]] — complete group room design: two-flag configuration, ownership/admin model, participant lifecycle, hybrid floor control with cohorts, attention modes, wallet protection, throttle manifest with creation-time constraints, scaling tiers, Sender Keys topology (Part 11)
+- [[2026-04-24_1530_inference-billing-protocol|Inference Billing Protocol]] — token-priced inference sessions: rate card extension at session establishment, signed cumulative billing metadata in Merkle leaves, Layer 5 cost cap enforcement, ABORT-BILLING termination reason, three tokenizer verification modes (local, hosted opt-in, trust-only)
 
 ---
 

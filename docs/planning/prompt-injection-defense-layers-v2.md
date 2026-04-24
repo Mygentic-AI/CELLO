@@ -375,6 +375,7 @@ The 80/20 applies to sequencing, not to skipping. Each of these four must be pre
 - [[day-0-agent-driven-development-plan|Day-0 Development Plan]] — Phase 1 implementation includes the DeBERTa scanner
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — maps the six defense layers to the MCP tool surface: Layers 1, 3–6 fire automatically; Layer 2 is exposed as `cello_scan` for explicit agent invocation
 - [[agent-client|CELLO Agent Client Requirements]] — the client is the runtime host for all six defense layers; Part 5 specifies the client's implementation responsibilities for each layer including DeBERTa delivery, audit logging, and continuous verification
+- [[2026-04-24_1530_inference-billing-protocol|Inference Billing Protocol]] — per-session inference cost caps are enforced as a Layer 5 runtime governance check on every response leaf
 
 ---
 

@@ -225,6 +225,7 @@ Bios are voluntary broadcasts — the owner wrote and published them. Trust sign
 - [[2026-04-18_1412_human-agent-marketplace|Human-Agent Marketplace]] — humans selling skills to AI agents; hosted lightweight relay agent tier; task verification; skill signals
 - [[2026-04-18_1454_merchant-crm-data-stash-and-free-samples|Merchant CRM Data Stash and Free Sample Tracking]] — client-side per-contact JSON blobs; universal identifier (identity_key); key rotation continuity
 - [[2026-04-18_1620_commerce-attestation-and-fraud-detection|Commerce Attestation and Fraud Detection]] — signed purchase attestations; behavioral fraud detection model; ephemeral chat log review for flagged accounts; KYC on sellers
+- [[2026-04-24_1530_inference-billing-protocol|Inference Billing Protocol]] — token-priced specialized inference: rate card binding at session establishment, signed cumulative billing in Merkle leaves, Layer 5 cost cap enforcement, ABORT-BILLING termination, three tokenizer verification modes (local, hosted opt-in, trust-only)
 
 **Readiness: Stable with deferred items.**
 - *Multi-party escrow*: Not yet designed. Group commerce is an open item — requires multi-party escrow before group rooms support commerce transactions.
@@ -290,3 +291,4 @@ All 12 design problems are closed. All 12 open decisions are resolved. The proto
 - [[2026-04-18_1454_merchant-crm-data-stash-and-free-samples|Merchant CRM Data Stash and Free Sample Tracking]] — client-side per-contact JSON storage; universal identifier via identity_key; key rotation continuity
 - [[2026-04-18_1620_commerce-attestation-and-fraud-detection|Commerce Attestation and Fraud Detection]] — signed purchase attestations; behavioral fraud detection; ephemeral chat log review for flagged accounts; KYC on sellers
 - [[2026-04-19_2045_group-room-design|Group Room Design]] — complete design of Class 3 group rooms: two-flag room model, ownership/admin structure, CONCURRENT+GCD conversation mode, digest batching, attention modes, violation enforcement with logarithmic auto-mute, wallet protection, relay defense, and 20-participant cap
+- [[2026-04-24_1530_inference-billing-protocol|Inference Billing Protocol]] — token-priced specialized inference: rate card binding at session establishment, signed cumulative billing in Merkle leaves, Layer 5 cost cap enforcement, ABORT-BILLING termination, three tokenizer verification modes (local, hosted opt-in, trust-only)
