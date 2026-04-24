@@ -12,12 +12,14 @@ The **`docs/planning/`** folder is an **Obsidian vault**. It is the primary desi
 
 ```
 docs/planning/
-├── cello-design.md                  # Master architecture document (start here)
+├── protocol-map.md                  # Start here — maps all 9 protocol domains, readiness status, and key discussion logs
+├── cello-design.md                  # Original vision — 10-step trust chain, revenue model, competitive landscape
+├── end-to-end-flow.md               # Deep canonical narrative — every domain in one coherent story (1100+ lines)
 ├── prompt-injection-defense-layers-v2.md
 ├── day-0-agent-driven-development-plan.md
 ├── protocol-review/
 │   ├── open-decisions.md            # 12 resolved design decisions
-│   ├── design-problems.md           # 7 unsolved problems
+│   ├── design-problems.md           # 12 design problems — all closed
 │   └── day-zero-review/
 │       ├── 00-synthesis.md          # Adversarial review summary
 │       └── 01–08-*.md               # Individual review reports
