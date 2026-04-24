@@ -1,7 +1,7 @@
 ---
 name: Day-0 Agent-Driven Development Plan
 type: plan
-date: 2026-04-07
+date: 2026-04-24
 topics: [SPARC, TDD, development-plan, testing, MCP, integration-testing, cryptography, claude-code, ruflo]
 status: active
 description: How CELLO is built — SPARC methodology, parallel agent orchestration via Claude Code, Ruflo testing framework and memory, cryptographic correctness rules, and integration testing strategy from unit tests through real agent integration.
@@ -10,7 +10,7 @@ description: How CELLO is built — SPARC methodology, parallel agent orchestrat
 # Day-0 Agent-Driven Development Plan
 
 **Project:** CELLO — Collaborative Execution: Local, Linked Operations
-**Date:** 2026-04-07 (revised 2026-04-24)
+**Date:** 2026-04-24
 
 ---
 
@@ -113,14 +113,18 @@ Architectural decisions accumulate across sessions. Two complementary systems:
 
 **The vault** (human-readable): Design documents, discussion logs, the protocol map. This is the authoritative record. Decisions are captured in discussion logs with full context and rationale.
 
-**Ruflo MCP memory** (machine-queryable, optional): Key-value store with vector search via HNSW indexing. Useful for quick lookups during coding sessions — "what did we decide about Merkle leaf format?" — without reading entire documents. Complements the vault; does not replace it.
+**Ruflo MCP memory** (machine-queryable, optional): Key-value store with vector search via HNSW indexing. Useful for quick lookups during coding sessions — "what did we decide about Merkle leaf format?" — without reading entire documents. Complements the vault; does not replace it. The vault remains authoritative.
+
+The binary installed by the `claude-flow` npm package is `claude-flow` (Ruflo is the project name; `claude-flow` is the CLI). Memory operations are exposed both as CLI commands and as MCP tools (`memory_store`, `memory_search`) callable from within an agent session.
 
 ```bash
-# Store a decision (via Ruflo MCP sidecar)
-ruflo memory store "merkle-leaf-format" "RFC 6962, domain separation 0x00/0x01, SHA-256" --namespace cello-architecture
+# Store a decision
+claude-flow memory store -k "merkle-leaf-format" \
+  -v "RFC 6962, domain separation 0x00/0x01, SHA-256" \
+  -n cello-architecture
 
-# Query during a session
-ruflo memory query "leaf format" --namespace cello-architecture
+# Semantic search during a session
+claude-flow memory search -q "leaf format" -n cello-architecture
 ```
 
 ---
@@ -133,7 +137,7 @@ This codebase is security infrastructure. A subtle mistake in a Merkle tree or k
 
 - **Ed25519 signing**: `@noble/ed25519` — audited, pure JS, no native deps, constant-time
 - **Hashing (SHA-256)**: `@noble/hashes` — same family, same audit guarantees
-- **FROST threshold signatures**: `@noble/frost` or equivalent audited implementation
+- **FROST threshold signatures**: production path is the Rust `frost` reference implementation (Zcash Foundation) exposed via a thin TypeScript binding. Pure-JS options (`@frosts/ed25519`, `@frosts/ristretto255`) exist and cite RFC 9591, but are explicitly experimental and not independently audited — acceptable for prototyping only. All FROST code must reference RFC 9591, not the superseded `draft-irtf-cfrg-frost` draft.
 - **Symmetric operations (AES-GCM, ChaCha20-Poly1305)**: Node.js `crypto` module — FIPS-compliant, battle-tested
 - **Avoid**: Crypto-JS (known vulnerabilities), any unaudited npm packages for core crypto
 
@@ -154,6 +158,7 @@ Agents must not resolve cryptographic implementation questions from training dat
 | Library usage | Official library docs — `@noble` GitHub, Node.js crypto docs |
 | CVEs and known weaknesses | GitHub Advisories, NVD API |
 | Protocol flow correctness | [Verifpal](https://verifpal.com) — symbolic protocol analysis |
+| FROST threshold signatures | RFC 9591 — *Two-Round Threshold Schnorr Signatures with FROST* |
 
 Any implementation touching Ed25519 signing, Merkle tree construction, threshold key splitting, or hash chaining must reference a named RFC, NIST publication, or library documentation URL in the code or PR. "Works" is not the bar — cryptographically correct is the bar.
 
