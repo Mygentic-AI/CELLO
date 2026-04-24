@@ -33,7 +33,7 @@ acceptance_criteria:
   - id: AC-001
     given: "Two MCP server instances connected to the same directory"
     when: "Agent A calls cello_initiate_session targeting Agent B"
-    then: "A session_id is returned to Agent A; Agent B's next cello_receive call on that session_id returns the session greeting or blocks waiting for the first message"
+    then: "A session_id is returned to Agent A; Agent B's next cello_receive call on that session_id blocks waiting for the first message"
     test_type: e2e
     component_under_test: client
 

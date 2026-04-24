@@ -15,7 +15,15 @@ story: >
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
   - trigger: "When the client constructs an outbound message"
-    action: "the protocol-types module shall produce a MessageEnvelope containing: sender_pubkey (32 bytes), session_id, sequence_number, content (arbitrary bytes), content_hash (SHA-256 leaf hash of the content), signature (Ed25519 over the content_hash), and timestamp (Unix milliseconds). The wire encoding is canonical CBOR (RFC 8949) — the signature is computed over the CBOR-encoded content_hash, and all implementations must produce identical bytes for the same logical envelope."
+    action: >
+      the protocol-types module shall produce a MessageEnvelope containing: sender_pubkey (32 bytes),
+      session_id, sequence_number, content (arbitrary bytes), content_hash (SHA-256 leaf hash of the content),
+      signature (64-byte Ed25519), and timestamp (Unix milliseconds). The wire encoding is canonical CBOR (RFC 8949).
+      The signature is computed over the canonical-CBOR encoding of the to-be-signed (TBS) array
+      `[sender_pubkey, session_id, sequence_number, content_hash, timestamp]` — a positional array, not a map,
+      so implementations never need to canonicalize map key order. Content is not in the TBS structure because
+      content_hash already commits to it. All implementations must produce byte-identical CBOR for the same
+      logical TBS to interoperate.
   - trigger: "When any component receives a MessageEnvelope"
     action: "the protocol-types module shall validate the envelope structure: all required fields present, sender_pubkey is 32 bytes, signature is 64 bytes, content_hash is 32 bytes, sequence_number is a non-negative integer"
   - trigger: "When a MessageEnvelope has a missing or malformed field"
@@ -24,9 +32,12 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "Valid content, a keypair, a session_id, and a sequence_number"
+    given: "Valid content, a keypair, a session_id, a sequence_number, and a timestamp"
     when: "The client constructs a MessageEnvelope"
-    then: "All fields are populated; content_hash equals the SHA-256 leaf hash of the content; signature verifies against sender_pubkey and content_hash"
+    then: >
+      All fields are populated; content_hash equals the SHA-256 leaf hash of the content;
+      the signature verifies against sender_pubkey over canonical-CBOR(TBS) where
+      TBS = [sender_pubkey, session_id, sequence_number, content_hash, timestamp]
     test_type: unit
     component_under_test: protocol-types
 
@@ -65,6 +76,13 @@ acceptance_criteria:
     test_type: unit
     component_under_test: protocol-types
 
+  - id: AC-007
+    given: "A valid MessageEnvelope signed with TBS = [sender_pubkey, session_id, sequence_number, content_hash, timestamp]"
+    when: "Any single TBS field is mutated after signing (session_id swapped, sequence_number changed, timestamp moved, sender_pubkey substituted, or content_hash replaced)"
+    then: "Signature verification fails for each mutation"
+    test_type: unit
+    component_under_test: protocol-types
+
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
@@ -76,6 +94,12 @@ security_invariants:
   - id: SI-002
     statement: "The protocol-types module shall never construct a MessageEnvelope with an invalid signature"
     adversarial_condition: "even when called rapidly in sequence with different content"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: SI-003
+    statement: "A validator shall reject a MessageEnvelope where any TBS field (sender_pubkey, session_id, sequence_number, content_hash, or timestamp) has been altered relative to what was signed"
+    adversarial_condition: "even when the altered envelope is otherwise structurally well-formed and the original signature bytes are retained"
     test_type: unit
     component_under_test: protocol-types
 
