@@ -99,8 +99,10 @@ acceptance_criteria:
     when: "1,000 sessions are created in rapid succession between authenticated client pairs"
     then: >
       All 1,000 session_ids are unique, all are exactly 16 bytes, and a chi-squared test
-      on the concatenated session_id bytes against a uniform distribution yields p > 0.01
-      (a sanity check that the ids came from a CSPRNG, not a low-entropy counter).
+      on the concatenated session_id bytes against a uniform distribution yields p > 0.0001
+      (a sanity check that the ids came from a CSPRNG, not a low-entropy counter; the
+      threshold is chosen to keep the false-failure rate on correct CSPRNG output
+      negligible for a test that runs every CI build).
     test_type: integration
     component_under_test: directory
 
