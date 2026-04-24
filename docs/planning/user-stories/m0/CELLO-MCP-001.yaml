@@ -17,6 +17,13 @@ story: >
 behavior:
   - trigger: "When the agent calls cello_initiate_session with a target agent's public key"
     action: "the MCP server shall establish a session through the directory and return a session_id"
+  - trigger: "When the agent calls cello_await_session with a timeout"
+    action: >
+      the MCP server shall block until a `session_established` event is received from the
+      directory (either already buffered or newly arriving) or the timeout expires. On
+      success it returns `{type: 'new_session', session_id, initiator_pubkey}`. On timeout
+      it returns `{type: 'timeout'}`. Buffered events from sessions established before the
+      call are returned in the order they arrived.
   - trigger: "When the agent calls cello_send with a session_id and content"
     action: "the MCP server shall construct a signed MessageEnvelope, dispatch it through the directory, and return the leaf hash and delivery status"
   - trigger: "When the agent calls cello_receive with a session_id and timeout"
@@ -31,9 +38,9 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "Two MCP server instances connected to the same directory"
-    when: "Agent A calls cello_initiate_session targeting Agent B"
-    then: "A session_id is returned to Agent A; Agent B's next cello_receive call on that session_id blocks waiting for the first message"
+    given: "Two MCP server instances connected to the same directory, both WebSocket-authenticated"
+    when: "Agent B calls cello_await_session(timeout=5s); Agent A calls cello_initiate_session targeting Agent B's pubkey"
+    then: "Agent A's call returns a session_id; Agent B's cello_await_session returns `{type: 'new_session', session_id, initiator_pubkey: A_pubkey}` with the same session_id before any message is sent"
     test_type: e2e
     component_under_test: client
 

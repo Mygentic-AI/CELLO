@@ -100,9 +100,11 @@ Fully specified stories live in `docs/planning/user-stories/m0/`. The table belo
 | CELLO-MSG-002 | Client send/receive with signature verification | Message Exchange | CLIENT | P0 | client, transport | MSG-001, SESSION-001 |
 | CELLO-MCP-001 | M0 MCP tool surface | MCP Tool Surface | AGENT | P0 | client | SESSION-001, MSG-002 |
 
-Seven stories, all P0, strict dependency chain. A TDD agent pulls the stories in order, writes failing tests from the acceptance criteria, and implements until green.
+Seven stories, all P0. A TDD agent pulls the stories in dependency order, writes failing tests from the acceptance criteria, and implements until green. CRYPTO-001 and CRYPTO-002 can run in parallel; MSG-001 waits on both; NODE-001 waits on MSG-001 (it validates envelopes on relay); SESSION-001 depends on both MSG-001 and NODE-001; MSG-002 depends on SESSION-001; MCP-001 is last.
 
 M0 already hashes message content as Merkle leaves (SHA-256 with 0x00 domain separator) even though no tree is constructed until M1. This is intentional — pre-committing to the leaf hash format means M1 adds the tree without changing the envelope format or invalidating M0 signatures.
+
+M0 authenticates the WebSocket connection via an Ed25519 challenge-response: on connect the directory sends a 32-byte nonce; the client returns a signature over the byte string `"CELLO-WS-AUTH-v1" || nonce || pubkey`. This is not FROST and does not protect against a compromised K_local — that's M2's job — but it prevents the trivial spoof where any connected client claims any pubkey, which would otherwise make NODE-001's and SESSION-001's negative tests vacuous. The domain-string prefix prevents cross-protocol signature reuse.
 
 ---
 

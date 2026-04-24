@@ -14,15 +14,35 @@ story: >
 
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
-  - trigger: "When a client connects via WebSocket"
-    action: "the directory shall accept the connection, register the client by its public key, and maintain the connection for the duration of the session"
-  - trigger: "When a client sends a MessageEnvelope"
+  - trigger: "When a client opens a WebSocket connection"
+    action: >
+      the directory shall generate a 32-byte cryptographically random nonce
+      and send a `ws_auth_challenge` frame `{nonce}` to the client, holding the
+      connection in an unauthenticated state until the challenge resolves.
+  - trigger: "When the client responds with `ws_auth_response { pubkey, signature }`"
+    action: >
+      the directory shall verify the Ed25519 signature over the byte string
+      `"CELLO-WS-AUTH-v1" || nonce || pubkey` against the claimed pubkey.
+      On success the connection is registered under that pubkey and transitions
+      to authenticated. On failure the connection is closed with a structured
+      `auth_failed` reason and no registration occurs.
+  - trigger: "While a connection is unauthenticated"
+    action: >
+      the directory shall reject any frame other than `ws_auth_response` with
+      a structured `not_authenticated` error and shall not relay, register, or
+      enqueue anything on behalf of the connection.
+  - trigger: "When a session is established between two authenticated clients"
+    action: >
+      the directory shall send a `session_established` frame
+      `{session_id, initiator_pubkey}` to the target client in addition to
+      returning the session_id to the initiator.
+  - trigger: "When an authenticated client sends a MessageEnvelope"
     action: "the directory shall validate the envelope structure, look up the session_id to find the counterparty, and relay the envelope to the counterparty's WebSocket connection"
-  - trigger: "When a client sends a MessageEnvelope for a session_id that does not exist"
+  - trigger: "When an authenticated client sends a MessageEnvelope for a session_id that does not exist"
     action: "the directory shall return a structured error and not relay the message"
   - trigger: "When a client disconnects"
     action: "the directory shall remove the client from its connection registry and notify any active session counterparties"
-  - trigger: "When a client sends a MessageEnvelope whose sender_pubkey does not match the client's WebSocket-registered public key"
+  - trigger: "When an authenticated client sends a MessageEnvelope whose sender_pubkey does not match the pubkey the connection authenticated with"
     action: "the directory shall reject the envelope with a structured error and not relay it"
   - trigger: "While relaying a message"
     action: "the directory shall never inspect, store, or log the content field of the MessageEnvelope — only the content_hash, sender_pubkey, session_id, and sequence_number"
@@ -31,8 +51,8 @@ behavior:
 acceptance_criteria:
   - id: AC-001
     given: "A directory stub is running"
-    when: "A client connects via WebSocket with a valid public key"
-    then: "The connection is accepted and the client is registered"
+    when: "A client connects, receives a `ws_auth_challenge`, and responds with a valid `ws_auth_response` signing `\"CELLO-WS-AUTH-v1\" || nonce || pubkey` with the private key corresponding to the claimed pubkey"
+    then: "The signature verifies, the connection is registered under the claimed pubkey, and the connection is marked authenticated"
     test_type: integration
     component_under_test: directory
 
@@ -72,9 +92,30 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-007
-    given: "Client A is connected and registered with public key K_A"
+    given: "Client A is authenticated and registered with public key K_A"
     when: "Client A sends a MessageEnvelope with sender_pubkey set to a different key K_X"
     then: "The directory rejects the envelope and does not relay it"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "A client has opened a WebSocket and received a `ws_auth_challenge { nonce }`"
+    when: "The client sends a `ws_auth_response` with a signature computed over the wrong nonce OR over an incorrect domain string OR with a pubkey that does not match the signing key"
+    then: "The directory closes the connection with a structured `auth_failed` reason and does not register the client"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-009
+    given: "An authenticated connection for Client A and an authenticated connection for Client B"
+    when: "Client A initiates a session targeting Client B's pubkey"
+    then: "Client B's WebSocket receives a `session_established` frame containing the new session_id and Client A's pubkey; Client A's initiate response also contains the same session_id"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010
+    given: "A WebSocket connection that has not yet completed auth"
+    when: "The connection sends a MessageEnvelope or session-initiation frame"
+    then: "The directory responds with a structured `not_authenticated` error and does not perform the requested action"
     test_type: integration
     component_under_test: directory
 
@@ -87,8 +128,14 @@ security_invariants:
     component_under_test: directory
 
   - id: SI-002
+    statement: "The directory shall never register a WebSocket connection under a public key the connection has not proven ownership of by signing `\"CELLO-WS-AUTH-v1\" || nonce || pubkey`"
+    adversarial_condition: "even when the attacker connects and sends a forged `ws_auth_response` with a valid-looking but incorrectly-signed signature, a signature over the wrong domain string, or a replayed signature from a different nonce"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
     statement: "The directory shall never relay a message to a client that is not a participant in the specified session"
-    adversarial_condition: "even when an attacker connects and sends envelopes with a guessed session_id"
+    adversarial_condition: "even when an attacker connects, authenticates with a valid pubkey, and sends envelopes with a guessed session_id they are not party to"
     test_type: integration
     component_under_test: directory
 

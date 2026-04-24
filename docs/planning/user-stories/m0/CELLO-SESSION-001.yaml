@@ -16,9 +16,19 @@ story: >
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
   - trigger: "When the client requests a new session with a target agent"
-    action: "the client shall send a session establishment request to the directory containing the initiator's public key and the target's public key; the directory shall generate a unique session_id, register both parties, and return the session_id to both clients"
-  - trigger: "When a client receives a session establishment response"
+    action: >
+      the client shall send a session establishment request to the directory containing the
+      initiator's public key and the target's public key. The directory shall generate a
+      unique session_id, register both parties, push a `session_established` event
+      `{session_id, initiator_pubkey}` to the target client's authenticated WebSocket, and
+      return the session_id to the initiator.
+  - trigger: "When the initiator receives the session establishment response"
     action: "the client shall store the session_id, counterparty public key, and initialize the sequence counter to 0"
+  - trigger: "When the target client receives a `session_established` event"
+    action: >
+      the client shall record the session_id, the initiator's public key, and initialize
+      the sequence counter to 0, making the session visible in its active session list and
+      discoverable to the agent via `cello_await_session`.
   - trigger: "When the client requests session close"
     action: "the client shall send a CLOSE message to the counterparty through the directory; the counterparty shall respond with CLOSE-ACK; both clients mark the session as closed"
   - trigger: "When the client receives a CLOSE message"
@@ -67,6 +77,13 @@ acceptance_criteria:
     given: "Client A has two active sessions (with B and C)"
     when: "Client A lists active sessions"
     then: "Both sessions are returned with correct counterparty public keys and status 'active'"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-007
+    given: "Client B is authenticated to the directory"
+    when: "Client A initiates a session targeting Client B's pubkey"
+    then: "Before any message is exchanged, Client B's runtime receives a `session_established` event and the session appears in Client B's active session list with Client A's pubkey as counterparty, status 'active', and sequence counter 0"
     test_type: integration
     component_under_test: client
 
