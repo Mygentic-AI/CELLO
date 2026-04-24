@@ -71,10 +71,10 @@ claude-flow agent spawn analyst --capabilities "security-analysis,threat-modelin
 
 ### Fire the Architecture Problem
 
-The open questions in `cello-design.md` are the first mandate for the hive — specific, technically hard, multiple independent domains:
+The open questions in `cello-initial-design.md` are the first mandate for the hive — specific, technically hard, multiple independent domains:
 
 ```bash
-claude-flow orchestrate "Analyze the CELLO trust infrastructure design in docs/planning/cello-design.md and resolve the open questions: (1) threshold cryptography scheme selection — Shamir's secret sharing vs ECDSA threshold signatures, latency impact of multi-node signing; (2) libp2p NAT traversal reliability and fallback strategy when hole punching fails; (3) K_server caching policy — session key lifetime vs security tradeoff; (4) Byzantine fault tolerance minimum consortium size; (5) deterministic ordering of identity Merkle tree operations across nodes — logical clock vs consensus on ordering; (6) checkpoint frequency tradeoff. Each agent attacks their domain independently, then the hive reaches consensus." --agents 8 --parallel
+claude-flow orchestrate "Analyze the CELLO trust infrastructure design in docs/planning/cello-initial-design.md and resolve the open questions: (1) threshold cryptography scheme selection — Shamir's secret sharing vs ECDSA threshold signatures, latency impact of multi-node signing; (2) libp2p NAT traversal reliability and fallback strategy when hole punching fails; (3) K_server caching policy — session key lifetime vs security tradeoff; (4) Byzantine fault tolerance minimum consortium size; (5) deterministic ordering of identity Merkle tree operations across nodes — logical clock vs consensus on ordering; (6) checkpoint frequency tradeoff. Each agent attacks their domain independently, then the hive reaches consensus." --agents 8 --parallel
 ```
 
 ### Enable Truth Verification
@@ -251,7 +251,7 @@ NanoClaw and ZeroClaw are available but there's no strong reason to prioritize t
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — architecture, trust chain, open questions this plan addresses
+- [[cello-initial-design|CELLO Design Document]] — architecture, trust chain, open questions this plan addresses
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — the DeBERTa Layer 2 scanner referenced in Phase 1
 - [[00-synthesis|Protocol Review — Synthesis]] — critical findings the hive should resolve first
 - [[open-decisions|Open Decisions]] — 12 decisions the hive already resolved

@@ -151,7 +151,7 @@ On any tombstone (VOLUNTARY, COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED, SU
 
 ### Three-system separation (home node concept dropped)
 
-The original design described a "home node" — a per-agent directory node storing non-replicated PII alongside the K_server_X share. This was dropped during the design-problems review (Problem 7: home node deanonymization). A node storing both PII and hash relay traffic lets a rogue operator trivially correlate them. See [[cello-design|CELLO Design Document]] — "Federated Node Model" section.
+The original design described a "home node" — a per-agent directory node storing non-replicated PII alongside the K_server_X share. This was dropped during the design-problems review (Problem 7: home node deanonymization). A node storing both PII and hash relay traffic lets a rogue operator trivially correlate them. See [[cello-initial-design|CELLO Design Document]] — "Federated Node Model" section.
 
 **The three systems that replaced it never intersect:**
 

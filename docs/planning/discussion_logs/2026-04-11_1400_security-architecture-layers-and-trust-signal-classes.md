@@ -130,7 +130,7 @@ The key thing the layer model makes explicit that the lifecycle model doesn't: *
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — spans Layer 2 (DDoS defense via staking) and Layer 3 (gate pyramid as the client-side filtering architecture); both layers in one mechanism
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — Layer 5a (enforcement) in practice; tombstone types, voucher accountability, and recovery paths are the consequence layer operating on signals from all other layers
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — the full protocol narrative; the four-layer model provides the organizing framework for understanding how its sections relate
-- [[cello-design|CELLO Design Document]] — the 10-step architecture; complementary framing to the layer model here
+- [[cello-initial-design|CELLO Design Document]] — the 10-step architecture; complementary framing to the layer model here
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — Layer 3 (client protection) in full detail
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — Layer 2 (node integrity) in full detail; the absolute vs. relative signal distinction here explains why the remaining Sybil stack works without TrustRank
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — the mechanism that makes the relative property of Class 2 signals unexploitable; PSI is what prevents a failed connection attempt from leaking the checking party's contact graph

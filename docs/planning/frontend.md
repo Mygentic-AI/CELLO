@@ -1078,7 +1078,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 - [[protocol-map|CELLO Protocol Map]]
 - [[server-infrastructure|CELLO Server Infrastructure Requirements]]
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]]
-- [[cello-design|CELLO Design Document]]
+- [[cello-initial-design|CELLO Design Document]]
 - [[2026-04-13_1000_device-attestation-reexamination|Device Attestation Reexamination]]
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]]
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]]

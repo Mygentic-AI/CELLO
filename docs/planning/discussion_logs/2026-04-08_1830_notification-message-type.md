@@ -116,7 +116,7 @@ Two distinct attack vectors with different mitigations:
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — Notification Messages section in Step 7; this log specifies the design in full
+- [[cello-initial-design|CELLO Design Document]] — Notification Messages section in Step 7; this log specifies the design in full
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — the companion log that surfaced the need for this primitive (web-of-trust introductions)
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — rate limiting and DDoS defense applies to notifications too
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — endorsements replace some just-in-time introduction notifications with pre-computed lookups

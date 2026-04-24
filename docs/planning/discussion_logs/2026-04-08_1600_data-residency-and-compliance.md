@@ -110,7 +110,7 @@ This mirrors how the real world works: you can close your bank account, but the 
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — the architecture whose data flows are analysed here (Steps 1–4, trust score design)
+- [[cello-initial-design|CELLO Design Document]] — the architecture whose data flows are analysed here (Steps 1–4, trust score design)
 - [[design-problems|Design Problems]] — Problem 6 (GDPR vs. append-only log) and Problem 7 (home node deanonymization)
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — companion insight: directory stores hashes, never personal data; simplifies GDPR further
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — tombstone types and what "account deletion" means at the protocol level

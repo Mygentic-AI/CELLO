@@ -1255,10 +1255,10 @@ The following names are canonical and supersede inconsistencies in earlier docum
 
 | Canonical | Supersedes |
 |---|---|
-| `cello_scan` | `cello_scan_message` (cello-design.md) |
-| `cello_search` | `cello_find_agents` (cello-design.md) |
-| `cello_send` | `cello_send_message` (cello-design.md) |
-| `cello_verify` | `cello_check_trust` (cello-design.md) |
+| `cello_scan` | `cello_scan_message` (cello-initial-design.md) |
+| `cello_search` | `cello_find_agents` (cello-initial-design.md) |
+| `cello_send` | `cello_send_message` (cello-initial-design.md) |
+| `cello_verify` | `cello_check_trust` (cello-initial-design.md) |
 
 ---
 
@@ -1522,7 +1522,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — full tool specifications; this document covers the client's implementation responsibilities, not the tool parameter schemas
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — full 6-layer specification; the client implements all six layers
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — deep canonical narrative; the client implements Parts 1–8
-- [[cello-design|CELLO Design Document]] — original architecture; trust chain steps 3–10 are all client-side
+- [[cello-initial-design|CELLO Design Document]] — original architecture; trust chain steps 3–10 are all client-side
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — FROST at session/seal only; defines the current signing model the client implements
 - [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] — per-agent K_server_X, independent rotation, envelope encryption; defines the key management model
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — transport layer; bootstrap discovery, ephemeral Peer IDs, NAT traversal, dual-path architecture

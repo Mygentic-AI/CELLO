@@ -33,7 +33,7 @@ This is the first document an agent or human should read. It maps the entire pro
 - **Key discussion logs** — the design sessions that shaped this domain, ordered by importance
 - **Readiness** — whether the domain is ready for user stories
 
-For the deep narrative connecting all domains into a single story, read [[end-to-end-flow|CELLO End-to-End Protocol Flow]]. For the original brainstorm and vision, see [[cello-design|CELLO Design Document]].
+For the deep narrative connecting all domains into a single story, read [[end-to-end-flow|CELLO End-to-End Protocol Flow]]. For the original brainstorm and vision, see [[cello-initial-design|CELLO Design Document]].
 
 ---
 
@@ -240,7 +240,7 @@ These documents span multiple domains and are important for understanding how th
 | Document | What it covers |
 |---|---|
 | [[end-to-end-flow\|CELLO End-to-End Protocol Flow]] | The deep canonical narrative — every domain in one coherent story |
-| [[cello-design\|CELLO Design Document]] | Original architecture and vision — the 10-step trust chain, revenue model, client architecture, competitive landscape |
+| [[cello-initial-design\|CELLO Design Document]] | Original architecture and vision — the 10-step trust chain, revenue model, client architecture, competitive landscape |
 | [[2026-04-11_1700_persistence-layer-design\|Persistence Layer Design]] | Complete schema for every protocol entity across all domains |
 | [[2026-04-14_1100_cello-mcp-server-tool-surface\|CELLO MCP Server Tool Surface]] | 33 MCP tools implementing the agent-facing interface across sessions, security, discovery, connections, groups, notifications, policy |
 | [[open-decisions\|Open Decisions]] | 12 resolved cryptographic and protocol decisions (FROST, Ed25519, SHA-256, thresholds, etc.) |
@@ -271,7 +271,7 @@ All 12 design problems are closed. All 12 open decisions are resolved. The proto
 ## Related Documents
 
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]]
-- [[cello-design|CELLO Design Document]]
+- [[cello-initial-design|CELLO Design Document]]
 - [[user-story-format|CELLO User Story Format]] — formal template for all user stories combining intent with EARS behavioral rigor, designed for TDD with AI coders
 - [[server-infrastructure|Server Infrastructure Requirements]] — complete requirements for signup portal, directory nodes, and relay nodes, with all conflicts and gaps identified
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]]

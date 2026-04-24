@@ -118,7 +118,7 @@ The OPRF-based approach is preferred over homomorphic encryption for this use ca
 ## Related Documents
 
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — the endorsement verification flow this log extends with PSI; the intersection computation is where PSI slots in
-- [[cello-design|CELLO Design Document]] — Step 6 (connection acceptance policies); PSI applies to the endorsement policy evaluation
+- [[cello-initial-design|CELLO Design Document]] — Step 6 (connection acceptance policies); PSI applies to the endorsement policy evaluation
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — hash-everything-store-nothing principle; PSI inputs follow the same transient, never-persisted pattern
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — asymmetric whitelist knowledge; PSI and this principle are complementary defenses against contact graph leakage
 - [[design-problems|Design Problems]] — Problem 4 (trust farming); PSI makes targeted farming harder but closed-loop detection is still needed for the general case

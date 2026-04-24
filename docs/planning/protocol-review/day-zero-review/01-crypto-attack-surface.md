@@ -2,7 +2,7 @@
 
 **Reviewer:** Senior Cryptographic Security Researcher
 **Date:** 2026-04-08
-**Document reviewed:** `docs/planning/cello-design.md`
+**Document reviewed:** `docs/planning/cello-initial-design.md`
 **Scope:** Full cryptographic design analysis, pre-implementation
 
 ---

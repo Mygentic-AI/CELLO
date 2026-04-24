@@ -188,7 +188,7 @@ The discovery system does not need to know about keys, FROST, or Merkle tree int
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — Step 4 (Discovery) and Step 5 (Connection Request); the discovery system is the full elaboration of Step 4
+- [[cello-initial-design|CELLO Design Document]] — Step 4 (Discovery) and Step 5 (Connection Request); the discovery system is the full elaboration of Step 4
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — Part 4 (Discovery) and §5.1–5.3 (connection initiation from a discovered agent)
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — the trust score displayed in discovery results is computed by the mechanisms designed there
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — the track record and pseudonym model that feeds the conversation count and clean-close rate shown in discovery

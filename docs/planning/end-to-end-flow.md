@@ -1130,7 +1130,7 @@ This mirrors established industry practice (WhatsApp, Telegram, banking records)
 
 - [[protocol-map|CELLO Protocol Map]] — top-level orientation document; maps all eight protocol domains with summaries, canonical sources, discussion log references, and readiness status for user stories
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — the four-layer system model and four trust signal classes (identity proofs, network graph, track record, economic stake); explains why each layer exists and why they can't be collapsed
-- [[cello-design|CELLO Design Document]] — the original 10-step architecture this document elaborates and extends
+- [[cello-initial-design|CELLO Design Document]] — the original 10-step architecture this document elaborates and extends
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — full specification of the 6-layer scanning pipeline (Part 7 above)
 - [[open-decisions|Open Decisions]] — 12 resolved cryptographic and protocol decisions incorporated throughout
 - [[design-problems|Design Problems]] — remaining open problems; Parts 3, 5, 8, and the Sybil architecture address Problems 1–4 and 6–7; Problem 5 (succession) is resolved by the succession log below

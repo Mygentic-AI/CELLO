@@ -332,7 +332,7 @@ The open item in the persistence-layer-design — "Conversation tree retention �
 - [[2026-04-08_1430_protocol-strength-and-commerce|Protocol Strength and Commerce]] — where the fabricated conversation attack and meta-Merkle tree defense were first identified
 - [[2026-04-08_1530_message-delivery-and-termination|Message Delivery and Termination]] — the per-conversation Merkle tree that produces the `seal_merkle_root` consumed by the MMR
 - [[2026-04-08_1700_node-architecture-and-replication|Node Architecture and Replication]] — federation model, primary/backup replication, and checkpoint mechanism that the distributed MMR construction builds on
-- [[cello-design|CELLO Design Document]] — the original architecture; §2 (identity), §7 (Merkle tree), and the federation section
+- [[cello-initial-design|CELLO Design Document]] — the original architecture; §2 (identity), §7 (Merkle tree), and the federation section
 - [[design-problems|Design Problems]] — Problem 8 (ML model supply chain) for comparison: both involve integrity-pinned third-party artifacts; the library trust reasoning parallels the hash-pinning approach here
 - [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — ML-DSA security level choice affects signature sizes but not MMR structure
 - [[2026-04-13_1200_discovery-system-design|Discovery System Design]] — Class 3 group conversations require multi-party seals; the MMR consumes seals regardless of participant count

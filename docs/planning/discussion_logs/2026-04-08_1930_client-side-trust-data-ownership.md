@@ -120,7 +120,7 @@ CELLO is in the verification business, not the storage business.
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — Step 2 (Strengthen Identity): the client-side trust data section is drawn directly from this log
+- [[cello-initial-design|CELLO Design Document]] — Step 2 (Strengthen Identity): the client-side trust data section is drawn directly from this log
 - [[2026-04-08_1600_data-residency-and-compliance|Data Residency and Compliance]] — GDPR analysis that this pattern dramatically simplifies; hash-only storage resolves the right-to-erasure tension
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — attestations are trust data following the same hash-relay pattern established here; the testimonial primitive in this log evolves into the attestation primitive there
 - [[design-problems|Design Problems]] — Problem 6 (GDPR vs. append-only log) and Problem 7 (home node deanonymization) — this log materially addresses both

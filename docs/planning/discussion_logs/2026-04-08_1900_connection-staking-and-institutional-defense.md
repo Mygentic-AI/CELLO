@@ -100,7 +100,7 @@ By the time open institutions are on the network and genuinely at risk, the stak
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — Connection Staking section in Step 6; the Gate Pyramid is reproduced there
+- [[cello-initial-design|CELLO Design Document]] — Connection Staking section in Step 6; the Gate Pyramid is reproduced there
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — session close attestation (CLEAN/FLAGGED) is the escrow release trigger
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — notification rate limiting and DDoS defence share the same layered approach
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — pre-computed endorsements reduce reliance on staking as a connection filter

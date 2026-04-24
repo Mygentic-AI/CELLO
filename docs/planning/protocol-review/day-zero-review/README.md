@@ -28,6 +28,6 @@ See [[09-build-in-public-index|Build in Public Content Index]] — 31 findings c
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — the architecture this review was conducted against
+- [[cello-initial-design|CELLO Design Document]] — the architecture this review was conducted against
 - [[design-problems|Design Problems]] — the 7 unresolved problems extracted from this review
 - [[open-decisions|Open Decisions]] — the 12 resolved decisions that emerged from addressing this review's findings

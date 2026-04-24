@@ -2,7 +2,7 @@
 
 **Reviewer:** Operational Security & Supply Chain Specialist
 **Date:** 2026-04-08
-**Document reviewed:** `docs/planning/cello-design.md`
+**Document reviewed:** `docs/planning/cello-initial-design.md`
 **Scope:** Supply chain attacks, insider threats, infrastructure compromise
 
 ---

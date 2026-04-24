@@ -2,7 +2,7 @@
 
 **Reviewer:** Product Strategy & Systems Thinking Specialist
 **Date:** 2026-04-08
-**Document reviewed:** `docs/planning/cello-design.md`
+**Document reviewed:** `docs/planning/cello-initial-design.md`
 **Scope:** Real-world user suffering, recovery paths, edge cases, mental model mismatches
 
 ---

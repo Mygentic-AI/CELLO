@@ -110,7 +110,7 @@ The three-part mechanism addresses the attack at every stage:
 ## Related Documents
 
 - [[design-problems|Design Problems]] — this log directly addresses Problem 1 (fallback mode as downgrade attack)
-- [[cello-design|CELLO Design Document]] — Step 6 (connection acceptance policies) and Step 9 (graceful degradation); relay node separation extends the federated directory architecture
+- [[cello-initial-design|CELLO Design Document]] — Step 6 (connection acceptance policies) and Step 9 (graceful degradation); relay node separation extends the federated directory architecture
 - [[2026-04-08_1700_node-architecture-and-replication|Node Architecture and Replication]] — primary/backup replication model; relay nodes extend this architecture
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — the gate pyramid this degraded-mode policy extends; same principle of inference-free filtering at every layer
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — the whitelist/blacklist mechanism this log extends with a degraded-mode tier

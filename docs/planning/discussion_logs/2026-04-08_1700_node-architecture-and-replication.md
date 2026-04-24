@@ -80,7 +80,7 @@ Clients maintain persistent connections to all nodes and send lightweight status
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — Federated Directory section; three-phase node deployment and FROST signing described there
+- [[cello-initial-design|CELLO Design Document]] — Federated Directory section; three-phase node deployment and FROST signing described there
 - [[open-decisions|Open Decisions]] — Decisions 1 (FROST), 3 (SHA-256), 4 (3-of-5 threshold), 12 (sequence number assignment) all resolved in this area
 - [[00-synthesis|Protocol Review — Synthesis]] — Critical findings C1/C2 (split-key underspecification), High findings on threshold and node architecture
 - [[design-problems|Design Problems]] — Problem 1 (fallback mode as downgrade attack) is the key unresolved problem in this space

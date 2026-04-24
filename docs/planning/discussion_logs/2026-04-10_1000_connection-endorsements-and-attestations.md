@@ -148,7 +148,7 @@ The more agents in the network who have gathered endorsements, the harder it is 
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — Step 6 (connection acceptance policies); the endorsement option is added to the policy table here
+- [[cello-initial-design|CELLO Design Document]] — Step 6 (connection acceptance policies); the endorsement option is added to the policy table here
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — the just-in-time introduction mechanism this log replaces with pre-computed endorsements; also bootstrapping via social carry-forward
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — the introduction notification primitive that pre-computed endorsements reduce reliance on at connection time
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — the connection gate that endorsements slot into; staking and endorsements are complementary filters

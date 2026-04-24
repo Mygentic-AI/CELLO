@@ -128,7 +128,7 @@ The trust score formula previously listed WebAuthn with "High" weight in the sam
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — schema corrected: WEBAUTHN removed from attestation_type enum
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — Class 1 Technical signals corrected: WebAuthn and device attestation separated
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — §1.2 updated: WebAuthn role clarified, native app requirement noted
-- [[cello-design|CELLO Design Document]] — trust score table updated: WebAuthn described as account security, not device sacrifice
+- [[cello-initial-design|CELLO Design Document]] — trust score table updated: WebAuthn described as account security, not device sacrifice
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — device attestation as Sybil defense (Problem 3); WebAuthn not a Sybil defense mechanism
 - [[design-problems|Design Problems]] — Problem 3 (phone Sybil floor); device attestation is one layer of the defense stack
 - [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — companion device registration uses the same App Attest-bound keypair provisioned during device attestation enrollment

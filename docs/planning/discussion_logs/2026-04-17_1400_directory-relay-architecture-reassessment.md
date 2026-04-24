@@ -227,7 +227,7 @@ Directory and relay scale on different axes. Directory load grows with the agent
 - [[server-infrastructure|CELLO Server Infrastructure Requirements]] — C-2 resolved; relay node section must be rewritten to reflect session-level Merkle engine role; hash relay section must move from directory to relay; session setup and seal flows must reflect the handoff
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — session lifecycle narrative must be updated to reflect directory-at-boundaries, relay-during-session model
 - [[agent-client|CELLO Agent Client Requirements]] — client must validate relay sequencing against `last_seen_seq`; must handle relay failure recovery (signal directory, resume on new relay)
-- [[cello-design|CELLO Design Document]] — relay node description must reflect the session-level Merkle engine role
+- [[cello-initial-design|CELLO Design Document]] — relay node description must reflect the session-level Merkle engine role
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — the session-level FROST decision that made this split possible: FROST at boundaries only means the directory can step away during the session
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — transport layer; circuit relay v2 configuration requirements for long-lived sessions
 - [[2026-04-08_1700_node-architecture-and-replication|Node Architecture and Replication]] — primary/backup replication and client-side routing; relay nodes need analogous backup selection for session resilience

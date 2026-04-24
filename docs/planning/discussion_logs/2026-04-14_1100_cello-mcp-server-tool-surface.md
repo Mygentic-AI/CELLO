@@ -794,12 +794,12 @@ The following canonical names supersede inconsistencies in earlier documents:
 
 | Canonical name | Supersedes |
 |----------------|-----------|
-| `cello_scan` | `cello_scan_message` (cello-design.md) |
-| `cello_search` | `cello_find_agents` (cello-design.md) |
-| `cello_send` | `cello_send_message` (cello-design.md) |
-| `cello_verify` | `cello_check_trust` (cello-design.md) |
+| `cello_scan` | `cello_scan_message` (cello-initial-design.md) |
+| `cello_search` | `cello_find_agents` (cello-initial-design.md) |
+| `cello_send` | `cello_send_message` (cello-initial-design.md) |
+| `cello_verify` | `cello_check_trust` (cello-initial-design.md) |
 
-The documents `cello-design.md` and `end-to-end-flow.md` should be updated to use these names.
+The documents `cello-initial-design.md` and `end-to-end-flow.md` should be updated to use these names.
 
 ---
 
@@ -814,7 +814,7 @@ The documents `cello-design.md` and `end-to-end-flow.md` should be updated to us
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — Client architecture section and MCP server integration tiers; this log implements the Tier 2 universal interface described there
+- [[cello-initial-design|CELLO Design Document]] — Client architecture section and MCP server integration tiers; this log implements the Tier 2 universal interface described there
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — Full protocol lifecycle; tool calls here map to steps in Parts 4–8 of that document; canonical tool names in §8 supersede the four names used there
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Layers v2]] — Full specification of the six-layer defense; Layers 1 and 3–6 are automatic; Layer 2 is `cello_scan`
 - [[2026-04-14_1000_contact-alias-design|Contact Alias Design]] — Full design of the alias primitive; `cello_create_alias`, `cello_list_aliases`, `cello_retire_alias` are the tooling surface defined there

@@ -223,7 +223,7 @@ Accountability is entirely client-side: if Agent C repeatedly introduces agents 
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — Steps 6 (connection policies), 7 (session termination + attestation), 9 (compromise detection), 10 (dispute resolution)
+- [[cello-initial-design|CELLO Design Document]] — Steps 6 (connection policies), 7 (session termination + attestation), 9 (compromise detection), 10 (dispute resolution)
 - [[design-problems|Design Problems]] — Problem 2 (trust score recovery after compromise) — this log resolves it
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — the introduction mechanism uses notification messages; the fire-and-forget primitive is designed here
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — connection policy and escrow mechanics that depend on session close attestation

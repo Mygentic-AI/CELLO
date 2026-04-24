@@ -2,7 +2,7 @@
 
 **Reviewer:** Identity Systems & Sybil Attack Specialist
 **Date:** 2026-04-08
-**Document reviewed:** `docs/planning/cello-design.md`
+**Document reviewed:** `docs/planning/cello-initial-design.md`
 **Scope:** Identity fraud, trust score manipulation, social verification gaming
 
 ---

@@ -112,7 +112,7 @@ REMOVE: seeder_lockouts table
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — Class 2 section (remove Trust Seeder paragraphs), Layer 5a enforcement (remove exponential backoff for seeders), TrustRank middle-ground discussion
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — Trust Seeder status and accountability section (remove entirely), related document references
 - [[design-problems|Design Problems]] — Problem 4 design work (remove TrustRank evaluation item), related document annotations
-- [[cello-design|CELLO Design Document]] — any Trust Seeder or TrustRank references in the architecture or related documents section
+- [[cello-initial-design|CELLO Design Document]] — any Trust Seeder or TrustRank references in the architecture or related documents section
 - [[00-synthesis|Protocol Review Synthesis]] — TrustRank recommendation in fix suggestions
 
 ---

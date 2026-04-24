@@ -134,7 +134,7 @@ Remaining specification work (not hard design problems): the exact format of the
 
 - [[design-problems|Design Problems]] — Problem 9 (K_server rotation overlap window) resolved here; Problem 1 (fallback) severity previously reduced
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — session-level FROST is the prerequisite that reduced FROST to two ceremony points; this session builds on it
-- [[cello-design|CELLO Design Document]] — K_server Protection and Home Node sections describe the FROST threshold architecture this rotation design builds on
+- [[cello-initial-design|CELLO Design Document]] — K_server Protection and Home Node sections describe the FROST threshold architecture this rotation design builds on
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — session establishment and seal are the only two points where K_server rotation matters
 - [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — FROST threshold signing and the IThresholdSigner abstraction; K_server rotation uses the same FROST DKG infrastructure
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — K_server_X shares stored in the node database; initial_fallback_pubkey_hash is the K_local registration record

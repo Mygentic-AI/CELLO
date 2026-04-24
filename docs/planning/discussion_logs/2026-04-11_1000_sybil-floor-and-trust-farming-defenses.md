@@ -250,7 +250,7 @@ The legitimate user's cost for each defense: organic transactions, endorsements 
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — §1.5 synthesizes this log's full Sybil defense stack into the complete protocol context
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — Class 2 (network graph) provides the structural Sybil asymmetry; conductance scoring and cluster detection live here
 - [[design-problems|Design Problems]] — Problems 3 (phone Sybil floor) and 4 (trust farming) that this log directly addresses
-- [[cello-design|CELLO Design Document]] — Step 2 (trust signals, signal scoring, anti-Sybil defenses) and Step 6 (connection acceptance policies)
+- [[cello-initial-design|CELLO Design Document]] — Step 2 (trust signals, signal scoring, anti-Sybil defenses) and Step 6 (connection acceptance policies)
 - [[2026-04-10_1000_connection-endorsements-and-attestations|Connection Endorsements and Attestations]] — the endorsement system and same-owner anti-farming rule this log extends with rate limiting, weight decay, and fan-out detection
 - [[2026-04-10_1200_psi-for-endorsement-intersection|PSI for Endorsement Intersection]] — PSI prevents targeted farming; this log addresses untargeted farming that PSI does not cover
 - [[2026-04-10_1100_fallback-downgrade-attack-defense|Fallback Downgrade Attack Defense]] — trust-weighted pool selection referenced here as an existing defense that layers with the Sybil stack

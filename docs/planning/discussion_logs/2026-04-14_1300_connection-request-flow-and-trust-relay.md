@@ -10,7 +10,7 @@ description: Definitive design for how connection requests are brokered through 
 
 ## Context
 
-Multiple documents describe pieces of the connection request flow — how Alice, having discovered Bob, initiates contact. The technical transport (directory WebSocket routing, ephemeral libp2p peer ID exchange on acceptance) is well-established across [[cello-design|CELLO Design Document]] Step 5–6, [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]], and [[end-to-end-flow|End-to-End Flow]]. What was underdefined: exactly what data travels with the connection request, how the directory verifies it, and what Alice can or cannot withhold.
+Multiple documents describe pieces of the connection request flow — how Alice, having discovered Bob, initiates contact. The technical transport (directory WebSocket routing, ephemeral libp2p peer ID exchange on acceptance) is well-established across [[cello-initial-design|CELLO Design Document]] Step 5–6, [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]], and [[end-to-end-flow|End-to-End Flow]]. What was underdefined: exactly what data travels with the connection request, how the directory verifies it, and what Alice can or cannot withhold.
 
 This log resolves those gaps.
 
@@ -111,7 +111,7 @@ The protocol provides the mechanism. The policy is Bob's to configure.
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — Step 5 (connection request routing) and Step 6 (connection acceptance policy, session establishment); this log resolves the trust data relay gap between those steps
+- [[cello-initial-design|CELLO Design Document]] — Step 5 (connection request routing) and Step 6 (connection acceptance policy, session establishment); this log resolves the trust data relay gap between those steps
 - [[end-to-end-flow|End-to-End Flow]] — §5 connection request flow; carries Alice's signature intact through the directory
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — the hash-everything-store-nothing model that this log's relay pattern depends on; the directory verifies against hashes and discards the data
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — the ephemeral peer ID exchange that happens after acceptance; this log covers everything before that point

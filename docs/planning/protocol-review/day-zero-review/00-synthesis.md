@@ -227,7 +227,7 @@ Individual reports are in this directory. See [[09-build-in-public-index|README 
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — the architecture this review assessed
+- [[cello-initial-design|CELLO Design Document]] — the architecture this review assessed
 - [[open-decisions|Open Decisions]] — the 12 resolved decisions that came out of this review
 - [[design-problems|Design Problems]] — the 7 unsolved problems that came out of this review
 - [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank|Deprecate Trust Seeders and TrustRank]] — removes TrustRank from the recommended fixes originating in this review; the recommendation was an LLM hallucination artifact inconsistent with CELLO's signal-based trust model

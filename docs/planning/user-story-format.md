@@ -346,4 +346,4 @@ references:
 - [[protocol-map|CELLO Protocol Map]] — top-level orientation; domains here map to protocol map domains
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — the deep canonical reference stories are derived from
 - [[server-infrastructure|Server Infrastructure Requirements]] — server-component requirements with conflicts and gaps that user stories must account for
-- [[cello-design|CELLO Design Document]] — original architecture and vision
+- [[cello-initial-design|CELLO Design Document]] — original architecture and vision

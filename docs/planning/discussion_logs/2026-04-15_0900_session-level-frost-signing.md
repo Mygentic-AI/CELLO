@@ -132,7 +132,7 @@ This reduces the K_server rotation problem from "every message could straddle a 
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — message signing flow and compromise canary sections updated to reflect this decision
+- [[cello-initial-design|CELLO Design Document]] — message signing flow and compromise canary sections updated to reflect this decision
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — §2.3 (FROST signing) and message flow sections updated
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — `cello_send` no longer performs FROST; signs with K_local
 - [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]] — sender_signature uses K_local; directory builds canonical tree without per-message co-signing

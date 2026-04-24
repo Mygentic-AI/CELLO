@@ -176,7 +176,7 @@ This raised the fabricated conversation attack: an attacker creates an internall
 
 ## Related Documents
 
-- [[cello-design|CELLO Design Document]] — Step 7 (Merkle tree, session termination protocol) and Step 9 (compromise detection)
+- [[cello-initial-design|CELLO Design Document]] — Step 7 (Merkle tree, session termination protocol) and Step 9 (compromise detection)
 - [[open-decisions|Open Decisions]] — Decision 12 (sequence number assignment + degraded mode reconciliation)
 - [[2026-04-08_1430_protocol-strength-and-commerce|Protocol Strength and Commerce]] — companion session; directory as custodian developed independently and converged
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — session close attestation (CLEAN/FLAGGED) and what happens at termination
