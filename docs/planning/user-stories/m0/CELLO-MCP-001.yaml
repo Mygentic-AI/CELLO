@@ -21,6 +21,13 @@ story: >
   production stdio and test in-memory paths exercise the same server code. This is enforced
   by AC-008 rather than left as convention.
 
+  Binary encoding across the MCP JSON boundary: all binary values exposed through MCP tool
+  inputs and outputs — session_id, pubkeys, content_hash, leaf_hash, signature — are
+  encoded as lowercase hex strings with no `0x` prefix. This matches the encoding used by
+  the CBOR fixtures and log output elsewhere in M0 and avoids introducing a second encoding
+  (base64url) that tests would have to normalize. Hex is not space-optimal on the wire but
+  the overhead is negligible at M0's message sizes and pays back in interop clarity.
+
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
   - trigger: "When the agent calls cello_initiate_session with a target agent's public key"
