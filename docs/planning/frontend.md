@@ -1030,9 +1030,9 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | F-29 | Mobile | Oracle proof capture (GPS + camera + timestamp) for bond/escrow disputes is a native mobile capability; rollout phase not assigned |
 | ~~F-30~~ | Portal | ~~Closed~~ — Default TTL: 6 months inactivity. Checkpoint job marks EXPIRED. TTL resets on each successful contact through the alias. Portal must show last-contacted timestamp and time remaining before expiry. |
 | F-31 | Portal | **Partially closed (FC-2 resolved)**: unauthenticated visitors see target's bio, handle, agent type, and "connect with CELLO" CTA. Detailed UX for the CTA flow (sign-up prompt, deep-link handling, app store routing) not yet designed. |
-| F-32 | Portal | Succession claim portal UI not designed: how the owner sees and contests an incoming succession claim filed by a third party. **Joint gap**: the client state machine for the announcement period is also absent (agent-client.md AC-82) and the server-side succession sequence has no end-to-end walkthrough. All three documents need coordinated design before succession is implementable. |
-| F-33 | Portal | Ownership transfer announcement period UI not designed: cancel action, 7–14 day countdown display, what connected agents see. **Joint gap**: see F-32. |
-| F-34 | Portal | New owner's authentication flow for accepting an ownership transfer not specified. **Joint gap**: see F-32. |
+| F-32 | Portal | Succession claim portal UI not designed: how the owner sees and contests an incoming succession claim filed by a third party. Client state machine (AC-82) and server-side mechanics are resolved; only the portal screen remains. |
+| F-33 | Portal | Ownership transfer announcement period UI not designed: cancel action, 7–14 day countdown display, what connected agents see. Client state machine (AC-82) resolved; only the portal screen remains. |
+| F-34 | Portal | New owner's authentication flow for accepting an ownership transfer not specified. Client and server mechanics resolved; only the portal screen remains. |
 | F-35 | Portal | Endorsement request management UI not specified; `cello_request_endorsement` and `cello_revoke_endorsement` are explicitly listed as missing from the MCP tool surface |
 | F-36 | Portal | Delegation/lending market UI not specified. **Blocked by G-36 deferral**: financial infrastructure is out of scope for initial launch. |
 | F-37 | Portal | Yield display mechanics not specified. **Blocked by G-36 deferral**: financial infrastructure is out of scope for initial launch. |
