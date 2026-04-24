@@ -1,0 +1,89 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-CRYPTO-001
+domain: Crypto
+actor: CLIENT
+priority: P0
+components:
+  - crypto
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want to generate Ed25519 keypairs, sign arbitrary data, and verify signatures
+  so that every message has a tamper-proof authorship guarantee.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the client initializes for the first time"
+    action: "the crypto module shall generate a new Ed25519 keypair (K_local) using a cryptographically secure random source and return the public key"
+  - trigger: "When the client is asked to sign data"
+    action: "the crypto module shall produce a 64-byte Ed25519 signature over the provided bytes using the private key"
+  - trigger: "When the client is asked to verify a signature"
+    action: "the crypto module shall verify the Ed25519 signature against the provided public key and data, returning a boolean result"
+  - trigger: "When verification is called with a mismatched public key, tampered data, or malformed signature"
+    action: "the crypto module shall return false without throwing an exception"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "No existing keypair"
+    when: "The client requests keypair generation"
+    then: "A new Ed25519 keypair is generated; the public key is 32 bytes; the private key is 64 bytes (seed + public)"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-002
+    given: "A valid keypair"
+    when: "The client signs a byte string"
+    then: "A 64-byte signature is returned; verifying the signature with the same public key and data returns true"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-003
+    given: "A valid signature over data D signed by key K"
+    when: "Verification is called with a different public key K'"
+    then: "Verification returns false"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-004
+    given: "A valid signature over data D"
+    when: "Verification is called with tampered data D' (one byte flipped)"
+    then: "Verification returns false"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-005
+    given: "A truncated or zero-filled signature"
+    when: "Verification is called"
+    then: "Verification returns false without throwing"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-006
+    given: "Two separate keypair generation calls"
+    when: "Both complete"
+    then: "The two public keys are different (randomness verification)"
+    test_type: unit
+    component_under_test: crypto
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The crypto module shall never expose the private key bytes through any public API"
+    adversarial_condition: "even when serializing the keypair for storage or transport"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: SI-002
+    statement: "The crypto module shall never accept a signature verification where the data has been modified"
+    adversarial_condition: "even when the modification is a single bit flip in a multi-kilobyte message"
+    test_type: unit
+    component_under_test: crypto
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Identity and Trust Signals"
+  end_to_end_flow: "§1.1"
+  discussion_logs:
+    - "2026-04-08_1930_client-side-trust-data-ownership"

@@ -1,0 +1,88 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-MSG-001
+domain: Message Exchange
+actor: CLIENT
+priority: P0
+components:
+  - protocol-types
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want a signed message envelope schema that bundles content with its Ed25519 signature and sender metadata
+  so that every message on the wire is self-describing, verifiable, and parseable by any CELLO component.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the client constructs an outbound message"
+    action: "the protocol-types module shall produce a MessageEnvelope containing: sender_pubkey (32 bytes), session_id, sequence_number, content (arbitrary bytes), content_hash (SHA-256 leaf hash of the content), signature (Ed25519 over the content_hash), and timestamp (Unix milliseconds)"
+  - trigger: "When any component receives a MessageEnvelope"
+    action: "the protocol-types module shall validate the envelope structure: all required fields present, sender_pubkey is 32 bytes, signature is 64 bytes, content_hash is 32 bytes, sequence_number is a non-negative integer"
+  - trigger: "When a MessageEnvelope has a missing or malformed field"
+    action: "the protocol-types module shall reject it with a structured error identifying the invalid field"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Valid content, a keypair, a session_id, and a sequence_number"
+    when: "The client constructs a MessageEnvelope"
+    then: "All fields are populated; content_hash equals the SHA-256 leaf hash of the content; signature verifies against sender_pubkey and content_hash"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-002
+    given: "A well-formed MessageEnvelope"
+    when: "Structural validation is performed"
+    then: "Validation passes with no errors"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-003
+    given: "A MessageEnvelope with sender_pubkey removed"
+    when: "Structural validation is performed"
+    then: "Validation fails with an error identifying sender_pubkey as missing"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-004
+    given: "A MessageEnvelope with a 31-byte sender_pubkey"
+    when: "Structural validation is performed"
+    then: "Validation fails with an error identifying sender_pubkey as malformed"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-005
+    given: "A MessageEnvelope with sequence_number set to -1"
+    when: "Structural validation is performed"
+    then: "Validation fails with an error identifying sequence_number as invalid"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-006
+    given: "A valid MessageEnvelope"
+    when: "Serialized to bytes and deserialized back"
+    then: "The deserialized envelope is identical to the original; the signature still verifies"
+    test_type: unit
+    component_under_test: protocol-types
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The protocol-types module shall never construct a MessageEnvelope where the content_hash does not match the actual content"
+    adversarial_condition: "even when the content is empty or contains binary data"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: SI-002
+    statement: "The protocol-types module shall never construct a MessageEnvelope with an invalid signature"
+    adversarial_condition: "even when called rapidly in sequence with different content"
+    test_type: unit
+    component_under_test: protocol-types
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Conversations"
+  end_to_end_flow: "§6.1"
+  discussion_logs:
+    - "2026-04-08_1530_message-delivery-and-termination"
+    - "2026-04-08_1430_protocol-strength-and-commerce"

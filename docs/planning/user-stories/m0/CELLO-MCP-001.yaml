@@ -1,0 +1,108 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-MCP-001
+domain: MCP Tool Surface
+actor: AGENT
+priority: P0
+components:
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As an AI Agent,
+  I want to send messages, receive messages, initiate sessions, close sessions, and check status through MCP tools
+  so that I can communicate with other agents without handling cryptographic operations or transport directly.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the agent calls cello_initiate_session with a target agent's public key"
+    action: "the MCP server shall establish a session through the directory and return a session_id"
+  - trigger: "When the agent calls cello_send with a session_id and content"
+    action: "the MCP server shall construct a signed MessageEnvelope, dispatch it through the directory, and return the leaf hash and delivery status"
+  - trigger: "When the agent calls cello_receive with a session_id and timeout"
+    action: "the MCP server shall block until a message arrives or timeout expires, returning the message content, sender_id, and leaf hash — or a timeout sentinel"
+  - trigger: "When the agent calls cello_close_session with a session_id"
+    action: "the MCP server shall execute the CLOSE/CLOSE-ACK exchange and return the final status"
+  - trigger: "When the agent calls cello_status"
+    action: "the MCP server shall return directory connectivity, active session count, and server uptime"
+  - trigger: "When any MCP tool is called with an invalid session_id"
+    action: "the MCP server shall return a structured error with the invalid session_id and reason"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Two MCP server instances connected to the same directory"
+    when: "Agent A calls cello_initiate_session targeting Agent B"
+    then: "A session_id is returned to Agent A; Agent B can discover the session via cello_status or cello_receive"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-002
+    given: "An active session between Agent A and Agent B"
+    when: "Agent A calls cello_send with text content"
+    then: "cello_send returns delivered: true and a leaf_hash; Agent B's cello_receive returns the same content with type: 'message'"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-003
+    given: "An active session"
+    when: "Agent A calls cello_send with await_reply_timeout set to 5 seconds, and Agent B sends a reply within 2 seconds"
+    then: "cello_send returns both the leaf_hash and the reply message inline"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-004
+    given: "An active session"
+    when: "Agent B calls cello_receive with timeout 1 second and no message arrives"
+    then: "cello_receive returns { type: 'timeout' } after approximately 1 second"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-005
+    given: "An active session"
+    when: "Agent A calls cello_close_session"
+    then: "The session is closed; both agents' subsequent cello_send calls on that session_id return an error"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-006
+    given: "An MCP server connected to the directory"
+    when: "Agent calls cello_status"
+    then: "The response includes directory_reachable: true, active_sessions count, and uptime_seconds"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-007
+    given: "An MCP server connected to the directory"
+    when: "Agent calls cello_send with a nonexistent session_id"
+    then: "The MCP server returns a structured error with the session_id and 'session not found' reason"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-008
+    given: "Two MCP server instances and a directory"
+    when: "Agent A initiates a session, sends 5 messages, Agent B receives all 5 and replies to each, Agent A closes the session"
+    then: "All 10 messages (5 each direction) are delivered with correct content, valid signatures, and sequential sequence numbers; session close completes cleanly"
+    test_type: e2e
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The MCP server shall never expose K_local private key material through any tool response"
+    adversarial_condition: "even when cello_status or error responses include diagnostic information"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: "The MCP server shall never deliver message content to the agent without the underlying client having verified the signature"
+    adversarial_condition: "even when the directory relay delivers a message with a valid structure but forged signature"
+    test_type: e2e
+    component_under_test: client
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Conversations"
+  end_to_end_flow: "§6.1"
+  discussion_logs:
+    - "2026-04-14_1100_cello-mcp-server-tool-surface"
+    - "2026-04-08_1530_message-delivery-and-termination"

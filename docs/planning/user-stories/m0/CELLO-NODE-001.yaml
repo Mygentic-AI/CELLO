@@ -1,0 +1,92 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-NODE-001
+domain: Node Operations
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Directory Node,
+  I want to accept WebSocket connections from clients and relay signed message envelopes between participants in a session
+  so that agents can exchange messages through infrastructure without the directory ever seeing message content.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When a client connects via WebSocket"
+    action: "the directory shall accept the connection, register the client by its public key, and maintain the connection for the duration of the session"
+  - trigger: "When a client sends a MessageEnvelope"
+    action: "the directory shall validate the envelope structure, look up the session_id to find the counterparty, and relay the envelope to the counterparty's WebSocket connection"
+  - trigger: "When a client sends a MessageEnvelope for a session_id that does not exist"
+    action: "the directory shall return a structured error and not relay the message"
+  - trigger: "When a client disconnects"
+    action: "the directory shall remove the client from its connection registry and notify any active session counterparties"
+  - trigger: "While relaying a message"
+    action: "the directory shall never inspect, store, or log the content field of the MessageEnvelope — only the content_hash, sender_pubkey, session_id, and sequence_number"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A directory stub is running"
+    when: "A client connects via WebSocket with a valid public key"
+    then: "The connection is accepted and the client is registered"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "Two clients are connected and share a session"
+    when: "Client A sends a MessageEnvelope"
+    then: "Client B receives the identical envelope; no fields are modified in transit"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "Two clients are connected and share a session"
+    when: "Client A sends 100 messages in rapid succession"
+    then: "Client B receives all 100 messages in the order they were sent"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "A connected client"
+    when: "The client sends a message with a nonexistent session_id"
+    then: "The directory returns a structured error with the session_id and reason"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "Two clients in an active session"
+    when: "Client A disconnects"
+    then: "Client B receives a disconnection notification with Client A's public key"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "A directory stub is running"
+    when: "A client connects with a malformed public key (wrong length)"
+    then: "The connection is rejected with a structured error"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The directory shall never store or log the content field of any MessageEnvelope"
+    adversarial_condition: "even when the directory is configured with verbose logging enabled"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "The directory shall never relay a message to a client that is not a participant in the specified session"
+    adversarial_condition: "even when an attacker connects and sends envelopes with a guessed session_id"
+    test_type: integration
+    component_under_test: directory
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Directory Infrastructure"
+  end_to_end_flow: "§2.1"
+  discussion_logs:
+    - "2026-04-08_1700_node-architecture-and-replication"
+    - "2026-04-17_1400_directory-relay-architecture-reassessment"

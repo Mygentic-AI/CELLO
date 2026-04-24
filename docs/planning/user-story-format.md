@@ -43,6 +43,7 @@ Domains are scoped to work units — small enough for an AI coder to complete in
 
 | Domain | Code | Scope | Primary components |
 |---|---|---|---|
+| Cryptographic Primitives | `CRYPTO` | Ed25519 keypair generation/signing/verification, SHA-256 with domain separation, key serialization | crypto |
 | Registration & Onboarding | `REG` | Phone OTP, email, K_local generation, directory listing creation | client, directory |
 | Trust Enrichment | `ENRICH` | WebAuthn, TOTP 2FA, OAuth providers (LinkedIn, GitHub, etc.), device attestation | web-portal, client, directory |
 | Trust Evaluation | `EVAL` | Signal evaluation, SignalRequirementPolicy, no-numeric-score model, hash-everything verification | client, directory |

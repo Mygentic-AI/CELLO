@@ -1,0 +1,74 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-CRYPTO-002
+domain: Crypto
+actor: CLIENT
+priority: P0
+components:
+  - crypto
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want to compute SHA-256 hashes with domain separation prefixes
+  so that hashes for different protocol purposes (message leaves, identity records, trust signals) can never collide across domains.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the client hashes data for a Merkle leaf"
+    action: "the crypto module shall prepend the leaf domain separator (0x00) before the data and compute SHA-256 over the prefixed bytes"
+  - trigger: "When the client hashes data for a Merkle internal node"
+    action: "the crypto module shall prepend the internal node domain separator (0x01) before the concatenated child hashes and compute SHA-256 over the prefixed bytes"
+  - trigger: "When the client hashes arbitrary data without domain separation"
+    action: "the crypto module shall compute a plain SHA-256 hash over the raw bytes"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A byte string D"
+    when: "The client computes a leaf hash"
+    then: "The result equals SHA-256(0x00 || D) and is 32 bytes"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-002
+    given: "Two 32-byte child hashes L and R"
+    when: "The client computes an internal node hash"
+    then: "The result equals SHA-256(0x01 || L || R) and is 32 bytes"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-003
+    given: "Identical data D"
+    when: "The client computes a leaf hash and a plain hash"
+    then: "The two results are different (domain separation prevents collision)"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-004
+    given: "Known test vectors from RFC 6962 Section 2.1"
+    when: "The client computes leaf and internal node hashes"
+    then: "The outputs match the expected test vector values"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-005
+    given: "An empty byte string"
+    when: "The client computes a leaf hash"
+    then: "The result equals SHA-256(0x00) — the hash of just the domain separator"
+    test_type: unit
+    component_under_test: crypto
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The crypto module shall never produce a leaf hash that equals an internal node hash for any input"
+    adversarial_condition: "even when an attacker crafts input data that begins with 0x01 followed by valid-looking child hashes"
+    test_type: unit
+    component_under_test: crypto
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Conversations"
+  end_to_end_flow: "§6.1"
+  discussion_logs:
+    - "2026-04-13_1400_meta-merkle-tree-design"

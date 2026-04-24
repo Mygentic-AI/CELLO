@@ -1,0 +1,108 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-MSG-002
+domain: Message Exchange
+actor: CLIENT
+priority: P0
+components:
+  - client
+  - transport
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want to send signed messages and verify incoming message signatures
+  so that tampered or forged messages are rejected before reaching the agent.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the client sends a message on an active session"
+    action: "the client shall construct a MessageEnvelope (signing the content hash with K_local), increment the session sequence counter, and dispatch the envelope to the directory for relay"
+  - trigger: "When the client receives a MessageEnvelope from the directory"
+    action: "the client shall verify the envelope structure, recompute the content hash, verify the sender's Ed25519 signature against their registered public key, and verify the sequence number is the next expected value"
+  - trigger: "When the content hash does not match the recomputed hash"
+    action: "the client shall reject the message and log a tampering event with the session_id, sequence_number, and expected vs. actual hash"
+  - trigger: "When the sender's signature does not verify"
+    action: "the client shall reject the message and log a signature verification failure"
+  - trigger: "When the sequence number is not the next expected value"
+    action: "the client shall reject the message and log a sequence gap or replay with the expected and received values"
+  - trigger: "When a message arrives without a signature field"
+    action: "the client shall reject the message unconditionally"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An active session between Client A and Client B"
+    when: "Client A sends a text message"
+    then: "Client B receives the message; the content is identical; the signature verifies; the sequence number is correct"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-002
+    given: "An active session"
+    when: "Client A sends 10 messages sequentially"
+    then: "Client B receives all 10; each has the correct sequence number (0 through 9); all signatures verify"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-003
+    given: "An active session"
+    when: "A message arrives with content modified after signing (one byte flipped in transit)"
+    then: "Client B rejects the message; a tampering event is logged with the hash mismatch"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-004
+    given: "An active session"
+    when: "A message arrives with a valid hash but the signature replaced with random bytes"
+    then: "Client B rejects the message; a signature failure is logged"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-005
+    given: "An active session where Client B has received messages 0, 1, 2"
+    when: "A message arrives with sequence_number 1 (replay)"
+    then: "Client B rejects the message; a replay event is logged"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-006
+    given: "An active session where Client B has received messages 0, 1, 2"
+    when: "A message arrives with sequence_number 4 (gap)"
+    then: "Client B rejects the message; a sequence gap event is logged"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-007
+    given: "An active session"
+    when: "A message arrives with the signature field missing entirely"
+    then: "Client B rejects the message unconditionally"
+    test_type: unit
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The client shall never deliver a message to the agent without first verifying the content hash and sender signature"
+    adversarial_condition: "even when the message was relayed by a trusted directory"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: "The client shall never accept a message with a sequence number that has already been seen in the same session"
+    adversarial_condition: "even when the replayed message has a valid signature"
+    test_type: integration
+    component_under_test: client
+
+  - id: SI-003
+    statement: "The client shall never send a MessageEnvelope with a sequence number that skips or repeats"
+    adversarial_condition: "even under concurrent send calls on the same session"
+    test_type: unit
+    component_under_test: client
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Conversations"
+  end_to_end_flow: "§6.1"
+  discussion_logs:
+    - "2026-04-08_1530_message-delivery-and-termination"
+    - "2026-04-08_1430_protocol-strength-and-commerce"
