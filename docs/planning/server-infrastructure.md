@@ -677,7 +677,8 @@ All tables are append-only unless noted. Mutable tables are marked.
 | `contact_aliases` | append-only |
 | `contact_alias_retirements` | append-only |
 | `directory_listings` | append-only; supersession pattern; Class 1 (PROFILE) and Class 2 (BULLETIN) |
-| `group_rooms` | append-only |
+| `group_rooms` | append-only; holds throttle manifest (immutable after creation) keyed by `room_id` |
+| `room_policy_records` | append-only (supersession pattern — new row per update); holds `banned_agents[]`, per-agent mute states and escalation levels, versioned hash; mutable by owner only; directory is the authority; relay receives current policy in signed session assignment at room activation and holds it in memory only for the session |
 | `room_memberships` | append-only |
 | `notification_events` | append-only; payload_hash only — no content stored |
 | `tombstones` | append-only |
@@ -740,7 +741,7 @@ See [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay 
 
 ### Session assignment and handoff authentication
 
-- At session establishment, the directory signs the session assignment (session ID, both agents' public keys, genesis `prev_root`) with its consortium key
+- At session establishment, the directory signs the session assignment (session ID, both agents' public keys, genesis `prev_root`; for group room sessions: also includes the current room policy record) with its consortium key
 - The relay verifies the directory's signature before accepting the session
 - Agents independently verify sender signatures against public keys confirmed via Merkle inclusion proof during connection request — through a completely separate channel
 - This is defence in depth: authenticated directory-to-relay channel, plus agents independently verify sender identity
@@ -858,7 +859,7 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 3. Agent A calls `cello_initiate_connection` — client bundles A's trust signal blobs with the request; directory checks blobs against held hashes (fraud filter), appends track record stats from its authoritative store, forwards package to Agent B, discards blobs
 4. Agent B's client performs independent verification (Merkle inclusion proof for identity, Alice's own signatures for trust blobs) and evaluates against its `SignalRequirementPolicy`
 5. If accepted: FROST co-signing ceremony (session establishment) — requires t-of-n directory nodes
-6. Directory assigns the session to a relay node, signing the assignment (session ID, both agents' public keys, genesis `prev_root`) with its consortium key
+6. Directory assigns the session to a relay node, signing the assignment (session ID, both agents' public keys, genesis `prev_root`; for group room sessions: also includes the current room policy record) with its consortium key
 7. Relay verifies the directory's signature on the assignment before accepting
 8. Directory performs ephemeral libp2p Peer ID exchange on behalf of both agents
 9. For sessions needing relay: agents use Peer IDs to connect to relay node; relay bridges the connection
@@ -1029,7 +1030,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-43 | Directory | Portal-facing notification API not specified — the portal requires a read-only event stream for the owner's agent (activity log, escalation queue, notification feed) authenticated by the portal's own keypair. This is distinct from the agent-client's authenticated WebSocket. See frontend.md F-28. |
 | G-44 | Cross | See Recovery contacts and succession section above. Items (2)–(4) remain open: portal succession claim contest UI (F-32), announcement period management UI (F-33), new owner acceptance flow (F-34). |
 | G-45 | Relay | Group room catch-up mechanism not designed. When an agent rejoins a group room mid-conversation (`cello_join_room`), the relay must be able to serve historical room content for the session. The delivery mechanism, how far back history is available, and whether the relay holds it or the directory serves it are not specified. See agent-client.md AC-8. |
-| G-46 | Relay | Group room persistent state between sessions: the throttle manifest and room policy record (including `banned_agents[]`) must survive relay node restarts and session boundaries. The relay holds no persistent state by design, but group rooms are long-lived entities. Where this state lives between active sessions — and how the relay loads it at room activation — is not specified. This is the server-side counterpart to the relay persistence conflict identified in the audit (conflict #1). |
+| ~~G-46~~ | Relay | ~~Resolved~~ — Directory owns all group room persistent state. Throttle manifest in `group_rooms` (append-only, immutable after creation). Room policy record (ban list, mute states, escalation levels) in `room_policy_records` (append-only, supersession pattern, mutable by owner only). At room activation, the directory includes the current room policy record in the signed session assignment sent to the relay. The relay holds it in memory for the session and discards it at session end. Mid-session policy changes (ban, mute lift) are written to the directory by the owner's client and pushed to the relay via the session assignment channel. The relay remains stateless; the directory is the single authority. See group-room-design.md §2. |
 | G-47 | Directory | Maximum companion devices per agent is not specified. The companion device allowlist is client-held (AC-C10), so the directory does not enforce a cap directly. However, the portal needs to display registered companion devices and allow the owner to revoke them, which requires a defined limit and a way to enumerate them. See agent-client.md AC-14. |
 
 ---
