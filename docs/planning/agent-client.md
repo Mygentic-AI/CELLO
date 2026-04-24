@@ -542,6 +542,7 @@ Control leaves (CLOSE, CLOSE-ACK, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN) are ha
 | `KICK` | Admin- or owner-initiated ejection of a participant (group rooms only) — records ejected agent's pubkey, reason code, timestamp, and admin who kicked | Terminal for the ejected participant |
 | `MENTION_INSERT` | Relay priority-inserts a mentioned agent into the next cohort (group rooms only) — rate-limited to 1 per agent per cycle | No — floor management |
 | `ROLE_CHANGE` | Participant role change from `speaker` to `listener` or vice versa, initiated by owner or admin (group rooms only) | No — room management |
+| `RECEIPT` | Agent explicitly acknowledges processing a specific message via `cello_acknowledge_receipt` — signed causal commitment | No — informational (no state change) |
 
 After `SEAL`: any subsequent message is rejected — with one time-windowed exception (AC-36 resolved). If a message arrives after `SEAL` but within a configurable grace window (`post_seal_grace_seconds`, default `300`), the client accepts it as a record-only leaf appended to the sealed tree. This handles in-flight messages that were dispatched before the sender received the `SEAL` notification. After the grace window expires, any arriving message triggers a new conversation: the client auto-initiates a `REOPEN` and delivers the message as the first leaf of the continuation session. The grace window is configurable via `cello_configure`. Messages accepted during the grace window are flagged `post_seal: true` in the local leaf record and surfaced to the agent via `cello_receive` with a `post_seal_arrival` flag so the agent can handle them appropriately.
 
@@ -1166,7 +1167,7 @@ The client implements the complete notification type registry. Types are enumera
 | `order_update` | Agent | Order or task status update from a counterparty agent |
 | `alert` | Agent | Operational alert from a counterparty agent |
 | `promotional` | Agent | Promotional content; subject to rate limits per trust tier and recipient opt-out |
-| `portal_instruction` | Directory (forwarded from portal) | Owner-initiated action forwarded by the directory from the portal API channel. Payload: `{ action, agent_id, target_id?, room_id?, portal_signature, issued_at }`. Action types: `accept_connection`, `decline_connection`, `ban_participant`, `mute_participant`, `unmute_participant`, `initiate_rotation`. The client executes without additional owner confirmation — portal owner already confirmed the action. The client validates `portal_signature` against the portal's known public key before acting. See server-infrastructure.md G-43. |
+| `portal_instruction` | Directory (forwarded from portal) | Owner-initiated action forwarded by the directory from the portal API channel. Payload: `{ action, agent_id, target_id?, room_id?, portal_signature, issued_at }`. Action types: `accept_connection`, `decline_connection`, `ban_participant`, `mute_participant`, `unmute_participant`, `initiate_rotation`, `create_succession_package`. The client executes without additional owner confirmation — portal owner already confirmed the action. The client validates `portal_signature` against the portal's known public key before acting. See server-infrastructure.md G-43. |
 
 ### Escalation channel routing
 
@@ -1188,7 +1189,7 @@ The owner's response routes directly to the client via the channel's own reply m
 
 ## Part 11: MCP Tool Surface
 
-The client exposes 39 tools (the 33 from the canonical tool surface, plus `cello_request_human_input`, `cello_acknowledge_receipt`, and 4 group room tools added by the group room design: `cello_petition_room`, `cello_dissolve_room`, `cello_transfer_ownership`, `cello_set_attention_mode`). The full tool specifications — parameters, return types, and usage guidance — are in [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]]. This section covers the client's implementation responsibilities for each group.
+The client exposes 43 tools. The base is the 33 from the canonical tool surface document, plus 10 tools added subsequently: `cello_request_human_input`, `cello_acknowledge_receipt`, and 8 group room tools added by the group room design (`cello_invite_to_room`, `cello_set_participant_role`, `cello_request_continuation`, `cello_get_room_info`, `cello_petition_room`, `cello_dissolve_room`, `cello_transfer_ownership`, `cello_set_attention_mode`). The full tool specifications — parameters, return types, and usage guidance — are in [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]]. This section covers the client's implementation responsibilities for each group.
 
 ### Deployment models
 
@@ -1213,7 +1214,7 @@ The client's behavior is identical across deployment models. The calling pattern
 | Status | `cello_status` | 1 |
 | Contact Aliases | `cello_create_alias`, `cello_list_aliases`, `cello_retire_alias` | 3 |
 | Human Input | `cello_request_human_input` | 1 |
-| **Total** | | **39** |
+| **Total** | | **43** |
 
 ### Key client-side implementation notes per group
 

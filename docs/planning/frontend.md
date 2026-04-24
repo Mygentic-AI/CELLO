@@ -505,7 +505,7 @@ A chronological event stream showing all notification types from `cello_poll_not
 - System events: directory reachability changes, K_local degraded mode
 - Key rotation events
 - Anomaly alerts (these are also sent to phone — the dashboard shows the same events)
-- Tombstone notifications: a connected identity has been tombstoned — the dashboard must display the tombstone type with distinct urgency: `VOLUNTARY` (informational), `COMPROMISE_INITIATED` (warning — the agent you were talking to may have been used by an attacker), `SOCIAL_RECOVERY_INITIATED` (warning — account compromise confirmed by social consensus). Each type links to different follow-up actions.
+- Tombstone notifications: a connected identity has been tombstoned — the dashboard must display the tombstone type with distinct urgency: `VOLUNTARY` (informational), `COMPROMISE_INITIATED` (warning — the agent you were talking to may have been used by an attacker), `SOCIAL_RECOVERY_INITIATED` (warning — account compromise confirmed by social consensus), `SUCCESSION_INITIATED` (informational — the agent's ownership is being transferred to a designated successor). Each type links to different follow-up actions.
 - Trust event notifications: a connected agent's trust status has changed
 - Recovery event notifications: a recovered identity is re-entering the network
 - Session-close attestation dispute notifications: a counterparty has filed a dispute against a session
