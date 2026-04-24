@@ -74,7 +74,7 @@ The portal must make the connection between trust signals and practical outcomes
 
 ### Trust enrichment flows
 
-Each trust enrichment flow follows the oracle pattern: portal verifies → produces structured JSON record → `SHA-256(json_blob)` → writes hash to directory → delivers raw JSON to client → discards original. The portal retains no trust signal data server-side.
+Each trust enrichment flow follows the oracle pattern: portal verifies → produces structured JSON record → `SHA-256(json_blob)` → writes hash to directory → delivers signed JSON to client → discards original. The portal retains no trust signal data server-side.
 
 **Async delivery via encrypted pickup queue.** The agent client may not be running — or may not yet be installed — when the human owner completes a trust enrichment flow in the browser. "Returns original JSON to client" cannot be a synchronous handoff; it must be a reliable async delivery. The mechanism:
 
@@ -135,7 +135,7 @@ Each OAuth binding:
 
 The portal must visibly communicate the binding lock to the owner before they confirm an OAuth binding.
 
-**Liveness probing**: The portal must periodically require fresh activity (new commit, new LinkedIn post) to maintain verification weight. Purchased dormant accounts must decay. The portal is responsible for initiating these re-checks and updating the trust signal hash when they pass. **Probe interval: 60 days.** On failure: signal marked `VERIFICATION_STALE`. After 3 consecutive failures (180 days): signal marked `UNVERIFIED`, hash updated in directory, agent notified.
+**Liveness probing**: The portal must periodically require fresh activity (new commit, new LinkedIn post) to maintain verification weight. Purchased dormant accounts must decay. The signup portal backend is responsible for initiating these re-checks and updating the trust signal hash when they pass. **Probe interval: 60 days.** On failure: signal marked `VERIFICATION_STALE`. After 3 consecutive failures (180 days): signal marked `UNVERIFIED`, hash updated in directory, agent notified.
 
 **[GAP F-6]**: The exact metadata evaluated for Twitter/X, Facebook, and Instagram is not specified in source documents. LinkedIn and GitHub have clear criteria; the others do not.
 
@@ -233,7 +233,7 @@ The portal must surface a permanent-consent warning before any data transitions 
 
 ### Activity log and audit view
 
-The portal exposes the owner's view of what their agent has been doing. This is a read-only view — no agent activity is initiated here. The portal reads this data from the signup portal backend and directory (via `cello_list_sessions` and `cello_poll_notifications`); it does not store this data independently.
+The portal exposes the owner's view of what their agent has been doing. This is a read-only view — no agent activity is initiated here. The portal reads this data from the signup portal backend and directory via its own authenticated WebSocket connection (see G-43); it does not store this data independently.
 
 Contents:
 - Sessions opened and sealed: timestamp, counterparty agent ID, session duration, seal status, Merkle root value
@@ -330,7 +330,7 @@ Contents:
 - Active signals: displayed by class (Class 1–4), with quality metadata (age, platform, verified_at where applicable). Named signals only — no composite score.
 - Missing signals: what is absent, what it would take to add each, what receiving agents commonly require it
 - **Who controls each signal** — the portal must make the ownership model visible to the owner: *behavioral signals* (conversation track record, connection history, anomaly flags) are directory-owned and always visible to counterparties — the owner cannot withhold them, and should not be given a UI that implies they can. *Identity and credential signals* (social proofs, WebAuthn, device attestation, endorsements) are client-owned — the owner chooses whether to disclose each one in a given connection request. The portal must not present these as "required fields." It should explain that including them raises acceptance likelihood, and that the choice not to disclose is valid (the owner may have privacy reasons — not revealing WebAuthn enrollment, avoiding LinkedIn farming, not exposing specific endorsers, etc.).
-- **Phone number tier**: Verified Mobile (uncapped) / Unverified Number (VoIP/virtual — trust ceiling applies) / Provisional (failed phone intelligence — re-evaluated at 60 days). The portal must display the tier clearly since it affects what trust signals are achievable and what connection policies the agent can satisfy. An owner with a VoIP number must see why certain policies refuse their agent.
+- **Phone number tier**: Verified Mobile (uncapped) / Unverified Number (VoIP/virtual — trust ceiling applies) / Provisional (failed phone intelligence — trust ceiling applies, re-evaluated at 60 days). The portal must display the tier clearly since it affects what trust signals are achievable and what connection policies the agent can satisfy. An owner with a VoIP number must see why certain policies refuse their agent.
 - **Outbound cold-contact daily limit** (post-provisional period): displayed by trust tier — phone-only/low-trust 5/day, established (≥1 signal ≥2yr) 10/day, high-trust (3+ signals, ≥1 ≥2yr) 100/day, institutional/bonded elevated. The portal must show the owner's current tier and daily usage so they can understand why connection requests may be blocked.
 - Connection policy indicator: what an unknown agent sees about this agent's openness to connection
 - Conversation statistics: session count, clean-close rate, platform age
@@ -363,7 +363,7 @@ The portal's discovery view is for the owner to understand the ecosystem, not fo
 
 **Public browse tier (no login required)**: Class 1 profiles, Class 2 bulletin listings, and Class 3 room listings are publicly browsable without authentication. The portal must expose a public landing page — accessible to anyone — showing the search interface and results. Authentication is required only to initiate a connection request or perform any protocol operation. This applies to alias short-URL resolution too: an unauthenticated visitor who clicks a `cello:alias/<slug>` link sees the target agent's bio, handle, agent type, and a "connect with CELLO" CTA without needing to log in.
 
-**Incubation period display**
+**Provisional period display**
 
 New agents are in an provisional period (7 days, 25 new outbound connections/day limit). The portal must:
 - Display an provisional period status indicator showing days remaining and daily connection attempts used
@@ -405,7 +405,7 @@ The portal should make designation of M-of-N recovery contacts prominent and dif
 The portal also supports:
 - Viewing and updating the recovery contact list
 - Configuring the M-of-N threshold (configurable at registration)
-- Creating and viewing the succession package. The portal displays the current package status (not created / created with timestamp and successor handle). A **WebAuthn-authenticated "Create Succession Package" action** sends a `portal_instruction` to the agent client; the client performs the encryption entirely locally — fetching the successor's `identity_key` from the directory, encrypting its own identity key private bytes, and uploading the result to the directory. The portal never receives, displays, or touches any key material. After the client completes the operation, the portal reflects the new status: package created, the successor's CELLO handle confirmed, and the note that only the designated successor can decrypt it. The portal must make clear that this is a one-way operation: the package can be revoked (by revoking the succession designation) but cannot be modified without recreating it.
+- Creating and viewing the succession package. The portal displays the current package status (not created / created with timestamp and successor handle). A **WebAuthn-authenticated "Create Succession Package" action** sends a `portal_instruction` to the agent client; the client performs the encryption entirely locally — using the successor's `identity_key` public key (resolved at designation time when the `successor_designations` record was created, not at package creation time), encrypting its own identity key private bytes, and uploading the result to the directory. The portal never receives, displays, or touches any key material. After the client completes the operation, the portal reflects the new status: package created, the successor's CELLO handle confirmed, and the note that only the designated successor can decrypt it. The portal must make clear that this is a one-way operation: the package can be revoked (by revoking the succession designation) but cannot be modified without recreating it.
 
 ### Succession and ownership transfer
 
@@ -444,7 +444,7 @@ The activity log displays endorsement events (received, issued, revoked). The po
 
 The portal is a high-value target. Its security posture must reflect this:
 
-- All portal-to-home-node communication must be TLS with certificate pinning
+- All portal-to-directory communication must be TLS with certificate pinning
 - WebAuthn challenges must be origin-bound; the browser's WebAuthn implementation enforces this by design
 - CSRF protection is required on all state-mutating endpoints
 - The portal must enforce a strict Content Security Policy that prevents exfiltration of in-page data
@@ -462,10 +462,10 @@ The Agent Dashboard is not a separate deployed product. It lives in the same web
 
 The sessions view must support both two-party and multi-party (group) conversations. The multi-party attestation schema supersedes the two-party schema — the two-party case is the degenerate case of a multi-party conversation with two participants.
 
-Session close types (complete set):
+Session lifecycle events (complete set):
 - **MUTUAL_SEAL** — both parties (or all participants) signed the final Merkle root
 - **SEAL_UNILATERAL** — one party closed without the other's acknowledgment
-- **EXPIRE** — session expired without explicit close
+- **EXPIRE** — session expired without explicit close (72-hour inactivity timeout). For active sessions, the dashboard must display time-remaining until expiry and warn the owner when a session is within 12 hours of the timeout threshold
 - **ABORT** — session aborted; reason code and timestamp displayed
 - **REOPEN** — a previously sealed session was reopened. Two distinct origins the dashboard must distinguish: (a) *bilateral-initiated* — both parties agreed to reopen; new FROST ceremony; sequence numbers restart at 1; (b) *auto-REOPEN* — a message arrived after the post-seal grace window (300s default) and the client automatically reopened the session to receive it; no FROST, no participant consent required; displayed as a system event with `origin: auto`
 
@@ -515,6 +515,17 @@ A chronological event stream showing all notification types from `cello_poll_not
 - Succession claim filed (`SUCCESSION_CLAIM_FILED`): a third party has filed a succession claim against this agent; the owner must authenticate and contest within the announcement window — links directly to the contest UI. **Urgent** — must break through Do Not Disturb on mobile.
 - Human input requested (`HUMAN_INPUT_REQUESTED`): the agent called `cello_request_human_input` during a conversation and is waiting for owner input; links to the companion app content view for the relevant session
 - Merkle tree pruning scheduled (`MERKLE_PRUNE_SCHEDULED`): the client will prune conversation Merkle trees in 30 days; after pruning, leaf-level dispute proofs are no longer available from the local client. The portal must display a countdown and offer an export-before-deletion action.
+- Room auto-mute (`ROOM_AUTO_MUTE`): a participant in a group room was automatically muted for policy violations
+- Room invite (`ROOM_INVITE`): this agent was invited to a group room
+- Alias expiry (`ALIAS_EXPIRY`): an alias reached its 6-month inactivity TTL and was released
+- Verification stale (`VERIFICATION_STALE`): a social signal's liveness probe failed; signal weight reduced
+- Unverified (`UNVERIFIED`): third consecutive probe failure; signal revoked and hash updated in directory
+- Recovery contact designated (`RECOVERY_CONTACT_DESIGNATED`): this agent was designated as a recovery contact by another agent
+- Recovery attestation requested (`RECOVERY_ATTESTATION_REQUESTED`): a recovery attestation is being requested from this agent; links to the vouching UI
+- Attestation received (`ATTESTATION_RECEIVED`): another agent issued an attestation for this agent
+- Ownership transfer announced (`OWNERSHIP_TRANSFER_ANNOUNCED`): a voluntary ownership transfer announcement period has started for a connected agent
+- Ownership transfer cancelled (`OWNERSHIP_TRANSFER_CANCELLED`): a previously announced ownership transfer was cancelled
+- Succession package available (`SUCCESSION_PACKAGE_AVAILABLE`): a succession package is available for pickup by the designated successor
 
 The event stream is filterable by type. Each event links to its relevant context in the portal (a security block links to the session; an endorsement links to the endorser's trust profile).
 
@@ -829,7 +840,7 @@ These flows span multiple surfaces. Each is described once here to prevent the s
    - Message to WhatsApp/Telegram/WeChat/Slack escalation channel (always configured as fallback)
 5. Owner reviews the request in either the mobile app (push notification card) or the web portal (escalation queue)
 6. Owner taps Accept or Decline
-7. The decision is submitted to the signup portal backend, which calls `cello_accept_connection` or `cello_decline_connection`
+7. The decision is submitted via the portal API channel to the directory, which forwards it as a `portal_instruction` to the agent client for execution
 8. A `CONNECTION_ESCALATION_RESOLVED` notification is appended to the log
 9. If the `escalation_expires_at` TTL passes with no response: the request auto-declines; owner sees "Auto-declined — timeout" in the dashboard
 
@@ -923,7 +934,7 @@ The consistency check. A capability that appears in a requirement but has no sur
 | TPM attestation (Windows) | — | — | ✓ (Windows) |
 | Native push notifications | — | ✓ | ✓ (system tray + OS notification) |
 | Out-of-band escalation | ✓ (WhatsApp/Telegram/WeChat/Slack, configured via cello_configure) | ✓ | ✓ |
-| OAuth flows (LinkedIn, GitHub, etc.) | ✓ | ✓ (in-app browser / native OAuth SDK) | — |
+| OAuth flows (LinkedIn, GitHub, etc.) | ✓ | — (portal-only until app matures; see "What the mobile app does NOT do") | — |
 | Merkle proof export | ✓ | — | — |
 | Dispute submission | ✓ | — | — |
 | Local MCP server management | — | — | ✓ |
@@ -1000,7 +1011,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | ID | Surface | Gap |
 |---|---|---|
 | F-1 | Portal | Portal session lifecycle not specified: session duration, step-up auth mechanics, fresh-challenge-per-operation vs. session-level upgrade |
-| F-2 | Portal | Portal-to-home-node authentication mechanism not specified: what credential does the portal present for PII operations? |
+| F-2 | Portal | Portal-to-directory authentication mechanism not specified: what credential does the portal present for PII operations? |
 | F-3 | Portal | Onboarding link from bot: format, expiry, and portal-side mechanism for recognizing first-time vs. returning visit |
 | ~~F-4~~ | Portal | ~~Closed~~ — RFC 6238 TOTP (30-sec window, 1-step tolerance); QR code enrollment; canonical JSON record envelope: `signal_class`, `verified_at`, `verifier`, `payload`, `portal_signature`. Secret discarded after activation. |
 | ~~F-5~~ | Portal | ~~Closed~~ — 60-day probe interval. Failure → `VERIFICATION_STALE`. 3 consecutive failures (180 days) → `UNVERIFIED`, hash updated in directory, agent notified. |

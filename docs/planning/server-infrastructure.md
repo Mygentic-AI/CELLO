@@ -77,7 +77,7 @@ The portal supports the following as optional, additive signals. None are regist
   5. Return the original JSON to the client
   6. Discard the original — nothing is retained server-side
 - **Social account binding lock**: Once bound, a 12-month lockout applies to rebinding after unbinding. The directory enforces this via `social_binding_releases.rebinding_lockout_until`.
-- **Liveness probing** — [GAP G-2 RESOLVED]: 60-day probe interval. On failure: mark signal `VERIFICATION_STALE` (grace period — account may be temporarily inaccessible). After 3 consecutive failed probes (180 days): mark `UNVERIFIED`, update hash in directory, notify agent. This prevents purchased dormant accounts from retaining full verification weight indefinitely while avoiding false revocations from transient API failures.
+- **Liveness probing** — [GAP G-2 RESOLVED]: 60-day probe interval. The signup portal backend executes the probes (it holds the OAuth tokens); the directory records and distributes the result. On failure: mark signal `VERIFICATION_STALE` (grace period — account may be temporarily inaccessible). After 3 consecutive failed probes (180 days): mark `UNVERIFIED`, update hash in directory, notify agent. This prevents purchased dormant accounts from retaining full verification weight indefinitely while avoiding false revocations from transient API failures.
 
 **Email verification** — [GAP G-3 RESOLVED]
 - 6-digit OTP delivered to the email address. 15-minute expiry. Max 3 attempts before requiring a new OTP. Rate-limited to 5 sends per hour per email address (prevents email bombing).
@@ -120,7 +120,7 @@ The portal supports the following as optional, additive signals. None are regist
 - During onboarding, the portal should make designation of M-of-N recovery contacts and a designated successor highly visible and difficult to skip (not a hard gate, but a persistent prompt).
 - An agent without a designated successor must display a visible signal in its trust profile.
 - The portal supports creation of a succession package via a `portal_instruction` to the agent client. The client encrypts its own identity key private bytes to the designated successor's `identity_key` and uploads the result to the directory. The portal triggers the operation (WebAuthn-authenticated) and reflects the resulting status — it never receives or handles any key material. The successor's `identity_key` public key is resolved at designation time (when the `successor_designations` record is created), not at package creation time — this ensures the correct key is used even if the successor rotates their identity key between designation and package creation.
-- Voluntary ownership transfer: current owner authenticates (WebAuthn), identifies new owner's CELLO identity, signs the identity migration. An announcement period of 7–14 days (configurable) runs during which all connected agents are notified and the old owner can cancel.
+- Voluntary ownership transfer: current owner authenticates (WebAuthn), identifies new owner's CELLO identity, signs the identity migration. An announcement period of 7–14 days (configurable) runs during which all connected agents are notified and the old owner can cancel (cancellation requires a second WebAuthn tap). If the new owner does not accept within the announcement window, the transfer cancels automatically and returns to IDLE — no auto-extension.
 - Involuntary succession (dead-man's switch): 30+ day waiting period (configurable), with notification to owner via external channels (WhatsApp/Telegram/WeChat) and all recovery contacts and connected agents. M-of-N recovery contact attestation required to execute.
 - The portal must enforce a freeze during the succession waiting period: social proofs and phone number cannot be reused. Only the pre-designated successor can receive succession.
 
@@ -143,7 +143,7 @@ On any tombstone (VOLUNTARY, COMPROMISE_INITIATED, SOCIAL_RECOVERY_INITIATED, SU
 ### Discovery and profile management
 
 - Portal exposes a short URL resolver so alias URIs (`cello:alias/<slug>`) can be resolved by any browser.
-- Portal allows the owner to browse all three discovery classes (agent directory, bulletin board, group rooms), search, and create/manage Class 1 listings and Class 2 posts.
+- Portal allows the owner to browse all three discovery classes (agent directory, bulletin board, group rooms), search, and create/manage Class 1 listings, Class 2 posts, and Class 3 group rooms.
 
 ---
 
@@ -243,23 +243,25 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 
 **Architecture principle**: Real-time path and consensus path are fully separated. Agents never wait for consensus.
 
-**Real-time path (on the critical path for sequencing, NOT for message delivery)**:
-- One primary node per session receives hashes, assigns canonical sequence numbers, ACKs to agents
-- Message delivery itself is concurrent: agent sends hash to directory AND message directly to counterparty simultaneously — neither blocks the other
+**Per-session hash relay and sequencing (relay node territory — not directory)**:
+- Per-session hash processing (receiving hashes, assigning canonical sequence numbers, ACKing to agents) happens on relay nodes, not directory nodes
+- Message delivery itself is concurrent: agent sends hash to relay AND message directly to counterparty simultaneously — neither blocks the other
+- At seal time: the relay hands the complete leaf sequence to the directory; the directory recomputes the tree, verifies the chain, then runs the FROST seal ceremony
+
+**Directory replication (identity trees, connection records, trust signal hashes)**:
 
 **Propagation (off the critical path)**:
-- Primary pushes hashes to other nodes asynchronously
+- Directory nodes replicate directory state (identity tree updates, connection records, trust signal hashes) asynchronously
 
 **Consensus (background)**:
-- Periodic checkpoint where nodes agree on ledger state
+- Periodic checkpoint where directory nodes agree on ledger state
 - Agents are unaffected
 
-**Primary/backup replication**:
-- At session establishment, agent simultaneously fire-and-forgets signed hashes to primary AND 2–3 backup nodes
-- Backup nodes store hashes tagged PENDING until sequenced
-- If primary fails before propagating: a backup promotes to primary, sequences accumulated PENDING hashes, agents reconnect and continue without resubmission
-- Backup selection is dynamic per session: agent picks 2–3 lowest-latency nodes at session establishment
-- Different conversations use different backup sets — load distributes without central coordination
+**Directory primary/backup replication**:
+- Directory replication concerns directory-level state, not per-message session hashes
+- At session establishment, the directory assigns a relay node and signs the session assignment; relay nodes handle hash relay and backup independently
+- Backup selection for relay nodes is dynamic per session: agent picks 2–3 lowest-latency relay nodes at session establishment
+- Different conversations use different relay backup sets — load distributes without central coordination
 
 **Client-side routing support**:
 - Nodes respond to lightweight pings (every 10–30 seconds, configurable) with timestamp + 1-byte load indicator
@@ -312,7 +314,7 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 
 **First-message anchor**: `prev_root = SHA-256(agent_A_pubkey || agent_B_pubkey || session_id || timestamp)`. This prevents first-message substitution by a compromised directory.
 
-**Three copies**: Sender, receiver, directory. All three must be identical absent tampering.
+**Three copies during active sessions**: Sender, receiver, relay. All three must be identical absent tampering. **After seal**: the relay hands the complete leaf sequence to the directory and destroys its per-session state; the sealed root is then held by sender, receiver, and directory.
 
 **Global meta-Merkle tree (MMR)**:
 - Append-only tree over all conversation registrations
@@ -357,7 +359,7 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 
 Session-level security events (`relay_sequencing_attack`, `peer_compromised_abort` and all session Merkle events) remain on the agent-client WebSocket only.
 
-**Direction 2 — writing (portal → directory → agent client)**: The portal submits signed escalation decisions and owner-initiated actions to the directory via the portal API channel (the same authenticated portal WebSocket). The directory validates the portal signature, verifies the portal is authorized for the target `agent_id`, and forwards the instruction to the agent client as a `portal_instruction` message on the agent's authenticated WebSocket. Forwarded action types: accept/decline a connection escalation, ban or mute a group room participant, lift a mute, initiate K_local rotation. The agent client executes the action without requiring a second owner confirmation — the portal owner already confirmed the action at the portal. See agent-client.md notification registry (`portal_instruction` type) and frontend.md F-28.
+**Direction 2 — writing (portal → directory → agent client)**: The portal submits signed escalation decisions and owner-initiated actions to the directory via the portal API channel (the same authenticated portal WebSocket). The directory validates the portal signature, verifies the portal is authorized for the target `agent_id`, and forwards the instruction to the agent client as a `portal_instruction` message on the agent's authenticated WebSocket. Forwarded action types: accept/decline a connection escalation, ban or mute a group room participant, lift a mute, initiate K_local rotation, create succession package. The agent client executes the action without requiring a second owner confirmation — the portal owner already confirmed the action at the portal. See agent-client.md notification registry (`portal_instruction` type) and frontend.md F-28.
 
 **Degraded mode — connection nodes unavailable**:
 - Connection nodes must refuse new connection requests when unavailable and send a reason: "directory unreachable, not accepting unauthenticated sessions — retry when available"
@@ -367,7 +369,7 @@ Session-level security events (`relay_sequencing_attack`, `peer_compromised_abor
 **Degraded mode — directory down**:
 - Existing sessions continue with K_local signing
 - Both parties use local sequence numbers; the hash chain provides ordering
-- On directory return: both parties submit locally-sequenced hashes; directory assigns canonical numbers retroactively; if the two submitted chains disagree the discrepancy is flagged for investigation
+- On directory return: the relay continues sequencing throughout the outage (it is independent from the directory for session-level operations); if the relay was also down, both parties submit locally-sequenced hashes to the new relay; if the two submitted chains disagree the discrepancy is flagged for investigation
 - The bilateral seal (both parties sign final root with K_local) is available immediately; the notarized FROST seal is deferred until directory returns
 
 **Session termination (control leaves)**:
@@ -433,7 +435,7 @@ After ABORT: REOPEN is not permitted. Post-ABORT message arrivals are always rej
 - Companion device authentication is outside the FROST model — the companion device presents a keypair registered at install time (bound via phone OTP), not a FROST-authenticated agent identity
 - The CELLO client holds the authoritative companion device allowlist locally and verifies companion devices at connection time. The directory never holds companion device public keys — consistent with the principle that the directory holds hashes, not client data. Registration is a local ceremony between the owner and the client (QR code or equivalent) with no server round-trip. The directory may in future hold hashes of the allowlist for integrity verification; that is not a current requirement. See agent-client.md AC-C10 (resolved). **[GAP G-41 — RETIRED]**
 - Companion device connections are read-only from the directory's perspective: no hashes are submitted, no Merkle tree operations occur, no sequence numbers are assigned
-- The `cello_request_human_input` MCP tool triggers a push notification to the companion device via the directory — the directory sees "send a knock to owner X's companion device," content-free
+- The `cello_request_human_input` MCP tool triggers a push notification to the companion device via the directory — the directory sees "send a knock to owner X's companion device," content-free. Delivery mechanism: APNs (iOS) / FCM (Android)
 
 **Multi-node public key cross-check** (identity verification — step 1 of receiver-side verification):
 - Receiver cross-checks requester's public key across multiple directory nodes with Merkle inclusion proof
@@ -631,6 +633,7 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
   | `CONNECTION_REQUEST` | Directory | Inbound connection request from another agent |
   | `CONNECTION_ACCEPTED` | Directory | Outbound connection request was accepted by the recipient |
   | `CONNECTION_DECLINED` | Directory | Outbound connection request was declined by the recipient |
+  | `CONNECTION_ESCALATION_RESOLVED` | Directory | A connection escalation decision has been made (accepted or declined); appended when the escalation outcome is finalized |
   | `ROOM_INVITE` | Directory | This agent has been invited to a group room by an existing member or owner |
   | `ENDORSEMENT_RECEIVED` | Directory | Another agent issued an endorsement for this agent |
   | `ENDORSEMENT_REVOKED` | Directory | A previously received endorsement was withdrawn |
@@ -772,7 +775,7 @@ See [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay 
 
 - Relay node receives signed hash (Structure 1) from the sending agent
 - Relay verifies the sender's signature against the sender's public key
-- Relay assigns the canonical sequence number and constructs Structure 2 (outer leaf): `sequence_number || sender_pubkey || message_content_hash || sender_signature (Structure 1 embedded) || prev_root`
+- Relay assigns the canonical sequence number and constructs Structure 2 (outer leaf): `sequence_number || sender_pubkey || message_content_hash || sender_signature (Structure 1 embedded) || scan_result || prev_root`
 - Relay relays Structure 2 to the counterparty
 - Receivers verify the sender's K_local signature directly — they do not trust the relay's version
 - **Adversarial sequencing defence**: each sender includes `last_seen_seq` in Structure 1, creating a causal chain. If Alice's message says "I've seen up to seq 5," the relay cannot place that message before seq 5 without the inconsistency being provable. The directory verifies causal consistency at seal time.
@@ -785,7 +788,7 @@ If a relay node goes down mid-session:
 1. Both agents detect the relay is gone (connection drops)
 2. Both agents still hold their local Merkle tree copies with all leaves and the last confirmed sequence number
 3. Both agents have a persistent WebSocket to the directory (dormant but open)
-4. Either agent signals the directory: "relay X is down, session Y needs reassignment"
+4. Both agents signal the directory: "relay X is down, session Y needs reassignment"
 5. Directory assigns a new relay, hands it the session ID, public keys, and the last confirmed sequence number (reported by both agents — must agree)
 6. New relay picks up sequencing from the confirmed point; agents resume
 
@@ -905,7 +908,7 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 4. Directory recomputes the tree from scratch (does not trust the relay's root); verifies causal consistency of `last_seen_seq` values across all leaves
 5. Directory initiates FROST seal ceremony — requires t-of-n directory nodes; any directory node can participate (all hold the required K_server_X shares)
 6. Directory produces SEAL: notarized statement of mutual close at specific timestamp
-7. Both parties write attestation (CLEAN / FLAGGED / PENDING) to their CLOSE leaves
+7. Each party writes its own attestation (CLEAN or FLAGGED) to its CLOSE leaf — PENDING is a directory-tracked state for counterparties who have not yet submitted, not a value a party writes about itself
 8. SEAL is recorded in `conversation_seals`; triggers MMR leaf append
 9. If staking was active: CLEAN → stake auto-released; FLAGGED + upheld arbitration → institution can claim stake
 10. Relay's per-session Merkle state is destroyed after handoff confirms
@@ -924,8 +927,8 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 ### Compromise response flow
 
 1. Owner receives push alert via WhatsApp/Telegram/WeChat (from directory, through notification path)
-2. Owner taps "Not Me"
-3. Directory immediately burns K_server_X shares (no new FROST sessions possible)
+2. Owner taps "Not Me" — request routes through the signup portal backend (the directory does not authenticate owners directly)
+3. Signup portal backend authenticates the owner and forwards the burn request to the directory; directory immediately burns K_server_X shares (no new FROST sessions possible)
 4. Directory fires dual-path forced abort simultaneously:
    - **Path 1** (cooperative): sends `EMERGENCY_SESSION_ABORT` control message to the agent's persistent WebSocket; client sends signed ABORT leaves (`COMPROMISE_INITIATED`) to all counterparties via P2P, then disconnects
    - **Path 2** (non-cooperative): for every active session on record, sends `PEER_COMPROMISED_ABORT` notification to each counterparty's WebSocket; counterparty seals unilaterally on receipt
@@ -1008,7 +1011,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | ID | Domain | Gap |
 |---|---|---|
 | G-1 | Portal | ~~Resolved~~ — RFC 6238 TOTP (30-sec window, 1-step tolerance). QR code enrollment. Canonical portal-issued JSON record envelope established for all signal types: `signal_class`, `verified_at`, `verifier`, `payload`, `portal_signature`. Hash written to directory; signed JSON returned to client; secret discarded. |
-| G-2 | Portal | ~~Resolved~~ — 60-day liveness probe interval. Failure → `VERIFICATION_STALE`. 3 consecutive failures (180 days) → `UNVERIFIED`, hash updated in directory, agent notified. |
+| G-2 | Portal | ~~Resolved~~ — 60-day liveness probe interval. Signup portal backend executes probes (holds OAuth tokens); directory records/distributes result. Failure → `VERIFICATION_STALE`. 3 consecutive failures (180 days) → `UNVERIFIED`, hash updated in directory, agent notified. |
 | G-3 | Portal | ~~Resolved~~ — 6-digit OTP, 15-min expiry, 3 attempts, 5 sends/hour rate limit. Domain only in JSON record (never full address). Dual purpose: standalone signal + registration correlation token. |
 | G-4 | Portal | ~~Resolved~~ — HTTPS POST to internal directory endpoint (not public WebSocket port). Portal authenticates with registered keypair (same model as relay nodes). Payload: `agent_id, signal_class, signal_hash, account_identifier_hash, portal_signature, timestamp`. |
 | G-5 | Portal | ~~Resolved~~ — Encrypted async pickup queue. Portal encrypts JSON blob to agent's `identity_key` pubkey, stores ciphertext with 30-day TTL, triggers `TRUST_SIGNAL_PICKUP_PENDING` notification. Agent decrypts, validates hash, ACKs, queue entry deleted. Orphaned hashes (TTL expired) surface re-verify prompt. See [[2026-04-17_1000_trust-signal-pickup-queue\|Trust Signal Pickup Queue]]. |
