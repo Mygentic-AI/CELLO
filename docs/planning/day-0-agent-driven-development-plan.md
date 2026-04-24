@@ -2,171 +2,147 @@
 name: Day-0 Agent-Driven Development Plan
 type: plan
 date: 2026-04-07
-topics: [claude-flow, development-plan, testing, MCP, SDK, integration-testing, cryptography, SPARC, TDD]
+topics: [SPARC, TDD, development-plan, testing, MCP, integration-testing, cryptography, claude-code, ruflo]
 status: active
-description: How to build CELLO using Claude-Flow multi-agent orchestration — CLAUDE.md templates, hive-mind architecture, SPARC TDD phases, cryptographic correctness rules, integration testing strategy.
+description: How CELLO is built — SPARC methodology, parallel agent orchestration via Claude Code, Ruflo testing framework and memory, cryptographic correctness rules, and integration testing strategy from unit tests through real agent integration.
 ---
 
 # Day-0 Agent-Driven Development Plan
 
 **Project:** CELLO — Collaborative Execution: Local, Linked Operations
-**Date:** 2026-04-07
-**Status:** Pre-implementation / Kick-off
+**Date:** 2026-04-07 (revised 2026-04-24)
 
 ---
 
 ## Overview
 
-CELLO is being built using AI agent orchestration as the primary development instrument. We're using [Claude-Flow v2.0.0 Alpha](https://github.com/ruvnet/ruflo) — a multi-agent orchestration platform with 64 specialized agents, hive-mind coordination, persistent memory, and a truth verification system that runs real tests.
+CELLO is built using AI agent orchestration as the primary development instrument. The execution environment is Claude Code with parallel agents dispatched via the Agent tool and isolated in git worktrees. The development methodology is SPARC (Specification → Pseudocode → Architecture → Refinement → Completion). The test framework is `@claude-flow/testing` from [Ruflo](https://github.com/ruvnet/ruflo), providing London School TDD patterns, Vitest integration, and performance assertions. Persistent decision memory is available via Ruflo's MCP server as a sidecar.
 
 This is not incidental. CELLO is trust infrastructure for agent-to-agent communication, built by agents. The development methodology and the product are the same idea.
 
 ---
 
-## Step 1: CLAUDE.md Template Stack
+## Development Methodology: SPARC
 
-Claude-Flow templates are `CLAUDE.md` configuration files that tell the agents how to behave inside the project context. CELLO spans security infrastructure, protocol design, distributed systems, and an open-source SDK — no single template covers it. The right approach is to apply a base template and layer in sections from others.
+Every milestone goes through five phases. The phases are a discipline, not a tool — they structure how work is approached regardless of what executes it.
 
-| Template | Why it applies |
+### S — Specification
+
+Define requirements as user stories in the [[user-story-format|CELLO User Story Format]]: EARS behaviors, acceptance criteria with Given/When/Then, security invariants with adversarial conditions, and degraded behaviors with fallback specifications. Every criterion maps 1:1 to a test case. The specification is complete when a TDD agent can read it and write failing tests directly.
+
+### P — Pseudocode
+
+Before coding, each major component gets high-level pseudocode reviewed against the spec. This catches structural problems before they become debugging sessions. For cryptographic components, the pseudocode must reference the specific RFC or NIST publication that defines the algorithm.
+
+### A — Architecture
+
+Interface definitions, package boundaries, type signatures. This is where the monorepo package structure solidifies for the milestone's components. Key decisions are stored in persistent memory (Ruflo MCP or vault) so subsequent milestones don't relitigate them.
+
+### R — Refinement
+
+Implementation via TDD. This is where Claude Code's parallelism kicks in — independent work streams dispatch as parallel agents with worktree isolation. Each agent works red/green/refactor against the acceptance criteria from the Specification phase. Crypto-touching code gets strict coverage: every acceptance criterion and security invariant has a passing test, no exceptions.
+
+### C — Completion
+
+Integration pass. The e2e test harness runs the full flow for the milestone. Performance assertions verify targets. Any decisions made during refinement are persisted. The Definition of Done from the user story format is enforced: every AC has a test, every SI has a negative test, every DB has a failure-condition test.
+
+---
+
+## Parallel Agent Orchestration
+
+Claude Code's Agent tool dispatches parallel work streams within a milestone. Each agent runs in a git worktree — full isolation, no merge conflicts during development, clean integration at the end.
+
+### Domain-Specific Agents
+
+Work streams are organized by domain, not by layer. A milestone that touches crypto, directory, and client code dispatches three parallel agents — one per domain — rather than doing all crypto first, then all directory, then all client.
+
+| Domain | Capabilities | Typical scope |
+|---|---|---|
+| Crypto | Ed25519, SHA-256, FROST, Merkle trees, key management | `packages/crypto` |
+| Protocol | Message envelopes, session lifecycle, connection flow | `packages/protocol-types`, `packages/client` |
+| Directory | WebSocket server, hash relay, sequence numbering, stores | `packages/directory` |
+| Relay | Session-level Merkle engine, NAT traversal, circuit relay | `packages/relay` |
+| Security | Sanitization pipeline, DeBERTa scanner, redaction, governance | `packages/client` (scanning layers) |
+| E2E | Test harness, integration tests, multi-component flows | `packages/e2e-tests` |
+
+### Orchestration Rules
+
+- Independent work streams run in parallel. Dependent work runs sequentially.
+- Each agent's scope must be completable and testable in isolation before integration.
+- The E2E agent runs last — it wires together what the domain agents built and runs the harness.
+- If two agents need the same package, one owns it and the other waits or works against the existing interface.
+
+---
+
+## Test Framework
+
+The test foundation is `@claude-flow/testing` from Ruflo, adapted for CELLO's domain. What we adopt:
+
+| From `@claude-flow/testing` | How CELLO uses it |
 |---|---|
-| **API Development** | Directory API, WebSocket server, agent registration endpoints |
-| **Microservices** | Federated directory nodes, core library + per-adapter repo architecture |
-| **TDD** | Truth verification gates on real tests; agents should write tests first |
-| **CI/CD** | Supply chain integrity (npm provenance, Sigstore signing) is a product requirement |
-| **AI/ML Projects** | DeBERTa prompt injection classifier, agent reliability scoring pipeline |
-| **Enterprise** | Federated consortium, private node licenses, multi-org trust boundaries |
+| `setupV3Tests()` | Global Vitest configuration |
+| `createTestScope()` | Isolated test contexts with automatic cleanup |
+| `waitFor()`, `retry()`, `withTimeout()` | Async utilities for e2e tests involving WebSocket, P2P |
+| `measureTime()`, `assertV3PerformanceTargets()` | Performance assertions on crypto operations |
+| `createMockEventBus()`, `createTestEmitter()` | Event-driven testing for notifications, session events |
+| London School TDD patterns | Behavior verification, not implementation testing |
 
-```bash
-claude-flow templates apply api-development --output CLAUDE.md
-# Then manually layer in sections from microservices, TDD, and CI/CD templates
-```
+What we write ourselves — CELLO-specific fixtures:
 
----
-
-## Step 2: Hive Mind Architecture Kick-Off
-
-CELLO has a clear layered architecture: SDK → transport → crypto → directory → federation. That's not a peer problem — it's a hierarchy. Use **hierarchical topology** with 8 agents: one queen coordinator plus one agent per major architectural domain.
-
-### Initialize
-
-```bash
-# Initialize the project context
-claude-flow init --sparc
-
-# Stand up the hive
-claude-flow hive init --topology hierarchical --agents 8 --memory-size 1GB
-```
-
-### Spawn Domain-Specific Agents
-
-```bash
-claude-flow agent spawn architect --capabilities "distributed-systems,merkle-trees,p2p-networking"
-claude-flow agent spawn architect --capabilities "cryptography,threshold-signatures,key-management"
-claude-flow agent spawn researcher --capabilities "libp2p,noise-protocol,NAT-traversal"
-claude-flow agent spawn researcher --capabilities "prompt-injection,ml-classifiers,DeBERTa"
-claude-flow agent spawn coder --capabilities "typescript,mcp-protocol,sdk-design"
-claude-flow agent spawn coder --capabilities "rust,wasm,wit-interfaces"
-claude-flow agent spawn analyst --capabilities "security-analysis,threat-modeling,trust-scoring"
-```
-
-### Fire the Architecture Problem
-
-The open questions in `cello-initial-design.md` are the first mandate for the hive — specific, technically hard, multiple independent domains:
-
-```bash
-claude-flow orchestrate "Analyze the CELLO trust infrastructure design in docs/planning/cello-initial-design.md and resolve the open questions: (1) threshold cryptography scheme selection — Shamir's secret sharing vs ECDSA threshold signatures, latency impact of multi-node signing; (2) libp2p NAT traversal reliability and fallback strategy when hole punching fails; (3) K_server caching policy — session key lifetime vs security tradeoff; (4) Byzantine fault tolerance minimum consortium size; (5) deterministic ordering of identity Merkle tree operations across nodes — logical clock vs consensus on ordering; (6) checkpoint frequency tradeoff. Each agent attacks their domain independently, then the hive reaches consensus." --agents 8 --parallel
-```
-
-### Enable Truth Verification
-
-```bash
-# Use moderate threshold for architecture discussions — this isn't code yet
-claude-flow verify init moderate
-```
-
----
-
-## Step 3: Persist Decisions to Memory
-
-CELLO's design doc has 12+ open questions. The SQLite memory system accumulates decisions across sessions — agents don't relitigate what's already been resolved.
-
-After each hive run, explicitly store architectural decisions:
-
-```bash
-# Example — fill in after hive produces output
-claude-flow memory store "threshold-crypto-decision" "<decision and rationale>" --namespace cello-architecture
-claude-flow memory store "libp2p-fallback-strategy" "<decision and rationale>" --namespace cello-architecture
-claude-flow memory store "consortium-minimum-size" "<decision and rationale>" --namespace cello-architecture
-
-# Recall across sessions
-claude-flow memory recall --namespace cello-architecture
-```
-
----
-
-## Step 4: Run the Training Pipeline
-
-After the architecture session, push the system by running the training pipeline on hard complexity. This is where you find out whether agent reliability scores actually improve or whether the self-improvement loop is theater.
-
-```bash
-claude-flow train-pipeline run --complexity hard --iterations 5
-claude-flow train-pipeline validate
-claude-flow train-pipeline status
-```
-
----
-
-## Step 5: SPARC TDD Mode for Implementation
-
-Once architecture is resolved, shift to SPARC TDD mode per CELLO phase. Truth verification moves to strict (0.95) for any code touching crypto primitives or Merkle tree operations.
-
-```bash
-# Enable strict verification for implementation
-claude-flow verify init strict
-
-# Phase 1: SDK core
-claude-flow sparc run tdd "implement CELLO MCP server core: cello_scan_message, cello_register, cello_find_agents, cello_send_message with DeBERTa Layer 2 scanner"
-
-# Phase 1: Directory API
-claude-flow sparc run api "implement CELLO directory WebSocket server with challenge-response authentication, hash relay, and append-only log"
-```
-
----
-
-## Order of Operations
-
-| Session | What happens |
+| Fixture | What it provides |
 |---|---|
-| **Session 1** | Apply layered CLAUDE.md (API + microservices + TDD base) |
-| **Session 2** | Full hierarchical hive init, 8 agents, fire open questions list |
-| **Session 3** | Store all decisions to persistent memory, run training pipeline |
-| **Session 4+** | SPARC TDD per phase, truth verification strict on crypto code |
+| Merkle leaf fixtures | Valid/tampered/missing-field leaves for tree tests |
+| Session envelope fixtures | FROST ceremony messages, session establishment/seal payloads |
+| Connection request fixtures | Trust profiles, policy configurations, endorsement sets |
+| Injection payload fixtures | Known attack patterns for each defense layer |
+| Agent identity fixtures | Keypairs, trust signal sets, registration records |
+
+### Test Tiers
+
+| Tier | What it tests | Speed | When it runs |
+|---|---|---|---|
+| Unit | Crypto primitives, Merkle math, sanitization, individual components | < 1s | Every save |
+| Integration | Multi-component flows within a package, store interface compliance | < 10s | Pre-commit |
+| E2E | Full protocol flows: directory + relay + two clients in-process | < 60s | Pre-push, CI |
 
 ---
 
-## What to Watch For
+## Persistent Decision Memory
 
-The truth verification system claims to run actual `npm test`, `npm run typecheck`, and `npm run lint` — not LLM-hallucinated feedback. That's the thing worth stress-testing. Set verification to strict on any code touching the crypto primitives and see whether it catches real failures or passes everything through.
+Architectural decisions accumulate across sessions. Two complementary systems:
 
-The training pipeline's self-improvement loop is the other claim to pressure-test. Five hard-complexity iterations should produce measurably better agent reliability scores. If the numbers don't move, the loop isn't working.
+**The vault** (human-readable): Design documents, discussion logs, the protocol map. This is the authoritative record. Decisions are captured in discussion logs with full context and rationale.
+
+**Ruflo MCP memory** (machine-queryable, optional): Key-value store with vector search via HNSW indexing. Useful for quick lookups during coding sessions — "what did we decide about Merkle leaf format?" — without reading entire documents. Complements the vault; does not replace it.
+
+```bash
+# Store a decision (via Ruflo MCP sidecar)
+ruflo memory store "merkle-leaf-format" "RFC 6962, domain separation 0x00/0x01, SHA-256" --namespace cello-architecture
+
+# Query during a session
+ruflo memory query "leaf format" --namespace cello-architecture
+```
 
 ---
 
-## Cryptographic Correctness in CLAUDE.md
+## Cryptographic Correctness
 
-When applying templates, add an explicit cryptographic correctness section. Standard templates don't know this codebase is security infrastructure — a subtle mistake in a Merkle tree or key derivation routine isn't a bug, it's a vulnerability.
+This codebase is security infrastructure. A subtle mistake in a Merkle tree or key derivation routine isn't a bug — it's a vulnerability.
 
-### Library Choices
+### Library Choices (TypeScript)
 
-**TypeScript:**
-- Use Node.js `crypto` module for symmetric operations (AES-GCM, ChaCha20-Poly1305) and hashing — FIPS-compliant, battle-tested
-- Avoid Crypto-JS — known vulnerabilities
-- For WASM interop with Rust, compile RustCrypto or `ring` via `wasm-bindgen` to share primitives across the stack
+- **Ed25519 signing**: `@noble/ed25519` — audited, pure JS, no native deps, constant-time
+- **Hashing (SHA-256)**: `@noble/hashes` — same family, same audit guarantees
+- **FROST threshold signatures**: `@noble/frost` or equivalent audited implementation
+- **Symmetric operations (AES-GCM, ChaCha20-Poly1305)**: Node.js `crypto` module — FIPS-compliant, battle-tested
+- **Avoid**: Crypto-JS (known vulnerabilities), any unaudited npm packages for core crypto
 
-**Rust:**
-- RustCrypto (`aes-gcm`, `chacha20poly1305`, `sha2`, `ed25519-dalek`) — pure Rust, modular, constant-time, actively audited. Gold standard.
-- `ring` for performance-critical paths (HKDF, ECDSA, Ed25519 where throughput matters) — depends on BoringSSL
-- `zeroize` for secret wiping, `secrecy` for type-safe secret handling in multi-tenant contexts
+### Library Choices (Rust — future)
+
+When the directory migrates to Rust:
+- RustCrypto (`aes-gcm`, `chacha20poly1305`, `sha2`, `ed25519-dalek`) — pure Rust, modular, constant-time, actively audited
+- `ring` for performance-critical paths (HKDF, ECDSA, Ed25519 where throughput matters)
+- `zeroize` for secret wiping, `secrecy` for type-safe secret handling
 
 ### Canonical Sources for Verification
 
@@ -175,84 +151,82 @@ Agents must not resolve cryptographic implementation questions from training dat
 | What to verify | Source |
 |---|---|
 | Algorithm correctness | NIST test vectors via NIST/CMVP sites |
-| Library usage | Official library docs — RustCrypto GitHub examples, Node.js crypto docs |
+| Library usage | Official library docs — `@noble` GitHub, Node.js crypto docs |
 | CVEs and known weaknesses | GitHub Advisories, NVD API |
 | Protocol flow correctness | [Verifpal](https://verifpal.com) — symbolic protocol analysis |
 
 Any implementation touching Ed25519 signing, Merkle tree construction, threshold key splitting, or hash chaining must reference a named RFC, NIST publication, or library documentation URL in the code or PR. "Works" is not the bar — cryptographically correct is the bar.
 
-### Agent Rules for CLAUDE.md
+### Agent Rules
 
 - Never simplify or shortcut cryptographic code for brevity
 - If unsure about a cryptographic detail, stop and flag — do not guess
 - No cryptographic operation tested with mocks — real keys, real signing, real verification
-- Truth verification threshold for any file in `crypto/`, `merkle/`, or `keys/` must be strict (0.95)
-- Any code touching cryptographic primitives requires a second agent pass for spec compliance, not just functional correctness
+- Any code in `packages/crypto/` or touching Merkle trees requires a second agent review for spec compliance, not just functional correctness
+- Every crypto function must have test vectors from an authoritative source, not hand-constructed examples
 
 ---
 
 ## Integration Testing Strategy
 
-Unit tests are straightforward and handle more than people expect. This section is about integration testing — the smallest realistic harness at each stage, and what each stage is actually capable of testing.
+Unit tests handle more than people expect. This section covers integration testing — the smallest realistic harness at each stage, and what each stage is actually capable of testing.
 
 ### Stage 1 — Unit Tests (no network, no agents)
 
-Crypto primitives, Merkle tree math, Layer 1 deterministic sanitization. All of this is standalone and fast. Attack patterns also belong here — replay attacks, tampered leaves, hash collision attempts, injection payloads — because you can construct all of it synthetically without needing a real session. This stage covers more than it looks like it should.
+Crypto primitives, Merkle tree math, Layer 1 deterministic sanitization. All standalone and fast. Attack patterns also belong here — replay attacks, tampered leaves, hash collision attempts, injection payloads — because you can construct all of it synthetically without needing a real session.
 
-### Stage 2 — Two MCP Servers
+### Stage 2 — In-Process E2E (monorepo advantage)
 
-Two CELLO MCP server instances, one as sender, one as receiver. No real directory, no real agents. One server stands in for the directory relay.
+Two CELLO client instances and a directory stub, all running in a single Vitest process. No Docker, no ports, no inter-process coordination. The e2e test package imports client and directory as local packages and wires them together in-memory.
 
 What this tests:
 - Full signing and verification pipeline
-- Hash relay (simulated)
-- Merkle tree sync across two parties
-- Layer 2 DeBERTa scanner with real message content
-- Connection handshake
-- The complete SDK behavior in isolation
+- Hash relay through the directory
+- Merkle tree sync across three parties (sender, receiver, directory)
+- Connection request flow with policy evaluation
+- Session establishment and close with sealed root comparison
 
-What it can't test: the 3-party Merkle tree (need a real directory), FROST session establishment and seal (K_server lives on the directory), WebSocket challenge-response auth, libp2p NAT traversal.
+What it can't test: FROST with real K_server distribution (needs multi-node), libp2p NAT traversal (needs real network), WebSocket behavior under real latency.
 
-### Stage 3 — MCP Servers + Local Directory Stub
+### Stage 3 — Multi-Process E2E
 
-Add a lightweight local directory service — WebSocket server, hash relay, append-only log. Phone verification is mocked. Now you have the full 3-party Merkle tree and can test:
+Directory and relay as separate processes. Clients connect over real WebSockets. This is where you test:
 
-- FROST session establishment and seal (K_server in the loop)
-- 3-party root comparison — sender, receiver, directory all independently compute and compare
-- Compromise detection: failed FROST at session start as a canary for key theft
-- Divergent root detection
+- FROST session establishment and seal with K_server in the loop
 - Challenge-response authentication over a real WebSocket
-
-Some attack scenarios also need this stage to be meaningful. MITM detection requires a real hash relay to diverge from. Replay attacks need sequence number enforcement across a live session. Injection that passes Layer 1 but trips Layer 2 needs real message context flowing through a real pipeline, not a synthetic stub.
+- Compromise detection: failed FROST at session start as a canary for key theft
+- Divergent root detection across real network boundaries
+- MITM detection via hash relay divergence
+- Replay attacks with sequence number enforcement across a live session
 
 ### Stage 4 — Real Agent Integration
 
 Agent order is deliberate:
 
 **1. Claude Code (MCP)**
-Zero setup — already in the dev environment and MCP-compatible. Proves the MCP path works end-to-end before standing up any separate agent runtime. Fast feedback loop.
+Zero setup — already in the dev environment and MCP-compatible. Proves the MCP path works end-to-end before standing up any separate agent runtime.
 
 **2. OpenClaw**
-The market. This is where CELLO needs to work. Testing against OpenClaw early means building the TypeScript adapter against the real `defineBundledChannelEntry` plugin interface from day one — not retrofitting it later when you discover constraints in the plugin manifest you didn't anticipate. If CELLO doesn't work cleanly on OpenClaw, nothing else matters.
+The market. This is where CELLO needs to work. Testing against OpenClaw means building the TypeScript adapter against the real `defineBundledChannelEntry` plugin interface from day one. If CELLO doesn't work cleanly on OpenClaw, nothing else matters.
 
 **3. Hermes**
-Self-learning agent. The interest here isn't Python — it's adaptivity. Hermes can evolve its behavior during a test session and probe in ways you wouldn't think to script manually. For a security protocol, an agent that learns and adapts is a more realistic stress test than anything written by hand. Use it to discover edge cases OpenClaw won't surface.
+Self-learning agent. Hermes can evolve its behavior during a test session and probe in ways you wouldn't think to script manually. For a security protocol, an agent that learns and adapts is a more realistic stress test than scripted tests.
 
 **4. IronClaw**
-The security reference implementation. The WASM sandbox means the CELLO channel component is cryptographically isolated from the host — testing here validates the security boundary, not just the protocol. Comes after the protocol is stable enough to build the WASM component properly. Iteration cycles are slower here; don't start here.
+The security reference implementation. The WASM sandbox means the CELLO channel component is cryptographically isolated from the host — testing here validates the security boundary, not just the protocol. Comes after the protocol is stable.
 
 ### What to Avoid
 
-Don't test on all agents simultaneously early on. The combinatorial surface is too large when the protocol is still changing. Lock down the protocol with MCP servers first, prove it on OpenClaw second, then expand.
-
-NanoClaw and ZeroClaw are available but there's no strong reason to prioritize them. They follow naturally once OpenClaw and IronClaw work — the adapters are thin and the hard work is already done.
+Don't test on all agents simultaneously early on. The combinatorial surface is too large when the protocol is still changing. Lock down the protocol with in-process tests first, prove it on Claude Code MCP second, expand to OpenClaw third.
 
 ---
 
 ## Related Documents
 
-- [[cello-initial-design|CELLO Design Document]] — architecture, trust chain, open questions this plan addresses
-- [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — the DeBERTa Layer 2 scanner referenced in Phase 1
-- [[00-synthesis|Protocol Review — Synthesis]] — critical findings the hive should resolve first
-- [[open-decisions|Open Decisions]] — 12 decisions the hive already resolved
-- Claude-Flow wiki: https://github.com/ruvnet/ruflo/wiki
+- [[protocol-map|CELLO Protocol Map]] — top-level orientation for all protocol domains
+- [[user-story-format|CELLO User Story Format]] — the specification format used in the SPARC Specification phase
+- [[agent-client|CELLO Agent Client Requirements]] — client requirements the test harness must exercise
+- [[server-infrastructure|Server Infrastructure Requirements]] — server requirements the directory stub must satisfy
+- [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — the DeBERTa Layer 2 scanner
+- [[00-synthesis|Protocol Review — Synthesis]] — adversarial review findings, all addressed
+- [[open-decisions|Open Decisions]] — 12 resolved cryptographic and protocol decisions
