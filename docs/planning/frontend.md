@@ -533,7 +533,7 @@ The event stream is filterable by type. Each event links to its relevant context
 
 **[~~GAP F-27~~ — Retired]**: Two delivery paths resolved: directory WebSocket pushes system/protocol events to the agent; client-to-companion P2P delivers owner-targeted notifications. The portal receives events via the directory WebSocket path (same as the agent). See AC-16 / G-32.
 
-**[~~GAP F-28~~ — Resolved]**: The portal uses a two-WebSocket design. At login, the portal opens a second authenticated WebSocket to the directory using the portal's own registered keypair, scoped to the owner's `agent_id`. The directory fans out the owner-relevant event subset to both the portal WebSocket and the agent-client WebSocket. The portal receives: connection requests and escalations, key rotation nudges, anomaly alerts, tombstones, trust signal pickups, succession claims, and relay reassignment events. Session-level security events are agent-WebSocket-only. Portal writes (escalation decisions, room ban/mute, rotation initiation) are submitted to the directory via the portal API channel and forwarded by the directory to the agent client as `portal_instruction` messages. See server-infrastructure.md G-43 for full specification.
+**[~~GAP F-28~~ — Resolved]**: The portal uses a two-WebSocket design. At login, the portal opens a second authenticated WebSocket to the directory using the portal's own registered keypair, scoped to the owner's `agent_id`. The directory fans out the owner-relevant event subset to both the portal WebSocket and the agent-client WebSocket. The portal receives: connection requests and escalations, key rotation nudges, anomaly alerts, tombstones, trust signal pickups, succession claims, and relay reassignment events. Session-level security events are agent-WebSocket-only. Portal writes (escalation decisions, room ban/mute, rotation initiation) are submitted to the directory via the portal WebSocket (the same authenticated WebSocket the portal opens at login — see server-infrastructure.md G-43) and forwarded by the directory to the agent client as `portal_instruction` messages. See server-infrastructure.md G-43 for full specification.
 
 ### What the dashboard does NOT do
 
@@ -805,24 +805,25 @@ These flows span multiple surfaces. Each is described once here to prevent the s
 
 ### Key rotation
 
-1. Owner opens the web portal (or mobile app WebAuthn path)
+1. Owner opens the web portal
 2. Initiates key rotation from account management
 3. Portal issues a WebAuthn challenge; owner taps hardware key or biometric
-4. Client generates new K_local (at the next session boundary)
-5. Portal sends key rotation request to signup portal backend (authenticated with WebAuthn response)
-6. Signup portal backend triggers new K_server_X ceremony across directory nodes
+4. Portal issues a short-lived, single-use rotation authorization token (signed by the portal keypair, scoped to `agent_id` + `rotate_k_local`) and delivers it to the agent client via `portal_instruction` (action: `initiate_rotation`) — the portal never touches K_local material
+5. Client generates new K_local locally and submits `{new_pubkey, rotation_token}` directly to the directory; directory validates the portal signature on the token
+6. Directory retires old K_local, runs a new K_server_X ceremony paired with the new K_local
 7. New public keys published; old keys marked expired; connected agents receive a `KEY_ROTATED` notification telling them to refresh cached key material
 8. Portal shows confirmation: new key fingerprint, rotation timestamp
 9. Desktop app shows a brief "Keys rotated" status update (system tray notification deferred — far future)
 
 ### Compromise detection and "Not Me"
 
+**Threat model note**: "Not Me" is an availability brake, not a confidentiality mechanism. A SIM-swap attacker who sends "Not Me" from a hijacked phone can burn K_server_X and lock the agent — but cannot re-key, because re-keying requires WebAuthn or TOTP (which the attacker does not have). The result is a DoS: the agent is bricked until the legitimate owner recovers. Owners who have not enrolled WebAuthn or TOTP must recover via M-of-N social recovery. This is the designed tradeoff — see the WebAuthn/TOTP enrollment warning in the registration completion flow.
+
 1. Directory detects anomaly event (e.g., FROST session establishment failure from unexpected source)
 2. Directory pushes push notification to mobile app AND sends message to WhatsApp/Telegram/WeChat (parallel paths — **[see Conflict FC-3]** for their relationship)
 3. Owner receives push notification
-4. Owner taps "Not Me / Emergency" in mobile app
-5. App re-authenticates with phone OTP
-6. App sends revocation request to signup portal backend; signup portal backend instructs directory to simultaneously:
+4. Owner taps "Not Me / Emergency" in mobile app or via WhatsApp/Telegram/WeChat
+5. App sends revocation request to signup portal backend (authenticated via messaging platform webhook bound to the registered phone number); signup portal backend instructs directory to simultaneously:
    - Burns K_server_X shares (no new FROST sessions possible)
    - Sends `EMERGENCY_SESSION_ABORT` to the agent client via its authenticated WebSocket — client aborts all active sessions and disconnects
    - Sends `PEER_COMPROMISED_ABORT` to all counterparties of active sessions via their authenticated WebSockets — counterparties seal unilaterally
@@ -842,7 +843,7 @@ These flows span multiple surfaces. Each is described once here to prevent the s
    - Message to WhatsApp/Telegram/WeChat/Slack escalation channel (always configured as fallback)
 5. Owner reviews the request in either the mobile app (push notification card) or the web portal (escalation queue)
 6. Owner taps Accept or Decline
-7. The decision is submitted via the portal API channel to the directory, which forwards it as a `portal_instruction` to the agent client for execution
+7. The decision is submitted via the portal WebSocket (G-43) to the directory, which forwards it as a `portal_instruction` to the agent client for execution
 8. A `CONNECTION_ESCALATION_RESOLVED` notification is appended to the log
 9. If the `escalation_expires_at` TTL passes with no response: the request auto-declines; owner sees "Auto-declined — timeout" in the dashboard
 
@@ -1039,7 +1040,7 @@ In Phase 1, the desktop app's server management features are replaced by CLI too
 | ~~F-25~~ | Portal | ~~Closed~~ — counterparty-facing key refresh notification named `KEY_ROTATED`; see FC-5 resolution above |
 | F-26 | Dashboard | DELIVERED-to-ABSENT transition timeout in group conversations not specified; portal cannot accurately display participant state without this |
 | ~~F-27~~ | Dashboard | ~~Retired~~ — two delivery paths resolved: directory WebSocket pushes system/protocol events to the agent; client-to-companion P2P delivers owner-targeted notifications. The portal receives events via the directory WebSocket path (same as the agent). See AC-16 / G-32. |
-| ~~F-28~~ | Portal | ~~Resolved~~ — Two-WebSocket design. Portal opens second authenticated WebSocket (portal keypair, scoped to agent_id) at login; directory fans out owner-relevant event subset. Portal writes (escalation decisions, room actions, rotation) submitted via portal API channel and forwarded by directory as `portal_instruction` messages to agent client. See server-infrastructure.md G-43. |
+| ~~F-28~~ | Portal | ~~Resolved~~ — Two-WebSocket design. Portal opens second authenticated WebSocket (portal keypair, scoped to agent_id) at login; directory fans out owner-relevant event subset. Portal writes (escalation decisions, room actions, rotation) submitted via portal WebSocket (G-43) and forwarded by directory as `portal_instruction` messages to agent client. See server-infrastructure.md G-43. |
 | F-29 | Mobile | Oracle proof capture (GPS + camera + timestamp) for bond/escrow disputes is a native mobile capability; rollout phase not assigned |
 | ~~F-30~~ | Portal | ~~Closed~~ — Default TTL: 6 months inactivity. Checkpoint job marks EXPIRED. TTL resets on each successful contact through the alias. Portal must show last-contacted timestamp and time remaining before expiry. |
 | F-31 | Portal | **Partially closed (FC-2 resolved)**: unauthenticated visitors see target's bio, handle, agent type, and "connect with CELLO" CTA. Detailed UX for the CTA flow (sign-up prompt, deep-link handling, app store routing) not yet designed. |

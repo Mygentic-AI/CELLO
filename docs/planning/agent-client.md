@@ -166,11 +166,13 @@ K_local rotation is agent-controlled. The directory sends a `KEY_ROTATION_RECOMM
 
 Rotation flow:
 1. Agent completes or seals any active sessions
-2. Client generates new K_local_v2
-3. Client registers K_local_v2 with the directory (authenticated via WebAuthn or TOTP — phone OTP alone is insufficient for identity-affecting operations)
-4. Directory retires K_local_v1 — no further FROST co-signing for the old key
-5. A new K_server_X ceremony runs to produce shares paired with K_local_v2
-6. Old K_server_X shares are retired
+2. Owner authenticates via WebAuthn or TOTP at the portal (phone OTP alone is insufficient)
+3. Portal issues a short-lived, single-use rotation authorization token (signed by the portal keypair, scoped to `agent_id` + `rotate_k_local`) and delivers it to the client via `portal_instruction` (action: `initiate_rotation`)
+4. Client generates new K_local_v2 locally — key material never transits the portal
+5. Client submits `{new_pubkey, rotation_token}` directly to the directory; directory validates the portal signature on the token
+6. Directory retires K_local_v1 — no further FROST co-signing for the old key
+7. A new K_server_X ceremony runs to produce shares paired with K_local_v2
+8. Old K_server_X shares are retired
 
 K_local rotation and K_server_X rotation are independent. K_server_X can rotate without the agent doing anything — the directory does it internally and notifies the agent of the new pubkey. K_local rotation triggers a new K_server_X ceremony as a side effect.
 
@@ -1167,7 +1169,7 @@ The client implements the complete notification type registry. Types are enumera
 | `order_update` | Agent | Order or task status update from a counterparty agent |
 | `alert` | Agent | Operational alert from a counterparty agent |
 | `promotional` | Agent | Promotional content; subject to rate limits per trust tier and recipient opt-out |
-| `portal_instruction` | Directory (forwarded from portal) | Owner-initiated action forwarded by the directory from the portal API channel. Payload: `{ action, agent_id, target_id?, room_id?, portal_signature, issued_at }`. Action types: `accept_connection`, `decline_connection`, `ban_participant`, `mute_participant`, `unmute_participant`, `initiate_rotation`, `create_succession_package`. The client executes without additional owner confirmation — portal owner already confirmed the action. The client validates `portal_signature` against the portal's known public key before acting. See server-infrastructure.md G-43. |
+| `portal_instruction` | Directory (forwarded from portal) | Owner-initiated action forwarded by the directory from the portal WebSocket (G-43). Payload: `{ action, agent_id, target_id?, room_id?, portal_signature, issued_at }`. Action types: `accept_connection`, `decline_connection`, `ban_participant`, `mute_participant`, `unmute_participant`, `initiate_rotation`, `create_succession_package`. The client executes without additional owner confirmation — portal owner already confirmed the action. The client validates `portal_signature` against the portal's known public key before acting. See server-infrastructure.md G-43. |
 
 ### Escalation channel routing
 
@@ -1303,10 +1305,11 @@ The following names are canonical and supersede inconsistencies in earlier docum
 2. Agent/operator decides to rotate (typically at the next session boundary)
 3. Client seals any active sessions
 4. Owner authenticates via WebAuthn or TOTP at the portal (phone OTP alone is insufficient)
-5. Client generates new K_local_v2
-6. Client registers K_local_v2 with directory; directory retires K_local_v1
-7. New K_server_X ceremony runs paired with K_local_v2; old K_server_X shares retired
-8. Client stores new K_local; old K_local securely deleted
+5. Portal issues a short-lived rotation authorization token (signed by portal keypair, scoped to `agent_id` + `rotate_k_local`) and delivers it to the client via `portal_instruction` (action: `initiate_rotation`)
+6. Client generates new K_local_v2 locally — key material never transits the portal
+7. Client submits `{new_pubkey, rotation_token}` to directory; directory validates portal signature on token, retires K_local_v1
+8. New K_server_X ceremony runs paired with K_local_v2; old K_server_X shares retired
+9. Client stores new K_local; old K_local securely deleted
 
 ### Compromise detection and "Not Me"
 
