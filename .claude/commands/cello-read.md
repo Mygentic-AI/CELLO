@@ -5,13 +5,17 @@ description: Load current CELLO project context — protocol map, recent activit
 
 Load context about the current state of the CELLO project. Starts from the whole protocol, then layers in recent activity. This is a briefing, not a full reading.
 
-## Step 1 — Read the Protocol Map
+**The protocol map is the foundation of every session. Do not skip it, skim it, or defer it. Everything else builds on what you learn there.**
 
-Read `docs/planning/protocol-map.md` in full.
+## Step 1 — Read the Protocol Map (REQUIRED — do not proceed to Step 2 without completing this)
 
-This is the orientation document. It covers all eight protocol domains: Identity, Directory, Connections, Conversations, Security, Recovery, Discovery, and Compliance. Each domain tells you what's decided, where the deep reference lives, which discussion logs matter, and whether the domain is ready for user stories.
+Read `docs/planning/protocol-map.md` **in full, from top to bottom**.
 
-After reading, you understand the full protocol at summary level — not just what changed recently.
+This is non-negotiable. The protocol map is the only document that gives you a complete, current picture of what is decided across all 9 protocol domains. Without it you will answer questions based on stale context, miss resolved decisions, or treat open items as open when they are not.
+
+Each domain entry tells you: what is decided, where the deep reference lives, which discussion logs matter, and whether the domain is ready for user stories. The Protocol Readiness Summary table at the bottom gives you the one-line status of every domain.
+
+Do not start Step 2 until you have read the full file and can answer: which domains are stable, what is deferred, and what is the current readiness status across all 9 domains.
 
 ## Step 2 — Recent activity
 
