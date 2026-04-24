@@ -119,7 +119,7 @@ The portal supports the following as optional, additive signals. None are regist
 
 - During onboarding, the portal should make designation of M-of-N recovery contacts and a designated successor highly visible and difficult to skip (not a hard gate, but a persistent prompt).
 - An agent without a designated successor must display a visible signal in its trust profile.
-- The portal supports creation of a succession package: an encrypted blob (seed phrase encrypted to the designated successor's `identity_key`), stored at the directory. Portal must never hold the plaintext seed phrase.
+- The portal supports creation of a succession package via a `portal_instruction` to the agent client. The client encrypts its own identity key private bytes to the designated successor's `identity_key` and uploads the result to the directory. The portal triggers the operation (WebAuthn-authenticated) and reflects the resulting status — it never receives or handles any key material.
 - Voluntary ownership transfer: current owner authenticates (WebAuthn), identifies new owner's CELLO identity, signs the identity migration. An announcement period of 7–14 days (configurable) runs during which all connected agents are notified and the old owner can cancel.
 - Involuntary succession (dead-man's switch): 30+ day waiting period (configurable), with notification to owner via external channels (WhatsApp/Telegram/WeChat) and all recovery contacts and connected agents. M-of-N recovery contact attestation required to execute.
 - The portal must enforce a freeze during the succession waiting period: social proofs and phone number cannot be reused. Only the pre-designated successor can receive succession.
@@ -713,7 +713,7 @@ All tables are append-only unless noted. Mutable tables are marked.
 | `key_rotation_log` | append-only |
 | `identity_migration_log` | append-only |
 | `succession_designations` | append-only |
-| `succession_packages` | append-only; encrypted payload, never plaintext; envelope-encrypted by node KMS master key (double-encrypted: owner encrypts to successor's `identity_key`, node wraps with KMS) |
+| `succession_packages` | append-only; encrypted payload, never plaintext; envelope-encrypted by node KMS master key (double-encrypted: client encrypts identity key private bytes to successor's `identity_key`, node wraps with KMS) |
 | `succession_events` | append-only |
 | `directory_checkpoints` | append-only |
 | `checkpoint_node_signatures` | append-only |
@@ -968,7 +968,7 @@ In Alpha, some components that will eventually be separated (relay vs. directory
 | Companion device allowlist | Client only (local allowlist) | N/A | Client-side; **[GAP G-41 — RETIRED]** |
 | Human injection logs | Client only (local SQLCipher) | N/A | Client-side; not in Merkle tree |
 | Anomaly event timestamps | All directory nodes | Yes | Not deleted |
-| Succession packages | Directory nodes only — identity-layer data; needed for authenticated succession ceremonies | Yes — full federation via append-only log, same as all core directory tables | GDPR: encrypted blob wiped on tombstone; hash remains in log. At-rest: envelope-encrypted by node KMS master key (same as K_server_X shares) — double-encrypted: once by owner to successor's `identity_key`, once by node KMS. |
+| Succession packages | Directory nodes only — identity-layer data; needed for authenticated succession ceremonies | Yes — full federation via append-only log, same as all core directory tables | GDPR: encrypted blob wiped on tombstone; hash remains in log. At-rest: envelope-encrypted by node KMS master key (same as K_server_X shares) — double-encrypted: client encrypts identity key private bytes to successor's `identity_key`; node wraps with KMS. |
 | Oracle evidence (GPS, photos, video) | Not stored by directory — [GAP G-40 RESOLVED] — follows hash-everything-store-nothing: oracle verifies claim → hash stored in directory → original discarded | N/A — original never held | Client holds original locally; presents to arbitration system if dispute arises; directory verifies hash matches |
 
 ---

@@ -210,31 +210,31 @@ Conversation Merkle trees are the only data that cannot be reconstructed from sc
 
 ### Succession package
 
-The owner can optionally create a succession package: an encrypted bundle containing the seed phrase, stored at the directory, decryptable only by the designated successor's `identity_key`.
+The owner can optionally create a succession package: an encrypted bundle containing the agent's identity key private bytes, stored at the directory, decryptable only by the designated successor's `identity_key`. The package gives the successor the ability to sign an identity migration as the predecessor — `old_identity_key.sign(new_identity_pubkey || timestamp)` — which is the only protocol operation that requires the predecessor's key. No seed phrase entry or derivation is needed; the client already holds the identity key material in its `KeyProvider`.
 
 **Client-side creation flow:**
 
-1. Owner designates a successor via the portal (or companion app); the directory stores the `successor_designations` record
-2. Owner opts into a succession package; the client fetches the designated successor's `identity_key` public key from the directory
-3. Client encrypts the seed phrase to the successor's `identity_key`:
+1. Owner designates a successor via the portal; the directory stores the `successor_designations` record
+2. Owner triggers package creation via the portal (WebAuthn-authenticated `portal_instruction`); the client receives the instruction and proceeds automatically — no owner key entry required
+3. Client fetches the designated successor's `identity_key` public key from the directory (resolved at designation time, not at package creation time)
+4. Client encrypts its own identity key private bytes to the successor's `identity_key`:
    ```
-   encrypted_payload = encrypt(seed_phrase, successor_identity_pubkey)
+   encrypted_payload = encrypt(identity_key_private_bytes, successor_identity_pubkey)
    payload_hash      = SHA-256(encrypted_payload)
    package_sig       = sign(payload_hash || agent_id || timestamp, identity_key)
    ```
-4. Client uploads `{encrypted_payload, payload_hash, package_sig}` to the directory's succession package endpoint
-5. Directory stores the encrypted blob and records `succession_package_hash` on the agent's registration record
+5. Client uploads `{encrypted_payload, payload_hash, package_sig}` to the directory's succession package endpoint
+6. Directory stores the encrypted blob and records `succession_package_hash` on the agent's registration record
 
-The directory never holds the plaintext seed phrase. Only the designated successor's `identity_key` can decrypt the payload. The `package_sig` lets verifiers confirm the owner authorised the package at upload time.
+The directory never holds the plaintext key material. Only the designated successor's `identity_key` can decrypt the payload. The `package_sig` lets verifiers confirm the owner authorised the package at upload time.
 
 **Client-side decryption flow (designated successor after succession executes):**
 
 1. Successor receives `succession_package_available` notification after the dead-man's switch waiting period completes and the succession executes
 2. Successor fetches the encrypted payload from the directory
-3. Successor's client decrypts: `seed_phrase = decrypt(encrypted_payload, own_identity_key)`
-4. Client derives the predecessor's `identity_key` from the recovered seed phrase
-5. Client uses the predecessor's `identity_key` to sign the identity migration: `old_identity_key.sign(new_identity_pubkey || timestamp)` — same as the standard identity migration flow
-6. Directory records the migration in `identity_migration_log`: `old_pseudonym → new_pseudonym`; track record continuity is preserved
+3. Successor's client decrypts: `identity_key_private_bytes = decrypt(encrypted_payload, own_identity_key)`
+4. Client uses the recovered predecessor identity key bytes directly to sign the identity migration: `old_identity_key.sign(new_identity_pubkey || timestamp)` — same as the standard identity migration flow; no seed phrase derivation needed
+5. Directory records the migration in `identity_migration_log`: `old_pseudonym → new_pseudonym`; track record continuity is preserved
 
 The path with a succession package is equivalent to voluntary transfer in terms of protocol outcome. Without a succession package, the succession link is informational only — the successor starts fresh.
 
