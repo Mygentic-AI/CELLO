@@ -45,9 +45,9 @@ acceptance_criteria:
     component_under_test: crypto
 
   - id: AC-004
-    given: "Known test vectors derived from the Certificate Transparency reference implementation (google/certificate-transparency-go test suite)"
-    when: "The client computes leaf and internal node hashes for the reference inputs"
-    then: "The outputs match the expected test vector values"
+    given: "NIST CAVP SHA-256 test vectors (short- and long-message sets from the FIPS 180-4 test suite) plus CELLO-specific leaf/node fixtures stored under `packages/crypto/test/vectors/merkle-primitives.json`. The CELLO fixtures cover: (a) the empty input leaf hash, (b) a single-byte input `0x42` leaf hash, (c) a 64-byte input leaf hash, (d) an internal node hash over two all-zero child hashes, (e) an internal node hash over two distinct child hashes. Expected outputs in the fixture are computed once from an independent SHA-256 reference (e.g., `sha256sum` CLI or Python `hashlib`) and committed as hex, serving as a cross-implementation contract the future Rust port must match"
+    when: "The client computes plain SHA-256 for the NIST vectors and leaf/node hashes for each CELLO fixture input"
+    then: "Every output matches the expected hex in its respective fixture"
     test_type: unit
     component_under_test: crypto
 

@@ -28,6 +28,8 @@ behavior:
     action: "the protocol-types module shall validate the envelope structure: all required fields present, sender_pubkey is 32 bytes, signature is 64 bytes, content_hash is 32 bytes, sequence_number is a non-negative integer"
   - trigger: "When a MessageEnvelope has a missing or malformed field"
     action: "the protocol-types module shall reject it with a structured error identifying the invalid field"
+  - trigger: "When envelope construction is called with content exceeding 1,048,576 bytes (1 MiB)"
+    action: "the protocol-types module shall reject the construction with a structured `content_too_large` error and shall not compute a content_hash, signature, or partial envelope. The same limit is enforced on the validation path: inbound envelopes carrying content larger than 1 MiB are rejected with the same error."
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -80,6 +82,34 @@ acceptance_criteria:
     given: "A valid MessageEnvelope signed with TBS = [sender_pubkey, session_id, sequence_number, content_hash, timestamp]"
     when: "Any single TBS field is mutated after signing (session_id swapped, sequence_number changed, timestamp moved, sender_pubkey substituted, or content_hash replaced)"
     then: "Signature verification fails for each mutation"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-008
+    given: "A fixed TBS fixture stored under `packages/protocol-types/test/vectors/tbs-canonical.json` specifying exact values for sender_pubkey (hex), session_id (string), sequence_number (integer), content_hash (hex), and timestamp (integer), together with the expected canonical-CBOR encoding as a hex string. The expected hex is committed and reviewed — it serves as the cross-implementation contract the future Rust port must match byte-for-byte"
+    when: "The TypeScript implementation encodes the TBS fixture values to canonical CBOR"
+    then: "The produced bytes equal the expected hex in the fixture exactly"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-009
+    given: "Content of exactly 1,048,576 bytes (1 MiB)"
+    when: "The client constructs a MessageEnvelope"
+    then: "Construction succeeds"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-010
+    given: "Content of 1,048,577 bytes (1 MiB + 1)"
+    when: "The client constructs a MessageEnvelope"
+    then: "Construction is rejected with a structured `content_too_large` error; no content_hash or signature is computed"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-011
+    given: "A received MessageEnvelope whose content field exceeds 1,048,576 bytes"
+    when: "Structural validation is performed"
+    then: "Validation fails with a `content_too_large` error"
     test_type: unit
     component_under_test: protocol-types
 

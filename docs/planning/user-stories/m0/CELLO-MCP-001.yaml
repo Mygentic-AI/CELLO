@@ -53,40 +53,33 @@ acceptance_criteria:
 
   - id: AC-003
     given: "An active session"
-    when: "Agent A calls cello_send with await_reply_timeout set to 5 seconds, and Agent B sends a reply within 2 seconds"
-    then: "cello_send returns both the leaf_hash and the reply message inline"
-    test_type: e2e
-    component_under_test: client
-
-  - id: AC-004
-    given: "An active session"
     when: "Agent B calls cello_receive with timeout 1 second and no message arrives"
     then: "cello_receive returns { type: 'timeout' } after approximately 1 second"
     test_type: e2e
     component_under_test: client
 
-  - id: AC-005
+  - id: AC-004
     given: "An active session"
     when: "Agent A calls cello_close_session"
     then: "The session is closed; both agents' subsequent cello_send calls on that session_id return an error"
     test_type: e2e
     component_under_test: client
 
-  - id: AC-006
+  - id: AC-005
     given: "An MCP server connected to the directory"
     when: "Agent calls cello_status"
     then: "The response includes directory_reachable: true, active_sessions count, and uptime_seconds"
     test_type: e2e
     component_under_test: client
 
-  - id: AC-007
+  - id: AC-006
     given: "An MCP server connected to the directory"
     when: "Agent calls cello_send with a nonexistent session_id"
     then: "The MCP server returns a structured error with the session_id and 'session not found' reason"
     test_type: e2e
     component_under_test: client
 
-  - id: AC-008
+  - id: AC-007
     given: "Two MCP server instances and a directory"
     when: "Agent A initiates a session, sends 5 messages, Agent B receives all 5 and replies to each, Agent A closes the session"
     then: "All 10 messages (5 each direction) are delivered with correct content, valid signatures, and sequential sequence numbers; session close completes cleanly"

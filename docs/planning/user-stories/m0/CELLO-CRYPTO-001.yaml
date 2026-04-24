@@ -70,8 +70,8 @@ acceptance_criteria:
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
-    statement: "The crypto module shall never expose the private key bytes through any public API"
-    adversarial_condition: "even when serializing the keypair for storage or transport"
+    statement: "The crypto module shall never expose the private key bytes through any logging, error message, diagnostic output, or toString/inspect path; serialization is permitted only through the designated `exportKeypair`/`importKeypair` API intended for encrypted persistence"
+    adversarial_condition: "even when the keypair object is passed to console.log, JSON.stringify, util.inspect, or included in an error thrown from a signing failure"
     test_type: unit
     component_under_test: crypto
 

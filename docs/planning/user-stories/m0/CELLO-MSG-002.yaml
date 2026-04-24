@@ -16,9 +16,20 @@ story: >
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
   - trigger: "When the client sends a message on an active session"
-    action: "the client shall construct a MessageEnvelope (signing the content hash with K_local), increment the session sequence counter, and dispatch the envelope to the directory for relay"
+    action: >
+      the client shall construct a MessageEnvelope per MSG-001: compute the content_hash
+      (leaf hash of the content), build the TBS array
+      `[sender_pubkey, session_id, sequence_number, content_hash, timestamp]`, encode it
+      as canonical CBOR, sign the CBOR bytes with K_local to produce the 64-byte Ed25519
+      signature, increment the session sequence counter atomically, and dispatch the
+      envelope to the directory for relay.
   - trigger: "When the client receives a MessageEnvelope from the directory"
-    action: "the client shall verify the envelope structure, recompute the content hash, verify the sender's Ed25519 signature against their registered public key, and verify the sequence number is the next expected value"
+    action: >
+      the client shall validate the envelope structure, recompute the content_hash from
+      the content and verify it matches the envelope's content_hash field, rebuild the TBS
+      array from the envelope fields, encode it as canonical CBOR, verify the Ed25519
+      signature against the sender's registered public key over the CBOR bytes, and verify
+      the sequence number is the next expected value for the session.
   - trigger: "When the content hash does not match the recomputed hash"
     action: "the client shall reject the message and log a tampering event with the session_id, sequence_number, and expected vs. actual hash"
   - trigger: "When the sender's signature does not verify"
@@ -98,6 +109,19 @@ security_invariants:
   - id: SI-003
     statement: "The client shall never send a MessageEnvelope with a sequence number that skips or repeats"
     adversarial_condition: "even when 100 concurrent send calls are fired on the same session simultaneously"
+    test_type: integration
+    component_under_test: client
+
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the directory WebSocket is disconnected (no authenticated connection)"
+    fallback: >
+      the client shall reject send attempts with a structured `transport_unavailable`
+      error and shall not queue the message, not advance the sequence counter, and not
+      modify session state, rather than blocking indefinitely or silently dropping.
+      Full graceful-degradation semantics (local-only operation, reconciliation on
+      recovery) arrive in later milestones.
     test_type: integration
     component_under_test: client
 

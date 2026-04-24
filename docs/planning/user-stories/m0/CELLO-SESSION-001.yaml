@@ -101,6 +101,19 @@ security_invariants:
     test_type: integration
     component_under_test: directory
 
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the directory WebSocket is disconnected mid-session"
+    fallback: >
+      the client shall mark the affected sessions as `transport_lost`, surface the event
+      to the agent on the next MCP call referencing those sessions, and reject further
+      send/close operations on them with a `transport_unavailable` error rather than
+      blocking. Session resumption after reconnect is out of M0 scope — the agent must
+      treat a `transport_lost` session as effectively closed.
+    test_type: integration
+    component_under_test: client
+
 # ─── References ─────────────────────────────────────────────
 references:
   protocol_map: "Conversations"
