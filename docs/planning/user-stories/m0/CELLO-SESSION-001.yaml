@@ -87,17 +87,49 @@ acceptance_criteria:
     test_type: integration
     component_under_test: client
 
+  - id: AC-008
+    given: "Client A is authenticated to the directory; no client is authenticated under target pubkey K_B"
+    when: "Client A initiates a session targeting K_B"
+    then: "The directory returns a structured `target_offline` error; no session is created; Client A's active session list is unchanged"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-009
+    given: "A running directory"
+    when: "1,000 sessions are created in rapid succession between authenticated client pairs"
+    then: >
+      All 1,000 session_ids are unique, all are exactly 16 bytes, and a chi-squared test
+      on the concatenated session_id bytes against a uniform distribution yields p > 0.01
+      (a sanity check that the ids came from a CSPRNG, not a low-entropy counter).
+    test_type: integration
+    component_under_test: directory
+
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
-    statement: "The directory shall never create a session where one of the parties did not request or accept it"
-    adversarial_condition: "even when an attacker sends a forged session establishment request with another client's public key"
+    statement: >
+      The directory shall create a session only when both parties are concurrently connected
+      and authenticated under the pubkeys named in the session-initiate request. In M0
+      there is no receiver-accept step — the target is notified via `session_established`
+      — so "both parties authenticated at creation time" is the full M0 invariant.
+      Receiver-gated acceptance is deferred to M3 (CELLO-CONNREQ-*).
+    adversarial_condition: >
+      even when an attacker initiates a session toward a pubkey that is offline, was
+      recently online but currently disconnected, or is represented by a hung WebSocket
+      that has not completed the challenge-response handshake.
     test_type: integration
     component_under_test: directory
 
   - id: SI-002
-    statement: "The directory shall never issue a session_id that collides with an existing active or recently-closed session"
-    adversarial_condition: "even when 1000 sessions are created in rapid succession"
+    statement: >
+      The directory shall generate session_ids as 16 bytes (128 bits) read from a
+      cryptographically secure random source, and shall never issue a session_id that
+      collides with an existing active or recently-closed session.
+    adversarial_condition: >
+      even when an attacker authenticated as K_X attempts to probe NODE-001's SI-003
+      (relay to non-participant) by guessing session_ids; 128 bits of entropy from a
+      CSPRNG makes brute-force infeasible. Also: even when 1000 sessions are created in
+      rapid succession, no two collide.
     test_type: integration
     component_under_test: directory
 

@@ -5,13 +5,15 @@ actor: CLIENT
 priority: P0
 components:
   - client
-  - transport
 
 # ─── Intent ─────────────────────────────────────────────────
 story: >
   As the CELLO Client,
   I want to send signed messages and verify incoming message signatures
   so that tampered or forged messages are rejected before reaching the agent.
+  WebSocket transport is an internal module of the client package (`client/src/transport/`);
+  no separate transport package exists in M0. Multi-transport extraction is deferred until
+  a second transport (e.g., libp2p in M10) materializes.
 
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
@@ -19,10 +21,10 @@ behavior:
     action: >
       the client shall construct a MessageEnvelope per MSG-001: compute the content_hash
       (leaf hash of the content), build the TBS array
-      `[sender_pubkey, session_id, sequence_number, content_hash, timestamp]`, encode it
-      as canonical CBOR, sign the CBOR bytes with K_local to produce the 64-byte Ed25519
-      signature, increment the session sequence counter atomically, and dispatch the
-      envelope to the directory for relay.
+      `[protocol_version, sender_pubkey, session_id, sequence_number, content_hash, timestamp]`
+      with protocol_version = 0 in M0, encode it as canonical CBOR, sign the CBOR bytes with
+      K_local to produce the 64-byte Ed25519 signature, increment the session sequence counter
+      atomically, and dispatch the envelope to the directory for relay.
   - trigger: "When the client receives a MessageEnvelope from the directory"
     action: >
       the client shall validate the envelope structure, recompute the content_hash from
@@ -38,6 +40,17 @@ behavior:
     action: "the client shall reject the message and log a sequence gap or replay with the expected and received values"
   - trigger: "When a message arrives without a signature field"
     action: "the client shall reject the message unconditionally"
+  - trigger: "When a message arrives with a TBS protocol_version not supported by the current build"
+    action: "the client shall reject the message with a structured `unsupported_version` error and shall not invoke any application-layer handling"
+  - trigger: "When a received message's sequence_number is not the next expected value for the session"
+    action: >
+      the client shall reject the message, mark the session status as `desynchronized`, log the
+      gap with expected vs. received values, and fail all subsequent send and receive operations
+      on the session with a `session_desynchronized` error. The session is terminally closed from
+      the client's perspective — recovery requires establishing a new session. WebSocket transport
+      is FIFO, so a sequence gap implies active tampering, a directory bug, or MITM activity;
+      continuing would leave the receiver unable to distinguish "message dropped" from "message
+      still in flight," so the receiver fails closed.
   - trigger: "When multiple sends are requested concurrently on the same session"
     action: "the client shall serialize them through a per-session queue so that sequence numbers are assigned atomically and never skip or repeat"
 
@@ -74,14 +87,22 @@ acceptance_criteria:
   - id: AC-005
     given: "An active session where Client B has received messages 0, 1, 2"
     when: "A message arrives with sequence_number 1 (replay)"
-    then: "Client B rejects the message; a replay event is logged"
+    then: >
+      Client B rejects the message; the session status becomes `desynchronized`;
+      a replay event is logged with expected vs. received sequence numbers;
+      subsequent `cello_send` and `cello_receive` calls on the session return
+      `session_desynchronized`.
     test_type: integration
     component_under_test: client
 
   - id: AC-006
     given: "An active session where Client B has received messages 0, 1, 2"
     when: "A message arrives with sequence_number 4 (gap)"
-    then: "Client B rejects the message; a sequence gap event is logged"
+    then: >
+      Client B rejects the message; the session status becomes `desynchronized`;
+      a sequence-gap event is logged with expected vs. received sequence numbers;
+      subsequent `cello_send` and `cello_receive` calls on the session return
+      `session_desynchronized`.
     test_type: integration
     component_under_test: client
 
@@ -89,6 +110,16 @@ acceptance_criteria:
     given: "An active session"
     when: "A message arrives with the signature field missing entirely"
     then: "Client B rejects the message unconditionally"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-008
+    given: "An active session"
+    when: "A message arrives whose TBS protocol_version is 1 (a value not supported by the M0 build)"
+    then: >
+      The client rejects the message with a structured `unsupported_version` error;
+      no application-layer handler is invoked; the session is not marked desynchronized
+      (an unsupported version is a forward-compatibility event, not a tampering event).
     test_type: unit
     component_under_test: client
 
@@ -109,6 +140,19 @@ security_invariants:
   - id: SI-003
     statement: "The client shall never send a MessageEnvelope with a sequence number that skips or repeats"
     adversarial_condition: "even when 100 concurrent send calls are fired on the same session simultaneously"
+    test_type: integration
+    component_under_test: client
+
+  - id: SI-004
+    statement: >
+      The client shall reject any received MessageEnvelope whose recomputed content_hash
+      (the leaf hash of the envelope's content field) does not match the envelope's
+      content_hash field, before any application-layer delivery or state update.
+    adversarial_condition: >
+      even when the signature over the mismatched content_hash is valid — i.e., when an
+      attacker has signed a hash that does not match the payload they are delivering. The
+      hash-content consistency check must succeed independently of signature verification;
+      both must pass before delivery.
     test_type: integration
     component_under_test: client
 

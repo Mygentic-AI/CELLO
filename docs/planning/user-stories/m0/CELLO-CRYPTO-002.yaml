@@ -54,7 +54,14 @@ acceptance_criteria:
   - id: AC-005
     given: "An empty byte string"
     when: "The client computes a leaf hash"
-    then: "The result equals SHA-256(0x00) — the hash of just the domain separator"
+    then: >
+      The result equals SHA-256(0x00) — the hash of just the domain separator. This is
+      internally consistent with the leaf-hash definition `leaf_hash(D) = SHA-256(0x00 || D)`
+      for any D including the empty string. M0 message envelopes never carry empty content
+      (MSG-001 AC-009/AC-010 enforce a non-zero content size via the 1 MiB cap, which is a
+      maximum; empty payloads are already excluded elsewhere in the envelope path). The
+      leaf-hash primitive is nevertheless defined on all byte strings so later milestones
+      can use it for empty notifications, group-control leaves, and similar constructs.
     test_type: unit
     component_under_test: crypto
 

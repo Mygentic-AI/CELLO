@@ -31,6 +31,13 @@ behavior:
       the directory shall reject any frame other than `ws_auth_response` with
       a structured `not_authenticated` error and shall not relay, register, or
       enqueue anything on behalf of the connection.
+  - trigger: "When a `ws_auth_response` references a nonce issued more than 30 seconds ago, a nonce that was never issued, or a nonce that has already been consumed by a prior auth attempt"
+    action: >
+      the directory shall close the connection with a structured `auth_failed` reason
+      (`nonce_expired`, `nonce_unknown`, or `nonce_reused`, respectively) and shall not
+      register the client. Issued nonces are tracked in a TTL-bounded map; each nonce is
+      evicted on first use (success or failure) or on expiry, whichever comes first. A
+      test-only time source lets tests drive expiry without wall-clock sleep.
   - trigger: "When a session is established between two authenticated clients"
     action: >
       the directory shall send a `session_established` frame
@@ -119,6 +126,20 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
+  - id: AC-011
+    given: "A client that received a `ws_auth_challenge { nonce }` and, under the test time source, has waited 31 seconds before responding"
+    when: "The client sends an otherwise-valid `ws_auth_response` signing the correct domain string and nonce"
+    then: "The directory closes the connection with `auth_failed: nonce_expired` and does not register the client"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-012
+    given: "A client has completed one `ws_auth_response` cycle (successful or failed) consuming nonce N"
+    when: "A second connection attempts to authenticate by submitting a `ws_auth_response` that references nonce N"
+    then: "The directory closes the second connection with `auth_failed: nonce_reused` and does not register it"
+    test_type: integration
+    component_under_test: directory
+
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
@@ -129,7 +150,12 @@ security_invariants:
 
   - id: SI-002
     statement: "The directory shall never register a WebSocket connection under a public key the connection has not proven ownership of by signing `\"CELLO-WS-AUTH-v1\" || nonce || pubkey`"
-    adversarial_condition: "even when the attacker connects and sends a forged `ws_auth_response` with a valid-looking but incorrectly-signed signature, a signature over the wrong domain string, or a replayed signature from a different nonce"
+    adversarial_condition: >
+      even when the attacker connects and sends a forged `ws_auth_response` with a
+      valid-looking but incorrectly-signed signature, a signature over the wrong domain
+      string, a replayed signature from a different nonce, a signature over a nonce that
+      has already been consumed by a prior (successful or failed) auth attempt, or a
+      signature over a nonce issued more than 30 seconds ago.
     test_type: integration
     component_under_test: directory
 

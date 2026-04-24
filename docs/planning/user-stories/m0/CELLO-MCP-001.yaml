@@ -11,7 +11,15 @@ story: >
   As an AI Agent,
   I want to send messages, receive messages, initiate sessions, close sessions, and check status through MCP tools
   so that I can communicate with other agents without handling cryptographic operations or transport directly.
-  The M0 MCP server uses the @modelcontextprotocol/sdk Node SDK over stdio transport.
+  The M0 MCP server uses the @modelcontextprotocol/sdk Node SDK over stdio transport in production.
+
+  Test infrastructure note: E2E tests in `packages/e2e-tests` run two MCP server instances in
+  the same Vitest process by wiring each pair of client/server through the SDK's in-memory
+  transport (`InMemoryTransport.createLinkedPair()`) against an in-process directory stub.
+  The server factory, tool registry, schemas, and internal client wiring are identical under
+  both transports — transport selection happens only at the outermost composition layer, so
+  production stdio and test in-memory paths exercise the same server code. This is enforced
+  by AC-008 rather than left as convention.
 
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
@@ -84,6 +92,18 @@ acceptance_criteria:
     when: "Agent A initiates a session, sends 5 messages, Agent B receives all 5 and replies to each, Agent A closes the session"
     then: "All 10 messages (5 each direction) are delivered with correct content, valid signatures, and sequential sequence numbers; session close completes cleanly"
     test_type: e2e
+    component_under_test: client
+
+  - id: AC-008
+    given: "The MCP server is produced by a shared factory that accepts a transport argument"
+    when: "The factory is invoked once with an SDK `InMemoryTransport` (as in tests) and once with stdio transport (as in production)"
+    then: >
+      The set of registered tool names, tool input schemas, tool output schemas, and the
+      constructed server's internal client wiring (directory connection, signing key source,
+      session table) are identical in both invocations, verified by structural equality
+      (or snapshot) on the server's tool registry and an assertion that the same client
+      instance type is injected. Transport is the only differing input.
+    test_type: unit
     component_under_test: client
 
 # ─── Security Invariants ───────────────────────────────────

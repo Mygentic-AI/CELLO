@@ -97,14 +97,20 @@ Fully specified stories live in `docs/planning/user-stories/m0/`. The table belo
 | CELLO-MSG-001 | Signed message envelope schema | Message Exchange | CLIENT | P0 | protocol-types | CRYPTO-001, CRYPTO-002 |
 | CELLO-NODE-001 | Directory stub: WebSocket relay | Node Operations | DIR | P0 | directory | MSG-001 |
 | CELLO-SESSION-001 | Session establishment (no FROST) | Session Lifecycle | CLIENT | P0 | client, directory | MSG-001, NODE-001 |
-| CELLO-MSG-002 | Client send/receive with signature verification | Message Exchange | CLIENT | P0 | client, transport | MSG-001, SESSION-001 |
+| CELLO-MSG-002 | Client send/receive with signature verification | Message Exchange | CLIENT | P0 | client | MSG-001, SESSION-001 |
 | CELLO-MCP-001 | M0 MCP tool surface | MCP Tool Surface | AGENT | P0 | client | SESSION-001, MSG-002 |
 
 Seven stories, all P0. A TDD agent pulls the stories in dependency order, writes failing tests from the acceptance criteria, and implements until green. CRYPTO-001 and CRYPTO-002 can run in parallel; MSG-001 waits on both; NODE-001 waits on MSG-001 (it validates envelopes on relay); SESSION-001 depends on both MSG-001 and NODE-001; MSG-002 depends on SESSION-001; MCP-001 is last.
 
 M0 already hashes message content as Merkle leaves (SHA-256 with 0x00 domain separator) even though no tree is constructed until M1. This is intentional — pre-committing to the leaf hash format means M1 adds the tree without changing the envelope format or invalidating M0 signatures.
 
-M0 authenticates the WebSocket connection via an Ed25519 challenge-response: on connect the directory sends a 32-byte nonce; the client returns a signature over the byte string `"CELLO-WS-AUTH-v1" || nonce || pubkey`. This is not FROST and does not protect against a compromised K_local — that's M2's job — but it prevents the trivial spoof where any connected client claims any pubkey, which would otherwise make NODE-001's and SESSION-001's negative tests vacuous. The domain-string prefix prevents cross-protocol signature reuse.
+M0 signs over a positional TBS array that begins with `protocol_version` (CBOR unsigned integer, constant `0` in M0). Placing the version first means an unknown version is detectable without parsing any subsequent field, and every future milestone that changes TBS structure bumps the version rather than silently reshaping the array. Value `1` is reserved for the first externally-shipped release.
+
+M0 authenticates the WebSocket connection via an Ed25519 challenge-response: on connect the directory sends a 32-byte cryptographically random nonce with a 30-second TTL; the client returns a signature over the byte string `"CELLO-WS-AUTH-v1" || nonce || pubkey`. Nonces are single-use and tracked in a TTL-bounded map — expired, unknown, or reused nonces are rejected with structured `auth_failed` reasons. This is not FROST and does not protect against a compromised K_local (that's M2's job), but it prevents the trivial spoof where any connected client claims any pubkey, which would otherwise make NODE-001's and SESSION-001's negative tests vacuous. The domain-string prefix prevents cross-protocol signature reuse.
+
+Session IDs in M0 are 128 bits of CSPRNG output, unguessable by construction. Without this entropy the relay-boundary invariant (NODE-001 SI-003: "never relay to a non-participant") would hold only against lazy attackers, and its negative test would pass because the attacker guessed wrong rather than because guessing is infeasible.
+
+Receivers fail closed on sequence gaps. WebSocket transport is FIFO, so a missing or out-of-order sequence number is either active tampering, a directory bug, or MITM activity — never benign reordering. The receiver marks the session `desynchronized` and fails subsequent sends/receives with `session_desynchronized`; recovery requires establishing a new session.
 
 ---
 

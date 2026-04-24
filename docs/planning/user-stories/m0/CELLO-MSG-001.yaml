@@ -16,14 +16,20 @@ story: >
 behavior:
   - trigger: "When the client constructs an outbound message"
     action: >
-      the protocol-types module shall produce a MessageEnvelope containing: sender_pubkey (32 bytes),
-      session_id, sequence_number, content (arbitrary bytes), content_hash (SHA-256 leaf hash of the content),
-      signature (64-byte Ed25519), and timestamp (Unix milliseconds). The wire encoding is canonical CBOR (RFC 8949).
-      The signature is computed over the canonical-CBOR encoding of the to-be-signed (TBS) array
-      `[sender_pubkey, session_id, sequence_number, content_hash, timestamp]` — a positional array, not a map,
-      so implementations never need to canonicalize map key order. Content is not in the TBS structure because
-      content_hash already commits to it. All implementations must produce byte-identical CBOR for the same
-      logical TBS to interoperate.
+      the protocol-types module shall produce a MessageEnvelope containing: protocol_version
+      (CBOR unsigned integer; constant 0 in M0), sender_pubkey (32 bytes), session_id,
+      sequence_number, content (arbitrary bytes), content_hash (SHA-256 leaf hash of the content),
+      signature (64-byte Ed25519), and timestamp (Unix milliseconds). The wire encoding is
+      canonical CBOR (RFC 8949). The signature is computed over the canonical-CBOR encoding of
+      the to-be-signed (TBS) array
+      `[protocol_version, sender_pubkey, session_id, sequence_number, content_hash, timestamp]`
+      — a positional array, not a map, so implementations never need to canonicalize map key
+      order. protocol_version is the first element so an unknown version is detectable without
+      parsing any subsequent fields. Content is not in the TBS structure because content_hash
+      already commits to it. All implementations must produce byte-identical CBOR for the same
+      logical TBS to interoperate. M0 uses protocol_version = 0; value 1 is reserved for the
+      first externally-shipped release, and every milestone that changes TBS structure bumps
+      the version.
   - trigger: "When any component receives a MessageEnvelope"
     action: "the protocol-types module shall validate the envelope structure: all required fields present, sender_pubkey is 32 bytes, signature is 64 bytes, content_hash is 32 bytes, sequence_number is a non-negative integer"
   - trigger: "When a MessageEnvelope has a missing or malformed field"
@@ -37,9 +43,10 @@ acceptance_criteria:
     given: "Valid content, a keypair, a session_id, a sequence_number, and a timestamp"
     when: "The client constructs a MessageEnvelope"
     then: >
-      All fields are populated; content_hash equals the SHA-256 leaf hash of the content;
-      the signature verifies against sender_pubkey over canonical-CBOR(TBS) where
-      TBS = [sender_pubkey, session_id, sequence_number, content_hash, timestamp]
+      All fields are populated; protocol_version equals 0; content_hash equals the SHA-256
+      leaf hash of the content; the signature verifies against sender_pubkey over
+      canonical-CBOR(TBS) where
+      TBS = [protocol_version, sender_pubkey, session_id, sequence_number, content_hash, timestamp]
     test_type: unit
     component_under_test: protocol-types
 
@@ -79,14 +86,14 @@ acceptance_criteria:
     component_under_test: protocol-types
 
   - id: AC-007
-    given: "A valid MessageEnvelope signed with TBS = [sender_pubkey, session_id, sequence_number, content_hash, timestamp]"
-    when: "Any single TBS field is mutated after signing (session_id swapped, sequence_number changed, timestamp moved, sender_pubkey substituted, or content_hash replaced)"
+    given: "A valid MessageEnvelope signed with TBS = [protocol_version, sender_pubkey, session_id, sequence_number, content_hash, timestamp]"
+    when: "Any single TBS field is mutated after signing (protocol_version substituted, session_id swapped, sequence_number changed, timestamp moved, sender_pubkey substituted, or content_hash replaced)"
     then: "Signature verification fails for each mutation"
     test_type: unit
     component_under_test: protocol-types
 
   - id: AC-008
-    given: "A fixed TBS fixture stored under `packages/protocol-types/test/vectors/tbs-canonical.json` specifying exact values for sender_pubkey (hex), session_id (string), sequence_number (integer), content_hash (hex), and timestamp (integer), together with the expected canonical-CBOR encoding as a hex string. The expected hex is committed and reviewed — it serves as the cross-implementation contract the future Rust port must match byte-for-byte"
+    given: "A fixed TBS fixture stored under `packages/protocol-types/test/vectors/tbs-canonical.json` specifying exact values for protocol_version (integer, 0), sender_pubkey (hex), session_id (string), sequence_number (integer), content_hash (hex), and timestamp (integer), together with the expected canonical-CBOR encoding as a hex string. The expected hex is committed and reviewed — it serves as the cross-implementation contract the future Rust port must match byte-for-byte"
     when: "The TypeScript implementation encodes the TBS fixture values to canonical CBOR"
     then: "The produced bytes equal the expected hex in the fixture exactly"
     test_type: unit
@@ -116,8 +123,13 @@ acceptance_criteria:
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
-    statement: "A validator shall reject a MessageEnvelope whose content_hash does not match the content"
-    adversarial_condition: "even when the signature over the mismatched content_hash is valid (attacker signed a hash that doesn't match the payload)"
+    statement: >
+      The protocol-types module shall never emit a MessageEnvelope whose content_hash field
+      was not computed from the content field by the module itself. The envelope constructor
+      must ignore any caller-supplied content_hash and always recompute it from the content.
+    adversarial_condition: >
+      even when a caller passes a pre-computed content_hash through the construction API in
+      an attempt to decouple the hash from the payload — the constructor must not honor it.
     test_type: unit
     component_under_test: protocol-types
 
@@ -128,8 +140,20 @@ security_invariants:
     component_under_test: protocol-types
 
   - id: SI-003
-    statement: "A validator shall reject a MessageEnvelope where any TBS field (sender_pubkey, session_id, sequence_number, content_hash, or timestamp) has been altered relative to what was signed"
+    statement: "A validator shall reject a MessageEnvelope where any TBS field (protocol_version, sender_pubkey, session_id, sequence_number, content_hash, or timestamp) has been altered relative to what was signed"
     adversarial_condition: "even when the altered envelope is otherwise structurally well-formed and the original signature bytes are retained"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: SI-004
+    statement: >
+      The protocol-types module shall reject any MessageEnvelope whose TBS protocol_version
+      is not in the set of versions supported by the current build. The M0 build supports
+      only protocol_version = 0.
+    adversarial_condition: >
+      even when the envelope is otherwise structurally well-formed and its signature verifies
+      against the altered TBS — an unsupported version must be refused before any application
+      logic is invoked, so future TBS changes cannot be silently misinterpreted by an M0 peer.
     test_type: unit
     component_under_test: protocol-types
 

@@ -70,8 +70,20 @@ acceptance_criteria:
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
-    statement: "The crypto module shall never expose the private key bytes through any logging, error message, diagnostic output, or toString/inspect path; serialization is permitted only through the designated `exportKeypair`/`importKeypair` API intended for encrypted persistence"
-    adversarial_condition: "even when the keypair object is passed to console.log, JSON.stringify, util.inspect, or included in an error thrown from a signing failure"
+    statement: >
+      The Keypair class shall redact private key bytes in all standard serialization and
+      inspection paths. Specifically, it must override `toJSON()`, `toString()`, and the
+      Node-specific `Symbol.for('nodejs.util.inspect.custom')` so that each returns a
+      representation containing no private-key bytes. Private key material shall be exposed
+      only through the explicit `exportKeypair(passphrase)` API, which produces an
+      encrypted blob; the plain private key field must not be readable from outside the
+      crypto package.
+    adversarial_condition: >
+      even when a Keypair instance is passed to `console.log`, `JSON.stringify`,
+      `util.inspect`, a thrown error, a structured logger, or a test snapshot — the
+      private key bytes must not appear in the output. The test plan exercises each
+      listed path with a known keypair and scans the resulting output for any substring
+      matching the 32-byte private-key seed in hex or base64; any match fails the test.
     test_type: unit
     component_under_test: crypto
 
