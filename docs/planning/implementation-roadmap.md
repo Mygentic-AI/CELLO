@@ -116,6 +116,20 @@ Receivers fail closed on sequence gaps. WebSocket transport is FIFO, so a missin
 
 ---
 
+## Deferred Items
+
+Items that are part of the canonical protocol design but are deliberately not built in the milestone where they first become relevant. Each item names the milestone that owns it and the reason for the deferral.
+
+- **MMR (Meta-Merkle Tree) inclusion proofs — deferred to M10.** The MMR is the global append-only tree of sealed conversations, and the client-side inclusion-proof algorithm is the fabricated-conversation defense (agent-client §MMR inclusion proof verification; AC-25). The defense is only meaningful under federation — a single-node directory can fabricate the entire MMR, so the verification algorithm requires federation-signed checkpoints. M10 ships federation, so MMR construction and client-side verification land together as one capability. M1–M9 use in-session inclusion proofs only (tamper detection within a single conversation tree), which are sufficient for every use case before federation exists.
+
+- **Consistency / audit proofs (RFC 6962 §2.1.2) — deferred, no assigned milestone.** These prove a tree is append-only between two root checkpoints. Useful for auditing long-term directory honesty, but not load-bearing for any currently specified capability (disputes use inclusion proofs; seal verification uses root comparison). Revisit if directory-honesty auditing becomes a user-facing feature.
+
+- **Session-close attestations (CLEAN / FLAGGED / PENDING) — deferred to M7.** The M1 `SEAL` control leaf carries an attestation field, but in M1 it is always `PENDING`. CLEAN/FLAGGED require the compromise-detection and arbitration machinery that M7 introduces (last-known-good anchor for compromise detection, FLAGGED→arbitration flow, trust-floor computation from prior CLEAN attestations). Keeping the field present from M1 means M7 fills in values rather than reshaping the leaf. Closes AC-39 in agent-client.md.
+
+- **Transport extraction — deferred to M10.** In M0 and M1, WebSocket transport lives inside `packages/client/src/transport/` (see MSG-002). Extraction to a separate package is triggered by the second transport materializing; libp2p in M10 is the expected trigger.
+
+---
+
 ## Related Documents
 
 - [[protocol-map|CELLO Protocol Map]] — top-level orientation; milestones map to protocol domains
