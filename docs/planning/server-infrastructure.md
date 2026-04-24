@@ -304,7 +304,7 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 
 **Two-structure leaf format** (N-party canonical form; two-party is a special case):
 - **Structure 1 (inner, sender-signed)**: `content_hash || sender_pubkey || conversation_id || last_seen_seq || timestamp` — signed by sender with K_local
-- **Structure 2 (outer, relay-constructed)**: `sequence_number || sender_pubkey || message_content_hash || sender_signature (Structure 1 embedded) || prev_root` — the relay node embeds Structure 1's signature, appends `prev_root` and the canonical sequence number, then hashes into the Merkle tree. The client never computes `prev_root`.
+- **Structure 2 (outer, relay-constructed)**: `sequence_number || sender_pubkey || message_content_hash || sender_signature (Structure 1 embedded) || scan_result || prev_root` — the relay node embeds Structure 1's signature, appends `scan_result` (sender's Layer 2 scanner output: `{ score, verdict, model_hash }` — honesty signal recorded in the leaf), `prev_root`, and the canonical sequence number, then hashes into the Merkle tree. The client never computes `prev_root`.
 
 **[CONFLICT C-4 — RESOLVED]**: The two-structure model (2026-04-13 multi-party design) is canonical. The 2026-04-15 session-level FROST signing description of sender-computed `prev_root` is superseded — it was written for the two-party case and does not account for multi-party, where the relay node is the only entity with canonical sequence across all senders during an active session. See agent-client.md AC-C2, AC-C7 (resolved).
 
@@ -351,6 +351,9 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 - `trust_signal_pickup_pending` — encrypted trust signal blob awaiting retrieval
 - `succession_claim_filed` — a succession claim has been filed; urgent, requires owner action
 - `relay_session_reassigned` — a relay failure and reassignment occurred (informational)
+- `ownership_transfer_announced` — this agent (as old or new owner) is entering a voluntary ownership transfer announcement period; the portal must display the succession banner for the duration of the window
+- `ownership_transfer_cancelled` — a previously announced voluntary ownership transfer has been cancelled; portal clears the succession banner
+- `succession_package_available` — succession package is available for pickup; sent to the designated successor after the dead-man's switch waiting period completes; portal must prompt the successor to accept and decrypt
 
 Session-level security events (`relay_sequencing_attack`, `peer_compromised_abort` and all session Merkle events) remain on the agent-client WebSocket only.
 
@@ -652,6 +655,8 @@ For COMPROMISE_INITIATED and SOCIAL_RECOVERY_INITIATED additionally:
   | `PEER_COMPROMISED_ABORT` | Directory | A counterparty agent has been compromised and all sessions with them are terminated; payload: `{ compromised_agent_id, tombstone_id, notified_at }` |
   | `RELAY_SESSION_REASSIGNED` | Directory | A relay node failure caused the directory to assign a new relay and resume the session from the last confirmed sequence number; payload: `{ session_id, old_relay_node_id, new_relay_node_id, resumed_from_seq, reassigned_at }`. Surfaced in the portal activity log so the owner can see disruption and recovery. See frontend.md F-45. |
   | `ROOM_AUTO_MUTE` | Directory (from relay) | A participant in a group room has been auto-muted by the relay after a 2nd violation within the rolling window; sent to the room owner. Payload: `{ room_id, muted_agent_id, violation_code, mute_sequence_number, duration_ms, muted_at }`. The relay reports the event to the directory; the directory forwards to the room owner's authenticated WebSocket. |
+  | `ALIAS_EXPIRY` | Directory | An alias has reached its 6-month inactivity TTL and has been marked `EXPIRED`. Payload: `{ alias_id, alias_slug, expired_at }`. |
+  | `PORTAL_INSTRUCTION` | Directory (forwarded from portal) | Owner-initiated action forwarded by the directory from the portal API channel. Payload: `{ action, agent_id, target_id?, room_id?, portal_signature, issued_at }`. Action types: `accept_connection`, `decline_connection`, `ban_participant`, `mute_participant`, `unmute_participant`, `initiate_rotation`. The client validates `portal_signature` before acting. See G-43. |
 - **Note**: `EMERGENCY_SESSION_ABORT` is a directory-to-client control instruction sent via the agent's persistent WebSocket — it is NOT a notification type and does not appear in the notification registry
 - **Notification delivery paths — resolved [GAP G-32 — RETIRED]**: Two paths. (1) Directory-sourced events (connection requests, endorsements, anomaly alerts, system events, PEER_COMPROMISED_ABORT, etc.) push via the recipient agent's authenticated persistent WebSocket — the directory is always involved for these. (2) Owner-targeted notifications (trust signal pickup pending, human input requested, companion content alerts) go direct from the CELLO client to the companion device over P2P — the directory is not in the path for these. The server handles path (1) only; path (2) is client-to-companion and requires no server-side change.
 - **Institutional verification for elevated rate limits**: application process and criteria are operational policy, not protocol design. **[GAP G-33 — deferred to product/BD]** Placeholder: applicant submits business registration, use-case description, and agrees to elevated accountability terms. CELLO approves manually at Alpha/Consortium. Automated criteria TBD when volume justifies it.

@@ -849,6 +849,8 @@ The client must validate `portal_signature` against the portal's known public ke
 | `linkedin` | OAuth | Every 60 days |
 | `github` | OAuth | Every 60 days |
 | `twitter` | OAuth | Every 60 days |
+| `facebook` | OAuth | Every 60 days |
+| `instagram` | OAuth | Every 60 days |
 | `email` | OTP link | On significant account events |
 | `phone` | SMS/WhatsApp OTP at registration | At re-verification only |
 | `totp` | RFC 6238 TOTP — 30-second window, 1-step tolerance; QR code enrollment via portal | No probing needed — activation_at recorded |
@@ -1155,6 +1157,11 @@ The client implements the complete notification type registry. Types are enumera
 | `alias_expiry` | Directory | An alias has reached its 6-month inactivity TTL and has been marked `EXPIRED` |
 | `relay_session_reassigned` | Directory | A relay node failed mid-session; the directory has assigned a new relay and resumed from the last confirmed sequence number. Payload: `{ session_id, old_relay_node_id, new_relay_node_id, resumed_from_seq, reassigned_at }`. See frontend.md F-45. |
 | `room_auto_mute` | Directory (from relay) | A participant in a group room has been auto-muted after a 2nd violation; sent to the room owner only. Payload: `{ room_id, muted_agent_id, violation_code, mute_sequence_number, duration_ms, muted_at }`. |
+| `recovery_contact_designated` | Directory | This agent has been designated as a recovery contact by another agent. Payload: `{ principal_agent_id, m_threshold, designated_at }`. Client records designation in local `recovery_contact_for[]` table. |
+| `recovery_attestation_requested` | Directory | M-of-N threshold has been met; this recovery contact's attestation is being requested for the principal. Client surfaces the pending request for owner action. |
+| `succession_package_available` | Directory | Succession package is available for pickup; sent to the designated successor after the dead-man's switch waiting period completes. Successor fetches encrypted payload from directory and decrypts with own `identity_key`. |
+| `ownership_transfer_announced` | Directory | This agent (as old or new owner) is entering a voluntary ownership transfer announcement period. Client surfaces state as `TRANSFER_PENDING` in `cello_status`. |
+| `ownership_transfer_cancelled` | Directory | A previously announced voluntary ownership transfer has been cancelled. Client transitions state back to `IDLE`; clears `TRANSFER_PENDING`. |
 | `introduction` | Agent | Web-of-trust introduction from a mutual contact; subject to rate limits per trust tier |
 | `order_update` | Agent | Order or task status update from a counterparty agent |
 | `alert` | Agent | Operational alert from a counterparty agent |
@@ -1181,7 +1188,7 @@ The owner's response routes directly to the client via the channel's own reply m
 
 ## Part 11: MCP Tool Surface
 
-The client exposes 35 tools (the 33 from the canonical tool surface, plus `cello_request_human_input` and `cello_acknowledge_receipt`). The full tool specifications — parameters, return types, and usage guidance — are in [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]]. This section covers the client's implementation responsibilities for each group.
+The client exposes 39 tools (the 33 from the canonical tool surface, plus `cello_request_human_input`, `cello_acknowledge_receipt`, and 4 group room tools added by the group room design: `cello_petition_room`, `cello_dissolve_room`, `cello_transfer_ownership`, `cello_set_attention_mode`). The full tool specifications — parameters, return types, and usage guidance — are in [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]]. This section covers the client's implementation responsibilities for each group.
 
 ### Deployment models
 
@@ -1200,7 +1207,7 @@ The client's behavior is identical across deployment models. The calling pattern
 | Trust / Identity | `cello_verify`, `cello_get_trust_profile`, `cello_check_own_signals` | 3 |
 | Discovery & Listings | `cello_search`, `cello_create_listing`, `cello_update_listing`, `cello_renew_listing`, `cello_retire_listing` | 5 |
 | Connection Management | `cello_initiate_connection`, `cello_accept_connection`, `cello_decline_connection`, `cello_disconnect` | 4 |
-| Group Conversations | `cello_create_room`, `cello_join_room`, `cello_leave_room`, `cello_invite_to_room`, `cello_set_participant_role`, `cello_request_continuation`, `cello_get_room_info` | 7 |
+| Group Conversations | `cello_create_room`, `cello_join_room`, `cello_leave_room`, `cello_invite_to_room`, `cello_set_participant_role`, `cello_request_continuation`, `cello_get_room_info`, `cello_petition_room`, `cello_dissolve_room`, `cello_transfer_ownership`, `cello_set_attention_mode` | 11 |
 | Notifications | `cello_poll_notifications` | 1 |
 | Policy & Configuration | `cello_manage_policy`, `cello_configure` | 2 |
 | Status | `cello_status` | 1 |
