@@ -338,7 +338,23 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 
 **Persistent WebSocket per agent**: Outbound TLS on port 443, kept open for the entire online session. Directory can push data (hash relay, connection requests, notifications) without initiating a new connection.
 
-**[GAP G-43]**: The portal requires a distinct notification delivery channel to display the agent's event stream (activity log, escalation queue, notification feed) without running the CELLO client itself. The WebSocket described above is the agent-client channel — the portal cannot authenticate against it as if it were the agent. A separate portal-facing API surface (authenticated by the portal's own keypair, scoped to read-only event stream access for the owner's agent) is not yet specified. This is cross-referenced as frontend.md GAP F-28.
+**[~~GAP G-43~~ — Resolved]**: The portal uses a **two-WebSocket design** to read and write to the owner's agent event stream without being the agent.
+
+**Direction 1 — reading (portal ← directory)**: At login, the portal opens a second authenticated WebSocket to the directory using the portal's own registered keypair. The connection is scoped to a single `agent_id` (the authenticated owner's agent). The directory fans out the owner-relevant event subset simultaneously to both the portal WebSocket and the agent-client WebSocket. The portal never sees the full agent event stream — only the owner-relevant subset below.
+
+**Owner-relevant subset** fanned out to the portal WebSocket:
+- `connection_request` — incoming connection request (requester trust profile, greeting post-Layer-1, scan result)
+- `connection_escalation_pending` — a request reached `PENDING_ESCALATION` and is awaiting owner decision
+- `key_rotation_recommended` — directory nudging the owner to rotate K_local
+- `security_block` — anomaly alert (Layer 1 fire, hash mismatch, delivery gap)
+- `tombstone` — a connected identity has been tombstoned
+- `trust_signal_pickup_pending` — encrypted trust signal blob awaiting retrieval
+- `succession_claim_filed` — a succession claim has been filed; urgent, requires owner action
+- `relay_session_reassigned` — a relay failure and reassignment occurred (informational)
+
+Session-level security events (`relay_sequencing_attack`, `peer_compromised_abort` and all session Merkle events) remain on the agent-client WebSocket only.
+
+**Direction 2 — writing (portal → directory → agent client)**: The portal submits signed escalation decisions and owner-initiated actions to the directory via the portal API channel (the same authenticated portal WebSocket). The directory validates the portal signature, verifies the portal is authorized for the target `agent_id`, and forwards the instruction to the agent client as a `portal_instruction` message on the agent's authenticated WebSocket. Forwarded action types: accept/decline a connection escalation, ban or mute a group room participant, lift a mute, initiate K_local rotation. The agent client executes the action without requiring a second owner confirmation — the portal owner already confirmed the action at the portal. See agent-client.md notification registry (`portal_instruction` type) and frontend.md F-28.
 
 **Degraded mode — connection nodes unavailable**:
 - Connection nodes must refuse new connection requests when unavailable and send a reason: "directory unreachable, not accepting unauthenticated sessions — retry when available"
@@ -1027,7 +1043,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-40 | Cross | ~~Resolved~~ — Oracle evidence is never stored by the directory. Hash-everything-store-nothing applies: oracle verifies → hash stored → original discarded. Client holds original; presents to arbitration if needed; directory verifies hash. |
 | G-41 | Directory | ~~Retired~~ — companion device allowlist is client-held, not directory-stored. See AC-C10 (resolved). Maximum devices per agent remains a client-side configuration decision. |
 | G-42 | Directory | ~~See above~~ — `cello_request_endorsement` and `cello_revoke_endorsement` client tool paths absent; directory endorsement endpoints are fully specified; client-side call path is not. |
-| G-43 | Directory | Portal-facing notification API not specified — the portal requires a read-only event stream for the owner's agent (activity log, escalation queue, notification feed) authenticated by the portal's own keypair. This is distinct from the agent-client's authenticated WebSocket. See frontend.md F-28. |
+| ~~G-43~~ | Directory | ~~Resolved~~ — Two-WebSocket design. Portal opens a second authenticated WebSocket (portal keypair, scoped to agent_id) at login. Directory fans out owner-relevant subset (connection requests, escalations, rotation nudges, anomaly alerts, tombstones, trust signal pickups, succession claims, relay reassignments) to both portal WebSocket and agent-client WebSocket simultaneously. Portal writes (escalation decisions, room actions, rotation initiation) submitted via portal API channel; directory forwards to agent client as `portal_instruction` message. Session-level security events remain agent-WebSocket-only. See frontend.md F-28. |
 | G-44 | Cross | See Recovery contacts and succession section above. Items (2)–(4) remain open: portal succession claim contest UI (F-32), announcement period management UI (F-33), new owner acceptance flow (F-34). |
 | G-45 | Relay | Group room catch-up mechanism not designed. When an agent rejoins a group room mid-conversation (`cello_join_room`), the relay must be able to serve historical room content for the session. The delivery mechanism, how far back history is available, and whether the relay holds it or the directory serves it are not specified. See agent-client.md AC-8. |
 | ~~G-46~~ | Relay | ~~Resolved~~ — Directory owns all group room persistent state. Throttle manifest in `group_rooms` (append-only, immutable after creation). Room policy record (ban list, mute states, escalation levels) in `room_policy_records` (append-only, supersession pattern, mutable by owner only). At room activation, the directory includes the current room policy record in the signed session assignment sent to the relay. The relay holds it in memory for the session and discards it at session end. Mid-session policy changes (ban, mute lift) are written to the directory by the owner's client and pushed to the relay via the session assignment channel. The relay remains stateless; the directory is the single authority. See group-room-design.md §2. |

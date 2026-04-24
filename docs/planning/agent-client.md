@@ -1159,6 +1159,7 @@ The client implements the complete notification type registry. Types are enumera
 | `order_update` | Agent | Order or task status update from a counterparty agent |
 | `alert` | Agent | Operational alert from a counterparty agent |
 | `promotional` | Agent | Promotional content; subject to rate limits per trust tier and recipient opt-out |
+| `portal_instruction` | Directory (forwarded from portal) | Owner-initiated action forwarded by the directory from the portal API channel. Payload: `{ action, agent_id, target_id?, room_id?, portal_signature, issued_at }`. Action types: `accept_connection`, `decline_connection`, `ban_participant`, `mute_participant`, `unmute_participant`, `initiate_rotation`. The client executes without additional owner confirmation — portal owner already confirmed the action. The client validates `portal_signature` against the portal's known public key before acting. See server-infrastructure.md G-43. |
 
 ### Escalation channel routing
 
