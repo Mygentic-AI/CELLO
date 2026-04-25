@@ -9,98 +9,162 @@ components:
 # ─── Intent ─────────────────────────────────────────────────
 story: >
   As an AI Agent,
-  I want the MCP surface extended in M1 so that (a) `cello_close_session` returns the sealed_root, (b) a new `cello_get_sealed_receipt` tool surfaces the full seal record, and (c) a new `cello_get_inclusion_proof` tool returns an RFC 6962 inclusion proof for any leaf in a sealed session
-  so that an agent can prove conversation contents to a third party and verify that a message it remembers sending is actually in the sealed tree.
+  I want the MCP surface in M1 to expose session-aware tools (initiate / await / close a session), a sealed-receipt lookup, and an RFC 6962 inclusion-proof tool
+  so that I can hold conversations scoped to sessions, prove conversation contents to a third party, and verify that a message I remember sending is actually in the sealed tree.
 
-  M1 extends MCP-001 rather than replacing it. The existing tools keep their schemas with three
-  modifications required by M1 semantics:
+  M1 introduces the session concept that M0 did not have. M0's peer-centric MCP tools
+  (`cello_connect_peer`, `cello_send(peer_pubkey, content)`, `cello_receive(peer_pubkey?,
+  timeout_ms)`, `cello_list_peers`, `cello_status`) are superseded by session-aware
+  equivalents that route through SESSION-002 and MSG-004:
 
-  - `cello_initiate_session` response keeps its shape but is now populated by SESSION-002 —
-    the session_id is allocated by the directory, and the relay_endpoint returned in the
-    response is the relay the directory assigned.
-  - `cello_send` response keeps `{delivered: bool, leaf_hash: hex}` but `leaf_hash` now refers
-    to Structure 2's leaf_hash (MERKLE-002) instead of M0's envelope-level hash.
-  - `cello_close_session` response is enriched: in M1 it returns
-    `{status: "sealed" | "seal_deferred" | "seal_rejected", sealed_root: hex | null, close_timestamp: int, reason: string | null}`.
-    For `seal_rejected`, `reason` carries the directory's structured rejection code.
-
-  Two new tools are added:
-
-  - `cello_get_sealed_receipt(session_id)` — returns the seal record held locally by the client
-    after the directory confirmed the seal:
-    `{session_id: hex, sealed_root: hex, participants: [hex, hex], close_timestamp: int,
-       attestation_self: "PENDING", attestation_counterparty: "PENDING",
-       leaf_count: int}`. Attestation fields are `PENDING` in M1 per the roadmap's deferred-items
-    policy (CLEAN/FLAGGED land in M7).
-
-  - `cello_get_inclusion_proof(session_id, leaf_index)` — returns an RFC 6962 inclusion proof
-    against the sealed_root:
-    `{leaf_hash: hex, leaf_index: int, tree_size: int, proof: [hex, ...], sealed_root: hex}`.
-    The agent (or any third party the agent shares the proof with) can verify the proof using
-    any RFC 6962 verifier — no CELLO-specific knowledge needed beyond knowing the sealed_root.
-    The client answers from its local tree copy; no round-trip to the directory or relay. For
-    unsealed sessions this tool returns a structured error — inclusion proofs in M1 are sealed-only.
+  - `cello_initiate_session({ target_pubkey })` — new. Returns
+    `{session_id: hex, counterparty_pubkey: hex, relay_endpoint: {peer_id: hex,
+    multiaddrs: string[]}, genesis_prev_root: hex}`. The agent passes the target's K_local
+    pubkey; the MCP server's signaling stream to the directory issues the session_request
+    per NODE-001; the resulting SessionAssignment is reflected in the response. If the
+    target is offline or the relay is unavailable, the call returns
+    `{error: {reason: 'target_offline' | 'relay_unavailable'}}`.
+  - `cello_await_session({ timeout_ms })` — new. Blocks until the client's signaling stream
+    receives a `session_assignment` frame for an inbound session (either already buffered
+    or newly arriving), or the timeout expires. On success returns
+    `{type: 'new_session', session_id, counterparty_pubkey, genesis_prev_root}`. On
+    timeout returns `{type: 'timeout'}`. Buffered events for sessions established before
+    the call are returned in arrival order.
+  - `cello_send({ session_id, content })` — replaces M0's peer-keyed `cello_send`. Returns
+    `{delivered: bool, leaf_hash: hex, reason?: string}` where `leaf_hash` is the M1
+    Structure 2 leaf hash per MERKLE-002.
+  - `cello_receive({ session_id, timeout_ms })` — replaces M0's peer-keyed `cello_receive`.
+    Returns `{type: 'message', content, sender_pubkey, sequence_number, leaf_hash}` or
+    `{type: 'timeout'}`.
+  - `cello_close_session({ session_id })` — new. Initiates SESSION-003's bilateral seal.
+    Returns `{status: 'sealed' | 'seal_deferred' | 'seal_rejected', sealed_root: hex | null,
+    close_timestamp: int, reason: string | null}` after the seal completes or fails.
+  - `cello_list_sessions()` — new. Replaces M0's `cello_list_peers`. Returns an array of
+    `{session_id, counterparty_pubkey, counterparty_peer_id, relay_endpoint, status:
+    'active' | 'transport_lost' | 'sealing' | 'sealed' | 'seal_rejected' | 'seal_deferred',
+    last_seen_seq, leaf_count}`.
+  - `cello_status()` — unchanged in name and contract; response extended with
+    `active_session_count` and `directory_reachable: bool`.
+  - `cello_get_sealed_receipt({ session_id })` — new. Returns the local seal record
+    populated after the directory confirmed the seal:
+    `{session_id, sealed_root, participants: [hex, hex], close_timestamp,
+    attestation_self: "PENDING", attestation_counterparty: "PENDING", leaf_count,
+    directory_signature: hex}`. Attestation fields are uniformly `PENDING` in M1 per the
+    roadmap's deferred-items policy — CLEAN / FLAGGED arrive in M7 and will reshape this
+    response then. `directory_signature` is the directory-identity signature over the
+    SealNotarization (M2 replaces the single signature with a FROST threshold signature;
+    the field name is stable, the verification rule bumps).
+  - `cello_get_inclusion_proof({ session_id, leaf_index })` — new. Returns an RFC 6962
+    inclusion proof against the sealed_root:
+    `{leaf_hash: hex, leaf_index, tree_size, proof: [hex, ...], sealed_root}`. The agent
+    (or any third party the agent shares the proof with) can verify the proof using any
+    RFC 6962 verifier — no CELLO-specific knowledge needed beyond knowing the sealed_root.
+    The client answers from its local tree copy; no round-trip to the directory or relay.
+    For unsealed sessions this tool returns
+    `{error: {reason: 'session_not_sealed'}}` — inclusion proofs in M1 are sealed-only.
 
   Binary encoding across the MCP JSON boundary is unchanged from MCP-001: lowercase hex, no
-  `0x` prefix, for all pubkeys, hashes, signatures, session_ids, sealed_roots, and proof hashes.
+  `0x` prefix, for all pubkeys, hashes, signatures, session_ids, leaf_hashes, sealed_roots,
+  and proof hashes. Multiaddrs use the standard multiaddr string form.
 
   Transport selection (stdio in prod, SDK InMemoryTransport in tests) and the shared factory
-  pattern are unchanged from MCP-001 AC-008.
+  pattern are unchanged from MCP-001 AC-006 (now re-expressed as MCP-002 AC-008 below).
 
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
-  - trigger: "When the agent calls cello_close_session on an active session"
+  - trigger: "When the agent calls `cello_initiate_session({ target_pubkey })`"
+    action: >
+      the MCP server shall issue a `session_request` on its authenticated signaling stream
+      to the directory per NODE-001 and SESSION-002, wait for the directory's
+      `session_assignment` response, dial the relay and the counterparty per SESSION-002,
+      and return `{session_id, counterparty_pubkey, relay_endpoint, genesis_prev_root}` on
+      success. On failure the call returns `{error: {reason: 'target_offline' |
+      'relay_unavailable' | 'directory_unreachable'}}`.
+  - trigger: "When the agent calls `cello_await_session({ timeout_ms })`"
+    action: >
+      the MCP server shall block until a `session_assignment` frame arrives for an inbound
+      session, dial the relay and the counterparty, and return
+      `{type: 'new_session', session_id, counterparty_pubkey, genesis_prev_root}`. On
+      timeout with no inbound session, return `{type: 'timeout'}`.
+  - trigger: "When the agent calls `cello_send({ session_id, content })`"
+    action: >
+      the MCP server shall invoke MSG-004's send flow (sign Structure 1, submit to relay,
+      dispatch content to counterparty). Return `{delivered: true, leaf_hash: hex}` when
+      the send completes successfully, or `{delivered: false, reason: <structured>}`
+      otherwise.
+  - trigger: "When the agent calls `cello_receive({ session_id, timeout_ms })`"
+    action: >
+      the MCP server shall block until an envelope completes dual-path validation on that
+      session and enters the receive queue, or the timeout expires. On success return
+      `{type: 'message', content, sender_pubkey, sequence_number, leaf_hash}`; on timeout
+      return `{type: 'timeout'}`; on session desynchronization return `{error: {reason:
+      'session_desynchronized', subreason: <MSG-004 failure class>}}`.
+  - trigger: "When the agent calls `cello_close_session({ session_id })` on an active session"
     action: >
       the MCP server shall invoke SESSION-003's bilateral seal flow and wait for one of:
-      (a) `session_sealed` event from the directory → return
-      `{status: \"sealed\", sealed_root, close_timestamp, reason: null}`,
-      (b) `session_seal_rejected` from the directory → return
-      `{status: \"seal_rejected\", sealed_root: null, close_timestamp, reason}`,
-      (c) directory unreachable → return
-      `{status: \"seal_deferred\", sealed_root: null, close_timestamp, reason: \"directory_unreachable\"}`.
-  - trigger: "When the agent calls cello_get_sealed_receipt with a session_id"
+      (a) `session_sealed` event → return `{status: 'sealed', sealed_root, close_timestamp,
+      reason: null}`; (b) `session_seal_rejected` → return `{status: 'seal_rejected',
+      sealed_root: null, close_timestamp, reason}`; (c) directory unreachable →
+      `{status: 'seal_deferred', sealed_root: null, close_timestamp,
+      reason: 'directory_unreachable'}`.
+  - trigger: "When the agent calls `cello_get_sealed_receipt({ session_id })`"
     action: >
-      the MCP server shall look up the local seal record. If present, return the SealedReceipt
-      structure with attestation fields carrying `PENDING`. If the session is not sealed or
-      not known, return a structured error
-      `{reason: \"session_not_sealed\" | \"session_not_found\", session_id}`.
-  - trigger: "When the agent calls cello_get_inclusion_proof with (session_id, leaf_index)"
+      the MCP server shall look up the local seal record. If present, return the full
+      SealedReceipt with attestation fields `PENDING`. If the session is not sealed or not
+      known, return `{error: {reason: 'session_not_sealed' | 'session_not_found',
+      session_id}}`.
+  - trigger: "When the agent calls `cello_get_inclusion_proof({ session_id, leaf_index })`"
     action: >
-      the MCP server shall (a) look up the session; if not sealed, return
-      `{reason: \"session_not_sealed\"}`, (b) validate leaf_index is in range [0, tree_size);
-      if not, return `{reason: \"leaf_index_out_of_range\", leaf_index, tree_size}`, (c) compute
-      the RFC 6962 inclusion proof from the local tree via MERKLE-001, (d) return the proof
-      structure with all hashes encoded as lowercase hex.
-  - trigger: "When any new tool is called during an active (unsealed) session"
-    action: "the MCP server shall return the appropriate structured error per the trigger rules above; no state is modified."
+      the MCP server shall (a) look up the session; if not sealed return
+      `{error: {reason: 'session_not_sealed'}}`, (b) validate leaf_index is in
+      range `[0, tree_size)`; if not return `{error: {reason: 'leaf_index_out_of_range',
+      leaf_index, tree_size}}`, (c) compute the RFC 6962 inclusion proof from the local
+      tree via MERKLE-001, (d) return the proof structure with all hashes as lowercase hex.
+  - trigger: "When any new tool is called during an active (unsealed) session where a sealed-only response would be expected"
+    action: "the MCP server shall return the appropriate `{error: {reason: 'session_not_sealed'}}`; no state is modified."
   - trigger: "When the server factory is invoked with a transport argument"
-    action: "the factory shall register the M1 tool set identically under stdio and InMemoryTransport (MCP-001 AC-008 extended to cover the two new tools)."
+    action: "the factory shall register the M1 tool set identically under stdio and InMemoryTransport — MCP-001's AC-006 structural-equality assertion extends to cover every new and modified M1 tool."
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "Two MCP server instances connected to the directory+relay with an active 5-message session between Agent A and Agent B"
-    when: "Agent A calls cello_close_session"
-    then: >
-      After SESSION-003's bilateral seal flow completes, Agent A's cello_close_session returns
-      `{status: \"sealed\", sealed_root: <hex>, close_timestamp: <int>, reason: null}` with
-      sealed_root equal to the directory's recorded sealed_root
+    given: "Two MCP server instances A and B connected to the directory+relay, both authenticated on signaling streams"
+    when: "Agent B calls `cello_await_session({ timeout_ms: 5000 })` then Agent A calls `cello_initiate_session({ target_pubkey: B_pubkey })`"
+    then: "A's call returns `{session_id, counterparty_pubkey: B_pubkey, relay_endpoint, genesis_prev_root}`; B's `cello_await_session` returns `{type: 'new_session', session_id, counterparty_pubkey: A_pubkey, genesis_prev_root}` with the same session_id before any message is sent; both genesis_prev_root values are byte-identical (SESSION-002 AC-002)"
     test_type: e2e
     component_under_test: client
 
   - id: AC-002
-    given: "A sealed session on Agent A's client"
-    when: "Agent A calls cello_get_sealed_receipt(session_id)"
-    then: >
-      The response is `{session_id, sealed_root, participants: [A_pubkey_hex,
-      B_pubkey_hex], close_timestamp, attestation_self: \"PENDING\",
-      attestation_counterparty: \"PENDING\", leaf_count: 7}` (5 messages + 2 SEAL leaves)
+    given: "An active session between Agent A and Agent B"
+    when: "Agent A calls `cello_send({ session_id, content: 'hello' })`"
+    then: "cello_send returns `{delivered: true, leaf_hash: hex}` where leaf_hash equals the M1 Structure 2 leaf_hash; Agent B's `cello_receive({ session_id, timeout_ms: 5000 })` returns `{type: 'message', content: 'hello', sender_pubkey: A_pubkey, sequence_number: 1, leaf_hash: <same>}`"
     test_type: e2e
     component_under_test: client
 
   - id: AC-003
+    given: "Two MCP servers with an active 5-message session"
+    when: "Agent A calls `cello_close_session({ session_id })`"
+    then: >
+      After SESSION-003's bilateral seal flow completes, A's call returns
+      `{status: 'sealed', sealed_root: <hex>, close_timestamp: <int>, reason: null}` with
+      sealed_root equal to the directory's recorded sealed_root
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-004
+    given: "A sealed session on Agent A's client"
+    when: "Agent A calls `cello_get_sealed_receipt({ session_id })`"
+    then: >
+      The response is `{session_id, sealed_root, participants: [A_pubkey, B_pubkey],
+      close_timestamp, attestation_self: 'PENDING', attestation_counterparty: 'PENDING',
+      leaf_count: 7, directory_signature: <hex>}` (5 messages + 2 SEAL leaves); the
+      directory_signature verifies against the pinned directory pubkey
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-005
     given: "A sealed session with 7 leaves on Agent A's client"
-    when: "Agent A calls cello_get_inclusion_proof(session_id, leaf_index=3)"
+    when: "Agent A calls `cello_get_inclusion_proof({ session_id, leaf_index: 3 })`"
     then: >
       The response contains leaf_hash (hex), leaf_index=3, tree_size=7, proof (list of hex
       siblings), and sealed_root (hex); verifying the proof against sealed_root using
@@ -108,68 +172,69 @@ acceptance_criteria:
     test_type: e2e
     component_under_test: client
 
-  - id: AC-004
-    given: "A sealed session and the inclusion proof from AC-003"
-    when: "The test harness feeds the proof into an independent RFC 6962 verifier (e.g., a Python reference implementation) against the same sealed_root and leaf_hash"
-    then: "The independent verifier also returns true, confirming the proof is format-compliant with RFC 6962 (not CELLO-specific)"
+  - id: AC-006
+    given: >
+      A sealed session and a committed fixture
+      `packages/e2e-tests/test/vectors/rfc6962-external-verify.json` containing
+      `{sealed_root, leaf_hash, leaf_index, tree_size, proof: [hex], expected: true}`
+      computed once from an independent RFC 6962 reference (e.g., Google's
+      certificate-transparency-go). The fixture is pre-committed and reviewed
+    when: "The test harness runs the fixture's (leaf_hash, leaf_index, tree_size, proof) against the fixture's sealed_root using MERKLE-001's verifier"
+    then: "Verification returns true; the output confirms MERKLE-001 agrees with the independent RFC 6962 reference implementation at this fixture point. No runtime external dependency is pulled in — the fixture is the cross-implementation contract"
     test_type: e2e
     component_under_test: client
 
-  - id: AC-005
-    given: "An active (unsealed) session"
-    when: "Agent A calls cello_get_sealed_receipt(session_id)"
-    then: "The response is `{error: {reason: \"session_not_sealed\", session_id}}`"
-    test_type: unit
-    component_under_test: client
-
-  - id: AC-006
-    given: "An active (unsealed) session"
-    when: "Agent A calls cello_get_inclusion_proof(session_id, leaf_index=0)"
-    then: "The response is `{error: {reason: \"session_not_sealed\", session_id}}`"
-    test_type: unit
-    component_under_test: client
-
   - id: AC-007
-    given: "A sealed session with 7 leaves"
-    when: "Agent A calls cello_get_inclusion_proof(session_id, leaf_index=7)"
-    then: "The response is `{error: {reason: \"leaf_index_out_of_range\", leaf_index: 7, tree_size: 7}}`"
+    given: "An active (unsealed) session"
+    when: "Agent A calls `cello_get_sealed_receipt({ session_id })` or `cello_get_inclusion_proof({ session_id, leaf_index: 0 })`"
+    then: "Each call returns `{error: {reason: 'session_not_sealed', session_id}}`"
     test_type: unit
     component_under_test: client
 
   - id: AC-008
-    given: "The MCP server factory"
-    when: "The factory is invoked once with SDK InMemoryTransport and once with stdio transport"
-    then: >
-      Both invocations register the M0 tools plus the M1 additions (cello_get_sealed_receipt,
-      cello_get_inclusion_proof) with identical input/output schemas; cello_close_session's
-      M1 output schema is registered identically in both; MCP-001 AC-008's structural-equality
-      assertion continues to pass
+    given: "A sealed session with 7 leaves"
+    when: "Agent A calls `cello_get_inclusion_proof({ session_id, leaf_index: 7 })`"
+    then: "The response is `{error: {reason: 'leaf_index_out_of_range', leaf_index: 7, tree_size: 7}}`"
     test_type: unit
     component_under_test: client
 
   - id: AC-009
-    given: "A sealed session on Agent A's client and Agent A has copied the sealed_root + proof for leaf_index=2 to an independent verifier that does not have the session's leaf sequence"
-    when: "The verifier reconstructs the root from (leaf_hash, proof) and compares against sealed_root"
-    then: "Reconstruction succeeds and equals sealed_root; the verifier confirms the leaf's inclusion without needing any other leaves"
-    test_type: e2e
+    given: "The MCP server factory"
+    when: "The factory is invoked once with SDK InMemoryTransport and once with stdio transport"
+    then: >
+      Both invocations register the full M1 tool set (cello_initiate_session,
+      cello_await_session, cello_send, cello_receive, cello_close_session,
+      cello_list_sessions, cello_status, cello_get_sealed_receipt,
+      cello_get_inclusion_proof) with identical input and output schemas; the structural
+      equality assertion from MCP-001 AC-006 continues to pass, now extended to cover
+      every M1 tool
+    test_type: unit
     component_under_test: client
 
   - id: AC-010
-    given: "A session where A has called cello_close_session but the directory is unreachable"
-    when: "cello_close_session returns"
+    given: "A session where A has called `cello_close_session` but the directory is unreachable"
+    when: "The close call returns"
     then: >
-      The response is `{status: \"seal_deferred\", sealed_root: null, close_timestamp,
-      reason: \"directory_unreachable\"}`; subsequent calls to cello_get_sealed_receipt
-      return `{error: {reason: \"session_not_sealed\"}}` until the directory confirms the seal
+      The response is `{status: 'seal_deferred', sealed_root: null, close_timestamp,
+      reason: 'directory_unreachable'}`; subsequent calls to `cello_get_sealed_receipt`
+      return `{error: {reason: 'session_not_sealed'}}` until the directory confirms the
+      seal and the client receives `session_sealed` on its signaling stream
     test_type: integration
+    component_under_test: client
+
+  - id: AC-011
+    given: "A sealed session on Agent A's client"
+    when: "Agent A copies the sealed_root and the inclusion proof for leaf_index=2 to an independent verifier that does not have access to the session's leaf sequence"
+    then: "Reconstruction from (leaf_hash, proof) equals sealed_root; the verifier confirms the leaf's inclusion without needing any other leaves"
+    test_type: e2e
     component_under_test: client
 
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
     statement: >
-      The MCP server shall never return a sealed_root or inclusion proof for a session whose
-      seal was rejected by the directory.
+      The MCP server shall never return a sealed_root or an inclusion proof for a session
+      whose seal was rejected by the directory.
     adversarial_condition: >
       even when the client holds the leaf sequence locally — a seal_rejected session has no
       valid sealed_root, and exposing one would undermine the "receipt only after directory
@@ -179,23 +244,35 @@ security_invariants:
 
   - id: SI-002
     statement: >
-      The MCP server shall never emit K_local private key material through any tool response
-      (MCP-001 SI-001 carried forward to cover the new tools).
+      The MCP server shall never emit K_local private key material through any tool
+      response (MCP-001 SI-001 carried forward).
     adversarial_condition: >
-      even when cello_get_sealed_receipt or cello_get_inclusion_proof error paths include
-      diagnostic information.
+      even when `cello_status`, `cello_get_sealed_receipt`, or `cello_get_inclusion_proof`
+      error paths include diagnostic information.
     test_type: unit
     component_under_test: client
 
   - id: SI-003
     statement: >
-      The MCP server shall never return an inclusion proof whose reconstructed root does not
-      equal the sealed_root returned by the same call (self-consistency).
+      The MCP server shall never return an inclusion proof whose reconstructed root does
+      not equal the sealed_root returned by the same call (self-consistency).
     adversarial_condition: >
-      even when the local tree is mid-update or a race between seal and proof retrieval could
-      otherwise expose a transient state — the tool reads a stable snapshot tied to the sealed
-      tree.
+      even when the local tree is mid-update or a race between seal and proof retrieval
+      could otherwise expose a transient state — the tool reads a stable snapshot tied to
+      the sealed tree.
     test_type: unit
+    component_under_test: client
+
+  - id: SI-004
+    statement: >
+      The MCP server shall never deliver message content to the agent without the
+      underlying client having completed both the content_hash cross-check (MSG-004 SI-001)
+      and the embedded Structure 1 signature verification.
+    adversarial_condition: >
+      even when the relay delivered a `leaf_deliver` frame with a valid structure but a
+      forged inner signature, or when a content_frame arrived with modified bytes — neither
+      path alone suffices; the two paths must agree.
+    test_type: e2e
     component_under_test: client
 
 # ─── References ─────────────────────────────────────────────

@@ -1,0 +1,327 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-NODE-001
+domain: Node Operations
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Directory Node,
+  I want to run as a libp2p node that authenticates clients by K_local, issues signed SessionAssignments that carry peer addressing and the relay endpoint, and notarizes seals by recomputing each session's Merkle tree from scratch
+  so that the directory is a bookend authority — present at session establishment and at seal — and absent from the per-message critical path, while never having a topological path to message content or message hashes.
+
+  M1 introduces `packages/directory` as a distinct pnpm workspace package with its own store
+  interface (`DirectoryStore` + `InMemoryDirectoryStore`). The client never imports from
+  `packages/directory` — it reaches the directory over libp2p on the `/cello/signaling/1.0.0`
+  stream protocol. In-process Vitest co-location is a harness convenience; the package boundary
+  is real.
+
+  The directory is itself a libp2p node (TRANSPORT-001 infrastructure reused) configured with
+  the same transport/security/muxer stack as clients. The directory's Peer ID derives from a
+  static directory-identity Ed25519 keypair pinned in client source configuration (the same key
+  that signs SessionAssignments in M1; M2's FROST ceremony replaces the single signing key with
+  a threshold scheme).
+
+  Scope boundaries for M1:
+
+  - The directory does **not** relay messages. Content flows peer↔peer on `/cello/content/1.0.0`;
+    hashes flow client↔relay on `/cello/relay/1.0.0`. Neither touches the directory.
+  - The directory does **not** enable Kademlia DHT, mDNS, or rendezvous. Peer discovery is
+    strictly via signed SessionAssignment — the directory is a phone book, not a discovery gossip
+    network.
+  - The directory does **not** run FROST. Session assignments and seal notarizations are signed
+    with a single directory-identity keypair. M2 replaces this with the FROST ceremony.
+  - The directory does **not** participate in connection policy, trust signal relay, or
+    discovery. Those arrive with M3 and later. M1's directory is pure signaling + notarization.
+
+  Authentication (client → directory): when a client opens a stream on `/cello/signaling/1.0.0`,
+  the directory issues an Ed25519 challenge-response. The client proves possession of its
+  K_local by signing `"CELLO-DIR-AUTH-v1" || nonce || pubkey`. This is the same construction
+  the M0 `CELLO-WS-AUTH-v1` handshake used, now carried inside a libp2p stream. libp2p's Noise
+  layer separately proves possession of the client's Peer ID — that proof covers the transport
+  endpoint. This challenge-response proves possession of K_local, which is the stable agent
+  identity (Peer IDs are ephemeral per session from M1 onward). Two independent proofs, two
+  independent keys.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When a client opens a libp2p stream on `/cello/signaling/1.0.0`"
+    action: >
+      the directory shall issue a `signaling_auth_challenge` frame `{nonce}` (32 bytes,
+      CSPRNG, 30-second TTL, single-use) and hold the stream unauthenticated until the
+      challenge resolves. Nonces are tracked in a TTL-bounded map; each nonce is evicted on
+      first use (success or failure) or on expiry, whichever comes first. A test-only time
+      source lets tests drive expiry without wall-clock sleep.
+  - trigger: "When the client responds with `signaling_auth_response { pubkey, signature }`"
+    action: >
+      the directory shall verify the Ed25519 signature over `"CELLO-DIR-AUTH-v1" || nonce ||
+      pubkey` against the claimed pubkey. On success the stream is registered under that
+      pubkey and transitions to authenticated. On failure the stream is reset with a structured
+      `auth_failed` reason (`nonce_expired`, `nonce_unknown`, `nonce_reused`, or
+      `signature_invalid`) and no registration occurs.
+  - trigger: "While a signaling stream is unauthenticated"
+    action: >
+      the directory shall reject any frame other than `signaling_auth_response` with a
+      structured `not_authenticated` error and shall not register the client, initiate any
+      session, or enqueue anything on behalf of the stream.
+  - trigger: "When an authenticated client sends a `session_request { target_pubkey }` frame"
+    action: >
+      the directory shall, in strict order: (a) verify the target pubkey corresponds to a
+      client currently authenticated on its own signaling stream, returning `target_offline`
+      if not, (b) generate a 16-byte CSPRNG session_id unique among active and recently-closed
+      sessions, (c) select the relay endpoint (in M1 the in-process relay; its multiaddr and
+      Peer ID are in directory configuration), (d) construct the SessionAssignment record
+      containing `{session_id, participants: [{pubkey, peer_id, multiaddrs[]}, {pubkey,
+      peer_id, multiaddrs[]}], relay_endpoint: {peer_id, multiaddrs[]}, session_timestamp,
+      directory_pubkey}`, sign the canonical-CBOR encoding with the directory-identity
+      signing key, (e) synchronously invoke `relay.recordAssignment(record)` via an
+      in-process call and wait for successful acknowledgement — the relay MUST have the
+      session registered, its counter at 0, and be ready to accept participant
+      authentications before the directory proceeds, (f) deliver the signed assignment to
+      both clients' signaling streams as `session_assignment` frames.
+  - trigger: "If step (e) of session establishment fails (relay unavailable or rejects the record)"
+    action: >
+      the directory shall return a structured `relay_unavailable` error to the initiator on
+      its signaling stream, shall not deliver the SessionAssignment to either client, and
+      shall not reserve the session_id for retry.
+  - trigger: "When the relay submits a sealed-session leaf sequence via `relay.submitForSeal(record)`"
+    action: >
+      the directory shall (a) rebuild the Merkle tree from scratch using MERKLE-001 over the
+      received leaves in the provided order, (b) confirm the recomputed root equals the root
+      supplied by the relay, (c) verify every leaf's embedded Structure 1 signature (MERKLE-002),
+      (d) verify `prev_root` consistency across the leaf sequence (each leaf's prev_root
+      equals the tree's root up to the preceding leaf), (e) verify the causal-chain invariant
+      on `last_seen_seq` (see SESSION-003), (f) verify the final two leaves are SEAL control
+      leaves from the two participants with correctly chained `final_root` values. On success
+      the directory signs a SealNotarization record `{session_id, sealed_root, participants,
+      close_timestamp, attestation: "PENDING"}` with the directory-identity signing key,
+      stores it in `DirectoryStore`, confirms the seal to the relay, and pushes a
+      `session_sealed` event to both clients' signaling streams. On failure the directory
+      records the rejection reason, confirms `seal_rejected` to the relay (which retains
+      state per NODE-002), and pushes `session_seal_rejected {session_id, reason}` to both
+      clients.
+  - trigger: "When a client disconnects from its signaling stream"
+    action: >
+      the directory shall remove the stream from its authenticated-connection registry. If
+      the disconnection occurs mid-session (after SessionAssignment issuance but before seal),
+      active sessions involving that client are unaffected from the directory's perspective —
+      relay and peer-to-peer content continue independently. The directory re-queues any
+      pending notifications (including `session_sealed` events) for delivery on the client's
+      next authenticated signaling stream.
+  - trigger: "While operating in any path"
+    action: >
+      the directory shall never open a stream on `/cello/content/1.0.0` or `/cello/relay/1.0.0`.
+      Those protocols are not registered on the directory's libp2p node. Directory-side
+      libp2p configuration exposes only `/cello/signaling/1.0.0` as an inbound handler, plus
+      the libp2p control protocols (identify, ping, noise, yamux, circuit-relay-hop) required
+      by the transport stack.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A directory libp2p node has started and a client has opened a stream on `/cello/signaling/1.0.0`"
+    when: "The client responds to the `signaling_auth_challenge` with a valid signature over `\"CELLO-DIR-AUTH-v1\" || nonce || pubkey`"
+    then: "The signature verifies; the stream is registered under the claimed pubkey; the stream is marked authenticated"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "An authenticated signaling stream"
+    when: "The client sends a `signaling_auth_response` with a signature computed over the wrong domain string, the wrong nonce, or a signature that does not verify"
+    then: "The directory resets the stream with `auth_failed: signature_invalid` and does not register the client"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A client that received a `signaling_auth_challenge {nonce}` and, under the test time source, has waited 31 seconds before responding"
+    when: "The client sends an otherwise-valid `signaling_auth_response`"
+    then: "The directory resets the stream with `auth_failed: nonce_expired` and does not register the client"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "A client has completed one `signaling_auth_response` cycle consuming nonce N (successful or failed)"
+    when: "A second stream attempts to authenticate by submitting a `signaling_auth_response` referencing nonce N"
+    then: "The directory resets the second stream with `auth_failed: nonce_reused` and does not register it"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "Two authenticated clients A and B on signaling streams"
+    when: "A sends `session_request { target_pubkey: B_pubkey }`"
+    then: >
+      The directory returns a `session_assignment` frame on A's stream AND pushes a
+      `session_assignment` frame to B's stream; both frames contain the same signed
+      SessionAssignment record with matching session_id, relay_endpoint, and
+      session_timestamp; the signature on the record verifies against the pinned
+      directory-identity pubkey
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: >
+      A running directory and in-process relay with a test hook that records (a) the
+      wall-clock time at which `relay.recordAssignment(session_id)` returns, and (b) the
+      wall-clock time at which each client observes its `session_assignment` frame
+    when: "A session is established between two authenticated clients"
+    then: >
+      `recordAssignment` return-time is strictly earlier than the earlier of the two
+      `session_assignment` frame observation times; the relay accepts a `hash_submit`
+      carrying the session_id at any point after either client has received the frame
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "A test configuration where `relay.recordAssignment` is stubbed to reject"
+    when: "Client A requests a session with Client B"
+    then: >
+      The directory returns `relay_unavailable` to A on its signaling stream; no
+      `session_assignment` frame is delivered to either client; the relay holds no state
+      for the attempted session_id
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "Client A authenticated to the directory; no client is authenticated under target pubkey K_B"
+    when: "A sends `session_request { target_pubkey: K_B }`"
+    then: "The directory returns `target_offline` on A's stream; no session_id is allocated; the relay receives no assignment"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-009
+    given: "A running directory"
+    when: "1,000 sessions are established in rapid succession between distinct authenticated client pairs (reduced to 256 if CI budget pressures arise; the chi-squared threshold is chosen to retain >99% confidence at n=256)"
+    then: >
+      All session_ids are unique, each is 16 bytes, and a chi-squared test on the
+      concatenated session_id bytes against a uniform distribution yields p > 0.0001
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010
+    given: "A sealed session whose relay has submitted the leaf sequence via `relay.submitForSeal`"
+    when: "The directory processes the submission"
+    then: >
+      The directory recomputes the root from scratch (MERKLE-001) and confirms it matches
+      the relay-supplied root; every leaf's Structure 1 signature verifies; prev_root chains
+      correctly; the causal-chain invariant on last_seen_seq holds; both SEAL leaves chain
+      correctly; the directory signs a SealNotarization with the directory-identity key and
+      confirms the seal; both clients' signaling streams receive `session_sealed {session_id,
+      sealed_root}`
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-011
+    given: "A relay submission with one leaf whose embedded Structure 1 signature has been replaced with 64 random bytes"
+    when: "The directory processes the submission"
+    then: >
+      The directory detects the invalid signature and pushes `session_seal_rejected
+      {session_id, reason: 'leaf_signature_invalid'}` to both clients; no SealNotarization
+      is signed; the relay retains per-session state per NODE-002
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-012
+    given: "A client authenticates to a relay with a signature computed over the domain string `\"CELLO-DIR-AUTH-v1\"` (the directory's domain) instead of `\"CELLO-RELAY-AUTH-v1\"`"
+    when: "The relay verifies the challenge"
+    then: "The signature fails to verify; the stream is reset with `auth_failed: signature_invalid`; the directory's domain string is not reusable at the relay endpoint"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-013
+    given: "A running directory libp2p node"
+    when: "A client attempts to open a stream on `/cello/relay/1.0.0` or `/cello/content/1.0.0` against the directory's Peer ID"
+    then: "The stream open fails with `protocol_not_supported` — the directory does not register handlers for those protocols"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The directory shall never register an authenticated connection under a pubkey the
+      client has not proven possession of by signing `"CELLO-DIR-AUTH-v1" || nonce || pubkey`.
+    adversarial_condition: >
+      even when the attacker connects and sends a forged `signaling_auth_response` with a
+      signature over the wrong domain string, a replayed signature from a different nonce,
+      a signature over a consumed nonce, or a signature over an expired nonce.
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      The directory shall generate session_ids as 16 bytes read from a CSPRNG and shall never
+      issue a session_id that collides with an existing active or recently-closed session.
+    adversarial_condition: >
+      even when 1000 sessions are created in rapid succession; no two collide. 128 bits of
+      entropy prevents an attacker from probing the relay with guessed session_ids.
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: >
+      The directory shall never deliver a `session_assignment` frame for a session_id the
+      relay has not yet registered via `recordAssignment`, AND shall never create a session
+      unless both parties are concurrently authenticated under the pubkeys named in the
+      session-initiate request.
+    adversarial_condition: >
+      even when an attacker initiates toward a pubkey that is offline, represented by a hung
+      stream that has not completed challenge-response, or when a client races its relay
+      stream open against the session-establishment sequence — the relay rejects any
+      `hash_submit` carrying a session_id for which `recordAssignment` has not yet completed
+      with a structured `session_not_found` error, providing no distinguishability between a
+      pre-registered-and-guessed session and a sealed-and-destroyed session.
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-004
+    statement: >
+      The directory shall never record a sealed_root it did not independently recompute from
+      the leaf sequence via MERKLE-001.
+    adversarial_condition: >
+      even when the relay supplies a claimed final_root — the directory recomputes from
+      scratch and compares; any mismatch rejects the seal.
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-005
+    statement: >
+      The directory's libp2p node shall never register inbound handlers for
+      `/cello/content/1.0.0` or `/cello/relay/1.0.0`. Only `/cello/signaling/1.0.0` is
+      exposed to clients, plus libp2p control protocols required by the transport stack.
+    adversarial_condition: >
+      even when a misconfiguration or future library default would otherwise register a
+      handler — the directory's createNode contract fixes the handler list, and the test
+      asserts the exposed protocol set by inspecting the started node.
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the relay is unreachable from the directory at `relay.recordAssignment` time"
+    fallback: >
+      session establishment fails with `relay_unavailable`; no state is persisted; the
+      initiator retries at its own discretion. The directory does not queue pending
+      establishment requests.
+    test_type: integration
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While a client's signaling stream is disconnected at the time the directory would push a `session_sealed` event"
+    fallback: >
+      the directory enqueues the event for delivery on the client's next authenticated
+      signaling stream. The seal is complete regardless of notification delivery —
+      notification is a liveness concern, not a correctness one.
+    test_type: integration
+    component_under_test: directory
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Directory Infrastructure"
+  end_to_end_flow: "§2.1, §3.1, §6.7"
+  discussion_logs:
+    - "2026-04-08_1700_node-architecture-and-replication"
+    - "2026-04-17_1400_directory-relay-architecture-reassessment"
+    - "2026-04-11_1400_libp2p-dht-and-peer-connectivity"

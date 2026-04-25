@@ -11,128 +11,146 @@ components:
 # ─── Intent ─────────────────────────────────────────────────
 story: >
   As the CELLO Client,
-  I want bilateral session seal: both parties sign the final Merkle root with K_local, the relay hands the full leaf sequence to the directory, the directory recomputes the tree from scratch, and the directory verifies the `last_seen_seq` causal chain across all leaves
+  I want bilateral session seal: both parties sign the final Merkle root with K_local via a SEAL control leaf, the relay hands the full leaf sequence to the directory, the directory recomputes the tree from scratch, verifies the `last_seen_seq` causal chain across all leaves, and notarizes the sealed root with the directory-identity signing key
   so that a sealed conversation is a cryptographically self-consistent 32-byte receipt that three independent parties agree on, and a relay that forged, reordered, or dropped leaves is provably detectable at seal time.
 
-  M1 seal is "bilateral K_local only" — the FROST notarization from the M2 design is not yet
-  present. Both parties produce a SEAL control leaf (leaf_kind = 0x02, MERKLE-002) whose content
-  is a canonical-CBOR record
-  `[session_id, final_root, close_timestamp, attestation]` where `attestation = "PENDING"`
-  in M1 (CLEAN/FLAGGED arrive with M7 per the deferred-items policy in the implementation roadmap).
-  Each party signs Structure 1 over this control leaf with K_local. The relay appends both SEAL
-  leaves to the tree, then hands the full leaf sequence to the directory. The directory
-  recomputes the tree from scratch, verifies the final root matches both parties' SEAL leaves,
-  verifies the `last_seen_seq` causal chain, and records the sealed root.
+  M1 seal is **bilateral K_local plus single-key directory notarization** — the FROST
+  threshold ceremony from M2 is not yet present. The directory signs the SealNotarization
+  with its single directory-identity key (the same key that signed the SessionAssignment in
+  SESSION-002), which clients verify against the pinned directory pubkey. M2 replaces this
+  single-key notarization with a t-of-n FROST ceremony; the sealed-root structure and the
+  causal-chain check are unchanged.
 
-  The seal is a two-step bilateral handshake initiated by either party:
+  The M1 SEAL control leaf carries `attestation = "PENDING"` — CLEAN / FLAGGED semantics
+  (which drive compromise-detection anchors and arbitration) arrive with M7. Keeping the
+  attestation field present from M1 means M7 fills in values rather than reshaping the leaf.
 
-  1. Initiator (say A) calls `cello_close_session(session_id)`. The client constructs the SEAL
-     control payload using A's view of the final root (the Merkle root of the local tree up to
-     and including the last message leaf), signs Structure 1, submits it to the relay as a
-     `hash_submit` frame with leaf_kind = 0x02. The relay assigns a sequence number, builds
-     Structure 2, appends the SEAL leaf to the tree, relays Structure 2 to B.
-  2. B receives the Structure 2 for A's SEAL leaf, verifies it passes all the usual MSG-004
-     checks, confirms `final_root` in the SEAL payload matches B's local tree root up to the
-     preceding leaf. B then constructs its own SEAL payload with `final_root` set to the
-     current tree root AFTER appending A's SEAL leaf (so B's SEAL commits to a tree that
-     includes A's SEAL). B signs and submits. The relay appends B's SEAL leaf. The tree now
-     has two SEAL leaves at its tail; the tree's final root after both SEAL leaves is the
-     `sealed_root`.
+  **M1 placeholder — non-initiator auto-response:** on receipt of a valid initiator SEAL
+  leaf, the non-initiator's client automatically builds and submits its own SEAL leaf
+  without owner/agent intervention. This is an M1 simplification driven by the fact that
+  attestations are uniformly `PENDING`; there is nothing for the non-initiator to choose.
+  M7 re-introduces the non-initiator's choice when CLEAN / FLAGGED become meaningful.
 
-  The directory performs the causal-chain check at seal:
+  Seal is a two-step bilateral handshake initiated by either party:
 
-  - For every leaf L_i, let `declared_seen = Structure 1.last_seen_seq`. Let `effective_seen`
-    be the highest sequence_number of a leaf from the *other* participant that is at index
-    < i in the canonical ordering. The causal invariant is `declared_seen <= effective_seen`
-    — a sender cannot claim to have seen a leaf it was not yet able to see at the time it
-    signed. Violation rejects the seal and marks the conversation `seal_rejected`.
+  1. Initiator (say A) calls `cello_close_session(session_id)`. The client constructs the
+     SEAL control payload using A's view of the final root (the Merkle root of the local
+     tree up to and including the last message leaf), signs Structure 1, submits it to the
+     relay as a `hash_submit` frame on `/cello/relay/1.0.0` with `leaf_kind = 0x02` plus
+     the SEAL payload as the content_frame on `/cello/content/1.0.0` for the counterparty.
+     The relay assigns a sequence number, builds Structure 2, appends the SEAL leaf to the
+     tree, and delivers Structure 2 + content_frame to B.
+  2. B receives the Structure 2 for A's SEAL leaf, runs all the usual MSG-004 checks,
+     additionally confirms `final_root` in the SEAL payload matches B's local tree root up
+     to the preceding leaf. B then constructs its own SEAL payload with `final_root` set to
+     the current tree root AFTER appending A's SEAL leaf (so B's SEAL commits to a tree
+     that includes A's SEAL), signs, and submits. The relay appends B's SEAL leaf. The tree
+     now has two SEAL leaves at its tail; the tree's final root after both SEAL leaves is
+     the `sealed_root`.
+
+  The directory then performs three verification passes before issuing the SealNotarization:
+
+  - **Root recompute** — MERKLE-001 from scratch over the relay's supplied leaf sequence;
+    must equal the relay's supplied root.
+  - **Per-leaf signature verification** — every leaf's embedded Structure 1 signature must
+    verify against the sender_pubkey.
+  - **Causal-chain check on `last_seen_seq`** — see below.
+
+  ### Causal-chain check (verified at the directory at seal)
+
+  For every leaf L_i in canonical sequence order (i = 1..n), let:
+  - `declared_seen` = the `last_seen_seq` inside L_i's embedded Structure 1.
+  - `effective_seen` = the maximum `sequence_number` of any leaf L_j from the *other*
+    participant where j < i in canonical order, or 0 if no such L_j exists.
+
+  **Invariant:** `declared_seen <= effective_seen` for every leaf.
+
+  A sender cannot claim to have seen a leaf it was not yet able to see at the time it
+  signed. Violation rejects the seal with `causal_chain_violation` and flags the relay's
+  handoff for review (a relay that misordered leaves produces this violation). The
+  initiator's and non-initiator's SEAL leaves are both subject to this check — their
+  `last_seen_seq` must reflect the highest counterparty sequence number each had seen when
+  signing its own SEAL.
 
   M1 explicitly does not implement dispute flow, arbitration, or CLEAN/FLAGGED attestations.
-  Those land with M7. The SEAL control leaf's `attestation` field is `PENDING` in M1 so later
-  milestones fill in values rather than reshaping the leaf.
+  Those land with M7.
 
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
-  - trigger: "When the client calls cello_close_session for an active session"
+  - trigger: "When the client calls `cello_close_session` for an active session"
     action: >
       the client shall (a) read the current local tree root `R_tail` (root over all leaves
-      appended so far), (b) build the SEAL payload
+      appended so far), (b) build the SEAL payload as
       `canonical_CBOR([session_id, R_tail, close_timestamp, \"PENDING\"])`, (c) compute
-      `content_hash = SHA-256(0x00 || SEAL_payload)`, (d) sign Structure 1 over
+      content_hash = `SHA-256(0x00 || SEAL_payload)`, (d) sign Structure 1 over
       `[1, content_hash, sender_pubkey, session_id, last_seen_seq, close_timestamp]`, (e)
-      submit hash_submit to the relay with leaf_kind = 0x02 plus the SEAL payload as the
-      content_deliver for the counterparty.
-  - trigger: "When the client receives a Structure 2 whose leaf_kind = 0x02 on an active session"
+      submit a `hash_submit` frame to the relay with leaf_kind = 0x02, (f) submit the SEAL
+      payload as a content_frame to the counterparty on `/cello/content/1.0.0`.
+  - trigger: "When the client receives a `leaf_deliver` frame whose Structure 2 carries leaf_kind = 0x02 on an active session"
     action: >
-      the client shall (a) perform all MSG-004 checks on the SEAL Structure 2, (b) parse the
-      SEAL payload from the content_deliver, (c) verify `final_root` in the payload equals the
-      client's own Merkle root of the local tree BEFORE appending the SEAL leaf (i.e., the
-      initiator and receiver are looking at the same tail state), (d) if valid: append the
-      SEAL leaf to the local tree, record the initiator's SEAL as received, transition the
-      session state to `sealing`.
+      the client shall (a) perform all MSG-004 checks on the SEAL Structure 2, (b) parse
+      the SEAL payload from the content_frame, (c) verify `final_root` in the payload
+      equals the client's own Merkle root of the local tree BEFORE appending the SEAL leaf
+      (i.e., the initiator and receiver are looking at the same tail state), (d) if valid:
+      append the SEAL leaf to the local tree, record the initiator's SEAL as received,
+      transition the session state to `sealing`.
   - trigger: "When the client has appended the initiator's SEAL leaf and is the non-initiator"
     action: >
       the client shall automatically build and submit its own SEAL payload, using
       `final_root = root of local tree after appending the initiator's SEAL leaf`. The
       non-initiator does not require a separate `cello_close_session` call — receipt of a
-      valid SEAL from the counterparty triggers the acknowledging SEAL.
+      valid SEAL from the counterparty triggers the acknowledging SEAL. (M1 placeholder:
+      M7 replaces auto-response with a non-initiator choice once CLEAN / FLAGGED
+      attestations become meaningful.)
   - trigger: "When the relay has observed SEAL leaves from both participants"
     action: >
-      the relay shall mark the session `sealing`, hand the complete ordered leaf sequence and
-      its current root to the directory via an in-process `submit_for_seal(session_id, leaves,
-      final_root)` call, and wait for a seal confirmation from the directory.
-  - trigger: "When the directory receives a submit_for_seal call from the relay"
+      the relay shall mark the session `sealing`, hand the complete ordered leaf sequence
+      and its current root to the directory via an in-process `submitForSeal(session_id)`
+      call, and wait for `confirmSeal` or `rejectSeal` from the directory.
+  - trigger: "When the directory receives a `submitForSeal` call from the relay"
     action: >
-      the directory shall (a) rebuild the Merkle tree from scratch using MERKLE-001 over the
-      received leaves in the provided order, (b) confirm the recomputed root equals the root
-      supplied by the relay, (c) verify every leaf's embedded Structure 1 signature, (d)
-      verify `prev_root` consistency across the leaf sequence (each leaf's prev_root equals
-      the tree's root up to the preceding leaf), (e) verify the causal-chain invariant on
-      `last_seen_seq` (see §Causal-chain check below), (f) verify the final two leaves are
-      SEAL control leaves, one from each participant, whose payloads' `final_root` values
-      match the recomputed root at the appropriate stage (initiator SEAL's final_root == root
-      before the SEAL leaves; responder SEAL's final_root == root after the initiator SEAL but
-      before the responder SEAL; the overall sealed_root == root after both SEAL leaves).
+      the directory shall (a) rebuild the Merkle tree from scratch using MERKLE-001 over
+      the received leaves in the provided order, (b) confirm the recomputed root equals
+      the root supplied by the relay, (c) verify every leaf's embedded Structure 1
+      signature, (d) verify `prev_root` consistency across the leaf sequence (each leaf's
+      prev_root equals the tree's root up to the preceding leaf), (e) verify the
+      causal-chain invariant on `last_seen_seq` across the full sequence, (f) verify the
+      final two leaves are SEAL control leaves, one from each participant, whose payloads'
+      `final_root` values match the recomputed root at the appropriate stage (initiator
+      SEAL's final_root equals root before the SEAL leaves; responder SEAL's final_root
+      equals root after the initiator SEAL but before the responder SEAL; sealed_root
+      equals root after both SEAL leaves).
   - trigger: "When directory seal verification succeeds"
     action: >
-      the directory shall record
-      `{session_id, sealed_root, participants, close_timestamp, attestation_A, attestation_B}`
-      in the conversation-seals store, confirm the seal to the relay, and push a `session_sealed`
-      event `{session_id, sealed_root}` to both clients' directory WebSockets.
+      the directory shall sign a SealNotarization record
+      `{session_id, sealed_root, participants, close_timestamp,
+      attestation_initiator: \"PENDING\", attestation_responder: \"PENDING\"}` with the
+      single directory-identity signing key, persist it to DirectoryStore, call
+      `relay.confirmSeal(session_id, sealed_root)` (which destroys the relay's per-session
+      state per NODE-002 SI-005), and push a `session_sealed {session_id, sealed_root,
+      directory_signature}` event to both clients' signaling streams.
   - trigger: "When directory seal verification fails at any step"
     action: >
       the directory shall reject the seal with a structured reason code
       (`recomputed_root_mismatch`, `leaf_signature_invalid`, `prev_root_inconsistent`,
-      `causal_chain_violation`, `seal_leaves_missing`, `seal_final_root_mismatch`), record the
-      rejection reason, and push `session_seal_rejected {session_id, reason}` to both clients.
-      The relay retains per-session state pending manual investigation — it is NOT destroyed
-      on rejection (destruction happens only on successful seal per NODE-002 SI-005).
-  - trigger: "When the client receives a session_sealed event"
+      `causal_chain_violation`, `seal_leaves_missing`, `seal_final_root_mismatch`), call
+      `relay.rejectSeal(session_id, reason)` (which retains relay state per NODE-002), and
+      push `session_seal_rejected {session_id, reason}` to both clients' signaling streams.
+  - trigger: "When the client receives a `session_sealed` event"
     action: >
-      the client shall record the sealed_root, transition the session state to `sealed`, and
-      reject any subsequent sends on the session with `session_sealed`.
-
-# ─── Causal-chain check (verified at seal) ────────────────
-# Computed by the directory during submit_for_seal verification.
-# For every leaf L_i (i = 1..n) in canonical sequence order, let:
-#   declared_seen = Structure 1.last_seen_seq
-#   effective_seen = max sequence_number of any leaf L_j from the OTHER participant
-#                    where j < i in canonical order, or 0 if none exist
-# Invariant: declared_seen must be <= effective_seen for every leaf.
-# Violation rejects the seal with `causal_chain_violation` and flags the relay's handoff
-# for review (a relay that misorders leaves produces this violation).
-# The initiator's SEAL leaf is subject to this check — its last_seen_seq must reflect the
-# highest counterparty sequence number the initiator had seen when signing.
+      the client shall verify the directory signature on the SealNotarization against the
+      pinned directory pubkey, record the sealed_root, transition the session state to
+      `sealed`, and reject any subsequent sends on the session with `session_sealed`.
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
     given: "An active session between A and B with 5 message leaves appended"
-    when: "A calls cello_close_session"
+    when: "A calls `cello_close_session`"
     then: >
-      A's SEAL leaf is appended (sequence_number = 6); B receives Structure 2 for A's SEAL and
-      verifies its final_root matches B's local tree root after 5 leaves; B's SEAL is appended
-      (sequence_number = 7)
+      A's SEAL leaf is appended (sequence_number = 6); B receives Structure 2 for A's SEAL
+      and verifies its final_root matches B's local tree root after 5 leaves; B's SEAL is
+      appended (sequence_number = 7) automatically
     test_type: e2e
     component_under_test: client
 
@@ -140,10 +158,11 @@ acceptance_criteria:
     given: "Both SEAL leaves have been appended"
     when: "The relay submits the leaf sequence to the directory for seal"
     then: >
-      The directory recomputes the tree, recomputes the root, verifies all leaf signatures,
-      verifies prev_root chaining, verifies the causal chain, confirms both SEAL leaves
-      reference matching final_roots at their respective stages, records the sealed_root,
-      and pushes session_sealed to both clients
+      The directory recomputes the tree from scratch, recomputes the root, verifies all
+      leaf signatures, verifies prev_root chaining, verifies the causal chain, confirms
+      both SEAL leaves reference matching final_roots at their respective stages, signs a
+      SealNotarization with the directory-identity key, calls `relay.confirmSeal`, and
+      pushes `session_sealed` to both clients
     test_type: e2e
     component_under_test: directory
 
@@ -157,22 +176,22 @@ acceptance_criteria:
   - id: AC-004
     given: "A valid sealed session with sealed_root R_sealed"
     when: "Each party's client and the directory report sealed_root"
-    then: "Client A's sealed_root, Client B's sealed_root, and the directory's sealed_root are byte-equal to R_sealed"
+    then: "Client A's sealed_root, Client B's sealed_root, and the directory's sealed_root are byte-equal to R_sealed; the directory signature on the SealNotarization verifies against the pinned directory pubkey on each client"
     test_type: e2e
     component_under_test: client
 
   - id: AC-005
-    given: "A session with 3 leaves, then the test harness tampers with leaf 2 before the relay submits for seal (replacing one sibling hash in the relay's internal tree nodes)"
-    when: "The relay submits the leaf sequence for seal (reporting a root derived from the tampered internal state) but the leaf sequence itself is unchanged"
+    given: "A session with 3 leaves; the test harness tampers with leaf 2 inside the relay's internal tree nodes (corrupts a sibling hash) before submitForSeal"
+    when: "The relay submits the leaf sequence for seal (reporting a root derived from its tampered internal state) but the leaf sequence itself is unchanged"
     then: >
-      The directory recomputes the root from the leaf sequence, finds it does not equal the
-      relay-supplied root, rejects with `recomputed_root_mismatch`; the relay's state is not
-      destroyed; both clients receive `session_seal_rejected`
+      The directory recomputes the root from the leaf sequence, finds it does not equal
+      the relay-supplied root, rejects with `recomputed_root_mismatch`; the relay's state
+      is not destroyed; both clients receive `session_seal_rejected`
     test_type: integration
     component_under_test: directory
 
   - id: AC-006
-    given: "A session with 3 leaves, then the test harness tampers with leaf 2 by replacing its embedded sender_signature with 64 random bytes"
+    given: "A session with 3 leaves; the test harness tampers with leaf 2 by replacing its embedded sender_signature with 64 random bytes"
     when: "The relay submits the leaf sequence for seal"
     then: "The directory detects the invalid signature and rejects with `leaf_signature_invalid`"
     test_type: integration
@@ -182,18 +201,18 @@ acceptance_criteria:
     given: "A session with 4 leaves where the test harness reorders leaves 2 and 3 in the relay's submitted sequence (swapping their positions)"
     when: "The relay submits the reordered sequence for seal"
     then: >
-      The directory detects that leaf 2's prev_root does not match the tree's root up to its
-      preceding leaf OR that leaf 3's declared last_seen_seq is inconsistent with the observed
-      ordering; the directory rejects with `prev_root_inconsistent` or `causal_chain_violation`
-      and pushes `session_seal_rejected` to both clients
+      The directory detects that leaf 2's prev_root does not match the tree's root up to
+      its preceding leaf OR that leaf 3's declared last_seen_seq is inconsistent with the
+      observed ordering; the directory rejects with `prev_root_inconsistent` or
+      `causal_chain_violation`; both clients receive `session_seal_rejected`
     test_type: integration
     component_under_test: directory
 
   - id: AC-008
     given: >
-      A session where A sends leaf 1 (seq 1, last_seen_seq 0), B sends leaf 2 (seq 2, last_seen_seq
-      1), A sends leaf 3 but the relay maliciously reports last_seen_seq = 5 inside Structure 1
-      (impossible — only 2 leaves have existed so far)
+      A session where A sends leaf 1 (seq 1, last_seen_seq 0), B sends leaf 2 (seq 2,
+      last_seen_seq 1), A sends leaf 3 but the relay's handoff maliciously reports
+      last_seen_seq = 5 inside Structure 1 (impossible — only 2 leaves have existed so far)
     when: "The directory performs the causal-chain check"
     then: "The directory detects declared_seen > effective_seen and rejects with `causal_chain_violation`"
     test_type: integration
@@ -202,88 +221,107 @@ acceptance_criteria:
   - id: AC-009
     given: "A sealed session"
     when: "The test harness generates an inclusion proof from the directory's stored leaf sequence for leaf index i"
-    then: "The proof verifies against sealed_root using MERKLE-001's verifier (AC-003/004 of MERKLE-001) for every i in [0, n-1]"
+    then: "The proof verifies against sealed_root using MERKLE-001's verifier for every i in [0, n-1]"
     test_type: e2e
     component_under_test: directory
 
   - id: AC-010
-    given: "A session where only one party (A) submits a SEAL leaf and B never responds"
+    given: "A session where only A submits a SEAL leaf and B never responds (simulated by holding B's auto-response at the test harness layer)"
     when: "The relay waits for the M1-configurable SEAL-response timeout (default 30 seconds) and the timeout expires"
     then: >
-      The session state remains `sealing` (not `sealed` and not `active`); the relay does NOT
-      submit for seal and does not destroy state; both clients see the session listed as
-      `sealing`. Unilateral seal (SEAL-UNILATERAL) and its notification mechanics are deferred
-      to M7 — M1 just stalls in `sealing` rather than failing closed, because M1 has no close
+      The session state remains `sealing` (not `sealed` and not `active`); the relay does
+      NOT submit for seal and does not destroy state; both clients see the session listed
+      as `sealing`. Unilateral seal (SEAL-UNILATERAL) mechanics are deferred to M7 — M1
+      just stalls in `sealing` rather than failing closed, because M1 has no close
       attestation semantics to attach to a unilateral path
     test_type: integration
     component_under_test: relay
+
+  - id: AC-011
+    given: "A valid sealed session"
+    when: "The test harness tampers with one bit of the directory signature on the SealNotarization before it reaches a client"
+    then: "The client detects the signature-verification failure, does not transition the session to `sealed`, and logs a `directory_signature_invalid` event. The sealed_root held by the other participant and the directory is unaffected"
+    test_type: integration
+    component_under_test: client
 
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
     statement: >
-      The directory shall never record a sealed_root it did not independently recompute from
-      the leaf sequence via MERKLE-001.
+      The directory shall never record a sealed_root it did not independently recompute
+      from the leaf sequence via MERKLE-001.
     adversarial_condition: >
-      even when the relay supplies a claimed final_root — the directory recomputes from scratch
-      and compares; any mismatch rejects the seal.
+      even when the relay supplies a claimed final_root — the directory recomputes from
+      scratch and compares; any mismatch rejects the seal.
     test_type: integration
     component_under_test: directory
 
   - id: SI-002
     statement: >
-      The directory shall never record a seal whose causal-chain check fails. A sender cannot
-      have declared `last_seen_seq = k` at signing time if no counterparty leaf with
+      The directory shall never record a seal whose causal-chain check fails. A sender
+      cannot have declared `last_seen_seq = k` at signing time if no counterparty leaf with
       sequence_number >= k exists at an earlier canonical index.
     adversarial_condition: >
-      even when the rest of the tree structure validates cleanly — causal inconsistency reveals
-      a relay that misordered, forged, or hid leaves and the seal must be rejected.
+      even when the rest of the tree structure validates cleanly — causal inconsistency
+      reveals a relay that misordered, forged, or hid leaves and the seal must be rejected.
     test_type: integration
     component_under_test: directory
 
   - id: SI-003
     statement: >
-      The two SEAL control leaves (one from each participant) are both required. The directory
-      shall never seal a session whose final two leaves are not SEAL leaves from the two
-      participants with correctly chained `final_root` values.
+      The two SEAL control leaves (one from each participant) are both required. The
+      directory shall never seal a session whose final two leaves are not SEAL leaves from
+      the two participants with correctly chained `final_root` values.
     adversarial_condition: >
-      even when a relay presents a leaf sequence ending in a single SEAL leaf or in two SEAL
-      leaves from the same participant — the bilateral requirement is enforced at seal, not
-      just at the client's local view.
+      even when a relay presents a leaf sequence ending in a single SEAL leaf or in two
+      SEAL leaves from the same participant — the bilateral requirement is enforced at seal,
+      not just at the client's local view.
     test_type: integration
     component_under_test: directory
 
   - id: SI-004
     statement: >
-      After the directory confirms a seal, the relay shall destroy all per-session state (NODE-002
-      SI-005 carries forward). If the seal is rejected, state is NOT destroyed.
+      After the directory confirms a seal, the relay shall destroy all per-session state
+      (NODE-002 SI-005 carries forward). If the seal is rejected, state is NOT destroyed.
     adversarial_condition: >
-      even when a failure after seal confirmation could leave orphaned state — destruction is
-      synchronous with the confirmation path.
+      even when a failure after seal confirmation could leave orphaned state — destruction
+      is synchronous with the `confirmSeal` return.
     test_type: integration
     component_under_test: relay
+
+  - id: SI-005
+    statement: >
+      The client shall never transition a session to `sealed` without verifying the
+      directory's signature on the SealNotarization against the pinned directory pubkey.
+    adversarial_condition: >
+      even when the SealNotarization payload matches what the client expects — the
+      directory signature is the authoritative attestation, and a tampered signature
+      means the notarization is not trustworthy. (M2 replaces the single signature with a
+      FROST threshold signature; the invariant is preserved.)
+    test_type: integration
+    component_under_test: client
 
 # ─── Degraded Behavior ─────────────────────────────────────
 degraded_behavior:
   - id: DB-001
-    condition: "While the directory is unreachable when the relay attempts submit_for_seal"
+    condition: "While the directory is unreachable when the relay attempts `submitForSeal`"
     fallback: >
-      the relay shall retain the per-session state (leaf sequence, tree, both SEAL leaves) and
-      mark the session `seal_deferred`; both clients see `seal_deferred` in their session list.
-      The bilateral SEAL leaves on the tree are sufficient for either party to prove the
-      conversation contents up to seal — the directory's notarization is an additional
-      confirmation, not a requirement for bilateral closure. When the directory returns, the
-      relay retries submit_for_seal automatically. Full graceful degradation semantics arrive
-      with M10.
+      the relay shall retain the per-session state (leaf sequence, tree, both SEAL leaves)
+      and mark the session `seal_deferred`; both clients see `seal_deferred` in their
+      session list. The bilateral SEAL leaves on the tree are sufficient for either party
+      to prove the conversation contents up to seal — the directory's notarization is an
+      additional confirmation, not a requirement for bilateral closure. When the directory
+      returns, the relay retries `submitForSeal` automatically. Full graceful degradation
+      semantics arrive with M10.
     test_type: integration
     component_under_test: relay
 
   - id: DB-002
-    condition: "While one participant's directory WebSocket is disconnected at the time the directory confirms the seal"
+    condition: "While one participant's signaling stream is disconnected at the time the directory confirms the seal"
     fallback: >
-      the directory shall enqueue the `session_sealed` event for delivery on the participant's
-      next authenticated connection. The seal is complete regardless of notification delivery —
-      notification is a liveness concern, not a correctness one.
+      the directory shall enqueue the `session_sealed` event for delivery on the
+      participant's next authenticated signaling stream. The seal is complete regardless
+      of notification delivery — notification is a liveness concern, not a correctness one.
     test_type: integration
     component_under_test: directory
 

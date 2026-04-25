@@ -9,179 +9,216 @@ components:
 # ─── Intent ─────────────────────────────────────────────────
 story: >
   As the Relay Node,
-  I want to accept sender-signed Structure 1 leaves, assign canonical sequence numbers, compute `prev_root`, construct Structure 2, and maintain the per-session Merkle tree during the active session
-  so that the per-session Merkle state is authoritative during the session and the tree is internally
-  consistent when handed to the directory at seal.
+  I want to accept sender-signed Structure 1 leaves over a dedicated libp2p protocol, assign canonical sequence numbers, compute `prev_root`, construct Structure 2, maintain the per-session Merkle tree, and deliver Structure 2 to the counterparty
+  so that canonical sequencing is authoritative during an active session, the tree is internally consistent when handed to the directory at seal, and the relay has **no topological path to message content**.
 
-  M1 introduces `packages/relay` as a distinct package with its own store interface
-  (`RelayStore` with `InMemoryRelayStore` as the initial implementation). In the Vitest test
-  harness the relay runs in-process alongside the directory and clients; the boundary is
-  enforced by the client never importing from `packages/relay` (it imports only from
-  `protocol-types` and `crypto`) and the relay never reading client internals.
+  M1 introduces `packages/relay` as a distinct pnpm workspace package with its own store
+  interface (`RelayStore` + `InMemoryRelayStore`). The client never imports from
+  `packages/relay` — it reaches the relay over libp2p on the `/cello/relay/1.0.0` stream
+  protocol. In-process Vitest co-location is a harness convenience; the package boundary is
+  real.
 
-  In M1 the relay learns about sessions through a trusted in-process call from the directory at
-  session establishment (see SESSION-002) — relay/directory authentication as a network protocol
-  is a later-milestone concern. The relay exposes a WebSocket endpoint to clients for hash
-  submission and Structure 2 delivery. Client-to-relay authentication reuses the Ed25519
-  challenge-response from NODE-001 (same byte-string construction, with the domain prefix
-  `"CELLO-RELAY-AUTH-v1"` instead of `"CELLO-WS-AUTH-v1"` so a signature for one endpoint
-  cannot be replayed at the other).
+  The relay is a libp2p node (TRANSPORT-001 infrastructure reused) separate from the directory
+  libp2p node. It has its own Peer ID derived from a relay-identity Ed25519 keypair pinned in
+  client and directory configuration. The relay registers a single inbound protocol:
+  `/cello/relay/1.0.0`. It does NOT register `/cello/signaling/1.0.0` or `/cello/content/1.0.0`
+  — the relay is not a signaler and is not a content peer.
 
-  The relay does NOT see message content. It sees Structure 1 (which contains only content_hash,
-  not content). Message content flows directly between participants (in M1: over the same
-  relay WebSocket but via a separate `content_deliver` frame routed to the counterparty without
-  being inspected, hashed, or stored by the relay). This satisfies the "hash relay, not content
-  relay" invariant (protocol-map Invariant 1).
+  **Content isolation (architectural invariant):** the relay never handles message content.
+  There is no `content_deliver` frame, no content field anywhere in any frame the relay
+  accepts, and no protocol path by which content reaches the relay. Content flows peer↔peer
+  on `/cello/content/1.0.0` (MSG-004) between the two session participants. The relay sees
+  only the 32-byte `content_hash` embedded inside Structure 1. This is enforced at the
+  protocol-registration level (the relay does not register the content protocol), not by a
+  content-scrubbing policy.
+
+  In M1 the relay learns about sessions through a trusted in-process call from the directory
+  at session establishment: `relay.recordAssignment(sessionAssignment)` (NODE-001). Relay-to-
+  directory network authentication (out-of-process) is a later-milestone concern.
+
+  Client-to-relay authentication reuses the Ed25519 challenge-response pattern with a distinct
+  domain prefix `"CELLO-RELAY-AUTH-v1"` so a signature for one protocol cannot be replayed at
+  another.
 
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
-  - trigger: "When a client opens a WebSocket connection to the relay"
+  - trigger: "When a client opens a libp2p stream on `/cello/relay/1.0.0`"
     action: >
-      the relay shall issue a `relay_auth_challenge` frame `{nonce}` (32 bytes, CSPRNG, 30s TTL,
-      single-use) and hold the connection unauthenticated until the challenge resolves, reusing
-      NODE-001's auth state machine with the domain string `"CELLO-RELAY-AUTH-v1"`.
-  - trigger: "When a directory supplies a session assignment to the relay in-process"
+      the relay shall issue a `relay_auth_challenge` frame `{nonce}` (32 bytes, CSPRNG,
+      30-second TTL, single-use) and hold the stream unauthenticated until the challenge
+      resolves, reusing the same auth state machine as NODE-001 with the domain string
+      `"CELLO-RELAY-AUTH-v1"`.
+  - trigger: "When the client responds with `relay_auth_response { pubkey, signature }`"
     action: >
-      the relay shall record the session: session_id (16 bytes), participant pubkeys (A, B),
-      the directory's signed assignment record, and the genesis prev_root per SESSION-002. It
-      initialises the per-session leaf log (empty) and the canonical sequence counter to 0.
-  - trigger: "When an authenticated client submits a signed Structure 1 for an active session"
+      the relay shall verify the Ed25519 signature over `"CELLO-RELAY-AUTH-v1" || nonce ||
+      pubkey` against the claimed pubkey. On success the stream is registered under that
+      pubkey and marked authenticated. On failure the stream is reset with a structured
+      `auth_failed` reason (`nonce_expired`, `nonce_unknown`, `nonce_reused`, or
+      `signature_invalid`).
+  - trigger: "When the directory supplies a session assignment via the in-process call `recordAssignment(sessionAssignment)`"
     action: >
-      The client submits a `hash_submit` frame carrying `{session_id, leaf_kind, structure1_cbor,
-      sender_signature}` where `leaf_kind` is a frame-level `uint8` — `0x00` for message leaves
-      or `0x02` for control leaves — applied later as the Merkle leaf-hash prefix byte per
-      MERKLE-002. On receipt the relay shall (a) verify the client is a registered participant
-      of the session, (b) reject with `leaf_kind_invalid` if leaf_kind is any value other than
-      `0x00` or `0x02`, (c) verify the sender's Ed25519 signature over canonical-CBOR(Structure 1),
-      (d) verify the declared `last_seen_seq` is <= the current canonical sequence counter (a
-      client cannot commit to having seen a future sequence number), (e) assign the next canonical
-      sequence number, (f) compute prev_root as the Merkle root of the per-session tree over all
-      prior leaves (for the first leaf, use the genesis prev_root from the session assignment),
-      (g) construct the 6-element Structure 2 per MERKLE-002 with the M1 scan_result sentinel,
-      (h) compute the new leaf hash as `SHA-256(leaf_kind || canonical_CBOR(Structure 2))`,
-      append to the tree, and (i) relay Structure 2 plus the same `leaf_kind` frame-level field
-      to the counterparty's WebSocket.
-  - trigger: "When an authenticated client submits a Structure 1 whose sender_pubkey does not match the connection's authenticated pubkey"
-    action: "the relay shall reject the submission with a structured `sender_mismatch` error and shall not assign a sequence number or append to the tree."
-  - trigger: "When an authenticated client submits a Structure 1 for a session_id it is not a participant of"
-    action: "the relay shall reject with a structured `not_a_participant` error, shall not relay, and shall not reveal whether the session exists."
-  - trigger: "When a client submits a Structure 1 with last_seen_seq > current canonical sequence counter"
-    action: "the relay shall reject with a structured `last_seen_seq_ahead` error — the client has declared seeing a sequence the relay has not yet issued."
-  - trigger: "When a client submits a content_deliver frame `{session_id, counterparty_pubkey, content_bytes}` alongside a Structure 1"
+      the relay shall (a) verify the directory signature on the SessionAssignment against the
+      pinned directory-identity pubkey, (b) record the session: session_id (16 bytes),
+      participant pubkeys (A, B), the signed assignment record, and the genesis prev_root
+      computed per SESSION-002 as `SHA-256(sorted(A_pubkey, B_pubkey) || session_id ||
+      session_timestamp)`, (c) initialise the per-session leaf log (empty) and the canonical
+      sequence counter to 0. The call returns acknowledgement only after all of the above
+      have completed successfully.
+  - trigger: "When an authenticated client submits a `hash_submit { session_id, leaf_kind, structure1_cbor, sender_signature }` frame"
     action: >
-      the relay shall forward the content_bytes verbatim to the counterparty's WebSocket as an
-      out-of-band payload keyed to the same session_id and sequence_number assigned to the
-      corresponding Structure 1. The relay shall not inspect, hash, store, or log content_bytes.
-      This is a pragmatic M1 simplification — M10 moves content to libp2p; M1 colocates the
-      content channel with the hash channel in-process so the dual-path cross-check (MSG-004)
-      can be exercised without standing up libp2p. The invariant "relay never stores content"
-      is preserved: content_bytes is a transient WebSocket payload, never persisted to
-      RelayStore.
-  - trigger: "When the directory requests the session's leaf sequence and final root for the seal"
+      the relay shall (a) verify the client is a registered participant of the session,
+      returning `not_a_participant` if the session exists but the client is not a participant,
+      returning `session_not_found` if no such session is registered, (b) reject with
+      `leaf_kind_invalid` if leaf_kind is any value other than `0x00` or `0x02`, (c) verify
+      the sender's Ed25519 signature over canonical-CBOR(Structure 1) against the embedded
+      sender_pubkey, (d) verify the sender_pubkey inside Structure 1 matches the connection's
+      authenticated pubkey — reject with `sender_mismatch` otherwise, (e) verify the declared
+      `last_seen_seq` in Structure 1 is <= the current canonical sequence counter — reject
+      with `last_seen_seq_ahead` otherwise (a client cannot commit to having seen a future
+      sequence number), (f) assign the next canonical sequence number, (g) compute prev_root
+      as the Merkle root of the per-session tree over all prior leaves (for the first leaf,
+      use the genesis prev_root from the session assignment), (h) construct Structure 2 per
+      MERKLE-002 as the 6-element CBOR array with the M1 scan_result sentinel, (i) compute
+      the leaf hash as `SHA-256(leaf_kind || canonical_CBOR(Structure 2))` and append to the
+      tree, (j) deliver Structure 2 plus the `leaf_kind` byte to the counterparty's
+      authenticated relay stream as a `leaf_deliver { session_id, leaf_kind, structure2_cbor }`
+      frame.
+  - trigger: "When the counterparty has no currently-authenticated stream to the relay"
     action: >
-      the relay shall return the complete ordered list of Structure 2 leaves and the current
-      Merkle root, and shall mark the session `sealing`. After the directory confirms the seal,
-      the relay shall destroy the per-session state (leaf log, tree nodes, counters). Per-session
-      state is ephemeral by design; no post-seal retention.
-  - trigger: "When a participant disconnects during an active session"
+      the relay shall queue up to a small bounded number of pending `leaf_deliver` frames for
+      that pubkey and deliver them on the counterparty's next authenticated stream. If the
+      queue would exceed the bound (M1 default: 256 leaves), the oldest queued entry is
+      dropped and a `relay_backpressure` event is logged against the session. Full recovery
+      semantics (new-relay assignment, directory notification) are out of M1 scope — M1's
+      queue bound is a liveness guard, not a recovery mechanism.
+  - trigger: "When the directory requests a seal via the in-process call `submitForSeal(session_id)`"
     action: >
-      the relay shall not destroy the session state (the participant may reconnect). On reconnect
-      with a fresh auth handshake, the participant resumes from the current canonical sequence
-      counter; the relay replays any Structure 2 leaves missed during the disconnect.
+      the relay shall return the complete ordered list of Structure 2 leaves, the canonical
+      sequence count, and the current Merkle root, and shall mark the session `sealing`.
+      After the directory confirms the seal (via `confirmSeal(session_id, sealed_root)`), the
+      relay shall destroy all per-session state (leaf log, tree nodes, counters, auth stream
+      registrations scoped to the session). If the directory rejects the seal (via
+      `rejectSeal(session_id, reason)`), the relay shall retain per-session state for
+      investigation and shall mark the session `seal_rejected`.
+  - trigger: "When a participant disconnects their relay stream during an active session"
+    action: >
+      the relay shall not destroy the session state (the participant may reconnect). On
+      reconnect with a fresh auth handshake, the participant resumes from the current
+      canonical sequence counter; the relay delivers any queued `leaf_deliver` frames that
+      accumulated during the disconnect (subject to the 256-leaf bound above).
+  - trigger: "While operating in any path"
+    action: >
+      the relay shall never open a stream on `/cello/content/1.0.0` or `/cello/signaling/1.0.0`.
+      Those protocols are not registered on the relay's libp2p node. Relay-side libp2p
+      configuration exposes only `/cello/relay/1.0.0` as an inbound handler, plus the libp2p
+      control protocols required by the transport stack.
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "A relay in-process with an established session between authenticated clients A and B (genesis prev_root = G)"
-    when: "A submits a signed Structure 1 with content_hash = H1, last_seen_seq = 0"
-    then: "The relay assigns sequence_number = 1, sets prev_root = G in Structure 2, relays Structure 2 to B, and appends the leaf to the tree"
+    given: "A relay and an established session between authenticated clients A and B (genesis prev_root = G)"
+    when: "A submits a `hash_submit` frame with leaf_kind = 0x00, a signed Structure 1 with content_hash = H1, last_seen_seq = 0"
+    then: "The relay assigns sequence_number = 1, sets prev_root = G in Structure 2, delivers `leaf_deliver` to B's relay stream, and appends the leaf to the tree"
     test_type: integration
     component_under_test: relay
 
   - id: AC-002
-    given: "An active session where A has already sent two messages (sequence numbers 1 and 2)"
-    when: "A submits a signed Structure 1 with last_seen_seq = 2"
+    given: "An active session where A has already sent two message leaves (sequence numbers 1 and 2)"
+    when: "A submits a `hash_submit` with leaf_kind = 0x00 and last_seen_seq = 2"
     then: "The relay assigns sequence_number = 3 and sets prev_root = Merkle root of the tree after leaves 1 and 2"
     test_type: integration
     component_under_test: relay
 
   - id: AC-003
     given: "An active session"
-    when: "A submits a Structure 1 where sender_pubkey = K_X (K_X is not A's authenticated pubkey)"
+    when: "A submits a `hash_submit` where Structure 1's sender_pubkey = K_X (K_X is not A's authenticated pubkey)"
     then: "The relay rejects with `sender_mismatch`; no sequence number is assigned; the tree is unchanged"
     test_type: integration
     component_under_test: relay
 
   - id: AC-004
-    given: "An active session and a third authenticated client C who is not a participant"
-    when: "C submits a Structure 1 for this session_id with a valid self-signature"
+    given: "An active session between A and B, and a third authenticated client C who is not a participant"
+    when: "C submits a `hash_submit` for this session_id with a valid self-signature"
     then: "The relay rejects with `not_a_participant`; no sequence number is assigned; the tree is unchanged"
     test_type: integration
     component_under_test: relay
 
   - id: AC-005
     given: "An active session where the canonical sequence counter is currently 2"
-    when: "A submits a Structure 1 declaring last_seen_seq = 5"
+    when: "A submits a `hash_submit` declaring last_seen_seq = 5"
     then: "The relay rejects with `last_seen_seq_ahead`; no sequence number is assigned"
     test_type: integration
     component_under_test: relay
 
   - id: AC-006
     given: "An active session with 10 leaves appended"
-    when: "The directory requests the seal handoff"
-    then: "The relay returns all 10 Structure 2 leaves in order plus the current Merkle root; the root matches an independent recomputation from the returned leaf sequence"
+    when: "The directory calls `submitForSeal(session_id)`"
+    then: "The relay returns all 10 Structure 2 leaves in order plus the canonical sequence count and the current Merkle root; the root matches an independent recomputation from the returned leaf sequence via MERKLE-001"
     test_type: integration
     component_under_test: relay
 
   - id: AC-007
-    given: "A session the relay has handed off to the directory for seal"
-    when: "Another client submits a Structure 1 for that session_id after the seal completes"
-    then: "The relay rejects with a structured `session_not_found` error; no per-session state exists"
+    given: "A session the directory has confirmed sealed via `confirmSeal`"
+    when: "Any client submits a `hash_submit` for that session_id after the seal completes"
+    then: "The relay rejects with `session_not_found` — per-session state has been destroyed; this is the same error returned for a session_id that was never registered"
     test_type: integration
     component_under_test: relay
 
   - id: AC-008
-    given: "Two clients A and B in an active session over local WebSockets"
-    when: "A submits Structure 1 plus a content_deliver frame with content_bytes = CB"
-    then: "B's WebSocket receives Structure 2 AND the content_deliver payload keyed to the same sequence_number; the relay's log contains sequence_number but not CB"
+    given: "An authenticated participant of an active session"
+    when: "The participant submits a `hash_submit` frame whose `leaf_kind` field is `0x01`, `0x03`, or any other value outside `{0x00, 0x02}`"
+    then: "The relay rejects with `leaf_kind_invalid`; no sequence number is assigned; the tree is unchanged; no `leaf_deliver` is delivered to the counterparty"
     test_type: integration
     component_under_test: relay
 
   - id: AC-009
-    given: "An authenticated client submits 50 Structure 1 frames in rapid succession on an active session"
+    given: "An authenticated client submits 50 valid `hash_submit` frames in rapid succession on an active session"
     when: "The relay processes them"
-    then: "Sequence numbers 1 through 50 are assigned in order; prev_root for leaf i equals the Merkle root of the tree after leaves 1..i-1; all 50 Structure 2 frames are relayed to the counterparty in submission order"
+    then: "Sequence numbers 1 through 50 are assigned in strictly monotonic order; prev_root for leaf i equals the Merkle root of the tree after leaves 1..i-1; all 50 `leaf_deliver` frames are delivered to the counterparty's relay stream in submission order"
     test_type: integration
     component_under_test: relay
 
   - id: AC-010
-    given: "A client authenticates to the relay with challenge signature computed over the domain string `\"CELLO-WS-AUTH-v1\"` (NODE-001's directory domain string) instead of `\"CELLO-RELAY-AUTH-v1\"`"
-    when: "The relay verifies the challenge response"
-    then: "The relay closes the connection with `auth_failed: wrong_domain` and does not register the client"
+    given: "A client authenticates to the relay with a challenge signature computed over the domain string `\"CELLO-DIR-AUTH-v1\"` (NODE-001's directory domain string) instead of `\"CELLO-RELAY-AUTH-v1\"`"
+    when: "The relay verifies the challenge"
+    then: "The signature fails to verify; the stream is reset with `auth_failed: signature_invalid`; the client is not registered"
     test_type: integration
     component_under_test: relay
 
   - id: AC-011
-    given: "An authenticated participant of an active session"
-    when: "The participant submits a `hash_submit` frame whose `leaf_kind` field is `0x01`, `0x03`, or any other value outside `{0x00, 0x02}`"
-    then: "The relay rejects with `leaf_kind_invalid`; no sequence number is assigned; the tree is unchanged; no Structure 2 is relayed to the counterparty"
+    given: "A running relay libp2p node"
+    when: "A client attempts to open a stream on `/cello/signaling/1.0.0` or `/cello/content/1.0.0` against the relay's Peer ID"
+    then: "The stream open fails with `protocol_not_supported` — the relay does not register handlers for those protocols"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-012
+    given: "An active session where B's relay stream has disconnected mid-session; A submits a `hash_submit` while B is offline"
+    when: "B reconnects and re-authenticates to the relay"
+    then: "The relay delivers the queued `leaf_deliver` frame(s) to B on the fresh stream; the canonical sequence numbers match what A submitted; B's local tree can be reconstructed to match the relay's tree"
     test_type: integration
     component_under_test: relay
 
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
-    statement: "The relay shall never store, log, or inspect the content field of a message; only Structure 1's content_hash and Structure 2's fields enter relay persistence."
+    statement: >
+      The relay shall never register an inbound handler for `/cello/content/1.0.0`. The
+      architectural content-isolation invariant is enforced at the protocol-registration
+      level — the relay has no topological path to plaintext message content.
     adversarial_condition: >
-      even when a misconfigured logger would otherwise capture WebSocket payload bodies — content_deliver
-      frames are routed without being read into any persistent or diagnostic path.
+      even when a misconfiguration or future library default would otherwise register a
+      content handler — the relay's createNode contract fixes the handler list; the test
+      asserts the exposed protocol set by inspecting the started node.
     test_type: integration
     component_under_test: relay
 
   - id: SI-002
-    statement: "The relay shall never issue duplicate or non-monotonic canonical sequence numbers within a single session."
+    statement: >
+      The relay shall never issue duplicate or non-monotonic canonical sequence numbers
+      within a single session.
     adversarial_condition: >
-      even when 100 Structure 1 submissions from both participants arrive concurrently — a
+      even when 100 `hash_submit` frames from both participants arrive concurrently — a
       per-session serialization queue ensures strictly monotonic assignment.
     test_type: integration
     component_under_test: relay
@@ -189,44 +226,60 @@ security_invariants:
   - id: SI-003
     statement: >
       The relay shall never construct a Structure 2 whose embedded sender_signature (from the
-      submitted Structure 1) does not verify against canonical-CBOR(Structure 1) under
-      sender_pubkey.
+      submitted Structure 1) does not verify against canonical-CBOR(Structure 1) under the
+      sender_pubkey inside Structure 1.
     adversarial_condition: >
-      even when a client submits a Structure 1 with a valid-looking but forged signature — the
-      relay rejects at submission time.
+      even when a client submits a Structure 1 with a valid-looking but forged signature —
+      the relay rejects at submission time.
     test_type: integration
     component_under_test: relay
 
   - id: SI-004
     statement: >
-      The relay shall never relay a Structure 2 to a client that is not the counterparty of the
-      session the submission originated from.
+      The relay shall never deliver a `leaf_deliver` frame to a client that is not the
+      counterparty of the session the submission originated from.
     adversarial_condition: >
-      even when an attacker authenticated under K_X guesses a valid session_id and attempts to
-      inject a Structure 1 into it; session_id guessability is addressed by SESSION-002's 128-bit
-      CSPRNG session IDs.
+      even when an attacker authenticated under K_X guesses a session_id and attempts to
+      inject a `hash_submit` into it; session_id guessability is addressed by SESSION-002's
+      128-bit CSPRNG session IDs (NODE-001 SI-002) and by returning `session_not_found` both
+      for unregistered and for sealed-and-destroyed sessions (no probe channel).
     test_type: integration
     component_under_test: relay
 
   - id: SI-005
     statement: >
-      The relay shall destroy all per-session Merkle state (leaf log, tree nodes, counters) after
-      confirming the seal handoff to the directory. No sealed-session state persists in the relay.
+      The relay shall destroy all per-session Merkle state (leaf log, tree nodes, counters,
+      session-scoped auth registrations) after the directory calls `confirmSeal`. No
+      sealed-session state persists on the relay.
     adversarial_condition: >
-      even when a post-seal forensic query or a bug in the seal confirmation path could otherwise
-      cause data to linger — the destruction is synchronous with seal confirmation.
+      even when a post-seal forensic query or a bug in the seal confirmation path could
+      otherwise cause data to linger — the destruction is synchronous with the confirmSeal
+      return.
     test_type: integration
     component_under_test: relay
 
 # ─── Degraded Behavior ─────────────────────────────────────
 degraded_behavior:
   - id: DB-001
-    condition: "While a participant's WebSocket is disconnected during an active session"
+    condition: "While a participant's relay stream is disconnected during an active session"
     fallback: >
-      the relay shall retain the per-session state (leaf log, tree, counter) and, on the
-      participant's reconnect and successful re-authentication, replay Structure 2 leaves
-      that were appended while they were disconnected. Full recovery semantics (new-relay
-      assignment, directory notification) are out of M1 scope.
+      the relay retains the per-session state (leaf log, tree, counter) and queues up to
+      256 `leaf_deliver` frames for that participant. On reconnect and successful re-auth,
+      the relay flushes the queued deliveries. If the queue bound is exceeded the oldest
+      entry is dropped and a `relay_backpressure` event is logged against the session —
+      the session is not marked desynchronized solely on a queue-drop event, but the
+      receiving client will detect the gap when its Structure 2 receive stream skips a
+      sequence number and will fail closed per MSG-004.
+    test_type: integration
+    component_under_test: relay
+
+  - id: DB-002
+    condition: "While the directory rejects a seal via `rejectSeal(session_id, reason)`"
+    fallback: >
+      the relay retains per-session state, marks the session `seal_rejected`, and does not
+      destroy the leaf log or tree. No further `hash_submit` frames are accepted on the
+      session (it is no longer in `active` state). Operational recovery from a seal
+      rejection is out of M1 scope; the state is retained for post-hoc investigation.
     test_type: integration
     component_under_test: relay
 
@@ -238,3 +291,4 @@ references:
     - "2026-04-17_1400_directory-relay-architecture-reassessment"
     - "2026-04-13_1500_multi-party-conversation-design"
     - "2026-04-08_1700_node-architecture-and-replication"
+    - "2026-04-11_1400_libp2p-dht-and-peer-connectivity"

@@ -20,6 +20,13 @@ story: >
   positional canonical-CBOR byte layout of both structures and the leaf-hash function applied to
   Structure 2 before it enters the tree.
 
+  Transport context (M1): Structure 1 travels from the sender to the relay on the libp2p protocol
+  `/cello/relay/1.0.0` as a `hash_submit` frame (see NODE-002). The relay constructs Structure 2
+  and delivers it to the counterparty on the same libp2p protocol. Content bytes do **not** travel
+  through the relay — they travel directly between peers on `/cello/content/1.0.0` (see MSG-004).
+  The relay sees content_hash (32 bytes) embedded in Structure 1; it never sees content. This is
+  the architectural content-isolation invariant: the relay has no topological path to plaintext.
+
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
   - trigger: "When the sender constructs Structure 1 for a message"

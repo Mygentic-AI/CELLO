@@ -9,100 +9,149 @@ components:
 # ─── Intent ─────────────────────────────────────────────────
 story: >
   As the CELLO Client,
-  I want to sign and submit Structure 1 to the relay, receive Structure 2 plus the content_deliver payload, cross-check both paths, and maintain my local per-session Merkle tree in lockstep with the relay's tree
-  so that tampering on either path is detected before a message reaches the agent, and the receiver's local tree is byte-identical to the relay's tree after each accepted leaf.
+  I want to send and receive messages across two architecturally independent libp2p paths — content peer↔peer on `/cello/content/1.0.0` and hashes client↔relay on `/cello/relay/1.0.0` — and cross-check them on receipt
+  so that tampering on either path is detected before a message reaches the agent, the receiver's local tree stays byte-identical to the relay's tree after each accepted leaf, and the relay has no topological path to content.
 
-  This replaces MSG-002's single-path model. In M1 every message traverses two independent paths:
+  This replaces MSG-002's M0 single-path model. In M1 every message traverses two independent
+  paths on two different libp2p nodes:
 
-  - Hash path: client signs Structure 1 with K_local → submits to relay → relay assigns
-    sequence_number, computes prev_root, builds Structure 2, relays Structure 2 to counterparty.
-  - Content path: client sends raw content_bytes in a `content_deliver` frame to the relay → relay
-    forwards verbatim (no inspection) to the counterparty, keyed to the same session_id. The relay
-    binds the content_deliver to the same sequence_number as the corresponding Structure 2 (NODE-002
-    AC-008).
+  - **Content path** (`/cello/content/1.0.0`, peer↔peer): sender opens a stream to the
+    counterparty using the Peer ID and multiaddrs from the signed SessionAssignment
+    (SESSION-002), writes the raw content bytes as a length-prefixed frame bound to
+    `{session_id, intended_sequence_number}`, closes the write side. The two peers dial each
+    other directly; neither the directory nor the relay is in this path.
+  - **Hash path** (`/cello/relay/1.0.0`, client↔relay): sender signs Structure 1 with K_local
+    per MERKLE-002 and submits it to the relay as a `hash_submit` frame (NODE-002). The relay
+    assigns the canonical sequence number, builds Structure 2 with the embedded Structure 1
+    signature and the `prev_root`, appends the leaf to the per-session tree, and delivers
+    Structure 2 to the counterparty via a `leaf_deliver` frame.
 
-  The receiver accepts a message only when both paths arrive consistently. Specifically: the
-  receiver recomputes `SHA-256(0x00 || content_bytes)` from the content_deliver payload, confirms
-  it equals the content_hash field inside the Structure 2's embedded Structure 1, verifies the
-  sender's Ed25519 signature, verifies prev_root matches the root of the receiver's local tree
-  up to the preceding leaf, and appends the Structure 2 leaf to its local tree. If any check
-  fails the message is rejected and logged.
+  The receiver accepts a message only when both paths arrive consistently. Specifically:
+  receiver recomputes `SHA-256(0x00 || content_bytes)` from the peer-delivered content,
+  confirms it equals the content_hash field inside the relay-delivered Structure 2's embedded
+  Structure 1; verifies the sender's Ed25519 signature against Structure 1; confirms
+  Structure 2's prev_root matches the receiver's local tree root up to the preceding leaf;
+  appends the leaf to its local tree. If any check fails the message is rejected and the
+  session is marked desynchronized.
 
-  Sends are serialized per session on the client side. A per-session outbound queue ensures the
-  client does not assemble two Structure 1 messages with the same `last_seen_seq` concurrently
-  when multiple send calls fire simultaneously — the client observes the relay's acknowledgments
-  to advance `last_seen_seq` before signing the next message. In M1 the client's `last_seen_seq`
-  is the highest sequence_number it has received from the relay (either as counterparty traffic
-  or as an ack for its own submissions).
+  **Genuine dual-path vs M0's single-path vs the rejected relay-in-the-middle model:** In
+  M0 the sender's content and signed envelope travel together on one libp2p stream to the
+  peer; there is no separate hash path because there is no relay. In the (rejected) earlier
+  M1 draft, content and hashes both passed through the same relay — that defeated the
+  dual-path property because the receiver was cross-checking two outputs of the same
+  middlebox. In the correct M1 shape, content and hashes traverse two different libp2p
+  nodes (the peer and the relay, respectively), so the cross-check is architecturally
+  meaningful: no single middlebox can tamper with both outputs consistently.
+
+  **Sender serialization per session:** sends are strictly serialized per session on the
+  client side. A per-session outbound queue ensures the client does not construct two
+  Structure 1 messages concurrently on the same session — the client waits for Structure 2
+  from the relay (its own message echoed back) before signing the next Structure 1. This
+  bounds throughput per session to one client↔relay RTT per message, which is acceptable for
+  M1 (commerce throughput concerns begin at M9). Under the strict rule, `last_seen_seq`
+  always reflects the relay's canonical state at signing time with no window for race
+  conditions.
+
+  **Client-side causal chain validation:** in addition to the receiver-side cross-check
+  between paths, the client also validates that every incoming Structure 2 is causally
+  consistent with the receiver's observed counterparty sequence numbers. Specifically: the
+  Structure 1 embedded in an incoming Structure 2 carries the sender's declared
+  `last_seen_seq`; this value must be <= the highest sequence number the receiver has ever
+  observed from the counterparty on this session. Violation indicates a relay that
+  misordered leaves and fails the session closed. (The directory performs the full
+  causal-chain check across the entire leaf sequence at seal in SESSION-003; the client-side
+  per-leaf check catches violations in-session rather than only at close.)
 
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
   - trigger: "When the client sends a message on an active session"
     action: >
-      the client shall (a) compute content_hash = `SHA-256(0x00 || content)`, (b) read the current
-      `last_seen_seq` for the session, (c) build the Structure 1 TBS
-      `[1, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]` and encode it as
-      canonical CBOR, (d) sign the TBS bytes with K_local to produce a 64-byte Ed25519 signature,
-      (e) submit the signed Structure 1 to the relay via a `hash_submit` frame, (f) submit the
-      raw content to the relay via a `content_deliver` frame bound to the same session_id and
-      intended counterparty.
-  - trigger: "When the client receives a Structure 2 frame from the relay on an active session"
+      the client shall (a) compute content_hash = `SHA-256(0x00 || content)`, (b) read the
+      current `last_seen_seq` for the session, (c) build the Structure 1 TBS
+      `[1, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]` and encode
+      it as canonical CBOR, (d) sign the TBS bytes with K_local to produce a 64-byte Ed25519
+      signature, (e) submit the signed Structure 1 to the relay via a `hash_submit` frame on
+      `/cello/relay/1.0.0` with leaf_kind = 0x00, (f) submit the raw content bytes to the
+      counterparty via a `content_frame` on `/cello/content/1.0.0` tagged with
+      `{session_id, content_hash}`.
+  - trigger: "When the client receives a `leaf_deliver` frame from the relay on an active session"
     action: >
-      the client shall (a) validate Structure 2 fields (lengths, leaf_kind, scan_result sentinel
-      shape), (b) extract the embedded Structure 1 bytes and verify the sender's Ed25519 signature
-      against the sender_pubkey over canonical-CBOR(Structure 1), (c) confirm the sequence_number
-      is exactly the next expected value for the session (prior canonical seq + 1), (d) confirm
-      prev_root equals the Merkle root of the receiver's local tree up to the immediately preceding
-      leaf, (e) buffer the leaf pending arrival of the matching content_deliver payload.
-  - trigger: "When the client receives a content_deliver payload for an active session"
+      the client shall (a) validate Structure 2 fields per MERKLE-002 (field lengths,
+      scan_result sentinel shape, leaf_kind in {0x00, 0x02}), (b) extract the embedded
+      Structure 1 bytes and verify the sender's Ed25519 signature against the embedded
+      sender_pubkey over canonical-CBOR(Structure 1), (c) confirm sequence_number is exactly
+      the next expected value for the session (prior canonical seq + 1), (d) confirm the
+      embedded Structure 1's `last_seen_seq` is <= the highest sequence_number the receiver
+      has previously observed from the counterparty on this session — reject with
+      `sequence_causal_inconsistency` if greater, (e) confirm prev_root equals the Merkle
+      root of the receiver's local tree up to the immediately preceding leaf, (f) buffer the
+      leaf pending arrival of the matching content_frame (buffer keyed by
+      `{session_id, content_hash}`).
+  - trigger: "When the client receives a `content_frame` from the counterparty on `/cello/content/1.0.0`"
     action: >
-      the client shall (a) recompute `content_hash' = SHA-256(0x00 || content_bytes)`, (b) match
-      it against the content_hash field of the buffered Structure 2 whose sequence_number equals
-      the content_deliver's sequence_number, (c) confirm the hashes are byte-equal, (d) if matched:
-      append the Structure 2 leaf to the local tree, update `last_seen_seq` to the new sequence_number,
-      and surface `{content, sender_pubkey, sequence_number, leaf_hash}` to the MCP receive queue.
-  - trigger: "When the content_deliver hash does not match the buffered Structure 2 content_hash"
+      the client shall (a) recompute `content_hash' = SHA-256(0x00 || content_bytes)`, (b)
+      match `content_hash'` against the content_hash in the buffered Structure 2, (c) if
+      matched: append the Structure 2 leaf to the local tree, update `last_seen_seq` to the
+      new sequence_number, and surface `{content, sender_pubkey, sequence_number, leaf_hash}`
+      to the MCP receive queue.
+  - trigger: "When the content_frame hash does not match the buffered Structure 2 content_hash"
     action: >
       the client shall reject the message, mark the session `desynchronized`, log a
-      `content_hash_mismatch` event with session_id, sequence_number, expected vs. actual hash,
-      and fail subsequent send/receive on the session with `session_desynchronized`.
+      `content_hash_mismatch` event with session_id, sequence_number, expected vs. actual
+      hash, and fail subsequent send/receive on the session with `session_desynchronized`.
   - trigger: "When the embedded sender signature in Structure 2 does not verify"
     action: >
       the client shall reject the message, mark the session `desynchronized`, and log a
-      `signature_verification_failed` event. A valid signature could never come from a trusted
-      sender on an honest relay, so any failure is either active tampering or a relay bug —
+      `signature_verification_failed` event. A valid Structure 1 signature can only come
+      from the legitimate sender; any failure implies active tampering or a relay bug —
       fail closed.
   - trigger: "When prev_root in Structure 2 does not match the local tree's root up to the preceding leaf"
     action: >
       the client shall reject the message, mark the session `desynchronized`, and log a
-      `prev_root_mismatch` event. The relay has either forked the tree or dropped a leaf; either
-      way the conversation integrity is broken.
+      `prev_root_mismatch` event. The relay has either forked the tree or dropped a leaf;
+      either way the conversation integrity is broken.
   - trigger: "When Structure 2 arrives with a sequence_number not equal to the expected next value"
     action: >
       the client shall reject the message, mark the session `desynchronized`, and log a
-      `sequence_gap` event with expected vs. received values. Carried forward from MSG-002: the
+      `sequence_gap` event with expected vs. received values. Carried forward from M0: the
       client fails closed on any sequence anomaly.
-  - trigger: "When a content_deliver payload arrives whose sequence_number does not match any buffered Structure 2 within an M1-configurable window (default 30 seconds)"
+  - trigger: "When an incoming Structure 2's embedded Structure 1.last_seen_seq is greater than the highest sequence_number the receiver has previously observed from the counterparty on this session"
     action: >
-      the client shall discard the payload, log a `content_without_hash` event, and continue
-      operating. If the matching Structure 2 later arrives, it will fail the content_deliver
-      match (hash path has no corresponding content) and the session becomes `desynchronized`.
+      the client shall reject the message, mark the session `desynchronized`, and log a
+      `sequence_causal_inconsistency` event. A sender cannot have declared seeing a
+      sequence the receiver has not yet seen from the other side; the discrepancy indicates
+      a relay that misordered or forged leaves.
+  - trigger: "When a Structure 2 is buffered and no matching content_frame arrives within `delivery_grace_seconds` (M1 default: 30)"
+    action: >
+      the client shall mark the session `desynchronized`, log a `content_missing` event with
+      session_id, sequence_number, and expected content_hash, and fail subsequent
+      send/receive with `session_desynchronized`. In M1 both paths terminate at the same
+      two-peer/one-relay set on the same local test harness; failure to receive content is
+      a protocol violation, not a benign loss.
+  - trigger: "When a content_frame arrives whose content_hash does not match any buffered Structure 2 within `delivery_grace_seconds` (M1 default: 30)"
+    action: >
+      the client shall discard the payload and log a `content_without_hash` event. The
+      session is not immediately marked desynchronized on this event alone — if the matching
+      Structure 2 later arrives, its cross-check will fail (hash path has no corresponding
+      content) and the session will be desynchronized via `content_hash_mismatch` or
+      `content_missing`. This gentler handling prevents a misrouted or replayed content
+      frame from taking down an otherwise-healthy session solely on its own merits.
   - trigger: "When multiple client-initiated sends are requested concurrently on the same session"
     action: >
-      the client shall serialize them through a per-session outbound queue: Structure 1 for send k+1
-      is not constructed until the client has observed the relay's Structure 2 for send k (the
-      client's own message echoed back). This is stricter than MSG-002 and intentional —
-      `last_seen_seq` must reflect the relay's canonical state at signing time.
+      the client shall serialize them through a per-session outbound queue: Structure 1 for
+      send k+1 is not constructed until the client has observed the relay's Structure 2 for
+      send k (the client's own message echoed back). Intentional throughput tradeoff for M1;
+      relaxed concurrency is deferred to later milestones if commerce use cases warrant it.
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "An active session between Client A and Client B with matching genesis prev_root"
+    given: "An active session between Client A and Client B with matching genesis prev_root, both clients authenticated to the relay, both clients dialed to each other on /cello/content/1.0.0"
     when: "A sends a message with content = 'hello'"
     then: >
-      B receives Structure 2 and the content_deliver payload; B recomputes content_hash and
-      matches; B verifies the embedded Structure 1 signature; B's local tree root after
-      appending the leaf equals the relay's tree root after leaf 1
+      B receives Structure 2 from the relay and the content_frame from A directly; B
+      recomputes content_hash and matches; B verifies the embedded Structure 1 signature;
+      B's local tree root after appending the leaf equals the relay's tree root after leaf 1
     test_type: integration
     component_under_test: client
 
@@ -110,15 +159,15 @@ acceptance_criteria:
     given: "An active session"
     when: "A sends 10 messages sequentially"
     then: >
-      B receives all 10, each with sequence_number 1..10, each with correct prev_root chaining;
-      A's local tree root, B's local tree root, and the relay's tree root are byte-equal after
-      each accepted leaf
+      B receives all 10 with sequence_numbers 1..10, each with correct prev_root chaining;
+      A's local tree root, B's local tree root, and the relay's tree root are byte-equal
+      after each accepted leaf
     test_type: integration
     component_under_test: client
 
   - id: AC-003
     given: "An active session"
-    when: "A content_deliver payload arrives with content_bytes modified such that its recomputed hash does not match the paired Structure 2's content_hash"
+    when: "A content_frame arrives with content_bytes modified such that its recomputed hash does not match the paired Structure 2's content_hash"
     then: "B rejects the message; session status becomes `desynchronized`; `content_hash_mismatch` is logged"
     test_type: integration
     component_under_test: client
@@ -140,7 +189,7 @@ acceptance_criteria:
   - id: AC-006
     given: "An active session where B has received leaves 1 and 2"
     when: "A Structure 2 arrives with sequence_number = 4 (gap)"
-    then: "B rejects the message; session status becomes `desynchronized`"
+    then: "B rejects the message; session status becomes `desynchronized`; `sequence_gap` is logged"
     test_type: integration
     component_under_test: client
 
@@ -152,30 +201,53 @@ acceptance_criteria:
     component_under_test: client
 
   - id: AC-008
-    given: "An active session"
-    when: "100 concurrent send calls are fired on the same session from Client A"
-    then: >
-      All 100 Structure 1 submissions carry a strictly monotonic timestamp order; no two share
-      the same last_seen_seq unless the relay assigned matching sequence numbers between
-      observations; the relay receives exactly 100 submissions with distinct canonical sequence
-      numbers; A's local tree root after all 100 echoes equals the relay's tree root
+    given: >
+      An active session where A and B have exchanged leaves such that B's highest-observed
+      sequence_number from A is 2. The test harness injects a Structure 2 whose embedded
+      Structure 1.last_seen_seq is 5 (impossible — B has not sent a leaf at sequence 5)
+    when: "B processes the injected Structure 2"
+    then: "B rejects the message; session status becomes `desynchronized`; `sequence_causal_inconsistency` is logged"
     test_type: integration
     component_under_test: client
 
   - id: AC-009
-    given: "An active session in which a content_deliver arrives but no corresponding Structure 2 arrives within 30 seconds"
-    when: "The client processes the stray content_deliver"
-    then: "The payload is discarded; `content_without_hash` is logged; the session is not marked desynchronized solely on this event"
+    given: "An active session"
+    when: "A Structure 2 is delivered to B but no matching content_frame arrives within 30 seconds (simulated by intercepting the content stream)"
+    then: "B marks the session `desynchronized`; `content_missing` is logged with session_id, sequence_number, and the expected content_hash; subsequent send/receive return `session_desynchronized`"
     test_type: integration
     component_under_test: client
 
   - id: AC-010
+    given: "An active session"
+    when: "A content_frame arrives at B whose content_hash does not match any buffered Structure 2 within 30 seconds"
+    then: >
+      The payload is discarded; `content_without_hash` is logged; the session is NOT
+      marked desynchronized solely on this event. If a matching Structure 2 later arrives
+      (after the content was discarded), the follow-up check will mark the session
+      desynchronized via `content_missing`
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-011
+    given: "An active session"
+    when: "Client A issues 5 concurrent sends on the same session"
+    then: >
+      The relay observes exactly 5 `hash_submit` frames with strictly monotonic
+      last_seen_seq values — send k+1's last_seen_seq is >= send k's observed Structure 2
+      sequence_number; no two sends share the same last_seen_seq unless the relay assigned
+      matching sequence numbers between observations; A's local tree root after all 5
+      echoes equals the relay's tree root
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-012
     given: "Three parties in-process: Client A, Client B, and the relay, all started fresh"
     when: "A sends 5 messages, B replies to each, and both parties read their local tree root after every leaf append"
     then: >
-      After every accepted leaf, root(A) == root(B) == root(relay); the full 10-leaf sequence
-      produces the same final root on all three; an inclusion proof generated by the relay for
-      any leaf index i verifies against all three roots using MERKLE-001's verifier
+      After every accepted leaf, root(A) == root(B) == root(relay); the full 10-leaf
+      sequence produces the same final root on all three; an inclusion proof generated by
+      the relay for any leaf index i verifies against all three roots using MERKLE-001's
+      verifier
     test_type: e2e
     component_under_test: client
 
@@ -184,10 +256,13 @@ security_invariants:
   - id: SI-001
     statement: >
       The client shall never deliver a message to the agent before BOTH the content_hash
-      consistency check and the embedded-Structure 1 signature verification have succeeded.
+      consistency check (content_frame hash matches Structure 2's content_hash) and the
+      embedded-Structure 1 signature verification have succeeded.
     adversarial_condition: >
-      even when the message was relayed by a trusted relay and the prev_root matches — both
-      checks are independent and both must pass.
+      even when the message was delivered by a trusted relay and prev_root matches — both
+      checks are independent and both must pass. The two paths (content peer↔peer, hash
+      client↔relay) terminate at different libp2p nodes, so consistency between them is
+      architectural evidence, not just policy.
     test_type: integration
     component_under_test: client
 
@@ -203,37 +278,63 @@ security_invariants:
 
   - id: SI-003
     statement: >
-      The client shall never submit a Structure 1 whose TBS last_seen_seq is greater than the
-      highest sequence_number it has actually received from the relay.
+      The client shall never submit a Structure 1 whose TBS last_seen_seq is greater than
+      the highest sequence_number it has actually received from the relay.
     adversarial_condition: >
       even under heavy concurrency — the per-session outbound queue ensures last_seen_seq
       reflects true observations at signing time. A client that signed a forward-looking
-      last_seen_seq would undermine the causal-chain defense (verified at seal by SESSION-003).
+      last_seen_seq would undermine the causal-chain defense (verified at seal by SESSION-003
+      and per-leaf by SI-004).
     test_type: integration
     component_under_test: client
 
   - id: SI-004
     statement: >
-      After any leaf-validation failure (content_hash_mismatch, signature_verification_failed,
-      prev_root_mismatch, sequence_gap), the client shall fail all subsequent send/receive on
-      the session with `session_desynchronized` — the session is terminally closed from the
-      client's perspective.
+      The client shall never accept an incoming Structure 2 whose embedded Structure 1
+      last_seen_seq is greater than the highest sequence_number the receiver has previously
+      observed from the counterparty on this session.
     adversarial_condition: >
-      even when a subsequent valid-looking Structure 2 arrives that would pass validation on a
-      fresh session — once a tampering signal is observed, continuing on that session is
-      unsafe and recovery requires a new session (carried forward from MSG-002).
+      even when the rest of the leaf validates cleanly — a declared `last_seen_seq` above
+      the receiver's observed counterparty-sequence ceiling reveals a relay that misordered
+      or forged leaves, and the session must be failed closed. This catches violations
+      in-session, complementing SESSION-003's full causal-chain check at seal.
+    test_type: integration
+    component_under_test: client
+
+  - id: SI-005
+    statement: >
+      After any leaf-validation failure (content_hash_mismatch, signature_verification_failed,
+      prev_root_mismatch, sequence_gap, sequence_causal_inconsistency, content_missing), the
+      client shall fail all subsequent send/receive on the session with `session_desynchronized`.
+    adversarial_condition: >
+      even when a subsequent valid-looking Structure 2 arrives that would pass validation on
+      a fresh session — once a tampering signal is observed, continuing is unsafe and
+      recovery requires a new session.
     test_type: integration
     component_under_test: client
 
 # ─── Degraded Behavior ─────────────────────────────────────
 degraded_behavior:
   - id: DB-001
-    condition: "While the client's WebSocket to the relay is disconnected"
+    condition: "While the client's relay stream (`/cello/relay/1.0.0`) is disconnected"
     fallback: >
-      the client shall reject send attempts with a structured `transport_unavailable` error and
-      shall not queue the message, advance last_seen_seq, or modify session state. On reconnect
-      and successful re-auth (NODE-002 DB-001 replays missed Structure 2 leaves), the client
-      resumes normal operation from the relay's current canonical sequence counter.
+      the client shall reject send attempts with a structured `transport_unavailable` error
+      and shall not queue the message, advance last_seen_seq, or modify session state. On
+      reconnect and successful re-auth (NODE-002 DB-001 flushes queued leaf_deliver frames),
+      the client resumes normal operation from the relay's canonical sequence counter.
+    test_type: integration
+    component_under_test: client
+
+  - id: DB-002
+    condition: "While the content stream to the counterparty (`/cello/content/1.0.0`) is disconnected"
+    fallback: >
+      the client shall attempt to redial the counterparty using the Peer ID and multiaddrs
+      from the cached SessionAssignment. If redial succeeds within the transport-loss
+      timeout (default 60s, per SESSION-002 DB-002), content sends resume. If the content
+      stream is down while a Structure 2 has already been delivered to the receiver on the
+      hash path, the content-missing grace window (30s) will fire and desynchronize the
+      session — that is the designed-in fail-closed behavior; M1 does not bridge an
+      extended content-path outage.
     test_type: integration
     component_under_test: client
 
@@ -245,3 +346,4 @@ references:
     - "2026-04-13_1500_multi-party-conversation-design"
     - "2026-04-17_1400_directory-relay-architecture-reassessment"
     - "2026-04-08_1530_message-delivery-and-termination"
+    - "2026-04-11_1400_libp2p-dht-and-peer-connectivity"
