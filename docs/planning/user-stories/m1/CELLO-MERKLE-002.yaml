@@ -1,0 +1,168 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-MERKLE-002
+domain: Merkle Trees
+actor: CLIENT
+priority: P0
+components:
+  - protocol-types
+  - crypto
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client and relay node,
+  I want the canonical two-structure leaf format (Structure 1 signed by the sender, Structure 2 built by the relay)
+  so that sender authorship and canonical sequencing are separated — the client never computes `prev_root`, and the relay never forges sender signatures.
+
+  Structure 1 is the inner, sender-signed leaf. Structure 2 is the outer, relay-constructed leaf that
+  embeds Structure 1's signature and is what the relay hashes into the per-session Merkle tree. Leaf
+  prefixes follow RFC 6962 with the CELLO extension for control leaves: `0x00` for message leaves,
+  `0x02` for control leaves. Internal nodes use `0x01` (MERKLE-001). This story specifies the
+  positional canonical-CBOR byte layout of both structures and the leaf-hash function applied to
+  Structure 2 before it enters the tree.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the sender constructs Structure 1 for a message"
+    action: >
+      the protocol-types module shall produce the canonical-CBOR encoding of the positional array
+      `[protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]` with
+      protocol_version = 1 in M1. This is the TBS (to-be-signed) byte string. Positional array (not
+      map) eliminates the key-ordering question. content_hash is the leaf hash of the message content
+      computed per CRYPTO-002 (`SHA-256(0x00 || content)`).
+  - trigger: "When the relay receives a sender-signed Structure 1 for a valid session"
+    action: >
+      the relay shall construct Structure 2 as the canonical-CBOR encoding of the positional array
+      `[leaf_kind, sequence_number, sender_pubkey, content_hash, sender_signature, scan_result, prev_root]`
+      where leaf_kind is 0x00 (message) or 0x02 (control), sequence_number is the next canonical
+      sequence number for the session, sender_signature is the 64-byte Ed25519 signature from
+      Structure 1, scan_result is the M1-placeholder sentinel `{score: null, verdict: "unscanned",
+      model_hash: <32 zero bytes>}` (Layer 2 scanner lands in M4; field is present to keep wire
+      layout stable), and prev_root is the 32-byte Merkle root of the tree up to and including the
+      immediately preceding leaf (for the first leaf of a session, prev_root is the genesis value
+      defined by SESSION-002).
+  - trigger: "When the relay computes the leaf hash that enters the per-session tree"
+    action: >
+      the relay shall apply the domain-separated leaf-hash function from CRYPTO-002:
+      `leaf_hash = SHA-256(leaf_kind || canonical_CBOR(Structure 2 without leaf_kind duplicated in the prefix))`.
+      Concretely: the leaf_kind byte is both the Merkle leaf prefix *and* the first field of the
+      Structure 2 array; the hash input is `leaf_kind_byte || canonical_CBOR([sequence_number,
+      sender_pubkey, content_hash, sender_signature, scan_result, prev_root])`. Using 0x00 or 0x02
+      as the prefix preserves the RFC 6962 second-preimage-protection guarantee (MERKLE-001 SI-001)
+      and distinguishes message leaves from control leaves without an extra field.
+  - trigger: "When a control leaf is produced (SEAL in M1; CLOSE/CLOSE-ACK/ABORT/EXPIRE/REOPEN in later milestones)"
+    action: >
+      the same two-structure model is used with leaf_kind = 0x02. Structure 1 is signed by the
+      party producing the control leaf with K_local. The CBOR layout of Structure 1 is unchanged;
+      the content_hash field carries the leaf hash of the control payload (CBOR-encoded per the
+      control-leaf-specific schema defined by SESSION-003 for SEAL, and by later stories for other
+      control types).
+  - trigger: "When Structure 2 is validated by a receiver or by the directory at seal"
+    action: >
+      the verifier shall (a) confirm leaf_kind is 0x00 or 0x02, (b) confirm all field lengths
+      (sender_pubkey = 32, sender_signature = 64, content_hash = 32, prev_root = 32), (c) verify
+      the sender's Ed25519 signature against the canonical-CBOR encoding of Structure 1
+      reconstructed from Structure 2's fields plus the session_id and last_seen_seq carried through
+      the relay path, and (d) verify prev_root equals the root of the tree up to the preceding leaf.
+      Any failure rejects the leaf.
+  - trigger: "When the module is asked to serialize either structure"
+    action: "the module shall emit canonical CBOR (RFC 8949 §4.2.1 Core Deterministic Encoding) identically to MSG-001's rules."
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Fixture inputs for Structure 1 (content_hash, sender_pubkey, session_id, last_seen_seq, timestamp) stored under `packages/protocol-types/test/vectors/structure1-canonical.json` with expected canonical-CBOR hex"
+    when: "The TypeScript implementation encodes Structure 1 from the fixture values"
+    then: "The produced bytes equal the expected hex exactly"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-002
+    given: "Fixture inputs for Structure 2 (leaf_kind, sequence_number, sender_pubkey, content_hash, sender_signature, scan_result sentinel, prev_root) stored under `packages/protocol-types/test/vectors/structure2-canonical.json` with expected canonical-CBOR hex and expected leaf_hash"
+    when: "The TypeScript implementation encodes Structure 2 and computes leaf_hash per the rule `SHA-256(leaf_kind || CBOR([sequence_number, sender_pubkey, content_hash, sender_signature, scan_result, prev_root]))`"
+    then: "Both the CBOR bytes and the leaf_hash match the fixture exactly"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-003
+    given: "A valid Structure 1 signed by a known keypair and the matching Structure 2 built by an honest relay"
+    when: "The receiver reconstructs canonical-CBOR(Structure 1) from Structure 2's fields plus session_id and last_seen_seq and verifies the sender's signature"
+    then: "Signature verification succeeds"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-004
+    given: "A Structure 2 with a forged sender_signature (random 64 bytes)"
+    when: "The receiver reconstructs Structure 1 and verifies"
+    then: "Signature verification fails; the leaf is rejected"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-005
+    given: "A Structure 2 with an honest signature but prev_root set to a random 32 bytes that does not match the tree's true preceding root"
+    when: "The receiver validates against its local tree"
+    then: "prev_root mismatch is detected and the leaf is rejected"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-006
+    given: "A message leaf (leaf_kind=0x00) and a control leaf (leaf_kind=0x02) whose Structure 2 arrays are otherwise byte-identical"
+    when: "Leaf hashes are computed for both"
+    then: "The two leaf hashes differ (domain separation)"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-007
+    given: "The M1 scan_result sentinel `{score: null, verdict: \"unscanned\", model_hash: <32 zero bytes>}`"
+    when: "Structure 2 is CBOR-encoded"
+    then: "The fixture hex encodes verdict as a definite-length string `unscanned`, model_hash as a 32-byte byte string of zeros, and score as CBOR null — matching `packages/protocol-types/test/vectors/scan-result-unscanned.json`"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-008
+    given: "A Structure 2 with sender_pubkey of length 31 or sender_signature of length 63 or content_hash of length 31 or prev_root of length 31"
+    when: "Structural validation is performed"
+    then: "Validation fails with a structured error identifying the malformed field in each case"
+    test_type: unit
+    component_under_test: protocol-types
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The protocol-types module shall never accept a Structure 2 whose sender_signature does not
+      verify against canonical-CBOR(Structure 1) reconstructed from Structure 2's fields.
+    adversarial_condition: >
+      even when the Structure 2 is otherwise well-formed and the prev_root matches the receiver's
+      local tree — the relay could have substituted a valid-looking Structure 2 around a forged
+      inner signature.
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: SI-002
+    statement: >
+      The client shall never compute prev_root. Only the relay populates prev_root in Structure 2.
+    adversarial_condition: >
+      even when the client has the necessary state to compute it locally — doing so in the client
+      would re-introduce the two-party-only assumption superseded by the 2026-04-13 multi-party
+      design (agent-client.md AC-C2).
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-003
+    statement: >
+      The leaf-hash function shall never produce the same hash for a message leaf and a control
+      leaf with otherwise-identical Structure 2 contents.
+    adversarial_condition: >
+      even when an attacker crafts Structure 2 fields intended to collide across leaf kinds — the
+      leaf_kind prefix byte is part of the hash input.
+    test_type: unit
+    component_under_test: crypto
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Conversations"
+  end_to_end_flow: "§6.1"
+  discussion_logs:
+    - "2026-04-13_1400_meta-merkle-tree-design"
+    - "2026-04-13_1500_multi-party-conversation-design"
+    - "2026-04-17_1400_directory-relay-architecture-reassessment"

@@ -1,0 +1,182 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-MSG-003
+domain: Message Exchange
+actor: CLIENT
+priority: P0
+components:
+  - protocol-types
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want the envelope schema upgraded to protocol_version = 1 with Structure 1 as the TBS
+  so that M1 peers exchange two-structure leaves (MERKLE-002) with canonical sender authorship and
+  reject legacy v0 traffic.
+
+  Envelope v1 reshapes the TBS array from M0's
+  `[protocol_version, sender_pubkey, session_id, sequence_number, content_hash, timestamp]`
+  into Structure 1's canonical form
+  `[protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`.
+  Two changes from M0: `last_seen_seq` replaces the client-assigned `sequence_number` (the relay
+  assigns canonical sequence numbers into Structure 2; the client reports the highest sequence
+  number it has seen from the relay as a causal-chain commitment), and the field order matches
+  Structure 1 exactly so no re-encoding is needed between envelope and leaf.
+
+  M1 is a hard cut: the M0 walking skeleton is discarded and v1-only is spoken. M0 peers are
+  never expected to interoperate with M1. An envelope bearing protocol_version = 0 is rejected
+  by M1 unconditionally (SI-004 in MSG-001 already mandates "refuse unsupported versions"; M1
+  narrows the supported set to `{1}`).
+
+  Envelope v1 retains the outer wrapper fields from v0 that are not part of Structure 1 — the
+  envelope carries `sender_signature` (the 64-byte Ed25519 signature over canonical-CBOR(Structure 1))
+  and optionally the message content — because the signature and content are transported with the
+  leaf but are not part of the TBS.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the client constructs an outbound envelope in M1"
+    action: >
+      the protocol-types module shall produce an Envelope v1 containing: protocol_version (CBOR
+      unsigned integer, constant 1 in M1), content_hash (32 bytes, `SHA-256(0x00 || content)`),
+      sender_pubkey (32 bytes), session_id (16 bytes), last_seen_seq (CBOR unsigned integer;
+      the highest canonical sequence number the sender has received from the relay on this
+      session; 0 for the first message of the session), timestamp (Unix milliseconds, CBOR
+      unsigned integer), content (arbitrary bytes, up to 1 MiB), and sender_signature (64 bytes,
+      Ed25519 over canonical-CBOR of the TBS array). The TBS is
+      `[protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`
+      — this is Structure 1 per MERKLE-002.
+  - trigger: "When any component receives an Envelope v1"
+    action: >
+      the protocol-types module shall validate: protocol_version = 1, content_hash length = 32,
+      sender_pubkey length = 32, session_id length = 16, last_seen_seq is a non-negative integer,
+      timestamp is a non-negative integer, content (if present) is <= 1 MiB, sender_signature
+      length = 64, and the recomputed content_hash (leaf hash of content per CRYPTO-002) equals
+      the envelope's content_hash field.
+  - trigger: "When an envelope arrives with protocol_version = 0"
+    action: "the protocol-types module shall reject it with a structured `unsupported_version` error and shall not invoke any downstream handling (consistent with MSG-001 SI-004)."
+  - trigger: "When an envelope arrives with protocol_version != 1 (including any value > 1)"
+    action: "the protocol-types module shall reject it with a structured `unsupported_version` error. The M1 build supports only {1}."
+  - trigger: "When envelope construction is called with content exceeding 1,048,576 bytes"
+    action: "the module shall reject with a structured `content_too_large` error and shall not compute content_hash, signature, or partial envelope (unchanged from MSG-001 behavior)."
+  - trigger: "When a caller supplies a pre-computed content_hash to envelope construction"
+    action: "the module shall ignore it and always recompute from content (unchanged from MSG-001 SI-001)."
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Valid content, a keypair, a session_id, a last_seen_seq, and a timestamp"
+    when: "The client constructs an Envelope v1"
+    then: >
+      protocol_version = 1; content_hash = `SHA-256(0x00 || content)`; sender_signature verifies
+      against sender_pubkey over canonical-CBOR([1, content_hash, sender_pubkey, session_id,
+      last_seen_seq, timestamp])
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-002
+    given: "A valid Envelope v1"
+    when: "Serialized to canonical CBOR and deserialized back"
+    then: "The deserialized envelope is identical; the signature still verifies; re-serializing produces byte-identical CBOR"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-003
+    given: "An Envelope v1 with protocol_version mutated to 0 after signing"
+    when: "Structural validation is performed"
+    then: "Validation fails with `unsupported_version`; no signature verification is attempted"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-004
+    given: "An Envelope v1 with protocol_version mutated to 2 after signing"
+    when: "Structural validation is performed"
+    then: "Validation fails with `unsupported_version`"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-005
+    given: "A valid Envelope v1"
+    when: "Any single TBS field is mutated after signing (content_hash replaced, session_id swapped, last_seen_seq altered, timestamp moved, or sender_pubkey substituted)"
+    then: "Signature verification fails for each mutation"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-006
+    given: "An Envelope v1 whose content field is modified in transit such that its leaf hash no longer equals content_hash"
+    when: "Structural validation is performed"
+    then: "Validation fails with a `content_hash_mismatch` error before signature verification"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-007
+    given: "A fixture stored under `packages/protocol-types/test/vectors/envelope-v1-canonical.json` specifying exact values for all v1 fields plus the expected canonical-CBOR encoding as hex and the expected TBS encoding as hex"
+    when: "The TypeScript implementation encodes the envelope from the fixture values"
+    then: "Both the full-envelope CBOR and the TBS CBOR match the fixture hex exactly"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-008
+    given: "Content of exactly 1,048,576 bytes"
+    when: "The client constructs an Envelope v1"
+    then: "Construction succeeds"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-009
+    given: "Content of 1,048,577 bytes"
+    when: "The client constructs an Envelope v1"
+    then: "Construction is rejected with `content_too_large`; no content_hash or signature is computed"
+    test_type: unit
+    component_under_test: protocol-types
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The protocol-types module shall never emit an Envelope v1 whose content_hash field was not
+      computed from the content field by the module itself (recompute rule carried forward from
+      MSG-001 SI-001).
+    adversarial_condition: >
+      even when a caller supplies a pre-computed content_hash through the construction API.
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: SI-002
+    statement: >
+      A validator shall reject any Envelope v1 whose protocol_version is not 1.
+    adversarial_condition: >
+      even when protocol_version = 0 and the envelope is otherwise structurally well-formed by
+      M0 rules with a signature that verifies against the M0 TBS — M1 builds must refuse v0
+      unconditionally; there is no negotiation path.
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: SI-003
+    statement: >
+      A validator shall reject any Envelope v1 where any TBS field has been altered relative to
+      what was signed, independent of the outer-envelope signature or content field.
+    adversarial_condition: >
+      even when the altered envelope is otherwise structurally well-formed and the original
+      signature bytes are retained.
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: SI-004
+    statement: >
+      The module shall never construct an Envelope v1 whose sender_signature was computed over
+      any layout other than the canonical-CBOR encoding of `[protocol_version=1, content_hash,
+      sender_pubkey, session_id, last_seen_seq, timestamp]`.
+    adversarial_condition: >
+      even when transient code paths could produce the same bytes via a different ordering — the
+      field order is fixed at the encoder.
+    test_type: unit
+    component_under_test: protocol-types
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Conversations"
+  end_to_end_flow: "§6.1"
+  discussion_logs:
+    - "2026-04-13_1500_multi-party-conversation-design"
+    - "2026-04-17_1400_directory-relay-architecture-reassessment"
+    - "2026-04-08_1530_message-delivery-and-termination"

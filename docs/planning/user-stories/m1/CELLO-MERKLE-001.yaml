@@ -1,0 +1,125 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-MERKLE-001
+domain: Merkle Trees
+actor: CLIENT
+priority: P0
+components:
+  - crypto
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want RFC 6962 Merkle tree primitives (build, root, inclusion proof, proof verification) with domain-separated leaf prefixes
+  so that any three parties holding the same leaf sequence compute byte-identical roots, and any verifier can confirm a leaf's membership in a tree without holding the whole tree.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the client is asked to build a Merkle tree from an ordered sequence of leaf byte strings"
+    action: >
+      the crypto module shall construct an RFC 6962 binary Merkle tree: each leaf L_i is hashed as
+      `SHA-256(prefix || L_i)` where `prefix` is supplied per leaf (0x00 for message leaves, 0x02 for
+      control leaves; see MERKLE-002), each internal node is hashed as `SHA-256(0x01 || left || right)`,
+      and the tree is left-balanced per RFC 6962 §2.1 (odd nodes at a level are promoted unchanged to
+      the next level, not duplicated). The root is the 32-byte hash at the apex.
+  - trigger: "When the client is asked to produce an inclusion proof for leaf index i in a tree of size n"
+    action: >
+      the crypto module shall return the ordered list of sibling hashes per RFC 6962 §2.1.1 — the
+      path from the leaf to the root. The proof is a list of 32-byte hashes; position (left/right)
+      is implicit in i and n per the RFC algorithm.
+  - trigger: "When the client is asked to verify an inclusion proof given (leaf_hash, index i, tree_size n, proof, expected_root)"
+    action: >
+      the crypto module shall reconstruct the root by walking the proof from the leaf hash upward
+      per RFC 6962 §2.1.1 and return true iff the reconstructed root equals expected_root exactly.
+  - trigger: "When asked to build a tree from zero leaves"
+    action: "the crypto module shall return the empty-tree root defined by RFC 6962 §2.1: `SHA-256()` (the SHA-256 hash of the empty byte string)."
+  - trigger: "When inclusion proof verification is called with a malformed proof (wrong hash length, index out of range, or inconsistent with tree_size)"
+    action: "the crypto module shall return false without throwing."
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An ordered sequence of n leaves (n in {1, 2, 3, 4, 5, 7, 8, 15, 16, 17}) each with prefix 0x00"
+    when: "The client builds a Merkle tree and computes the root"
+    then: "The root is 32 bytes; rebuilding from the same inputs produces a byte-identical root"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-002
+    given: "The fixture `packages/crypto/test/vectors/merkle-tree.json` containing (a) RFC 6962 reference test vectors from the Certificate Transparency v1 specification — at minimum the empty-tree root and the 8-leaf example — and (b) CELLO-specific trees built from the leaf fixtures of CELLO-CRYPTO-002, with expected roots and expected inclusion proofs at a sample of indices computed once from an independent RFC 6962 implementation and committed as hex"
+    when: "The TypeScript implementation builds each fixture tree and produces inclusion proofs at the specified indices"
+    then: "Every root and every proof matches the expected hex in the fixture exactly"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-003
+    given: "A tree of size n and a leaf at index i (0 <= i < n)"
+    when: "The client produces an inclusion proof and verifies it against the computed root"
+    then: "Verification returns true"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-004
+    given: "A valid inclusion proof for leaf index i"
+    when: "The expected_root is changed by flipping a single bit"
+    then: "Verification returns false"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-005
+    given: "A valid inclusion proof for leaf index i"
+    when: "The leaf_hash is substituted with a different 32-byte value"
+    then: "Verification returns false"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-006
+    given: "A valid inclusion proof for leaf index i"
+    when: "Any single sibling hash in the proof is replaced with random bytes"
+    then: "Verification returns false"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-007
+    given: "An empty leaf sequence"
+    when: "The client builds a Merkle tree"
+    then: "The root equals SHA-256 of the empty byte string (the RFC 6962 empty-tree root)"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-008
+    given: "A tree of size n"
+    when: "Inclusion proof verification is called with index = n (out of range), a proof of wrong length, or a 31-byte sibling hash"
+    then: "Verification returns false without throwing for each case"
+    test_type: unit
+    component_under_test: crypto
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The crypto module shall never produce a tree where a leaf hash is indistinguishable from an
+      internal node hash. Leaf prefixes (0x00, 0x02) and the internal node prefix (0x01) must be
+      applied exactly as specified; omitting a leaf prefix or reusing 0x01 for leaves is a RFC 6962
+      second-preimage-protection violation.
+    adversarial_condition: >
+      even when an attacker submits a byte sequence crafted to look like an internal node (e.g.,
+      0x01 || hash_A || hash_B) as a leaf input — the module must still hash it with its leaf
+      prefix, producing a distinct leaf hash.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: SI-002
+    statement: >
+      The crypto module shall never accept an inclusion proof whose reconstructed root does not
+      byte-equal the provided expected_root.
+    adversarial_condition: >
+      even when the reconstructed root differs from expected_root by a single bit.
+    test_type: unit
+    component_under_test: crypto
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Conversations"
+  end_to_end_flow: "§6.1"
+  discussion_logs:
+    - "2026-04-13_1400_meta-merkle-tree-design"

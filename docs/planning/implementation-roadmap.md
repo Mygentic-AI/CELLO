@@ -38,7 +38,7 @@ For the design source, see [[protocol-map|CELLO Protocol Map]]. For the user sto
 | Milestone | What gets built | What it proves |
 |---|---|---|
 | M0 — Walking Skeleton | Monorepo scaffolding, `protocol-types`, `crypto` (Ed25519 + SHA-256), directory stub (WebSocket, in-memory store, message relay), client (connect, send, receive via MCP tool interface), e2e test harness | Two agents can exchange signed messages through infrastructure. The test harness runs a full roundtrip in one Vitest process. |
-| M1 — Merkle Notarization | RFC 6962 Merkle tree library, directory sequence numbering, 3-party tree sync (sender, receiver, directory), session close with sealed root | A conversation is a 32-byte receipt. Three independent copies produce the same root. Tamper with one message and the root diverges. |
+| M1 — Merkle Notarization | RFC 6962 Merkle tree library with inclusion proofs, two-structure leaf model (Structure 1 sender-signed, Structure 2 relay-built), `packages/relay` with per-session canonical sequencing and `prev_root`, envelope bump to `protocol_version = 1` (hard cut; v0 refused), 3-party tree sync during active sessions (sender, receiver, relay), bilateral K_local-only seal with directory recompute and `last_seen_seq` causal-chain verification, MCP additions for sealed receipt and inclusion proofs | A conversation is a 32-byte receipt. Sender, receiver, and relay produce the same root; the directory independently recomputes it at seal; a relay that forges, reorders, or drops leaves is caught by the causal-chain check; inclusion proofs verify against the sealed root using any RFC 6962 verifier. |
 | M2 — FROST Ceremonies | DKG (distributed key generation), threshold co-signing at session establishment and seal, K_server share management with envelope encryption | Neither the client nor the directory can forge a session alone. A compromised K_local cannot pass the FROST ceremony — compromise is detectable at session boundaries. |
 | M3 — Connections & Policy | Registration (stubbed OTP), connection request flow, trust data relay with selective disclosure, `SignalRequirementPolicy` evaluation, accept/decline | Agents control who reaches them. A receiver can require specific trust signals and enforce it. The one-round negotiation works — what you disclose, what you withhold. |
 | M4 — Prompt Injection Defense | Six-layer pipeline: Layer 1 deterministic sanitization, Layer 2 DeBERTa scanner, Layer 3 outbound gate, Layer 4 redaction, Layer 5 runtime governance, Layer 6 access control | Messages are safe from injection. Each layer catches different attack classes. Standalone value — works without the network. |
@@ -73,7 +73,7 @@ M4 is the most parallelizable with other milestones — the scanning pipeline is
 | After | The e2e harness can test |
 |---|---|
 | M0 | Two clients exchange signed messages through a directory stub. Assert: message roundtrip, signature verification, rejection of tampered messages. |
-| M1 | All of M0 plus: Merkle tree construction across three parties, root comparison after N messages, sealed root on session close, divergence detection on tampered leaves. |
+| M1 | All of M0 plus: two-structure leaf construction, per-session Merkle tree built by the relay, sender/receiver/relay root equality after each leaf, bilateral seal with directory recomputing the tree from scratch, `last_seen_seq` causal-chain violation detection at seal, inclusion proofs verifiable against the sealed root by an independent RFC 6962 verifier, tamper detection on leaf content / signature / sequence / `prev_root`. |
 | M2 | All of M1 plus: FROST DKG ceremony, threshold-signed session establishment, threshold-signed seal, rejection of session establishment with a compromised K_local. |
 | M3 | All of M2 plus: registration, connection request/accept/decline, policy evaluation against trust signals, selective disclosure of trust data. Two-agent flows now start from "strangers" not "pre-connected." |
 | M4 | All of M3 plus: injection payloads through each defense layer, Layer 1 sanitization on incoming messages, Layer 2 scan invocation, Layer 3 outbound gate blocking exfiltration, Layer 4 redaction, Layer 5 cost/volume cap enforcement. |
@@ -104,7 +104,7 @@ Fully specified stories live in `docs/planning/user-stories/m0/`. The table belo
 
 Seven stories, all P0. A TDD agent pulls the stories in dependency order, writes failing tests from the acceptance criteria, and implements until green. CRYPTO-001 and CRYPTO-002 can run in parallel; MSG-001 waits on both; NODE-001 waits on MSG-001 (it validates envelopes on relay); SESSION-001 depends on both MSG-001 and NODE-001; MSG-002 depends on SESSION-001; MCP-001 is last.
 
-M0 already hashes message content as Merkle leaves (SHA-256 with 0x00 domain separator) even though no tree is constructed until M1. This is intentional — pre-committing to the leaf hash format means M1 adds the tree without changing the envelope format or invalidating M0 signatures.
+M0 already hashes message content as Merkle leaves (SHA-256 with 0x00 domain separator) even though no tree is constructed until M1. This is intentional — pre-committing to the leaf hash format lets M1 reuse the same content-hash primitive without re-specifying it. The envelope TBS itself does reshape at M1 (Structure 1 per MERKLE-002 replaces M0's TBS), and `protocol_version` bumps from 0 to 1; M0 and M1 peers are not expected to interoperate (M0 is an internal walking skeleton, not a released version).
 
 M0 signs over a positional TBS array that begins with `protocol_version` (CBOR unsigned integer, constant `0` in M0). Placing the version first means an unknown version is detectable without parsing any subsequent field, and every future milestone that changes TBS structure bumps the version rather than silently reshaping the array. Value `1` is reserved for the first externally-shipped release.
 
@@ -113,6 +113,35 @@ M0 authenticates the WebSocket connection via an Ed25519 challenge-response: on 
 Session IDs in M0 are 128 bits of CSPRNG output, unguessable by construction. Without this entropy the relay-boundary invariant (NODE-001 SI-003: "never relay to a non-participant") would hold only against lazy attackers, and its negative test would pass because the attacker guessed wrong rather than because guessing is infeasible.
 
 Receivers fail closed on sequence gaps. WebSocket transport is FIFO, so a missing or out-of-order sequence number is either active tampering, a directory bug, or MITM activity — never benign reordering. The receiver marks the session `desynchronized` and fails subsequent sends/receives with `session_desynchronized`; recovery requires establishing a new session.
+
+---
+
+## M1 User Stories
+
+Fully specified stories live in `docs/planning/user-stories/m1/`. The table below is the index.
+
+| ID | Title | Domain | Actor | Priority | Components | Depends on |
+|---|---|---|---|---|---|---|
+| CELLO-MERKLE-001 | RFC 6962 Merkle primitives with inclusion proofs | Merkle Trees | CLIENT | P0 | crypto | M0 CRYPTO-002 |
+| CELLO-MERKLE-002 | Two-structure leaf construction (Structure 1 + Structure 2) | Merkle Trees | CLIENT | P0 | protocol-types, crypto | MERKLE-001, M0 MSG-001 |
+| CELLO-MSG-003 | Envelope v1: Structure 1 TBS, `last_seen_seq`, `protocol_version = 1` | Message Exchange | CLIENT | P0 | protocol-types | MERKLE-002 |
+| CELLO-NODE-002 | Relay package: hash relay, canonical sequencing, per-session tree | Node Operations | DIR | P0 | relay | MERKLE-002, MSG-003 |
+| CELLO-SESSION-002 | Session establishment v1: directory assigns relay, genesis `prev_root` | Session Lifecycle | CLIENT | P0 | client, directory, relay | NODE-002 |
+| CELLO-MSG-004 | Client send/receive v1: Structure 1 signing, dual-path cross-check | Message Exchange | CLIENT | P0 | client | SESSION-002 |
+| CELLO-SESSION-003 | Bilateral seal: SEAL control leaf, directory recompute, causal check | Session Lifecycle | CLIENT | P0 | client, directory, relay | MSG-004 |
+| CELLO-MCP-002 | MCP surface additions: sealed receipt and inclusion proof tools | MCP Tool Surface | AGENT | P0 | client | SESSION-003 |
+
+Eight stories, all P0. Dependency-ordered: MERKLE-001 → MERKLE-002 → MSG-003 → NODE-002 → SESSION-002 → MSG-004 → SESSION-003 → MCP-002. MERKLE-001 can start immediately on top of M0 CRYPTO-002. MERKLE-002 and MSG-003 are protocol-types work that can partially overlap once MERKLE-001's hash primitives are stable.
+
+M1 introduces `packages/relay` as a distinct pnpm package with its own store interface (`RelayStore` + `InMemoryRelayStore`). The client never imports from `packages/relay` — it reaches the relay over WebSocket, exactly as it will in production. In-process Vitest co-location is a harness convenience; the boundary is real.
+
+M1 is a hard cut from M0. Peers speak `protocol_version = 1` only; v0 envelopes are refused with `unsupported_version`. The TBS reshapes from M0's positional array into Structure 1 (`[protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`). The `sequence_number` field that the client assigned in M0 moves into Structure 2, where the relay assigns it canonically; the client's contribution to ordering is now the `last_seen_seq` causal commitment.
+
+The directory in M1 is a bookend authority, not an active relay. It creates session records, signs session assignments (against a pinned directory pubkey in M1; federation and FROST replace the pinning in later milestones), and recomputes the tree from scratch at seal. Between session establishment and seal, the directory WebSocket stays open for notifications but carries no message hashes.
+
+Seal in M1 is bilateral K_local — both parties sign a SEAL control leaf (`leaf_kind = 0x02`) committing to the final Merkle root. The directory independently recomputes the tree from the relay's handoff, verifies `prev_root` chaining and the `last_seen_seq` causal invariant across all leaves, and records the sealed root. A relay that misordered, forged, or dropped leaves produces a provable inconsistency at this check. FROST notarization arrives in M2; CLEAN/FLAGGED attestations arrive in M7 (SEAL leaves in M1 carry `attestation = "PENDING"`).
+
+Inclusion proofs are RFC 6962 standard — `cello_get_inclusion_proof` returns a format-compliant proof verifiable by any RFC 6962 implementation against the sealed root, with no CELLO-specific knowledge required. MMR inclusion proofs (the fabricated-conversation defense across the global sealed-conversation ledger) are deferred to M10 per the Deferred Items section below.
 
 ---
 

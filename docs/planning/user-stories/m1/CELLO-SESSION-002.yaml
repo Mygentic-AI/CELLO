@@ -1,0 +1,205 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-SESSION-002
+domain: Session Lifecycle
+actor: CLIENT
+priority: P0
+components:
+  - client
+  - directory
+  - relay
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want session establishment in M1 to assign a relay, initialize the genesis `prev_root`, and notify both participants of the relay endpoint and session parameters
+  so that M1 conversations use the canonical architecture (directory bookends, relay per-session engine) and the per-session Merkle tree starts from a cryptographically bound anchor.
+
+  This replaces SESSION-001's directory-as-relay model. In M1 the directory is a bookend authority:
+  it creates the session record, picks a relay, computes a signed assignment record, pushes it to
+  both clients over their authenticated directory WebSockets (NODE-001 auth), and hands the
+  assignment in-process to the relay (NODE-002). Once the relay is assigned and both clients have
+  authenticated to it (NODE-002's `CELLO-RELAY-AUTH-v1` challenge-response), hash traffic flows
+  client↔relay during the session; the directory WebSocket remains open for out-of-band
+  notifications but does not carry message hashes.
+
+  FROST is not yet present — session establishment is K_local only. The directory signs the
+  assignment with its own signing key (in M1 this is a single directory-node key; M2 replaces
+  it with the FROST ceremony). The client verifies the assignment signature against the
+  directory's public key, which is pinned in client configuration for M1 (a CA-like trust
+  anchor; M10 federates it).
+
+  Genesis `prev_root` is initialised by the relay per open-decisions Decision 7:
+  `SHA-256(agent_A_pubkey || agent_B_pubkey || session_id || timestamp)`. The timestamp is the
+  session-establishment timestamp the directory included in the signed assignment, so both
+  clients and the relay derive the same genesis value deterministically.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When a client requests a new session with a target agent via the directory WebSocket"
+    action: >
+      the directory shall (a) verify both requester and target are authenticated, (b) generate
+      a 16-byte CSPRNG session_id unique among active and recently-closed sessions, (c) select
+      a relay endpoint (in M1 the in-process relay is the only endpoint), (d) construct a
+      SessionAssignment record containing {session_id, participants: [A_pubkey, B_pubkey],
+      relay_endpoint, session_timestamp, directory_node_id}, (e) sign the canonical-CBOR
+      encoding of the record with the directory's signing key, (f) deliver the signed
+      assignment to both clients' directory WebSockets as `session_assignment` frames, and
+      (g) hand the same signed record in-process to the relay via `recordAssignment(record)`.
+  - trigger: "When a client receives a `session_assignment` frame"
+    action: >
+      the client shall (a) verify the directory signature against its pinned directory pubkey,
+      (b) compute the genesis prev_root locally as
+      `SHA-256(A_pubkey || B_pubkey || session_id || session_timestamp)` in the exact byte layout
+      specified by Decision 7, (c) store the session record
+      (session_id, counterparty_pubkey, relay_endpoint, genesis_prev_root, last_seen_seq = 0),
+      and (d) open an authenticated WebSocket to the relay endpoint and complete NODE-002's
+      challenge-response.
+  - trigger: "When the relay receives a SessionAssignment record from the directory"
+    action: >
+      the relay shall (a) verify the directory signature against its pinned directory pubkey,
+      (b) compute the same genesis prev_root locally, (c) register the session with counter = 0
+      and an empty leaf log, and (d) accept participant authentications for that session.
+  - trigger: "When either client closes the directory WebSocket mid-establishment before authenticating to the relay"
+    action: >
+      the directory shall discard the session record and notify the relay in-process to discard
+      its provisional state. A partially-established session is not persisted.
+  - trigger: "When session establishment is requested to an offline target pubkey"
+    action: >
+      the directory shall return a structured `target_offline` error; no session_id is allocated;
+      no relay assignment is made (unchanged from SESSION-001 AC-008).
+  - trigger: "When the client inspects its active session list"
+    action: "the client shall return each session's session_id, counterparty_pubkey, status ('active' | 'transport_lost' | 'sealing' | 'sealed'), relay_endpoint, and the current last_seen_seq."
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Two clients A and B authenticated to the directory"
+    when: "A requests a session with B"
+    then: >
+      Both clients receive a `session_assignment` frame with the same session_id, the same
+      relay_endpoint, and a directory signature that verifies against the pinned directory
+      pubkey; the relay has recorded the same session with an empty tree
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "Two clients have received matching `session_assignment` frames"
+    when: "Each client computes genesis prev_root locally"
+    then: >
+      Both clients compute byte-identical genesis prev_root values equal to
+      `SHA-256(A_pubkey || B_pubkey || session_id || session_timestamp)` and equal to the value
+      the relay computes independently
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-003
+    given: "A client has received a `session_assignment` frame"
+    when: "The client opens a WebSocket to the relay_endpoint and responds to the challenge with a signature over `\"CELLO-RELAY-AUTH-v1\" || nonce || pubkey`"
+    then: "The relay accepts the authentication and associates the connection with the client's participant role in the session"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-004
+    given: "A session assignment has been issued and both clients have authenticated to the relay"
+    when: "The active session list is queried on each client"
+    then: "Both clients show the session with status 'active', the correct counterparty_pubkey, the relay_endpoint, and last_seen_seq = 0"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-005
+    given: "A client receives a `session_assignment` frame whose directory signature has been tampered (one bit flipped)"
+    when: "The client verifies the signature"
+    then: "Verification fails; the client discards the assignment, does not open a relay connection, and logs a `directory_signature_invalid` event"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-006
+    given: "Client A requests a session with pubkey K_B where no client is authenticated under K_B"
+    when: "The directory processes the request"
+    then: "The directory returns `target_offline`; no session_id is allocated; the relay receives no assignment"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "A running directory and relay"
+    when: "1,000 sessions are established in rapid succession between distinct authenticated client pairs"
+    then: >
+      All 1,000 session_ids are unique, each is 16 bytes, and a chi-squared test on the
+      concatenated session_id bytes against a uniform distribution yields p > 0.0001 (carried
+      over from SESSION-001 AC-009)
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "A session has been established and both clients have authenticated to the relay"
+    when: "The directory WebSocket is closed for one of the clients"
+    then: "The client's directory status transitions to `directory_unreachable` but the relay connection and session state remain intact; send/receive still works on that session"
+    test_type: integration
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The directory shall create a session only when both parties are concurrently authenticated
+      under the pubkeys named in the session-initiate request (carried over from SESSION-001 SI-001).
+    adversarial_condition: >
+      even when an attacker initiates toward a pubkey that is offline or represented by a hung
+      WebSocket that has not completed the challenge-response handshake.
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      The directory shall generate session_ids as 16 bytes from a CSPRNG, no collisions with
+      active or recently-closed sessions (carried over from SESSION-001 SI-002).
+    adversarial_condition: >
+      even when 1000 sessions are created in rapid succession.
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: >
+      The client shall never participate in a session whose `session_assignment` frame fails
+      signature verification against the pinned directory pubkey.
+    adversarial_condition: >
+      even when a MITM on the directory WebSocket substitutes a forged assignment with a
+      plausible-looking relay_endpoint — pinning and signing together prevent acceptance.
+    test_type: integration
+    component_under_test: client
+
+  - id: SI-004
+    statement: >
+      The genesis `prev_root` shall be computed from exactly the bytes
+      `A_pubkey || B_pubkey || session_id || session_timestamp`, with session_timestamp encoded
+      as an 8-byte big-endian unsigned integer (milliseconds since Unix epoch).
+    adversarial_condition: >
+      even when a minor encoding difference would otherwise produce byte-different genesis values
+      on different clients — a fixture with expected genesis hex is committed under
+      `packages/protocol-types/test/vectors/genesis-prev-root.json` and both the client
+      and the relay must match it exactly.
+    test_type: unit
+    component_under_test: protocol-types
+
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the client's WebSocket to the relay is disconnected mid-session"
+    fallback: >
+      the client shall mark the session `transport_lost`, surface the event to the agent on the
+      next MCP call referencing the session, and reject send/close on it with
+      `transport_unavailable`. Session resumption after reconnect is covered by NODE-002 DB-001
+      (relay replays missed Structure 2 leaves after re-auth). If the disconnect persists beyond
+      an M1-configurable timeout (default 60s), the client treats the session as effectively
+      closed and does not attempt resumption.
+    test_type: integration
+    component_under_test: client
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Directory Infrastructure"
+  end_to_end_flow: "§3.1, §6.1"
+  discussion_logs:
+    - "2026-04-17_1400_directory-relay-architecture-reassessment"
+    - "2026-04-15_0900_session-level-frost-signing"
+    - "2026-04-13_1500_multi-party-conversation-design"
