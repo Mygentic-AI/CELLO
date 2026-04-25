@@ -1,0 +1,217 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-TRANSPORT-001
+domain: Transport
+actor: CLIENT
+priority: P0
+components:
+  - transport
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want a libp2p node bootstrap surface that produces a Peer ID, exposes dial-by-multiaddr, and accepts streams on a custom CELLO protocol
+  so that two clients can connect directly peer-to-peer from M0 and every subsequent milestone inherits a validated network substrate.
+
+  libp2p is the network substrate the entire protocol is designed around (ephemeral Peer IDs
+  per session from M1, DCuTR hole-punching, circuit relay v2 fallback, Noise end-to-end
+  encryption between peers). Introducing it in M0 — the walking-skeleton milestone — means
+  every subsequent milestone runs on a substrate whose integration surprises have already
+  surfaced.
+
+  The M0 transport package exposes a minimal, milestone-appropriate surface:
+
+  - `createNode({ keypair, listenAddresses })` — constructs a `js-libp2p` node configured
+    with the CELLO transport/security/muxer stack: `@libp2p/tcp` and `@libp2p/websockets`
+    transports, `@chainsafe/libp2p-noise` for security, `@chainsafe/libp2p-yamux` for
+    multiplexing. The node's Peer ID derives from the supplied Ed25519 keypair (in M0 this
+    is the client's K_local; from M1 onward a fresh ephemeral keypair per session).
+  - `node.start()` / `node.stop()` — lifecycle.
+  - `node.dial(multiaddr)` — opens a libp2p connection to a remote peer.
+  - `node.handle(protocolId, handler)` — registers a stream handler for a given protocol ID.
+  - `node.newStream(remotePeerId, protocolId)` — opens a new stream on an existing connection.
+  - `node.listenAddresses()` — returns the multiaddrs the node is listening on (useful for
+    the test harness to wire peer A's address into peer B's dial call).
+
+  The M0 CELLO stream protocol is `/cello/m0/1.0.0`. It is a one-shot request protocol:
+  the sender opens a stream, writes the canonical-CBOR encoding of a MessageEnvelope v0
+  (MSG-001), and closes the write side. The receiver reads the CBOR, validates, and closes
+  the stream. M0 does not define a request/response pattern — MSG-002 covers the higher-level
+  send/receive semantics.
+
+  The transport package is deliberately thin. It does *not* expose libp2p's full configuration
+  surface (DHT, mDNS, Kademlia, rendezvous, pubsub) — those are either irrelevant or
+  deferred per the roadmap's Deferred Items section. It also does *not* handle CBOR encoding,
+  envelope construction, or signing — those live in `protocol-types` and `crypto`. The
+  transport surface is purely "here is a libp2p node, here is how you open a stream with
+  a peer's Peer ID, here is how you register a handler."
+
+  Circuit relay v2 is configured but not yet exercised in M0 (M0 test scenarios are
+  localhost-only and hole-punching is not needed). DCuTR is likewise enabled in the libp2p
+  configuration but not stressed until cross-machine integration tests in later milestones.
+  Enabling them now means the configuration path is validated and M1 can lean on real
+  NAT-traversal paths without a transport-layer change.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the client calls `createNode({ keypair, listenAddresses })`"
+    action: >
+      the transport module shall construct a libp2p node configured with: (a) `@libp2p/tcp`
+      and `@libp2p/websockets` as transports, (b) `@chainsafe/libp2p-noise` as the sole
+      security upgrader, (c) `@chainsafe/libp2p-yamux` as the sole muxer, (d) a Peer ID
+      derived from the supplied Ed25519 keypair, (e) circuit relay v2 transport configured
+      (server + client capability), (f) DCuTR service enabled. The node is returned in a
+      stopped state — callers invoke `start()` explicitly.
+  - trigger: "When the client calls `node.start()`"
+    action: "the node shall begin listening on every supplied `listenAddresses` multiaddr and become dialable. `node.listenAddresses()` after start returns the full list including any libp2p-assigned ephemeral ports."
+  - trigger: "When the client calls `node.handle(protocolId, handler)`"
+    action: "the node shall register the handler for the given protocol ID. Subsequent incoming streams on that protocol ID invoke the handler with `{stream, connection}`. M0's initial handler registration is for `/cello/m0/1.0.0` and is performed by MSG-002."
+  - trigger: "When the client calls `node.dial(multiaddr)`"
+    action: "the node shall establish a libp2p connection to the remote peer identified by the multiaddr, negotiating Noise security and Yamux multiplexing. The returned value carries the remote Peer ID so callers can subsequently open streams to it."
+  - trigger: "When the client calls `node.newStream(remotePeerId, protocolId)` on an established connection"
+    action: "the node shall open a new multiplexed stream on the identified protocol. If the remote does not speak that protocol the stream open fails with a structured `protocol_not_supported` error."
+  - trigger: "When the client calls `node.stop()`"
+    action: "the node shall close all open streams and connections, stop listening, and release all libp2p resources. A stopped node cannot be restarted — the caller constructs a new node if reuse is required."
+  - trigger: "When a connection to a peer is lost"
+    action: "subsequent `newStream` calls to that peer shall fail with a structured `connection_lost` error. Redialing is the caller's responsibility; M0 does not implement automatic reconnection."
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An Ed25519 keypair and a listen multiaddr `/ip4/127.0.0.1/tcp/0` (random port)"
+    when: "The client calls `createNode` and then `start`"
+    then: "The node transitions to started; `node.listenAddresses()` returns at least one multiaddr with a concrete non-zero port; the node's Peer ID is a valid libp2p PeerId derived from the supplied keypair"
+    test_type: unit
+    component_under_test: transport
+
+  - id: AC-002
+    given: "Two started nodes A and B on distinct loopback ports"
+    when: "A dials one of B's listen multiaddrs"
+    then: "The dial succeeds; A's connection object reports B's Peer ID; B observes an inbound connection event with A's Peer ID"
+    test_type: integration
+    component_under_test: transport
+
+  - id: AC-003
+    given: "Two connected nodes A and B; B has registered a handler for `/cello/m0/1.0.0` that reads a length-prefixed frame and echoes it back"
+    when: "A calls `newStream(B_peerId, '/cello/m0/1.0.0')`, writes 32 bytes, closes the write side, and reads the response"
+    then: "A receives the same 32 bytes B received; the stream closes cleanly on both sides"
+    test_type: integration
+    component_under_test: transport
+
+  - id: AC-004
+    given: "Two connected nodes A and B"
+    when: "A calls `newStream(B_peerId, '/cello/nonexistent/1.0.0')` on a protocol B has not registered"
+    then: "The stream open fails with a structured `protocol_not_supported` error; A's connection to B remains usable for other protocols"
+    test_type: integration
+    component_under_test: transport
+
+  - id: AC-005
+    given: "Two connected nodes A and B"
+    when: "A third-party observer captures all packets between A and B during a stream exchange"
+    then: >
+      The captured bytes do not contain the plaintext of the stream payload. This is asserted
+      by sending a distinctive marker sequence (e.g., 32 bytes of `0xAB`) through the stream
+      and confirming the marker does not appear in the captured packet stream. Noise
+      encryption is enabled — the assertion is that configuration is correctly applied, not
+      that Noise is uncompromised (libp2p's own test suite covers the cryptographic property)
+    test_type: integration
+    component_under_test: transport
+
+  - id: AC-006
+    given: "A started node"
+    when: "The node is stopped"
+    then: "All open streams close; all connections close; `listenAddresses()` returns an empty list; subsequent dial/newStream calls fail with a structured `node_stopped` error"
+    test_type: unit
+    component_under_test: transport
+
+  - id: AC-007
+    given: "Two connected nodes A and B; A has opened one stream on `/cello/m0/1.0.0` and a second stream on a different registered protocol"
+    when: "One stream is closed"
+    then: "The other stream remains open and usable — Yamux multiplexing isolates streams on a single connection"
+    test_type: integration
+    component_under_test: transport
+
+  - id: AC-008
+    given: "Two nodes A and B, A has dialed B successfully, and B then crashes (node.stop() without closing streams first as a simulation)"
+    when: "A calls `newStream(B_peerId, '/cello/m0/1.0.0')` after detecting B is gone"
+    then: "The newStream call fails with a structured `connection_lost` error; A's own node remains healthy and can dial a different peer"
+    test_type: integration
+    component_under_test: transport
+
+  - id: AC-009
+    given: >
+      A started node with circuit relay v2 configured (service enabled per the createNode
+      contract). A second started node connects to the first
+    when: "The second node queries the first's advertised protocols"
+    then: "The advertised protocol list includes `/libp2p/circuit/relay/0.2.0/hop` — confirming circuit relay v2 is configured. The protocol is not exercised end-to-end in M0; this AC only validates configuration"
+    test_type: integration
+    component_under_test: transport
+
+  - id: AC-010
+    given: "Two started nodes in the same Vitest process on distinct loopback ports"
+    when: "A dials B, opens a stream, transfers 100 KiB of data, closes the stream, and both nodes are stopped"
+    then: "The full cycle completes; both nodes reach a stopped state cleanly; no warnings or unhandled rejections appear in the Vitest logs — confirming the teardown path is clean for reuse across many tests"
+    test_type: integration
+    component_under_test: transport
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The transport module shall never expose a libp2p node that accepts inbound connections
+      without Noise security negotiation. The Noise upgrader must be the sole security
+      mechanism registered; an unencrypted fallback (`plaintext`) must not appear in the
+      security upgrader list.
+    adversarial_condition: >
+      even when libp2p's own defaults change or a future library update introduces a
+      plaintext-tolerant configuration — the transport module's `createNode` contract fixes
+      Noise as the only option, and this is asserted at test time by inspecting the node's
+      registered security protocols.
+    test_type: unit
+    component_under_test: transport
+
+  - id: SI-002
+    statement: >
+      The transport module shall never construct a libp2p node whose Peer ID is derived from
+      a keypair other than the one supplied by the caller.
+    adversarial_condition: >
+      even when the libp2p builder provides a peer-id auto-generation path — the transport
+      module's contract is that the caller owns the keypair, and the Peer ID is a deterministic
+      function of that keypair. Verified by asserting that the constructed node's Peer ID
+      equals `peerIdFromKeys(keypair.publicKey.bytes, keypair.privateKey.bytes)` for the
+      supplied keypair.
+    test_type: unit
+    component_under_test: transport
+
+  - id: SI-003
+    statement: >
+      The transport module shall never enable libp2p peer-discovery protocols in M0 (Kademlia
+      DHT, mDNS, rendezvous) — peer discovery is out of M0's scope, and enabling these would
+      have nodes advertising themselves on networks where discovery is not wanted.
+    adversarial_condition: >
+      even when a later libp2p default change introduces a discovery protocol as opt-out
+      rather than opt-in — the transport module's createNode contract fixes the discovery
+      list to empty. Verified by inspecting the started node's registered services and
+      asserting none of the above protocols appear.
+    test_type: unit
+    component_under_test: transport
+
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While all listen ports are already bound by another process (port exhaustion simulated in tests by binding every candidate port before node.start)"
+    fallback: >
+      `node.start()` shall reject with a structured `listen_failed` error naming the
+      multiaddr that could not bind. The node enters a failed state; `node.stop()` is a
+      no-op on a never-started node. The test harness always binds `/tcp/0` (random port
+      selection by the OS) so this condition is not expected in CI, but the failure mode
+      is specified for deployment contexts.
+    test_type: unit
+    component_under_test: transport
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Transport"
+  end_to_end_flow: "§3, §6.1"
+  discussion_logs:
+    - "2026-04-11_1400_libp2p-dht-and-peer-connectivity"
+    - "2026-04-17_1400_directory-relay-architecture-reassessment"

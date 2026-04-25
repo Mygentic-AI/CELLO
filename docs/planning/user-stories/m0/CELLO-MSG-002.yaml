@@ -9,163 +9,202 @@ components:
 # ─── Intent ─────────────────────────────────────────────────
 story: >
   As the CELLO Client,
-  I want to send signed messages and verify incoming message signatures
-  so that tampered or forged messages are rejected before reaching the agent.
-  WebSocket transport is an internal module of the client package (`client/src/transport/`);
-  no separate transport package exists in M0. Multi-transport extraction is deferred until
-  a second transport (e.g., libp2p in M10) materializes.
+  I want to send a signed MessageEnvelope to a known peer over a libp2p stream and receive signed envelopes from peers, verifying every inbound envelope before delivery to the agent
+  so that two M0 peers can exchange tamper-evident messages directly, with no directory or relay between them.
+
+  M0's message flow is minimal and peer-to-peer. The sender opens a libp2p stream on
+  `/cello/m0/1.0.0` (CELLO-TRANSPORT-001), writes the canonical-CBOR encoding of a
+  MessageEnvelope v0 (MSG-001), and closes the write side. The receiver reads the CBOR,
+  validates the envelope structure, verifies the content_hash against the content, verifies
+  the sender's Ed25519 signature against the envelope's `sender_pubkey`, and delivers the
+  content to the agent through the MCP surface (MCP-001).
+
+  No directory, no relay, no session concept, no sequence numbers. The sender knows the
+  receiver's multiaddr out-of-band (hardcoded in the test harness; in production eventually
+  via M1's signed SessionAssignment). The receiver accepts incoming streams on the handler
+  registered at transport startup.
+
+  Authorship is the only property M0 proves at the message layer — "I signed these bytes
+  as the holder of K_local." There is no ordering guarantee across multiple messages
+  (M1 introduces canonical sequencing via the relay). A peer may receive multiple messages
+  from the same sender in any order; M0 does not detect reordering.
+
+  Trust model: the receiver trusts a message iff the Ed25519 signature verifies against the
+  claimed `sender_pubkey`. M0 has no identity registry, so `sender_pubkey` is a raw key —
+  agent identity tied to real-world trust arrives with M3 (Connections & Policy). For M0
+  the test harness pre-shares pubkeys between peers.
 
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
-  - trigger: "When the client sends a message on an active session"
+  - trigger: "When the client is asked to send a message to a peer identified by (remote_peer_id, remote_multiaddr)"
     action: >
-      the client shall construct a MessageEnvelope per MSG-001: compute the content_hash
-      (leaf hash of the content), build the TBS array
-      `[protocol_version, sender_pubkey, session_id, sequence_number, content_hash, timestamp]`
-      with protocol_version = 0 in M0, encode it as canonical CBOR, sign the CBOR bytes with
-      K_local to produce the 64-byte Ed25519 signature, increment the session sequence counter
-      atomically, and dispatch the envelope to the directory for relay.
-  - trigger: "When the client receives a MessageEnvelope from the directory"
+      the client shall (a) ensure a libp2p connection to the remote peer exists, dialing
+      `remote_multiaddr` if none is open, (b) construct a MessageEnvelope v0 per MSG-001
+      using the client's K_local as `sender_pubkey`, (c) open a new stream on
+      `/cello/m0/1.0.0`, (d) write the canonical-CBOR encoding of the envelope as a
+      length-prefixed frame (unsigned little-endian 32-bit length followed by the CBOR
+      bytes), (e) close the write side of the stream, (f) return `{delivered: true,
+      content_hash: hex}` to the caller on successful write. The read side of the stream
+      is held briefly to detect reset/error; a clean close indicates successful delivery.
+  - trigger: "When the client's registered `/cello/m0/1.0.0` stream handler is invoked by libp2p with an inbound stream"
     action: >
-      the client shall validate the envelope structure, recompute the content_hash from
-      the content and verify it matches the envelope's content_hash field, rebuild the TBS
-      array from the envelope fields, encode it as canonical CBOR, verify the Ed25519
-      signature against the sender's registered public key over the CBOR bytes, and verify
-      the sequence number is the next expected value for the session.
-  - trigger: "When the content hash does not match the recomputed hash"
-    action: "the client shall reject the message and log a tampering event with the session_id, sequence_number, and expected vs. actual hash"
-  - trigger: "When the sender's signature does not verify"
-    action: "the client shall reject the message and log a signature verification failure"
-  - trigger: "When the sequence number is not the next expected value"
-    action: "the client shall reject the message and log a sequence gap or replay with the expected and received values"
-  - trigger: "When a message arrives without a signature field"
-    action: "the client shall reject the message unconditionally"
-  - trigger: "When a message arrives with a TBS protocol_version not supported by the current build"
-    action: "the client shall reject the message with a structured `unsupported_version` error and shall not invoke any application-layer handling"
-  - trigger: "When a received message's sequence_number is not the next expected value for the session"
-    action: >
-      the client shall reject the message, mark the session status as `desynchronized`, log the
-      gap with expected vs. received values, and fail all subsequent send and receive operations
-      on the session with a `session_desynchronized` error. The session is terminally closed from
-      the client's perspective — recovery requires establishing a new session. WebSocket transport
-      is FIFO, so a sequence gap implies active tampering, a directory bug, or MITM activity;
-      continuing would leave the receiver unable to distinguish "message dropped" from "message
-      still in flight," so the receiver fails closed.
-  - trigger: "When multiple sends are requested concurrently on the same session"
-    action: "the client shall serialize them through a per-session queue so that sequence numbers are assigned atomically and never skip or repeat"
+      the handler shall (a) read the length prefix, (b) read exactly `length` bytes of CBOR,
+      (c) parse the CBOR into a MessageEnvelope v0 via protocol-types, (d) run full envelope
+      validation per MSG-001 AC-002 (field lengths, content_hash matches content, signature
+      verifies against sender_pubkey), (e) on full success: enqueue the message on the
+      client's receive queue keyed by `sender_pubkey` and close the stream cleanly, (f) on
+      any validation failure: close the stream with a reset (libp2p abort) and log a
+      structured event identifying the failure class.
+  - trigger: "When a received envelope's content_hash does not match `SHA-256(0x00 || content)`"
+    action: "the client shall reject the envelope with a `content_hash_mismatch` event; the envelope is not delivered to the agent; the stream is reset."
+  - trigger: "When a received envelope's signature does not verify against `sender_pubkey`"
+    action: "the client shall reject the envelope with a `signature_verification_failed` event; the envelope is not delivered; the stream is reset."
+  - trigger: "When a received envelope's CBOR fails to parse or fails structural validation"
+    action: "the client shall reject with a `malformed_envelope` event carrying the specific validation error (missing field, wrong length, unsupported version, content too large); the stream is reset."
+  - trigger: "When a send is attempted to a peer whose multiaddr cannot be dialed"
+    action: "the client shall return `{delivered: false, reason: 'peer_unreachable'}` to the caller after libp2p reports dial failure."
+  - trigger: "When a send successfully writes the envelope and closes the write side but the stream is then reset by the remote"
+    action: "the client shall return `{delivered: false, reason: 'remote_rejected'}`. The remote reset indicates envelope validation failed on the receiver — the sender cannot tell which validation class failed, only that the receiver refused the message."
+  - trigger: "When multiple sends are issued concurrently to the same peer"
+    action: "each send opens its own stream over the shared libp2p connection (Yamux multiplexes). There is no per-peer serialization — M0 has no sequence numbers to preserve. Order of delivery at the receiver is unspecified."
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "An active session between Client A and Client B"
-    when: "Client A sends a text message"
-    then: "Client B receives the message; the content is identical; the signature verifies; the sequence number is correct"
+    given: "Two M0 clients A and B with libp2p nodes started; A knows B's Peer ID and listen multiaddr"
+    when: "A sends the message `hello` to B"
+    then: >
+      B's receive queue contains one envelope whose content equals `hello`, whose
+      `sender_pubkey` equals A's K_local pubkey, whose signature verifies, and whose
+      `content_hash` matches `SHA-256(0x00 || 'hello')`. A's send call returns
+      `{delivered: true}`
     test_type: integration
     component_under_test: client
 
   - id: AC-002
-    given: "An active session"
-    when: "Client A sends 10 messages sequentially"
-    then: "Client B receives all 10; each has the correct sequence number (0 through 9); all signatures verify"
+    given: "Two connected M0 clients A and B"
+    when: "A sends 10 distinct messages to B as fast as send allows"
+    then: "B receives all 10 envelopes; every signature verifies; every content_hash matches; no envelope is lost. Order of arrival is not asserted"
     test_type: integration
     component_under_test: client
 
   - id: AC-003
-    given: "An active session"
-    when: "A message arrives with content modified after signing (one byte flipped in transit)"
-    then: "Client B rejects the message; a tampering event is logged with the hash mismatch"
+    given: "Two connected M0 clients A and B; the test harness intercepts A's outbound CBOR and flips one bit in the `content` field before it reaches B"
+    when: "B's handler processes the inbound envelope"
+    then: >
+      The envelope is rejected with `content_hash_mismatch`; the envelope is NOT delivered
+      to B's agent; the stream is reset; A's send call returns `{delivered: false,
+      reason: 'remote_rejected'}`
     test_type: integration
     component_under_test: client
 
   - id: AC-004
-    given: "An active session"
-    when: "A message arrives with a valid hash but the signature replaced with random bytes"
-    then: "Client B rejects the message; a signature failure is logged"
+    given: "Two connected M0 clients A and B; the test harness intercepts A's outbound CBOR and replaces the `sender_signature` field with 64 random bytes"
+    when: "B's handler processes the inbound envelope"
+    then: "The envelope is rejected with `signature_verification_failed`; the envelope is NOT delivered; the stream is reset"
     test_type: integration
     component_under_test: client
 
   - id: AC-005
-    given: "An active session where Client B has received messages 0, 1, 2"
-    when: "A message arrives with sequence_number 1 (replay)"
-    then: >
-      Client B rejects the message; the session status becomes `desynchronized`;
-      a replay event is logged with expected vs. received sequence numbers;
-      subsequent `cello_send` and `cello_receive` calls on the session return
-      `session_desynchronized`.
+    given: "Two connected M0 clients A and B; the test harness sends a raw non-CBOR payload (random bytes) on `/cello/m0/1.0.0`"
+    when: "B's handler attempts to parse"
+    then: "The handler rejects with `malformed_envelope`; the stream is reset; B's client remains healthy and accepts subsequent well-formed messages"
     test_type: integration
     component_under_test: client
 
   - id: AC-006
-    given: "An active session where Client B has received messages 0, 1, 2"
-    when: "A message arrives with sequence_number 4 (gap)"
-    then: >
-      Client B rejects the message; the session status becomes `desynchronized`;
-      a sequence-gap event is logged with expected vs. received sequence numbers;
-      subsequent `cello_send` and `cello_receive` calls on the session return
-      `session_desynchronized`.
+    given: "An M0 client A with a started libp2p node"
+    when: "A attempts to send to a multiaddr that is not listening (no peer at that address)"
+    then: "A's send call returns `{delivered: false, reason: 'peer_unreachable'}` within the libp2p dial timeout; A's node remains healthy"
     test_type: integration
     component_under_test: client
 
   - id: AC-007
-    given: "An active session"
-    when: "A message arrives with the signature field missing entirely"
-    then: "Client B rejects the message unconditionally"
-    test_type: unit
+    given: "Two connected M0 clients A and B; A sends a 1 MiB message (the upper bound)"
+    when: "B's handler processes the envelope"
+    then: "The envelope is delivered to B's receive queue; content_hash matches; signature verifies; no truncation"
+    test_type: integration
     component_under_test: client
 
   - id: AC-008
-    given: "An active session"
-    when: "A message arrives whose TBS protocol_version is 1 (a value not supported by the M0 build)"
-    then: >
-      The client rejects the message with a structured `unsupported_version` error;
-      no application-layer handler is invoked; the session is not marked desynchronized
-      (an unsupported version is a forward-compatibility event, not a tampering event).
-    test_type: unit
+    given: "Two connected M0 clients A and B; B's handler is in the middle of processing one stream when A opens a second stream on `/cello/m0/1.0.0`"
+    when: "The second stream completes"
+    then: "Both messages arrive in B's receive queue independently; stream handling is concurrent via Yamux multiplexing; neither stream blocks the other"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-009
+    given: "Two M0 clients A and B; A sends a message to B; B's receive queue is then drained by the agent via MCP-001's `cello_receive`"
+    when: "The agent calls `cello_receive(timeout=1s)` on B"
+    then: "The call returns the envelope's content, A's pubkey, and the content_hash within 1 second"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-010
+    given: "Three M0 clients A, B, C all connected to each other; A sends messages to B and C concurrently"
+    when: "The sends complete"
+    then: "B receives A's message-to-B; C receives A's message-to-C; neither B nor C receives the other's message (per-peer routing is correct by libp2p Peer ID)"
+    test_type: integration
     component_under_test: client
 
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
-    statement: "The client shall never deliver a message to the agent without first verifying the content hash and sender signature"
-    adversarial_condition: "even when the message was relayed by a trusted directory"
-    test_type: unit
+    statement: >
+      The client shall never deliver an inbound envelope to the agent without first verifying
+      both the content_hash (recomputed from the envelope's content field) and the Ed25519
+      signature (verified against the envelope's sender_pubkey over canonical-CBOR(TBS)).
+    adversarial_condition: >
+      even when libp2p's Noise layer authenticated the transport — Noise proves the packet
+      came from the remote Peer ID, not that the envelope's claimed sender_pubkey signed
+      this content. The two properties are independent; both must pass.
+    test_type: integration
     component_under_test: client
 
   - id: SI-002
-    statement: "The client shall never accept a message with a sequence number that has already been seen in the same session"
-    adversarial_condition: "even when the replayed message has a valid signature"
-    test_type: integration
+    statement: >
+      The client shall never emit an outbound envelope whose content_hash was not computed
+      from the content field by the envelope constructor. MSG-001 SI-001 carries forward to
+      the client layer — the client must not bypass the constructor or supply a
+      pre-computed content_hash.
+    adversarial_condition: >
+      even when a test fixture supplies a pre-computed content_hash through a shortcut API
+      the module must not expose — the client's send path invokes the constructor with only
+      the content and keypair; the constructor computes the hash.
+    test_type: unit
     component_under_test: client
 
   - id: SI-003
-    statement: "The client shall never send a MessageEnvelope with a sequence number that skips or repeats"
-    adversarial_condition: "even when 100 concurrent send calls are fired on the same session simultaneously"
-    test_type: integration
-    component_under_test: client
-
-  - id: SI-004
     statement: >
-      The client shall reject any received MessageEnvelope whose recomputed content_hash
-      (the leaf hash of the envelope's content field) does not match the envelope's
-      content_hash field, before any application-layer delivery or state update.
+      The client shall never accept a libp2p stream on `/cello/m0/1.0.0` without running
+      the full validation pipeline: CBOR parse → structural validation → content_hash
+      recompute → signature verification. Short-circuiting any step (e.g., skipping hash
+      recompute when the signature verifies) is a protocol violation.
     adversarial_condition: >
-      even when the signature over the mismatched content_hash is valid — i.e., when an
-      attacker has signed a hash that does not match the payload they are delivering. The
-      hash-content consistency check must succeed independently of signature verification;
-      both must pass before delivery.
+      even when performance pressure might motivate caching or reordering — the validation
+      pipeline is fixed. A message with a valid signature over content_hash X and a content
+      field whose actual hash is Y ≠ X must be rejected at the content_hash check, not
+      accepted because the signature "verified."
     test_type: integration
     component_under_test: client
 
 # ─── Degraded Behavior ─────────────────────────────────────
 degraded_behavior:
   - id: DB-001
-    condition: "While the directory WebSocket is disconnected (no authenticated connection)"
+    condition: "While the local libp2p node is not started"
     fallback: >
-      the client shall reject send attempts with a structured `transport_unavailable`
-      error and shall not queue the message, not advance the sequence counter, and not
-      modify session state, rather than blocking indefinitely or silently dropping.
-      Full graceful-degradation semantics (local-only operation, reconciliation on
-      recovery) arrive in later milestones.
+      the client shall reject send and receive-handler registration with a structured
+      `transport_not_started` error. No queuing occurs; the caller must start the transport
+      before exchanging messages. The client does not auto-start the transport on first send.
+    test_type: unit
+    component_under_test: client
+
+  - id: DB-002
+    condition: "While a libp2p connection to a specific peer has dropped mid-send (after stream open, before write completes)"
+    fallback: >
+      the send call returns `{delivered: false, reason: 'connection_lost'}`. The envelope
+      is not retried — M0 has no retry semantics. The caller decides whether to retry by
+      redialing.
     test_type: integration
     component_under_test: client
 
@@ -175,4 +214,5 @@ references:
   end_to_end_flow: "§6.1"
   discussion_logs:
     - "2026-04-08_1530_message-delivery-and-termination"
-    - "2026-04-08_1430_protocol-strength-and-commerce"
+    - "2026-04-11_1400_libp2p-dht-and-peer-connectivity"
+    - "2026-04-17_1400_directory-relay-architecture-reassessment"
