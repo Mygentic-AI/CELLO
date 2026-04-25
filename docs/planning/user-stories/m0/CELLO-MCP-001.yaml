@@ -27,38 +27,68 @@ story: >
   (the test harness hands the peer's multiaddr to the agent out-of-band; in production
   beyond M0, M1's signed SessionAssignment replaces this).
 
-  Binary encoding across the MCP JSON boundary: all binary values exposed through MCP tool
-  inputs and outputs — pubkeys, content_hash, multiaddrs-as-bytes — are encoded as
-  lowercase hex strings with no `0x` prefix (except multiaddrs, which use the standard
-  multiaddr string form `/ip4/127.0.0.1/tcp/54321/p2p/<peer-id>`). Hex is not space-optimal
-  on the wire but the overhead is negligible at M0's message sizes and pays back in
-  interop clarity with the CBOR fixtures.
+  **Peer registry (client-local, populated by the MCP server).** `cello_connect_peer`
+  populates the client's local peer registry (MSG-002) with the triple
+  `{peer_pubkey, peer_id, multiaddrs}`. `cello_send({ peer_pubkey })` resolves the pubkey
+  to the registry entry and delegates to MSG-002's send path. The registry is not
+  persisted across MCP server restarts — a fresh server starts with an empty registry.
+
+  **Binary encoding across the MCP JSON boundary.** All binary values exposed through MCP
+  tool inputs and outputs — `peer_pubkey`, `sender_pubkey`, `own_pubkey`, `content_hash`,
+  `leaf_hash` — are encoded as **lowercase hex strings with no `0x` prefix**. Multiaddrs
+  use the standard multiaddr string form (`/ip4/127.0.0.1/tcp/54321/p2p/<peer-id>`).
+  Each tool's input and output schema states this encoding explicitly so an implementing
+  agent cannot accidentally mix encodings between a header convention and a tool contract.
+  AC-011 below exercises the round-trip: a pubkey returned from `cello_connect_peer` must
+  be directly usable as the `peer_pubkey` argument to `cello_send` without any
+  case-folding or formatting by the caller.
+
+  **Content type on the MCP boundary.** `cello_send`'s `content` argument is a UTF-8
+  string. The envelope's `content` field (MSG-001) is `Uint8Array`; the MCP layer encodes
+  the UTF-8 string to bytes at the send boundary and decodes bytes back to a UTF-8 string
+  at the `cello_receive` boundary. Binary (non-UTF-8) content support is deferred — adding
+  `content_encoding: 'utf8' | 'base64'` as an optional field is a non-breaking extension
+  for a later milestone. M0 is text only.
 
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
   - trigger: "When the agent calls `cello_connect_peer({ multiaddr })`"
     action: >
       the MCP server shall dial the multiaddr via the libp2p node (CELLO-TRANSPORT-001),
-      return `{connected: true, peer_pubkey: hex}` on successful connection where
-      `peer_pubkey` is the remote's Peer-ID-derived Ed25519 public key, or
-      `{connected: false, reason: 'peer_unreachable' | 'dial_failed'}` on failure.
-  - trigger: "When the agent calls `cello_send({ peer_pubkey, content })`"
+      extract the remote's Peer ID from libp2p's identify exchange, derive the remote's
+      Ed25519 public key from the Peer ID, and add the triple `{peer_pubkey, peer_id,
+      multiaddrs: [supplied multiaddr, ...any identify-discovered addrs]}` to the local
+      peer registry. Returns `{connected: true, peer_pubkey: <lowercase hex, no 0x prefix>}`
+      on success or `{connected: false, reason: 'peer_unreachable' | 'dial_failed'}` on
+      failure.
+  - trigger: "When the agent calls `cello_send({ peer_pubkey, content })` where `content` is a UTF-8 string"
     action: >
-      the MCP server shall look up an existing connection to that peer (matching by
-      `peer_pubkey` against known connections), build a signed MessageEnvelope v0 with the
-      client's K_local, dispatch via MSG-002, and return `{delivered: bool, content_hash:
-      hex, reason?: string}`. If no connection to that peer exists the call returns
-      `{delivered: false, reason: 'peer_not_connected'}` without dialing — the agent must
-      call `cello_connect_peer` first.
+      the MCP server shall (a) look up `peer_pubkey` in the local peer registry; if no
+      entry exists return `{delivered: false, reason: 'peer_not_connected'}` without
+      dialing — the agent must call `cello_connect_peer` first, (b) encode `content` as
+      UTF-8 bytes, (c) delegate to MSG-002's send path with the resolved
+      `(peer_id, multiaddrs)` and the UTF-8 bytes as envelope content. Returns
+      `{delivered: bool, content_hash: hex, reason?: string}`. Failure reasons include
+      `peer_not_connected`, `peer_unreachable`, `connection_lost`, `remote_rejected`, and
+      `content_too_large` (when the UTF-8-encoded byte length exceeds 1,048,576). The
+      `content_hash` field is populated on success and on `remote_rejected` (the envelope
+      was constructed and hashed before the remote rejected it); it is null on every
+      other failure reason.
   - trigger: "When the agent calls `cello_receive({ peer_pubkey?, timeout_ms })`"
     action: >
-      the MCP server shall block until an envelope arrives in the receive queue matching
-      `peer_pubkey` (if supplied; otherwise any peer), returning `{type: 'message',
-      content, sender_pubkey: hex, content_hash: hex, timestamp}`. If no envelope arrives
-      within `timeout_ms` the call returns `{type: 'timeout'}`. Queue ordering is
-      arrival-order — M0 has no sequence numbers, so "arrival" is first-written-first-read
-      by the receive handler (MSG-002). When no `peer_pubkey` filter is supplied the next
-      envelope from any peer is returned.
+      the MCP server shall block until an envelope matching `peer_pubkey` (if supplied;
+      otherwise any peer) arrives in the receive queue, returning `{type: 'message',
+      content: <UTF-8 string decoded from envelope bytes>, sender_pubkey: hex,
+      content_hash: hex, timestamp: int}`. If no matching envelope arrives within
+      `timeout_ms` the call returns `{type: 'timeout'}`. Envelopes from peers OTHER than
+      the filter peer are NOT consumed from the queue — a filtered receive must leave
+      unrelated messages in place for subsequent `cello_receive` calls. When no
+      `peer_pubkey` filter is supplied the next envelope from any peer is returned. Queue
+      ordering is arrival-order — M0 has no sequence numbers, so "arrival" is
+      first-written-first-read by the receive handler (MSG-002). If the envelope's content
+      bytes do not decode as valid UTF-8 the message is surfaced with
+      `{type: 'decode_error', sender_pubkey, content_hash}` — M0 is text-only on the MCP
+      boundary.
   - trigger: "When the agent calls `cello_list_peers()`"
     action: >
       the MCP server shall return an array of `{peer_pubkey: hex, multiaddrs: string[],
@@ -151,12 +181,32 @@ acceptance_criteria:
     component_under_test: client
 
   - id: AC-010
-    given: "Two MCP server instances A and B with an established connection; a test harness interceptor flips one byte in A's outbound CBOR payload before it reaches B"
-    when: "Agent A sends a message and Agent B calls `cello_receive`"
+    given: "An MCP server instance A with an established connection to B"
+    when: "Agent A calls `cello_send({ peer_pubkey: <B's pubkey>, content: <a string whose UTF-8 encoding is 1,048,577 bytes> })`"
+    then: "The call returns `{delivered: false, reason: 'content_too_large', content_hash: null}`; no libp2p stream is opened; A's server remains healthy"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-011
+    given: "An MCP server instance A that has just called `cello_connect_peer({ multiaddr })` and received `{connected: true, peer_pubkey: P_hex}`"
+    when: "Agent A calls `cello_send({ peer_pubkey: P_hex, content: 'hello' })` passing the SAME string `P_hex` it just received, with no case-folding, trimming, or re-encoding"
     then: >
-      Agent A's send returns `{delivered: false, reason: 'remote_rejected'}`; Agent B's
-      `cello_receive` returns `{type: 'timeout'}` (no message was delivered to the agent
-      queue because B's client rejected the envelope at validation)
+      The send succeeds — the peer_pubkey round-trip from `cello_connect_peer` output to
+      `cello_send` input works with the exact string value. The hex encoding is
+      deterministically lowercase and carries no `0x` prefix, per the MCP boundary
+      convention stated in the story intent. An implementation that returns uppercase hex
+      from one tool and accepts only lowercase in another would fail this AC
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-012
+    given: "Three MCP servers A, B, C all mutually connected; C sends a message to A; B sends nothing"
+    when: "Agent A calls `cello_receive({ peer_pubkey: <B's pubkey>, timeout_ms: 200 })`"
+    then: >
+      The call returns `{type: 'timeout'}` after ~200ms. C's message remains in A's
+      queue — the filtered receive MUST NOT consume it. A subsequent
+      `cello_receive({ peer_pubkey: <C's pubkey>, timeout_ms: 200 })` returns C's message
+      immediately
     test_type: e2e
     component_under_test: client
 

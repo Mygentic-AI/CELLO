@@ -14,15 +14,47 @@ story: >
 
   M0's message flow is minimal and peer-to-peer. The sender opens a libp2p stream on
   `/cello/m0/1.0.0` (CELLO-TRANSPORT-001), writes the canonical-CBOR encoding of a
-  MessageEnvelope v0 (MSG-001), and closes the write side. The receiver reads the CBOR,
-  validates the envelope structure, verifies the content_hash against the content, verifies
+  MessageEnvelope v0 (MSG-001) as a single `it-length-prefixed` frame, and closes the
+  write side. The receiver reads the length-prefixed frame, parses the CBOR, validates
+  the envelope structure, verifies the content_hash against the content, verifies
   the sender's Ed25519 signature against the envelope's `sender_pubkey`, and delivers the
   content to the agent through the MCP surface (MCP-001).
 
+  **Framing.** The M0 stream uses the libp2p-ecosystem `it-length-prefixed` convention —
+  a varint length prefix followed by exactly that many payload bytes. This matches what
+  the rest of the libp2p substream ecosystem uses; it is NOT a bespoke fixed-width
+  length encoding.
+
+  **Delivery confirmation micro-protocol.** The send-side return value distinguishes three
+  outcomes on every send, and the three outcomes correspond to three observable
+  receiver-side behaviors. The receiver never sends an application-level ACK frame —
+  delivery is signaled purely through libp2p stream lifecycle events:
+
+  | Sender observation | Receiver behavior | Sender return |
+  |---|---|---|
+  | Stream closes cleanly (EOF from receiver) | Receiver enqueued the envelope and closed | `{delivered: true}` |
+  | Stream is reset (libp2p abort from receiver) | Receiver rejected at validation | `{delivered: false, reason: 'remote_rejected'}` |
+  | Connection drops (transport error, not a reset) | Neither peer controlled the termination | `{delivered: false, reason: 'connection_lost'}` |
+
+  The sender writes its CBOR envelope, closes its write side, and awaits the read-side
+  close event. A clean close means the receiver finished processing (which for the
+  receiver means validation passed and the envelope was enqueued, OR validation failed
+  and the stream was reset — the two are distinguishable by the close type: `close` vs.
+  `reset`). The receiver never sends a success or failure frame — the stream lifecycle
+  is the signal.
+
   No directory, no relay, no session concept, no sequence numbers. The sender knows the
-  receiver's multiaddr out-of-band (hardcoded in the test harness; in production eventually
-  via M1's signed SessionAssignment). The receiver accepts incoming streams on the handler
-  registered at transport startup.
+  receiver's multiaddr and Peer ID out-of-band (hardcoded in the test harness; in
+  production eventually via M1's signed SessionAssignment). The receiver accepts incoming
+  streams on the handler registered at transport startup.
+
+  **Peer registry (client-local).** The client maintains a local peer registry that maps
+  `peer_pubkey → { peer_id, multiaddrs, connected: bool }`. This registry is populated by
+  `cello_connect_peer` (MCP-001), which dials the peer's multiaddr, extracts the remote
+  Peer ID from libp2p's identify exchange, and stores the triple. Subsequent
+  `cello_send({ peer_pubkey })` calls consult this registry to resolve the `peer_pubkey`
+  to the `(peer_id, multiaddrs)` pair the transport layer needs. M0 does not persist the
+  registry across restarts.
 
   Authorship is the only property M0 proves at the message layer — "I signed these bytes
   as the holder of K_local." There is no ordering guarantee across multiple messages
@@ -36,25 +68,31 @@ story: >
 
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
-  - trigger: "When the client is asked to send a message to a peer identified by (remote_peer_id, remote_multiaddr)"
+  - trigger: "When the client is asked to send a message to a peer identified by `peer_pubkey`"
     action: >
-      the client shall (a) ensure a libp2p connection to the remote peer exists, dialing
-      `remote_multiaddr` if none is open, (b) construct a MessageEnvelope v0 per MSG-001
-      using the client's K_local as `sender_pubkey`, (c) open a new stream on
-      `/cello/m0/1.0.0`, (d) write the canonical-CBOR encoding of the envelope as a
-      length-prefixed frame (unsigned little-endian 32-bit length followed by the CBOR
-      bytes), (e) close the write side of the stream, (f) return `{delivered: true,
-      content_hash: hex}` to the caller on successful write. The read side of the stream
-      is held briefly to detect reset/error; a clean close indicates successful delivery.
+      the client shall (a) look up `peer_pubkey` in the local peer registry to resolve
+      `(peer_id, multiaddrs)`, returning `{delivered: false, reason: 'peer_not_connected'}`
+      if no registry entry exists, (b) ensure a libp2p connection to the peer exists,
+      dialing the first multiaddr if none is open, (c) construct a MessageEnvelope v0 per
+      MSG-001 using `keyProvider.sign` (CRYPTO-001); on `content_too_large` from the
+      envelope constructor, return `{delivered: false, reason: 'content_too_large'}`
+      without opening a stream, (d) open a new stream on `/cello/m0/1.0.0`, (e) write the
+      canonical-CBOR encoding of the envelope as a single `it-length-prefixed` frame, (f)
+      close the write side of the stream, (g) await the read-side close: a clean EOF
+      returns `{delivered: true, content_hash: hex}`; a stream reset returns
+      `{delivered: false, reason: 'remote_rejected'}`; a connection drop returns
+      `{delivered: false, reason: 'connection_lost'}`.
   - trigger: "When the client's registered `/cello/m0/1.0.0` stream handler is invoked by libp2p with an inbound stream"
     action: >
-      the handler shall (a) read the length prefix, (b) read exactly `length` bytes of CBOR,
-      (c) parse the CBOR into a MessageEnvelope v0 via protocol-types, (d) run full envelope
-      validation per MSG-001 AC-002 (field lengths, content_hash matches content, signature
-      verifies against sender_pubkey), (e) on full success: enqueue the message on the
-      client's receive queue keyed by `sender_pubkey` and close the stream cleanly, (f) on
-      any validation failure: close the stream with a reset (libp2p abort) and log a
-      structured event identifying the failure class.
+      the handler shall (a) read a single `it-length-prefixed` frame (with a read timeout
+      of 5 seconds — a frame that does not arrive within the timeout is treated as a
+      truncated-frame rejection), (b) parse the CBOR into a MessageEnvelope v0 via
+      protocol-types, (c) run full envelope validation per MSG-001 (field lengths,
+      content_hash matches content, signature verifies against sender_pubkey), (d) on full
+      success: enqueue the message on the client's receive queue keyed by `sender_pubkey`
+      AND close the stream cleanly (no ACK frame is sent — the clean close IS the ACK
+      signal), (e) on any validation failure or truncated-frame timeout: reset the stream
+      (libp2p abort) and log a structured event identifying the failure class.
   - trigger: "When a received envelope's content_hash does not match `SHA-256(0x00 || content)`"
     action: "the client shall reject the envelope with a `content_hash_mismatch` event; the envelope is not delivered to the agent; the stream is reset."
   - trigger: "When a received envelope's signature does not verify against `sender_pubkey`"
@@ -147,6 +185,52 @@ acceptance_criteria:
     test_type: integration
     component_under_test: client
 
+  - id: AC-011
+    given: "Two connected M0 clients A and B; the test harness intercepts A's outbound CBOR payload after the length prefix has been written and flips one byte inside the CBOR payload (not the length prefix, which would be a framing-layer corruption covered by AC-012)"
+    when: "B's handler processes the inbound frame"
+    then: >
+      B parses the CBOR successfully (the CBOR is structurally valid — a byte-flip in a
+      random position inside the encoded envelope may land in the content field or any
+      other byte; in this AC the test harness deterministically targets a byte inside the
+      `content` field). Validation detects the content_hash mismatch; the handler resets
+      the stream; A's send returns `{delivered: false, reason: 'remote_rejected'}`; B's
+      receive queue is unchanged. This AC exercises the same guarantee as AC-003 but at
+      the CBOR-payload layer rather than logical-content layer, ensuring middle-of-frame
+      tampering is detectable regardless of which byte was flipped
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-012
+    given: "Two connected M0 clients A and B; the test harness opens a raw libp2p stream on `/cello/m0/1.0.0` to B and writes only a length prefix that claims 100 bytes of payload, then writes only 20 bytes, then closes the write side"
+    when: "B's handler processes the inbound stream"
+    then: >
+      The handler's read-with-timeout (5 seconds) times out waiting for the remaining 80
+      bytes; the handler rejects with `malformed_envelope` (subreason: `truncated_frame`)
+      and resets the stream; B's client remains healthy and accepts subsequent well-formed
+      streams. The handler does NOT block indefinitely
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-013
+    given: "An M0 client A with a started libp2p node and an established connection to B"
+    when: "A calls send with content of 1,048,577 bytes (1 MiB + 1 — exceeds the MSG-001 cap)"
+    then: "A's send call returns `{delivered: false, reason: 'content_too_large'}` before any libp2p stream is opened; A's node remains healthy; no outbound bytes are written"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-014
+    given: "Two connected M0 clients A and B; A sends an envelope to B with valid content, a valid signature, but a `content_hash` field that was computed as `SHA-256(0x01 || content)` (with the internal-node prefix, not the message-leaf prefix) — this is TG-002 from the review"
+    when: "B's handler processes the inbound envelope"
+    then: >
+      B recomputes content_hash as `SHA-256(0x00 || content)` via the CRYPTO-002
+      message-leaf primitive, finds it does not match the envelope's (wrong-prefix)
+      content_hash field, rejects with `content_hash_mismatch`, and resets the stream. The
+      handler MUST NOT accept the envelope solely because the signature over the (wrong)
+      content_hash verifies — the recompute step is independent of signature verification
+      and catches wrong-prefix hashes before trust is extended
+    test_type: integration
+    component_under_test: client
+
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
@@ -170,7 +254,8 @@ security_invariants:
     adversarial_condition: >
       even when a test fixture supplies a pre-computed content_hash through a shortcut API
       the module must not expose — the client's send path invokes the constructor with only
-      the content and keypair; the constructor computes the hash.
+      the content and the `KeyProvider`; the constructor computes the hash via CRYPTO-002's
+      message-leaf primitive and signs via `keyProvider.sign`.
     test_type: unit
     component_under_test: client
 

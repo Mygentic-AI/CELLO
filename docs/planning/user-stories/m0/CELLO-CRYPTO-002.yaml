@@ -9,23 +9,38 @@ components:
 # ─── Intent ─────────────────────────────────────────────────
 story: >
   As the CELLO Client,
-  I want to compute SHA-256 hashes with domain separation prefixes
-  so that hashes for different protocol purposes (message leaves, identity records, trust signals) can never collide across domains.
+  I want to compute SHA-256 hashes with domain separation prefixes for message leaves (0x00), internal Merkle nodes (0x01), and control leaves (0x02)
+  so that hashes for different protocol purposes cannot collide across domains and M1's Merkle tree primitives have a complete set of leaf-hash operations to build on.
+
+  Three domain separators are defined from day one:
+
+  - `0x00` — message leaves (MSG-001 envelope `content_hash`; M1 Structure 2 leaves with
+    `leaf_kind = 0x00`).
+  - `0x01` — Merkle internal nodes (M1 MERKLE-001 construction).
+  - `0x02` — control leaves (M1 SEAL; M7 CLOSE, CLOSE-ACK, ABORT, EXPIRE, REOPEN, RECEIPT,
+    etc. — M1 Structure 2 leaves with `leaf_kind = 0x02`).
+
+  M0 uses `0x00` actively (for envelope content_hash). `0x01` and `0x02` are defined but have
+  no M0 callers — they land in the crypto package now so M1 reuses primitives rather than
+  re-specifying them, and so a single second-preimage-protection invariant (SI-001 below)
+  covers the whole domain-separator set.
 
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
-  - trigger: "When the client hashes data for a Merkle leaf"
-    action: "the crypto module shall prepend the leaf domain separator (0x00) before the data and compute SHA-256 over the prefixed bytes. The module wraps @noble/hashes SHA-256, concatenating the domain separator and data before calling the hash — there is no built-in leaf-hash primitive in the library."
+  - trigger: "When the client hashes data for a message leaf"
+    action: "the crypto module shall prepend the message leaf domain separator (`0x00`) before the data and compute SHA-256 over the prefixed bytes. The module wraps `@noble/hashes` SHA-256, concatenating the domain separator and data before calling the hash — there is no built-in leaf-hash primitive in the library."
   - trigger: "When the client hashes data for a Merkle internal node"
-    action: "the crypto module shall prepend the internal node domain separator (0x01) before the concatenated child hashes and compute SHA-256 over the prefixed bytes"
+    action: "the crypto module shall prepend the internal node domain separator (`0x01`) before the concatenated child hashes and compute SHA-256 over the prefixed bytes."
+  - trigger: "When the client hashes data for a control leaf"
+    action: "the crypto module shall prepend the control leaf domain separator (`0x02`) before the data and compute SHA-256 over the prefixed bytes. This primitive is defined in M0 for use by M1's SEAL control leaf construction; it has no M0 callers."
   - trigger: "When the client hashes arbitrary data without domain separation"
-    action: "the crypto module shall compute a plain SHA-256 hash over the raw bytes"
+    action: "the crypto module shall compute a plain SHA-256 hash over the raw bytes."
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
     given: "A byte string D"
-    when: "The client computes a leaf hash"
+    when: "The client computes a message leaf hash"
     then: "The result equals SHA-256(0x00 || D) and is 32 bytes"
     test_type: unit
     component_under_test: crypto
@@ -38,22 +53,40 @@ acceptance_criteria:
     component_under_test: crypto
 
   - id: AC-003
-    given: "Identical data D"
-    when: "The client computes a leaf hash and a plain hash"
-    then: "The two results are different (domain separation prevents collision)"
+    given: "A byte string D"
+    when: "The client computes a control leaf hash"
+    then: "The result equals SHA-256(0x02 || D) and is 32 bytes"
     test_type: unit
     component_under_test: crypto
 
   - id: AC-004
-    given: "NIST CAVP SHA-256 test vectors (short- and long-message sets from the FIPS 180-4 test suite) plus CELLO-specific leaf/node fixtures stored under `packages/crypto/test/vectors/merkle-primitives.json`. The CELLO fixtures cover: (a) the empty input leaf hash, (b) a single-byte input `0x42` leaf hash, (c) a 64-byte input leaf hash, (d) an internal node hash over two all-zero child hashes, (e) an internal node hash over two distinct child hashes. Expected outputs in the fixture are computed once from an independent SHA-256 reference (e.g., `sha256sum` CLI or Python `hashlib`) and committed as hex, serving as a cross-implementation contract the future Rust port must match"
-    when: "The client computes plain SHA-256 for the NIST vectors and leaf/node hashes for each CELLO fixture input"
-    then: "Every output matches the expected hex in its respective fixture"
+    given: "Identical data D"
+    when: "The client computes a message leaf hash, a control leaf hash, and a plain hash"
+    then: "All three results are different — domain separation prevents collision across the three domains"
     test_type: unit
     component_under_test: crypto
 
   - id: AC-005
+    given: >
+      NIST CAVP SHA-256 test vectors (short- and long-message sets from the FIPS 180-4 test
+      suite) plus CELLO-specific leaf/node/control fixtures stored under
+      `packages/crypto/test/vectors/merkle-primitives.json`. The CELLO fixtures cover:
+      (a) the empty-input message leaf hash, (b) a single-byte input `0x42` message leaf
+      hash, (c) a 64-byte input message leaf hash, (d) an internal node hash over two
+      all-zero child hashes, (e) an internal node hash over two distinct child hashes,
+      (f) the empty-input control leaf hash, (g) a single-byte input `0x42` control leaf
+      hash — paired with (b) to produce distinct outputs under the same input (second-
+      preimage evidence across leaf kinds). Expected outputs are computed once from an
+      independent SHA-256 reference (e.g., `sha256sum` CLI or Python `hashlib`) and
+      committed as hex — the cross-implementation contract the future Rust port must match
+    when: "The client computes plain SHA-256 for the NIST vectors and leaf/node/control hashes for each CELLO fixture input"
+    then: "Every output matches the expected hex in its respective fixture; in particular the (b)/(g) pair over identical single-byte input produces distinct outputs"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-006
     given: "An empty byte string"
-    when: "The client computes a leaf hash"
+    when: "The client computes a message leaf hash"
     then: >
       The result equals SHA-256(0x00) — the hash of just the domain separator. This is
       internally consistent with the leaf-hash definition `leaf_hash(D) = SHA-256(0x00 || D)`
@@ -61,15 +94,37 @@ acceptance_criteria:
       (MSG-001 AC-009/AC-010 enforce a non-zero content size via the 1 MiB cap, which is a
       maximum; empty payloads are already excluded elsewhere in the envelope path). The
       leaf-hash primitive is nevertheless defined on all byte strings so later milestones
-      can use it for empty notifications, group-control leaves, and similar constructs.
+      can use it for empty notifications, group-control leaves, and similar constructs
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-007
+    given: "A byte string D and its correctly computed message leaf hash H_msg = SHA-256(0x00 || D)"
+    when: "A caller mistakenly computes an alleged message leaf hash using the internal node prefix H_wrong = SHA-256(0x01 || D) and then asks the crypto module's message-leaf primitive whether H_wrong equals the correct hash of D"
+    then: >
+      The module's message-leaf primitive returns SHA-256(0x00 || D) = H_msg, which is NOT
+      equal to H_wrong. A downstream envelope-validation path that recomputes content_hash
+      via this primitive (MSG-001 AC-012) detects the mismatch. This AC is a regression
+      guard against an implementing agent swapping prefixes between message and internal-node
+      hashes — the primitives are unambiguous and a misuse is caught at recompute time
     test_type: unit
     component_under_test: crypto
 
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
-    statement: "The crypto module shall never produce a leaf hash that equals an internal node hash for any input"
-    adversarial_condition: "even when an attacker crafts input data that begins with 0x01 followed by valid-looking child hashes"
+    statement: >
+      The crypto module shall never produce the same output hash for inputs differing only
+      in their intended domain (message leaf, internal node, or control leaf). The three
+      domain separators (`0x00`, `0x01`, `0x02`) must be applied exactly as specified; using
+      a different prefix, no prefix, or reusing a prefix across domains is a RFC 6962
+      second-preimage-protection violation.
+    adversarial_condition: >
+      even when an attacker crafts input data that begins with `0x01` followed by
+      valid-looking child hashes (attempting to make a leaf hash collide with an internal
+      node hash), or begins with `0x02` followed by valid-looking control payload bytes
+      (attempting to make a message leaf collide with a control leaf) — the module's
+      primitives apply their own prefix and produce a distinct output.
     test_type: unit
     component_under_test: crypto
 

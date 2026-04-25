@@ -142,7 +142,7 @@ acceptance_criteria:
     component_under_test: protocol-types
 
   - id: AC-013
-    given: "A received MessageEnvelope whose protocol_version is `1` (a value not supported by the M0 build)"
+    given: "A received MessageEnvelope whose protocol_version is `999` (a value not supported by the M0 build and chosen to avoid colliding with any future milestone's protocol_version assignment)"
     when: "Structural validation is performed"
     then: "Validation fails with `unsupported_version`; no signature verification is attempted"
     test_type: unit

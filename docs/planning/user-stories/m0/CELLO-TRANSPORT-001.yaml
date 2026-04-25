@@ -9,8 +9,8 @@ components:
 # ─── Intent ─────────────────────────────────────────────────
 story: >
   As the CELLO Client,
-  I want a libp2p node bootstrap surface that produces a Peer ID, exposes dial-by-multiaddr, and accepts streams on a custom CELLO protocol
-  so that two clients can connect directly peer-to-peer from M0 and every subsequent milestone inherits a validated network substrate.
+  I want a libp2p node bootstrap surface that produces a Peer ID, exposes dial-by-multiaddr, and accepts streams on a custom CELLO protocol — constructed from a `KeyProvider` (CRYPTO-001) so the key backend is an injection point from day one
+  so that two clients can connect directly peer-to-peer from M0 and every subsequent milestone inherits a validated network substrate with a pluggable key backend.
 
   libp2p is the network substrate the entire protocol is designed around (ephemeral Peer IDs
   per session from M1, DCuTR hole-punching, circuit relay v2 fallback, Noise end-to-end
@@ -20,12 +20,15 @@ story: >
 
   The M0 transport package exposes a minimal, milestone-appropriate surface:
 
-  - `createNode({ keypair, listenAddresses })` — constructs a `js-libp2p` node configured
+  - `createNode({ keyProvider, listenAddresses })` — constructs a `js-libp2p` node configured
     with the CELLO transport/security/muxer stack: `@libp2p/tcp` and `@libp2p/websockets`
     transports, `@chainsafe/libp2p-noise` for security, `@chainsafe/libp2p-yamux` for
-    multiplexing. The node's Peer ID derives from the supplied Ed25519 keypair (in M0 this
-    is the client's K_local; from M1 onward a fresh ephemeral keypair per session).
-  - `node.start()` / `node.stop()` — lifecycle.
+    multiplexing. The node's Peer ID derives from the `KeyProvider`'s public key. In M0 the
+    `KeyProvider` is `InMemoryKeyProvider` holding the client's K_local; M1+ can supply an
+    `OSKeychainKeyProvider`, `TPMKeyProvider`, or cloud-secret-manager backend without any
+    change to the transport package — the injection point is the `KeyProvider` interface.
+  - `node.start()` / `node.stop()` — lifecycle. Start/stop cycles follow libp2p's default
+    semantics — the transport package does not add constraints beyond what libp2p provides.
   - `node.dial(multiaddr)` — opens a libp2p connection to a remote peer.
   - `node.handle(protocolId, handler)` — registers a stream handler for a given protocol ID.
   - `node.newStream(remotePeerId, protocolId)` — opens a new stream on an existing connection.
@@ -51,16 +54,27 @@ story: >
   Enabling them now means the configuration path is validated and M1 can lean on real
   NAT-traversal paths without a transport-layer change.
 
+  **Stream framing:** within a libp2p stream, CELLO uses the `it-length-prefixed` convention
+  from the libp2p ecosystem (varint-prefixed frames). This matches what the rest of the
+  libp2p substream ecosystem uses and avoids a bespoke fixed-width length encoding. The
+  framing library is pinned in package.json; the exact varint format is stable across
+  libp2p versions.
+
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
-  - trigger: "When the client calls `createNode({ keypair, listenAddresses })`"
+  - trigger: "When the client calls `createNode({ keyProvider, listenAddresses })`"
     action: >
       the transport module shall construct a libp2p node configured with: (a) `@libp2p/tcp`
       and `@libp2p/websockets` as transports, (b) `@chainsafe/libp2p-noise` as the sole
       security upgrader, (c) `@chainsafe/libp2p-yamux` as the sole muxer, (d) a Peer ID
-      derived from the supplied Ed25519 keypair, (e) circuit relay v2 transport configured
-      (server + client capability), (f) DCuTR service enabled. The node is returned in a
-      stopped state — callers invoke `start()` explicitly.
+      derived from the supplied `KeyProvider`'s public key (the libp2p Peer ID construction
+      is the standard Ed25519-public-key → PeerId derivation), (e) circuit relay v2
+      transport configured (server + client capability), (f) DCuTR service enabled. The
+      node is returned in a stopped state — callers invoke `start()` explicitly. The
+      `KeyProvider` reference is retained for any future signing the transport might need
+      to perform; in M0 libp2p does its own handshake signing inside Noise using key
+      material it holds internally (libp2p's configuration requires a PeerId source, and
+      the transport package hands it the KeyProvider's public bytes).
   - trigger: "When the client calls `node.start()`"
     action: "the node shall begin listening on every supplied `listenAddresses` multiaddr and become dialable. `node.listenAddresses()` after start returns the full list including any libp2p-assigned ephemeral ports."
   - trigger: "When the client calls `node.handle(protocolId, handler)`"
@@ -70,16 +84,16 @@ behavior:
   - trigger: "When the client calls `node.newStream(remotePeerId, protocolId)` on an established connection"
     action: "the node shall open a new multiplexed stream on the identified protocol. If the remote does not speak that protocol the stream open fails with a structured `protocol_not_supported` error."
   - trigger: "When the client calls `node.stop()`"
-    action: "the node shall close all open streams and connections, stop listening, and release all libp2p resources. A stopped node cannot be restarted — the caller constructs a new node if reuse is required."
+    action: "the node shall close all open streams and connections, stop listening, and release all libp2p resources. Lifecycle follows libp2p's defaults; the transport package adds no additional restart constraints beyond what libp2p itself provides."
   - trigger: "When a connection to a peer is lost"
     action: "subsequent `newStream` calls to that peer shall fail with a structured `connection_lost` error. Redialing is the caller's responsibility; M0 does not implement automatic reconnection."
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "An Ed25519 keypair and a listen multiaddr `/ip4/127.0.0.1/tcp/0` (random port)"
-    when: "The client calls `createNode` and then `start`"
-    then: "The node transitions to started; `node.listenAddresses()` returns at least one multiaddr with a concrete non-zero port; the node's Peer ID is a valid libp2p PeerId derived from the supplied keypair"
+    given: "A `KeyProvider` (from CRYPTO-001) and a listen multiaddr `/ip4/127.0.0.1/tcp/0` (random port)"
+    when: "The client calls `createNode({ keyProvider, listenAddresses })` and then `start`"
+    then: "The node transitions to started; `node.listenAddresses()` returns at least one multiaddr with a concrete non-zero port; the node's Peer ID is a valid libp2p PeerId derived from the `KeyProvider`'s public key (asserted by independently deriving the expected PeerId from `keyProvider.getPublicKey()` and comparing)"
     test_type: unit
     component_under_test: transport
 
@@ -105,15 +119,18 @@ acceptance_criteria:
     component_under_test: transport
 
   - id: AC-005
-    given: "Two connected nodes A and B"
-    when: "A third-party observer captures all packets between A and B during a stream exchange"
+    given: "A started libp2p node constructed via `createNode`"
+    when: "The test inspects the node's registered security upgraders (via libp2p's introspection API) and the connection-upgrade protocol list advertised on `/libp2p/identify`"
     then: >
-      The captured bytes do not contain the plaintext of the stream payload. This is asserted
-      by sending a distinctive marker sequence (e.g., 32 bytes of `0xAB`) through the stream
-      and confirming the marker does not appear in the captured packet stream. Noise
-      encryption is enabled — the assertion is that configuration is correctly applied, not
-      that Noise is uncompromised (libp2p's own test suite covers the cryptographic property)
-    test_type: integration
+      The security-upgrader list contains exactly `@chainsafe/libp2p-noise` (`/noise`) and
+      does NOT contain `plaintext` or any other non-encrypting upgrader; the advertised
+      protocol list on `/libp2p/identify` includes `/noise` and does not include any
+      plaintext-security protocol id. The Noise cryptographic property itself is covered
+      by libp2p's own test suite; this AC verifies only that CELLO's transport
+      configuration has Noise as the sole security mechanism. Real traffic-capture
+      validation of end-to-end encryption is reserved for the cross-machine nightly
+      integration job (per roadmap), where pcap-level inspection is actually possible
+    test_type: unit
     component_under_test: transport
 
   - id: AC-006
@@ -141,8 +158,16 @@ acceptance_criteria:
     given: >
       A started node with circuit relay v2 configured (service enabled per the createNode
       contract). A second started node connects to the first
-    when: "The second node queries the first's advertised protocols"
-    then: "The advertised protocol list includes `/libp2p/circuit/relay/0.2.0/hop` — confirming circuit relay v2 is configured. The protocol is not exercised end-to-end in M0; this AC only validates configuration"
+    when: "The second node queries the first's advertised protocols via libp2p identify"
+    then: >
+      The advertised protocol list includes the libp2p circuit-relay-v2 hop protocol
+      identifier. The exact string is the constant `CIRCUIT_RELAY_V2_HOP_PROTOCOL_ID`
+      defined in `packages/transport/src/protocols.ts` and pinned against the
+      `@libp2p/circuit-relay-v2` package version declared in the transport package's
+      dependencies (as of M0: `/libp2p/circuit/relay/0.2.0/hop`, but the implementation
+      reads the constant, not a hard-coded string, so a future library version bump is a
+      constant update rather than a story rewrite). This AC validates configuration only;
+      the protocol is not exercised end-to-end in M0
     test_type: integration
     component_under_test: transport
 
@@ -172,13 +197,14 @@ security_invariants:
   - id: SI-002
     statement: >
       The transport module shall never construct a libp2p node whose Peer ID is derived from
-      a keypair other than the one supplied by the caller.
+      any source other than the supplied `KeyProvider`'s public key.
     adversarial_condition: >
       even when the libp2p builder provides a peer-id auto-generation path — the transport
-      module's contract is that the caller owns the keypair, and the Peer ID is a deterministic
-      function of that keypair. Verified by asserting that the constructed node's Peer ID
-      equals `peerIdFromKeys(keypair.publicKey.bytes, keypair.privateKey.bytes)` for the
-      supplied keypair.
+      module's contract is that the caller owns the key backend, and the Peer ID is a
+      deterministic function of `keyProvider.getPublicKey()`. Verified by asserting that
+      the constructed node's Peer ID equals the PeerId independently derived from
+      `await keyProvider.getPublicKey()` using libp2p's standard Ed25519-public-key → PeerId
+      construction.
     test_type: unit
     component_under_test: transport
 

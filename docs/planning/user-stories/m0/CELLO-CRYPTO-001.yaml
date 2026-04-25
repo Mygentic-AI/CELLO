@@ -9,61 +9,102 @@ components:
 # ─── Intent ─────────────────────────────────────────────────
 story: >
   As the CELLO Client,
-  I want to generate Ed25519 keypairs, sign arbitrary data, and verify signatures
-  so that every message has a tamper-proof authorship guarantee.
+  I want an Ed25519 `KeyProvider` abstraction that generates keys, produces signatures, and verifies signatures — with private key bytes confined to the crypto package
+  so that every message has a tamper-proof authorship guarantee AND the signing abstraction matches the day-one `KeyProvider` contract from agent-client.md, so M1+ can swap in an OS Keychain, TPM, or cloud-secret-manager backend without changing any caller.
+
+  `KeyProvider` is the sole signing abstraction the rest of the codebase consumes. Private key
+  material never crosses the `KeyProvider` boundary — callers pass bytes in, receive signatures
+  out. Retrofitting this abstraction later is significantly more expensive than shipping it on
+  day one, per agent-client.md.
+
+  ```typescript
+  interface KeyProvider {
+    getPublicKey(): Promise<PublicKey>  // 32-byte Ed25519 public key
+    sign(data: Uint8Array): Promise<Signature>  // 64-byte Ed25519 signature
+  }
+  ```
+
+  M0 ships one concrete implementation: `InMemoryKeyProvider implements KeyProvider`. It holds
+  the Ed25519 keypair in process memory and performs Ed25519 signing internally. It is the
+  M0 default for Claude Code / Vitest deployment contexts where there is no OS-level key
+  backend. M1+ adds `OSKeychainKeyProvider`, `TPMKeyProvider`, etc. — all swap-in-compatible
+  behind the interface.
+
+  The module also exposes a stateless `verify(publicKey, data, signature)` function — signature
+  verification does not require key backend coupling and is the same code path regardless of
+  who produced the signature.
+
+  **`IThresholdSigner` placement:** The protocol design (agent-client.md) names `IThresholdSigner`
+  as a day-one interface required for the FROST swap path. The roadmap places FROST and its
+  threshold signer implementation at M2. M0 does not ship any `IThresholdSigner` callers, and a
+  stub interface with no consumers would be dead code. Resolution: `IThresholdSigner` is
+  deferred to M2 per the roadmap, which supersedes agent-client.md on this point. M2's story
+  set introduces the interface alongside its first concrete implementation (`FrostThresholdSigner`)
+  so the abstraction lands with a real consumer.
 
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
-  - trigger: "When the client initializes for the first time"
-    action: "the crypto module shall generate a new Ed25519 keypair (K_local) using a cryptographically secure random source and return the public key"
-  - trigger: "When the client is asked to sign data"
-    action: "the crypto module shall produce a 64-byte Ed25519 signature over the provided bytes using the private key"
-  - trigger: "When the client is asked to verify a signature"
-    action: "the crypto module shall verify the Ed25519 signature against the provided public key and data, returning a boolean result"
-  - trigger: "When verification is called with a mismatched public key, tampered data, or malformed signature"
-    action: "the crypto module shall return false without throwing an exception"
+  - trigger: "When the crypto module is asked to generate a new keypair"
+    action: "the module shall generate a new Ed25519 keypair using a cryptographically secure random source and return an `InMemoryKeyProvider` instance holding it. The public key is 32 bytes; the private key seed is 32 bytes; neither is returned as a value — only the `KeyProvider` handle."
+  - trigger: "When the caller invokes `keyProvider.getPublicKey()`"
+    action: "the module shall return the 32-byte Ed25519 public key."
+  - trigger: "When the caller invokes `keyProvider.sign(data)`"
+    action: "the module shall produce a 64-byte Ed25519 signature over the provided bytes using the private key held internally. Private key bytes are never returned to the caller and never traverse the `KeyProvider` boundary."
+  - trigger: "When the caller invokes `verify(publicKey, data, signature)`"
+    action: "the module shall verify the Ed25519 signature against the provided public key and data, returning a boolean. Verification is stateless — it does not depend on or reference any `KeyProvider` instance."
+  - trigger: "When `verify` is called with a mismatched public key, tampered data, or malformed signature"
+    action: "the module shall return false without throwing an exception."
+  - trigger: "When `keyProvider.sign(data)` is called with an empty byte string"
+    action: "the module shall produce a valid 64-byte Ed25519 signature over the empty bytes (Ed25519 is defined on all byte strings including the empty one); `verify(publicKey, <empty>, signature)` returns true."
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
     given: "No existing keypair"
-    when: "The client requests keypair generation"
-    then: "A new Ed25519 keypair is generated; the public key is 32 bytes; the private key (seed) is 32 bytes; signatures are 64 bytes"
+    when: "The crypto module is asked to generate a new keypair"
+    then: "An `InMemoryKeyProvider` is returned whose `getPublicKey()` resolves to a 32-byte public key; `sign` produces 64-byte signatures; the private key seed is 32 bytes internally (not exposed on the public API)"
     test_type: unit
     component_under_test: crypto
 
   - id: AC-002
-    given: "A valid keypair"
-    when: "The client signs a byte string"
-    then: "A 64-byte signature is returned; verifying the signature with the same public key and data returns true"
+    given: "A valid `KeyProvider`"
+    when: "The caller calls `sign(data)` for a non-empty byte string and then `verify(publicKey, data, signature)`"
+    then: "`sign` returns a 64-byte signature; `verify` returns true"
     test_type: unit
     component_under_test: crypto
 
   - id: AC-003
-    given: "A valid signature over data D signed by key K"
-    when: "Verification is called with a different public key K'"
-    then: "Verification returns false"
+    given: "A valid signature over data D produced by `KeyProvider` K"
+    when: "`verify` is called with a different public key K'"
+    then: "`verify` returns false"
     test_type: unit
     component_under_test: crypto
 
   - id: AC-004
     given: "A valid signature over data D"
-    when: "Verification is called with tampered data D' (one byte flipped)"
-    then: "Verification returns false"
+    when: "`verify` is called with tampered data D' (one byte flipped)"
+    then: "`verify` returns false"
     test_type: unit
     component_under_test: crypto
 
   - id: AC-005
     given: "A truncated or zero-filled signature"
-    when: "Verification is called"
-    then: "Verification returns false without throwing"
+    when: "`verify` is called"
+    then: "`verify` returns false without throwing"
     test_type: unit
     component_under_test: crypto
 
   - id: AC-006
-    given: "Two separate keypair generation calls"
+    given: "Two separate keypair-generation calls"
     when: "Both complete"
-    then: "The two public keys are different (randomness verification)"
+    then: "The two public keys returned by `getPublicKey()` are different (randomness verification)"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-007
+    given: "A valid `KeyProvider`"
+    when: "The caller calls `sign(<empty byte string>)`"
+    then: "A 64-byte signature is returned; `verify(publicKey, <empty>, signature)` returns true; `verify(publicKey, <one byte>, signature)` returns false"
     test_type: unit
     component_under_test: crypto
 
@@ -71,25 +112,40 @@ acceptance_criteria:
 security_invariants:
   - id: SI-001
     statement: >
-      The Keypair class shall redact private key bytes in all standard serialization and
-      inspection paths. Specifically, it must override `toJSON()`, `toString()`, and the
-      Node-specific `Symbol.for('nodejs.util.inspect.custom')` so that each returns a
-      representation containing no private-key bytes. Private key material shall be exposed
-      only through the explicit `exportKeypair(passphrase)` API, which produces an
-      encrypted blob; the plain private key field must not be readable from outside the
-      crypto package.
+      Private key bytes shall never cross the `KeyProvider` boundary. The interface exposes
+      only `getPublicKey()` and `sign(data)`; no method returns, serializes, or otherwise
+      surfaces the private key. Standard inspection and serialization paths — `toJSON()`,
+      `toString()`, the Node-specific `Symbol.for('nodejs.util.inspect.custom')` — must
+      return a redacted representation. There is no public export API in M0; if private key
+      extraction is ever required (e.g., for hardware-backup flows), it is a dedicated new
+      API introduced by a story that reviews the security implications, not retrofitted
+      through a generic escape hatch.
     adversarial_condition: >
-      even when a Keypair instance is passed to `console.log`, `JSON.stringify`,
-      `util.inspect`, a thrown error, a structured logger, or a test snapshot — the
-      private key bytes must not appear in the output. The test plan exercises each
-      listed path with a known keypair and scans the resulting output for any substring
-      matching the 32-byte private-key seed in hex or base64; any match fails the test.
+      even when a `KeyProvider` instance is passed to `console.log`, `JSON.stringify`,
+      `util.inspect`, a thrown error, a structured logger, or a test snapshot — the private
+      key bytes must not appear in the output. The test plan exercises each listed path
+      with a known keypair and scans the resulting output for any substring matching the
+      32-byte private-key seed in hex or base64; any match fails the test.
     test_type: unit
     component_under_test: crypto
 
   - id: SI-002
     statement: "The crypto module shall never accept a signature verification where the data has been modified"
     adversarial_condition: "even when the modification is a single bit flip in a multi-kilobyte message"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: SI-003
+    statement: >
+      The `KeyProvider` contract exposes only `getPublicKey()` and `sign(data)`. Implementations
+      shall not add methods that return key material in any form (e.g., `exportKey`,
+      `getPrivateKey`, `toJSON` returning private bytes). `InMemoryKeyProvider` is the M0
+      concrete; future implementations (OS keychain, TPM, cloud secret manager) must honor
+      the same narrow surface.
+    adversarial_condition: >
+      even when an implementing developer assumes "just one escape hatch for testing" is
+      harmless — every additional method is a new exposure path and is forbidden at the
+      interface level. The test asserts the interface shape is exactly the two methods.
     test_type: unit
     component_under_test: crypto
 
