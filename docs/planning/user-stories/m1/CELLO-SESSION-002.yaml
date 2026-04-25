@@ -37,14 +37,22 @@ story: >
 behavior:
   - trigger: "When a client requests a new session with a target agent via the directory WebSocket"
     action: >
-      the directory shall (a) verify both requester and target are authenticated, (b) generate
-      a 16-byte CSPRNG session_id unique among active and recently-closed sessions, (c) select
-      a relay endpoint (in M1 the in-process relay is the only endpoint), (d) construct a
-      SessionAssignment record containing {session_id, participants: [A_pubkey, B_pubkey],
-      relay_endpoint, session_timestamp, directory_node_id}, (e) sign the canonical-CBOR
-      encoding of the record with the directory's signing key, (f) deliver the signed
-      assignment to both clients' directory WebSockets as `session_assignment` frames, and
-      (g) hand the same signed record in-process to the relay via `recordAssignment(record)`.
+      the directory shall, in strict order:
+      (a) verify both requester and target are authenticated,
+      (b) generate a 16-byte CSPRNG session_id unique among active and recently-closed sessions,
+      (c) select a relay endpoint (in M1 the in-process relay is the only endpoint),
+      (d) construct a SessionAssignment record containing `{session_id, participants:
+      [A_pubkey, B_pubkey], relay_endpoint, session_timestamp, directory_node_id}` and sign
+      the canonical-CBOR encoding with the directory's signing key,
+      (e) synchronously invoke `relay.recordAssignment(record)` and wait for successful
+      acknowledgement — the relay MUST have the session registered, its counter at 0, and be
+      ready to accept participant authentications before the directory proceeds,
+      (f) deliver the signed assignment to both clients' directory WebSockets as
+      `session_assignment` frames.
+      **Invariant:** no `session_assignment` frame is transmitted to either client until
+      `recordAssignment` has returned successfully. If step (e) fails, establishment aborts:
+      the directory returns a structured `relay_unavailable` error to the initiator, delivers
+      nothing to either client, and does not reserve the session_id for retry.
   - trigger: "When a client receives a `session_assignment` frame"
     action: >
       the client shall (a) verify the directory signature against its pinned directory pubkey,
@@ -137,15 +145,62 @@ acceptance_criteria:
     test_type: integration
     component_under_test: client
 
+  - id: AC-009
+    given: >
+      A running directory and in-process relay with a test hook that records (a) the wall-clock
+      time at which `relay.recordAssignment(session_id)` returns, and (b) the wall-clock time at
+      which each client observes its `session_assignment` frame on its directory WebSocket
+    when: "A session is established between two authenticated clients"
+    then: >
+      `recordAssignment` return-time is strictly earlier than the earlier of the two
+      `session_assignment` frame observation times; additionally, the relay accepts a
+      `hash_submit` carrying the session_id at any point after either client has received the
+      frame (no post-delivery pre-registration window exists)
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010
+    given: "A test configuration where `relay.recordAssignment` is stubbed to reject with an error"
+    when: "Client A requests a session with Client B"
+    then: >
+      The directory returns a structured `relay_unavailable` error to Client A; no
+      `session_assignment` frame is delivered to either client; the relay holds no state for
+      any session_id from this attempt; the session_id is not reserved for retry (a subsequent
+      successful establishment is free to reuse the CSPRNG output of that attempt, though the
+      16-byte entropy makes collision negligible)
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-011
+    given: >
+      A directory that has just completed step (d) of establishment (SessionAssignment record
+      constructed and signed) but has NOT yet called `relay.recordAssignment`, simulated via a
+      test hook that stalls step (e) indefinitely. An attacker authenticated as Client C (not
+      a participant) has guessed the session_id somehow and opens a relay WebSocket
+    when: "Client C submits a `hash_submit` frame for the stalled session_id"
+    then: >
+      The relay returns `session_not_found` — the same error code NODE-002 AC-007 returns for
+      a session that has already been sealed and destroyed. Pre-registration and post-seal are
+      indistinguishable from the attacker's perspective, preventing any probe channel that
+      leaks the session_id before clients are even aware of it
+    test_type: integration
+    component_under_test: relay
+
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
     statement: >
       The directory shall create a session only when both parties are concurrently authenticated
-      under the pubkeys named in the session-initiate request (carried over from SESSION-001 SI-001).
+      under the pubkeys named in the session-initiate request (carried over from SESSION-001 SI-001),
+      AND shall never deliver a `session_assignment` frame for a session_id the relay has not yet
+      registered via `recordAssignment`.
     adversarial_condition: >
       even when an attacker initiates toward a pubkey that is offline or represented by a hung
-      WebSocket that has not completed the challenge-response handshake.
+      WebSocket that has not completed the challenge-response handshake; and even when a client
+      races its relay WebSocket open against the session-establishment sequence — the relay
+      shall reject any `hash_submit` carrying a session_id for which `recordAssignment` has not
+      yet completed with a structured `session_not_found` error, providing no distinguishability
+      between a pre-registered-and-guessed session and a sealed-and-destroyed session.
     test_type: integration
     component_under_test: directory
 

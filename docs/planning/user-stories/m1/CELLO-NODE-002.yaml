@@ -47,15 +47,20 @@ behavior:
       initialises the per-session leaf log (empty) and the canonical sequence counter to 0.
   - trigger: "When an authenticated client submits a signed Structure 1 for an active session"
     action: >
-      the relay shall (a) verify the client is a registered participant of the session, (b)
-      verify the sender's Ed25519 signature over canonical-CBOR(Structure 1), (c) verify the
-      declared `last_seen_seq` is <= the current canonical sequence counter (a client cannot
-      commit to having seen a future sequence number), (d) assign the next canonical sequence
-      number, (e) compute prev_root as the Merkle root of the per-session tree over all prior
-      leaves (for the first leaf, use the genesis prev_root from the session assignment), (f)
-      construct Structure 2 per MERKLE-002 with leaf_kind = 0x00 and the M1 scan_result sentinel,
-      (g) compute the new leaf hash, append to the tree, and (h) relay Structure 2 to the
-      counterparty's WebSocket.
+      The client submits a `hash_submit` frame carrying `{session_id, leaf_kind, structure1_cbor,
+      sender_signature}` where `leaf_kind` is a frame-level `uint8` — `0x00` for message leaves
+      or `0x02` for control leaves — applied later as the Merkle leaf-hash prefix byte per
+      MERKLE-002. On receipt the relay shall (a) verify the client is a registered participant
+      of the session, (b) reject with `leaf_kind_invalid` if leaf_kind is any value other than
+      `0x00` or `0x02`, (c) verify the sender's Ed25519 signature over canonical-CBOR(Structure 1),
+      (d) verify the declared `last_seen_seq` is <= the current canonical sequence counter (a
+      client cannot commit to having seen a future sequence number), (e) assign the next canonical
+      sequence number, (f) compute prev_root as the Merkle root of the per-session tree over all
+      prior leaves (for the first leaf, use the genesis prev_root from the session assignment),
+      (g) construct the 6-element Structure 2 per MERKLE-002 with the M1 scan_result sentinel,
+      (h) compute the new leaf hash as `SHA-256(leaf_kind || canonical_CBOR(Structure 2))`,
+      append to the tree, and (i) relay Structure 2 plus the same `leaf_kind` frame-level field
+      to the counterparty's WebSocket.
   - trigger: "When an authenticated client submits a Structure 1 whose sender_pubkey does not match the connection's authenticated pubkey"
     action: "the relay shall reject the submission with a structured `sender_mismatch` error and shall not assign a sequence number or append to the tree."
   - trigger: "When an authenticated client submits a Structure 1 for a session_id it is not a participant of"
@@ -153,6 +158,13 @@ acceptance_criteria:
     given: "A client authenticates to the relay with challenge signature computed over the domain string `\"CELLO-WS-AUTH-v1\"` (NODE-001's directory domain string) instead of `\"CELLO-RELAY-AUTH-v1\"`"
     when: "The relay verifies the challenge response"
     then: "The relay closes the connection with `auth_failed: wrong_domain` and does not register the client"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-011
+    given: "An authenticated participant of an active session"
+    when: "The participant submits a `hash_submit` frame whose `leaf_kind` field is `0x01`, `0x03`, or any other value outside `{0x00, 0x02}`"
+    then: "The relay rejects with `leaf_kind_invalid`; no sequence number is assigned; the tree is unchanged; no Structure 2 is relayed to the counterparty"
     test_type: integration
     component_under_test: relay
 

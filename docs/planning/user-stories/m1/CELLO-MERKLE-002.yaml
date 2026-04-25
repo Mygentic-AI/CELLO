@@ -31,39 +31,46 @@ behavior:
       computed per CRYPTO-002 (`SHA-256(0x00 || content)`).
   - trigger: "When the relay receives a sender-signed Structure 1 for a valid session"
     action: >
-      the relay shall construct Structure 2 as the canonical-CBOR encoding of the positional array
-      `[leaf_kind, sequence_number, sender_pubkey, content_hash, sender_signature, scan_result, prev_root]`
-      where leaf_kind is 0x00 (message) or 0x02 (control), sequence_number is the next canonical
-      sequence number for the session, sender_signature is the 64-byte Ed25519 signature from
-      Structure 1, scan_result is the M1-placeholder sentinel `{score: null, verdict: "unscanned",
-      model_hash: <32 zero bytes>}` (Layer 2 scanner lands in M4; field is present to keep wire
-      layout stable), and prev_root is the 32-byte Merkle root of the tree up to and including the
-      immediately preceding leaf (for the first leaf of a session, prev_root is the genesis value
-      defined by SESSION-002).
+      the relay shall construct Structure 2 as the canonical-CBOR encoding of the 6-element
+      positional array
+      `[sequence_number, sender_pubkey, content_hash, sender_signature, scan_result, prev_root]`
+      where sequence_number is the next canonical sequence number for the session, sender_signature
+      is the 64-byte Ed25519 signature from Structure 1, scan_result is the M1-placeholder sentinel
+      `{score: null, verdict: "unscanned", model_hash: <32 zero bytes>}` (Layer 2 scanner lands in
+      M4; field is present to keep wire layout stable), and prev_root is the 32-byte Merkle root of
+      the tree up to and including the immediately preceding leaf (for the first leaf of a session,
+      prev_root is the genesis value defined by SESSION-002). `leaf_kind` is **not** a field of this
+      array — it is carried as a frame-level field on the `hash_submit` frame that accompanied the
+      corresponding Structure 1 (NODE-002) and is applied only as the domain-separator prefix byte
+      during leaf hashing.
   - trigger: "When the relay computes the leaf hash that enters the per-session tree"
     action: >
-      the relay shall apply the domain-separated leaf-hash function from CRYPTO-002:
-      `leaf_hash = SHA-256(leaf_kind || canonical_CBOR(Structure 2 without leaf_kind duplicated in the prefix))`.
-      Concretely: the leaf_kind byte is both the Merkle leaf prefix *and* the first field of the
-      Structure 2 array; the hash input is `leaf_kind_byte || canonical_CBOR([sequence_number,
-      sender_pubkey, content_hash, sender_signature, scan_result, prev_root])`. Using 0x00 or 0x02
-      as the prefix preserves the RFC 6962 second-preimage-protection guarantee (MERKLE-001 SI-001)
-      and distinguishes message leaves from control leaves without an extra field.
+      the relay shall apply the domain-separated leaf-hash primitive from CRYPTO-002:
+      `leaf_hash = SHA-256(leaf_kind_byte || canonical_CBOR(Structure 2))`
+      where `leaf_kind_byte` is `0x00` for message leaves and `0x02` for control leaves, and
+      `canonical_CBOR(Structure 2)` is the 6-element CBOR encoding defined above. This is the same
+      `leaf_hash(D) = SHA-256(prefix || D)` construction CRYPTO-002 defines over the primitive
+      leaf prefix; Structure 2's CBOR bytes are `D`. The prefix byte is *outside* the CBOR —
+      Structure 2 does not embed `leaf_kind` as an inner field. Using `0x00` or `0x02` as the
+      prefix preserves the RFC 6962 second-preimage-protection guarantee (MERKLE-001 SI-001) and
+      distinguishes message leaves from control leaves without an extra CBOR field.
   - trigger: "When a control leaf is produced (SEAL in M1; CLOSE/CLOSE-ACK/ABORT/EXPIRE/REOPEN in later milestones)"
     action: >
-      the same two-structure model is used with leaf_kind = 0x02. Structure 1 is signed by the
-      party producing the control leaf with K_local. The CBOR layout of Structure 1 is unchanged;
-      the content_hash field carries the leaf hash of the control payload (CBOR-encoded per the
-      control-leaf-specific schema defined by SESSION-003 for SEAL, and by later stories for other
-      control types).
+      the same two-structure model is used with `leaf_kind_byte = 0x02`. Structure 1 is signed by
+      the party producing the control leaf with K_local. The CBOR layout of Structure 1 is
+      unchanged; the content_hash field carries the leaf hash of the control payload, computed
+      with the **primitive** `0x00` prefix per CRYPTO-002 (`SHA-256(0x00 || control_payload_CBOR)`).
+      Only the *outer* Merkle leaf hash uses `0x02`; the inner content_hash always uses the
+      primitive `0x00` prefix regardless of leaf_kind. This keeps `content_hash` a uniform
+      construct across message and control leaves.
   - trigger: "When Structure 2 is validated by a receiver or by the directory at seal"
     action: >
-      the verifier shall (a) confirm leaf_kind is 0x00 or 0x02, (b) confirm all field lengths
-      (sender_pubkey = 32, sender_signature = 64, content_hash = 32, prev_root = 32), (c) verify
-      the sender's Ed25519 signature against the canonical-CBOR encoding of Structure 1
-      reconstructed from Structure 2's fields plus the session_id and last_seen_seq carried through
-      the relay path, and (d) verify prev_root equals the root of the tree up to the preceding leaf.
-      Any failure rejects the leaf.
+      the verifier shall (a) confirm the accompanying `leaf_kind_byte` from the frame is
+      `0x00` or `0x02`, (b) confirm all field lengths inside Structure 2 (sender_pubkey = 32,
+      sender_signature = 64, content_hash = 32, prev_root = 32), (c) verify the sender's Ed25519
+      signature against the canonical-CBOR encoding of Structure 1 reconstructed from Structure 2's
+      fields plus the session_id and last_seen_seq carried through the relay path, and (d) verify
+      prev_root equals the root of the tree up to the preceding leaf. Any failure rejects the leaf.
   - trigger: "When the module is asked to serialize either structure"
     action: "the module shall emit canonical CBOR (RFC 8949 §4.2.1 Core Deterministic Encoding) identically to MSG-001's rules."
 
@@ -77,9 +84,21 @@ acceptance_criteria:
     component_under_test: protocol-types
 
   - id: AC-002
-    given: "Fixture inputs for Structure 2 (leaf_kind, sequence_number, sender_pubkey, content_hash, sender_signature, scan_result sentinel, prev_root) stored under `packages/protocol-types/test/vectors/structure2-canonical.json` with expected canonical-CBOR hex and expected leaf_hash"
-    when: "The TypeScript implementation encodes Structure 2 and computes leaf_hash per the rule `SHA-256(leaf_kind || CBOR([sequence_number, sender_pubkey, content_hash, sender_signature, scan_result, prev_root]))`"
-    then: "Both the CBOR bytes and the leaf_hash match the fixture exactly"
+    given: >
+      Two committed fixtures. (1) `packages/protocol-types/test/vectors/structure2-canonical.json`
+      pins the 6-element Structure 2 wire form: inputs `[sequence_number, sender_pubkey,
+      content_hash, sender_signature, scan_result sentinel, prev_root]` and the expected
+      canonical-CBOR hex. (2) `packages/crypto/test/vectors/leaf-hash-vectors.json` pins the
+      leaf-hash construction: each entry is `{leaf_kind_byte, structure2_cbor_hex,
+      expected_leaf_hash_hex}` and must include both a `0x00` (message) and a `0x02` (control)
+      case, plus a pair whose `structure2_cbor_hex` is byte-identical but whose `leaf_kind_byte`
+      differs so the expected leaf_hashes differ (second-preimage / domain-separation evidence)
+    when: >
+      The TypeScript implementation (a) encodes Structure 2 from the fixture inputs per the rule
+      `canonical_CBOR([sequence_number, sender_pubkey, content_hash, sender_signature, scan_result,
+      prev_root])` and (b) computes `leaf_hash = SHA-256(leaf_kind_byte || structure2_cbor)` for
+      each leaf-hash-vectors entry
+    then: "Both the Structure 2 CBOR bytes and every leaf_hash match the fixture hex exactly; the two fixture entries that share structure2_cbor_hex but differ in leaf_kind_byte produce distinct expected leaf_hashes"
     test_type: unit
     component_under_test: crypto
 
@@ -105,9 +124,11 @@ acceptance_criteria:
     component_under_test: client
 
   - id: AC-006
-    given: "A message leaf (leaf_kind=0x00) and a control leaf (leaf_kind=0x02) whose Structure 2 arrays are otherwise byte-identical"
-    when: "Leaf hashes are computed for both"
-    then: "The two leaf hashes differ (domain separation)"
+    given: >
+      Two leaf-hash inputs sharing byte-identical 6-element Structure 2 CBOR but paired with
+      different leaf_kind prefix bytes (one `0x00`, one `0x02`)
+    when: "Leaf hashes are computed for both via `SHA-256(leaf_kind_byte || structure2_cbor)`"
+    then: "The two leaf hashes differ (domain separation via the prefix byte applied outside the CBOR)"
     test_type: unit
     component_under_test: crypto
 
