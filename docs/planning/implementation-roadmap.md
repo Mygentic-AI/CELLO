@@ -1,17 +1,29 @@
 ---
 name: CELLO Implementation Roadmap
 type: plan
-date: 2026-04-24
-topics: [implementation, milestones, user-stories, test-harness, monorepo]
+date: 2026-04-25
+topics: [implementation, milestones, user-stories, test-harness, monorepo, libp2p]
 status: active
-description: Capability-based milestone map (M0–M10) with implementation decisions, test harness evolution, and fully specified M0 user stories.
+description: Capability-based milestone map (M0–M10) with libp2p peer-to-peer substrate from M0, implementation decisions, test harness evolution, and milestone-by-milestone user story indexes.
 ---
 
 # CELLO Implementation Roadmap
 
-This document defines what gets built and in what order. Eleven capability milestones, each delivering a protocol capability that builds on the last. M0 user stories are fully specified in `docs/planning/user-stories/m0/`; subsequent milestone stories are written just before work begins.
+This document defines what gets built and in what order. Eleven capability milestones, each delivering a protocol capability that builds on the last. M0 and M1 user stories are fully specified in `docs/planning/user-stories/m0/` and `docs/planning/user-stories/m1/`; subsequent milestone stories are written just before work begins.
 
 For the design source, see [[protocol-map|CELLO Protocol Map]]. For the user story template, see [[user-story-format|CELLO User Story Format]]. For the development methodology (SPARC phases, parallel agent orchestration, test framework, cryptographic correctness rules), see [[day-0-agent-driven-development-plan|Day-0 Agent-Driven Development Plan]].
+
+---
+
+## Substrate Front-Loading
+
+libp2p is the network substrate the entire protocol is designed around — ephemeral Peer IDs per session, DCuTR hole-punching, circuit relay v2 fallback, WebSocket-on-443 transport, Noise end-to-end encryption between peers. It is not a transport optimization; it is the shape of every session.
+
+libp2p lands in M0. Every subsequent milestone runs on the substrate the protocol assumes, so integration surprises (library quirks, connection-manager tuning, transport selection under corporate firewalls, hole-punch success rates on real ISPs) are discovered in the first milestone rather than the last. An earlier draft of this roadmap deferred libp2p to M10; that deferral has been reversed.
+
+The same principle — validate load-bearing substrate early — drives FROST's placement at M2 rather than bundled into a later milestone. A parallel research spike is proving out the TypeScript FROST library surface before M2 locks.
+
+A second invariant that shapes milestone boundaries: **message content never passes through server infrastructure.** Content flows peer-to-peer over libp2p; hashes flow client↔relay over libp2p; signaling flows client↔directory over libp2p. The directory and relay are separate nodes with separate protocol IDs, and neither has a topological path to plaintext. This is architectural, not a policy claim.
 
 ---
 
@@ -19,15 +31,17 @@ For the design source, see [[protocol-map|CELLO Protocol Map]]. For the user sto
 
 - **Language:** TypeScript end-to-end — client, directory, relay, shared packages. The directory is intended to move to Rust. If CELLO becomes a blockchain, directory nodes become validator nodes, and Rust is the lingua franca of that ecosystem (Solana, Substrate, Near, Aptos, Sui). TypeScript first because the TypeScript directory becomes the reference implementation and test oracle: when the Rust version is built, both run side by side and assert identical behavior. That's a better path to correctness than building Rust cold against a spec.
 
-- **Monorepo:** pnpm workspaces. Packages: `client`, `directory`, `relay`, `protocol-types`, `crypto`, `e2e-tests`. The client is designed for extraction — it imports only from `protocol-types` and `crypto`, never from `directory` or `relay`. When the client moves to its own repo, `protocol-types` and `crypto` publish as npm packages. The imports don't change.
+- **Monorepo:** pnpm workspaces. Packages: `client`, `directory`, `relay`, `protocol-types`, `crypto`, `transport`, `e2e-tests`. The client is designed for extraction — it imports only from `protocol-types`, `crypto`, and `transport`, never from `directory` or `relay`. When the client moves to its own repo, the shared packages publish as npm packages. The imports don't change.
+
+- **Network substrate:** `js-libp2p` from M0. Transports: `@libp2p/tcp` and `@libp2p/websockets`. Security: `@chainsafe/libp2p-noise`. Muxer: `@chainsafe/libp2p-yamux`. Ephemeral Peer IDs are minted per session (M1 onward) from fresh Ed25519 keypairs — the stable agent identity is K_local, not the Peer ID. The directory is itself a libp2p node exposing a custom signaling protocol (`/cello/signaling/1.0.0`); it does not enable Kademlia DHT, mDNS, or rendezvous — peer discovery is strictly via directory-mediated signaling so the directory's "phone book" role stays bounded. libp2p circuit relay v2 and DCuTR are configured from M0; they are exercised on localhost loopback in unit tests and on real networks in cross-machine integration tests.
 
 - **Persistence:** In-memory stores behind interfaces initially. A `Store` interface per component, with `InMemoryStore` as the first implementation. The protocol logic — FROST ceremonies, Merkle tree operations, hash relay, connection brokering — is identical regardless of where the bytes live. Deferring real persistence keeps the e2e tests fast (no database setup/teardown, no file cleanup) and focuses early milestones on getting the protocol right. When SQLite/SQLCipher is added, it's a new `Store` implementation behind the same interface. The protocol tests never change; the store layer gets its own focused integration test suite.
 
 - **Wire encoding:** Canonical CBOR (RFC 8949 §4.2.1 Core Deterministic Encoding — minimal integer encoding, definite-length items only, bytewise-lexicographic map key ordering). Signatures are computed over CBOR-encoded bytes, so all implementations must produce identical serialization for the same logical structure. CBOR over JSON because binary fields (public keys, signatures, hashes) are first-class in CBOR; JSON would require base64 encoding and a canonicalization spec.
 
-- **CBOR library (TypeScript):** `@ipld/cborg`. Deterministic encoding is the default behavior (no flag to forget to set), and the library is the de facto encoder in the IPLD / DID / VC ecosystems where CBOR bytes are routinely signed and hashed. Other TypeScript CBOR libraries (`cbor-x`, `cbor2` node bindings) require manual configuration and can silently regress to non-deterministic output. Callers must ensure object keys are in bytewise-lexicographic order before encoding, since the encoder does not reorder keys of JavaScript objects it is handed. Positional arrays (used for TBS) avoid the key-ordering question entirely. The future Rust port will use `ciborium` configured for CDE; byte-for-byte parity with `@ipld/cborg` output is enforced by the committed TBS fixtures (MSG-001 AC-008, CRYPTO-002 AC-004).
+- **CBOR library (TypeScript):** `@ipld/cborg`. Deterministic encoding is the default behavior (no flag to forget to set), and the library is the de facto encoder in the IPLD / DID / VC ecosystems where CBOR bytes are routinely signed and hashed. Other TypeScript CBOR libraries (`cbor-x`, `cbor2` node bindings) require manual configuration and can silently regress to non-deterministic output. Callers must ensure object keys are in bytewise-lexicographic order before encoding, since the encoder does not reorder keys of JavaScript objects it is handed. Positional arrays (used for TBS) avoid the key-ordering question entirely. The future Rust port will use `ciborium` configured for CDE; byte-for-byte parity with `@ipld/cborg` output is enforced by the committed TBS fixtures (MSG-001, CRYPTO-002).
 
-- **Test harness:** The e2e test package spins up directory, relay, and clients in a single Vitest process. No Docker, no ports, no inter-process coordination during development. The in-memory stores make this possible.
+- **Test harness:** The e2e test package spins up directory, relay, and clients — each as real libp2p nodes — in a single Vitest process. libp2p binds to random loopback ports; setup is a small constant per test; teardown calls `libp2p.stop()` on every spawned node. No Docker, no manual port allocation, no inter-process coordination during development. In-memory stores keep the protocol layer fast even as the transport is real.
 
 - **Initial agent integration:** Claude Code sessions. OpenClaw, Hermes, and IronClaw come later per the integration stages in the day-0 plan.
 
@@ -37,9 +51,9 @@ For the design source, see [[protocol-map|CELLO Protocol Map]]. For the user sto
 
 | Milestone | What gets built | What it proves |
 |---|---|---|
-| M0 — Walking Skeleton | Monorepo scaffolding, `protocol-types`, `crypto` (Ed25519 + SHA-256), directory stub (WebSocket, in-memory store, message relay), client (connect, send, receive via MCP tool interface), e2e test harness | Two agents can exchange signed messages through infrastructure. The test harness runs a full roundtrip in one Vitest process. |
-| M1 — Merkle Notarization | RFC 6962 Merkle tree library with inclusion proofs, two-structure leaf model (Structure 1 sender-signed, Structure 2 relay-built), `packages/relay` with per-session canonical sequencing and `prev_root`, envelope bump to `protocol_version = 1` (hard cut; v0 refused), 3-party tree sync during active sessions (sender, receiver, relay), bilateral K_local-only seal with directory recompute and `last_seen_seq` causal-chain verification, MCP additions for sealed receipt and inclusion proofs | A conversation is a 32-byte receipt. Sender, receiver, and relay produce the same root; the directory independently recomputes it at seal; a relay that forges, reorders, or drops leaves is caught by the causal-chain check; inclusion proofs verify against the sealed root using any RFC 6962 verifier. |
-| M2 — FROST Ceremonies | DKG (distributed key generation), threshold co-signing at session establishment and seal, K_server share management with envelope encryption | Neither the client nor the directory can forge a session alone. A compromised K_local cannot pass the FROST ceremony — compromise is detectable at session boundaries. |
+| M0 — Peer-to-Peer Walking Skeleton | Monorepo scaffolding; `protocol-types`, `crypto` (Ed25519 + SHA-256 with domain separation), `transport` (libp2p node bootstrap: TCP + WebSocket + Noise + Yamux, Ed25519 Peer IDs, dial-by-multiaddr, `/cello/m0/1.0.0` stream protocol); envelope v0 (positional TBS without session/sequence fields); client library with MCP tools for peer connect / send / receive; e2e harness with real libp2p nodes in-process | Two agents exchange a tamper-evident signed message peer-to-peer over libp2p with no server in the middle. Tamper any byte mid-flight and the receiver rejects. The full transport, security, and signature substrate is exercised end-to-end. |
+| M1 — Directory Signaling + Merkle Notarization | Directory node (libp2p, signaling-only, `/cello/signaling/1.0.0`): client auth, session request, signed SessionAssignment issuance carrying counterparty Peer IDs + multiaddrs and relay endpoint. Relay node (libp2p, hash-only, `/cello/relay/1.0.0`): accepts Structure 1 submissions, assigns canonical sequence numbers, computes `prev_root`, builds per-session RFC 6962 Merkle tree, delivers Structure 2. RFC 6962 primitives library with inclusion proofs. Two-structure leaf model (Structure 1 sender-signed, Structure 2 relay-built with `prev_root`). Envelope v1 (`protocol_version = 1`, hard cut). Genuine dual-path: content client↔client via libp2p; hashes client↔relay via libp2p. Bilateral K_local-only seal with single directory signing key (FROST placeholder). Directory recomputes tree from scratch at seal and verifies `last_seen_seq` causal chain. MCP additions for sealed receipt and inclusion proofs. | A conversation is a 32-byte receipt. Sender, receiver, and relay produce the same root; the directory independently recomputes it at seal; a relay that forges, reorders, or drops leaves is caught by the causal-chain check. The directory and relay are separate libp2p nodes and neither sees message content. Inclusion proofs verify against the sealed root using any RFC 6962 verifier. |
+| M2 — FROST Ceremonies | DKG (distributed key generation); threshold co-signing at session establishment and seal replacing the single directory signing key from M1; K_server share management with envelope encryption; `IThresholdSigner` abstraction as the swap point for a future threshold ML-DSA implementation | Neither the client nor the directory can forge a session alone. A compromised K_local cannot pass the FROST ceremony — compromise is detectable at session boundaries. |
 | M3 — Connections & Policy | Registration (stubbed OTP), connection request flow, trust data relay with selective disclosure, `SignalRequirementPolicy` evaluation, accept/decline | Agents control who reaches them. A receiver can require specific trust signals and enforce it. The one-round negotiation works — what you disclose, what you withhold. |
 | M4 — Prompt Injection Defense | Six-layer pipeline: Layer 1 deterministic sanitization, Layer 2 DeBERTa scanner, Layer 3 outbound gate, Layer 4 redaction, Layer 5 runtime governance, Layer 6 access control | Messages are safe from injection. Each layer catches different attack classes. Standalone value — works without the network. |
 | M5 — Discovery & Notifications | Bio, search (BM25 + vector), contact aliases with revocation, notification event queue | The full cold-start flow: search → discover → connect → converse. Contact aliases enable sharing outside the directory. |
@@ -47,21 +61,21 @@ For the design source, see [[protocol-map|CELLO Protocol Map]]. For the user sto
 | M7 — Compromise & Recovery | Continuous compromise detection, "Not Me" revocation with K_server burn and session termination, social recovery (M-of-N, 48-hour wait), key rotation, trust floor based on pre-compromise history | Compromise is survivable. Detection is continuous, revocation is instant, recovery preserves earned trust. |
 | M8 — Group Rooms | N-party Merkle tree, concurrent mode with GCD floor control, owner/admin model, throttle manifest with cost protection, violation enforcement with auto-mute, 20-participant cap | Groups work with provable records. Floor control prevents chaos, throttle manifests protect wallets, violations escalate logarithmically. |
 | M9 — Commerce | Push-publish subscriptions with per-delivery micropayments, inference billing (rate card, signed cumulative token counts in Merkle leaves, ABORT-BILLING), purchase attestations, merchant CRM data stash, fraud detection | Agents can trade. Token counts are signed and verifiable. Fraudulent billing is caught by the buyer's client or by deterministic arbitration. |
-| M10 — Federation | Multi-node directory with primary/backup replication, consensus for state changes, relay node separation, client-side latency monitoring with proactive session migration | The network decentralizes. A node failure mid-session is survivable — the client detects it, migrates, and the session continues. |
+| M10 — Federation | Multi-node directory with primary/backup replication, consensus for state changes, relay operator separation from directory operators, client-side latency monitoring with proactive session migration, MMR inclusion proof verification against federation-signed checkpoints | The network decentralizes. A node failure mid-session is survivable — the client detects it, migrates, and the session continues. Fabricated conversations are detectable via MMR inclusion proofs now that federation-signed checkpoints exist. |
 
 ### Dependencies
 
 ```
-M0 → M1 → M2   (Walking Skeleton → Merkle Notarization → FROST Ceremonies)
+M0 → M1 → M2   (Peer-to-peer skeleton → Directory + Merkle → FROST bookends)
        ↓
       M3 → M5 → M6   (Connections & Policy → Discovery & Notifications → Social Trust)
        ↓
       M4   (Prompt Injection Defense — can start after M0, independent otherwise)
-      
+
 M2 + M3 → M7   (Compromise & Recovery needs FROST and connections)
 M1 + M3 → M8   (Group Rooms need Merkle and connections)
 M3 + M5 → M9   (Commerce needs connections and discovery)
-M2 → M10        (Federation needs FROST working on a single node first)
+M2 → M10       (Federation needs FROST working on a single node first; MMR verification lands with federation-signed checkpoints)
 ```
 
 M4 is the most parallelizable with other milestones — the scanning pipeline is almost entirely client-side and each layer is independent.
@@ -72,9 +86,9 @@ M4 is the most parallelizable with other milestones — the scanning pipeline is
 
 | After | The e2e harness can test |
 |---|---|
-| M0 | Two clients exchange signed messages through a directory stub. Assert: message roundtrip, signature verification, rejection of tampered messages. |
-| M1 | All of M0 plus: two-structure leaf construction, per-session Merkle tree built by the relay, sender/receiver/relay root equality after each leaf, bilateral seal with directory recomputing the tree from scratch, `last_seen_seq` causal-chain violation detection at seal, inclusion proofs verifiable against the sealed root by an independent RFC 6962 verifier, tamper detection on leaf content / signature / sequence / `prev_root`. |
-| M2 | All of M1 plus: FROST DKG ceremony, threshold-signed session establishment, threshold-signed seal, rejection of session establishment with a compromised K_local. |
+| M0 | Two real libp2p clients dial each other by multiaddr and exchange a signed envelope. Assert: message roundtrip, signature verification, rejection of tampered content, Noise encryption in place (third-party packet capture would see ciphertext), MCP tool surface drives the flow end-to-end. |
+| M1 | All of M0 plus: directory libp2p node issues signed session assignments; relay libp2p node sequences Structure 1 submissions and builds the per-session Merkle tree; content flows peer↔peer while hashes flow client↔relay on distinct libp2p protocols; sender/receiver/relay root equality after each leaf; bilateral seal with directory recomputing the tree from scratch; `last_seen_seq` causal-chain violation detection at seal; inclusion proofs verifiable against the sealed root by an independent RFC 6962 verifier; tamper detection on leaf content / signature / sequence / `prev_root`; relay never observes content bytes (verified by transport-layer assertion). |
+| M2 | All of M1 plus: FROST DKG ceremony, threshold-signed session establishment, threshold-signed seal replacing the single-key notarization from M1, rejection of session establishment with a compromised K_local, `IThresholdSigner` abstraction covering the algorithm swap. |
 | M3 | All of M2 plus: registration, connection request/accept/decline, policy evaluation against trust signals, selective disclosure of trust data. Two-agent flows now start from "strangers" not "pre-connected." |
 | M4 | All of M3 plus: injection payloads through each defense layer, Layer 1 sanitization on incoming messages, Layer 2 scan invocation, Layer 3 outbound gate blocking exfiltration, Layer 4 redaction, Layer 5 cost/volume cap enforcement. |
 | M5 | All of M4 plus: agent publishes bio, second agent searches and discovers it, connects via contact alias, full cold-start-to-conversation flow in one test. |
@@ -82,9 +96,11 @@ M4 is the most parallelizable with other milestones — the scanning pipeline is
 | M7 | All of M6 plus: compromise detection triggers, "Not Me" cascade (K_server burn, all sessions terminated), social recovery ceremony, key rotation with continued conversations, trust floor preservation. |
 | M8 | All of M7 plus: 3+ clients in a group room, concurrent message ordering, floor control, throttle manifest enforcement, violation → auto-mute escalation. |
 | M9 | All of M8 plus: inference session with rate card, signed cumulative billing in Merkle leaves, buyer-side token count verification, ABORT-BILLING on cap exceeded, push-publish subscription lifecycle. |
-| M10 | All of M9 plus: multi-node directory, primary failure with backup promotion, client session migration, relay node assignment separate from directory, data replicated across nodes. |
+| M10 | All of M9 plus: multi-node directory, primary failure with backup promotion, client session migration, relay operator separation, data replicated across nodes, MMR inclusion proofs verified against federation-signed checkpoints. |
 
 Every milestone's tests continue running in subsequent milestones. The harness only grows — nothing is replaced.
+
+In addition to the in-process Vitest harness, a cross-machine integration test runs at least after every milestone boundary: two client machines on different networks (home ISP, corporate VPN, mobile tether) dial through DCuTR and fall back to circuit relay on symmetric NAT. This exists to catch the class of libp2p issue that localhost loopback cannot surface. Cross-machine tests do not gate CI; they are a separate nightly job whose failures feed back into the test harness.
 
 ---
 
@@ -96,23 +112,20 @@ Fully specified stories live in `docs/planning/user-stories/m0/`. The table belo
 |---|---|---|---|---|---|---|
 | CELLO-CRYPTO-001 | Ed25519 keypair generation, signing, and verification | Crypto | CLIENT | P0 | crypto | — |
 | CELLO-CRYPTO-002 | SHA-256 hashing with domain separation | Crypto | CLIENT | P0 | crypto | — |
-| CELLO-MSG-001 | Signed message envelope schema | Message Exchange | CLIENT | P0 | protocol-types | CRYPTO-001, CRYPTO-002 |
-| CELLO-NODE-001 | Directory stub: WebSocket relay | Node Operations | DIR | P0 | directory | MSG-001 |
-| CELLO-SESSION-001 | Session establishment (no FROST) | Session Lifecycle | CLIENT | P0 | client, directory | MSG-001, NODE-001 |
-| CELLO-MSG-002 | Client send/receive with signature verification | Message Exchange | CLIENT | P0 | client | MSG-001, SESSION-001 |
-| CELLO-MCP-001 | M0 MCP tool surface | MCP Tool Surface | AGENT | P0 | client | SESSION-001, MSG-002 |
+| CELLO-MSG-001 | Signed envelope v0 schema (no session, no sequence) | Message Exchange | CLIENT | P0 | protocol-types | CRYPTO-001, CRYPTO-002 |
+| CELLO-TRANSPORT-001 | libp2p node bootstrap, Peer IDs, dial, custom stream protocol | Transport | CLIENT | P0 | transport | — |
+| CELLO-MSG-002 | Peer-to-peer signed message exchange over libp2p streams | Message Exchange | CLIENT | P0 | client | MSG-001, TRANSPORT-001 |
+| CELLO-MCP-001 | M0 MCP tool surface (connect peer, send, receive, status) | MCP Tool Surface | AGENT | P0 | client | MSG-002 |
 
-Seven stories, all P0. A TDD agent pulls the stories in dependency order, writes failing tests from the acceptance criteria, and implements until green. CRYPTO-001 and CRYPTO-002 can run in parallel; MSG-001 waits on both; NODE-001 waits on MSG-001 (it validates envelopes on relay); SESSION-001 depends on both MSG-001 and NODE-001; MSG-002 depends on SESSION-001; MCP-001 is last.
+Six stories, all P0. A TDD agent pulls the stories in dependency order, writes failing tests from the acceptance criteria, and implements until green. CRYPTO-001, CRYPTO-002, and TRANSPORT-001 can run in parallel. MSG-001 waits on both CRYPTO stories. MSG-002 waits on MSG-001 and TRANSPORT-001. MCP-001 is last.
 
-M0 already hashes message content as Merkle leaves (SHA-256 with 0x00 domain separator) even though no tree is constructed until M1. This is intentional — pre-committing to the leaf hash format lets M1 reuse the same content-hash primitive without re-specifying it. The envelope TBS itself does reshape at M1 (Structure 1 per MERKLE-002 replaces M0's TBS), and `protocol_version` bumps from 0 to 1; M0 and M1 peers are not expected to interoperate (M0 is an internal walking skeleton, not a released version).
+M0 has no directory, no relay, no session concept, and no Merkle tree. Two libp2p peers know each other's multiaddrs out-of-band (hardcoded in the test harness) and exchange a single signed envelope over a custom libp2p stream protocol. The envelope's TBS is `[protocol_version=0, content_hash, sender_pubkey, timestamp]` — session_id and sequence_number do not exist yet because there is no session.
 
-M0 signs over a positional TBS array that begins with `protocol_version` (CBOR unsigned integer, constant `0` in M0). Placing the version first means an unknown version is detectable without parsing any subsequent field, and every future milestone that changes TBS structure bumps the version rather than silently reshaping the array. Value `1` is reserved for the first externally-shipped release.
+M0 already hashes message content with SHA-256 and the `0x00` domain separator (the Merkle leaf primitive). The tree itself doesn't exist until M1, but the content-hash primitive is shared — pre-committing to it means M1 reuses the same primitive without redefining it.
 
-M0 authenticates the WebSocket connection via an Ed25519 challenge-response: on connect the directory sends a 32-byte cryptographically random nonce with a 30-second TTL; the client returns a signature over the byte string `"CELLO-WS-AUTH-v1" || nonce || pubkey`. Nonces are single-use and tracked in a TTL-bounded map — expired, unknown, or reused nonces are rejected with structured `auth_failed` reasons. This is not FROST and does not protect against a compromised K_local (that's M2's job), but it prevents the trivial spoof where any connected client claims any pubkey, which would otherwise make NODE-001's and SESSION-001's negative tests vacuous. The domain-string prefix prevents cross-protocol signature reuse.
+M0's positional TBS array begins with `protocol_version` so an unknown version is detectable without parsing any subsequent field. M0 uses `protocol_version = 0`; value `1` is reserved for M1. Every milestone that changes TBS structure bumps the version.
 
-Session IDs in M0 are 128 bits of CSPRNG output, unguessable by construction. Without this entropy the relay-boundary invariant (NODE-001 SI-003: "never relay to a non-participant") would hold only against lazy attackers, and its negative test would pass because the attacker guessed wrong rather than because guessing is infeasible.
-
-Receivers fail closed on sequence gaps. WebSocket transport is FIFO, so a missing or out-of-order sequence number is either active tampering, a directory bug, or MITM activity — never benign reordering. The receiver marks the session `desynchronized` and fails subsequent sends/receives with `session_desynchronized`; recovery requires establishing a new session.
+M0 is a walking skeleton of the right shape: the transport substrate libp2p provides (Noise encryption between peers, DCuTR hole-punching configuration, Ed25519 Peer IDs, Yamux multiplexing) is exercised from the first milestone, so every subsequent milestone builds on a substrate whose surprises have already been surfaced.
 
 ---
 
@@ -125,19 +138,22 @@ Fully specified stories live in `docs/planning/user-stories/m1/`. The table belo
 | CELLO-MERKLE-001 | RFC 6962 Merkle primitives with inclusion proofs | Merkle Trees | CLIENT | P0 | crypto | M0 CRYPTO-002 |
 | CELLO-MERKLE-002 | Two-structure leaf construction (Structure 1 + Structure 2) | Merkle Trees | CLIENT | P0 | protocol-types, crypto | MERKLE-001, M0 MSG-001 |
 | CELLO-MSG-003 | Envelope v1: Structure 1 TBS, `last_seen_seq`, `protocol_version = 1` | Message Exchange | CLIENT | P0 | protocol-types | MERKLE-002 |
-| CELLO-NODE-002 | Relay package: hash relay, canonical sequencing, per-session tree | Node Operations | DIR | P0 | relay | MERKLE-002, MSG-003 |
-| CELLO-SESSION-002 | Session establishment v1: directory assigns relay, genesis `prev_root` | Session Lifecycle | CLIENT | P0 | client, directory, relay | NODE-002 |
-| CELLO-MSG-004 | Client send/receive v1: Structure 1 signing, dual-path cross-check | Message Exchange | CLIENT | P0 | client | SESSION-002 |
+| CELLO-NODE-001 | Directory libp2p node: signaling protocol, signed session assignments | Node Operations | DIR | P0 | directory | M0 TRANSPORT-001 |
+| CELLO-NODE-002 | Relay libp2p node: hash relay, canonical sequencing, per-session tree | Node Operations | DIR | P0 | relay | MERKLE-002, MSG-003, M0 TRANSPORT-001 |
+| CELLO-SESSION-002 | Session assignment carries Peer IDs and multiaddrs; genesis `prev_root` | Session Lifecycle | CLIENT | P0 | client, directory, relay | NODE-001, NODE-002 |
+| CELLO-MSG-004 | Genuine dual-path send/receive (content peer↔peer, hash client↔relay) | Message Exchange | CLIENT | P0 | client | SESSION-002 |
 | CELLO-SESSION-003 | Bilateral seal: SEAL control leaf, directory recompute, causal check | Session Lifecycle | CLIENT | P0 | client, directory, relay | MSG-004 |
 | CELLO-MCP-002 | MCP surface additions: sealed receipt and inclusion proof tools | MCP Tool Surface | AGENT | P0 | client | SESSION-003 |
 
-Eight stories, all P0. Dependency-ordered: MERKLE-001 → MERKLE-002 → MSG-003 → NODE-002 → SESSION-002 → MSG-004 → SESSION-003 → MCP-002. MERKLE-001 can start immediately on top of M0 CRYPTO-002. MERKLE-002 and MSG-003 are protocol-types work that can partially overlap once MERKLE-001's hash primitives are stable.
+Nine stories, all P0. Dependency-ordered as shown. MERKLE-001 can start immediately on top of M0 CRYPTO-002. NODE-001 (directory signaling) can start as soon as TRANSPORT-001 stabilizes. MERKLE-002 and MSG-003 are protocol-types work that can partially overlap once MERKLE-001's hash primitives are stable.
 
-M1 introduces `packages/relay` as a distinct pnpm package with its own store interface (`RelayStore` + `InMemoryRelayStore`). The client never imports from `packages/relay` — it reaches the relay over WebSocket, exactly as it will in production. In-process Vitest co-location is a harness convenience; the boundary is real.
+M1 introduces `packages/directory` and `packages/relay` as distinct pnpm packages, each with its own store interface (`DirectoryStore`, `RelayStore`) and in-memory first implementation. The client never imports from either server package — it reaches them over libp2p, exactly as it will in production. In-process Vitest co-location is a harness convenience; the package boundary is real.
 
-M1 is a hard cut from M0. Peers speak `protocol_version = 1` only; v0 envelopes are refused with `unsupported_version`. The TBS reshapes from M0's positional array into Structure 1 (`[protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`). The `sequence_number` field that the client assigned in M0 moves into Structure 2, where the relay assigns it canonically; the client's contribution to ordering is now the `last_seen_seq` causal commitment.
+The directory and relay are **separate libp2p nodes** with distinct protocol IDs. The directory speaks `/cello/signaling/1.0.0` for session request, authentication, and signed SessionAssignment delivery. The relay speaks `/cello/relay/1.0.0` for `hash_submit` frames and Structure 2 delivery. Neither has a topological path to message content — content flows peer↔peer on a third libp2p protocol (`/cello/content/1.0.0`) the clients negotiate after they receive each other's Peer IDs + multiaddrs in the signed SessionAssignment. The "directory and relay never see content" invariant is architectural, not a policy claim, because the middleboxes are not on the content-path stream at all.
 
-The directory in M1 is a bookend authority, not an active relay. It creates session records, signs session assignments (against a pinned directory pubkey in M1; federation and FROST replace the pinning in later milestones), and recomputes the tree from scratch at seal. Between session establishment and seal, the directory WebSocket stays open for notifications but carries no message hashes.
+M1 is a hard cut from M0. Peers speak `protocol_version = 1` only; v0 envelopes are refused with `unsupported_version`. The TBS reshapes from M0's positional array into Structure 1 (`[protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`). Canonical sequence numbers enter Structure 2, assigned by the relay; the client's contribution to ordering is now the `last_seen_seq` causal commitment.
+
+The directory in M1 is a bookend authority, not an in-path relay. It creates session records, signs session assignments with a single directory signing key (pinned in client configuration; FROST replaces this pinning in M2), and recomputes the tree from scratch at seal. Between session establishment and seal, the directory libp2p connection stays open for notifications but carries no message hashes or content.
 
 Seal in M1 is bilateral K_local — both parties sign a SEAL control leaf (`leaf_kind = 0x02`) committing to the final Merkle root. The directory independently recomputes the tree from the relay's handoff, verifies `prev_root` chaining and the `last_seen_seq` causal invariant across all leaves, and records the sealed root. A relay that misordered, forged, or dropped leaves produces a provable inconsistency at this check. FROST notarization arrives in M2; CLEAN/FLAGGED attestations arrive in M7 (SEAL leaves in M1 carry `attestation = "PENDING"`).
 
@@ -153,9 +169,9 @@ Items that are part of the canonical protocol design but are deliberately not bu
 
 - **Consistency / audit proofs (RFC 6962 §2.1.2) — deferred, no assigned milestone.** These prove a tree is append-only between two root checkpoints. Useful for auditing long-term directory honesty, but not load-bearing for any currently specified capability (disputes use inclusion proofs; seal verification uses root comparison). Revisit if directory-honesty auditing becomes a user-facing feature.
 
-- **Session-close attestations (CLEAN / FLAGGED / PENDING) — deferred to M7.** The M1 `SEAL` control leaf carries an attestation field, but in M1 it is always `PENDING`. CLEAN/FLAGGED require the compromise-detection and arbitration machinery that M7 introduces (last-known-good anchor for compromise detection, FLAGGED→arbitration flow, trust-floor computation from prior CLEAN attestations). Keeping the field present from M1 means M7 fills in values rather than reshaping the leaf. Closes AC-39 in agent-client.md.
+- **Session-close attestations (CLEAN / FLAGGED / PENDING) — deferred to M7.** The M1 `SEAL` control leaf carries an attestation field, but in M1 it is always `PENDING`. CLEAN/FLAGGED require the compromise-detection and arbitration machinery that M7 introduces (last-known-good anchor for compromise detection, FLAGGED→arbitration flow, trust-floor computation from prior CLEAN attestations). Keeping the field present from M1 means M7 fills in values rather than reshaping the leaf.
 
-- **Transport extraction — deferred to M10.** In M0 and M1, WebSocket transport lives inside `packages/client/src/transport/` (see MSG-002). Extraction to a separate package is triggered by the second transport materializing; libp2p in M10 is the expected trigger.
+- **libp2p peer-discovery protocols (Kademlia DHT, mDNS, rendezvous) — deferred.** libp2p ships these out of the box, and they are *not* enabled on the M0–M9 directory. Peer discovery is strictly directory-mediated signaling: the directory hands each client the counterparty's Peer ID and candidate multiaddrs in a signed SessionAssignment. Enabling DHT or rendezvous would have the directory advertising and resolving Peer IDs globally, which is a different privacy posture than "directory is a phone book you authenticate to." If federation (M10) benefits from a gossip-style node-list distribution, that introduces one libp2p discovery protocol at that point — not before.
 
 ---
 
@@ -167,5 +183,5 @@ Items that are part of the canonical protocol design but are deliberately not bu
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — the deep canonical reference stories are derived from
 - [[agent-client|CELLO Agent Client Requirements]] — client-side requirements
 - [[server-infrastructure|Server Infrastructure Requirements]] — server-side requirements
-- [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — the 33 MCP tools; M0 implements a minimal subset
+- [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — the 33 MCP tools; M0 implements a minimal peer-to-peer subset
 - [[cello-initial-design|CELLO Initial Design]] — original architecture and vision
