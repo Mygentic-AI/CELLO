@@ -1,0 +1,180 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-SCAFFOLD-001
+domain: Infrastructure
+actor: DEVELOPER
+priority: P0
+components:
+  - monorepo
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a developer,
+  I want a pnpm monorepo scaffold with TypeScript project references, a Vitest workspace,
+  per-package CodeBuild buildspecs, and all M0 package stubs in place
+  so that every subsequent M0 story has a working build system, test harness, and CI
+  pipeline to land in — and the package boundary between `client` and `adapter-*` is
+  enforced at compile time from day one.
+
+  The scaffold is the prerequisite for every other M0 story. No story can have a passing
+  test until the Vitest workspace runs. No PR can trigger CI until the CodeBuild pipelines
+  exist (see CELLO-INFRA-001 for the AWS wiring). SCAFFOLD-001 is done when `pnpm test`
+  passes locally with a smoke test in each package.
+
+  **Monorepo layout:**
+
+  ```
+  trustless-cello/
+  ├── package.json                  ← root — devDeps, scripts (typecheck, test, lint)
+  ├── pnpm-workspace.yaml           ← lists packages/*
+  ├── tsconfig.base.json            ← strict mode, ES2022 target, Node22 lib
+  ├── vitest.workspace.ts           ← workspace config pointing at each package
+  ├── .nvmrc                        ← 22
+  ├── CONTEXT.md
+  ├── docs/adr/
+  └── packages/
+      ├── protocol-types/
+      ├── crypto/
+      ├── transport/
+      ├── client/
+      ├── adapter-claude-code/
+      ├── directory/
+      ├── relay/
+      └── e2e-tests/
+  ```
+
+  **Per-package structure (identical for all packages):**
+
+  ```
+  packages/<name>/
+  ├── package.json        ← name: @cello/<name>, engines: node>=22, scripts: typecheck/test
+  ├── tsconfig.json       ← extends ../../tsconfig.base.json, declares project references
+  ├── buildspec.yml       ← CodeBuild: install pnpm, typecheck, test this package only
+  └── src/
+      └── index.ts        ← empty export (filled in by domain stories)
+  ```
+
+  **TypeScript project references:** Each package's `tsconfig.json` declares its
+  dependencies via `"references"`. The dependency graph is:
+
+  ```
+  adapter-claude-code → client → transport, crypto, protocol-types
+  adapter-claude-code → client → (never directory, never relay)
+  directory           → transport, crypto, protocol-types
+  relay               → transport, crypto, protocol-types
+  e2e-tests           → client, adapter-claude-code, directory, relay, transport, crypto, protocol-types
+  ```
+
+  This means an `import` from `adapter-claude-code` into `directory` is a TypeScript
+  compile error — the package boundary is enforced by the build system, not by convention.
+
+  **npm scope:** all packages are `@cello/<name>`. Node.js 22 LTS. TypeScript `target: ES2022`.
+
+  **Root scripts:**
+  - `pnpm run typecheck` — `tsc --build` from root (builds all packages via project references)
+  - `pnpm run test` — `vitest run` (runs all packages via workspace config)
+  - `pnpm run lint` — ESLint across all packages
+
+  **Vitest workspace:** `vitest.workspace.ts` at the root enumerates all packages. Each
+  package's `vitest.config.ts` (or Vitest config section in `package.json`) sets
+  `environment: 'node'` and includes `src/**/*.test.ts`. The `e2e-tests` package config
+  sets a longer `testTimeout` (30s default; cross-machine tests are excluded from the
+  workspace config and run via a separate `test:cross-machine` script).
+
+  **Smoke test:** Each package has exactly one smoke test at `src/index.test.ts` that
+  imports the package's `index.ts` and asserts it is defined. These tests exist only to
+  confirm the harness is wired correctly — they are replaced by real tests as domain
+  stories land.
+
+  **Per-package buildspec.yml:**
+
+  ```yaml
+  version: 0.2
+  phases:
+    install:
+      runtime-versions:
+        nodejs: 22
+      commands:
+        - npm install -g pnpm
+        - pnpm install --frozen-lockfile
+    build:
+      commands:
+        - pnpm --filter @cello/<name> run typecheck
+        - pnpm --filter @cello/<name> run test
+  ```
+
+  The AWS pipeline wiring (EventBridge path-filter Lambda, CodePipeline per package,
+  CodeBuild project per package) is covered by CELLO-INFRA-001 and is not in scope here.
+  SCAFFOLD-001 is done when the `buildspec.yml` files exist and `pnpm test` passes locally.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When a developer runs `pnpm install` at the repo root"
+    action: "all package dependencies are installed; no missing peer dependency warnings for any M0 package"
+
+  - trigger: "When a developer runs `pnpm run typecheck` at the repo root"
+    action: "`tsc --build` completes with zero errors across all packages; the dependency graph is resolved via project references without circular references"
+
+  - trigger: "When a developer runs `pnpm run test` at the repo root"
+    action: "Vitest runs the smoke test in each package; all smoke tests pass; total wall-clock time is under 10 seconds"
+
+  - trigger: "When a developer adds an import from `adapter-claude-code` to `directory`"
+    action: "`tsc --build` fails with a project-reference violation — the dependency is not declared in `directory`'s `tsconfig.json` references"
+
+  - trigger: "When a developer adds an import from `client` to `directory`"
+    action: "`tsc --build` fails with a project-reference violation — `client` is not in `directory`'s declared references"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A freshly cloned repo with Node.js 22 and pnpm installed"
+    when: "Developer runs `pnpm install && pnpm run typecheck && pnpm run test`"
+    then: "All three commands exit 0; no errors; smoke test in each of the 8 packages passes"
+    test_type: unit
+    component_under_test: monorepo
+
+  - id: AC-002
+    given: "The root `tsconfig.base.json`"
+    when: "Inspected"
+    then: "Contains `strict: true`, `target: ES2022`, `module: Node16` (or `NodeNext`), `moduleResolution: Node16` (or `NodeNext`)"
+    test_type: unit
+    component_under_test: monorepo
+
+  - id: AC-003
+    given: "Any package's `tsconfig.json`"
+    when: "Inspected"
+    then: "Extends `../../tsconfig.base.json`; declares `composite: true`; lists only its direct dependencies in `references` (no transitive references)"
+    test_type: unit
+    component_under_test: monorepo
+
+  - id: AC-004
+    given: "A test file added to `packages/adapter-claude-code/src/` that imports from `@cello/directory`"
+    when: "Developer runs `pnpm run typecheck`"
+    then: "`tsc --build` exits non-zero with an error referencing the missing project reference — the boundary is enforced at compile time"
+    test_type: unit
+    component_under_test: monorepo
+
+  - id: AC-005
+    given: "All 8 packages"
+    when: "`package.json` of each is inspected"
+    then: "Each has `name: @cello/<name>`, `engines: { node: '>=22' }`, and scripts for `typecheck` and `test`"
+    test_type: unit
+    component_under_test: monorepo
+
+  - id: AC-006
+    given: "All 8 packages"
+    when: "Each package's `buildspec.yml` is inspected"
+    then: "Each uses `nodejs: 22` runtime, runs `pnpm install --frozen-lockfile`, and runs typecheck + test scoped to that package via `pnpm --filter @cello/<name>`"
+    test_type: unit
+    component_under_test: monorepo
+
+  - id: AC-007
+    given: "The repo root"
+    when: "Developer runs `pnpm run lint`"
+    then: "ESLint runs across all packages with zero errors on the scaffold code (empty index files + smoke tests)"
+    test_type: unit
+    component_under_test: monorepo
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "N/A — infrastructure story"
+  implementation_roadmap: "Implementation Decisions (monorepo, TypeScript, test harness)"

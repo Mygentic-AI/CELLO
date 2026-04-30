@@ -24,10 +24,21 @@ story: >
   }
   ```
 
-  M0 ships one concrete implementation: `InMemoryKeyProvider implements KeyProvider`. It holds
-  the Ed25519 keypair in process memory and performs Ed25519 signing internally. It is the
-  M0 default for Claude Code / Vitest deployment contexts where there is no OS-level key
-  backend. M1+ adds `OSKeychainKeyProvider`, `TPMKeyProvider`, etc. — all swap-in-compatible
+  M0 ships two concrete implementations:
+
+  - `InMemoryKeyProvider implements KeyProvider` — holds the Ed25519 keypair in process
+    memory. Used in tests and as the underlying key holder for `FileKeyProvider`.
+
+  - `FileKeyProvider implements KeyProvider` — loads a persisted keypair from a key file
+    on disk (path configurable, defaults to `~/.cello/key`). If the file does not exist,
+    generates a fresh keypair and writes it atomically with permissions 0o600. If the file
+    exists but is corrupt or invalid, throws a structured `key_file_corrupt` error — never
+    silently generates a new key over an existing file. Used by `adapter-claude-code` in
+    production so K_local is stable across process restarts. K_local MUST persist across
+    restarts — it is the agent's operational identity tied to pseudonym, FROST ceremonies,
+    and counterparty trust. Generating a fresh key on every restart would break the protocol.
+
+  M1+ adds `OSKeychainKeyProvider`, `TPMKeyProvider`, etc. — all swap-in-compatible
   behind the interface.
 
   The module also exposes a stateless `verify(publicKey, data, signature)` function — signature
@@ -105,6 +116,41 @@ acceptance_criteria:
     given: "A valid `KeyProvider`"
     when: "The caller calls `sign(<empty byte string>)`"
     then: "A 64-byte signature is returned; `verify(publicKey, <empty>, signature)` returns true; `verify(publicKey, <one byte>, signature)` returns false"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-008
+    given: "No key file exists at the configured path"
+    when: "`FileKeyProvider.load(path)` is called"
+    then: "A fresh Ed25519 keypair is generated; the key file is written atomically (write to temp file, rename) at the configured path with permissions 0o600; the returned `FileKeyProvider` uses this keypair; subsequent calls to `FileKeyProvider.load(path)` return a provider with the same public key"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-009
+    given: "A key file written by a previous `FileKeyProvider.load` call"
+    when: "`FileKeyProvider.load(path)` is called again"
+    then: "The returned provider's `getPublicKey()` returns the same public key as the original — K_local is stable across loads"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-010
+    given: "A key file that exists but contains corrupt or invalid bytes (e.g., truncated, wrong format)"
+    when: "`FileKeyProvider.load(path)` is called"
+    then: "The call throws a structured error with `reason: 'key_file_corrupt'`; no new key is generated; the corrupt file is not overwritten"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-011
+    given: "A key file written by `FileKeyProvider`"
+    when: "The file permissions are inspected"
+    then: "The file has permissions 0o600 (owner read/write only, no group or other access)"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-012
+    given: "A `FileKeyProvider` loaded from a key file"
+    when: "`sign(data)` is called and then `verify(publicKey, data, signature)` is called with the public key from `getPublicKey()`"
+    then: "`verify` returns true — the loaded keypair produces valid signatures"
     test_type: unit
     component_under_test: crypto
 

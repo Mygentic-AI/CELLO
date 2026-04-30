@@ -1,0 +1,169 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-ADAPTER-001
+domain: MCP Tool Surface
+actor: AGENT
+priority: P0
+components:
+  - adapter-claude-code
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a Claude Code agent,
+  I want a runnable MCP server (`@cello/adapter-claude-code`) that wraps `CelloClient`,
+  exposes the M0 tool surface over stdio, pushes minimal wake-up notifications via
+  `claude/channel` when messages arrive, and ships a `SKILL.md` that installs it
+  so that a Claude Code agent can send and receive CELLO messages reactively — without
+  polling — from M0.
+
+  `adapter-claude-code` is the Claude Code-specific wrapper around the protocol core
+  (`@cello/client`). It is the runnable thing an agent operator installs and launches.
+  `@cello/client` has no MCP server, no stdio transport, and no agent-runtime concepts —
+  those live here.
+
+  **Architecture of this adapter:**
+
+  ```
+  packages/adapter-claude-code/
+  ├── src/
+  │   ├── index.ts          ← entry point: createMcpServer(options), startStdio()
+  │   ├── server.ts         ← MCP server factory; registers tools against CelloClient
+  │   ├── queue.ts          ← inbound receive queue (populated via CelloClient.onMessage)
+  │   └── notifications.ts  ← claude/channel push logic
+  ├── SKILL.md              ← installation skill for Claude Code operators
+  └── package.json          ← @cello/adapter-claude-code, bin: cello-mcp
+  ```
+
+  **Startup sequence:**
+  1. Load K_local from key file (`CELLO_KEY_FILE` env var, default `~/.cello/key`).
+     If the file does not exist, generate a new keypair and write it atomically with
+     chmod 600. Uses `FileKeyProvider` from `@cello/crypto`.
+  2. Construct `CelloClient` with the loaded `FileKeyProvider`.
+  3. Register `CelloClient.onMessage` handler: enqueue inbound messages in the adapter's
+     receive queue and push a `claude/channel` notification.
+  4. Start the `CelloClient` (starts the libp2p node, binds listen address).
+  5. Start the MCP server over stdio.
+
+  **claude/channel notification payload** (pushed when a message lands in the queue):
+  ```json
+  { "type": "cello_message", "from": "<peer_pubkey_hex>" }
+  ```
+  Content is never included in the notification. The agent calls `cello_receive` to
+  retrieve the actual message. This ensures signature verification and content validation
+  (in `CelloClient`) are never bypassed.
+
+  **Receive queue:** lives in the adapter. Populated by `CelloClient.onMessage` callbacks.
+  `cello_receive` drains the queue with per-peer filtering (leave unmatched messages in
+  place). Different adapters may queue differently — queueing is not `CelloClient`'s concern.
+
+  **Tool registration:** the MCP server factory (`createMcpServer`) accepts a transport
+  argument and registers the M0 tool set identically under stdio and `InMemoryTransport`.
+  Tool names, input schemas, output schemas, and internal `CelloClient` wiring are
+  identical in both — transport is the only varying input. This mirrors the constraint
+  from MCP-001 AC-006, now enforced at the adapter layer.
+
+  **SKILL.md** covers:
+  1. `npm install -g @cello/adapter-claude-code`
+  2. Add to Claude Code MCP config: `claude mcp add --transport stdio cello -- cello-mcp`
+  3. Launch Claude Code with `--channels` flag to enable push notifications
+  4. Verify: run `cello_status` tool; confirm `transport_started: true` and `own_pubkey` present
+
+  **Listen address:** configurable via `CELLO_LISTEN_ADDR` env var, default
+  `/ip4/0.0.0.0/tcp/0` (random port). Surfaced in `cello_status` output.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the adapter starts with no key file present at `CELLO_KEY_FILE`"
+    action: "a new Ed25519 keypair is generated via `FileKeyProvider`, written atomically to the key file with permissions 0o600, and used as K_local for this and all subsequent runs"
+
+  - trigger: "When the adapter starts with an existing key file present"
+    action: "the keypair is loaded from the key file; `CelloClient` is constructed with this `KeyProvider`; the agent's K_local pubkey is stable across restarts"
+
+  - trigger: "When `CelloClient.onMessage` fires with an inbound validated message"
+    action: "the adapter enqueues the message in its receive queue and pushes `{ type: 'cello_message', from: <peer_pubkey_hex> }` as a `claude/channel` notification to the connected Claude Code session"
+
+  - trigger: "When Claude Code receives the channel notification and calls `cello_receive`"
+    action: "the adapter drains the next matching message from the receive queue and returns it; unmatched messages (per peer_pubkey filter) remain in the queue"
+
+  - trigger: "When the MCP server is started via `cello-mcp` CLI"
+    action: "the server runs over stdio; tools are registered; the `claude/channel` capability is declared in the server's capabilities; the server is ready to accept tool calls"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "No key file at `CELLO_KEY_FILE`"
+    when: "The adapter starts"
+    then: "A key file is created at the configured path with permissions 0o600; subsequent restarts load the same keypair (same `own_pubkey` in `cello_status`)"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-002
+    given: "A running adapter instance A and a second running adapter instance B with an established libp2p connection"
+    when: "B's underlying `CelloClient` receives an inbound message from A"
+    then: "B's adapter pushes a `claude/channel` notification `{ type: 'cello_message', from: <A's pubkey hex> }` to the connected MCP client; the notification contains no message content"
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-003
+    given: "Two adapter instances A and B with an established connection; B has received a message from A via channel notification"
+    when: "The MCP client calls `cello_receive({ timeout_ms: 5000 })` on B"
+    then: "The call returns the message content; the `sender_pubkey` matches A's pubkey from `cello_status`"
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-004
+    given: "The adapter MCP server factory is invoked once with `InMemoryTransport` and once with stdio"
+    when: "Both instances are inspected"
+    then: "Tool names, input schemas, output schemas, and `CelloClient` wiring are structurally identical; transport is the only differing input"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-005
+    given: "A running adapter"
+    when: "`cello_status` is called"
+    then: "Response includes `transport_started: true`, `own_pubkey` (32-byte hex, stable across restarts), non-empty `listen_addresses`, `connected_peer_count`, `uptime_seconds`"
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-006
+    given: "The adapter's MCP server capabilities response"
+    when: "Inspected by the MCP client"
+    then: "The `claude/channel` capability is declared; the server is eligible to push channel notifications to a Claude Code session started with `--channels`"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-007
+    given: "The `SKILL.md` in the package root"
+    when: "A developer follows it on a fresh machine"
+    then: "After completing all steps, `cello_status` returns `transport_started: true` in a running Claude Code session with `--channels`"
+    test_type: manual
+    component_under_test: adapter-claude-code
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The adapter shall never include message content in a `claude/channel` notification payload"
+    adversarial_condition: "even when the notification payload is extended with diagnostic fields — content always flows through `cello_receive` so signature verification is never bypassed"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: SI-002
+    statement: "The key file shall be written with permissions 0o600 (owner read/write only) on every write — initial generation and any future rotation"
+    adversarial_condition: "even when the file is created on a system with a permissive umask"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: SI-003
+    statement: "The adapter shall never surface K_local private key bytes in any tool response, notification payload, log output, or error message"
+    adversarial_condition: "even when startup fails or the key file is unreadable and the error message includes diagnostic context"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Conversations"
+  context_md: "Agent adapter, Claude Code adapter, CelloClient interface, claude/channel notification payload, KeyProvider persistence"
+  adr:
+    - "ADR-0001 — Peer ID separate from K_local"
+  related_stories:
+    - "CELLO-MCP-001 — tool logic in @cello/client that this adapter wraps"
+    - "CELLO-CRYPTO-001 — FileKeyProvider used at startup"

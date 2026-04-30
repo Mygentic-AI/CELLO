@@ -178,6 +178,23 @@ acceptance_criteria:
     test_type: integration
     component_under_test: transport
 
+  - id: AC-011
+    given: >
+      Two nodes on separate machines on different networks (e.g., home ISP and mobile
+      tether). A test relay (the minimal circuit-relay-v2-only fixture in
+      `packages/e2e-tests/`) is running at a known public address reachable by both
+      machines. Both nodes are configured with the test relay's multiaddr.
+    when: "Node A dials Node B's multiaddr (which may be behind NAT)"
+    then: >
+      The dial succeeds — either via DCuTR hole-punch (preferred) or via circuit relay v2
+      fallback when hole-punch fails. A's connection object reports B's Peer ID; B observes
+      an inbound connection from A. A stream opened on `/cello/m0/1.0.0` transfers data
+      successfully in both directions. The test script (`pnpm run test:cross-machine` in
+      `packages/e2e-tests/`) documents which path succeeded (DCuTR or relay) in its output.
+    test_type: cross-machine
+    component_under_test: transport
+    execution: "Run manually via `pnpm run test:cross-machine` — one machine as server, one as client. Not in CI. See packages/e2e-tests/README.md for setup instructions."
+
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001

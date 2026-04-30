@@ -50,9 +50,17 @@ This file is the canonical glossary for CELLO. Use these terms exactly in code, 
 
 **test relay** — a minimal libp2p node in `e2e-tests/` that does nothing but provide circuit relay v2. Used as the fallback relay for cross-machine tests when DCuTR hole-punching fails. Not a CELLO relay node — no Merkle, no sequencing, no protocol logic. Lives in `packages/e2e-tests/` as a test fixture.
 
+**cross-machine test** — a `pnpm run test:cross-machine` script in `packages/e2e-tests/`. One machine runs as "server", the other as "client". Executed manually by the developer to verify TRANSPORT-001's cross-machine AC. Not in CI in M0 — automated two-machine CodeBuild execution is deferred. The script and its pass criteria are codified so the test is reproducible. `test_type: cross-machine` in story ACs references this script.
+
 ---
 
 ## Package Structure (monorepo, pnpm workspaces)
+
+**npm scope: `@cello/`** — all packages publish as `@cello/package-name` (e.g. `@cello/client`, `@cello/crypto`, `@cello/adapter-claude-code`).
+
+**Runtime: Node.js 22 LTS.** TypeScript `target: ES2022`. All `package.json` files declare `"engines": { "node": ">=22" }`.
+
+**CI/CD: AWS CodeBuild + CodePipeline, eu-west-1.** Same webhook chain as cello-agent: GitHub push → HMAC-validated Lambda → EventBridge → path-filter Lambda → per-package CodePipeline. Each package has its own `buildspec.yml` running `pnpm run typecheck && pnpm run test` for that package only. No Docker/ECR/ECS in M0 — deployment pipelines added when directory and relay nodes need to run (M1+). Path filter maps `packages/<name>/**` → `cello-<name>-pipeline`.
 
 ```
 packages/

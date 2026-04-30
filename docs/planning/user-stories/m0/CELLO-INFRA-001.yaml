@@ -1,0 +1,95 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-001
+domain: Infrastructure
+actor: DEVELOPER
+priority: P0
+components:
+  - aws-infrastructure
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a developer,
+  I want per-package AWS CodeBuild + CodePipeline CI pipelines wired to the GitHub repo
+  so that every push to main that touches a package automatically triggers typecheck and
+  tests for that package — using the same webhook chain pattern already proven in
+  cello-agent.
+
+  The AWS infrastructure follows the 5-step chain from cello-agent:
+  1. GitHub push → HMAC-validated webhook receiver Lambda
+  2. Lambda → EventBridge bus
+  3. EventBridge path-filter Lambda → identifies which packages changed
+  4. Lambda → triggers the relevant CodePipeline(s)
+  5. CodePipeline → CodeBuild runs the package's `buildspec.yml` (typecheck + test only;
+     no Docker, no ECR, no ECS in M0)
+
+  **Region:** eu-west-1.
+
+  **Per-package pipelines (M0):**
+  - `cello-protocol-types-pipeline`
+  - `cello-crypto-pipeline`
+  - `cello-transport-pipeline`
+  - `cello-client-pipeline`
+  - `cello-adapter-claude-code-pipeline`
+  - `cello-directory-pipeline`
+  - `cello-relay-pipeline`
+  - `cello-e2e-tests-pipeline`
+
+  **Path filter rules:** A push touching `packages/<name>/**` triggers
+  `cello-<name>-pipeline`. Multiple packages changed in one push triggers multiple
+  pipelines concurrently. A change to root config files (`tsconfig.base.json`,
+  `pnpm-workspace.yaml`, root `package.json`) triggers all pipelines.
+
+  **CodeBuild environment:** `aws/codebuild/standard:7.0` image (Node.js 22 available),
+  ARM64 compute (`BUILD_GENERAL1_SMALL`). Source: GitHub via CodeStar connection.
+
+  **Deployment pipelines** (Docker → ECR → ECS) for `directory` and `relay` nodes are
+  NOT in scope for M0 — they are added when those nodes need to run continuously (M1+).
+  The `buildspec.yml` files in `packages/directory/` and `packages/relay/` run tests only
+  in M0; the deployment steps are added to their pipelines in M1.
+
+  **SSM parameters used:**
+  - `/cello/aws-account-id` — AWS account ID (same pattern as cello-agent)
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A push to main that modifies `packages/crypto/src/index.ts`"
+    when: "The push completes"
+    then: "`cello-crypto-pipeline` is triggered; CodeBuild runs `pnpm --filter @cello/crypto run typecheck && pnpm --filter @cello/crypto run test`; pipeline succeeds"
+    test_type: integration
+    component_under_test: aws-infrastructure
+
+  - id: AC-002
+    given: "A push to main that modifies files in both `packages/crypto/` and `packages/transport/`"
+    when: "The push completes"
+    then: "Both `cello-crypto-pipeline` and `cello-transport-pipeline` are triggered concurrently; both complete independently"
+    test_type: integration
+    component_under_test: aws-infrastructure
+
+  - id: AC-003
+    given: "A push to main that modifies `tsconfig.base.json`"
+    when: "The push completes"
+    then: "All 8 per-package pipelines are triggered"
+    test_type: integration
+    component_under_test: aws-infrastructure
+
+  - id: AC-004
+    given: "A push to main that modifies only `docs/planning/` files"
+    when: "The push completes"
+    then: "No CodePipeline is triggered — doc-only changes do not run CI"
+    test_type: integration
+    component_under_test: aws-infrastructure
+
+  - id: AC-005
+    given: "A push to main with a deliberate TypeScript error introduced in `packages/client/src/index.ts`"
+    when: "The `cello-client-pipeline` CodeBuild run completes"
+    then: "The pipeline fails at the typecheck step; the failure is visible in the CodePipeline console"
+    test_type: integration
+    component_under_test: aws-infrastructure
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "N/A — infrastructure story"
+  implementation_roadmap: "Implementation Decisions (monorepo, test harness)"
+  related_stories:
+    - "CELLO-SCAFFOLD-001 — buildspec.yml files this pipeline runs"

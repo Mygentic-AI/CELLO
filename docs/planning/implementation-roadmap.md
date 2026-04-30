@@ -112,14 +112,17 @@ Fully specified stories live in `docs/planning/user-stories/m0/`. The table belo
 
 | ID | Title | Domain | Actor | Priority | Components | Depends on |
 |---|---|---|---|---|---|---|
-| CELLO-CRYPTO-001 | Ed25519 keypair generation, signing, and verification | Crypto | CLIENT | P0 | crypto | — |
-| CELLO-CRYPTO-002 | SHA-256 hashing with domain separation | Crypto | CLIENT | P0 | crypto | — |
+| CELLO-SCAFFOLD-001 | Monorepo scaffold: pnpm workspaces, TypeScript project references, Vitest workspace, per-package buildspecs | Infrastructure | DEVELOPER | P0 | monorepo | — |
+| CELLO-INFRA-001 | AWS CI/CD: per-package CodeBuild + CodePipeline wired via EventBridge path-filter | Infrastructure | DEVELOPER | P0 | aws-infrastructure | SCAFFOLD-001 |
+| CELLO-CRYPTO-001 | Ed25519 keypair generation, signing, verification; InMemoryKeyProvider + FileKeyProvider | Crypto | CLIENT | P0 | crypto | SCAFFOLD-001 |
+| CELLO-CRYPTO-002 | SHA-256 hashing with domain separation | Crypto | CLIENT | P0 | crypto | SCAFFOLD-001 |
 | CELLO-MSG-001 | Signed envelope v0 schema (no session, no sequence) | Message Exchange | CLIENT | P0 | protocol-types | CRYPTO-001, CRYPTO-002 |
-| CELLO-TRANSPORT-001 | libp2p node bootstrap, Peer IDs, dial, custom stream protocol | Transport | CLIENT | P0 | transport | — |
+| CELLO-TRANSPORT-001 | libp2p node bootstrap, Peer IDs, dial, custom stream protocol; cross-machine AC | Transport | CLIENT | P0 | transport | SCAFFOLD-001 |
 | CELLO-MSG-002 | Peer-to-peer signed message exchange over libp2p streams | Message Exchange | CLIENT | P0 | client | MSG-001, TRANSPORT-001 |
-| CELLO-MCP-001 | M0 MCP tool surface (connect peer, send, receive, status) | MCP Tool Surface | AGENT | P0 | client | MSG-002 |
+| CELLO-MCP-001 | M0 MCP tool logic in @cello/client (connect peer, send, receive, status) | MCP Tool Surface | AGENT | P0 | client | MSG-002 |
+| CELLO-ADAPTER-001 | Claude Code adapter: stdio MCP server, claude/channel notifications, FileKeyProvider startup, SKILL.md | MCP Tool Surface | AGENT | P0 | adapter-claude-code | MCP-001, CRYPTO-001 |
 
-Six stories, all P0. A TDD agent pulls the stories in dependency order, writes failing tests from the acceptance criteria, and implements until green. CRYPTO-001, CRYPTO-002, and TRANSPORT-001 can run in parallel. MSG-001 waits on both CRYPTO stories. MSG-002 waits on MSG-001 and TRANSPORT-001. MCP-001 is last.
+Nine stories, all P0. SCAFFOLD-001 is the prerequisite for everything. CRYPTO-001, CRYPTO-002, and TRANSPORT-001 can run in parallel after SCAFFOLD-001. INFRA-001 can run in parallel with domain stories after SCAFFOLD-001. MSG-001 waits on both CRYPTO stories. MSG-002 waits on MSG-001 and TRANSPORT-001. MCP-001 follows MSG-002. ADAPTER-001 is last — it wraps the complete client.
 
 M0 has no directory, no relay, no session concept, and no Merkle tree. Two libp2p peers know each other's multiaddrs out-of-band (hardcoded in the test harness) and exchange a single signed envelope over a custom libp2p stream protocol. The envelope's TBS is `[protocol_version=0, content_hash, sender_pubkey, timestamp]` — session_id and sequence_number do not exist yet because there is no session.
 

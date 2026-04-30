@@ -12,15 +12,17 @@ story: >
   I want MCP tools to connect to a known peer by multiaddr, send signed messages to that peer, receive signed messages from peers, and check transport status
   so that I can communicate peer-to-peer with another agent from M0 without handling cryptographic operations, libp2p lifecycle, or envelope construction directly.
 
-  The M0 MCP server uses the `@modelcontextprotocol/sdk` Node SDK over stdio transport in
-  production. Test infrastructure note: E2E tests in `packages/e2e-tests` run two MCP
-  server instances in the same Vitest process by wiring each pair of client/server through
-  the SDK's in-memory transport (`InMemoryTransport.createLinkedPair()`) against in-process
-  libp2p nodes. The server factory, tool registry, schemas, and internal client wiring
-  (transport, keypair source, receive queue) are identical under both transports —
-  transport selection happens only at the outermost composition layer, so production stdio
-  and test in-memory paths exercise the same server code. This is enforced by AC-006 rather
-  than left as convention.
+  **Scope:** This story covers the tool logic, peer registry, input/output schemas, and
+  `CelloClient` wiring that live in `@cello/client`. The runnable MCP server process,
+  stdio transport, `claude/channel` notification push, key file loading, and `SKILL.md`
+  are covered by CELLO-ADAPTER-001 (`@cello/adapter-claude-code`).
+
+  Test infrastructure note: E2E tests in `packages/e2e-tests` exercise this story by
+  wiring two `CelloClient` instances through the SDK's `InMemoryTransport.createLinkedPair()`
+  against in-process libp2p nodes. The tool registry, schemas, and internal `CelloClient`
+  wiring are identical under `InMemoryTransport` and stdio — transport selection happens
+  only at the outermost composition layer (in `adapter-claude-code`). This is enforced by
+  AC-006 rather than left as convention.
 
   M0's tool surface is minimal and peer-to-peer — no session concept, no directory, no
   relay. The agent drives peer discovery by supplying a multiaddr to `cello_connect_peer`
@@ -238,3 +240,5 @@ references:
     - "2026-04-14_1100_cello-mcp-server-tool-surface"
     - "2026-04-08_1530_message-delivery-and-termination"
     - "2026-04-11_1400_libp2p-dht-and-peer-connectivity"
+  related_stories:
+    - "CELLO-ADAPTER-001 — runnable MCP server, stdio transport, claude/channel notifications, SKILL.md"
