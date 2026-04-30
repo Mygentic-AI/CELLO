@@ -12,7 +12,7 @@ This file is the canonical glossary for CELLO. Use these terms exactly in code, 
 
 **Agent adapter** — the thin agent-specific wrapper around the protocol core. Varies per agent runtime (Claude Code, IronClaw, Hermes, OpenClaw). Responsible for: (1) inbound notification — how the agent learns a message arrived; (2) outbound channel — how the agent initiates sends; (3) security surface differences (TBD).
 
-**Claude Code adapter** — uses MCP JSON-RPC notifications via the `claude/channel` capability with `--channels` flag. When a libp2p inbound message arrives, the CELLO MCP server pushes a minimal wake-up notification ("you have a message from peer X") into the Claude Code session. Claude Code starts a new turn and calls `cello_receive` to retrieve the message. The push notification is the M0 delivery signal only — no directory, no connection requests, no session concept in M0. `cello_receive` remains the retrieval tool; channel notification is only the wake-up.
+**Claude Code adapter** — uses MCP JSON-RPC notifications via the `claude/channel` capability with `--channels` flag. When a libp2p inbound message arrives, the CELLO MCP server pushes a minimal wake-up notification `{ type: 'cello_message', from: <peer_pubkey hex> }` into the Claude Code session. Claude Code starts a new turn and calls `cello_receive` to retrieve the content. The notification never carries message content — content always flows through `cello_receive` so signature verification and content validation are never bypassed.
 
 **Hermes adapter** — injects CELLO as an additional message channel alongside Telegram/WhatsApp, using Hermes's existing message-channel model.
 
@@ -22,7 +22,7 @@ This file is the canonical glossary for CELLO. Use these terms exactly in code, 
 
 **K_server_X** — FROST threshold shares held by directory nodes. Neither the client nor any single directory node can produce a combined signature without the other. Used only at session establishment and conversation seal.
 
-**KeyProvider** — the abstraction over the private key backend. `getPublicKey()` and `sign(data)`. Backend varies per deployment (OS Keychain, TPM, cloud secret manager, encrypted file). The private key never leaves the provider. `KeyProvider` is for CELLO envelope signing only — it is NOT wired into libp2p's Noise handshake. See ADR-0001.
+**KeyProvider** — the abstraction over the private key backend. `getPublicKey()` and `sign(data)`. Backend varies per deployment (OS Keychain, TPM, cloud secret manager, encrypted file). The private key never leaves the provider. `KeyProvider` is for CELLO envelope signing only — it is NOT wired into libp2p's Noise handshake. See ADR-0001. K_local MUST persist across restarts — it is the agent's operational identity, tied to pseudonym, FROST ceremonies, and counterparty trust. In M0, `InMemoryKeyProvider` loads from a key file on startup (generated once, stored at `~/.cello/key` or `CELLO_KEY_FILE` env var). Generating a fresh key on every restart would break the protocol.
 
 **Peer ID** — a libp2p transport identifier derived from a libp2p-managed keypair, not from K_local. Authenticates the transport connection (Noise handshake). In M1+, Peer IDs are ephemeral — fresh per session. K_local authenticates message content via envelope signatures. These are different keys serving different trust claims. See ADR-0001.
 
