@@ -1,0 +1,148 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-E2E-001
+domain: End-to-End
+actor: AGENT
+priority: P0
+components:
+  - adapter-claude-code
+  - client
+  - transport
+  - crypto
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a milestone sign-off,
+  I want two real Claude Code agents on two different machines to exchange a
+  tamper-evident signed CELLO message — Agent A sends, Agent B wakes up via
+  channel notification, reads the message, and replies — with no directory,
+  no relay, and no human in the message path
+  so that M0 is provably done: the full stack from libp2p transport through
+  CBOR envelope signing through MCP tool surface through claude/channel
+  notification is exercised end-to-end with real agent runtimes.
+
+  This story is the M0 finish line. All other M0 stories (SCAFFOLD-001 through
+  ADAPTER-001) are prerequisites. M0 is not closed until this story's acceptance
+  criteria are manually verified and signed off.
+
+  This story has no automated tests. Its ACs are a manual sign-off checklist.
+  The confidence that the individual layers work comes from the automated ACs in
+  the prerequisite stories. This story verifies that the layers compose correctly
+  with real agent runtimes.
+
+  **Setup:**
+  - Machine 1: Agent A — Claude Code session with `@cello/adapter-claude-code`
+    installed and wired into MCP config, started with `--channels`
+  - Machine 2: Agent B — same setup, independent Claude Code session
+  - Both machines on different networks (e.g., home ISP + mobile tether or
+    corporate VPN + home ISP)
+  - Test relay EC2 (from INFRA-001) running and reachable by both machines
+
+  **Message path being verified:**
+
+  ```
+  Agent A (Claude Code)
+    → calls cello_connect_peer({ multiaddr: <B's multiaddr> })
+    → calls cello_send({ peer_pubkey: <B's pubkey>, content: "hello from A" })
+
+  libp2p (Noise-encrypted, peer-to-peer)
+    → DCuTR hole-punch or circuit relay fallback
+
+  Agent B's adapter-claude-code
+    → CelloClient receives envelope
+    → verifies content_hash and sender signature
+    → enqueues message
+    → pushes { type: 'cello_message', from: <A's pubkey> } via claude/channel
+
+  Agent B (Claude Code)
+    → wakes up from channel notification
+    → calls cello_receive({ timeout_ms: 5000 })
+    → reads "hello from A", sender_pubkey matches A
+    → calls cello_send({ peer_pubkey: <A's pubkey>, content: "hello from B" })
+
+  Agent A's adapter-claude-code
+    → receives reply, verifies, enqueues, pushes channel notification
+
+  Agent A (Claude Code)
+    → wakes up, calls cello_receive
+    → reads "hello from B"
+  ```
+
+  **What tamper-evidence means in this context:** if a byte of the message
+  content is modified in transit, the receiving adapter rejects the envelope
+  (content_hash mismatch or signature verification failure) and the message
+  never surfaces in `cello_receive`. The sign-off checklist includes a tamper
+  test to verify this.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Agent A's Claude Code session with adapter running; Agent B's multiaddr obtained from `cello_status` on Machine 2"
+    when: "Agent A calls `cello_connect_peer({ multiaddr: <B's multiaddr> })`"
+    then: "Returns `{ connected: true, peer_pubkey: <hex> }`; the connection traverses a real network boundary (verified by confirming the machines are on different networks)"
+    test_type: manual
+    component_under_test: adapter-claude-code
+
+  - id: AC-002
+    given: "An established connection between A and B"
+    when: "Agent A calls `cello_send({ peer_pubkey: <B's pubkey>, content: 'hello from A' })`"
+    then: "Returns `{ delivered: true, content_hash: <hex> }`"
+    test_type: manual
+    component_under_test: adapter-claude-code
+
+  - id: AC-003
+    given: "Agent A has sent 'hello from A'"
+    when: "Agent B's Claude Code session is observed"
+    then: "A new turn starts automatically without any human input — the `claude/channel` notification woke Claude Code up"
+    test_type: manual
+    component_under_test: adapter-claude-code
+
+  - id: AC-004
+    given: "Agent B's Claude Code session has started a new turn from the channel notification"
+    when: "Agent B calls `cello_receive({ timeout_ms: 5000 })`"
+    then: "Returns `{ type: 'message', content: 'hello from A', sender_pubkey: <A's pubkey hex>, content_hash: <hex>, timestamp: <int> }`; `sender_pubkey` matches the value returned by `cello_status` on Machine 1"
+    test_type: manual
+    component_under_test: adapter-claude-code
+
+  - id: AC-005
+    given: "Agent B has received A's message"
+    when: "Agent B calls `cello_send({ peer_pubkey: <A's pubkey>, content: 'hello from B' })`"
+    then: "Agent A's Claude Code session wakes up via channel notification; Agent A calls `cello_receive` and gets `{ type: 'message', content: 'hello from B' }`"
+    test_type: manual
+    component_under_test: adapter-claude-code
+
+  - id: AC-006
+    given: "A signed envelope in transit from A to B (captured before delivery by intercepting the libp2p stream in a test variant where a byte of content is flipped)"
+    when: "The tampered envelope arrives at B's adapter"
+    then: "`cello_receive` on B never returns the tampered message — the adapter rejects it silently; no channel notification is pushed for the tampered envelope; B's Claude Code session does not wake up"
+    test_type: manual
+    component_under_test: adapter-claude-code
+
+  - id: AC-007
+    given: "Both agents have completed the full exchange (AC-001 through AC-005)"
+    when: "`cello_status` is called on both machines"
+    then: "Both show `connected_peer_count: 1`; `own_pubkey` on each machine matches the `sender_pubkey` seen in the other machine's received messages"
+    test_type: manual
+    component_under_test: adapter-claude-code
+
+  - id: AC-008
+    given: "The full exchange completed over a real network boundary"
+    when: "The operator notes which connectivity path was used"
+    then: "Either DCuTR hole-punch succeeded (preferred) or circuit relay fallback was used — both are acceptable; the result is recorded in the M0 sign-off notes"
+    test_type: manual
+    component_under_test: transport
+
+# ─── Sign-off ────────────────────────────────────────────────
+signoff:
+  required_before: "M0 closed / M1 stories begin"
+  performed_by: "Developer running both machines"
+  recorded_in: "docs/planning/discussion_logs/ — create a sign-off log entry with date, machines used, network paths, and AC pass/fail for each item"
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Conversations, Transport"
+  implementation_roadmap: "M0 — Peer-to-Peer Walking Skeleton"
+  related_stories:
+    - "CELLO-ADAPTER-001 — adapter under test"
+    - "CELLO-TRANSPORT-001 AC-011 — cross-machine connectivity prerequisite"
+    - "CELLO-MCP-001 — tool logic under test"
+    - "CELLO-MSG-002 — envelope exchange under test"

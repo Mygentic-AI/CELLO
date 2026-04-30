@@ -121,8 +121,9 @@ Fully specified stories live in `docs/planning/user-stories/m0/`. The table belo
 | CELLO-MSG-002 | Peer-to-peer signed message exchange over libp2p streams | Message Exchange | CLIENT | P0 | client | MSG-001, TRANSPORT-001 |
 | CELLO-MCP-001 | M0 MCP tool logic in @cello/client (connect peer, send, receive, status) | MCP Tool Surface | AGENT | P0 | client | MSG-002 |
 | CELLO-ADAPTER-001 | Claude Code adapter: stdio MCP server, claude/channel notifications, FileKeyProvider startup, SKILL.md | MCP Tool Surface | AGENT | P0 | adapter-claude-code | MCP-001, CRYPTO-001 |
+| CELLO-E2E-001 | M0 milestone sign-off: two real Claude Code agents on two machines exchange a signed message end-to-end | End-to-End | AGENT | P0 | adapter-claude-code, client, transport, crypto | ADAPTER-001, TRANSPORT-001 AC-011 |
 
-Nine stories, all P0. SCAFFOLD-001 is the prerequisite for everything. CRYPTO-001, CRYPTO-002, and TRANSPORT-001 can run in parallel after SCAFFOLD-001. INFRA-001 can run in parallel with domain stories after SCAFFOLD-001. MSG-001 waits on both CRYPTO stories. MSG-002 waits on MSG-001 and TRANSPORT-001. MCP-001 follows MSG-002. ADAPTER-001 is last — it wraps the complete client.
+Ten stories, all P0. SCAFFOLD-001 is the prerequisite for everything. CRYPTO-001, CRYPTO-002, and TRANSPORT-001 can run in parallel after SCAFFOLD-001. INFRA-001 can run in parallel with domain stories after SCAFFOLD-001. MSG-001 waits on both CRYPTO stories. MSG-002 waits on MSG-001 and TRANSPORT-001. MCP-001 follows MSG-002. ADAPTER-001 wraps the complete client. E2E-001 is the milestone finish line — M0 is not closed until it passes.
 
 M0 has no directory, no relay, no session concept, and no Merkle tree. Two libp2p peers know each other's multiaddrs out-of-band (hardcoded in the test harness) and exchange a single signed envelope over a custom libp2p stream protocol. The envelope's TBS is `[protocol_version=0, content_hash, sender_pubkey, timestamp]` — session_id and sequence_number do not exist yet because there is no session.
 
