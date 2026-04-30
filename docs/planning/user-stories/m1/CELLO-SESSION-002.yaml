@@ -293,6 +293,20 @@ degraded_behavior:
     test_type: integration
     component_under_test: client
 
+# ─── Stubs ───────────────────────────────────────────────────
+stubs:
+  - what: "Session initiation MCP tool surface (e.g. cello_connect / cello_request_session)"
+    why: "M1 proves Merkle notarization and dual-path architecture; the agent-facing connection UX belongs to M3 where trust data, policy evaluation, and the full accept/decline flow land together."
+    replaced_by: "A story to be written before M3 begins — provisionally CELLO-M3-SESSION-001"
+
+  - what: "Accept/decline flow — in M1 both agents are pre-authorized in the test harness; the directory issues SessionAssignments without an accept step"
+    why: "Full connection request flow requires trust signals, SignalRequirementPolicy evaluation, and selective disclosure of connection package items — all M3 concerns."
+    replaced_by: "A story to be written before M3 begins — provisionally CELLO-M3-CONNECTION-001"
+
+  - what: "FROST threshold signing at session establishment — single directory signing key pinned in client config"
+    why: "FROST DKG and threshold ceremony land in M2; M1 uses a single key as a placeholder."
+    replaced_by: "CELLO-M2 stories (FROST ceremonies replace the single key; no story rewrite needed — M2 swaps the IThresholdSigner implementation)"
+
 # ─── References ─────────────────────────────────────────────
 references:
   protocol_map: "Directory Infrastructure"
