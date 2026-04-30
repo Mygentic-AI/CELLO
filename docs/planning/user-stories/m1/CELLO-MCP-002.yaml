@@ -38,7 +38,10 @@ story: >
     `{type: 'timeout'}`.
   - `cello_close_session({ session_id })` — new. Initiates SESSION-003's bilateral seal.
     Returns `{status: 'sealed' | 'seal_deferred' | 'seal_rejected', sealed_root: hex | null,
-    close_timestamp: int, reason: string | null}` after the seal completes or fails.
+    close_timestamp: int, reason: string | null, mmr_peak: null}` after the seal completes
+    or fails. `mmr_peak` is always `null` in M1 — the MMR (global sealed-conversation
+    ledger) lands in M10. The field is present from M1 so M10 fills it in without changing
+    the return shape or breaking callers.
   - `cello_list_sessions()` — new. Replaces M0's `cello_list_peers`. Returns an array of
     `{session_id, counterparty_pubkey, counterparty_peer_id, relay_endpoint, status:
     'active' | 'transport_lost' | 'sealing' | 'sealed' | 'seal_rejected' | 'seal_deferred',
@@ -103,10 +106,11 @@ behavior:
     action: >
       the MCP server shall invoke SESSION-003's bilateral seal flow and wait for one of:
       (a) `session_sealed` event → return `{status: 'sealed', sealed_root, close_timestamp,
-      reason: null}`; (b) `session_seal_rejected` → return `{status: 'seal_rejected',
-      sealed_root: null, close_timestamp, reason}`; (c) directory unreachable →
-      `{status: 'seal_deferred', sealed_root: null, close_timestamp,
-      reason: 'directory_unreachable'}`.
+      reason: null, mmr_peak: null}`; (b) `session_seal_rejected` → return
+      `{status: 'seal_rejected', sealed_root: null, close_timestamp, reason,
+      mmr_peak: null}`; (c) directory unreachable → `{status: 'seal_deferred',
+      sealed_root: null, close_timestamp, reason: 'directory_unreachable', mmr_peak: null}`.
+      `mmr_peak` is always null in M1 — populated by M10.
   - trigger: "When the agent calls `cello_get_sealed_receipt({ session_id })`"
     action: >
       the MCP server shall look up the local seal record. If present, return the full
@@ -146,8 +150,9 @@ acceptance_criteria:
     when: "Agent A calls `cello_close_session({ session_id })`"
     then: >
       After SESSION-003's bilateral seal flow completes, A's call returns
-      `{status: 'sealed', sealed_root: <hex>, close_timestamp: <int>, reason: null}` with
-      sealed_root equal to the directory's recorded sealed_root
+      `{status: 'sealed', sealed_root: <hex>, close_timestamp: <int>, reason: null,
+      mmr_peak: null}` with sealed_root equal to the directory's recorded sealed_root;
+      mmr_peak is null in M1 — populated in M10
     test_type: e2e
     component_under_test: client
 
