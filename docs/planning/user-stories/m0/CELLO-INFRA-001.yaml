@@ -47,8 +47,18 @@ story: >
   The `buildspec.yml` files in `packages/directory/` and `packages/relay/` run tests only
   in M0; the deployment steps are added to their pipelines in M1.
 
+  **Test relay EC2 instance:**
+  A dedicated t4g.nano (ARM64, eu-west-1) runs the minimal circuit-relay-v2-only fixture
+  from `packages/e2e-tests/` permanently. Assigned an Elastic IP. The public address is
+  recorded in `/cello/test-relay-multiaddr` in SSM Parameter Store and hardcoded in
+  `packages/e2e-tests/README.md`. Security group: inbound TCP on the relay's listen port
+  from 0.0.0.0/0; SSH restricted to operator IP. Node.js 22 installed; relay process
+  managed by systemd. This is the only always-on infrastructure in M0 — all other nodes
+  are ephemeral developer machines.
+
   **SSM parameters used:**
   - `/cello/aws-account-id` — AWS account ID (same pattern as cello-agent)
+  - `/cello/test-relay-multiaddr` — public multiaddr of the test relay EC2 instance
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -85,6 +95,13 @@ acceptance_criteria:
     when: "The `cello-client-pipeline` CodeBuild run completes"
     then: "The pipeline fails at the typecheck step; the failure is visible in the CodePipeline console"
     test_type: integration
+    component_under_test: aws-infrastructure
+
+  - id: AC-006
+    given: "The test relay EC2 instance is running"
+    when: "A developer runs `pnpm run test:cross-machine` from `packages/e2e-tests/` on two machines on different networks"
+    then: "Both machines can dial the test relay's multiaddr successfully; the relay facilitates circuit relay v2 connections between them"
+    test_type: manual
     component_under_test: aws-infrastructure
 
 # ─── References ─────────────────────────────────────────────
