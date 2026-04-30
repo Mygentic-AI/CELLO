@@ -196,15 +196,19 @@ security_invariants:
 
   - id: SI-002
     statement: >
-      The transport module shall never construct a libp2p node whose Peer ID is derived from
-      any source other than the supplied `KeyProvider`'s public key.
+      The transport module's Peer ID is derived from a libp2p-managed keypair, not from the
+      supplied `KeyProvider`. The `KeyProvider` is for CELLO envelope signing only and must
+      never be wired into libp2p's Noise handshake or Peer ID derivation. The Peer ID
+      authenticates the transport connection; K_local (via `KeyProvider`) authenticates
+      message content. These are different keys serving different trust claims. See ADR-0001.
     adversarial_condition: >
-      even when the libp2p builder provides a peer-id auto-generation path — the transport
-      module's contract is that the caller owns the key backend, and the Peer ID is a
-      deterministic function of `keyProvider.getPublicKey()`. Verified by asserting that
-      the constructed node's Peer ID equals the PeerId independently derived from
-      `await keyProvider.getPublicKey()` using libp2p's standard Ed25519-public-key → PeerId
-      construction.
+      Even when a future refactor attempts to unify the transport identity key with K_local
+      for simplicity — the separation is load-bearing. In M1+, Peer IDs are ephemeral per
+      session while K_local is stable; conflating them would mean K_local rotations disrupt
+      in-flight sessions. Verified by asserting that `createNode` does not call
+      `keyProvider.getPublicKey()` or `keyProvider.sign()` during node construction or
+      startup, and that the node's Peer ID is NOT equal to the PeerId that would be derived
+      from `keyProvider.getPublicKey()`.
     test_type: unit
     component_under_test: transport
 

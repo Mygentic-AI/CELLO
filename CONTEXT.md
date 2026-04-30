@@ -22,13 +22,19 @@ This file is the canonical glossary for CELLO. Use these terms exactly in code, 
 
 **K_server_X** — FROST threshold shares held by directory nodes. Neither the client nor any single directory node can produce a combined signature without the other. Used only at session establishment and conversation seal.
 
-**KeyProvider** — the abstraction over the private key backend. `getPublicKey()` and `sign(data)`. Backend varies per deployment (OS Keychain, TPM, cloud secret manager, encrypted file). The private key never leaves the provider.
+**KeyProvider** — the abstraction over the private key backend. `getPublicKey()` and `sign(data)`. Backend varies per deployment (OS Keychain, TPM, cloud secret manager, encrypted file). The private key never leaves the provider. `KeyProvider` is for CELLO envelope signing only — it is NOT wired into libp2p's Noise handshake. See ADR-0001.
+
+**Peer ID** — a libp2p transport identifier derived from a libp2p-managed keypair, not from K_local. Authenticates the transport connection (Noise handshake). In M1+, Peer IDs are ephemeral — fresh per session. K_local authenticates message content via envelope signatures. These are different keys serving different trust claims. See ADR-0001.
+
+**CELLO identification exchange** — a minimal handshake that happens immediately after a libp2p connection is established on `/cello/m0/1.0.0`. The remote sends `{pubkey: <K_local hex>}` — self-reported, unverified at connect time. The first signed envelope exchange verifies it: if the signature matches the claimed pubkey, the pubkey is genuine. This is how `cello_connect_peer` returns `peer_pubkey` despite the Peer ID being separate from K_local.
 
 **IThresholdSigner** — the abstraction over the multi-party threshold ceremony. `FrostThresholdSigner` is the day-one implementation. Exists as a day-one interface so threshold ML-DSA can swap in without changing the protocol layer.
 
 **pseudonym** — the stable, pseudonymous identity used in the conversation participation table. Derived from `identity_key`, stable across K_local rotations.
 
 **session** — a single conversation between two agents. Has its own relay node assignment, Merkle tree, sequence numbering, and `session_id`. Multiple sessions can run concurrently on the same client.
+
+**session establishment (M1)** — the directory issues a signed `SessionAssignment` carrying both peers' Peer IDs and multiaddrs. In M1 the accept/decline step is stubbed — both agents are pre-authorized in the test harness and the directory issues the `SessionAssignment` directly. M3 replaces the stub with the full connection request flow (Alice requests → Bob notified → Bob accepts/declines). The `SessionAssignment` format does not change between M1 and M3.
 
 **relay node** — the session-level Merkle engine. Receives signed hashes from the sender, assigns canonical sequence numbers, builds the per-conversation Merkle tree, delivers Structure 2 back. Sees only ephemeral Peer IDs and signed hashes — never content.
 
@@ -40,7 +46,9 @@ This file is the canonical glossary for CELLO. Use these terms exactly in code, 
 
 **sealed root** — the final Merkle root produced by the bilateral seal. Both parties sign a SEAL control leaf committing to it; the directory independently recomputes it at seal.
 
-**walking skeleton** — M0. Two agents exchange a tamper-evident signed message peer-to-peer over libp2p with no server in the middle. Exercises the full transport, security, and signature substrate end-to-end.
+**walking skeleton** — M0. Two agents on two different machines exchange a tamper-evident signed message peer-to-peer over libp2p with no server in the middle. Cross-machine connectivity (DCuTR hole-punch or circuit relay fallback) is a M0 acceptance criterion, not deferred. Exercises the full transport, security, and signature substrate end-to-end.
+
+**test relay** — a minimal libp2p node in `e2e-tests/` that does nothing but provide circuit relay v2. Used as the fallback relay for cross-machine tests when DCuTR hole-punching fails. Not a CELLO relay node — no Merkle, no sequencing, no protocol logic. Lives in `packages/e2e-tests/` as a test fixture.
 
 ---
 
@@ -64,6 +72,27 @@ packages/
 **Dependency rule:** `adapter-* → client → transport, crypto, protocol-types`. No adapter imports from `directory` or `relay`.
 
 **Distribution:** each adapter is an npm package. Its `SKILL.md` is the installation skill for that agent runtime — the one-liner is `npm install @cello/adapter-<name>`, then follow the skill. The skill knows how to wire up that specific agent. Operators building their own integration import `@cello/client` directly.
+
+---
+
+## CelloClient interface (adapter boundary)
+
+`CelloClient` in `packages/client` exposes a push-only event model. It fires events; adapters decide what to do with them. The receive queue, per-peer filtering, and timeout logic live in the adapter, not in `CelloClient`.
+
+```typescript
+interface CelloClient {
+  start(): Promise<void>
+  stop(): Promise<void>
+  getOwnPublicKey(): Promise<string>           // lowercase hex, no 0x prefix
+  getListenAddresses(): string[]               // multiaddrs
+  connectPeer(multiaddr: string): Promise<{ peerId: string, peerPubkey: string }>  // peerPubkey from CELLO identification exchange
+  send(peerPubkey: string, content: Uint8Array): Promise<{ contentHash: string }>
+  listPeers(): Peer[]
+  onMessage(handler: (msg: InboundMessage) => void): void  // push only — no receive() on CelloClient
+}
+```
+
+`adapter-claude-code` registers an `onMessage` handler at startup. When a message arrives: (1) the adapter enqueues it in its own receive queue, (2) pushes a `claude/channel` notification to wake Claude Code. `cello_receive` drains the adapter's queue with per-peer filtering.
 
 ---
 
