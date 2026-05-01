@@ -19,7 +19,7 @@ The three other architectural surfaces interact with the client but are distinct
 
 | Surface | Relationship to the client |
 |---|---|
-| **Directory nodes** | The client authenticates to the directory at startup, participates in FROST ceremonies at session establishment and seal, and receives notifications via a persistent WebSocket. The directory is dormant during active sessions — it does not relay hashes or assign sequence numbers per message. The directory never sees message content. |
+| **Directory nodes** | The client authenticates to the directory at startup via a persistent libp2p connection (`/cello/signaling/1.0.0`), participates in FROST ceremonies at session establishment and seal, and receives notifications via this connection. The directory is dormant during active sessions — it does not relay hashes or assign sequence numbers per message. The directory never sees message content. |
 | **Relay nodes** | The relay node is the session-level Merkle engine during an active conversation. It receives signed hashes from the sender, verifies the sender's signature, assigns canonical sequence numbers, builds the per-conversation Merkle tree, and relays the sequenced hash to the counterparty. It also provides circuit relay for the ~20–30% of sessions that cannot hole-punch through symmetric NAT. The relay sees only ephemeral Peer IDs and signed hashes — never content, never real identities, never K_server_X shares. |
 | **Companion devices** (mobile / desktop app) | The companion device connects to the client over libp2p P2P to read conversation content and optionally inject human input. The client maintains the companion device allowlist and exposes the owner-facing companion API. This is an inbound connection from the owner, not from a protocol peer. |
 
@@ -27,7 +27,7 @@ The client is not a proxy between the agent and the protocol. The agent calls MC
 
 ### Parallel sessions
 
-The client supports any number of concurrent sessions running simultaneously. Each session is fully independent: its own relay node assignment, its own Merkle tree, its own sequence numbering, its own `session_id`. A new connection request arriving while other sessions are active is processed normally — the directory WebSocket remains open during active sessions for exactly this purpose (connection requests, notifications, relay assignments). Accepting a new connection runs a FROST ceremony on directory nodes independently of any active relay sessions; there is no contention.
+The client supports any number of concurrent sessions running simultaneously. Each session is fully independent: its own relay node assignment, its own Merkle tree, its own sequence numbering, its own `session_id`. A new connection request arriving while other sessions are active is processed normally — the persistent libp2p connection to the directory remains open during active sessions for exactly this purpose (connection requests, notifications, relay assignments). Accepting a new connection runs a FROST ceremony on directory nodes independently of any active relay sessions; there is no contention.
 
 The agent interacts with sessions by `session_id`. All `cello_send`, `cello_receive`, and `cello_close_session` calls are scoped to a specific session. `cello_list_sessions` returns all active sessions. The agent can address sessions in any order; the client routes each call to the correct relay and P2P connection independently.
 
@@ -304,20 +304,27 @@ None of these mechanisms are secrets. Security comes from what happens after a n
 
 The consortium's public key constant in client source code is secured by npm package integrity: pinned version, sha512 checksum in `package-lock.json`, Sigstore/OIDC provenance proving the package was built from a specific commit in a specific CI pipeline.
 
-### Persistent authenticated WebSocket
+### Persistent authenticated connection
 
-On startup the client establishes an outbound TLS WebSocket connection (port 443) to its chosen directory connection node. This connection:
+On startup the client establishes a libp2p connection to its chosen directory connection node. The directory is a libp2p node speaking the `/cello/signaling/1.0.0` stream protocol. This connection:
 
-- Is initiated outbound by the client — works through any NAT, indistinguishable from HTTPS
-- Stays open for the entire online session
+- Uses libp2p's WebSocket transport on port 443 — works through any NAT, indistinguishable from HTTPS to network observers
+- Stays open for the entire online session (persistent libp2p connection)
 - Is bidirectional — the directory can push data (connection requests, notifications, relay assignments, recovery coordination) through the client's existing connection without initiating a new one. During active sessions the connection is dormant; the relay node handles hash relay and sequencing.
 
-Authentication is bidirectional on connection:
-1. Client identifies itself: "I am Agent X"
-2. Directory sends a 256-bit CSPRNG nonce (single-use, short expiry)
-3. Client signs: `sign(nonce || agent_id || directory_node_id || timestamp, K_local)`
-4. Directory verifies signature against the registered public key
-5. Client verifies the directory's identity: directory signs its own challenge response; client checks against consortium-pinned node keys
+Authentication is two-layer:
+
+**Transport layer (automatic via libp2p Noise):** The libp2p Noise handshake authenticates both sides at the transport level using their respective libp2p-managed keypairs. This establishes an encrypted channel but does not bind the connection to a CELLO identity.
+
+**Protocol layer (CELLO identification exchange):** Immediately after the libp2p connection is established, the client sends `{pubkey: <K_local hex>}` over the `/cello/signaling/1.0.0` stream. The directory verifies ownership via a challenge-response:
+1. Directory sends a 256-bit CSPRNG nonce (single-use, short expiry)
+2. Client signs: `sign(nonce || agent_id || directory_node_id || timestamp, K_local)`
+3. Directory verifies signature against the registered public key
+4. Directory signs its own challenge response; client checks against consortium-pinned node keys
+
+This binds the libp2p transport connection to the agent's K_local identity. The Peer ID authenticates the transport; K_local authenticates the protocol participant. See ADR-0001.
+
+**Wire format:** All frames on `/cello/signaling/1.0.0` are canonical CBOR (RFC 8949 §4.2.1 Core Deterministic Encoding). Binary fields (public keys, signatures, hashes) are first-class CBOR byte strings.
 
 **Timestamp skew (AC-3 resolved):** The acceptable skew window for directory nonce verification is ±30 seconds. Consistent with NTP-synchronized systems and TOTP tolerance. Requests with timestamps outside this window are rejected as potential replays.
 
@@ -375,17 +382,17 @@ All three layers are production features of the libp2p stack (DCuTR, circuit rel
 
 ### Signaling flow
 
-The directory's existing WebSocket connections serve as the signaling channel:
+The directory's existing libp2p connections serve as the signaling channel (all frames CBOR-encoded on `/cello/signaling/1.0.0`):
 
 ```
-Client A → directory (WebSocket):  "My ephemeral Peer ID is X, candidate addresses: [...]"
-Directory → Client B (WebSocket):  forwards A's Peer ID and addresses
-Client B → directory (WebSocket):  "My ephemeral Peer ID is Y, candidate addresses: [...]"
-Directory → Client A (WebSocket):  forwards B's Peer ID and addresses
+Client A → directory (libp2p signaling):  "My ephemeral Peer ID is X, candidate addresses: [...]"
+Directory → Client B (libp2p signaling):  forwards A's Peer ID and addresses
+Client B → directory (libp2p signaling):  "My ephemeral Peer ID is Y, candidate addresses: [...]"
+Directory → Client A (libp2p signaling):  forwards B's Peer ID and addresses
 Directory discards both. Not stored.
 ```
 
-The directory's signaling role is complete once both parties have each other's Peer IDs and addresses. All subsequent communication is direct.
+The directory issues a signed `SessionAssignment` carrying both peers' Peer IDs and multiaddrs. The directory's signaling role is complete once both parties have the assignment. All subsequent communication is direct (content on `/cello/content/1.0.0` between peers) or via the relay (hashes on `/cello/relay/1.0.0`).
 
 ### Companion device P2P
 
@@ -426,7 +433,7 @@ When a relay node fails mid-session:
 
 1. Both agents detect the relay is gone (connection drops; no response to keepalive)
 2. Both agents retain their local Merkle tree copies with all leaves and the last confirmed sequence number
-3. Both agents signal the directory via their dormant but open persistent WebSocket: "relay X is down, session Y needs reassignment"
+3. Both agents signal the directory via their dormant but open persistent libp2p connection (`/cello/signaling/1.0.0`): "relay X is down, session Y needs reassignment"
 4. Directory assigns a new relay, handing it the session ID, both agents' public keys, and the last confirmed sequence number (the directory verifies both agents' reported sequence numbers agree)
 5. New relay picks up sequencing from the confirmed point; both agents reconnect to it
 6. Session resumes with no message loss
@@ -1096,7 +1103,7 @@ The human injection is never sent to the counterparty directly. It is an input t
 
 The `cello_request_human_input` MCP tool is agent-facing (not companion-device-facing). When the agent calls it:
 
-1. Client sends a content-free knock request to the directory via the persistent WebSocket
+1. Client sends a content-free knock request to the directory via the persistent libp2p signaling connection
 2. Directory pushes a push notification to the companion device via APNs (iOS) / FCM (Android): "Your agent is requesting input"
 3. Owner opens the app; companion P2P connection is established
 4. Owner sees conversation context via `fetch_session_content`
@@ -1125,12 +1132,12 @@ The companion app is a live viewer. If there is nothing to view, it says so. The
 
 The client maintains a notification queue. Events arrive from two sources:
 
-- **Directory** — pushed via the persistent authenticated WebSocket. Includes: incoming connection requests, endorsement received/revoked, system events (directory reachability, K_local degraded mode, key rotation nudge), anomaly alerts, tombstone/trust/recovery/succession events.
+- **Directory** — pushed via the persistent authenticated libp2p connection (`/cello/signaling/1.0.0`). Includes: incoming connection requests, endorsement received/revoked, system events (directory reachability, K_local degraded mode, key rotation nudge), anomaly alerts, tombstone/trust/recovery/succession events.
 - **Client-generated** — Layer 1 security blocks, Layer 3 outbound gate fires, delivery failure escalations, `PENDING_ESCALATION` outcomes, `CONNECTION_ESCALATION_RESOLVED` events.
 
 The agent polls this queue via `cello_poll_notifications`. Events are returned in receipt order. The agent acknowledges events by passing `ack_previous: true` on the next poll.
 
-**Notification routing (AC-16 resolved):** Two delivery paths exist and are not mutually exclusive. System-generated notifications (directory events: connection requests, endorsements, anomaly alerts, key rotation nudges, tombstone events, etc.) are pushed by the directory to the client via the persistent authenticated WebSocket — this is the primary path for all protocol-level notifications. Client-generated notifications destined for the owner's mobile app are sent directly by the client to the companion device over the P2P companion connection — since the client can always reach its own owner's mobile app, this path is always available. The distinction: directory-sourced events come via WebSocket; owner-targeted events from the client go direct to companion.
+**Notification routing (AC-16 resolved):** Two delivery paths exist and are not mutually exclusive. System-generated notifications (directory events: connection requests, endorsements, anomaly alerts, key rotation nudges, tombstone events, etc.) are pushed by the directory to the client via the persistent authenticated libp2p connection — this is the primary path for all protocol-level notifications. Client-generated notifications destined for the owner's mobile app are sent directly by the client to the companion device over the P2P companion connection — since the client can always reach its own owner's mobile app, this path is always available. The distinction: directory-sourced events come via the libp2p signaling stream; owner-targeted events from the client go direct to companion.
 
 ### Notification type registry
 
@@ -1269,13 +1276,13 @@ The following names are canonical and supersede inconsistencies in earlier docum
 1. Owner initiates registration via WhatsApp/Telegram/WeChat bot — phone OTP, baseline provisioning
 2. Client generates K_local and identity key; BIP-39 seed phrase produced for owner to back up
 3. K_server_X FROST ceremony runs; primary and fallback public keys registered in directory
-4. Client performs bootstrap discovery and establishes persistent authenticated WebSocket
+4. Client performs bootstrap discovery and establishes persistent authenticated libp2p connection to directory (`/cello/signaling/1.0.0`)
 5. Owner visits web portal to optionally strengthen trust profile (WebAuthn, OAuth, device attestation)
 6. Portal returns trust signal JSON blobs to client; client stores; directory holds hashes only
 
 ### Session setup
 
-1. Both agents are online with persistent authenticated WebSockets to their respective directory nodes
+1. Both agents are online with persistent authenticated libp2p connections to their respective directory nodes
 2. Agent A calls `cello_initiate_connection` — client bundles A's trust signal blobs with the request; directory verifies blobs against held hashes (fraud filter), appends track record stats, forwards package to Agent B, discards blobs
 3. Client B runs the automated policy evaluation pipeline (Layer 1 → signal verification → policy match)
 4. If auto-accepted: Agent B's client calls `cello_accept_connection`; FROST session establishment ceremony runs on directory nodes
@@ -1325,13 +1332,13 @@ The following names are canonical and supersede inconsistencies in earlier docum
 3. Owner taps "Not Me" in mobile app or portal
 4. Mobile app sends revocation request to signup portal backend; signup portal backend instructs the directory to burn K_server_X shares; `COMPROMISE_INITIATED` tombstone filed
 5. **All active sessions are terminated immediately via two parallel abort paths:**
-   - **Path 1 — cooperative (directory → compromised client):** Directory sends `EMERGENCY_SESSION_ABORT` control message to the client's existing authenticated WebSocket. Client sends a signed ABORT control leaf (`COMPROMISE_INITIATED` reason code) to each active counterparty via existing P2P channels, then disconnects all sessions and drops its own WebSocket. This is the clean path — both parties get a signed, reason-coded close in their Merkle trees.
-   - **Path 2 — non-cooperative (directory → each counterparty):** Simultaneously, the directory sends a `PEER_COMPROMISED_ABORT` notification directly to every counterparty's authenticated WebSocket. Each counterparty client seals unilaterally on receipt, regardless of whether an ABORT leaf arrives from the compromised side. This path executes regardless of the state of the compromised client — it works even if the client is offline, crashed, or actively controlled by the attacker. **Path 2 is the more important path.** Path 1 is an optimisation that produces a cleaner Merkle record when available.
+   - **Path 1 — cooperative (directory → compromised client):** Directory sends `EMERGENCY_SESSION_ABORT` control message to the client's existing authenticated libp2p signaling connection. Client sends a signed ABORT control leaf (`COMPROMISE_INITIATED` reason code) to each active counterparty via existing P2P channels, then disconnects all sessions and drops its own libp2p connection to the directory. This is the clean path — both parties get a signed, reason-coded close in their Merkle trees.
+   - **Path 2 — non-cooperative (directory → each counterparty):** Simultaneously, the directory sends a `PEER_COMPROMISED_ABORT` notification directly to every counterparty's authenticated libp2p signaling connection. Each counterparty client seals unilaterally on receipt, regardless of whether an ABORT leaf arrives from the compromised side. This path executes regardless of the state of the compromised client — it works even if the client is offline, crashed, or actively controlled by the attacker. **Path 2 is the more important path.** Path 1 is an optimisation that produces a cleaner Merkle record when available.
 6. No new FROST sessions possible — all new connection requests rejected
 7. Owner authenticates with WebAuthn at portal; generates new K_local; new K_server_X ceremony
 8. New keys published; connected agents receive key refresh notification
 
-**Client handling of `EMERGENCY_SESSION_ABORT`:** The client must treat this as the highest-priority control message. On receipt: (1) send signed ABORT control leaf with `COMPROMISE_INITIATED` reason code to each active counterparty via P2P; (2) disconnect all P2P sessions; (3) drop the WebSocket connection to the directory. No user confirmation required — the owner already confirmed "Not Me" at step 3.
+**Client handling of `EMERGENCY_SESSION_ABORT`:** The client must treat this as the highest-priority control message. On receipt: (1) send signed ABORT control leaf with `COMPROMISE_INITIATED` reason code to each active counterparty via P2P; (2) disconnect all P2P sessions; (3) drop the libp2p connection to the directory. No user confirmation required — the owner already confirmed "Not Me" at step 3.
 
 **Tombstone types (AC-77 resolved):** The client must handle four tombstone types with distinct behaviors:
 
@@ -1440,7 +1447,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | ~~AC-13~~ | Companion | ~~Resolved~~ — local QR-code ceremony; client displays QR code; companion app scans; keypair registered in client's local allowlist; no server round-trip, no directory involvement, no phone OTP. Distinct from device attestation enrollment. See frontend.md F-43. |
 | AC-14 | Companion | Maximum number of companion devices per agent not specified; `companion_device_registrations` table removed (AC-C10); local allowlist schema also undocumented (AC-72) |
 | AC-15 | Companion | Human injection delivery mechanism to agent input channel for Deployment Model A (direct MCP) not designed; `cello_receive` returns protocol messages, not owner-injected content |
-| AC-16 | Notifications | ~~Resolved~~ — directory-sourced events push via authenticated WebSocket; owner-targeted client notifications go direct to companion over P2P. Two paths, not mutually exclusive. |
+| AC-16 | Notifications | ~~Resolved~~ — directory-sourced events push via authenticated libp2p signaling connection; owner-targeted client notifications go direct to companion over P2P. Two paths, not mutually exclusive. |
 | AC-17 | Notifications | ~~Resolved~~ — response routes directly to client via channel's own reply mechanism: WhatsApp/Telegram/WeChat bot reply handler, or CELLO mobile app over companion P2P. No directory node intermediary. Slack and other workspace-scoped platforms are not supported as escalation channels because they lack verifiable phone-number binding. |
 | AC-18 | Status | `cello_status` does not distinguish between "directory temporarily unreachable" and "agent locked post-Not-Me revocation"; these are meaningfully different states |
 | AC-19 | Registration | ~~Partially resolved~~ — Incubation body text added (Part 6, 7-day / 25 outbound/day cap). Client must track provisional period state locally; directory enforces at FROST ceremony time. Open: the directory rejection error code for exceeding the provisional period cap is not specified. |

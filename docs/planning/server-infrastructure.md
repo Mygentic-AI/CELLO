@@ -98,7 +98,7 @@ The portal supports the following as optional, additive signals. None are regist
 
 **Portal-to-directory write API — [GAP G-4 RESOLVED]**: HTTPS POST to a dedicated internal directory endpoint, not exposed on the public WebSocket port. The portal authenticates with its own registered keypair — same model as relay nodes. The portal signs each write request; the directory verifies the portal signature before writing. Payload: `{ agent_id, signal_class, signal_hash, account_identifier_hash (if social), portal_signature, timestamp }`.
 
-**JSON record delivery to client — [GAP G-5 RESOLVED]**: Encrypted async pickup queue. The agent client may not be running when the portal completes verification. The portal encrypts the JSON blob to the agent's `identity_key` public key (stable long-term root — not K_local, which can rotate), stores the ciphertext in a short-lived pickup queue (portal-side ephemeral storage, 30-day TTL), and triggers a `TRUST_SIGNAL_PICKUP_PENDING` notification to the agent via the directory WebSocket. The agent downloads the encrypted blob, decrypts with its identity_key, validates `SHA-256(decrypted_blob) == stored_hash`, stores the JSON locally, and sends ACK. Pickup queue entry deleted on ACK. The portal never holds plaintext after encryption. If TTL expires without ACK, the hash remains in the directory as an orphaned entry; the agent client detects orphaned hashes and surfaces a re-verify prompt to the owner. See [[2026-04-17_1000_trust-signal-pickup-queue|Trust Signal Pickup Queue — Async Oracle Handoff]].
+**JSON record delivery to client — [GAP G-5 RESOLVED]**: Encrypted async pickup queue. The agent client may not be running when the portal completes verification. The portal encrypts the JSON blob to the agent's `identity_key` public key (stable long-term root — not K_local, which can rotate), stores the ciphertext in a short-lived pickup queue (portal-side ephemeral storage, 30-day TTL), and triggers a `TRUST_SIGNAL_PICKUP_PENDING` notification to the agent via the directory's libp2p signaling connection. The agent downloads the encrypted blob, decrypts with its identity_key, validates `SHA-256(decrypted_blob) == stored_hash`, stores the JSON locally, and sends ACK. Pickup queue entry deleted on ACK. The portal never holds plaintext after encryption. If TTL expires without ACK, the hash remains in the directory as an orphaned entry; the agent client detects orphaned hashes and surfaces a re-verify prompt to the owner. See [[2026-04-17_1000_trust-signal-pickup-queue|Trust Signal Pickup Queue — Async Oracle Handoff]].
 
 ### Key rotation and key operations
 
@@ -198,7 +198,7 @@ Minimum threshold at any phase: 3-of-5 across different jurisdictions and cloud 
 - Each ceremony output must include a K_server version/epoch identifier — [GAP G-8 RESOLVED]. Format: monotonic integer appended to the agent ID, e.g. `agent_123:epoch:4`. Simple, sortable, unambiguous. Grace period: 7 days after rotation — long enough for agents offline over a weekend, short enough that a suspected-compromised key cannot be used indefinitely. Hard cutoff: signatures from expired epochs rejected outright after the grace window.
 - When a K_server rotation boundary coincides with an in-flight FROST ceremony, that ceremony must abort and retry with new shares.
 
-**FROST ceremony coordinator and abort/retry — [GAP G-12 RESOLVED for FROST ceremonies]**: The initiating agent client is the FROST coordinator. It has the authenticated WebSocket to the directory and the strongest incentive to drive the ceremony to completion. No directory node is designated coordinator — that would be a single point of failure inside the ceremony itself.
+**FROST ceremony coordinator and abort/retry — [GAP G-12 RESOLVED for FROST ceremonies]**: The initiating agent client is the FROST coordinator. It has the authenticated libp2p connection to the directory and the strongest incentive to drive the ceremony to completion. No directory node is designated coordinator — that would be a single point of failure inside the ceremony itself.
 
 - **Round timeout**: 3 seconds per round. Gives 15× the worst-case RTT at Alpha (North America ↔ Asia ~200ms). A node that does not respond within 3 seconds is treated as absent for this ceremony.
 - **On timeout**: abort the ceremony, exclude non-responding nodes from the participant set, select a fresh set of t participants from the remaining pool, retry.
@@ -229,17 +229,20 @@ The node list public key is a constant in client source code (verified at build 
 
 ### Authentication
 
-**Per-connection authentication**:
-1. Directory issues a 256-bit CSPRNG challenge nonce (single-use, short-expiry)
-2. Agent signs: `nonce + agent_ID + directory_node_ID + timestamp` with K_local (Ed25519)
-3. Directory verifies the agent's signature against the registered public key
-4. Directory signs its own challenge response so the agent can verify the directory's identity against consortium-pinned node keys (certificate pinning)
+Authentication is two-layer. The agent client connects via libp2p (WebSocket transport on port 443); libp2p's Noise handshake authenticates the transport. The CELLO identification exchange then binds the connection to a K_local identity:
+
+**Per-connection authentication (CELLO identification exchange)**:
+1. Client sends `{pubkey: <K_local hex>}` over `/cello/signaling/1.0.0`
+2. Directory issues a 256-bit CSPRNG challenge nonce (single-use, short-expiry)
+3. Agent signs: `nonce + agent_ID + directory_node_ID + timestamp` with K_local (Ed25519)
+4. Directory verifies the agent's signature against the registered public key
+5. Directory signs its own challenge response so the agent can verify the directory's identity against consortium-pinned node keys (certificate pinning)
 
 The agent payload binds the challenge to a specific directory_node_ID to prevent cross-node replay. A timestamp skew check is enforced. Acceptable skew: **±30 seconds** — consistent with NTP-synchronized systems; matches TOTP tolerance; prevents replay without rejecting legitimate requests from agents with minor clock drift. **[GAP G-10 RESOLVED]**
 
-Repeated malformed WebSocket messages: rate limit → disconnect → require reverification.
+Repeated malformed frames on the signaling stream: rate limit → disconnect → require reverification.
 
-**WebSocket schema**: Directory WebSocket accepts only a rigid JSON schema: `{type, agent_id, session_id, payload, signature, timestamp}`. Anything outside this schema is rejected. Validation is pure code (schema check, signature verification, timestamp check) — no LLM involvement.
+**Frame schema**: The `/cello/signaling/1.0.0` stream accepts only canonical CBOR frames (RFC 8949 §4.2.1 Core Deterministic Encoding). Each frame contains: `{type, agent_id, session_id, payload, signature, timestamp}`. Anything outside this schema is rejected. Validation is pure code (schema check, signature verification, timestamp check) — no LLM involvement. The portal's WebSocket connection (G-43) uses JSON encoding since the portal is a web application, not a libp2p peer.
 
 ### Replication and consensus
 
@@ -340,11 +343,11 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 
 ### Session management
 
-**Persistent WebSocket per agent**: Outbound TLS on port 443, kept open for the entire online session. Directory can push data (hash relay, connection requests, notifications) without initiating a new connection.
+**Persistent libp2p connection per agent**: The agent client connects to the directory node via libp2p, using WebSocket transport on port 443. The directory speaks `/cello/signaling/1.0.0` — a custom libp2p stream protocol with CBOR-encoded frames. The connection stays open for the entire online session. The directory can push data (connection requests, notifications, relay assignments) through the client's existing connection without initiating a new one. Authentication is two-layer: libp2p Noise at the transport level, then a CELLO identification exchange (K_local challenge-response) at the protocol level. See ADR-0001 for the Peer ID / K_local separation rationale.
 
-**[~~GAP G-43~~ — Resolved]**: The portal uses a **two-WebSocket design** to read and write to the owner's agent event stream without being the agent.
+**[~~GAP G-43~~ — Resolved]**: The portal uses a **two-connection design** to read and write to the owner's agent event stream without being the agent. The portal connects via a standard authenticated WebSocket (it is a web application, not a libp2p peer); the agent client connects via libp2p.
 
-**Direction 1 — reading (portal ← directory)**: At login, the portal opens a second authenticated WebSocket to the directory using the portal's own registered keypair. The connection is scoped to a single `agent_id` (the authenticated owner's agent). The directory fans out the owner-relevant event subset simultaneously to both the portal WebSocket and the agent-client WebSocket. The portal never sees the full agent event stream — only the owner-relevant subset below.
+**Direction 1 — reading (portal ← directory)**: At login, the portal opens an authenticated WebSocket to the directory using the portal's own registered keypair. The connection is scoped to a single `agent_id` (the authenticated owner's agent). The directory fans out the owner-relevant event subset simultaneously to both the portal WebSocket and the agent client's libp2p signaling connection. The portal never sees the full agent event stream — only the owner-relevant subset below.
 
 **Owner-relevant subset** fanned out to the portal WebSocket:
 - `connection_request` — incoming connection request (requester trust profile, greeting post-Layer-1, scan result)
@@ -359,9 +362,9 @@ Repeated malformed WebSocket messages: rate limit → disconnect → require rev
 - `ownership_transfer_cancelled` — a previously announced voluntary ownership transfer has been cancelled; portal clears the succession banner
 - `succession_package_available` — succession package is available for pickup; sent to the designated successor after the dead-man's switch waiting period completes; portal must prompt the successor to accept and decrypt
 
-Session-level security events (`relay_sequencing_attack`, `peer_compromised_abort` and all session Merkle events) remain on the agent-client WebSocket only.
+Session-level security events (`relay_sequencing_attack`, `peer_compromised_abort` and all session Merkle events) remain on the agent client's libp2p signaling connection only.
 
-**Direction 2 — writing (portal → directory → agent client)**: The portal submits signed escalation decisions and owner-initiated actions to the directory via the portal WebSocket (G-43 — the same authenticated WebSocket opened at login). The directory validates the portal signature, verifies the portal is authorized for the target `agent_id`, and forwards the instruction to the agent client as a `portal_instruction` message on the agent's authenticated WebSocket. Forwarded action types: accept/decline a connection escalation, ban or mute a group room participant, lift a mute, initiate K_local rotation, create succession package. The agent client executes the action without requiring a second owner confirmation — the portal owner already confirmed the action at the portal. See agent-client.md notification registry (`portal_instruction` type) and frontend.md F-28.
+**Direction 2 — writing (portal → directory → agent client)**: The portal submits signed escalation decisions and owner-initiated actions to the directory via the portal WebSocket (G-43 — the same authenticated WebSocket opened at login). The directory validates the portal signature, verifies the portal is authorized for the target `agent_id`, and forwards the instruction to the agent client as a `portal_instruction` message on the agent's authenticated libp2p signaling connection. Forwarded action types: accept/decline a connection escalation, ban or mute a group room participant, lift a mute, initiate K_local rotation, create succession package. The agent client executes the action without requiring a second owner confirmation — the portal owner already confirmed the action at the portal. See agent-client.md notification registry (`portal_instruction` type) and frontend.md F-28.
 
 **Degraded mode — connection nodes unavailable**:
 - Connection nodes must refuse new connection requests when unavailable and send a reason: "directory unreachable, not accepting unauthenticated sessions — retry when available"
@@ -423,7 +426,7 @@ After ABORT: REOPEN is not permitted. Post-ABORT message arrivals are always rej
 - On receiving the connection request package, the directory:
   1. Checks each submitted trust blob against the hashes it already holds — this is a **fraud filter only**, not a trust authority function. It stops obviously invalid or tampered submissions.
   2. Appends track record stats from its own authoritative store (keyed to Alice's pseudonymous pubkey). These stats are directory-held data, not Alice-submitted data.
-  3. Forwards the full package to Bob via his authenticated WebSocket.
+  3. Forwards the full package to Bob via his authenticated libp2p signaling connection.
   4. Discards the trust blobs. The directory never stores trust signal data beyond hashes — the blobs exist only transiently during relay.
 - The directory does not re-sign the trust data. Alice's original Ed25519 signatures on each blob arrive at Bob intact. The directory is not a trust authority — it is a verified relay.
 - The connection package that arrives at Bob contains: Alice's trust signal blobs (signed by Alice at creation time), Alice's identity key, and track record stats appended by the directory.
@@ -523,8 +526,8 @@ CELLO does not compute or publish a single numeric trust score. Trust is express
 **Compromise response (dual-path forced abort)**:
 - "Not Me" → directory immediately burns K_server_X shares; no new FROST sessions possible; no conversations can receive notarized seal
 - K_server revocation alone cannot close existing P2P sessions — they are direct libp2p connections not routed through the directory. Two additional abort paths fire simultaneously:
-  - **Path 1 — cooperative (directory → compromised agent client)**: Directory sends `EMERGENCY_SESSION_ABORT` control message via the agent's persistent WebSocket. The client sends a signed ABORT control leaf (`COMPROMISE_INITIATED` reason code) to each active counterparty via existing P2P channels, then disconnects all sessions and drops the WebSocket. Applies when the legitimate agent process is still running.
-  - **Path 2 — non-cooperative (directory → each counterparty)**: For every active session on record, the directory sends a `PEER_COMPROMISED_ABORT` notification to each counterparty's authenticated WebSocket. Counterparty seals unilaterally on receipt. Applies regardless of whether the compromised client is online, responsive, or attacker-controlled. **Path 2 is the more important path** — Path 1 is an optimisation that produces a cleaner Merkle record.
+  - **Path 1 — cooperative (directory → compromised agent client)**: Directory sends `EMERGENCY_SESSION_ABORT` control message via the agent's persistent libp2p signaling connection. The client sends a signed ABORT control leaf (`COMPROMISE_INITIATED` reason code) to each active counterparty via existing P2P channels, then disconnects all sessions and drops the connection. Applies when the legitimate agent process is still running.
+  - **Path 2 — non-cooperative (directory → each counterparty)**: For every active session on record, the directory sends a `PEER_COMPROMISED_ABORT` notification to each counterparty's authenticated libp2p signaling connection. Counterparty seals unilaterally on receipt. Applies regardless of whether the compromised client is online, responsive, or attacker-controlled. **Path 2 is the more important path** — Path 1 is an optimisation that produces a cleaner Merkle record.
 - `EMERGENCY_SESSION_ABORT` is a directory control instruction, not a notification type. `PEER_COMPROMISED_ABORT` is added to the formal notification type registry.
 - After recovery via WebAuthn: changing the registered phone number also requires WebAuthn, removing attacker access from a SIM-swapped number
 
@@ -633,7 +636,7 @@ For SUCCESSION_INITIATED additionally:
   | High-trust | 3+ verified signals, at least one ≥ 2 years | 100/day |
   | Institutional | Verified business (see G-33) | Elevated, application-based |
   | Bonded | Economic bond posted (pending G-36 financial infrastructure) | Elevated; bond functions as stake — planned future extension |
-- **Delivery**: Via recipient's persistent authenticated WebSocket
+- **Delivery**: Via recipient's persistent authenticated libp2p signaling connection
 - **Notification hashes**: Stored as standalone events — not chained into a session Merkle tree
 - **Notification type registry**: Enumerated, not freeform. Full type list:
 
@@ -672,12 +675,12 @@ For SUCCESSION_INITIATED additionally:
   | `KEY_ROTATED` | Directory | This agent has completed a K_local rotation; counterparty agents should refresh cached key material; payload: `{ agent_id, new_pubkey }` |
   | `PEER_COMPROMISED_ABORT` | Directory | A counterparty agent has been compromised and all sessions with them are terminated; payload: `{ compromised_agent_id, tombstone_id, notified_at }` |
   | `RELAY_SESSION_REASSIGNED` | Directory | A relay node failure caused the directory to assign a new relay and resume the session from the last confirmed sequence number; payload: `{ session_id, old_relay_node_id, new_relay_node_id, resumed_from_seq, reassigned_at }`. Surfaced in the portal activity log so the owner can see disruption and recovery. See frontend.md F-45. |
-  | `ROOM_AUTO_MUTE` | Directory (from relay) | A participant in a group room has been auto-muted by the relay after a 2nd violation within the rolling window; sent to the room owner. Payload: `{ room_id, muted_agent_id, violation_code, mute_sequence_number, duration_ms, muted_at }`. The relay reports the event to the directory; the directory forwards to the room owner's authenticated WebSocket. |
+  | `ROOM_AUTO_MUTE` | Directory (from relay) | A participant in a group room has been auto-muted by the relay after a 2nd violation within the rolling window; sent to the room owner. Payload: `{ room_id, muted_agent_id, violation_code, mute_sequence_number, duration_ms, muted_at }`. The relay reports the event to the directory; the directory forwards to the room owner's authenticated libp2p signaling connection. |
   | `ALIAS_EXPIRY` | Directory | An alias has reached its 6-month inactivity TTL and has been marked `EXPIRED`. Payload: `{ alias_id, alias_slug, expired_at }`. |
   | `PORTAL_INSTRUCTION` | Directory (forwarded from portal) | Owner-initiated action forwarded by the directory from the portal WebSocket (G-43). Payload: `{ action, agent_id, target_id?, room_id?, portal_signature, issued_at }`. Action types: `accept_connection`, `decline_connection`, `ban_participant`, `mute_participant`, `unmute_participant`, `initiate_rotation`, `create_succession_package`. The client validates `portal_signature` before acting. See G-43. |
   | `FALLBACK_CANARY` | Directory | **Highest-urgency security event.** Fired when the directory detects two competing FROST participation attempts for the same agent from different sources within a short window — a strong indicator that K_local has been stolen and an attacker is attempting to open a session concurrently with the legitimate agent. Pushes to the owner via WhatsApp/Telegram/WeChat and breaks through Do Not Disturb on mobile. Tapping "Not Me" triggers the compromise response flow. Payload: `{ agent_id, session_attempt_ids[], detected_at }`. |
-- **Note**: `EMERGENCY_SESSION_ABORT` is a directory-to-client control instruction sent via the agent's persistent WebSocket — it is NOT a notification type and does not appear in the notification registry
-- **Notification delivery paths — resolved [GAP G-32 — RETIRED]**: Two paths. (1) Directory-sourced events (connection requests, endorsements, anomaly alerts, system events, PEER_COMPROMISED_ABORT, etc.) push via the recipient agent's authenticated persistent WebSocket — the directory is always involved for these. (2) Owner-targeted notifications (trust signal pickup pending, human input requested, companion content alerts) go direct from the CELLO client to the companion device over P2P — the directory is not in the path for these. The server handles path (1) only; path (2) is client-to-companion and requires no server-side change.
+- **Note**: `EMERGENCY_SESSION_ABORT` is a directory-to-client control instruction sent via the agent's persistent libp2p signaling connection — it is NOT a notification type and does not appear in the notification registry
+- **Notification delivery paths — resolved [GAP G-32 — RETIRED]**: Two paths. (1) Directory-sourced events (connection requests, endorsements, anomaly alerts, system events, PEER_COMPROMISED_ABORT, etc.) push via the recipient agent's authenticated persistent libp2p signaling connection — the directory is always involved for these. (2) Owner-targeted notifications (trust signal pickup pending, human input requested, companion content alerts) go direct from the CELLO client to the companion device over P2P — the directory is not in the path for these. The server handles path (1) only; path (2) is client-to-companion and requires no server-side change.
 - **Institutional verification for elevated rate limits**: application process and criteria are operational policy, not protocol design. **[GAP G-33 — deferred to product/BD]** Placeholder: applicant submits business registration, use-case description, and agrees to elevated accountability terms. CELLO approves manually at Alpha/Consortium. Automated criteria TBD when volume justifies it.
 
 ### Contact aliases
@@ -776,7 +779,7 @@ See [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay 
 - **Implementation**: libp2p circuit relay v2 (production feature of the libp2p stack)
 - Both A and B connect outbound to the relay node; the relay bridges the two outbound connections. Neither side needs to accept an inbound connection. Resolves symmetric NAT failure cases.
 - **WebSocket fallback**: For corporate firewalls that block all non-443 traffic, libp2p WebSocket transport tunnels the P2P connection over TLS on port 443. Indistinguishable from HTTPS. Still E2E encrypted, never touches directory for content.
-- **Signaling**: Peer ID exchange happens via the directory's WebSocket (directory receives ephemeral Peer IDs, forwards them, discards both — not stored). This is a one-time exchange; relay node is then contacted directly.
+- **Signaling**: Peer ID exchange happens via the directory's libp2p signaling protocol (`/cello/signaling/1.0.0`) — directory receives ephemeral Peer IDs, issues a signed `SessionAssignment` carrying both peers' Peer IDs and multiaddrs, discards the Peer IDs after delivery. This is a one-time exchange; relay node is then contacted directly.
 - **libp2p circuit relay v2 configuration**: Relay nodes must be configured with no time limit on reservations and no data cap (or cap far above any realistic session). The default 2-minute / 128 KiB reservation limits assume a short stepping-stone usage; CELLO relay nodes support conversations that last hours or days.
 
 ### Session assignment and handoff authentication
@@ -802,7 +805,7 @@ See [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay 
 If a relay node goes down mid-session:
 1. Both agents detect the relay is gone (connection drops)
 2. Both agents still hold their local Merkle tree copies with all leaves and the last confirmed sequence number
-3. Both agents have a persistent WebSocket to the directory (dormant but open)
+3. Both agents have a persistent libp2p connection to the directory (dormant but open)
 4. Both agents signal the directory: "relay X is down, session Y needs reassignment"
 5. Directory assigns a new relay, hands it the session ID, public keys, and the last confirmed sequence number (reported by both agents — must agree)
 6. New relay picks up sequencing from the confirmed point; agents resume
@@ -894,8 +897,8 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 
 ### Session setup flow
 
-1. Agent connects to a directory connection node via persistent WebSocket (TLS port 443)
-2. Bidirectional challenge-response authentication (agent ↔ directory node)
+1. Agent connects to a directory connection node via libp2p (WebSocket transport on TLS port 443); Noise handshake authenticates the transport
+2. CELLO identification exchange: client sends K_local pubkey, directory issues challenge nonce, client signs with K_local, directory verifies — binds the libp2p connection to the agent's CELLO identity
 3. Agent A calls `cello_initiate_connection` — client bundles A's trust signal blobs with the request; directory checks blobs against held hashes (fraud filter), appends track record stats from its authoritative store, forwards package to Agent B, discards blobs
 4. Agent B's client performs independent verification (Merkle inclusion proof for identity, Alice's own signatures for trust blobs) and evaluates against its `SignalRequirementPolicy`
 5. If accepted: FROST co-signing ceremony (session establishment) — requires t-of-n directory nodes
@@ -904,7 +907,7 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 8. Directory performs ephemeral libp2p Peer ID exchange on behalf of both agents
 9. For sessions needing relay: agents use Peer IDs to connect to relay node; relay bridges the connection
 10. For ~70–80% of sessions: direct hole-punch succeeds; relay node provides hash relay and sequencing but not circuit relay
-11. Hash relay begins: agent sends signed hash → relay node → relay verifies signature, assigns seq#, constructs Structure 2 leaf, relays to counterparty; directory WebSocket remains dormant (open for recovery)
+11. Hash relay begins: agent sends signed hash → relay node → relay verifies signature, assigns seq#, constructs Structure 2 leaf, relays to counterparty; directory libp2p connection remains dormant (open for recovery)
 
 ### Message flow
 
@@ -913,7 +916,7 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 3. Relay: verifies A's K_local signature, assigns canonical sequence number, constructs Structure 2 outer leaf (embedding Structure 1 + seq# + prev_root), relays to Agent B via B's connection to the relay
 4. Agent B receives message via P2P AND Structure 2 leaf via relay (two independent paths)
 5. Agent B verifies K_local signature in Structure 1, checks hash matches message content, checks `last_seen_seq` for causal consistency, updates local Merkle tree
-6. Neither path blocks the other; directory WebSocket remains dormant during normal message flow
+6. Neither path blocks the other; directory libp2p connection remains dormant during normal message flow
 
 ### Session seal flow
 
@@ -947,8 +950,8 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 2. Owner taps "Not Me" — request routes through the signup portal backend (the directory does not authenticate owners directly)
 3. Signup portal backend authenticates the owner (via messaging platform webhook bound to the registered phone number) and forwards the burn request to the directory; directory immediately burns K_server_X shares (no new FROST sessions possible)
 4. Directory fires dual-path forced abort simultaneously:
-   - **Path 1** (cooperative): sends `EMERGENCY_SESSION_ABORT` control message to the agent's persistent WebSocket; client sends signed ABORT leaves (`COMPROMISE_INITIATED`) to all counterparties via P2P, then disconnects
-   - **Path 2** (non-cooperative): for every active session on record, sends `PEER_COMPROMISED_ABORT` notification to each counterparty's WebSocket; counterparty seals unilaterally on receipt
+   - **Path 1** (cooperative): sends `EMERGENCY_SESSION_ABORT` control message to the agent's persistent libp2p signaling connection; client sends signed ABORT leaves (`COMPROMISE_INITIATED`) to all counterparties via P2P, then disconnects
+   - **Path 2** (non-cooperative): for every active session on record, sends `PEER_COMPROMISED_ABORT` notification to each counterparty's libp2p signaling connection; counterparty seals unilaterally on receipt
 5. All active sessions terminated — either via Path 1 ABORT leaves (clean record) or Path 2 counterparty SEAL-UNILATERAL (no ABORT from compromised side; absence is itself evidentiary)
 6. Owner authenticates via WebAuthn on Signup Portal
 7. Owner generates new K_local; portal triggers new K_server_X ceremony
@@ -1061,7 +1064,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-29 | Directory | ~~Bio update rate limit N not defined~~ **RESOLVED**: 12-hour cooldown |
 | G-30 | Directory | ~~Greeting rate limit threshold not specified~~ **RESOLVED**: 1 per recipient per 7 days; 30 days after explicit decline; permanent on block |
 | G-31 | Directory | ~~Rate limit values per trust tier not specified~~ **RESOLVED**: phone-only/low-trust 5/day; established (1 signal ≥2yr) 10/day; high-trust (3+ signals, ≥1 ≥2yr) 100/day; institutional/bonded elevated |
-| G-32 | Directory | ~~Retired~~ — two delivery paths resolved: directory WebSocket for system/protocol events to agents; direct client-to-companion P2P for owner-targeted notifications. See AC-16. |
+| G-32 | Directory | ~~Retired~~ — two delivery paths resolved: directory libp2p signaling connection for system/protocol events to agents; direct client-to-companion P2P for owner-targeted notifications. See AC-16. |
 | G-33 | Directory | ~~Institutional verification process not specified~~ **DEFERRED**: operational/BD policy; manual approval at Alpha/Consortium; automated criteria TBD |
 | G-34 | Directory | ~~Alias creation rate limiting not specified~~ **RESOLVED**: 1 per 7-day window; 2nd allowed if agent has an unused alias slot |
 | G-35 | Directory | ~~Alias TTL mechanism not defined~~ **RESOLVED**: configurable TTL (default 6 months inactivity); checkpoint job marks EXPIRED; TTL resets on contact; owner can manually RETIRE |
@@ -1072,7 +1075,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-40 | Cross | ~~Resolved~~ — Oracle evidence is never stored by the directory. Hash-everything-store-nothing applies: oracle verifies → hash stored → original discarded. Client holds original; presents to arbitration if needed; directory verifies hash. |
 | G-41 | Directory | ~~Retired~~ — companion device allowlist is client-held, not directory-stored. See AC-C10 (resolved). Maximum devices per agent remains a client-side configuration decision. |
 | G-42 | Directory | ~~See above~~ — `cello_request_endorsement` and `cello_revoke_endorsement` client tool paths absent; directory endorsement endpoints are fully specified; client-side call path is not. |
-| ~~G-43~~ | Directory | ~~Resolved~~ — Two-WebSocket design. Portal opens a second authenticated WebSocket (portal keypair, scoped to agent_id) at login. Directory fans out owner-relevant subset (connection requests, escalations, rotation nudges, anomaly alerts, tombstones, trust signal pickups, succession claims, relay reassignments) to both portal WebSocket and agent-client WebSocket simultaneously. Portal writes (escalation decisions, room actions, rotation initiation) submitted via portal WebSocket (G-43); directory forwards to agent client as `portal_instruction` message. Session-level security events remain agent-WebSocket-only. See frontend.md F-28. |
+| ~~G-43~~ | Directory | ~~Resolved~~ — Two-connection design. Portal opens an authenticated WebSocket (portal keypair, scoped to agent_id) at login; agent client connects via libp2p (`/cello/signaling/1.0.0`). Directory fans out owner-relevant subset (connection requests, escalations, rotation nudges, anomaly alerts, tombstones, trust signal pickups, succession claims, relay reassignments) to both portal WebSocket and agent client's libp2p signaling connection simultaneously. Portal writes (escalation decisions, room actions, rotation initiation) submitted via portal WebSocket (G-43); directory forwards to agent client as `portal_instruction` message. Session-level security events remain on the agent's libp2p signaling connection only. See frontend.md F-28. |
 | ~~G-44~~ | Cross | ~~Resolved~~ — All succession gaps closed. Client-side (AC-81, AC-82), server-side mechanics, and all portal screens (F-32, F-33, F-34, F-39) are fully specified. |
 | G-45 | Relay | Group room catch-up mechanism not designed. When an agent rejoins a group room mid-conversation (`cello_join_room`), the relay must be able to serve historical room content for the session. The delivery mechanism, how far back history is available, and whether the relay holds it or the directory serves it are not specified. See agent-client.md AC-8. |
 | ~~G-46~~ | Relay | ~~Resolved~~ — Directory owns all group room persistent state. Throttle manifest in `group_rooms` (append-only, immutable after creation). Room policy record (ban list, mute states, escalation levels) in `room_policy_records` (append-only, supersession pattern, mutable by owner only). At room activation, the directory includes the current room policy record in the signed session assignment sent to the relay. The relay holds it in memory for the session and discards it at session end. Mid-session policy changes (ban, mute lift) are written to the directory by the owner's client and pushed to the relay via the session assignment channel. The relay remains stateless; the directory is the single authority. See group-room-design.md §2. |
