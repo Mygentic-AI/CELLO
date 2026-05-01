@@ -43,9 +43,12 @@ story: >
   ARM64 compute (`BUILD_GENERAL1_SMALL`). Source: GitHub via CodeStar connection.
 
   **Deployment pipelines** (Docker → ECR → ECS) for `directory` and `relay` nodes are
-  NOT in scope for M0 — they are added when those nodes need to run continuously (M1+).
-  The `buildspec.yml` files in `packages/directory/` and `packages/relay/` run tests only
-  in M0; the deployment steps are added to their pipelines in M1.
+  NOT in scope for M0. All milestones through M9 are testable via the in-process Vitest
+  harness (real libp2p nodes on loopback, real crypto, InMemoryStore) — deployed
+  always-on infrastructure for directory and relay is an Alpha deployment concern, not a
+  milestone-completion concern. The `buildspec.yml` files in `packages/directory/` and
+  `packages/relay/` run tests only. Deployment steps are added when real-world Alpha
+  usage begins (can start any time after M2).
 
   **Test relay EC2 instance:**
   A dedicated t4g.nano (ARM64, eu-west-1) runs the minimal circuit-relay-v2-only fixture
