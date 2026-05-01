@@ -37,6 +37,12 @@ Every document has **YAML frontmatter** with:
 
 ---
 
+## Required Reading
+
+**Read `CONTEXT.md` at the repo root before any implementation work.** It is the canonical glossary for CELLO — terms, package structure, interface contracts, and architectural decisions. Using terms not defined there, or contradicting definitions in it, is a mistake.
+
+---
+
 ## Slash Commands
 
 ### `/cello-read`
