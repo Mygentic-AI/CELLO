@@ -1,0 +1,223 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-NODE-003
+domain: Node Operations
+actor: DIR
+priority: P0
+components:
+  - directory
+  - crypto
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Directory Node,
+  I want to participate in FROST DKG and per-ceremony signing via
+  `/cello/frost/1.0.0`, store K_server_X shares behind an `InMemoryShareStore`,
+  and detect in-flight ceremony conflicts for the same agent pubkey
+  so that K_server_X shares are distributed (never assembled), FROST ceremonies
+  complete reliably, and a stolen K_local attempting to open a competing ceremony
+  is detected as an anomaly.
+
+  **DKG bootstrap (M2 test harness only):**
+  The directory exposes an internal `bootstrapKeyShares(agentPubkey)` method that
+  the e2e test harness calls directly to pre-populate K_server_X shares for a test
+  agent. This method is guarded: `if (process.env.NODE_ENV !== 'test') throw`.
+  Registration (M3) replaces this stub with a real libp2p ceremony triggered by the
+  registration flow.
+
+  **`/cello/frost/1.0.0` protocol:**
+  A dedicated libp2p stream protocol for FROST ceremonies. Separate from
+  `/cello/signaling/1.0.0` (session assignment delivery) to keep each handler
+  focused. The client opens a stream per participating directory node for each
+  ceremony round.
+
+  **K_server_X share storage:**
+  Shares are held in `InMemoryShareStore` implementing a `ShareStore` interface.
+  `ShareStore` is the durable abstraction point; a KMS-backed implementation
+  arrives with real deployment infrastructure. Per agent: one 32-byte share entry
+  keyed by `(agentPubkey, epoch)`.
+
+  **Epoch identifiers:**
+  Each K_server_X epoch is identified as `{agent_id}:epoch:{N}` (monotonic integer).
+  All FROST ceremony outputs include the epoch identifier. Verifiers reject signatures
+  from expired epochs. Grace period: 7 days after rotation. Hard cutoff after grace
+  period. Epoch management beyond M2 initial setup is a M7 concern (K_server rotation).
+
+  **In-flight ceremony conflict detection (M2 canary — minimal):**
+  The directory tracks active FROST ceremonies by `(agentPubkey, epochId)`. If a
+  second ceremony request for the same `(agentPubkey, epochId)` arrives from a
+  different libp2p Peer ID while one is already in flight, the directory:
+  1. Rejects the second request with `{ reason: 'CEREMONY_CONFLICT' }`
+  2. Fires a `FALLBACK_CANARY` anomaly event (logged; no push notification in M2)
+
+  This guard is necessary for the M2 FROST security claim to hold — a stolen K_local
+  cannot silently open a competing ceremony. It is NOT sufficient for production:
+  the M7 compromise detection milestone replaces it with full anomaly detection
+  (historical source fingerprinting, rate-of-attempt tracking, owner push alert).
+
+  **Coordinator abort/retry (from server-infrastructure.md GAP G-12):**
+  The client is the FROST coordinator. Round timeout: 3 seconds. On timeout: abort,
+  exclude non-responding node, retry with a fresh participant set from remaining pool.
+  Below-threshold: fail immediately with `DIRECTORY_BELOW_THRESHOLD`.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When a FROST ceremony round message arrives on `/cello/frost/1.0.0` for a known agent epoch"
+    action: >
+      the directory node shall look up the agent's K_server_X share for the given epoch
+      from `ShareStore`, compute its partial FROST signature contribution using
+      `@noble/curves/frost` with the provided `tbs` and `context`, and return the
+      partial signature to the coordinator client.
+
+  - trigger: "When a FROST ceremony round message arrives for an agent with no stored K_server_X share"
+    action: >
+      the directory node shall reject the ceremony with
+      `{ reason: 'AGENT_NOT_BOOTSTRAPPED' }` and close the stream.
+
+  - trigger: "When a FROST ceremony request for `(agentPubkey, epochId)` arrives while a ceremony for the same `(agentPubkey, epochId)` is already in flight from a different Peer ID"
+    action: >
+      the directory node shall reject the incoming request with
+      `{ reason: 'CEREMONY_CONFLICT' }`, close the stream, and fire a
+      `FALLBACK_CANARY` anomaly event recording both Peer IDs, the agentPubkey,
+      the epochId, and a timestamp. The in-flight ceremony is not interrupted.
+
+  - trigger: "When a FROST ceremony request for `(agentPubkey, epochId)` arrives from the same Peer ID as the in-flight ceremony"
+    action: >
+      the directory node shall treat this as a retry (e.g. dropped round message)
+      and respond normally — not a conflict.
+
+  - trigger: "When `bootstrapKeyShares(agentPubkey)` is called in NODE_ENV=test"
+    action: >
+      the directory node shall generate a new K_server_X key share for the agent
+      (epoch 1), store it in `InMemoryShareStore`, and return the share commitment
+      needed by the client to derive `primary_pubkey`.
+
+  - trigger: "When `bootstrapKeyShares` is called outside NODE_ENV=test"
+    action: >
+      the directory node shall throw `BootstrapNotAllowedInProduction` immediately
+      without touching share storage.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A directory node with a bootstrapped K_server_X share for agent A (epoch 1)"
+    when: "A FROST ceremony round message arrives for agent A on `/cello/frost/1.0.0`"
+    then: >
+      The directory computes and returns a valid partial FROST signature contribution;
+      the client can combine it with contributions from other nodes to produce a
+      valid `ThresholdSignature`
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "A directory node with no bootstrapped share for agent X"
+    when: "A FROST ceremony request arrives for agent X"
+    then: "The directory rejects with `{ reason: 'AGENT_NOT_BOOTSTRAPPED' }` and closes the stream"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-003
+    given: "An in-flight FROST ceremony for agent A from Peer ID P1"
+    when: "A second FROST ceremony request for agent A arrives from Peer ID P2 (different)"
+    then: >
+      The directory rejects the second request with `{ reason: 'CEREMONY_CONFLICT' }`,
+      fires a `FALLBACK_CANARY` anomaly event recording both Peer IDs and the agent
+      pubkey, and the in-flight ceremony with P1 continues uninterrupted
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "An in-flight FROST ceremony for agent A from Peer ID P1"
+    when: "A retry message for the same ceremony arrives again from P1"
+    then: "The directory responds normally — same Peer ID is not treated as a conflict"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-005
+    given: "NODE_ENV=test and a directory node"
+    when: "`bootstrapKeyShares(agentPubkey)` is called"
+    then: >
+      A K_server_X share for epoch 1 is stored in `InMemoryShareStore`; the share
+      commitment is returned to the caller; no key material beyond the commitment
+      leaves the directory node
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-006
+    given: "NODE_ENV=production and a directory node"
+    when: "`bootstrapKeyShares(agentPubkey)` is called"
+    then: "The call throws `BootstrapNotAllowedInProduction`; no store mutation occurs"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-007
+    given: "3 in-process directory nodes each bootstrapped with a K_server_X share for agent A; threshold is 2-of-3"
+    when: "A full FROST ceremony is run with the client as coordinator"
+    then: >
+      The ceremony completes using any 2 nodes; the combined signature verifies
+      against `primary_pubkey`; the ceremony is idempotent for the same `ceremonyId`
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "A FROST ceremony round message carrying an expired epoch identifier"
+    when: "The directory node receives it"
+    then: "The directory rejects with `{ reason: 'EPOCH_EXPIRED' }` and closes the stream"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The K_server_X key share stored in `ShareStore` shall never appear in any
+      log, error response, or wire message on `/cello/frost/1.0.0`
+    adversarial_condition: >
+      even when a ceremony fails mid-round and the error path includes diagnostic
+      information about the partial computation
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      `bootstrapKeyShares` shall never execute outside `NODE_ENV=test`
+    adversarial_condition: >
+      even when called via a crafted libp2p stream or an internal module import
+      in a non-test environment
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-003
+    statement: >
+      The directory node shall never participate in two simultaneous FROST
+      ceremonies for the same `(agentPubkey, epochId)` from different Peer IDs
+    adversarial_condition: >
+      even when the second request arrives before the first ceremony completes
+      its final round — the conflict guard fires and the second is rejected
+    test_type: integration
+    component_under_test: directory
+
+# ─── Stubs ───────────────────────────────────────────────────
+stubs:
+  - what: "Push alert to agent owner on FALLBACK_CANARY (phone notification via WhatsApp/Telegram/WeChat)"
+    why: "Notification infrastructure and owner alert routing are M5+ concerns. M2 logs the event only."
+    replaced_by: "CELLO-M7 compromise detection stories — FALLBACK_CANARY becomes a production owner alert with full source fingerprinting, rate-of-attempt tracking, and historical anomaly context"
+
+  - what: "KMS-backed ShareStore implementation"
+    why: "M2 runs in-process Vitest with no AWS dependency. InMemoryShareStore is sufficient for proving ceremony mechanics."
+    replaced_by: "A deployment infrastructure story written when directory nodes are deployed for real (M1 infra extension or dedicated story)"
+
+  - what: "Full K_server_X rotation (epoch management beyond initial setup)"
+    why: "Rotation requires the compromise detection and recovery flows that M7 introduces."
+    replaced_by: "CELLO-M7 key rotation stories (KEYROT domain)"
+
+  - what: "Registration-driven DKG (replacing bootstrapKeyShares)"
+    why: "Registration (phone OTP, directory listing creation) lands in M3."
+    replaced_by: "CELLO-M3 registration stories — the real DKG ceremony is triggered by the registration flow"
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Authentication"
+  end_to_end_flow: "§2.3"
+  discussion_logs:
+    - "2026-04-15_0900_session-level-frost-signing"
+    - "2026-04-08_1700_node-architecture-and-replication"

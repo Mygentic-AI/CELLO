@@ -1,0 +1,214 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-CRYPTO-003
+domain: Cryptographic Primitives
+actor: CLIENT
+priority: P0
+components:
+  - crypto
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want an `IThresholdSigner` abstraction with a `FrostThresholdSigner`
+  implementation backed by `@noble/curves/frost`
+  so that all threshold signing in the protocol flows through a single swap point
+  and `FrostThresholdSigner` can be replaced with `ThresholdMlDsaSigner` in the
+  future without any change to the protocol layer above it.
+
+  **Interface:**
+  ```typescript
+  interface IThresholdSigner {
+    participateInCeremony(
+      ceremonyId: string,
+      tbs: Uint8Array,
+      context: string,
+    ): Promise<ThresholdSignature>
+  }
+  ```
+  `participateInCeremony` is the single entry point for both coordinator and
+  participant roles. Coordinator logic (opening libp2p streams, collecting partial
+  signatures, combining into the group signature) is internal to
+  `FrostThresholdSigner`; callers only see "run this ceremony and give me a
+  signature." This makes `IThresholdSigner` implementations plug-in-compatible
+  regardless of whether their internal protocol is symmetric or asymmetric.
+
+  **FROST TBS construction:**
+  Each ceremony signs a structured positional array via RFC 9591 FROST with a
+  domain context string. Two context strings exist in M2:
+  - Session establishment: context `"cello-frost-session-establishment-v1"`,
+    TBS fields `[session_id, agent_A_pubkey, agent_B_pubkey, genesis_prev_root, timestamp]`
+  - Conversation seal: context `"cello-frost-seal-v1"`,
+    TBS fields `[session_id, sealed_root, leaf_count, timestamp]`
+
+  Domain context strings are passed as the `context` parameter to the `@noble/curves`
+  FROST API per RFC 9591 — not manually prepended to the byte array. This prevents
+  cross-ceremony confusion: an establishment signature cannot be submitted as a seal
+  signature even if the byte arrays have the same length.
+
+  **DKG output:**
+  The client, acting as ceremony coordinator, initiates DKG against t-of-n directory
+  nodes over `/cello/frost/1.0.0`. On completion, `FrostThresholdSigner` stores:
+  - The client's local key share (never leaves the `@cello/crypto` package)
+  - `primary_pubkey`: the group public key, returned by the DKG ceremony and stored
+    alongside K_local for use in future FROST signature verification
+
+  `IThresholdSigner` is separate from `KeyProvider`. `KeyProvider` handles the
+  private key backend for K_local (envelope signing). `IThresholdSigner` handles
+  the multi-party threshold ceremony protocol.
+
+  **Configuration:**
+  `FrostThresholdSigner` accepts `{ threshold: number, participants: number }`.
+  Tests run 2-of-3; Alpha config sets 3-of-5.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When `participateInCeremony` is called with a `ceremonyId`, `tbs`, and `context`"
+    action: >
+      `FrostThresholdSigner` shall act as coordinator: open `/cello/frost/1.0.0` streams
+      to `threshold` directory nodes, run the FROST multi-round protocol using
+      `@noble/curves/frost` with the provided `context` string, collect partial
+      signatures from all responding nodes within the per-round timeout, combine them
+      into a `ThresholdSignature`, and return it to the caller.
+
+  - trigger: "When a directory node receives a FROST ceremony round message on `/cello/frost/1.0.0`"
+    action: >
+      the directory node shall compute its partial signature contribution using its
+      K_server_X share and the provided `tbs` and `context`, and return the partial
+      signature to the coordinator client.
+
+  - trigger: "When a participating directory node does not respond within the round timeout (3 seconds)"
+    action: >
+      `FrostThresholdSigner` shall exclude the non-responding node from the participant
+      set, select a replacement node from the remaining pool, and retry the ceremony
+      round with the new participant set.
+
+  - trigger: "If fewer than `threshold` directory nodes are reachable at ceremony initiation"
+    action: >
+      `FrostThresholdSigner` shall fail immediately with
+      `{ error: { reason: 'DIRECTORY_BELOW_THRESHOLD' } }` without attempting any
+      ceremony rounds.
+
+  - trigger: "When DKG completes successfully"
+    action: >
+      `FrostThresholdSigner` shall persist the client's local key share and store
+      `primary_pubkey` (the group public key produced by DKG) alongside K_local so
+      it is available for future FROST signature verification.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A `FrostThresholdSigner` configured 2-of-3 and 3 in-process directory node stubs"
+    when: "DKG is run via the test-harness bootstrap"
+    then: >
+      All three nodes receive DKG round messages; `primary_pubkey` is returned and
+      stored; the client's local key share is stored; no key material is logged or
+      returned to the caller beyond `primary_pubkey`
+    test_type: integration
+    component_under_test: crypto
+
+  - id: AC-002
+    given: "A completed DKG and a `tbs` bytes array for session establishment"
+    when: "`participateInCeremony` is called with context `\"cello-frost-session-establishment-v1\"`"
+    then: >
+      A valid `ThresholdSignature` is returned; the signature verifies against
+      `primary_pubkey` using `@noble/curves/frost` with the same `context` string
+    test_type: integration
+    component_under_test: crypto
+
+  - id: AC-003
+    given: "A completed DKG and a `tbs` bytes array for conversation seal"
+    when: "`participateInCeremony` is called with context `\"cello-frost-seal-v1\"`"
+    then: >
+      A valid `ThresholdSignature` is returned; the signature verifies against
+      `primary_pubkey` with the `\"cello-frost-seal-v1\"` context
+    test_type: integration
+    component_under_test: crypto
+
+  - id: AC-004
+    given: "An establishment signature produced with context `\"cello-frost-session-establishment-v1\"`"
+    when: "Verification is attempted with context `\"cello-frost-seal-v1\"`"
+    then: "Verification fails — cross-ceremony confusion is not possible"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-005
+    given: "A `FrostThresholdSigner` configured 2-of-3; one of 3 directory node stubs is made unresponsive"
+    when: "`participateInCeremony` is called"
+    then: >
+      The ceremony completes successfully using the 2 responsive nodes; the
+      unresponsive node is excluded after the 3-second round timeout
+    test_type: integration
+    component_under_test: crypto
+
+  - id: AC-006
+    given: "A `FrostThresholdSigner` configured 2-of-3; all 3 directory node stubs are made unresponsive"
+    when: "`participateInCeremony` is called"
+    then: "Returns `{ error: { reason: 'DIRECTORY_BELOW_THRESHOLD' } }` immediately"
+    test_type: integration
+    component_under_test: crypto
+
+  - id: AC-007
+    given: "Two separate `FrostThresholdSigner` instances (simulating two agents) each with their own DKG"
+    when: "Both are asked to sign the same `tbs` with the same `context`"
+    then: >
+      Each produces a valid signature verifiable against its own `primary_pubkey`;
+      the two signatures are not identical (different DKG sessions produce different
+      group keys)
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-008
+    given: "The `IThresholdSigner` interface"
+    when: "A `MockThresholdSigner` test double implementing `IThresholdSigner` is used in place of `FrostThresholdSigner`"
+    then: >
+      All callers that accept `IThresholdSigner` function correctly with the mock
+      — confirming the swap point abstraction is real and not leaky
+    test_type: unit
+    component_under_test: crypto
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The client's local FROST key share shall never appear in any log, error
+      message, tool response, or return value from `participateInCeremony`
+    adversarial_condition: >
+      even when the ceremony fails partway through and the error path includes
+      diagnostic context about the partial rounds
+    test_type: unit
+    component_under_test: crypto
+
+  - id: SI-002
+    statement: >
+      A FROST signature produced with one domain context string shall never
+      verify successfully with a different domain context string
+    adversarial_condition: >
+      even when the TBS byte arrays for the two contexts happen to be the same
+      length and content — the RFC 9591 context parameter is the confusion guard
+    test_type: unit
+    component_under_test: crypto
+
+  - id: SI-003
+    statement: >
+      `primary_pubkey` shall be derived from the DKG ceremony output only —
+      never from K_local alone
+    adversarial_condition: >
+      even when K_local is available at construction time — using K_local as a
+      stand-in for `primary_pubkey` would let a party forge FROST-signed frames
+      without the directory's participation
+    test_type: unit
+    component_under_test: crypto
+
+# ─── Stubs ───────────────────────────────────────────────────
+stubs:
+  - what: "ThresholdMlDsaSigner implementation of IThresholdSigner"
+    why: "Threshold ML-DSA is research-grade; no production-ready TypeScript implementation exists as of M2. The IThresholdSigner abstraction is the swap point."
+    replaced_by: "A story to be written when threshold ML-DSA matures — estimated no earlier than M10 per implementation-roadmap.md Deferred Items"
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Authentication"
+  end_to_end_flow: "§2.3"
+  discussion_logs:
+    - "2026-04-15_0900_session-level-frost-signing"
+    - "2026-04-13_1100_quantum-resistance-design"

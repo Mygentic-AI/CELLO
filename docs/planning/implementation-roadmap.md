@@ -168,6 +168,27 @@ Inclusion proofs are RFC 6962 standard — `cello_get_inclusion_proof` returns a
 
 ---
 
+## M2 User Stories
+
+Fully specified stories live in `docs/planning/user-stories/m2/`. The table below is the index.
+
+| ID | Title | Domain | Actor | Priority | Components | Depends on |
+|---|---|---|---|---|---|---|
+| CELLO-CRYPTO-003 | `IThresholdSigner` abstraction + `FrostThresholdSigner` (`@noble/curves/frost`); DKG; RFC 9591 domain context strings | Cryptographic Primitives | CLIENT | P0 | crypto | M1 all |
+| CELLO-NODE-003 | Directory: `/cello/frost/1.0.0` protocol, K_server_X share storage (`InMemoryShareStore`), in-flight ceremony conflict detection | Node Operations | DIR | P0 | directory, crypto | CRYPTO-003 |
+| CELLO-SESSION-004 | FROST-authenticated session establishment; `SessionAssignment` carries `signature_type: 'frost'`; M1 single-key hard cut | Session Lifecycle | CLIENT | P0 | client, directory, crypto | NODE-003, M1 SESSION-002 |
+| CELLO-SESSION-005 | FROST-notarized seal; `cello_close_session` returns `seal_type: 'frost' \| 'bilateral'`; deferred seal on directory outage | Session Lifecycle | CLIENT | P0 | client, directory, relay, crypto | SESSION-004, M1 SESSION-003 |
+
+Four stories, all P0. CRYPTO-003 is the prerequisite for everything — the abstraction and DKG must exist before any ceremony can run. NODE-003 adds the directory-side ceremony handler and share storage. SESSION-004 wires FROST into session establishment; SESSION-005 wires it into seal. The dependency chain is strict: CRYPTO-003 → NODE-003 → SESSION-004 → SESSION-005.
+
+M2 is a hard cut at the session bookends: `SessionAssignment` frames with `signature_type: 'single'` (M1) are refused with `unsupported_signature_type`. Per-message flow (dual-path, Structure 1/2, relay sequencing) is identical to M1 — FROST touches only the two ceremony points. The FROST library is `@noble/curves/frost`, same audit lineage as the Ed25519 and SHA-256 primitives from M0.
+
+DKG in M2 uses a test-harness bootstrap (`directory.bootstrapKeyShares(agentPubkey)`) guarded by `NODE_ENV=test`. Registration (M3) replaces this with the real ceremony. The in-process test threshold is 2-of-3 (configurable); Alpha production is 3-of-5.
+
+The in-flight ceremony conflict detector (NODE-003) is the minimal canary required for the M2 security claim: a stolen K_local attempting a competing ceremony is detected and rejected. This guard is **not sufficient for production** — M7 replaces it with full anomaly detection including source fingerprinting, historical analysis, and owner push alerts.
+
+---
+
 ## Deferred Items
 
 Items that are part of the canonical protocol design but are deliberately not built in the milestone where they first become relevant. Each item names the milestone that owns it and the reason for the deferral.

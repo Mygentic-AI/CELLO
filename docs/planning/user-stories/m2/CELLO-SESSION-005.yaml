@@ -1,0 +1,258 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-SESSION-005
+domain: Session Lifecycle
+actor: CLIENT
+priority: P0
+components:
+  - client
+  - directory
+  - relay
+  - crypto
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want conversation seal notarized via a FROST ceremony replacing the single
+  directory signing key from M1, with `cello_close_session` returning
+  `seal_type: 'frost' | 'bilateral'` to indicate whether the directory co-signed
+  so that a sealed conversation carries an independently verifiable third-party
+  attestation and the agent knows whether it received a fully notarized seal or
+  a bilateral-only seal (e.g. directory unreachable at seal time).
+
+  **What changes from M1 (SESSION-003):**
+  - After the relay submits the complete leaf sequence for seal, the directory
+    runs a FROST ceremony co-signing the verified `sealed_root` before issuing
+    the `SealNotarization`.
+  - The `SealNotarization` carries `signature_type: 'frost'` and the combined
+    FROST output instead of the single-key directory signature.
+  - `cello_close_session` returns `{ sealed_root_hash, mmr_peak: null, seal_type }`:
+    - `seal_type: 'frost'` — directory co-signed; full notarized seal
+    - `seal_type: 'bilateral'` — directory unreachable; bilateral K_local seal only;
+      notarized FROST seal is deferred until the directory returns
+  - Clients verify the FROST-signed `SealNotarization` against `primary_pubkey`.
+  - M1 `SealNotarization` frames with `signature_type: 'single'` are refused with
+    `unsupported_signature_type`.
+
+  **FROST TBS for conversation seal (from CONTEXT.md):**
+  Context string: `"cello-frost-seal-v1"`
+  Fields: `[session_id, sealed_root, leaf_count, timestamp]`
+  The domain context string prevents an establishment signature from being replayed
+  as a seal signature.
+
+  **Seal ceremony flow:**
+  1. The relay receives SEAL leaves from both participants (per SESSION-003 mechanics,
+     unchanged from M1).
+  2. The relay hands the complete leaf sequence and current root to the directory.
+  3. The directory runs its three verification passes (root recompute, per-leaf
+     signature verification, causal-chain check) — unchanged from SESSION-003.
+  4. If verification passes, the directory constructs the seal TBS and runs a FROST
+     ceremony with the client as coordinator over `/cello/frost/1.0.0`.
+  5. The combined FROST signature is embedded in the `SealNotarization` with
+     `signature_type: 'frost'`.
+  6. The directory calls `relay.confirmSeal` (destroying relay per-session state)
+     and pushes `session_sealed { session_id, sealed_root, frost_signature }` to
+     both clients.
+  7. Each client verifies the FROST signature against `primary_pubkey` before
+     transitioning the session to `sealed`.
+
+  **Deferred FROST seal (bilateral fallback):**
+  If the directory is unreachable when the relay submits for seal, the relay retains
+  state, marks the session `seal_deferred`, and `cello_close_session` returns
+  `seal_type: 'bilateral'`. When the directory returns, the deferred FROST ceremony
+  runs automatically; `cello_close_session` is not re-called — the client receives a
+  `session_frost_sealed` notification and updates its local session record.
+
+  `mmr_peak` remains `null` in M2 — the MMR (global sealed-conversation ledger)
+  lands with M10 Federation.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the directory has verified the seal (root recompute, leaf signatures, causal-chain check) and all checks pass"
+    action: >
+      the directory shall construct the seal TBS
+      `[session_id, sealed_root, leaf_count, timestamp]`, call
+      `IThresholdSigner.participateInCeremony` with context `"cello-frost-seal-v1"`,
+      embed the resulting `ThresholdSignature` in a `SealNotarization` with
+      `signature_type: 'frost'`, call `relay.confirmSeal`, and push
+      `session_sealed { session_id, sealed_root, frost_signature }` to both clients.
+
+  - trigger: "When a client receives a `session_sealed` event with `signature_type: 'frost'`"
+    action: >
+      the client shall reconstruct the seal TBS from the event fields, verify the
+      FROST signature against `primary_pubkey` using `@noble/curves/frost` with
+      context `"cello-frost-seal-v1"`, transition the session to `sealed`, and
+      return `{ sealed_root_hash, mmr_peak: null, seal_type: 'frost' }` from
+      `cello_close_session`.
+
+  - trigger: "When a client receives a `session_sealed` event with `signature_type: 'single'` (an M1-era notarization)"
+    action: >
+      the client shall reject it with `unsupported_signature_type` and not
+      transition the session to `sealed`.
+
+  - trigger: "While the directory is unreachable when the relay attempts `submitForSeal`"
+    action: >
+      the relay shall retain per-session state, mark the session `seal_deferred`,
+      and both clients shall receive `cello_close_session` returning
+      `{ sealed_root_hash, mmr_peak: null, seal_type: 'bilateral' }`.
+
+  - trigger: "When the directory returns and a deferred FROST seal ceremony is pending"
+    action: >
+      the directory shall automatically run the FROST seal ceremony for the deferred
+      session; on completion, push `session_frost_sealed { session_id, sealed_root,
+      frost_signature }` to both clients; each client shall verify and update its
+      local session record from `seal_type: 'bilateral'` to `seal_type: 'frost'`.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A session between A and B with 5 message leaves; directory reachable; 2-of-3 threshold"
+    when: "A calls `cello_close_session`"
+    then: >
+      The bilateral SEAL exchange completes (SESSION-003 mechanics unchanged); the
+      directory runs a FROST ceremony over the seal TBS; `cello_close_session`
+      returns `{ sealed_root_hash: <hex>, mmr_peak: null, seal_type: 'frost' }`;
+      both clients verify the FROST signature against `primary_pubkey`
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-002
+    given: "A session where the FROST seal ceremony `SealNotarization` has one byte of its signature tampered"
+    when: "A client attempts to verify it"
+    then: >
+      Verification fails; the client does not transition to `sealed`; a
+      `seal_signature_invalid` event is logged
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-003
+    given: "A session where the directory is unreachable when the relay submits for seal"
+    when: "`cello_close_session` returns"
+    then: >
+      Returns `{ sealed_root_hash: <hex>, mmr_peak: null, seal_type: 'bilateral' }`;
+      session state is `seal_deferred` (not `sealed`); relay retains its per-session
+      state
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-004
+    given: "A session in `seal_deferred` state; the directory becomes reachable"
+    when: "The directory runs the deferred FROST seal ceremony"
+    then: >
+      The directory pushes `session_frost_sealed` to both clients; each client
+      verifies the FROST signature and updates its session record to
+      `seal_type: 'frost'`; no `cello_close_session` re-call is required
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-005
+    given: "A `SealNotarization` with `signature_type: 'single'` (M1-era)"
+    when: "An M2 client receives it"
+    then: "The client rejects with `unsupported_signature_type`; session remains in `sealing`"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-006
+    given: "A seal FROST signature produced with context `\"cello-frost-seal-v1\"`"
+    when: "Verification is attempted with context `\"cello-frost-session-establishment-v1\"`"
+    then: "Verification fails — a seal signature cannot be replayed as an establishment signature"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-007
+    given: "A sealed session"
+    when: "Client A reports `sealed_root_hash`, Client B reports `sealed_root_hash`, the directory reports `sealed_root`"
+    then: >
+      All three values are byte-equal; the FROST signature on the `SealNotarization`
+      verifies against `primary_pubkey` on both clients
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-008
+    given: "A completed FROST seal"
+    when: "The test harness inspects the relay's per-session state"
+    then: "The relay has destroyed all per-session state (leaf sequence, tree, SEAL leaves)"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-009
+    given: "A session with `seal_type: 'bilateral'` — FROST deferred"
+    when: "The agent queries `cello_status`"
+    then: >
+      The session appears in the session list with `seal_type: 'bilateral'` and
+      state `seal_deferred` — the agent can observe that a notarized seal is pending
+    test_type: unit
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The client shall never transition a session to `sealed` without verifying the
+      FROST signature on the `SealNotarization` against the locally stored
+      `primary_pubkey`
+    adversarial_condition: >
+      even when the `sealed_root_hash` matches the client's local tree — the FROST
+      signature is the directory's attestation; without it the session has only a
+      bilateral seal
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: >
+      The directory shall never issue a `SealNotarization` with `signature_type: 'frost'`
+      without independently recomputing the sealed_root from the leaf sequence
+    adversarial_condition: >
+      even when the relay-supplied root matches previous records — the directory
+      recomputes from scratch before the FROST ceremony; it signs what it verified,
+      not what the relay claimed
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: >
+      The client shall never accept a `SealNotarization` with `signature_type: 'single'`
+    adversarial_condition: >
+      even when the single-key signature itself is valid — M2 hard-cuts single-key
+      seal notarization
+    test_type: unit
+    component_under_test: client
+
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the directory is unreachable when the relay attempts `submitForSeal`"
+    fallback: >
+      the relay retains per-session state and marks the session `seal_deferred`;
+      `cello_close_session` returns `seal_type: 'bilateral'`; the bilateral SEAL
+      leaves on the tree are sufficient for both parties to prove the conversation
+      contents — the FROST notarization is an additional confirmation, not a
+      requirement for bilateral closure
+    test_type: integration
+    component_under_test: relay
+
+  - id: DB-002
+    condition: "While `DIRECTORY_BELOW_THRESHOLD` occurs during the FROST seal ceremony (not enough nodes reachable)"
+    fallback: >
+      the directory shall not issue a `SealNotarization`; the session remains in
+      `seal_deferred`; the relay retains state; the deferred seal is retried
+      when threshold nodes are again available
+    test_type: integration
+    component_under_test: directory
+
+# ─── Stubs ───────────────────────────────────────────────────
+stubs:
+  - what: "`mmr_peak` — populated from null"
+    why: "The MMR (global sealed-conversation ledger) and its client-side inclusion proof verification land with M10 Federation."
+    replaced_by: "CELLO-M10 MMR story — `mmr_peak` field transitions from `null` to a real value when the MMR is built"
+
+  - what: "CLEAN/FLAGGED attestations on the SEAL control leaf"
+    why: "Attestation semantics require compromise detection and arbitration machinery that M7 introduces."
+    replaced_by: "CELLO-M7 session close attestation stories — `attestation` field transitions from `'PENDING'` to `'CLEAN'` or `'FLAGGED'`"
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Authentication"
+  end_to_end_flow: "§2.3, §6.6, §6.7"
+  discussion_logs:
+    - "2026-04-15_0900_session-level-frost-signing"
+    - "2026-04-17_1400_directory-relay-architecture-reassessment"
