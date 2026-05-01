@@ -54,6 +54,14 @@ story: >
   the M7 compromise detection milestone replaces it with full anomaly detection
   (historical source fingerprinting, rate-of-attempt tracking, owner push alert).
 
+  **Node discovery for FROST ceremonies:**
+  The client's `FrostThresholdSigner` is configured with `directoryNodes: Multiaddr[]`
+  — the list of directory node multiaddrs eligible for FROST ceremonies. In M2, the
+  test harness provides these addresses directly. In production, node addresses come
+  from the directory's signaling protocol (announced at session establishment time in
+  the SessionAssignment or via a dedicated node-list query). Each directory node
+  listens on `/cello/frost/1.0.0` in addition to its other protocols.
+
   **Coordinator abort/retry (from server-infrastructure.md GAP G-12):**
   The client is the FROST coordinator. Round timeout: 3 seconds. On timeout: abort,
   exclude non-responding node, retry with a fresh participant set from remaining pool.
@@ -89,7 +97,10 @@ behavior:
     action: >
       the directory node shall generate a new K_server_X key share for the agent
       (epoch 1), store it in `InMemoryShareStore`, and return the share commitment
-      needed by the client to derive `primary_pubkey`.
+      for this node. The client must call `bootstrapKeyShares` on all `n` directory
+      nodes, collect all `n` commitments, and derive `primary_pubkey` deterministically
+      from the complete set. No single node's commitment is sufficient to derive
+      `primary_pubkey`.
 
   - trigger: "When `bootstrapKeyShares` is called outside NODE_ENV=test"
     action: >
@@ -133,13 +144,14 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-005
-    given: "NODE_ENV=test and a directory node"
-    when: "`bootstrapKeyShares(agentPubkey)` is called"
+    given: "NODE_ENV=test and 3 directory nodes"
+    when: "`bootstrapKeyShares(agentPubkey)` is called on each of the 3 nodes"
     then: >
-      A K_server_X share for epoch 1 is stored in `InMemoryShareStore`; the share
-      commitment is returned to the caller; no key material beyond the commitment
-      leaves the directory node
-    test_type: unit
+      Each node stores a K_server_X share for epoch 1 in its `InMemoryShareStore`
+      and returns its share commitment; no key material beyond the commitment leaves
+      any node; the 3 commitments are sufficient for the client to derive
+      `primary_pubkey` deterministically
+    test_type: integration
     component_under_test: directory
 
   - id: AC-006
@@ -154,13 +166,14 @@ acceptance_criteria:
     when: "A full FROST ceremony is run with the client as coordinator"
     then: >
       The ceremony completes using any 2 nodes; the combined signature verifies
-      against `primary_pubkey`; the ceremony is idempotent for the same `ceremonyId`
+      against `primary_pubkey`; a retry request for the same `ceremonyId` from the
+      same Peer ID is treated as a continuation (not a conflict) per behavior #4
     test_type: integration
     component_under_test: directory
 
   - id: AC-008
-    given: "A FROST ceremony round message carrying an expired epoch identifier"
-    when: "The directory node receives it"
+    given: "A FROST ceremony round message carrying an expired epoch identifier (synthetically constructed — M2 only has epoch 1; the test manually marks epoch 1 as expired and bootstraps epoch 2)"
+    when: "The directory node receives the message referencing the expired epoch"
     then: "The directory rejects with `{ reason: 'EPOCH_EXPIRED' }` and closes the stream"
     test_type: unit
     component_under_test: directory
@@ -209,6 +222,10 @@ stubs:
   - what: "Full K_server_X rotation (epoch management beyond initial setup)"
     why: "Rotation requires the compromise detection and recovery flows that M7 introduces."
     replaced_by: "CELLO-M7 key rotation stories (KEYROT domain)"
+
+  - what: "Dynamic directory node discovery for FROST ceremonies"
+    why: "M2 provides `directoryNodes` addresses via test harness configuration. Production node-list advertisement (via signaling protocol or dedicated query) is a deployment concern."
+    replaced_by: "CELLO-M3 or M10 (federation) stories — node discovery becomes a real protocol interaction when multiple independently operated nodes exist"
 
   - what: "Registration-driven DKG (replacing bootstrapKeyShares)"
     why: "Registration (phone OTP, directory listing creation) lands in M3."

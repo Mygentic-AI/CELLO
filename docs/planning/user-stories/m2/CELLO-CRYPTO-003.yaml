@@ -57,8 +57,19 @@ story: >
   the multi-party threshold ceremony protocol.
 
   **Configuration:**
-  `FrostThresholdSigner` accepts `{ threshold: number, participants: number }`.
-  Tests run 2-of-3; Alpha config sets 3-of-5.
+  `FrostThresholdSigner` accepts `{ threshold: number, participants: number,
+  directoryNodes: Multiaddr[] }`. `directoryNodes` is the list of directory node
+  multiaddrs eligible for FROST ceremonies. The coordinator dials these nodes on
+  `/cello/frost/1.0.0`. Tests run 2-of-3 with in-process directory nodes; Alpha
+  config sets 3-of-5 with real network addresses.
+
+  **`primary_pubkey` is per-agent and public:**
+  Each agent's DKG with the directory cluster produces a unique group public key.
+  `primary_pubkey` is stored on the directory at DKG time alongside the agent's
+  profile. Counterparties look up an agent's `primary_pubkey` from the directory
+  to verify FROST signatures produced by that agent's group. In M2 (test harness),
+  both clients have access to each other's `primary_pubkey` via the shared test
+  context; M3 registration makes this a real directory lookup.
 
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
@@ -88,11 +99,23 @@ behavior:
       `{ error: { reason: 'DIRECTORY_BELOW_THRESHOLD' } }` without attempting any
       ceremony rounds.
 
+  - trigger: "When the client initiates DKG via `bootstrapKeyShares` (M2 test harness) or registration (M3+)"
+    action: >
+      `FrostThresholdSigner` shall collect share commitments from all `n` directory
+      nodes, derive `primary_pubkey` deterministically from the complete set of
+      commitments, persist the client's local key share, and store `primary_pubkey`
+      alongside K_local. The same set of commitments always produces the same
+      `primary_pubkey`. In M2, `bootstrapKeyShares` on each directory node returns
+      the node's commitment; the client collects all `n` commitments and derives
+      `primary_pubkey` locally.
+
   - trigger: "When DKG completes successfully"
     action: >
-      `FrostThresholdSigner` shall persist the client's local key share and store
-      `primary_pubkey` (the group public key produced by DKG) alongside K_local so
-      it is available for future FROST signature verification.
+      `FrostThresholdSigner` shall register `primary_pubkey` with the directory
+      (stored alongside the agent's profile, publicly queryable) so that
+      counterparties can verify FROST signatures produced by this agent's group.
+      In M2, the test harness wires `primary_pubkey` into both clients' contexts
+      directly; M3 registration makes this a real directory query.
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -148,13 +171,14 @@ acceptance_criteria:
     component_under_test: crypto
 
   - id: AC-007
-    given: "Two separate `FrostThresholdSigner` instances (simulating two agents) each with their own DKG"
+    given: "Two separate `FrostThresholdSigner` instances (simulating two agents) each with their own DKG against the same 3 directory nodes"
     when: "Both are asked to sign the same `tbs` with the same `context`"
     then: >
       Each produces a valid signature verifiable against its own `primary_pubkey`;
-      the two signatures are not identical (different DKG sessions produce different
-      group keys)
-    test_type: unit
+      the two `primary_pubkey` values are different (different DKG sessions produce
+      different group keys); a signature from agent A does NOT verify against agent
+      B's `primary_pubkey` and vice versa
+    test_type: integration
     component_under_test: crypto
 
   - id: AC-008
@@ -163,6 +187,16 @@ acceptance_criteria:
     then: >
       All callers that accept `IThresholdSigner` function correctly with the mock
       — confirming the swap point abstraction is real and not leaky
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-009
+    given: "3 in-process directory nodes; `bootstrapKeyShares` called on each for agent A"
+    when: "The client collects all 3 share commitments and derives `primary_pubkey`"
+    then: >
+      `primary_pubkey` is deterministic — repeating the derivation with the same 3
+      commitments in any order produces the same `primary_pubkey`; `primary_pubkey`
+      is distinct from K_local and cannot be derived from K_local alone
     test_type: unit
     component_under_test: crypto
 
@@ -201,9 +235,17 @@ security_invariants:
 
 # ─── Stubs ───────────────────────────────────────────────────
 stubs:
+  - what: "Real multi-round DKG ceremony over `/cello/frost/1.0.0`"
+    why: "M2 uses `bootstrapKeyShares` as a test shortcut that pre-populates shares and returns commitments. The full interactive DKG ceremony (multiple rounds over libp2p) arrives with M3 registration, where a real agent identity triggers key generation."
+    replaced_by: "CELLO-M3 registration stories — the real DKG ceremony is triggered by the registration flow and replaces `bootstrapKeyShares`"
+
   - what: "ThresholdMlDsaSigner implementation of IThresholdSigner"
     why: "Threshold ML-DSA is research-grade; no production-ready TypeScript implementation exists as of M2. The IThresholdSigner abstraction is the swap point."
     replaced_by: "A story to be written when threshold ML-DSA matures — estimated no earlier than M10 per implementation-roadmap.md Deferred Items"
+
+  - what: "Directory-based `primary_pubkey` lookup for counterparty verification"
+    why: "M2 wires `primary_pubkey` values into both clients via the shared test context. M3 registration stores `primary_pubkey` on the directory and counterparties query it as part of the connection flow."
+    replaced_by: "CELLO-M3 registration and connection stories — `primary_pubkey` becomes a directory-queryable field on the agent profile"
 
 # ─── References ─────────────────────────────────────────────
 references:

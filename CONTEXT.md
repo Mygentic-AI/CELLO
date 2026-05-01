@@ -32,6 +32,10 @@ Inbound session request (M1+): `{ "type": "cello_session_request", "from": "<cou
 
 **CELLO identification exchange** — a minimal handshake that happens immediately after a libp2p connection is established on `/cello/m0/1.0.0`. The remote sends `{pubkey: <K_local hex>}` — self-reported, unverified at connect time. The first signed envelope exchange verifies it: if the signature matches the claimed pubkey, the pubkey is genuine. This is how `cello_connect_peer` returns `peer_pubkey` despite the Peer ID being separate from K_local.
 
+**primary_pubkey** — the group public key produced by an agent's DKG ceremony with the directory cluster. Per-agent and public: each agent has a unique `primary_pubkey` derived from the directory nodes' K_server_X share commitments for that agent. Stored on the directory alongside the agent's profile; counterparties look it up to verify FROST signatures. The initiator of a session or seal coordinates the FROST ceremony using their own group (K_local + their K_server_X shares), and the resulting signature verifies only against the initiator's `primary_pubkey`. In M2, test harness wires `primary_pubkey` values directly; M3+ uses directory lookups.
+
+**signer_pubkey** — a field carried in `SessionAssignment` and `SealNotarization` frames that identifies which agent's `primary_pubkey` the FROST signature verifies against. Always the session/seal initiator's `primary_pubkey`. Allows the counterparty to verify the FROST signature without a separate directory round-trip (the key is embedded in the frame).
+
 **IThresholdSigner** — the abstraction over the multi-party threshold ceremony. `FrostThresholdSigner` is the day-one implementation. Exists as a day-one interface so threshold ML-DSA can swap in without changing the protocol layer. FROST implementation library: `@noble/curves` (`@noble/curves/frost`) — same audit lineage and pure-JS guarantee as the Ed25519 and SHA-256 primitives already in use. No other FROST library is used.
 
 **FROST TBS (to-be-signed) arrays** — positional arrays signed via RFC 9591 FROST with a domain context string to prevent cross-ceremony confusion:
@@ -44,7 +48,11 @@ The domain context string is the cross-ceremony confusion guard — an establish
 
 **session** — a single conversation between two agents. Has its own relay node assignment, Merkle tree, sequence numbering, and `session_id`. Multiple sessions can run concurrently on the same client.
 
-**session establishment (M1)** — the directory issues a signed `SessionAssignment` carrying both peers' Peer IDs and multiaddrs. In M1 the accept/decline step is stubbed — both agents are pre-authorized in the test harness and the directory issues the `SessionAssignment` directly. M3 replaces the stub with the full connection request flow (Alice requests → Bob notified → Bob accepts/declines). The `SessionAssignment` format does not change between M1 and M3.
+**session establishment (M1→M2)** — the directory issues a signed `SessionAssignment` carrying both peers' Peer IDs and multiaddrs. In M1 the directory signs with a single key; in M2 the initiating client coordinates a FROST ceremony and the directory embeds the combined signature with `signature_type: 'frost'` and `signer_pubkey`. The accept/decline step is stubbed through M2 — both agents are pre-authorized in the test harness. M3 replaces the stub with the full connection request flow. The `SessionAssignment` format does not change between M2 and M3.
+
+**seal ceremony flow (M2)** — after the bilateral SEAL leaf exchange, the relay hands the leaf sequence to the directory. The directory verifies (recompute, signatures, causal chain) then pushes `seal_verified` to the seal initiator's signaling stream. The initiator coordinates a FROST ceremony and returns the signature via `seal_frost_signature`. The directory verifies, embeds in `SealNotarization`, and pushes `session_sealed` to both clients. The seal initiator is always the agent who called `cello_close_session`.
+
+**seal-frost-timeout** — configurable timeout (default 15 seconds) after the bilateral SEAL exchange. If no `session_sealed` event arrives within this window, clients transition to `seal_deferred` with `seal_type: 'bilateral'`. The timeout detects directory unreachability without requiring an explicit failure signal from the relay.
 
 **relay node** — the session-level Merkle engine. Receives signed hashes from the sender, assigns canonical sequence numbers, builds the per-conversation Merkle tree, delivers Structure 2 back. Sees only ephemeral Peer IDs and signed hashes — never content.
 

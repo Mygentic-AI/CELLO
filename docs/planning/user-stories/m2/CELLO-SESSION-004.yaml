@@ -35,18 +35,30 @@ story: >
   establishment signature.
 
   **Ceremony flow:**
-  1. Agent A calls `cello_initiate_session({ target_pubkey: B_pubkey })`.
+  1. Agent A (the initiator) calls `cello_initiate_session({ target_pubkey: B_pubkey })`.
   2. The client sends a session request to the directory over `/cello/signaling/1.0.0`.
   3. The directory assigns `session_id`, `genesis_prev_root`, relay endpoint, and
      counterparty Peer IDs.
-  4. The client, acting as FROST coordinator, opens `/cello/frost/1.0.0` streams to
-     t-of-n directory nodes and runs the ceremony with the session establishment TBS.
+  4. The initiating client (A), acting as FROST coordinator, opens `/cello/frost/1.0.0`
+     streams to t-of-n directory nodes and runs the ceremony with the session
+     establishment TBS. The directory nodes contribute their K_server_X shares for
+     agent A — the group being signed with is A's FROST group.
   5. The combined FROST signature is embedded in the `SessionAssignment` as
-     `signature_type: 'frost'`.
+     `signature_type: 'frost'`, alongside `signer_pubkey: A_primary_pubkey` so that
+     the counterparty can verify.
   6. The directory sends the signed `SessionAssignment` to both agents via their
      signaling streams.
-  7. Each client verifies the FROST signature against `primary_pubkey` before
-     accepting the session.
+  7. Agent A verifies the FROST signature against its own `primary_pubkey` (it
+     coordinated the ceremony). Agent B verifies against the `signer_pubkey` field
+     in the SessionAssignment (A's `primary_pubkey`). In M2, B obtains A's
+     `primary_pubkey` from the SessionAssignment; in M3+, B can additionally
+     cross-check it against the directory's stored profile for A.
+
+  **Why the initiator's group signs establishment:** The FROST signature proves that
+  the initiating agent's K_local actively participated — a stolen K_local that
+  attempts a competing ceremony triggers the conflict detector (NODE-003). The
+  receiver does not need to co-sign establishment; they prove liveness by accepting
+  the session and engaging in the conversation (and by co-signing the seal at close).
 
   **In M2 the accept/decline step remains stubbed** (both agents are pre-authorized
   in the test harness). M3 replaces the stub with the full accept/decline flow.
@@ -60,15 +72,20 @@ behavior:
       the client shall act as FROST coordinator: construct the session establishment
       TBS `[session_id, agent_A_pubkey, agent_B_pubkey, genesis_prev_root, timestamp]`,
       call `IThresholdSigner.participateInCeremony` with context
-      `"cello-frost-session-establishment-v1"`, and embed the resulting
-      `ThresholdSignature` in the `SessionAssignment` with `signature_type: 'frost'`.
+      `"cello-frost-session-establishment-v1"`, and return the resulting
+      `ThresholdSignature` to the directory. The directory embeds the signature in the
+      `SessionAssignment` with `signature_type: 'frost'` and
+      `signer_pubkey: initiator_primary_pubkey` before delivering to both clients.
 
   - trigger: "When the client receives a `SessionAssignment` frame with `signature_type: 'frost'`"
     action: >
-      the client shall reconstruct the session establishment TBS from the frame fields,
-      verify the FROST signature against the stored `primary_pubkey` using
-      `@noble/curves/frost` with context `"cello-frost-session-establishment-v1"`,
-      and only accept the session if verification succeeds.
+      the client shall reconstruct the session establishment TBS from the frame fields
+      and verify the FROST signature using `@noble/curves/frost` with context
+      `"cello-frost-session-establishment-v1"`. The verification key depends on role:
+      (a) the initiator verifies against its own stored `primary_pubkey` (it
+      coordinated this ceremony); (b) the counterparty verifies against the
+      `signer_pubkey` field carried in the SessionAssignment (the initiator's
+      `primary_pubkey`). The session is accepted only if verification succeeds.
 
   - trigger: "When the client receives a `SessionAssignment` frame with `signature_type: 'single'`"
     action: >
@@ -90,13 +107,14 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "Two agents A and B each with bootstrapped K_server_X shares (2-of-3 threshold, 3 in-process directory nodes)"
+    given: "Two agents A and B each with bootstrapped K_server_X shares (2-of-3 threshold, 3 in-process directory nodes); A is the initiator"
     when: "A calls `cello_initiate_session({ target_pubkey: B_pubkey })`"
     then: >
-      A FROST ceremony runs; the resulting `SessionAssignment` carries
-      `signature_type: 'frost'`; both A and B verify the FROST signature against
-      their respective `primary_pubkey`; the session transitions to `active` on both
-      clients
+      A FROST ceremony runs with A as coordinator using A's K_server_X shares; the
+      resulting `SessionAssignment` carries `signature_type: 'frost'` and
+      `signer_pubkey: A_primary_pubkey`; A verifies against its own `primary_pubkey`;
+      B verifies against the `signer_pubkey` field; the session transitions to
+      `active` on both clients
     test_type: e2e
     component_under_test: client
 
@@ -145,12 +163,14 @@ acceptance_criteria:
     component_under_test: client
 
   - id: AC-007
-    given: "Two agents each with their own `primary_pubkey` from independent DKG sessions"
-    when: "Agent A's `SessionAssignment` FROST signature is presented to agent B for verification"
+    given: "Two agents A and B each with their own `primary_pubkey` from independent DKG sessions; A initiates a session"
+    when: "The `SessionAssignment` FROST signature arrives at B"
     then: >
-      B verifies against B's own `primary_pubkey` (which is the group key for B's
-      K_local + B's K_server_X shares) — not against A's `primary_pubkey`. Each
-      agent's FROST signature is verifiable only against its own group key.
+      B verifies against the `signer_pubkey` field in the SessionAssignment (which
+      is A's `primary_pubkey`) — not against B's own `primary_pubkey`. Verification
+      succeeds. If B attempts verification against its own `primary_pubkey` instead,
+      verification fails — each agent's FROST group produces signatures verifiable
+      only against that agent's group key.
     test_type: integration
     component_under_test: client
 
@@ -159,11 +179,13 @@ security_invariants:
   - id: SI-001
     statement: >
       The client shall never accept a `SessionAssignment` whose FROST signature
-      does not verify against the locally stored `primary_pubkey`
+      does not verify against the appropriate verification key (own `primary_pubkey`
+      for initiator; `signer_pubkey` from the frame for counterparty)
     adversarial_condition: >
       even when the `SessionAssignment` fields (session_id, pubkeys, relay endpoint)
-      are otherwise valid — a missing or incorrect FROST signature means the directory
-      did not co-sign and the session is not authenticated
+      are otherwise valid — a missing or incorrect FROST signature means the
+      initiator's K_local did not participate in the ceremony and the session is not
+      authenticated
     test_type: unit
     component_under_test: client
 
