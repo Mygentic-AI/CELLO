@@ -283,7 +283,7 @@ The client's registration flow begins with the WhatsApp, Telegram, or WeChat bot
 
 1. Client generates K_local (signing key) on device
 2. Directory runs the K_server_X FROST key ceremony across t-of-n nodes — establishing the threshold shares that pair with this agent's K_local
-3. `primary_pubkey` (FROST of K_local + K_server_X shares) and `fallback_pubkey` (K_local only) registered in the directory's identity tree
+3. `primary_pubkey` (FROST group key derived from K_local + K_server_X shares) registered in the directory's identity tree alongside K_local's public key
 4. Agent is listed in the directory and can send/receive immediately
 
 The client is responsible for generating K_local and presenting the public key to the directory during the ceremony. The identity key is generated simultaneously; the BIP-39 seed phrase is produced for the owner to back up.
@@ -516,7 +516,7 @@ The cross-check is the security guarantee. B's receipt of the message from A and
 
 The per-message cross-check proves a message arrived from the sender. The MMR inclusion proof proves the sealed conversation was actually recorded in the conversation proof ledger — the fabricated conversation defense. These are distinct verification operations. The client must implement both.
 
-After `cello_close_session` returns `sealed_root_hash` and `mmr_peak`, the client can request and verify an inclusion proof for the sealed conversation. The five-step verification algorithm (all local, no additional network requests after proof receipt):
+After `cello_close_session` returns `{ sealed_root_hash, mmr_peak, seal_type }`, the client can request and verify an inclusion proof for the sealed conversation. The five-step verification algorithm (all local, no additional network requests after proof receipt):
 
 1. **Recompute leaf hash** from known conversation data: `SHA-256(leaf_index || seal_merkle_root || recorded_at)`. Must match `proof.leaf_hash`.
 
@@ -595,7 +595,7 @@ The client participates in FROST at exactly two points, as described in Part 1:
 
 **Session establishment:** The client contributes its K_local partial signature to the FROST ceremony. The directory contributes K_server_X shares from t-of-n nodes. The combined FROST signature authenticates the session opening.
 
-**Conversation seal:** After CLOSE/CLOSE-ACK exchange, the client participates in a FROST ceremony co-signing the final Merkle root. The sealed root enters the MMR (Merkle Mountain Range) via `cello_close_session`, which returns the `sealed_root_hash` and the new `mmr_peak`.
+**Conversation seal:** After the bilateral SEAL leaf exchange, the seal initiator (the agent who called `cello_close_session`) coordinates a FROST ceremony with the directory nodes, co-signing the verified Merkle root. The sealed root enters the MMR (Merkle Mountain Range) via `cello_close_session`, which returns `{ sealed_root_hash, mmr_peak, seal_type }`.
 
 If the directory is unavailable at seal time, the bilateral seal (both parties sign final root with K_local) is completed immediately. The notarized FROST seal is queued and completed when the directory returns.
 
@@ -1064,7 +1064,7 @@ Returns:
   Session[]
     session_id
     counterparty_agent_id (or room_id for group sessions)
-    status:   active | sealed | aborted | expired
+    status:   active | sealed | seal_deferred | aborted | expired
     message_count
     opened_at
     closed_at?
@@ -1234,7 +1234,7 @@ The client's behavior is identical across deployment models. The calling pattern
 
 ### Key client-side implementation notes per group
 
-**Session / Conversation:** `cello_send` dispatches dual-path simultaneously (P2P + directory hash relay); applies Layer 3 outbound gate and Layer 4 redaction before delivery; the `leaf_hash` return value is the Merkle leaf hash for the sent message. `cello_receive` applies Layer 1 sanitization to all incoming text before returning content; returns a `security_block` sentinel if Layer 1 fires rather than passing unsanitized text. `cello_close_session` participates in the FROST seal ceremony; returns `sealed_root_hash` and `mmr_peak`. `cello_acknowledge_receipt` provides explicit causal commitment: the agent calls it with a `leaf_hash` to record that it has processed a specific message and that any subsequent messages from this agent are causally downstream of that receipt. The client writes a signed `RECEIPT` control leaf into the Merkle tree (same construction as other control leaves) and submits the hash to the relay node. Designed for high-stakes multi-party and commerce scenarios where implicit ACK via the Merkle chain is insufficient — e.g., an agent must prove it received an offer before it made a counter-offer. Calling `cello_acknowledge_receipt` is always optional; the default implicit ACK behaviour (Merkle chain) remains the norm for all other sessions.
+**Session / Conversation:** `cello_send` dispatches dual-path simultaneously (P2P + directory hash relay); applies Layer 3 outbound gate and Layer 4 redaction before delivery; the `leaf_hash` return value is the Merkle leaf hash for the sent message. `cello_receive` applies Layer 1 sanitization to all incoming text before returning content; returns a `security_block` sentinel if Layer 1 fires rather than passing unsanitized text. `cello_close_session` initiates the bilateral SEAL exchange; the seal initiator coordinates the FROST ceremony with directory nodes; returns `{ sealed_root_hash, mmr_peak, seal_type }`. `cello_acknowledge_receipt` provides explicit causal commitment: the agent calls it with a `leaf_hash` to record that it has processed a specific message and that any subsequent messages from this agent are causally downstream of that receipt. The client writes a signed `RECEIPT` control leaf into the Merkle tree (same construction as other control leaves) and submits the hash to the relay node. Designed for high-stakes multi-party and commerce scenarios where implicit ACK via the Merkle chain is insufficient — e.g., an agent must prove it received an offer before it made a counter-offer. Calling `cello_acknowledge_receipt` is always optional; the default implicit ACK behaviour (Merkle chain) remains the norm for all other sessions.
 
 **Security:** `cello_scan` invokes the Layer 2 LLM scanner; the client is responsible for enforcing structured output mode and schema validation. `cello_report` submits a signed trust incident report to the directory; the client signs with K_local before submission.
 
@@ -1305,13 +1305,14 @@ The following names are canonical and supersede inconsistencies in earlier docum
 ### Session seal
 
 1. Agent A calls `cello_close_session(session_id)`
-2. Client A sends a signed CLOSE control leaf (includes A's CLEAN or FLAGGED attestation) via P2P and to the relay
-3. Client B receives CLOSE via P2P and from the relay; Client B sends CLOSE-ACK (includes B's attestation) via P2P and to the relay
-4. Relay records both CLOSE and CLOSE-ACK leaves, finalises the conversation Merkle tree, and hands the complete leaf sequence and final root to the directory
-5. Directory recomputes the Merkle tree from scratch from the leaf sequence (does not trust the relay's root); initiates FROST seal ceremony; both clients participate
-6. `cello_close_session` returns `sealed_root_hash` and `mmr_peak`
-7. Session enters terminal state; subsequent messages are rejected
-8. If directory is unavailable: bilateral seal completes immediately (K_local only); relay retains the leaf sequence until the notarized FROST seal can complete
+2. Client A sends a signed SEAL control leaf via P2P and to the relay; Client B auto-responds with its own SEAL leaf
+3. Relay hands the complete leaf sequence and final root to the directory
+4. Directory recomputes the Merkle tree from scratch (does not trust the relay's root), verifies all leaf signatures and causal chain, pushes `seal_verified` to the seal initiator (A)
+5. A (the seal initiator) coordinates a FROST ceremony with t-of-n directory nodes, returns the FROST signature to the directory
+6. Directory verifies the FROST signature against A's `primary_pubkey`, issues `SealNotarization` with `signature_type: 'frost'` and `signer_pubkey: A_primary_pubkey`, pushes `session_sealed` to both clients
+7. Both clients verify the FROST signature (A against own `primary_pubkey`; B against `signer_pubkey` from the event); session transitions to `sealed`
+8. `cello_close_session` returns `{ sealed_root_hash, mmr_peak, seal_type }` — `seal_type: 'frost'` if directory co-signed, `seal_type: 'bilateral'` if directory was unreachable
+9. If directory is unavailable: bilateral SEAL leaves are sufficient for both parties; `seal_type: 'bilateral'`; session enters `seal_deferred`; the FROST ceremony runs automatically when the directory returns (no re-call of `cello_close_session` needed)
 
 ### Key rotation
 

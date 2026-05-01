@@ -891,7 +891,7 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 1. Agent registers via WhatsApp/Telegram/WeChat bot (phone OTP)
 2. Bot verifies phone → agent provisioned with baseline registration
 3. Agent's K_local generated on device; K_server_X ceremony runs on directory nodes
-4. `primary_pubkey` (FROST of K_local + K_server_X shares) and `fallback_pubkey` (K_local only) registered in identity tree
+4. `primary_pubkey` (FROST group key derived from K_local + K_server_X shares) registered in identity tree alongside K_local's public key
 5. Owner optionally opens Signup Web Portal to strengthen trust profile (WebAuthn, OAuth, etc.)
 6. For each strengthening item: portal verifies → produces JSON record → SHA-256 hash → writes hash to directory → returns JSON to client → discards original
 

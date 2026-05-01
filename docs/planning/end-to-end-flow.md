@@ -294,22 +294,16 @@ K_server rotation is scheduled and automatic — the directory rotates K_server 
 
 FROST ceremonies occur at two points in the protocol — not on every message:
 
-1. **Session establishment** — both agents authenticate to the directory via FROST. The directory co-signs the session. This proves both identities are legitimate.
-2. **Conversation seal** — the final Merkle root is co-signed via FROST. The directory attests to the conversation's existence and final state. The sealed root enters the MMR.
+1. **Session establishment** — the initiating agent coordinates a FROST ceremony with t-of-n directory nodes. Both agents authenticate to the directory via K_local challenge-response, but only the initiator's FROST group signs the SessionAssignment. The counterparty verifies the FROST signature against the initiator's `primary_pubkey`. This proves the initiator's K_local cooperated with the directory network collectively.
+2. **Conversation seal** — the seal initiator (the agent who called `cello_close_session`) coordinates a FROST ceremony co-signing the verified Merkle root. The directory attests to the conversation's existence and final state. The sealed root enters the MMR.
 
 Individual messages are signed with **K_local alone** and verified against **pubkey(K_local)**. The relay node receives signed Merkle leaves (containing message hashes, not content), assigns sequence numbers, and relays them to the counterparty. The directory is dormant during the session — it returns as the active authority only at seal time.
 
-**Dual public keys — the compromise canary:**
+**The compromise canary:**
 
-Every agent has two registered public keys:
-```json
-{
-  "primary_pubkey": "FROST(K_local + K_server_shares)",
-  "fallback_pubkey": "from(K_local only)"
-}
-```
+Every agent has `primary_pubkey` (the FROST group key derived from K_local + K_server_X shares) registered on the directory alongside K_local's public key. K_local's public key is used for per-message signature verification and challenge-response auth; `primary_pubkey` is used for FROST signature verification at session boundaries.
 
-The compromise canary operates at **session boundaries**: if the FROST ceremony at session establishment fails because K_local is being used from an unexpected source, the directory detects the anomaly. A stolen K_local cannot establish new FROST-authenticated sessions without the directory's cooperation. Per-message signing uses K_local, so the canary does not fire per message — it fires when the attacker attempts to start a new session or seal a conversation.
+The compromise canary operates at **session boundaries**: if a stolen K_local attempts to coordinate a FROST ceremony while the legitimate agent is also attempting one, the directory detects the conflict (two competing ceremony requests for the same agent from different sources). A stolen K_local cannot produce FROST signatures without the directory's cooperation. Per-message signing uses K_local, so the canary does not fire per message — it fires when the attacker attempts to start a new session or seal a conversation.
 
 ### 2.4 Replication and Consensus
 
