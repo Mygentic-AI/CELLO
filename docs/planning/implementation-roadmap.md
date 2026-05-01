@@ -187,6 +187,8 @@ DKG in M2 uses a test-harness bootstrap (`directory.bootstrapKeyShares(agentPubk
 
 The in-flight ceremony conflict detector (NODE-003) is the minimal canary required for the M2 security claim: a stolen K_local attempting a competing ceremony is detected and rejected. This guard is **not sufficient for production** — M7 replaces it with full anomaly detection including source fingerprinting, historical analysis, and owner push alerts.
 
+MCP tool surface changes in M2 are covered inline within SESSION-004 and SESSION-005 — `cello_initiate_session` now runs a FROST ceremony under the hood and `cello_close_session` returns `seal_type: 'frost' | 'bilateral'`. No separate MCP/adapter story exists in M2; the agent-facing contract changes are exercised via the session stories' e2e acceptance criteria.
+
 ---
 
 ## Deferred Items

@@ -45,12 +45,15 @@ story: >
   cross-ceremony confusion: an establishment signature cannot be submitted as a seal
   signature even if the byte arrays have the same length.
 
-  **DKG output:**
-  The client, acting as ceremony coordinator, initiates DKG against t-of-n directory
-  nodes over `/cello/frost/1.0.0`. On completion, `FrostThresholdSigner` stores:
+  **Key share bootstrap output (M2) / DKG output (M3+):**
+  In M2, the client calls `bootstrapKeyShares` on each directory node (one-shot,
+  no multi-round interaction) and collects share commitments. In M3+, the client
+  runs a full interactive DKG ceremony over `/cello/frost/1.0.0`. Either path
+  produces the same two outputs stored by `FrostThresholdSigner`:
   - The client's local key share (never leaves the `@cello/crypto` package)
-  - `primary_pubkey`: the group public key, returned by the DKG ceremony and stored
-    alongside K_local for use in future FROST signature verification
+  - `primary_pubkey`: the group public key, derived deterministically from the
+    complete set of share commitments, stored alongside K_local for use in future
+    FROST signature verification
 
   `IThresholdSigner` is separate from `KeyProvider`. `KeyProvider` handles the
   private key backend for K_local (envelope signing). `IThresholdSigner` handles
@@ -58,14 +61,20 @@ story: >
 
   **Configuration:**
   `FrostThresholdSigner` accepts `{ threshold: number, participants: number,
-  directoryNodes: Multiaddr[] }`. `directoryNodes` is the list of directory node
-  multiaddrs eligible for FROST ceremonies. The coordinator dials these nodes on
-  `/cello/frost/1.0.0`. Tests run 2-of-3 with in-process directory nodes; Alpha
-  config sets 3-of-5 with real network addresses.
+  directoryNodes: Multiaddr[], roundTimeoutMs?: number, ceremonyTimeoutMs?: number }`.
+  `directoryNodes` is the list of directory node multiaddrs eligible for FROST
+  ceremonies. The coordinator dials these nodes on `/cello/frost/1.0.0`. Tests run
+  2-of-3 with in-process directory nodes; Alpha config sets 3-of-5 with real network
+  addresses. `roundTimeoutMs` (default 3000) is the per-node response deadline.
+  `ceremonyTimeoutMs` (default 30000) is the total wall-clock cap for the entire
+  ceremony including retries — if exceeded, `participateInCeremony` fails with
+  `{ error: { reason: 'CEREMONY_TIMEOUT' } }`. This prevents unbounded retry loops
+  when multiple nodes are flapping.
 
   **`primary_pubkey` is per-agent and public:**
-  Each agent's DKG with the directory cluster produces a unique group public key.
-  `primary_pubkey` is stored on the directory at DKG time alongside the agent's
+  Each agent's key share bootstrap (M2) or DKG (M3+) with the directory cluster
+  produces a unique group public key. `primary_pubkey` is stored on the directory
+  at bootstrap/DKG time alongside the agent's
   profile. Counterparties look up an agent's `primary_pubkey` from the directory
   to verify FROST signatures produced by that agent's group. In M2 (test harness),
   both clients have access to each other's `primary_pubkey` via the shared test
@@ -93,23 +102,38 @@ behavior:
       set, select a replacement node from the remaining pool, and retry the ceremony
       round with the new participant set.
 
+  - trigger: "When a participating directory node responds within the round timeout but returns a cryptographically invalid partial signature (fails `@noble/curves/frost` share verification)"
+    action: >
+      `FrostThresholdSigner` shall treat the node identically to a timeout: exclude it
+      from the participant set, select a replacement node from the remaining pool, and
+      retry the ceremony round. The invalid contribution is discarded — it is never
+      passed to the combiner.
+
   - trigger: "If fewer than `threshold` directory nodes are reachable at ceremony initiation"
     action: >
       `FrostThresholdSigner` shall fail immediately with
       `{ error: { reason: 'DIRECTORY_BELOW_THRESHOLD' } }` without attempting any
       ceremony rounds.
 
-  - trigger: "When the client initiates DKG via `bootstrapKeyShares` (M2 test harness) or registration (M3+)"
+  - trigger: "If the total ceremony wall-clock time exceeds `ceremonyTimeoutMs` (default 30 seconds)"
+    action: >
+      `FrostThresholdSigner` shall abort all in-flight round requests and fail with
+      `{ error: { reason: 'CEREMONY_TIMEOUT' } }`. This prevents unbounded retry
+      loops when multiple nodes are flapping between responsive and unresponsive.
+
+  - trigger: "When the client initiates share commitment collection via `bootstrapKeyShares` (M2 test harness) or a full multi-round DKG ceremony (M3+ registration)"
     action: >
       `FrostThresholdSigner` shall collect share commitments from all `n` directory
       nodes, derive `primary_pubkey` deterministically from the complete set of
       commitments, persist the client's local key share, and store `primary_pubkey`
       alongside K_local. The same set of commitments always produces the same
       `primary_pubkey`. In M2, `bootstrapKeyShares` on each directory node returns
-      the node's commitment; the client collects all `n` commitments and derives
-      `primary_pubkey` locally.
+      the node's commitment in a single call; the client collects all `n` commitments
+      and derives `primary_pubkey` locally. This is NOT a multi-round DKG — it is a
+      one-shot bootstrap that pre-populates shares. The real interactive DKG ceremony
+      arrives with M3 registration.
 
-  - trigger: "When DKG completes successfully"
+  - trigger: "When share commitment collection completes successfully"
     action: >
       `FrostThresholdSigner` shall register `primary_pubkey` with the directory
       (stored alongside the agent's profile, publicly queryable) so that
@@ -121,16 +145,16 @@ behavior:
 acceptance_criteria:
   - id: AC-001
     given: "A `FrostThresholdSigner` configured 2-of-3 and 3 in-process directory node stubs"
-    when: "DKG is run via the test-harness bootstrap"
+    when: "Share commitment collection is run via the test-harness `bootstrapKeyShares`"
     then: >
-      All three nodes receive DKG round messages; `primary_pubkey` is returned and
-      stored; the client's local key share is stored; no key material is logged or
-      returned to the caller beyond `primary_pubkey`
+      All three nodes generate shares and return commitments; `primary_pubkey` is
+      derived from the commitments and stored; the client's local key share is stored;
+      no key material is logged or returned to the caller beyond `primary_pubkey`
     test_type: integration
     component_under_test: crypto
 
   - id: AC-002
-    given: "A completed DKG and a `tbs` bytes array for session establishment"
+    given: "A completed key share bootstrap and a `tbs` bytes array for session establishment"
     when: "`participateInCeremony` is called with context `\"cello-frost-session-establishment-v1\"`"
     then: >
       A valid `ThresholdSignature` is returned; the signature verifies against
@@ -139,7 +163,7 @@ acceptance_criteria:
     component_under_test: crypto
 
   - id: AC-003
-    given: "A completed DKG and a `tbs` bytes array for conversation seal"
+    given: "A completed key share bootstrap and a `tbs` bytes array for conversation seal"
     when: "`participateInCeremony` is called with context `\"cello-frost-seal-v1\"`"
     then: >
       A valid `ThresholdSignature` is returned; the signature verifies against
@@ -164,24 +188,41 @@ acceptance_criteria:
     component_under_test: crypto
 
   - id: AC-006
+    given: "A `FrostThresholdSigner` configured 2-of-3; one of 3 directory node stubs returns a malformed partial signature (random 32 bytes instead of a valid share contribution)"
+    when: "`participateInCeremony` is called"
+    then: >
+      The invalid node is excluded (same as timeout); the ceremony completes
+      successfully using the 2 remaining valid nodes; the invalid partial is never
+      passed to the combiner
+    test_type: integration
+    component_under_test: crypto
+
+  - id: AC-007
     given: "A `FrostThresholdSigner` configured 2-of-3; all 3 directory node stubs are made unresponsive"
     when: "`participateInCeremony` is called"
     then: "Returns `{ error: { reason: 'DIRECTORY_BELOW_THRESHOLD' } }` immediately"
     test_type: integration
     component_under_test: crypto
 
-  - id: AC-007
-    given: "Two separate `FrostThresholdSigner` instances (simulating two agents) each with their own DKG against the same 3 directory nodes"
+  - id: AC-008
+    given: "A `FrostThresholdSigner` configured 2-of-3 with `ceremonyTimeoutMs: 5000`; 2 nodes respond successfully on the first round but all 3 nodes become unresponsive for subsequent rounds (simulating flapping)"
+    when: "`participateInCeremony` is called and 5 seconds elapse without ceremony completion"
+    then: "Returns `{ error: { reason: 'CEREMONY_TIMEOUT' } }` after the total timeout expires; no partial result is returned"
+    test_type: integration
+    component_under_test: crypto
+
+  - id: AC-009
+    given: "Two separate `FrostThresholdSigner` instances (simulating two agents) each with their own bootstrap against the same 3 directory nodes"
     when: "Both are asked to sign the same `tbs` with the same `context`"
     then: >
       Each produces a valid signature verifiable against its own `primary_pubkey`;
-      the two `primary_pubkey` values are different (different DKG sessions produce
-      different group keys); a signature from agent A does NOT verify against agent
+      the two `primary_pubkey` values are different (different bootstrap sessions
+      produce different group keys); a signature from agent A does NOT verify against agent
       B's `primary_pubkey` and vice versa
     test_type: integration
     component_under_test: crypto
 
-  - id: AC-008
+  - id: AC-010
     given: "The `IThresholdSigner` interface"
     when: "A `MockThresholdSigner` test double implementing `IThresholdSigner` is used in place of `FrostThresholdSigner`"
     then: >
@@ -190,7 +231,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: crypto
 
-  - id: AC-009
+  - id: AC-011
     given: "3 in-process directory nodes; `bootstrapKeyShares` called on each for agent A"
     when: "The client collects all 3 share commitments and derives `primary_pubkey`"
     then: >
@@ -224,8 +265,8 @@ security_invariants:
 
   - id: SI-003
     statement: >
-      `primary_pubkey` shall be derived from the DKG ceremony output only —
-      never from K_local alone
+      `primary_pubkey` shall be derived from the share commitment collection
+      output only — never from K_local alone
     adversarial_condition: >
       even when K_local is available at construction time — using K_local as a
       stand-in for `primary_pubkey` would let a party forge FROST-signed frames

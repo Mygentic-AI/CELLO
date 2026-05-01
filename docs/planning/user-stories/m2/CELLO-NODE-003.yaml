@@ -34,7 +34,12 @@ story: >
   Shares are held in `InMemoryShareStore` implementing a `ShareStore` interface.
   `ShareStore` is the durable abstraction point; a KMS-backed implementation
   arrives with real deployment infrastructure. Per agent: one 32-byte share entry
-  keyed by `(agentPubkey, epoch)`.
+  keyed by `(agentPubkey, epoch)`. The `ShareStore` contract guarantees that
+  implementations encrypt shares at rest — the share bytes are opaque to the
+  storage backend and must never be persisted in plaintext outside process memory.
+  `InMemoryShareStore` satisfies this trivially (shares exist only in process
+  memory and are never written to disk); a KMS-backed implementation satisfies it
+  via envelope encryption (AES-256-GCM under a KMS-managed data key).
 
   **Epoch identifiers:**
   Each K_server_X epoch is identified as `{agent_id}:epoch:{N}` (monotonic integer).
@@ -215,9 +220,9 @@ stubs:
     why: "Notification infrastructure and owner alert routing are M5+ concerns. M2 logs the event only."
     replaced_by: "CELLO-M7 compromise detection stories — FALLBACK_CANARY becomes a production owner alert with full source fingerprinting, rate-of-attempt tracking, and historical anomaly context"
 
-  - what: "KMS-backed ShareStore implementation"
-    why: "M2 runs in-process Vitest with no AWS dependency. InMemoryShareStore is sufficient for proving ceremony mechanics."
-    replaced_by: "A deployment infrastructure story written when directory nodes are deployed for real (M1 infra extension or dedicated story)"
+  - what: "KMS-backed ShareStore implementation (envelope encryption at rest)"
+    why: "M2 runs in-process Vitest with no AWS dependency. InMemoryShareStore satisfies the encrypt-at-rest contract trivially (shares never leave process memory). The real deployment story must implement AES-256-GCM envelope encryption under a KMS-managed data key."
+    replaced_by: "A deployment infrastructure story written when directory nodes are deployed for real (M1 infra extension or dedicated story) — must honour the ShareStore encrypt-at-rest guarantee"
 
   - what: "Full K_server_X rotation (epoch management beyond initial setup)"
     why: "Rotation requires the compromise detection and recovery flows that M7 introduces."
