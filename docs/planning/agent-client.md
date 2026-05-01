@@ -139,7 +139,7 @@ Every call to threshold signing goes through this interface. This is a day-one r
 ```typescript
 interface IThresholdSigner {
   // Session establishment and conversation seal only
-  participateInCeremony(ceremonyId: string, localShare: KeyShare): Promise<ThresholdSignature>
+  participateInCeremony(ceremonyId: string, tbs: Uint8Array, context: string): Promise<ThresholdSignature>
 }
 
 class FrostThresholdSigner implements IThresholdSigner { ... }     // day one

@@ -61,15 +61,18 @@ story: >
 
   **Configuration:**
   `FrostThresholdSigner` accepts `{ threshold: number, participants: number,
-  directoryNodes: Multiaddr[], roundTimeoutMs?: number, ceremonyTimeoutMs?: number }`.
+  directoryNodes: Multiaddr[], roundTimeoutMs?: number, ceremonyTimeoutMs?: number,
+  maxRetries?: number }`.
   `directoryNodes` is the list of directory node multiaddrs eligible for FROST
   ceremonies. The coordinator dials these nodes on `/cello/frost/1.0.0`. Tests run
   2-of-3 with in-process directory nodes; Alpha config sets 3-of-5 with real network
   addresses. `roundTimeoutMs` (default 3000) is the per-node response deadline.
   `ceremonyTimeoutMs` (default 30000) is the total wall-clock cap for the entire
   ceremony including retries — if exceeded, `participateInCeremony` fails with
-  `{ error: { reason: 'CEREMONY_TIMEOUT' } }`. This prevents unbounded retry loops
-  when multiple nodes are flapping.
+  `{ error: { reason: 'CEREMONY_TIMEOUT' } }`. `maxRetries` (default 3) is the
+  maximum number of ceremony attempts with different participant sets — if exceeded,
+  `participateInCeremony` fails with `{ error: { reason: 'CEREMONY_EXHAUSTED' } }`.
+  Both caps apply independently: whichever fires first terminates the ceremony.
 
   **`primary_pubkey` is per-agent and public:**
   Each agent's key share bootstrap (M2) or DKG (M3+) with the directory cluster
@@ -120,6 +123,13 @@ behavior:
       `FrostThresholdSigner` shall abort all in-flight round requests and fail with
       `{ error: { reason: 'CEREMONY_TIMEOUT' } }`. This prevents unbounded retry
       loops when multiple nodes are flapping between responsive and unresponsive.
+
+  - trigger: "If `maxRetries` (default 3) ceremony attempts with different participant sets all fail"
+    action: >
+      `FrostThresholdSigner` shall fail with
+      `{ error: { reason: 'CEREMONY_EXHAUSTED' } }` without waiting for
+      `ceremonyTimeoutMs` to expire. The problem is systemic (not transient) — further
+      retries with different participant sets will not help.
 
   - trigger: "When the client initiates share commitment collection via `bootstrapKeyShares` (M2 test harness) or a full multi-round DKG ceremony (M3+ registration)"
     action: >
@@ -208,6 +218,13 @@ acceptance_criteria:
     given: "A `FrostThresholdSigner` configured 2-of-3 with `ceremonyTimeoutMs: 5000`; 2 nodes respond successfully on the first round but all 3 nodes become unresponsive for subsequent rounds (simulating flapping)"
     when: "`participateInCeremony` is called and 5 seconds elapse without ceremony completion"
     then: "Returns `{ error: { reason: 'CEREMONY_TIMEOUT' } }` after the total timeout expires; no partial result is returned"
+    test_type: integration
+    component_under_test: crypto
+
+  - id: AC-012
+    given: "A `FrostThresholdSigner` configured 2-of-3 with `maxRetries: 3`; each attempt fails because one node returns an invalid partial (a different node each time, so a fresh participant set is selected each retry)"
+    when: "`participateInCeremony` is called and all 3 attempts with different participant sets fail"
+    then: "Returns `{ error: { reason: 'CEREMONY_EXHAUSTED' } }` after the 3rd failed attempt; does not wait for `ceremonyTimeoutMs`; no partial result is returned"
     test_type: integration
     component_under_test: crypto
 
