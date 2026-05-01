@@ -34,6 +34,12 @@ Inbound session request (M1+): `{ "type": "cello_session_request", "from": "<cou
 
 **IThresholdSigner** — the abstraction over the multi-party threshold ceremony. `FrostThresholdSigner` is the day-one implementation. Exists as a day-one interface so threshold ML-DSA can swap in without changing the protocol layer. FROST implementation library: `@noble/curves` (`@noble/curves/frost`) — same audit lineage and pure-JS guarantee as the Ed25519 and SHA-256 primitives already in use. No other FROST library is used.
 
+**FROST TBS (to-be-signed) arrays** — positional arrays signed via RFC 9591 FROST with a domain context string to prevent cross-ceremony confusion:
+- Session establishment: context `"cello-frost-session-establishment-v1"`, fields `[session_id, agent_A_pubkey, agent_B_pubkey, genesis_prev_root, timestamp]`
+- Conversation seal: context `"cello-frost-seal-v1"`, fields `[session_id, sealed_root, leaf_count, timestamp]`
+
+The domain context string is the cross-ceremony confusion guard — an establishment signature cannot be replayed as a seal signature and vice versa.
+
 **pseudonym** — the stable, pseudonymous identity used in the conversation participation table. Derived from `identity_key`, stable across K_local rotations.
 
 **session** — a single conversation between two agents. Has its own relay node assignment, Merkle tree, sequence numbering, and `session_id`. Multiple sessions can run concurrently on the same client.
