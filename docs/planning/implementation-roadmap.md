@@ -149,9 +149,10 @@ Fully specified stories live in `docs/planning/user-stories/m1/`. The table belo
 | CELLO-SESSION-002 | Session assignment carries Peer IDs and multiaddrs; genesis `prev_root` | Session Lifecycle | CLIENT | P0 | client, directory, relay | NODE-001, NODE-002 |
 | CELLO-MSG-004 | Genuine dual-path send/receive (content peer↔peer, hash client↔relay) | Message Exchange | CLIENT | P0 | client | SESSION-002 |
 | CELLO-SESSION-003 | Bilateral seal: SEAL control leaf, directory recompute, causal check | Session Lifecycle | CLIENT | P0 | client, directory, relay | MSG-004 |
-| CELLO-MCP-002 | MCP surface additions: sealed receipt and inclusion proof tools | MCP Tool Surface | AGENT | P0 | client | SESSION-003 |
+| CELLO-MCP-002 | MCP surface additions: session-aware tools, sealed receipt, inclusion proof | MCP Tool Surface | AGENT | P0 | client | SESSION-003 |
+| CELLO-ADAPTER-002 | Claude Code adapter M1: cello_session_request notifications, M1 tool set, SKILL.md update | MCP Tool Surface | AGENT | P0 | adapter-claude-code | MCP-002 |
 
-Nine stories, all P0. Dependency-ordered as shown. MERKLE-001 can start immediately on top of M0 CRYPTO-002. NODE-001 (directory signaling) can start as soon as TRANSPORT-001 stabilizes. MERKLE-002 and MSG-003 are protocol-types work that can partially overlap once MERKLE-001's hash primitives are stable.
+Ten stories, all P0. Dependency-ordered as shown. MERKLE-001 can start immediately on top of M0 CRYPTO-002. NODE-001 (directory signaling) can start as soon as TRANSPORT-001 stabilizes. MERKLE-002 and MSG-003 are protocol-types work that can partially overlap once MERKLE-001's hash primitives are stable. ADAPTER-002 is last — it wraps the complete M1 client just as ADAPTER-001 wrapped M0.
 
 M1 introduces `packages/directory` and `packages/relay` as distinct pnpm packages, each with its own store interface (`DirectoryStore`, `RelayStore`) and in-memory first implementation. The client never imports from either server package — it reaches them over libp2p, exactly as it will in production. In-process Vitest co-location is a harness convenience; the package boundary is real.
 

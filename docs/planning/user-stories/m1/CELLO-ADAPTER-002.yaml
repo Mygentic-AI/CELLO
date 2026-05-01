@@ -1,0 +1,190 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-ADAPTER-002
+domain: MCP Tool Surface
+actor: AGENT
+priority: P0
+components:
+  - adapter-claude-code
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a Claude Code agent,
+  I want the `@cello/adapter-claude-code` MCP server updated for M1 — pushing
+  `cello_session_request` channel notifications when an inbound session arrives,
+  maintaining a session event queue alongside the existing message queue, and
+  exposing the M1 tool set (session-aware send/receive, close, sealed receipt,
+  inclusion proof) over stdio
+  so that a Claude Code agent can receive and initiate CELLO sessions reactively,
+  without polling, from M1 onward.
+
+  This story extends CELLO-ADAPTER-001 (M0). The M0 adapter handles:
+  - `cello_message` channel notifications for inbound messages
+  - M0 tool set: `cello_connect_peer`, `cello_send`, `cello_receive`,
+    `cello_list_peers`, `cello_status`
+
+  M1 adds:
+
+  **New channel notification type — inbound session:**
+  When a `session_assignment` frame arrives on the client's signaling stream for an
+  inbound session (i.e. Agent B receiving a session initiated by Agent A), the adapter
+  pushes:
+  ```json
+  { "type": "cello_session_request", "from": "<counterparty_pubkey_hex>", "session_id": "<hex>" }
+  ```
+  Claude Code wakes up and calls `cello_await_session` to retrieve the session details.
+  The notification carries only the counterparty pubkey and session_id — no content,
+  no trust data, no multiaddrs.
+
+  **Session event queue:** the adapter maintains a session event queue alongside the
+  M0 message queue. Populated by `CelloClient.onSessionAssignment` (new event on
+  `CelloClient` in M1). `cello_await_session` drains this queue; if empty, blocks until
+  an event arrives or timeout expires.
+
+  **Tool set changes in M1:**
+  - `cello_connect_peer` — REMOVED. Replaced by `cello_initiate_session`.
+  - `cello_list_peers` — REMOVED. Replaced by `cello_list_sessions`.
+  - `cello_send({ peer_pubkey, content })` — REPLACED by `cello_send({ session_id, content })`.
+  - `cello_receive({ peer_pubkey?, timeout_ms })` — REPLACED by `cello_receive({ session_id, timeout_ms })`.
+  - `cello_initiate_session` — NEW (from MCP-002).
+  - `cello_await_session` — NEW (from MCP-002).
+  - `cello_close_session` — NEW (from MCP-002).
+  - `cello_list_sessions` — NEW (from MCP-002).
+  - `cello_get_sealed_receipt` — NEW (from MCP-002).
+  - `cello_get_inclusion_proof` — NEW (from MCP-002).
+  - `cello_status` — extended with `active_session_count` and `directory_reachable: bool`.
+
+  **SKILL.md update:** the M0 SKILL.md in `packages/adapter-claude-code/SKILL.md` is
+  updated to reflect the M1 tool set. No new installation steps — the package version
+  bump (`npm install @cello/adapter-claude-code@latest`) is sufficient.
+
+  **CelloClient additions required by this story:**
+  - `onSessionAssignment(handler: (event: InboundSessionEvent) => void)` — push-only,
+    fires when a `session_assignment` frame arrives for an inbound session. Same pattern
+    as `onMessage` — queueing is the adapter's concern, not `CelloClient`'s.
+
+  The `FileKeyProvider` startup sequence, stdio entrypoint, and `claude/channel`
+  capability declaration are unchanged from ADAPTER-001.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When `CelloClient.onSessionAssignment` fires with an inbound session event"
+    action: >
+      the adapter shall enqueue the event in its session event queue and push
+      `{ type: 'cello_session_request', from: <counterparty_pubkey_hex>, session_id: <hex> }`
+      as a `claude/channel` notification to the connected Claude Code session. No session
+      content, multiaddrs, or trust data appears in the notification.
+
+  - trigger: "When the agent calls `cello_await_session({ timeout_ms })`"
+    action: >
+      the adapter shall return the next event from the session event queue immediately if
+      one is present, or block until one arrives or the timeout expires. Returns
+      `{type: 'new_session', session_id, counterparty_pubkey, genesis_prev_root}` on
+      success or `{type: 'timeout'}` on expiry. Events are consumed in arrival order.
+
+  - trigger: "When the agent calls any M0 tool that no longer exists in M1 (`cello_connect_peer`, `cello_list_peers`)"
+    action: >
+      the adapter shall return `{error: {reason: 'tool_removed', replacement: '<tool_name>'}}`.
+      `cello_connect_peer` → `cello_initiate_session`; `cello_list_peers` → `cello_list_sessions`.
+      This provides a clear upgrade path rather than a silent `method_not_found`.
+
+  - trigger: "When the MCP server factory is invoked with a transport argument"
+    action: >
+      the factory shall register the full M1 tool set identically under stdio and
+      InMemoryTransport. The M0 tools that were removed (`cello_connect_peer`,
+      `cello_list_peers`) must not appear in the M1 tool registry.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Two adapter instances A and B connected to the M1 directory; B is idle"
+    when: "Agent A calls `cello_initiate_session({ target_pubkey: B_pubkey })`"
+    then: >
+      B's adapter receives the inbound `session_assignment` frame, pushes
+      `{ type: 'cello_session_request', from: <A_pubkey>, session_id: <hex> }` via
+      `claude/channel`; B's Claude Code session starts a new turn; B calls
+      `cello_await_session({ timeout_ms: 5000 })` and receives
+      `{type: 'new_session', session_id, counterparty_pubkey: A_pubkey, genesis_prev_root}`
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-002
+    given: "A `cello_session_request` channel notification payload"
+    when: "Inspected"
+    then: "Contains exactly `type`, `from`, and `session_id` fields — no content, no multiaddrs, no trust data, no additional fields"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-003
+    given: "An M1 adapter instance"
+    when: "Agent calls `cello_connect_peer({ multiaddr: '...' })`"
+    then: "Returns `{error: {reason: 'tool_removed', replacement: 'cello_initiate_session'}}`; no dial is attempted"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-004
+    given: "An M1 adapter instance"
+    when: "Agent calls `cello_list_peers()`"
+    then: "Returns `{error: {reason: 'tool_removed', replacement: 'cello_list_sessions'}}`"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-005
+    given: "Two inbound session events queued before `cello_await_session` is called"
+    when: "Agent calls `cello_await_session({ timeout_ms: 1000 })` twice in succession"
+    then: "First call returns the first queued event immediately; second call returns the second queued event immediately; neither call blocks"
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-006
+    given: "An adapter with an empty session event queue"
+    when: "Agent calls `cello_await_session({ timeout_ms: 200 })`"
+    then: "Returns `{type: 'timeout'}` after approximately 200ms"
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-007
+    given: "The M1 MCP server factory invoked with InMemoryTransport and with stdio"
+    when: "Tool registries of both instances are inspected"
+    then: >
+      Both contain exactly the M1 tool set: `cello_initiate_session`, `cello_await_session`,
+      `cello_send`, `cello_receive`, `cello_close_session`, `cello_list_sessions`,
+      `cello_status`, `cello_get_sealed_receipt`, `cello_get_inclusion_proof`.
+      Neither contains `cello_connect_peer` or `cello_list_peers`.
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-008
+    given: "The updated SKILL.md in `packages/adapter-claude-code/`"
+    when: "Inspected"
+    then: "References the M1 tool set; does not mention `cello_connect_peer` or `cello_list_peers`; installation instructions are unchanged from M0 (version bump only)"
+    test_type: manual
+    component_under_test: adapter-claude-code
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The `cello_session_request` channel notification shall never include message content, multiaddrs, trust signals, or any data beyond counterparty pubkey and session_id"
+    adversarial_condition: "even when the SessionAssignment frame carries rich data — the notification is a wake-up signal only; all session data is retrieved via cello_await_session where it is properly validated"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: SI-002
+    statement: "K_local private key material shall never appear in any tool response, notification payload, log, or error message (carried forward from ADAPTER-001 SI-003)"
+    adversarial_condition: "even when session establishment fails and the error path includes diagnostic context"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+# ─── Stubs ───────────────────────────────────────────────────
+stubs:
+  - what: "Hermes, IronClaw, OpenClaw adapter equivalents of this story"
+    why: "M1 only ships the Claude Code adapter; other adapters follow in later milestones when those agent runtimes are integrated"
+    replaced_by: "Adapter-specific stories written when each agent runtime integration begins"
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Conversations"
+  context_md: "Claude Code adapter, claude/channel notification payloads, CelloClient interface"
+  related_stories:
+    - "CELLO-ADAPTER-001 — M0 adapter this story extends"
+    - "CELLO-MCP-002 — tool logic in @cello/client that this adapter wraps"
+    - "CELLO-SESSION-002 — session establishment that triggers inbound notifications"
