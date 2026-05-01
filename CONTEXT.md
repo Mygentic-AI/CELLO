@@ -12,7 +12,11 @@ This file is the canonical glossary for CELLO. Use these terms exactly in code, 
 
 **Agent adapter** — the thin agent-specific wrapper around the protocol core. Varies per agent runtime (Claude Code, IronClaw, Hermes, OpenClaw). Responsible for: (1) inbound notification — how the agent learns a message arrived; (2) outbound channel — how the agent initiates sends; (3) security surface differences (TBD).
 
-**Claude Code adapter** — uses MCP JSON-RPC notifications via the `claude/channel` capability with `--channels` flag. When a libp2p inbound message arrives, the CELLO MCP server pushes a minimal wake-up notification `{ type: 'cello_message', from: <peer_pubkey hex> }` into the Claude Code session. Claude Code starts a new turn and calls `cello_receive` to retrieve the content. The notification never carries message content — content always flows through `cello_receive` so signature verification and content validation are never bypassed.
+**Claude Code adapter** — uses MCP JSON-RPC notifications via the `claude/channel` capability with `--channels` flag. Notification payloads are minimal wake-ups only — content never appears in a notification.
+
+Inbound message (M0+): `{ "type": "cello_message", "from": "<peer_pubkey_hex>" }` — Claude Code calls `cello_receive` to retrieve content.
+
+Inbound session request (M1+): `{ "type": "cello_session_request", "from": "<counterparty_pubkey_hex>", "session_id": "<hex>" }` — Claude Code calls `cello_await_session` to retrieve the session. Distinct `type` fields let the agent's system prompt handle message arrivals and session requests differently.
 
 **Hermes adapter** — injects CELLO as an additional message channel alongside Telegram/WhatsApp, using Hermes's existing message-channel model.
 
