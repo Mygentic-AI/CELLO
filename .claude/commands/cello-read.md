@@ -7,9 +7,11 @@ Load context about the current state of the CELLO project. Starts from the whole
 
 **The protocol map is the foundation of every session. Do not skip it, skim it, or defer it. Everything else builds on what you learn there.**
 
-## Step 1 — Read the Protocol Map (REQUIRED — do not proceed to Step 2 without completing this)
+## Step 1 — Read the canonical glossary and protocol map (REQUIRED — do not proceed to Step 2 without completing both)
 
-Read `docs/planning/protocol-map.md` **in full, from top to bottom**.
+Read `CONTEXT.md` at the repo root **first**. It is the canonical glossary for CELLO — terms, package structure, interface contracts, and architectural decisions. Using terms not defined there, or contradicting definitions in it, is a mistake.
+
+Then read `docs/planning/protocol-map.md` **in full, from top to bottom**.
 
 This is non-negotiable. The protocol map is the only document that gives you a complete, current picture of what is decided across all 9 protocol domains. Without it you will answer questions based on stale context, miss resolved decisions, or treat open items as open when they are not.
 
