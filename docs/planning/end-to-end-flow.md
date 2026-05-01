@@ -294,8 +294,8 @@ K_server rotation is scheduled and automatic — the directory rotates K_server 
 
 FROST ceremonies occur at two points in the protocol — not on every message:
 
-1. **Session establishment** — the initiating agent coordinates a FROST ceremony with t-of-n directory nodes. Both agents authenticate to the directory via K_local challenge-response, but only the initiator's FROST group signs the SessionAssignment. The counterparty verifies the FROST signature against the initiator's `primary_pubkey`. This proves the initiator's K_local cooperated with the directory network collectively.
-2. **Conversation seal** — the seal initiator (the agent who called `cello_close_session`) coordinates a FROST ceremony co-signing the verified Merkle root. The directory attests to the conversation's existence and final state. The sealed root enters the MMR.
+1. **Session establishment** — the initiating agent coordinates a FROST ceremony with t-of-n directory nodes. Only the initiator's FROST group signs the `SessionAssignment`; the combined signature is embedded with `signer_pubkey: initiator_primary_pubkey`. The counterparty verifies the FROST signature against the `signer_pubkey` field in the frame. The initiator proves liveness via the FROST ceremony; the counterparty proves liveness via K_local-signed message leaves and by co-signing the bilateral SEAL control leaf at close.
+2. **Conversation seal** — the seal initiator (the agent who called `cello_close_session`) coordinates a FROST ceremony co-signing the verified Merkle root. The directory attests to the conversation's existence and final state via a `SealNotarization`. The sealed root enters the MMR.
 
 Individual messages are signed with **K_local alone** and verified against **pubkey(K_local)**. The relay node receives signed Merkle leaves (containing message hashes, not content), assigns sequence numbers, and relays them to the counterparty. The directory is dormant during the session — it returns as the active authority only at seal time.
 
@@ -658,26 +658,29 @@ The Merkle leaf is two distinct data structures. The sender produces Structure 1
 
 ```
 Structure 1 (inner, sender-signed with K_local):
-  content_hash       ← SHA-256 of message content
-  sender_pubkey
-  conversation_id
-  last_seen_seq      ← last sequence number received from relay
-  timestamp
+  TBS: [protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]
+  ↳ content_hash     ← SHA-256(0x00 || message content)
+  ↳ session_id       ← 16-byte session identifier
+  ↳ last_seen_seq    ← highest canonical sequence number sender has observed from relay
+  sender_signature   ← Ed25519 over canonical CBOR of the TBS array
 
-Structure 2 (outer, relay-constructed):
-  0x00               ← message leaf prefix (RFC 6962)
-  sequence_number    ← relay-assigned canonical number
-  sender_pubkey
-  message_content_hash
-  sender_signature   ← Structure 1 embedded
-  prev_root          ← relay-appended; chains to previous state
+Structure 2 (outer, relay-constructed — 6-element CBOR array):
+  [sequence_number, sender_pubkey, content_hash, sender_signature, scan_result, prev_root]
+  ↳ sequence_number  ← relay-assigned canonical number
+  ↳ sender_signature ← Structure 1 signature embedded verbatim
+  ↳ scan_result      ← {score, verdict, model_hash}; placeholder sentinel until M4 scanner
+  ↳ prev_root        ← relay-appended; chains to previous state
+
+Leaf hash = SHA-256(leaf_kind_byte || canonical_CBOR(Structure 2))
+  where leaf_kind_byte = 0x00 for message leaves, 0x02 for control leaves.
+  The prefix byte is outside the CBOR — it is not a field inside Structure 2.
 ```
 
 The relay node embeds Structure 1's `sender_signature` into Structure 2 and computes `prev_root`. **The client never computes `prev_root`** — in multi-party conversations, the relay node is the only entity with canonical sequence across all senders during the session.
 
 The `prev_root` field creates a blockchain within the tree — each message commits to the entire history that preceded it. Gaps and modifications are detectable immediately.
 
-RFC 6962 prefix scheme: `0x00` message leaves, `0x01` internal nodes, `0x02` control leaves (CLOSE, CLOSE-ACK, SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN, RECEIPT).
+RFC 6962 prefix scheme: `0x00` message leaves, `0x01` internal nodes, `0x02` control leaves (SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN, RECEIPT).
 
 **First message initialization:**
 ```
@@ -756,17 +759,17 @@ Precedence: sender override beats global type rule. O(1) per notification — no
 
 ### 6.6 Session Termination Protocol
 
-Termination is a first-class protocol event. The Merkle tree supports three leaf prefixes: `0x00` for message leaves, `0x01` for internal nodes (RFC 6962), and `0x02` for control leaves (CLOSE, CLOSE-ACK, SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN, RECEIPT). Control leaves are hashed and signed identically to message leaves.
+Termination is a first-class protocol event. The Merkle tree supports three leaf prefixes: `0x00` for message leaves, `0x01` for internal nodes (RFC 6962), and `0x02` for control leaves (SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN, RECEIPT). Control leaves are hashed and signed identically to message leaves.
 
-**Clean termination (mutual close):**
-1. Party A sends CLOSE control leaf (signed, hashed, carries session close attestation)
-2. Party B sends CLOSE-ACK (signed, hashed, carries B's independent attestation)
-3. Directory notarizes: records both parties' final hashes, signs a SEAL (notarized statement: closed by mutual agreement at a specific time)
+**Clean termination (bilateral seal):**
+1. Party A sends a SEAL control leaf (signed, hashed, carries session close attestation)
+2. Party B sends a SEAL control leaf (signed, hashed, carries B's independent attestation)
+3. The relay submits the complete leaf sequence to the directory. The directory recomputes the Merkle root from scratch, verifies per-leaf signatures and causal chain, and issues a `SealNotarization` (FROST-signed in M2+, recording the sealed root, both participants, and close timestamp)
 4. Final Merkle root = complete, sealed conversation
-5. After SEAL: a configurable grace window (`post_seal_grace_seconds`, default 300) permits late-arriving messages (in-flight before the sender received the SEAL notification) to be accepted as `post_seal: true` record-only leaves. After the grace window expires, any arriving message triggers an auto-REOPEN and is delivered as the first leaf of a continuation session.
+5. After `SealNotarization`: a configurable grace window (`post_seal_grace_seconds`, default 300) permits late-arriving messages (in-flight before the sender received the `SealNotarization`) to be accepted as `post_seal: true` record-only leaves. After the grace window expires, any arriving message triggers an auto-REOPEN and is delivered as the first leaf of a continuation session.
 
 **Unilateral close (SEAL-UNILATERAL):**
-Party A sends CLOSE, Party B never acknowledges. After timeout, A submits to the directory. Directory seals as "closed by A, unacknowledged by B." Different status from mutual close — the record shows B didn't confirm.
+Party A sends a SEAL control leaf, Party B never responds. After timeout, A submits to the directory. Directory seals as "closed by A, unacknowledged by B." Different status from mutual close — the record shows B didn't confirm.
 
 **Timeout (EXPIRE):**
 No messages for a configurable period. Directory sends EXPIRE control leaf to both parties. Either party can REOPEN within a grace period.
@@ -787,11 +790,11 @@ Appends to a SEALed or EXPIREd tree, creating a continuation rather than a new t
 | EXPIRE | Sealed with expiration marker | Yes (within grace) |
 | ABORT | Sealed with abort reason + reason code | No |
 
-**Termination is subject to the same delivery failure modes.** Party A sends CLOSE, the hash reaches the directory, but the CLOSE message never reaches B on the direct channel. The protocol handles this identically to Case B — if B never acknowledges within the timeout, the directory seals as SEAL-UNILATERAL.
+**Termination is subject to the same delivery failure modes.** Party A sends a SEAL control leaf, the hash reaches the directory, but the SEAL message never reaches B on the direct channel. The protocol handles this identically to Case B — if B never responds with its own SEAL leaf within the timeout, the directory seals as SEAL-UNILATERAL.
 
 ### 6.7 Session Close Attestation
 
-Every CLOSE and CLOSE-ACK carries a per-participant attestation field:
+Every participant's SEAL control leaf carries a per-participant attestation field:
 
 | State | Meaning |
 |---|---|
@@ -1422,7 +1425,7 @@ Instead of two agents establishing a direct channel, N agents (up to 10 speakers
 
 **Commerce (Part 12) branch from §6.6 (Session Termination):**
 
-Purchase attestation is generated at session close time — it is a structured addition to the CLOSE/CLOSE-ACK exchange, not a new ceremony. The escrow release trigger is the existing CLEAN attestation from §6.7. Push-publish (§12.1) uses the existing notification primitive (§6.5) with a subscription reference added. Fraud detection is a directory-side background process; it does not change any session mechanics but may trigger a chat log request as a narrow exception to the no-content-storage principle.
+Purchase attestation is generated at session close time — it is a structured addition to the bilateral SEAL leaf exchange, not a new ceremony. The escrow release trigger is the existing CLEAN attestation from §6.7. Push-publish (§12.1) uses the existing notification primitive (§6.5) with a subscription reference added. Fraud detection is a directory-side background process; it does not change any session mechanics but may trigger a chat log request as a narrow exception to the no-content-storage principle.
 
 **Companion devices (Part 13) branch from §3.2 (What "Online" Means):**
 
