@@ -32,7 +32,7 @@ Inbound session request (M1+): `{ "type": "cello_session_request", "from": "<cou
 
 **CELLO identification exchange** — a minimal handshake that happens immediately after a libp2p connection is established on `/cello/m0/1.0.0`. The remote sends `{pubkey: <K_local hex>}` — self-reported, unverified at connect time. The first signed envelope exchange verifies it: if the signature matches the claimed pubkey, the pubkey is genuine. This is how `cello_connect_peer` returns `peer_pubkey` despite the Peer ID being separate from K_local.
 
-**IThresholdSigner** — the abstraction over the multi-party threshold ceremony. `FrostThresholdSigner` is the day-one implementation. Exists as a day-one interface so threshold ML-DSA can swap in without changing the protocol layer.
+**IThresholdSigner** — the abstraction over the multi-party threshold ceremony. `FrostThresholdSigner` is the day-one implementation. Exists as a day-one interface so threshold ML-DSA can swap in without changing the protocol layer. FROST implementation library: `@noble/curves` (`@noble/curves/frost`) — same audit lineage and pure-JS guarantee as the Ed25519 and SHA-256 primitives already in use. No other FROST library is used.
 
 **pseudonym** — the stable, pseudonymous identity used in the conversation participation table. Derived from `identity_key`, stable across K_local rotations.
 
