@@ -207,6 +207,173 @@ Items that are part of the canonical protocol design but are deliberately not bu
 
 ---
 
+## Monorepo Structure
+
+The repo is a pnpm-workspace monorepo designed for eventual extraction: the client-side packages (`client`, `crypto`, `transport`, `protocol-types`, `adapter-*`) will move to a separate `cello-agent` repo at production readiness. The monorepo exists because cross-package integration testing (real libp2p nodes, real crypto, in-process directory/relay) is dramatically simpler when all packages share a single Vitest workspace and a single `pnpm install`. When the client extracts, shared packages publish as `@cello/*` on npm — import paths don't change for any consumer.
+
+### Root
+
+```
+trustless-cello/
+├── .nvmrc                          # 22
+├── eslint.config.mjs               # flat config, shared across all packages
+├── package.json                    # root — devDeps only, scripts: typecheck, test, lint
+├── pnpm-workspace.yaml             # packages: ["packages/*"]
+├── tsconfig.base.json              # strict, ES2022, module: NodeNext, moduleResolution: NodeNext
+├── vitest.workspace.ts             # workspace config → each package
+├── CONTEXT.md                      # canonical glossary
+├── .claude/
+│   └── CLAUDE.md                   # project instructions for Claude Code
+├── docs/
+│   ├── adr/                        # implementation ADRs (code-level decisions, not protocol design)
+│   └── planning/                   # Obsidian vault (unchanged — protocol design lives here)
+└── packages/
+```
+
+### Packages
+
+```
+packages/
+├── protocol-types/                 # @cello/protocol-types — wire types, TBS schemas, envelope defs
+│   ├── package.json
+│   ├── tsconfig.json               # refs: (none — leaf package)
+│   ├── buildspec.yml
+│   └── src/
+│       ├── index.ts
+│       └── __tests__/
+│           └── fixtures/           # TBS byte vectors, canonical CBOR test cases
+│
+├── crypto/                         # @cello/crypto — Ed25519, SHA-256, FROST (M2+)
+│   ├── package.json
+│   ├── tsconfig.json               # refs: protocol-types
+│   ├── buildspec.yml
+│   └── src/
+│       ├── index.ts
+│       ├── __tests__/
+│       │   └── fixtures/           # RFC 8032 test vectors, domain-sep hash vectors
+│       └── frost/                  # M2+ — IThresholdSigner, FrostThresholdSigner
+│
+├── transport/                      # @cello/transport — libp2p bootstrap, dial, stream handling
+│   ├── package.json
+│   ├── tsconfig.json               # refs: protocol-types, crypto
+│   ├── buildspec.yml
+│   └── src/
+│       ├── index.ts
+│       ├── protocols.ts            # protocol ID constants (/cello/m0/1.0.0, etc.)
+│       └── __tests__/
+│
+├── client/                         # @cello/client — CelloClient, MCP tool logic (no server)
+│   ├── package.json
+│   ├── tsconfig.json               # refs: transport, crypto, protocol-types
+│   ├── buildspec.yml
+│   └── src/
+│       ├── index.ts
+│       ├── mcp/                    # tool handlers (connect, send, receive, session, seal)
+│       └── __tests__/
+│
+├── adapter-claude-code/            # @cello/adapter-claude-code — MCP server + notifications
+│   ├── package.json
+│   ├── tsconfig.json               # refs: client
+│   ├── buildspec.yml
+│   ├── SKILL.md                    # shipped with adapter — agent installation instructions
+│   └── src/
+│       ├── index.ts                # stdio entrypoint
+│       └── __tests__/
+│
+├── directory/                      # @cello/directory — directory node logic (M1+)
+│   ├── package.json
+│   ├── tsconfig.json               # refs: transport, crypto, protocol-types
+│   ├── buildspec.yml
+│   └── src/
+│       ├── index.ts
+│       ├── store.ts                # DirectoryStore interface + InMemoryDirectoryStore
+│       └── __tests__/
+│
+├── relay/                          # @cello/relay — relay node logic (M1+)
+│   ├── package.json
+│   ├── tsconfig.json               # refs: transport, crypto, protocol-types
+│   ├── buildspec.yml
+│   └── src/
+│       ├── index.ts
+│       ├── store.ts                # RelayStore interface + InMemoryRelayStore
+│       └── __tests__/
+│
+└── e2e-tests/                      # NOT published — integration test harness
+    ├── package.json
+    ├── tsconfig.json               # refs: all packages
+    ├── buildspec.yml
+    ├── vitest.config.ts            # testTimeout: 30000
+    ├── README.md                   # cross-machine test setup instructions
+    └── src/
+        ├── m0/                     # M0 e2e tests (grows per milestone)
+        ├── m1/
+        ├── m2/
+        ├── cross-machine/          # test:cross-machine script targets (not in CI)
+        │   ├── server.ts
+        │   └── client.ts
+        ├── fixtures/               # shared e2e fixtures (keypairs, multiaddrs, envelopes)
+        └── helpers/
+            └── test-relay.ts       # minimal circuit relay v2 fixture (not a CELLO relay)
+```
+
+### Dependency Graph (enforced by TypeScript project references)
+
+```
+adapter-claude-code → client → transport, crypto, protocol-types
+directory           → transport, crypto, protocol-types
+relay               → transport, crypto, protocol-types
+e2e-tests           → client, adapter-claude-code, directory, relay, transport, crypto, protocol-types
+```
+
+Violations are compile errors — not lint warnings, not convention. An import from `adapter-claude-code` into `directory` or from `client` into `directory`/`relay` fails `tsc --build`.
+
+### Per-Package Conventions
+
+- **`package.json`:** `name: @cello/<name>`, `engines: { "node": ">=22" }`, scripts: `typecheck`, `test`
+- **`tsconfig.json`:** extends `../../tsconfig.base.json`, `composite: true`, declares only direct deps in `references`
+- **`buildspec.yml`:** CodeBuild spec — `nodejs: 22`, `pnpm install --frozen-lockfile`, `pnpm --filter @cello/<name> run typecheck && test`
+- **Tests:** co-located at `src/__tests__/*.test.ts`. Fixtures in `src/__tests__/fixtures/`
+- **No barrel re-exports beyond `index.ts`** — each package has one public entry point
+
+### Test Framework
+
+Root devDependencies:
+- `vitest` — test runner
+- `@claude-flow/testing` — `setupV3Tests()`, `createTestScope()`, `waitFor()`, `retry()`, `withTimeout()`, `measureTime()`, performance assertions, custom matchers
+
+The Vitest workspace config at root enumerates all packages. Each package's tests run in `environment: 'node'`. The `e2e-tests` package has a longer `testTimeout` (30s). Cross-machine tests are excluded from the workspace and run via `pnpm --filter @cello/e2e-tests run test:cross-machine`.
+
+### What Changes Per Milestone
+
+| Milestone | Structural additions |
+|---|---|
+| M0 | Full scaffold + all M0 source in `crypto`, `transport`, `protocol-types`, `client`, `adapter-claude-code`, `e2e-tests/src/m0/` |
+| M1 | `directory/src/signaling/`, `relay/src/merkle/`, `e2e-tests/src/m1/`, new shared fixtures |
+| M2 | `crypto/src/frost/`, `directory/src/frost/`, `e2e-tests/src/m2/` |
+| M3+ | New subdirs within existing packages; no new top-level packages until later adapters |
+
+### Extraction Plan (Future)
+
+At production readiness, the client-side packages move to the existing `cello-agent` repository:
+
+**Extracted to `cello-agent`:**
+- `packages/client`
+- `packages/crypto`
+- `packages/transport`
+- `packages/protocol-types`
+- `packages/adapter-claude-code`
+- Future `packages/adapter-hermes`, `packages/adapter-ironclaw`, `packages/adapter-openclaw`
+
+**Stays in `trustless-cello` (or becomes `cello-infrastructure`):**
+- `packages/directory`
+- `packages/relay`
+- `packages/e2e-tests`
+- `docs/planning/` (protocol design vault)
+
+After extraction, the shared packages publish as `@cello/*` on npm. The infrastructure repo depends on the published packages for its e2e test harness. Import paths are unchanged — the monorepo boundary was always the npm scope boundary.
+
+---
+
 ## Related Documents
 
 - [[protocol-map|CELLO Protocol Map]] — top-level orientation; milestones map to protocol domains
