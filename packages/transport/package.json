@@ -20,6 +20,10 @@
   },
   "dependencies": {
     "@cello/crypto": "workspace:*",
+    "@libp2p/crypto": "^5.0.0",
+    "@libp2p/interface": "^3.0.0",
+    "@libp2p/peer-id": "^6.0.0",
+    "@multiformats/multiaddr": "^13.0.0",
     "@chainsafe/libp2p-noise": "^17.0.0",
     "@chainsafe/libp2p-yamux": "^8.0.1",
     "@libp2p/circuit-relay-v2": "^4.2.3",

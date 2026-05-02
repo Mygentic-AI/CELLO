@@ -1,0 +1,8 @@
+{
+  "_comment": "CELLO-MSG-001 TBS v0 canonical CBOR fixture. Cross-implementation regression guard. RFC 8949 \u00a74.2.1.",
+  "protocol_version": 0,
+  "content_hash_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+  "sender_pubkey_hex": "abababababababababababababababababababababababababababababababab",
+  "timestamp": 1746057600000,
+  "expected_cbor_hex": "8400582000000000000000000000000000000000000000000000000000000000000000005820abababababababababababababababababababababababababababababababab1b0000019689249c00"
+}
