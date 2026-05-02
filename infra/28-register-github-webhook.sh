@@ -40,6 +40,19 @@ if [ -z "$WEBHOOK_SECRET" ]; then
   exit 1
 fi
 
+# Idempotency guard: skip creation if a webhook pointing at WEBHOOK_URL already exists.
+echo "Checking for existing webhook on $GITHUB_REPO..."
+EXISTING_HOOK_ID=$(gh api "repos/${GITHUB_REPO}/hooks" \
+  --jq ".[] | select(.config.url == \"${WEBHOOK_URL}\") | .id" 2>/dev/null || true)
+
+if [ -n "$EXISTING_HOOK_ID" ]; then
+  echo "Webhook already registered (id=$EXISTING_HOOK_ID) — skipping."
+  echo ""
+  echo "=== COMPLETE ==="
+  echo "Webhook already present on $GITHUB_REPO. Nothing to do."
+  exit 0
+fi
+
 echo "Registering push webhook on $GITHUB_REPO..."
 gh api "repos/${GITHUB_REPO}/hooks" \
   --method POST \

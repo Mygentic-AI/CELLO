@@ -214,20 +214,23 @@ CURRENT_CP_POLICY=$(aws iam get-role-policy \
   --query 'PolicyDocument' \
   --output json)
 
-UPDATED_CP_POLICY=$(echo "$CURRENT_CP_POLICY" | python3 - << 'PYEOF'
-import json, sys
+UPDATED_CP_POLICY=$(ACCT="$AWS_ACCOUNT_ID" REGION="$REGION" python3 - << 'PYEOF'
+import json, sys, os
 
+acct   = os.environ["ACCT"]
+region = os.environ["REGION"]
 policy = json.load(sys.stdin)
 new_projects = [
-    "arn:aws:codebuild:eu-west-1:257394457473:project/cello-crypto-build",
-    "arn:aws:codebuild:eu-west-1:257394457473:project/cello-protocol-types-build",
-    "arn:aws:codebuild:eu-west-1:257394457473:project/cello-transport-build",
-    "arn:aws:codebuild:eu-west-1:257394457473:project/cello-client-build",
-    "arn:aws:codebuild:eu-west-1:257394457473:project/cello-adapter-claude-code-build",
-    "arn:aws:codebuild:eu-west-1:257394457473:project/cello-directory-build",
-    "arn:aws:codebuild:eu-west-1:257394457473:project/cello-relay-build",
-    "arn:aws:codebuild:eu-west-1:257394457473:project/cello-e2e-tests-build",
+    f"arn:aws:codebuild:{region}:{acct}:project/cello-crypto-build",
+    f"arn:aws:codebuild:{region}:{acct}:project/cello-protocol-types-build",
+    f"arn:aws:codebuild:{region}:{acct}:project/cello-transport-build",
+    f"arn:aws:codebuild:{region}:{acct}:project/cello-client-build",
+    f"arn:aws:codebuild:{region}:{acct}:project/cello-adapter-claude-code-build",
+    f"arn:aws:codebuild:{region}:{acct}:project/cello-directory-build",
+    f"arn:aws:codebuild:{region}:{acct}:project/cello-relay-build",
+    f"arn:aws:codebuild:{region}:{acct}:project/cello-e2e-tests-build",
 ]
+found = False
 for stmt in policy["Statement"]:
     actions = stmt.get("Action", [])
     # Normalise to list so membership test works whether Action is a string or list.
@@ -236,7 +239,11 @@ for stmt in policy["Statement"]:
     if "codebuild:StartBuild" in actions:
         existing = stmt["Resource"] if isinstance(stmt["Resource"], list) else [stmt["Resource"]]
         stmt["Resource"] = list(set(existing + new_projects))
+        found = True
         break
+if not found:
+    print("ERROR: codebuild:StartBuild statement not found in CodePipelinePermissions policy", file=sys.stderr)
+    sys.exit(1)
 print(json.dumps(policy))
 PYEOF
 )
@@ -259,22 +266,25 @@ CURRENT_FILTER_POLICY=$(aws iam get-role-policy \
   --query 'PolicyDocument' \
   --output json)
 
-UPDATED_FILTER_POLICY=$(echo "$CURRENT_FILTER_POLICY" | python3 - << 'PYEOF'
-import json, sys
+UPDATED_FILTER_POLICY=$(ACCT="$AWS_ACCOUNT_ID" REGION="$REGION" python3 - << 'PYEOF'
+import json, sys, os
 
+acct   = os.environ["ACCT"]
+region = os.environ["REGION"]
 policy = json.load(sys.stdin)
 new_pipelines = [
-    "arn:aws:codepipeline:eu-west-1:257394457473:cello-crypto-pipeline",
-    "arn:aws:codepipeline:eu-west-1:257394457473:cello-protocol-types-pipeline",
-    "arn:aws:codepipeline:eu-west-1:257394457473:cello-transport-pipeline",
-    "arn:aws:codepipeline:eu-west-1:257394457473:cello-client-pipeline",
-    "arn:aws:codepipeline:eu-west-1:257394457473:cello-adapter-claude-code-pipeline",
-    "arn:aws:codepipeline:eu-west-1:257394457473:cello-directory-pipeline",
-    "arn:aws:codepipeline:eu-west-1:257394457473:cello-relay-pipeline",
-    "arn:aws:codepipeline:eu-west-1:257394457473:cello-e2e-tests-pipeline",
+    f"arn:aws:codepipeline:{region}:{acct}:cello-crypto-pipeline",
+    f"arn:aws:codepipeline:{region}:{acct}:cello-protocol-types-pipeline",
+    f"arn:aws:codepipeline:{region}:{acct}:cello-transport-pipeline",
+    f"arn:aws:codepipeline:{region}:{acct}:cello-client-pipeline",
+    f"arn:aws:codepipeline:{region}:{acct}:cello-adapter-claude-code-pipeline",
+    f"arn:aws:codepipeline:{region}:{acct}:cello-directory-pipeline",
+    f"arn:aws:codepipeline:{region}:{acct}:cello-relay-pipeline",
+    f"arn:aws:codepipeline:{region}:{acct}:cello-e2e-tests-pipeline",
 ]
 # Target only the StartPipelineExecution statement — guard against future
 # additional statements in this policy getting pipeline ARNs appended incorrectly.
+found = False
 for stmt in policy["Statement"]:
     actions = stmt.get("Action", [])
     if isinstance(actions, str):
@@ -282,7 +292,11 @@ for stmt in policy["Statement"]:
     if "codepipeline:StartPipelineExecution" in actions:
         existing = stmt["Resource"] if isinstance(stmt["Resource"], list) else [stmt["Resource"]]
         stmt["Resource"] = list(set(existing + new_pipelines))
+        found = True
         break
+if not found:
+    print("ERROR: codepipeline:StartPipelineExecution statement not found in CodePipelineStartExecution policy", file=sys.stderr)
+    sys.exit(1)
 print(json.dumps(policy))
 PYEOF
 )
