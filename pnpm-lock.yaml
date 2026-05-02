@@ -53,6 +53,15 @@ importers:
       '@cello/transport':
         specifier: workspace:*
         version: link:../transport
+      '@libp2p/interface':
+        specifier: ^3.2.2
+        version: 3.2.2
+      it-length-prefixed:
+        specifier: ^10.0.1
+        version: 10.0.1
+      it-pipe:
+        specifier: ^3.0.1
+        version: 3.0.1
 
   packages/crypto:
     dependencies:
