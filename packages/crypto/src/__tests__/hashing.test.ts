@@ -1,7 +1,14 @@
-import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  setupV3Tests,
+  describe,
+  it,
+  expect,
+} from "@claude-flow/testing";
 import { hash, msgLeafHash, nodeHash, ctrlLeafHash } from "../hashing.js";
+
+setupV3Tests();
 
 const vectors = JSON.parse(
   readFileSync(join(import.meta.dirname ?? __dirname, "../../test/vectors/merkle-primitives.json"), "utf8")

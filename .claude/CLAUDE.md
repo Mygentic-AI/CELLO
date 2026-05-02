@@ -43,6 +43,79 @@ Every document has **YAML frontmatter** with:
 
 ---
 
+# ⚠️ IMPORTANT MANDATORY: SPARC Development Process
+
+**This is non-negotiable. Every story, every package, every time. No exceptions.**
+
+CELLO is financial trust infrastructure. Cutting process corners is how vulnerabilities get shipped.
+Read the full process: `docs/planning/day-0-agent-driven-development-plan.md`
+
+## The Five Phases — In Order, Always
+
+### Phase S — Specification (already done for M0)
+User stories exist in `docs/planning/user-stories/`. Read the full YAML before writing a single line of code or test. Every AC maps 1:1 to a test case.
+
+### Phase P — Pseudocode (MANDATORY before coding)
+Before writing any implementation:
+1. Write high-level pseudocode for each component in a comment block or discussion log
+2. Crypto code MUST reference the RFC or NIST publication: Ed25519 → RFC 8032, SHA-256 → FIPS 180-4, FROST → RFC 9591
+3. Review the pseudocode against the spec ACs. Catch structural problems now, not after 200 lines.
+
+### Phase A — Architecture (MANDATORY before coding)
+1. Define TypeScript interfaces and type signatures before implementing them
+2. Confirm package boundaries: which package owns what, which imports are allowed
+3. Verify against `CONTEXT.md` definitions — use the exact terms defined there
+
+### Phase R — Refinement (TDD: RED first, then GREEN)
+
+**The TDD rule is absolute:**
+
+```
+1. Write ALL tests for the story first — derived directly from the ACs and SIs
+2. Run: pnpm run test — ALL new tests MUST FAIL (red). If a test passes before implementation exists, the test is wrong.
+3. Write implementation — minimum code to make tests pass
+4. Run: pnpm run test — ALL tests MUST PASS (green)
+5. Refactor if needed — tests must stay green
+```
+
+**You are not allowed to write implementation code before the tests exist and have been confirmed red.**
+
+Test files must use `@claude-flow/testing`:
+```typescript
+import { setupV3Tests, createTestScope, measureTime, assertV3PerformanceTargets } from '@claude-flow/testing';
+setupV3Tests();
+```
+
+Crypto tests: use `measureTime()` + `assertV3PerformanceTargets()` for performance assertions.
+Async/P2P tests: use `waitFor()`, `retry()`, `withTimeout()` — not raw `setTimeout`.
+Isolation: use `createTestScope()` for cleanup, not manual teardown.
+
+**No mocks for cryptographic operations.** Real keys, real signing, real verification. Always.
+
+### Phase C — Completion
+After all tests are green:
+1. `pnpm run typecheck` — zero errors
+2. `pnpm run lint` — zero errors
+3. `pnpm run test` — all pass
+4. Every AC in the story YAML has a corresponding named test
+5. Every SI in the story YAML has a negative test (adversarial condition)
+6. Commit with the story ID in the commit message
+
+## What Skipping Any Phase Looks Like
+
+- Skipping P: structural bugs caught at integration, not spec review
+- Skipping A: interface mismatches between packages discovered late
+- Skipping red-first TDD: tests that never actually caught a bug — untested code shipped as "tested"
+- Not using `@claude-flow/testing`: inconsistent async handling, missing performance assertions, manual cleanup that leaks state
+
+## Parallel Agent Dispatch
+
+MSG-001 and TRANSPORT-001 are independent and run in parallel as separate agents.
+Each agent owns its package. Neither touches the other's package.
+The E2E agent runs only after both complete and pass their ACs.
+
+---
+
 ## Slash Commands
 
 ### `/cello-read`

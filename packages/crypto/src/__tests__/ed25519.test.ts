@@ -1,9 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rm, readFile, writeFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { inspect } from "node:util";
+import {
+  setupV3Tests,
+  createTestScope,
+  measureTime,
+  assertTimingWithin,
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+} from "@claude-flow/testing";
 import {
   generateKeypair,
   verify,
@@ -11,13 +21,17 @@ import {
   FileKeyProvider,
 } from "../ed25519.js";
 
+setupV3Tests();
+
 // ─── CRYPTO-001 AC-001: key generation returns correct sizes ─────────────────
 describe("generateKeypair", () => {
-  it("AC-001: returns InMemoryKeyProvider with 32-byte public key", async () => {
-    const kp = generateKeypair();
-    const pubkey = await kp.getPublicKey();
-    expect(pubkey).toBeInstanceOf(Uint8Array);
-    expect(pubkey.length).toBe(32);
+  it("AC-001: returns InMemoryKeyProvider with 32-byte public key; keygen completes under 50ms", async () => {
+    await assertTimingWithin(async () => {
+      const kp = generateKeypair();
+      const pubkey = await kp.getPublicKey();
+      expect(pubkey).toBeInstanceOf(Uint8Array);
+      expect(pubkey.length).toBe(32);
+    }, 50);
   });
 
   // AC-006: two keypairs produce different public keys
@@ -34,10 +48,12 @@ describe("sign and verify", () => {
     const kp = generateKeypair();
     const pubkey = await kp.getPublicKey();
     const data = new TextEncoder().encode("hello cello");
-    const sig = await kp.sign(data);
+    const { result: sig, duration } = await measureTime(() => kp.sign(data));
     expect(sig).toBeInstanceOf(Uint8Array);
     expect(sig.length).toBe(64);
     expect(verify(pubkey, data, sig)).toBe(true);
+    // Ed25519 sign must complete under 50ms — noble/curves is constant-time but fast
+    expect(duration).toBeLessThan(50);
   });
 
   // AC-003: wrong public key → false
@@ -146,13 +162,17 @@ describe("KeyProvider interface shape (SI-003)", () => {
 // ─── CRYPTO-001 AC-008–012: FileKeyProvider ──────────────────────────────────
 describe("FileKeyProvider", () => {
   let tmpPath: string;
+  const scope = createTestScope();
 
   beforeEach(() => {
     tmpPath = join(tmpdir(), `cello-test-key-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    scope.addCleanup(async () => {
+      if (existsSync(tmpPath)) await rm(tmpPath);
+    });
   });
 
   afterEach(async () => {
-    if (existsSync(tmpPath)) await rm(tmpPath);
+    await scope.run(async () => {});
   });
 
   it("AC-008: creates key file when none exists; subsequent load returns same pubkey", async () => {
