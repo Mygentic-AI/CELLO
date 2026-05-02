@@ -1,0 +1,12 @@
+version: 0.2
+phases:
+  install:
+    runtime-versions:
+      nodejs: 24
+    commands:
+      - npm install -g pnpm
+      - pnpm install --frozen-lockfile
+  build:
+    commands:
+      - pnpm --filter @cello/crypto run typecheck
+      - pnpm --filter @cello/crypto run test

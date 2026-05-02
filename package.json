@@ -1,0 +1,23 @@
+{
+  "name": "trustless-cello",
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc --build",
+    "test": "vitest run",
+    "lint": "eslint packages/*/src"
+  },
+  "devDependencies": {
+    "@claude-flow/memory": "^3.0.0-alpha.2",
+    "@claude-flow/shared": "^3.0.0-alpha.1",
+    "@claude-flow/swarm": "^3.0.0-alpha.1",
+    "@claude-flow/testing": "3.0.0-alpha.2",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0"
+  }
+}

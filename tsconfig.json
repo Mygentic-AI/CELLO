@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/crypto" },
+    { "path": "packages/protocol-types" },
+    { "path": "packages/transport" },
+    { "path": "packages/client" },
+    { "path": "packages/adapter-claude-code" },
+    { "path": "packages/directory" },
+    { "path": "packages/relay" },
+    { "path": "packages/e2e-tests" }
+  ]
+}

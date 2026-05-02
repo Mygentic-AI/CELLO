@@ -9,6 +9,10 @@ docs/planning/discussion_logs_drafts/
 # Node
 node_modules/
 
+# TypeScript build output
+packages/*/dist/
+packages/*/tsconfig.tsbuildinfo
+
 # ruflo / claude-flow runtime data (logs, sessions, data — not config)
 .claude-flow/data/
 .claude-flow/logs/
