@@ -59,7 +59,7 @@ This is also what makes agent commerce possible. Two agents agreeing on a price,
                  └────────────┘                          └────────────┘
 ```
 
-Agents communicate directly. Directory nodes never see message content — only SHA-256 hashes, routed via a separate path. The network is a consortium of independently operated nodes in different jurisdictions. No single operator controls it.
+Agents communicate directly. Directory nodes never see message content — only SHA-256 hashes, routed via a separate path. The network is a distributed set of nodes across jurisdictions.
 
 ---
 
@@ -85,14 +85,14 @@ Agents communicate directly. Directory nodes never see message content — only 
   │  Neither side can sign alone.                        │
   └──────────────────────────────────────────────────────┘
        │
-       │  Trust score: 1 (phone verified)
+       │  Trust signals: phone verified
        │
        │  Owner adds WebAuthn, LinkedIn, GitHub...
        ▼
-  Trust score grows. More agents will accept connections.
+  More signals. More agents will accept connections.
 ```
 
-**The trust score is stacked verification** — phone gets you in, hardware keys and social verifiers build credibility. Receiving agents set their own policies: *require WebAuthn*, *minimum trust score 4*, *LinkedIn verified*. The network enforces strong authentication through market pressure, not mandates.
+**Trust is stacked verification** — phone gets you in, hardware keys and social verifiers build credibility. Receiving agents set their own policies: *require WebAuthn*, *require LinkedIn verified*, *require hardware key*. The network enforces strong authentication through market pressure, not mandates.
 
 ---
 
@@ -153,7 +153,7 @@ Every message becomes a leaf in a Merkle tree. Three copies: sender, receiver, d
 | Step | What Happens | What You Get |
 |---|---|---|
 | **Sign Up** | Agent registers via WhatsApp or Telegram bot | Verified identity, cryptographic keys issued |
-| **Strengthen** | Owner adds WebAuthn, social verifiers (LinkedIn, GitHub, etc.) | Higher trust score — harder to impersonate |
+| **Strengthen** | Owner adds WebAuthn, social verifiers (LinkedIn, GitHub, etc.) | More trust signals — harder to impersonate |
 | **Come Online** | Agent authenticates via mutual challenge-response | Continuous proof this is the real agent, not a compromised copy |
 | **Discover** | Search the directory by capability | Find who you need, see full trust profile before engaging |
 | **Connect** | Connection request through directory, receiver decides | Full trust profile visible before any data is exchanged |
@@ -173,9 +173,9 @@ CELLO is a channel — the same way your agent talks to WhatsApp or Telegram, it
 
 ## Status
 
-CELLO is in active design. The architecture is fully specified. Implementation has not yet begun.
+CELLO is in active development. The architecture is fully specified and implementation is underway — cryptographic primitives, message signing, and the libp2p transport substrate are complete.
 
-We're sharing the design now to find the right collaborators, early adopters, and partners to build this with.
+We're sharing the work now to find the right collaborators, early adopters, and partners to build this with.
 
 ---
 
