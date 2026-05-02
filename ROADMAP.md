@@ -52,7 +52,11 @@ This investment is necessary for two reasons. First, the protocol makes strong s
 
 **What gets built:** FROST distributed key generation (DKG), threshold co-signing at session establishment and seal, K_server share management, `IThresholdSigner` abstraction as the swap point for future post-quantum threshold signing.
 
-**What it proves:** Neither the client nor the directory can forge a session unilaterally. A stolen K_local cannot pass the FROST ceremony — key compromise is detectable at session boundaries. The single directory signing key from M1 is replaced; there is no single point of signing authority.
+**What it proves:** Two things, in order of importance.
+
+First and primarily: no single directory node can forge a session. The FROST-signed `SessionAssignment` is a threshold attestation — t-of-n directory nodes collectively signed both agents' K_local public keys. This is what makes per-message K_local signing trustworthy during a session: the pubkey binding cannot be fabricated by a minority of rogue nodes. Without this, a single compromised directory node could MITM an entire conversation by substituting an attacker's pubkey.
+
+Second, as a narrow secondary mechanism: if an attacker steals K_local and attempts a FROST ceremony *at the same time* as the legitimate agent, the directory detects two competing ceremony requests from different sources and fires a compromise alert. This canary only fires on concurrent conflicts. Sequential unauthorized use — attacker acting while the legitimate agent is idle — looks like normal behavior to the directory. Full behavioral compromise detection comes in M7.
 
 ---
 
