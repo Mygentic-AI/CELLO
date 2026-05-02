@@ -5,3 +5,11 @@ docs/planning/discussion_logs_drafts/
 
 # Obsidian vault config
 .obsidian/
+
+# Node
+node_modules/
+
+# ruflo / claude-flow runtime data (logs, sessions, data — not config)
+.claude-flow/data/
+.claude-flow/logs/
+.claude-flow/sessions/
