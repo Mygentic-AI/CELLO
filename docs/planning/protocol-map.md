@@ -17,7 +17,7 @@ The on-ramp is a free, open-source secure communication client. The prompt injec
 
 1. **Hash relay, not content relay.** The directory sees hashes, never content.
 2. **Client is the enforcer.** Merkle proofs, endorsement hashes, scan results, signature checks — verified locally.
-3. **FROST bookends the conversation.** Session establishment and seal use FROST; individual messages use K_local.
+3. **FROST bookends the conversation.** The opening FROST ceremony creates an unforgeable pubkey binding (t-of-n nodes attest both agents' K_local pubkeys); the closing FROST ceremony attests to the final Merkle root. Individual messages use K_local — safe because the pubkey was threshold-verified at session start. No minority of nodes can forge session assignments or fabricate sealed conversation records.
 4. **Degraded state raises the guard.** Directory unavailability is a reason to refuse new connections, not accept weaker ones.
 5. **All identity signals are optional enrichment.** Phone OTP and email are the only registration requirements.
 6. **Non-repudiation is the foundation of commerce.** A 32-byte Merkle root proves an entire conversation.
@@ -111,7 +111,7 @@ Trust data relay during connection requests follows a one-round negotiation with
 
 **What's decided.** Every message follows two paths: the direct channel (message + embedded signed hash) and the directory relay (signed hash only, for notarization). The Merkle tree uses RFC 6962 construction with domain separation. Leaf format includes sender pubkey, sequence number, message content, scan result, prev_root (creating a hash chain), and timestamp. Three copies exist: sender, receiver, directory.
 
-Session termination is first-class: CLOSE/CLOSE-ACK → SEAL (mutual), SEAL-UNILATERAL (timeout), EXPIRE (inactivity), ABORT (security event). Control leaves (`0x01`) are hashed and signed identically to message leaves. Session close attestations (CLEAN/FLAGGED/PENDING) serve triple duty: "last known good" timestamp for compromise detection, forced LLM self-audit, and escrow release trigger. Notification messages are fire-and-forget: self-contained, self-sealing, no session, prior conversation required.
+Session termination is first-class: bilateral SEAL (mutual), SEAL-UNILATERAL (timeout), EXPIRE (inactivity), ABORT (security event). Control leaves (`0x02`) are hashed and signed identically to message leaves. Session close attestations (CLEAN/FLAGGED/PENDING) carried in each party's SEAL leaf serve triple duty: "last known good" timestamp for compromise detection, forced LLM self-audit, and escrow release trigger. Notification messages are fire-and-forget: self-contained, self-sealing, no session, prior conversation required.
 
 Multi-party (N>2) conversations separate authorship from ordering. Two modes: serialized (single-speaker token) and concurrent (per-sender sequence + merge points). Client-side receive windows handle LLM agent participation. Group rooms are the primary multi-party venue: invite-only and selective configurations, owner/admin model, throttle manifest with cost protection, violation enforcement, and CONCURRENT+GCD conversation mode.
 

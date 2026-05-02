@@ -21,7 +21,7 @@ These principles apply everywhere. If a proposed mechanism violates any of them,
 
 2. **Client is the enforcer.** Merkle proofs, endorsement hashes, scan results, signature checks — the client verifies everything locally. A node can be compromised; if the client enforces correctly, the compromise is detectable and bounded.
 
-3. **FROST bookends the conversation.** FROST ceremonies authenticate at session start and notarize at seal. Individual messages use K_local. A stolen K_local cannot establish new FROST sessions or produce notarized seals — compromise is detected at session boundaries.
+3. **FROST bookends the conversation.** The opening FROST ceremony creates an unforgeable pubkey binding: t-of-n directory nodes collectively sign both agents' K_local pubkeys into the `SessionAssignment`. This is what makes K_local-only messaging safe between the bookends — every K_local signature during the session is verified against a pubkey that no minority of nodes could have fabricated. Without the threshold-attested binding, a single rogue node could issue a `SessionAssignment` with an attacker's pubkey and MITM the entire session. The closing FROST ceremony does the symmetric thing for the record: t-of-n nodes collectively attest to the final Merkle root, so no rogue relay or minority coalition can present a modified conversation history. Individual messages use K_local alone — FROST ensures the infrastructure is honest at the boundaries where trust anchors are established.
 
 4. **Degraded state raises the guard.** Directory unavailability is not a reason to accept lower-quality connections — it is a reason to be more selective. The default during degraded mode is refuse new unauthenticated connections with a clear reason.
 
@@ -196,7 +196,7 @@ For each agent's 1-hop endorsement/transaction neighborhood, the directory compu
 Automatic for smartphone clients. Desktop and server agents without TPMs simply don't provide this signal and are not penalized.
 
 **Layer 6 — Endorsement defenses (protocol-level rules):**
-- Rate limiting: max N new endorsements per month per agent
+- Rate limiting: max N new endorsements per month per owner (phone number) — shared across all agents under that owner, preventing farming via multiple agents
 - Weight decay by volume: agents endorsing hundreds carry less per-endorsement weight than selective endorsers
 - Fan-out detection: 50 agents endorsing the same 150 targets in a window is statistically anomalous
 - Social account binding lock: once GitHub/LinkedIn is bound, 12-month lockout on rebinding after unbinding (prevents marketplace resale of social verification)
@@ -241,7 +241,13 @@ The directory is an **append-only log of signed operations**, not a mutable data
 
 An attacker could create an internally consistent fake conversation (valid hashes, valid signatures, two keys they control) and insert it into the directory. The defense: a global append-only Merkle tree over all conversation registrations — a meta-Merkle tree. Each new conversation is a leaf. Published checkpoint roots prove that a conversation is either in the tree at a given point, or it isn't. This is a purpose-built blockchain for conversation proof — not financial transactions, but proof that a conversation happened, between whom, and when.
 
-**WebSocket security:** The directory's WebSocket server accepts only a rigid JSON schema (`type`, `agent_id`, `session_id`, `payload`, `signature`, `timestamp`). Anything else is rejected. Validation is pure code — schema check, signature verification, timestamp skew check. No LLM, no interpretation. Repeated malformed messages trigger: rate limit → disconnect → require reverification.
+**Two distinct directory interfaces:**
+
+1. **Agent clients** connect via persistent libp2p on `/cello/signaling/1.0.0`. Wire format: canonical CBOR (RFC 8949 deterministic encoding). Authenticated via CELLO identification exchange (challenge-response with K_local). This is the protocol-level connection for session signaling, FROST ceremonies, hash relay coordination, and notifications.
+
+2. **Portal** connects via authenticated WebSocket with JSON encoding (not libp2p). Accepts only a rigid JSON schema (`type`, `agent_id`, `session_id`, `payload`, `signature`, `timestamp`). Used for portal-originated instructions (accept/decline connection, key rotation, "Not Me" emergency actions). The portal never uses libp2p.
+
+Both interfaces apply the same validation discipline: schema check, signature verification, timestamp skew check (+/−30 seconds). No LLM, no interpretation. Repeated malformed messages trigger: rate limit → disconnect → require reverification.
 
 ### 2.2 Node Architecture
 
@@ -299,11 +305,13 @@ FROST ceremonies occur at two points in the protocol — not on every message:
 
 Individual messages are signed with **K_local alone** and verified against **pubkey(K_local)**. The relay node receives signed Merkle leaves (containing message hashes, not content), assigns sequence numbers, and relays them to the counterparty. The directory is dormant during the session — it returns as the active authority only at seal time.
 
-**The compromise canary:**
+**The compromise canary (narrow detection window):**
 
-Every agent has `primary_pubkey` (the FROST group key derived from K_local + K_server_X shares) registered on the directory alongside K_local's public key. K_local's public key is used for per-message signature verification and challenge-response auth; `primary_pubkey` is used for FROST signature verification at session boundaries.
+Every agent has `primary_pubkey` (the FROST group key derived from the DKG ceremony with directory nodes) registered on the directory alongside K_local's public key. K_local's public key is used for per-message signature verification and challenge-response auth; `primary_pubkey` is used for FROST signature verification at session boundaries.
 
-The compromise canary operates at **session boundaries**: if a stolen K_local attempts to coordinate a FROST ceremony while the legitimate agent is also attempting one, the directory detects the conflict (two competing ceremony requests for the same agent from different sources). A stolen K_local cannot produce FROST signatures without the directory's cooperation. Per-message signing uses K_local, so the canary does not fire per message — it fires when the attacker attempts to start a new session or seal a conversation.
+If a stolen client (K_local + FROST key share) attempts to coordinate a FROST ceremony **while the legitimate agent is also attempting one**, the directory detects the conflict (two competing ceremony requests for the same agent from different sources). This canary only fires on **concurrent liveness claims** — if the attacker uses the stolen material after the legitimate agent goes idle, the directory sees normal sequential behavior and the canary does not fire.
+
+The canary is a narrow supplementary detection mechanism, not the primary compromise defense. The primary defenses against sequential unauthorized use are behavioral: burst activity, unusual hours, unknown peers → push notification to owner; counterparty scan failures → FLAGGED attestation; owner-initiated "Not Me" → immediate K_server burn and dual-path forced abort (§8.3).
 
 ### 2.4 Replication and Consensus
 
@@ -680,7 +688,7 @@ The relay node embeds Structure 1's `sender_signature` into Structure 2 and comp
 
 The `prev_root` field creates a blockchain within the tree — each message commits to the entire history that preceded it. Gaps and modifications are detectable immediately.
 
-RFC 6962 prefix scheme: `0x00` message leaves, `0x01` internal nodes, `0x02` control leaves (SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN, RECEIPT).
+RFC 6962 prefix scheme: `0x00` message leaves, `0x01` internal nodes, `0x02` control leaves (SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, ABORT-BILLING, REOPEN, RECEIPT, FLOOR_GRANT, CONTINUATION_GRANT, AUTO_MUTE, KICK, MENTION_INSERT, ROLE_CHANGE).
 
 **First message initialization:**
 ```
@@ -759,17 +767,21 @@ Precedence: sender override beats global type rule. O(1) per notification — no
 
 ### 6.6 Session Termination Protocol
 
-Termination is a first-class protocol event. The Merkle tree supports three leaf prefixes: `0x00` for message leaves, `0x01` for internal nodes (RFC 6962), and `0x02` for control leaves (SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, REOPEN, RECEIPT). Control leaves are hashed and signed identically to message leaves.
+Termination is a first-class protocol event. The Merkle tree supports three leaf prefixes: `0x00` for message leaves, `0x01` for internal nodes (RFC 6962), and `0x02` for control leaves (SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, ABORT-BILLING, REOPEN, RECEIPT, FLOOR_GRANT, CONTINUATION_GRANT, AUTO_MUTE, KICK, MENTION_INSERT, ROLE_CHANGE). Control leaves are hashed and signed identically to message leaves.
 
 **Clean termination (bilateral seal):**
-1. Party A sends a SEAL control leaf (signed, hashed, carries session close attestation)
-2. Party B sends a SEAL control leaf (signed, hashed, carries B's independent attestation)
+1. Party A calls `cello_close_session` — the client runs its self-audit, produces the session attestation, and emits a SEAL control leaf (signed, hashed, carries A's attestation)
+2. Party B's client receives A's SEAL leaf, runs its own self-audit, and emits B's SEAL control leaf (signed, hashed, carries B's independent attestation)
 3. The relay submits the complete leaf sequence to the directory. The directory recomputes the Merkle root from scratch, verifies per-leaf signatures and causal chain, and issues a `SealNotarization` (FROST-signed in M2+, recording the sealed root, both participants, and close timestamp)
-4. Final Merkle root = complete, sealed conversation
-5. After `SealNotarization`: a configurable grace window (`post_seal_grace_seconds`, default 300) permits late-arriving messages (in-flight before the sender received the `SealNotarization`) to be accepted as `post_seal: true` record-only leaves. After the grace window expires, any arriving message triggers an auto-REOPEN and is delivered as the first leaf of a continuation session.
+4. Final Merkle root = complete, sealed conversation segment
+5. After `SealNotarization`: a configurable grace window (`post_seal_grace_seconds`, default 300) permits late-arriving messages (in-flight before the sender received the `SealNotarization`) to be accepted as `post_seal: true` record-only leaves. After the grace window expires, any arriving message triggers an auto-REOPEN and is delivered as the first leaf of a new continuation segment.
+
+**Design note — no CLOSE/CLOSE-ACK handshake:** The bilateral SEAL exchange is the complete termination mechanism. There is no separate CLOSE/CLOSE-ACK step preceding it. A SEAL leaf IS each party's signed statement that they are done — a separate "I intend to close" signal before it adds a round-trip and state machine complexity (CLOSE-sent, CLOSE-ACK-received, ready-to-seal, sealed) with no additional security value. The `post_seal_grace_seconds` window (default 300 seconds) handles the "B wasn't ready" case: if B had a message in flight when A's SEAL arrived, that message is accepted during the grace window. If this proves insufficient in practice — if agents frequently need an explicit "A is done sending" signal before they can produce their attestation — a CLOSE/CLOSE-ACK pair can be added as a purely additive protocol change without breaking existing seal semantics.
+
+**Relationship between `post_seal_grace_seconds` and `SEAL-UNILATERAL` timeout:** The SEAL-UNILATERAL timeout (how long the directory waits for B's SEAL leaf before sealing unilaterally) must be longer than `post_seal_grace_seconds`. If B needs the grace window to process a late in-flight message before it can self-audit and emit its SEAL leaf, the SEAL-UNILATERAL timeout must accommodate that. Setting SEAL-UNILATERAL timeout < post_seal_grace would mean the directory seals unilaterally before B has had time to respond — defeating the purpose of the grace window.
 
 **Unilateral close (SEAL-UNILATERAL):**
-Party A sends a SEAL control leaf, Party B never responds. After timeout, A submits to the directory. Directory seals as "closed by A, unacknowledged by B." Different status from mutual close — the record shows B didn't confirm.
+Party A sends a SEAL control leaf, Party B never responds within the SEAL-UNILATERAL timeout. Directory seals as "closed by A, unacknowledged by B." Different status from mutual close — the record shows B didn't confirm.
 
 **Timeout (EXPIRE):**
 No messages for a configurable period. Directory sends EXPIRE control leaf to both parties. Either party can REOPEN within a grace period.
@@ -781,7 +793,11 @@ One party detects something wrong (hash mismatch, suspected compromise, maliciou
 An agent calls `cello_acknowledge_receipt` to record that it has processed a specific message. The client writes a signed RECEIPT control leaf into the Merkle tree — explicit causal commitment proving the agent received an offer before making a counter-offer, for example. Optional; implicit ACK via the Merkle chain is the default for all sessions.
 
 **Resumption (REOPEN):**
-Appends to a SEALed or EXPIREd tree, creating a continuation rather than a new tree. Not applicable to ABORTed conversations.
+Creates a new conversation segment cryptographically chained to the sealed predecessor. The sealed root of the prior segment remains a valid, independently-verifiable FROST-signed attestation of that segment's final state. The new segment's genesis `prev_root` = `SHA-256(previous_sealed_root || session_id || reopen_timestamp)` — this proves descent without invalidating the prior seal. Sequence numbers restart at 1 in the new segment. The relay's per-session state was destroyed at seal time; a new relay assignment provisions fresh state for the continuation segment.
+
+Explicit REOPEN (bilateral) requires a new FROST ceremony — "FROST bookends the conversation" applies to each segment. Auto-REOPEN (triggered by a post-grace-window message arrival) does not require FROST — it is a protocol-level continuity mechanism for in-flight messages, not a participant-initiated act. The next explicit seal provides the closing bookend.
+
+Not applicable to ABORTed conversations — ABORT is permanent.
 
 | Termination | Merkle state | Reopenable? |
 |---|---|---|
@@ -789,6 +805,7 @@ Appends to a SEALed or EXPIREd tree, creating a continuation rather than a new t
 | SEAL-UNILATERAL | Sealed by one party | Yes |
 | EXPIRE | Sealed with expiration marker | Yes (within grace) |
 | ABORT | Sealed with abort reason + reason code | No |
+| ABORT-BILLING | Sealed with billing dispute reason (cost cap exceeded, token count divergence, rate card hash mismatch) | No |
 
 **Termination is subject to the same delivery failure modes.** Party A sends a SEAL control leaf, the hash reaches the directory, but the SEAL message never reaches B on the direct channel. The protocol handles this identically to Case B — if B never responds with its own SEAL leaf within the timeout, the directory seals as SEAL-UNILATERAL.
 
@@ -1409,7 +1426,9 @@ Several mechanisms appear separate but are tightly coupled through shared primit
 - **Group room floor control**: relay is the authority for floor discipline; floor grant decisions never touch the directory
 
 **Session-level FROST connects to:**
-- **Compromise canary**: a stolen K_local cannot establish new FROST sessions or produce notarized seals — detection at session boundaries, not per message
+- **Infrastructure honesty**: t-of-n threshold prevents any minority of directory nodes from forging session assignments or fabricating sealed records — the primary purpose of FROST at the bookends
+- **Pubkey binding**: K_local-only messaging during sessions is safe because the pubkey was threshold-attested at session start; without this, a single rogue node could MITM via a forged `SessionAssignment`
+- **Compromise canary (narrow)**: concurrent FROST ceremony attempts from different sources are detectable — but only fires on simultaneous liveness claims, not sequential unauthorized use
 - **Graceful degradation**: the system never stops — it temporarily operates at lower trust when the directory is unavailable
 - **Group room joins**: each joining participant runs an independent FROST ceremony; no shared ceremony across all participants
 
@@ -1429,4 +1448,4 @@ Purchase attestation is generated at session close time — it is a structured a
 
 **Companion devices (Part 13) branch from §3.2 (What "Online" Means):**
 
-The companion device is a second connection to the owner's CELLO client — not to the directory. It uses the same libp2p infrastructure but is a distinct peer type with different authorization (companion keypair + phone OTP, not FROST). The local persistence model (§13.3) is an extension of what the client already maintains: the Merkle record is unchanged, but the client additionally records local-only events (human injections, input requests) with `merkle_leaf_hash = null`. Human injection (§13.2) produces no protocol record — the other agent sees only whatever the first agent chose to send, which is a normal agent message in the Merkle tree.
+The companion device is a second connection to the owner's CELLO client — not to the directory. It uses the same libp2p infrastructure but is a distinct peer type with different authorization (companion keypair registered via local QR-code ceremony — no server round-trip, not FROST). Phone OTP is used for emergency portal actions ("Not Me"), not for companion device registration. The local persistence model (§13.3) is an extension of what the client already maintains: the Merkle record is unchanged, but the client additionally records local-only events (human injections, input requests) with `merkle_leaf_hash = null`. Human injection (§13.2) produces no protocol record — the other agent sees only whatever the first agent chose to send, which is a normal agent message in the Merkle tree.

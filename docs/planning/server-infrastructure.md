@@ -305,12 +305,12 @@ Repeated malformed frames on the signaling stream: rate limit → disconnect →
 
 **Message Merkle tree**:
 - Two separate Merkle trees: Identity tree (checkpointed periodically) and Message tree (per-conversation hash chains, updated per message)
-- RFC 6962 construction with control leaf extension: `0x00` message leaves, `0x01` internal nodes (RFC 6962 standard), `0x02` control leaves (CLOSE, CLOSE-ACK, SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, ABORT-BILLING, REOPEN, RECEIPT)
+- RFC 6962 construction with control leaf extension: `0x00` message leaves, `0x01` internal nodes (RFC 6962 standard), `0x02` control leaves (SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, ABORT-BILLING, REOPEN, RECEIPT, FLOOR_GRANT, CONTINUATION_GRANT, AUTO_MUTE, KICK, MENTION_INSERT, ROLE_CHANGE)
 
 **[CONFLICT C-3 — RESOLVED]**: The `0x02` prefix for control leaves preserves RFC 6962 second-preimage protection (internal nodes remain `0x01`) while keeping control leaves as first-class Merkle entries distinct from message leaves (`0x00`). See agent-client.md AC-C3 (resolved).
 
 **Two-structure leaf format** (N-party canonical form; two-party is a special case):
-- **Structure 1 (inner, sender-signed)**: `content_hash || sender_pubkey || conversation_id || last_seen_seq || timestamp` — signed by sender with K_local
+- **Structure 1 (inner, sender-signed)**: `content_hash || sender_pubkey || session_id || last_seen_seq || timestamp` — signed by sender with K_local
 - **Structure 2 (outer, relay-constructed)**: `sequence_number || sender_pubkey || message_content_hash || sender_signature (Structure 1 embedded) || scan_result || prev_root` — the relay node embeds Structure 1's signature, appends `scan_result` (sender's Layer 2 scanner output: `{ score, verdict, model_hash }` — honesty signal recorded in the leaf), `prev_root`, and the canonical sequence number, then hashes into the Merkle tree. The client never computes `prev_root`.
 
 **[CONFLICT C-4 — RESOLVED]**: The two-structure model (2026-04-13 multi-party design) is canonical. The 2026-04-15 session-level FROST signing description of sender-computed `prev_root` is superseded — it was written for the two-party case and does not account for multi-party, where the relay node is the only entity with canonical sequence across all senders during an active session. See agent-client.md AC-C2, AC-C7 (resolved).
@@ -378,18 +378,16 @@ Session-level security events (`relay_sequencing_attack`, `peer_compromised_abor
 - The bilateral seal (both parties sign final root with K_local) is available immediately; the notarized FROST seal is deferred until directory returns
 
 **Session termination (control leaves)**:
-Control leaves are hashed and signed identically to message leaves and recorded in the Merkle tree.
+Control leaves are hashed and signed identically to message leaves and recorded in the Merkle tree. The bilateral SEAL exchange is the complete termination mechanism — there is no CLOSE/CLOSE-ACK handshake.
 
 | Control type | Trigger | Status |
 |---|---|---|
-| CLOSE | Party A initiates close | In progress |
-| CLOSE-ACK | Party B acknowledges | In progress |
-| SEAL | Directory notarizes mutual close | Terminal |
-| SEAL-UNILATERAL | Timeout — B did not ack | Terminal |
-| EXPIRE | Directory: no messages for configurable period | Quasi-terminal (REOPEN permitted) |
+| SEAL | Bilateral seal — both parties emit SEAL leaves carrying attestations; directory notarizes (FROST) | Terminal |
+| SEAL-UNILATERAL | Timeout — B did not emit SEAL within SEAL-UNILATERAL timeout | Terminal |
+| EXPIRE | Directory: no messages for 72 hours | Quasi-terminal (REOPEN permitted) |
 | ABORT | Security event | Terminal — REOPEN not permitted |
 | ABORT-BILLING | Billing dispute: cost cap exceeded, token count divergence, or rate card hash mismatch | Terminal — REOPEN not permitted |
-| REOPEN | Either party reopens SEALED or EXPIRED tree | Continuation |
+| REOPEN | Either party reopens a SEALED or EXPIRED session — creates new segment chained to prior seal | New segment |
 | RECEIPT | Agent explicitly acknowledges processing a specific message | Informational (no state change) |
 | FLOOR_GRANT | Relay assigns a turn cohort (group rooms only) — `cohort_pubkeys[]` + `round_number` | No — floor management |
 | CONTINUATION_GRANT | Relay grants or denies a `cello_request_continuation` request (group rooms only) | No — floor management |
@@ -398,16 +396,16 @@ Control leaves are hashed and signed identically to message leaves and recorded 
 | MENTION_INSERT | Relay priority-inserts a mentioned agent into the next cohort (group rooms only) — rate-limited to 1 per agent per cycle | No — floor management |
 | ROLE_CHANGE | Participant role change (speaker ↔ listener), initiated by owner or admin (group rooms only) | No — room management |
 
-After SEAL: a configurable grace window (`post_seal_grace_seconds`, default `300`) permits late-arriving messages (in-flight before the sender received the SEAL notification) to be accepted as `post_seal: true` record-only leaves. After the grace window expires, any arriving message triggers an auto-REOPEN and is delivered as the first leaf of a continuation session.
+After SEAL: a configurable grace window (`post_seal_grace_seconds`, default `300`) permits late-arriving messages (in-flight before the sender received the SEAL notification) to be accepted as `post_seal: true` record-only leaves. After the grace window expires, any arriving message triggers an auto-REOPEN and is delivered as the first leaf of a new continuation segment. **Constraint:** The SEAL-UNILATERAL timeout (how long the directory waits for B's SEAL leaf) must exceed `post_seal_grace_seconds` — if B needs the grace window to process a late in-flight message before self-auditing and emitting its SEAL leaf, the timeout must accommodate that.
 After ABORT: REOPEN is not permitted. Post-ABORT message arrivals are always rejected regardless of timing.
 
-**Session timeout**: 72 hours (3 days). No messages for 72 hours → directory issues EXPIRE control leaf; session moves to quasi-terminal (REOPEN permitted). A conversation quiet over a weekend should not auto-expire. Owners can always manually CLOSE earlier. **[GAP G-13 RESOLVED]**
+**Session timeout**: 72 hours (3 days). No messages for 72 hours → directory issues EXPIRE control leaf; session moves to quasi-terminal (REOPEN permitted). A conversation quiet over a weekend should not auto-expire. Owners can always initiate a SEAL earlier. **[GAP G-13 RESOLVED]**
 
 **REOPEN semantics — [GAP G-14 RESOLVED]**:
 
 - **New FROST ceremony required: yes.** The seal is a definitive notarial act — the directory has attested to a final state. Reopening invalidates that finality. A REOPEN is structurally equivalent to session establishment and carries the same authentication weight. Skipping FROST would leave the directory's sealed record as the last attested state with no new anchor for the continuation.
 - **Sequence numbers: restart at 1, anchored to previous seal.** The new segment's genesis `prev_root` = `SHA-256(previous_sealed_root || session_id || reopen_timestamp)`. This creates a cryptographically linked chain of conversation segments — each segment's genesis commits to the prior seal. History is fully reconstructible; each segment is a clean, unambiguous unit. Continuing sequence numbers across a seal boundary would blur the meaning of the seal.
-- **Unilateral REOPEN: not permitted.** The seal is a bilateral agreement — both parties signed CLOSE and CLOSE-ACK. A unilateral REOPEN would undermine that finality and is a harassment vector (spamming REOPENs against someone who closed to end contact). If one party wants to communicate and the other does not respond to a REOPEN request, they start a new session via the standard connection request flow. REOPEN continues an existing thread; a new session goes through full trust evaluation and policy check.
+- **Unilateral REOPEN: not permitted.** The seal is a bilateral agreement — both parties emitted SEAL leaves. A unilateral REOPEN would undermine that finality and is a harassment vector (spamming REOPENs against someone who closed to end contact). If one party wants to communicate and the other does not respond to a REOPEN request, they start a new session via the standard connection request flow. REOPEN continues an existing thread; a new session goes through full trust evaluation and policy check.
 - **Auto-REOPEN exception**: Late-arriving messages that trigger an auto-REOPEN (post-grace-window arrival, per the rule above) do not require a new FROST ceremony — the auto-REOPEN is a protocol-level continuity mechanism, not a participant-initiated act. The client initiates it: the receiving client detects that a P2P message arrived after the grace window closed, creates and signs a REOPEN control leaf (`origin: auto`, no FROST), and submits the leaf hash to the directory via the normal hash submission path. The directory validates, notarizes the REOPEN leaf, re-provisions a relay for the continuation session (since the sealed relay destroyed its per-session state), and extends the Merkle record. The directory does not detect the late arrival — only the receiving client can see P2P message timing.
 
 **Session close attestation** (`conversation_attestations` table — per-participant, N-party):
@@ -472,7 +470,7 @@ The privacy design is intentional: an agent may have valid reasons not to disclo
 - Three observable states: hash present and not revoked (valid), hash present and revoked (withdrawn), hash not present
 - Revocation: directory appends a revocation event alongside the existing hash (never deletes the original)
 - At connection time: hash lookup for endorsement verification (milliseconds, no round-trips)
-- Rate limits: max **10 new endorsements per month** per agent. **[GAP G-17 RESOLVED]**
+- Rate limits: max **10 new endorsements per month** per owner (phone number) — shared across all agents under that owner to prevent farming via multiple agents. **[GAP G-17 RESOLVED]**
 - Weight decay: promiscuous endorsers carry less per-endorsement weight
 - Fan-out detection: statistically anomalous patterns (e.g., 50 agents endorsing same 150 targets in a window) flagged
 - **[GAP G-42]**: `cello_request_endorsement` and `cello_revoke_endorsement` MCP tools are absent from the client's tool surface (see agent-client.md AC-12 and frontend.md F-35). The directory endorsement endpoints are fully specified above, but the client and portal cannot exercise them until those tools are built. This is a shared incompleteness — the server-side infrastructure is ready; the client-side call path is not.
@@ -817,10 +815,10 @@ For NAT-failed sessions (~20–30% using circuit relay): both message and hash p
 ### Seal handoff
 
 At seal time, the relay's role is:
-1. Record the CLOSE and CLOSE-ACK control leaves
+1. Record both parties' SEAL control leaves (bilateral seal)
 2. Hand the complete leaf sequence and the session's final Merkle root to the directory
 3. Directory recomputes the tree from scratch — it does not trust the relay's root
-4. Directory runs the FROST seal ceremony
+4. Seal initiator coordinates the FROST ceremony; directory produces `SealNotarization`
 5. Sealed root enters the global MMR
 
 Relay's per-session state is destroyed after the handoff.
@@ -920,14 +918,14 @@ When a relay node needs to alert an agent owner (e.g., anomaly detection):
 
 ### Session seal flow
 
-1. Party A sends CLOSE control leaf (signed, hashed) — relay records it, relays to B
-2. Party B sends CLOSE-ACK control leaf (signed, hashed) — relay records it
+1. Party A calls `cello_close_session` — client runs self-audit, produces attestation, emits SEAL control leaf (signed, hashed, carries attestation) — relay records it, relays to B
+2. Party B's client receives A's SEAL leaf, runs its own self-audit, emits B's SEAL control leaf (signed, hashed, carries B's attestation) — relay records it
 3. Relay hands the complete leaf sequence and session's final Merkle root to the directory
 4. Directory recomputes the tree from scratch (does not trust the relay's root); verifies causal consistency of `last_seen_seq` values across all leaves
-5. Directory initiates FROST seal ceremony — requires t-of-n directory nodes; any directory node can participate (all hold the required K_server_X shares)
-6. Directory produces SEAL: notarized statement of mutual close at specific timestamp
-7. Each party writes its own attestation (CLEAN or FLAGGED) to its CLOSE leaf — PENDING is a directory-tracked state for counterparties who have not yet submitted, not a value a party writes about itself
-8. SEAL is recorded in `conversation_seals`; triggers MMR leaf append
+5. Seal initiator (Party A) coordinates a FROST ceremony with t-of-n directory nodes
+6. Directory produces `SealNotarization`: FROST-signed statement of mutual seal at specific timestamp, with `signer_pubkey: initiator_primary_pubkey`
+7. Each party's attestation (CLEAN or FLAGGED) is carried in their SEAL leaf — PENDING is a directory-tracked state for counterparties who have not yet submitted, not a value a party writes about itself
+8. `SealNotarization` is recorded in `conversation_seals`; triggers MMR leaf append
 9. If staking was active: CLEAN → stake auto-released; FLAGGED + upheld arbitration → institution can claim stake
 10. Relay's per-session Merkle state is destroyed after handoff confirms
 
@@ -1049,7 +1047,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-14 | Directory | ~~Resolved~~ — REOPEN requires new FROST ceremony; seq# restarts at 1 with genesis `prev_root = SHA-256(previous_sealed_root \|\| session_id \|\| reopen_timestamp)`; unilateral REOPEN not permitted (bilateral by design; use new session request if counterparty non-responsive). Auto-REOPEN (late-arriving post-grace message) is protocol-internal and does not require FROST. |
 | G-15 | Directory | ~~Retired~~ — signals divide by ownership: directory-owned behavioral signals (track record, connection history, anomaly flags) are appended automatically by the directory; client-owned identity signals (social proofs, WebAuthn, device attestation, endorsements) are discretionary disclosures. No mandatory-signal registry; no rejection at submission. Enforcement is the receiving client's `SignalRequirementPolicy`. |
 | G-16 | Directory | ~~Resolved~~ — Directory nodes enforce (connection requests happen at FROST ceremony, a directory operation). Cap updated to 25 outbound connections/day during 7-day provisional period. Daily counter on agent record, incremented at each outbound connection request. |
-| G-17 | Directory | ~~Endorsement rate limit N not specified~~ **RESOLVED**: 10 new endorsements per month per agent |
+| G-17 | Directory | ~~Endorsement rate limit N not specified~~ **RESOLVED**: 10 new endorsements per month per owner (phone number), shared across all agents under that owner |
 | G-18 | Directory | ~~Deferred~~ — pending server stack decision (Rust vs. Go for directory nodes). PSI is Phase 2; Phase 1 ships with direct comparison. Library selection is downstream of stack choice. |
 | G-19 | Directory | ~~Resolved~~ — Gap was an artifact of the home node model. `phone_hash` is stored in `agent_registrations` and replicates to all directory nodes. Every node enforces the same-owner rule at endorsement submission time. No additional mechanism required. |
 | G-20 | Directory | ~~Blocked by G-36~~ — custodian API cannot be specified until financial infrastructure is designed. |

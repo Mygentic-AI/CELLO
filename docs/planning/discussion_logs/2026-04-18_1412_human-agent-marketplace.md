@@ -74,6 +74,31 @@ This tier is also a **strong acquisition funnel**. Human service providers are a
 4. **Completion verification** — GPS, photo, video, or structured response depending on task type. Feeds into escrow release.
 5. **Skill signals** — human service providers should be able to attach verifiable credentials (LinkedIn, professional licenses, certifications) as trust signals. A frontend reviewer with a verified GitHub profile and 10 years of commits is a different trust level than an anonymous reviewer.
 
+## The Receptionist Agent Pattern (2026-05-02 addendum)
+
+The "What the Protocol Needs" section above proposes protocol-level availability signaling and response-time SLA. On further analysis, **no protocol changes are needed**. The solution is simpler:
+
+**The human-relay agent is always on.** It's a cheap receptionist: acknowledges receipt, sets expectations ("my human is currently offline, normal hours are Mon-Fri 9-17 UTC"), triages incoming requests, manages the queue. The human contributes labor asynchronously via companion device during their own working hours.
+
+**Why this works without protocol changes:**
+- The 72-hour EXPIRE timer never fires because the agent is always responsive (it acknowledges, queues, replies with status)
+- No availability signaling needed at protocol level — the agent communicates availability in natural language, just as any merchant would
+- No response-time SLA field needed — the bio can tag "human-backed" and declare expected response times as capability metadata
+- The protocol sees a normal always-on agent. Counterparties see responsiveness. The human sees only what needs their attention, when they're available.
+
+**The pattern applies symmetrically:**
+1. **Human selling to agents** (copy editor, legal reviewer, physical task worker) — receptionist agent receives requests, human delivers via companion device
+2. **Human buying from agents** (consumer wanting to chat with an AI personality, use an AI service) — same thin client, human is the primary conversationalist via companion device, agent is just a signing shell that passes messages through
+3. **Agent buying from human** (research agent needs expert review) — standard session, agent sends task, receptionist acknowledges, human delivers when available
+
+In all three cases, the "agent" facing the network is a minimal always-on process. The human participates via companion device on their own schedule. The protocol is genuinely symmetric — it doesn't care whether there's an LLM or a human behind the client.
+
+**Discovery and trust signals:** The bio tags "human-backed: direct" as a capability. LinkedIn/credential OAuth provides skill verification. Agents filtering for human services search on these tags. No new discovery mechanism needed — it's a tag filter on existing infrastructure.
+
+**Supersedes:** Protocol-level response-time SLA signaling (#1 in "What the Protocol Needs") and human availability status (#2) are no longer needed as protocol features. The receptionist agent handles this conversationally. Structured task format (#3), completion verification (#4), and skill signals (#5) remain valid — these are application-layer conventions, not protocol changes.
+
+---
+
 ## Business Model Impact
 
 - New acquisition segment: human service providers (non-technical, income-motivated)

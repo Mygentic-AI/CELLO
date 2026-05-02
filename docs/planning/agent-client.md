@@ -116,19 +116,21 @@ When presenting a pseudonym to a counterparty, the client generates a binding pr
 
 ### Two-track signing model
 
-CELLO uses two cryptographic signing schemes that serve different roles. Implementors must support both.
+CELLO uses two cryptographic signing schemes that serve different roles:
 
-| Artifact | Scheme | Quantum-safe? | Rationale |
+| Artifact | Scheme (M0–M2) | Scheme (M3+) | Rationale |
 |---|---|---|---|
-| Split-key signing (session establishment, conversation seal) | FROST (Ed25519) | No — accepted quantum debt | No viable threshold alternative exists; `IThresholdSigner` abstraction enables future swap |
-| Per-message signing (K_local) | Ed25519 | No — accepted quantum debt | Used for individual messages within an established session |
-| Endorsement records | ML-DSA (liboqs / node-oqs) | Yes | Simple signature, no threshold needed |
-| Attestations | ML-DSA | Yes | Same |
-| Directory certificates | ML-DSA | Yes | Same |
-| Pseudonym binding | ML-DSA | Yes | Directory co-signs at registration; single key |
-| Connection package items | ML-DSA | Yes | Same |
+| Split-key signing (session establishment, conversation seal) | FROST (Ed25519) | FROST (Ed25519) — quantum debt accepted | No viable threshold alternative exists; `IThresholdSigner` abstraction enables future swap |
+| Per-message signing (K_local) | Ed25519 | Ed25519 — quantum debt accepted | Used for individual messages within an established session |
+| Endorsement records | Ed25519 | ML-DSA (liboqs / node-oqs) | Simple signature, no threshold needed — ML-DSA deferred to M3+ |
+| Attestations | Ed25519 | ML-DSA | Same |
+| Directory certificates | Ed25519 | ML-DSA | Same |
+| Pseudonym binding | Ed25519 | ML-DSA | Directory co-signs at registration; single key |
+| Connection package items | Ed25519 | ML-DSA | Same |
 
-ML-DSA is CRYSTALS-Dilithium, NIST FIPS 204. Security level (ML-DSA-44 vs ML-DSA-65) is an open decision. The library to build against is `liboqs` / `node-oqs` (Open Quantum Safe project, implements FIPS 204).
+**M0–M2: Ed25519 only.** All signatures (threshold and non-threshold) use Ed25519. This matches `@cello/crypto` which lists ML-DSA as M3+.
+
+**M3+: ML-DSA for non-threshold signatures.** ML-DSA is CRYSTALS-Dilithium, NIST FIPS 204. Security level (ML-DSA-44 vs ML-DSA-65) is an open decision. The library to build against is `liboqs` / `node-oqs` (Open Quantum Safe project, implements FIPS 204).
 
 The quantum vulnerability of FROST is documented, accepted, and has a defined resolution path through the `IThresholdSigner` abstraction. Threshold ML-DSA is research-grade and not yet production-ready (estimated 5–7 years to standardization).
 
@@ -328,13 +330,13 @@ This binds the libp2p transport connection to the agent's K_local identity. The 
 
 **Timestamp skew (AC-3 resolved):** The acceptable skew window for directory nonce verification is ±30 seconds. Consistent with NTP-synchronized systems and TOTP tolerance. Requests with timestamps outside this window are rejected as potential replays.
 
-### FROST session establishment — the opening canary
+### FROST session establishment — pubkey binding and infrastructure honesty
 
-When the client initiates or accepts a session, FROST authentication runs before any application messages flow. Both agents authenticate to the directory via mutual challenge-response; the directory co-signs the session establishment via FROST.
+When the client initiates a session, the FROST ceremony runs before any application messages flow. The initiator coordinates a threshold ceremony with t-of-n directory nodes; the resulting `SessionAssignment` carries both agents' K_local pubkeys signed by the initiator's FROST group.
 
-This ceremony is the compromise canary. If K_local has been stolen and an attacker is attempting to open a session from an unexpected source, the FROST ceremony produces a detectable anomaly: two competing FROST participation attempts for the same agent from different sources. The directory detects and fires a `FALLBACK_CANARY` anomaly event, triggering a push alert to the owner's WhatsApp/Telegram/WeChat.
+**Primary purpose: unforgeable pubkey binding.** The FROST-signed `SessionAssignment` proves that t-of-n directory nodes collectively attested to both agents' identities. This is what makes K_local-only messaging safe during the session — every K_local signature is verified against a pubkey that no minority of nodes could have fabricated. Without the threshold-attested binding, a single rogue node could issue a `SessionAssignment` with an attacker's pubkey and MITM the entire conversation.
 
-The canary fires at session establishment boundaries. It does not fire per message (individual messages are signed K_local-only). A K_local extraction during an active session is therefore detected at the next session start, not message by message.
+**Secondary mechanism: compromise canary (narrow detection window).** If the entire client state is stolen (K_local + FROST key share) and the attacker attempts a FROST ceremony **while the legitimate agent is also attempting one**, the directory detects the conflict — two competing ceremony requests for the same agent from different sources. The directory fires a `FALLBACK_CANARY` anomaly event, triggering a push alert to the owner. This canary only fires on concurrent liveness claims. If the attacker acts while the legitimate agent is idle, the directory sees normal sequential behavior and the canary does not fire. The primary defenses against sequential unauthorized use are behavioral (burst activity, unusual hours, unknown peers → owner notification; counterparty scan failures → FLAGGED attestation; owner "Not Me" → immediate K_server burn).
 
 **Session policy binding at FROST bookend:** Session establishment signs more than authentication — it also binds the session's commercial terms. For inference-priced sessions, the `InferenceRateCard` (input/output rates per 1K tokens, tokenizer_id, tokenizer_hash, currency, optional cache_discount and caps) is declared by the seller and co-signed by both parties as part of the FROST session bookend. The rate card hash is embedded in every inference response Merkle leaf, preventing retroactive price changes. Rate card changes require closing the current session and establishing a new one — there is no mid-session rate modification.
 
@@ -460,7 +462,7 @@ Every outbound message involves **two distinct structures** that must not be con
 sender_signature = sign_with_K_local(
   content_hash      ||   SHA-256 of the message content
   sender_pubkey     ||   the sender's current K_local public key
-  conversation_id   ||   stable identifier for this conversation
+  session_id        ||   16-byte session identifier
   last_seen_seq     ||   highest sequence number received at composition time
   timestamp            sender's local clock, not canonical
 )
@@ -488,7 +490,7 @@ The sender produces Structure 1 and transmits it with the message content. The r
 
 **Inference response metadata (application-layer recommendation):** For inference-priced sessions, each response leaf carries structured billing metadata alongside the standard leaf fields: `input_tokens_this_message`, `output_tokens_this_message`, `cached_input_tokens_this_message` (optional), `cost_this_message`, cumulative totals for tokens and cost, `rate_card_hash`, `model_id`, and `tokenizer_id`. This schema is an application-layer recommendation at launch — sellers who follow it get full dispute coverage; sellers who do not fall back to manual arbitration. Promotion to first-class protocol fields is deferred pending vertical growth. See [[2026-04-24_1530_inference-billing-protocol|Inference Billing Protocol]].
 
-The leaf prefix scheme follows RFC 6962 with an extension for control leaves (AC-C3 resolved): `0x00` for message leaves, `0x01` for internal nodes (RFC 6962 standard), `0x02` for control leaves (CLOSE, CLOSE-ACK, SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, ABORT-BILLING, REOPEN, RECEIPT). Using `0x01` for both internal nodes and control leaves would defeat RFC 6962's second-preimage protection by making control leaves indistinguishable from internal nodes. The `0x02` prefix keeps control leaves as first-class Merkle entries while preserving the RFC 6962 invariant.
+The leaf prefix scheme follows RFC 6962 with an extension for control leaves (AC-C3 resolved): `0x00` for message leaves, `0x01` for internal nodes (RFC 6962 standard), `0x02` for control leaves (SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, ABORT-BILLING, REOPEN, RECEIPT, FLOOR_GRANT, CONTINUATION_GRANT, AUTO_MUTE, KICK, MENTION_INSERT, ROLE_CHANGE). Using `0x01` for both internal nodes and control leaves would defeat RFC 6962's second-preimage protection by making control leaves indistinguishable from internal nodes. The `0x02` prefix keeps control leaves as first-class Merkle entries while preserving the RFC 6962 invariant.
 
 ### Dual-path dispatch
 
@@ -534,22 +536,20 @@ Proof size: under 3 KB for a ledger with 10 million conversations. Verification 
 
 Every outbound message from either party implicitly acknowledges all prior messages. The `prev_root` in each leaf (computed by the relay node) commits to the entire conversation history up to that point. When B sends a response, B's leaf chains through A's last message. This is a signed cryptographic assertion: "I built this message on top of a conversation tree that includes A's message."
 
-No separate ACK mechanism is needed for mid-conversation messages. The final message problem is solved by the CLOSE/CLOSE-ACK protocol.
+No separate ACK mechanism is needed for mid-conversation messages. The bilateral SEAL exchange handles session termination completely — no CLOSE/CLOSE-ACK handshake precedes it.
 
 ### Control leaves
 
-Control leaves (CLOSE, CLOSE-ACK, SEAL-UNILATERAL, EXPIRE, ABORT, ABORT-BILLING, REOPEN) are hashed and signed identically to message leaves and recorded in the Merkle tree. They are first-class protocol events, not out-of-band signals.
+Control leaves (SEAL, SEAL-UNILATERAL, EXPIRE, ABORT, ABORT-BILLING, REOPEN, RECEIPT, and group room types) are hashed and signed identically to message leaves and recorded in the Merkle tree. They are first-class protocol events, not out-of-band signals.
 
 | Control type | Trigger | Terminal? |
 |---|---|---|
-| `CLOSE` | Party A initiates close | No — in progress |
-| `CLOSE-ACK` | Party B acknowledges | No — in progress |
-| `SEAL` | Directory notarizes mutual close (FROST) | Yes |
-| `SEAL-UNILATERAL` | Timeout — B did not send CLOSE-ACK | Yes |
+| `SEAL` | Bilateral seal — both parties emit SEAL leaves carrying their attestations; directory notarizes (FROST) | Yes |
+| `SEAL-UNILATERAL` | Timeout — B did not emit SEAL within the SEAL-UNILATERAL timeout | Yes |
 | `EXPIRE` | No messages for 72 hours (3 days) | Quasi-terminal (REOPEN permitted) |
 | `ABORT` | Security event or policy breach | Yes — REOPEN not permitted |
 | `ABORT-BILLING` | Billing dispute: session/per-message cost cap exceeded, seller token count diverges from buyer verification, or rate card hash mismatch | Yes — REOPEN not permitted |
-| `REOPEN` | Either party reopens a SEALED or EXPIRED session | Continuation |
+| `REOPEN` | Either party reopens a SEALED or EXPIRED session — creates a new segment chained to prior seal | New segment |
 | `FLOOR_GRANT` | Relay assigns a turn cohort (group rooms only) — `cohort_pubkeys[]` + `round_number` | No — floor management |
 | `CONTINUATION_GRANT` | Relay grants or denies a `cello_request_continuation` request (group rooms only) | No — floor management |
 | `AUTO_MUTE` | Relay-enforced mute after 2nd violation within rolling window (group rooms only) — trusted-relay assertion; cannot be independently verified by clients | No — enforcement |
@@ -558,7 +558,9 @@ Control leaves (CLOSE, CLOSE-ACK, SEAL-UNILATERAL, EXPIRE, ABORT, ABORT-BILLING,
 | `ROLE_CHANGE` | Participant role change from `speaker` to `listener` or vice versa, initiated by owner or admin (group rooms only) | No — room management |
 | `RECEIPT` | Agent explicitly acknowledges processing a specific message via `cello_acknowledge_receipt` — signed causal commitment | No — informational (no state change) |
 
-After `SEAL`: any subsequent message is rejected — with one time-windowed exception (AC-36 resolved). If a message arrives after `SEAL` but within a configurable grace window (`post_seal_grace_seconds`, default `300`), the client accepts it as a record-only leaf appended to the sealed tree. This handles in-flight messages that were dispatched before the sender received the `SEAL` notification. After the grace window expires, any arriving message triggers a new conversation: the client auto-initiates a `REOPEN` and delivers the message as the first leaf of the continuation session. The grace window is configurable via `cello_configure`. Messages accepted during the grace window are flagged `post_seal: true` in the local leaf record and surfaced to the agent via `cello_receive` with a `post_seal_arrival` flag so the agent can handle them appropriately.
+**Design note — no CLOSE/CLOSE-ACK:** The bilateral SEAL exchange is the complete termination mechanism. A's SEAL leaf IS the definitive "I'm done" signal; B has the full SEAL-UNILATERAL timeout window to self-audit and produce its own SEAL leaf. The `post_seal_grace_seconds` window (default 300) handles messages B had in-flight when A's SEAL arrived. If this proves insufficient in practice — if agents frequently need an explicit "I intend to close" signal before they can produce their attestation — CLOSE/CLOSE-ACK can be added as a purely additive change without breaking existing seal semantics.
+
+After `SEAL`: any subsequent message is rejected — with one time-windowed exception (AC-36 resolved). If a message arrives after `SEAL` but within a configurable grace window (`post_seal_grace_seconds`, default `300`), the client accepts it as a record-only leaf appended to the sealed segment. This handles in-flight messages that were dispatched before the sender received the `SealNotarization`. After the grace window expires, any arriving message triggers an auto-REOPEN: the client creates a new continuation segment (fresh relay, seq restart at 1, genesis `prev_root` derived from prior sealed root) and delivers the message as the first leaf. The grace window is configurable via `cello_configure`. Messages accepted during the grace window are flagged `post_seal: true` in the local leaf record and surfaced to the agent via `cello_receive` with a `post_seal_arrival` flag so the agent can handle them appropriately.
 
 After `ABORT`: `REOPEN` is not permitted. Post-`ABORT` message arrivals are always rejected regardless of timing — the security event that triggered `ABORT` makes record-only acceptance unsafe.
 
@@ -568,24 +570,24 @@ After `ABORT`: `REOPEN` is not permitted. Post-`ABORT` message arrivals are alwa
 
 ### Session attestation
 
-When the agent sends a CLOSE leaf, it includes a session attestation:
+When the agent emits a SEAL leaf, it includes a session attestation:
 
 - `CLEAN` — no issues detected during this session
 - `FLAGGED` — suspicious activity observed; session is eligible for arbitration submission
 
 A `FLAGGED` attestation that is never submitted to arbitration expires after **7 days** with no consequence to either party. Serial flag-and-abandon (flagging agent abandons more than 3 flags in a rolling 90-day window without submitting) is recorded as a behavioral signal on the flagger's trust profile — this eliminates the harassment attack vector where an agent repeatedly flags counterparties without intending to pursue arbitration.
 
-The attestation is part of the CLOSE leaf — signed and in the Merkle tree. It serves triple duty: "last known good" timestamp for compromise window determination if something goes wrong later, forced LLM self-audit (the agent must evaluate the session before it can close cleanly), and escrow release trigger (CLEAN → stake returned; FLAGGED + upheld arbitration → institution can claim).
+The attestation is part of the SEAL leaf — signed and in the Merkle tree. It serves triple duty: "last known good" timestamp for compromise window determination if something goes wrong later, forced LLM self-audit (the agent must evaluate the session before it can close cleanly), and escrow release trigger (CLEAN → stake returned; FLAGGED + upheld arbitration → institution can claim).
 
 **Multi-party attestation (AC-32):** For N-party conversations, the two-party `party_a_attestation`/`party_b_attestation` model does not apply. Each participant submits an individual attestation row at seal time. The client must submit one row per participant it is aware of to the `conversation_attestations` table. Per-participant states (complete set):
 
 - `CLEAN` — participant attested no issues
 - `FLAGGED` — participant flagged the session for dispute
-- `PENDING` — attestation not yet received (waiting for counterparty's CLOSE leaf)
+- `PENDING` — attestation not yet received (waiting for counterparty's SEAL leaf)
 - `DELIVERED` — transport-confirmed receipt with no output (participant received but did not produce content)
 - `ABSENT` — participant went offline or was removed; no delivery confirmation received
 
-The two-party case is the degenerate N=2 case of this model. The client submits its own attestation row (CLEAN or FLAGGED) as part of sending the CLOSE leaf; it populates counterparty rows as their CLOSE leaves arrive. The `DELIVERED`→`ABSENT` transition timeout for group room participants is not yet specified — see GAP AC-33.
+The two-party case is the degenerate N=2 case of this model. The client submits its own attestation row (CLEAN or FLAGGED) as part of emitting its SEAL leaf; it populates counterparty rows as their SEAL leaves arrive. The `DELIVERED`→`ABSENT` transition timeout for group room participants is not yet specified — see GAP AC-33.
 
 The Layer 3 outbound gate's self-check log (produced before every `cello_send`) provides the evidentiary basis for the agent's attestation. If the self-check consistently passed, the agent can attest CLEAN.
 
@@ -812,7 +814,7 @@ Group conversations are excluded from the cold-contact counter.
 
 **Incubation period:** New agents are in a 7-day provisional period window with a 25 outbound connection/day cap regardless of trust tier. The directory enforces this at FROST ceremony time; the client enforces it as a secondary guard.
 
-**Endorsement rate limit:** Maximum 10 new endorsements per month per agent. The directory rejects submissions above this limit.
+**Endorsement rate limit:** Maximum 10 new endorsements per month per owner (phone number) — shared across all agents under that owner. The directory rejects submissions above this limit. This prevents farming via multiple agents registered to the same identity.
 
 **Greeting rate limits (per-recipient):** 1 greeting per recipient per 7 days after a non-response or ignore. If the recipient explicitly declines, the lockout extends to 30 days. If the recipient blocks the agent, the lockout is permanent.
 
@@ -1295,7 +1297,7 @@ The following names are canonical and supersede inconsistencies in earlier docum
 
 1. Agent A calls `cello_send(session_id, content)`
 2. Client A applies Layer 3 outbound gate + Layer 4 redaction
-3. Client A builds Structure 1 signed leaf (content hash + sender_pubkey + conversation_id + last_seen_seq + timestamp)
+3. Client A builds Structure 1 signed leaf (content hash + sender_pubkey + session_id + last_seen_seq + timestamp)
 4. Client A dispatches simultaneously: content + signed Structure 1 leaf to B via P2P; signed Structure 1 leaf to relay node
 5. Relay node verifies A's signature, assigns canonical sequence number, constructs Structure 2 Merkle leaf, updates the conversation Merkle tree, relays hash + seq# to B
 6. Client B receives message + signed Structure 1 leaf via P2P AND Structure 2 hash + seq# from relay
@@ -1413,7 +1415,7 @@ All configured channels always fire. No hierarchy, no suppression based on app p
 §8.4 is correct and §8.3 is superseded. All active sessions receive SEAL-UNILATERAL immediately on "Not Me" — no active session continues after the owner has declared a compromise. The threat model is: the owner doesn't know what was compromised, so a hard stop on everything is the only safe response. Allowing existing sessions to continue (§8.3) trades security for continuity in exactly the scenario where continuity must not be trusted.
 
 **AC-C7: Leaf inner authorship proof vs. outer relay leaf — resolved**
-Two distinct structures. Structure 1 (inner): what the sender signs with K_local — content_hash, sender_pubkey, conversation_id, last_seen_seq, timestamp. Structure 2 (outer): what the relay node hashes into the conversation Merkle tree — sequence_number, sender_pubkey, message_content_hash, sender_signature (Structure 1 embedded), prev_root (relay-appended). At seal time, the relay hands the full leaf sequence to the directory, which recomputes the tree independently. See Part 4 for full specification.
+Two distinct structures. Structure 1 (inner): what the sender signs with K_local — content_hash, sender_pubkey, session_id, last_seen_seq, timestamp. Structure 2 (outer): what the relay node hashes into the conversation Merkle tree — sequence_number, sender_pubkey, message_content_hash, sender_signature (Structure 1 embedded), scan_result, prev_root (relay-appended). At seal time, the relay hands the full leaf sequence to the directory, which recomputes the tree independently. See Part 4 for full specification.
 
 **AC-C8: Escalation resolution routing — resolved**
 Owner responses route directly to the client via the channel's own reply mechanism. WhatsApp/Telegram/WeChat: bot reply handler. CELLO mobile app: companion P2P connection. No directory node intermediary. The client maintains the connection for each configured channel. Also resolves GAP AC-17.
