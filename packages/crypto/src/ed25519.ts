@@ -1,10 +1,7 @@
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 import { readFile, writeFile, rename, chmod, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { dirname } from "node:path";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { KeyProvider, PublicKey, Signature } from "./types.js";
 
 const INSPECT = Symbol.for("nodejs.util.inspect.custom");
@@ -53,8 +50,20 @@ export class FileKeyProvider implements KeyProvider {
   }
 
   static async load(path: string): Promise<FileKeyProvider> {
-    if (existsSync(path)) {
-      const raw = await readFile(path);
+    // Attempt to read without existsSync to avoid TOCTOU: if the file disappears
+    // between a check and a read, readFile throws ENOENT — treated as "not found".
+    let raw: Buffer | null = null;
+    try {
+      raw = await readFile(path);
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        throw { reason: "key_file_corrupt", message: `cannot read key file: ${(err as Error).message}` };
+      }
+      // ENOENT → fall through to generation
+    }
+
+    if (raw !== null) {
       if (raw.length !== KEY_FILE_SIZE) {
         throw { reason: "key_file_corrupt", message: `key file has wrong length: expected ${KEY_FILE_SIZE}, got ${raw.length}` };
       }
@@ -70,15 +79,17 @@ export class FileKeyProvider implements KeyProvider {
       return new FileKeyProvider(new InMemoryKeyProvider(seed));
     }
 
-    // Generate and atomically write a new key file
+    // Generate and atomically write a new key file.
+    // Tmp file lives in the same directory as the target so rename() is same-filesystem.
     const seed = randomBytes(SEED_BYTES);
     const buf = Buffer.alloc(KEY_FILE_SIZE);
     KEY_FILE_MAGIC.forEach((b: number, i: number) => { buf[i] = b; });
     buf[KEY_FILE_MAGIC.length] = KEY_FILE_VERSION;
     seed.forEach((b: number, i: number) => { buf[KEY_FILE_MAGIC.length + 1 + i] = b; });
 
-    await mkdir(dirname(path), { recursive: true });
-    const tmp = join(tmpdir(), `cello-key-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
+    const dir = dirname(path);
+    await mkdir(dir, { recursive: true });
+    const tmp = join(dir, `.cello-key-tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     await writeFile(tmp, buf, { mode: 0o600 });
     await rename(tmp, path);
     await chmod(path, 0o600);

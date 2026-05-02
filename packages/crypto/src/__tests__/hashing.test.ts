@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import {
   setupV3Tests,
   describe,
@@ -82,11 +83,15 @@ describe("empty input (AC-006)", () => {
 
 // ─── CRYPTO-002 AC-007: domain prefix confusion guard ────────────────────────
 describe("domain prefix confusion guard (AC-007)", () => {
-  it("AC-007: msgLeafHash(D) != nodeHash prefix applied to D", () => {
+  it("AC-007: msgLeafHash(D) != SHA-256(0x01 || D) — confused caller cannot produce the same hash", () => {
     const data = new TextEncoder().encode("test data");
     const correct = toHex(msgLeafHash(data));
-    // Simulate accidentally using internal-node prefix
-    const wrong = toHex(nodeHash(data, new Uint8Array(0)));
+    // Construct the "wrong" hash exactly as described in AC-007: a caller accidentally uses
+    // the internal-node prefix 0x01 on message data instead of 0x00.
+    const wrongInput = new Uint8Array(1 + data.length);
+    wrongInput[0] = 0x01;
+    wrongInput.set(data, 1);
+    const wrong = createHash("sha256").update(wrongInput).digest("hex");
     expect(correct).not.toBe(wrong);
   });
 });

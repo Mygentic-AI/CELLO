@@ -94,6 +94,13 @@ describe("sign and verify", () => {
     expect(verify(pubkey, data, truncated)).toBe(false);
   });
 
+  it("AC-005: verify with zero-length signature returns false without throwing", async () => {
+    const kp = generateKeypair();
+    const pubkey = await kp.getPublicKey();
+    const data = new TextEncoder().encode("test");
+    expect(verify(pubkey, data, new Uint8Array(0))).toBe(false);
+  });
+
   // AC-007: empty data
   it("AC-007: sign of empty bytes produces valid 64-byte signature", async () => {
     const kp = generateKeypair();
@@ -146,16 +153,60 @@ describe("KeyProvider private key confinement (SI-001)", () => {
 
 // ─── CRYPTO-001 SI-003: interface shape ──────────────────────────────────────
 describe("KeyProvider interface shape (SI-003)", () => {
-  it("SI-003: InMemoryKeyProvider has exactly getPublicKey and sign as async methods", async () => {
+  it("SI-003: InMemoryKeyProvider has getPublicKey and sign; no key-export escape hatches", async () => {
     const kp = generateKeypair();
     expect(typeof kp.getPublicKey).toBe("function");
     expect(typeof kp.sign).toBe("function");
-    // No exportKey, getPrivateKey, or similar escape hatches
+    // Negative assertion per SI-003: no exportKey / getPrivateKey / getSeed methods.
+    // Positive note: toJSON/toString/[inspect] are intentionally present (required by SI-001
+    // to provide redacted representations). SI-003 forbids *key-extraction* methods, not
+    // all additional methods.
     const proto = Object.getOwnPropertyNames(Object.getPrototypeOf(kp));
-    const publicApiMethods = proto.filter((n) => !n.startsWith("#") && n !== "constructor");
-    expect(publicApiMethods).not.toContain("exportKey");
-    expect(publicApiMethods).not.toContain("getPrivateKey");
-    expect(publicApiMethods).not.toContain("getSeed");
+    expect(proto).not.toContain("exportKey");
+    expect(proto).not.toContain("getPrivateKey");
+    expect(proto).not.toContain("getSeed");
+  });
+});
+
+// ─── CRYPTO-001 SI-001: FileKeyProvider private key confinement ──────────────
+describe("FileKeyProvider private key confinement (SI-001)", () => {
+  let kpPath: string;
+  let fp: FileKeyProvider;
+  let pubkeyHex: string;
+  const scope = createTestScope();
+
+  beforeEach(async () => {
+    kpPath = join(tmpdir(), `cello-si001-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    scope.addCleanup(async () => { try { await rm(kpPath); } catch { /* ok */ } });
+    fp = await FileKeyProvider.load(kpPath);
+    pubkeyHex = Buffer.from(await fp.getPublicKey()).toString("hex");
+  });
+
+  afterEach(async () => { await scope.run(async () => {}); });
+
+  it("SI-001 FileKeyProvider: toString contains only pubkey hex, no private key material", () => {
+    const s = fp.toString();
+    expect(s).toContain(pubkeyHex);
+    const hexMatches = s.match(/[0-9a-f]{64}/gi) ?? [];
+    for (const m of hexMatches) {
+      expect(m.toLowerCase()).toBe(pubkeyHex);
+    }
+  });
+
+  it("SI-001 FileKeyProvider: toJSON contains only pubkey hex, no private key material", () => {
+    const j = JSON.stringify(fp);
+    const hexMatches = j.match(/[0-9a-f]{64}/gi) ?? [];
+    for (const m of hexMatches) {
+      expect(m.toLowerCase()).toBe(pubkeyHex);
+    }
+  });
+
+  it("SI-001 FileKeyProvider: util.inspect contains only pubkey hex, no private key material", () => {
+    const s = inspect(fp);
+    const hexMatches = s.match(/[0-9a-f]{64}/gi) ?? [];
+    for (const m of hexMatches) {
+      expect(m.toLowerCase()).toBe(pubkeyHex);
+    }
   });
 });
 
