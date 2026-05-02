@@ -20,6 +20,9 @@ export function msgLeafHash(data: Uint8Array): Uint8Array {
 }
 
 export function nodeHash(left: Uint8Array, right: Uint8Array): Uint8Array {
+  if (left.length !== 32 || right.length !== 32) {
+    throw new Error(`nodeHash: expected 32-byte inputs, got left=${left.length} right=${right.length}`);
+  }
   const buf = new Uint8Array(1 + left.length + right.length);
   buf[0] = INTERNAL_NODE;
   buf.set(left, 1);

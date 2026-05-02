@@ -75,9 +75,13 @@ describe("domain separation (AC-004)", () => {
 
 // ─── CRYPTO-002 AC-006: empty input message leaf ─────────────────────────────
 describe("empty input (AC-006)", () => {
-  it("AC-006: msgLeafHash(empty) == SHA-256(0x00)", () => {
-    const result = msgLeafHash(new Uint8Array(0));
-    expect(toHex(result)).toBe(vectors.message_leaf[0].output_hex);
+  it("AC-006: msgLeafHash(empty) == SHA-256(0x00) — verified independently, not just against fixture", () => {
+    // Compute expected independently using Node native crypto (FIPS 180-4) so this test
+    // cannot pass due to a wrong fixture — it verifies the spec invariant directly.
+    const expected = createHash("sha256").update(new Uint8Array([0x00])).digest("hex");
+    expect(toHex(msgLeafHash(new Uint8Array(0)))).toBe(expected);
+    // Also assert the fixture matches the independently computed value (catches a wrong fixture).
+    expect(expected).toBe(vectors.message_leaf[0].output_hex);
   });
 });
 
@@ -113,11 +117,15 @@ describe("second-preimage protection (SI-001)", () => {
     expect(msgHash).not.toBe(realNodeHash);
   });
 
-  it("SI-001: data starting with 0x02 cannot collide with control leaf hash using message leaf primitive", () => {
-    const data = new Uint8Array([0x02, 0xde, 0xad]);
-    const msg = toHex(msgLeafHash(data));
-    const ctrl = toHex(ctrlLeafHash(data));
-    expect(msg).not.toBe(ctrl);
+  it("SI-001: attacker crafting msgLeaf input starting with 0x02 cannot collide with ctrlLeafHash", () => {
+    // SI-001 adversarial scenario: attacker passes [0x02, <controlBytes>] to msgLeafHash,
+    // hoping msgLeafHash([0x02, ...cb]) == ctrlLeafHash(cb). It cannot: msgLeaf prepends
+    // its own 0x00 prefix, so the actual hashed input is [0x00, 0x02, ...cb] vs [0x02, ...cb].
+    const controlBytes = new Uint8Array([0xde, 0xad]);
+    const craftedInput = new Uint8Array([0x02, ...controlBytes]);
+    const attackerHash = toHex(msgLeafHash(craftedInput));
+    const legitimateCtrlHash = toHex(ctrlLeafHash(controlBytes));
+    expect(attackerHash).not.toBe(legitimateCtrlHash);
   });
 
   it("SI-001: msgLeaf(0x42) != ctrlLeaf(0x42) — identical input, different domain", () => {
@@ -129,11 +137,19 @@ describe("second-preimage protection (SI-001)", () => {
 });
 
 // ─── CRYPTO-002 AC-005: NIST CAVP SHA-256 vectors + CELLO fixtures ───────────
-// AC-005 requires NIST short/long message vectors as the cross-implementation contract
-// the Rust port must match, plus the 7 CELLO-specific fixtures (a)–(g).
+// AC-005 requires exactly 6 NIST short/long message vectors as the cross-implementation
+// contract the Rust port must match, plus the 7 CELLO-specific fixtures (a)–(g).
 // NIST vectors are in merkle-primitives.json under "nist_sha256".
 // CELLO fixtures (a)–(g) are covered by the msgLeafHash/nodeHash/ctrlLeafHash tests above.
 describe("NIST CAVP SHA-256 vectors (AC-005)", () => {
+  // Guard: deleting a vector from the JSON silently drops coverage without this check.
+  it("vector file contains exactly 6 NIST vectors, 3 message-leaf, 2 internal-node, 2 control-leaf", () => {
+    expect(vectors.nist_sha256.vectors.length).toBe(6);
+    expect(vectors.message_leaf.length).toBe(3);
+    expect(vectors.internal_node.length).toBe(2);
+    expect(vectors.control_leaf.length).toBe(2);
+  });
+
   for (const v of vectors.nist_sha256.vectors) {
     it(`NIST: ${v.label}`, () => {
       expect(toHex(hash(fromHex(v.input_hex)))).toBe(v.output_hex);

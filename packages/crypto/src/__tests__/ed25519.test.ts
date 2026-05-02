@@ -115,39 +115,32 @@ describe("sign and verify", () => {
 
 // ─── CRYPTO-001 SI-001: private key never surfaces ───────────────────────────
 describe("KeyProvider private key confinement (SI-001)", () => {
+  // Use a known seed so we can assert the seed hex itself is absent from output.
+  // InMemoryKeyProvider constructor is exported and accepts a seed directly.
+  const knownSeed = new Uint8Array(32).fill(0xab);
   let kp: InMemoryKeyProvider;
   let pubkeyHex: string;
+  const seedHex = Buffer.from(knownSeed).toString("hex");
 
   beforeEach(async () => {
-    kp = generateKeypair();
+    kp = new InMemoryKeyProvider(knownSeed);
     pubkeyHex = Buffer.from(await kp.getPublicKey()).toString("hex");
   });
 
-  it("SI-001: toString does not leak key material beyond pubkey", () => {
+  it("SI-001: toString does not leak private seed", () => {
     const s = kp.toString();
-    // Must contain pubkey (that's fine), must not expose anything else that looks like a 32-byte key
     expect(s).toContain(pubkeyHex);
-    // The only 64-char hex sequence in the output should be the pubkey
-    const hexMatches = s.match(/[0-9a-f]{64}/gi) ?? [];
-    for (const m of hexMatches) {
-      expect(m.toLowerCase()).toBe(pubkeyHex);
-    }
+    expect(s).not.toContain(seedHex);
   });
 
-  it("SI-001: toJSON does not expose private key material", () => {
+  it("SI-001: toJSON does not expose private seed", () => {
     const j = JSON.stringify(kp);
-    const hexMatches = j.match(/[0-9a-f]{64}/gi) ?? [];
-    for (const m of hexMatches) {
-      expect(m.toLowerCase()).toBe(pubkeyHex);
-    }
+    expect(j).not.toContain(seedHex);
   });
 
-  it("SI-001: util.inspect does not expose private key material", () => {
+  it("SI-001: util.inspect does not expose private seed", () => {
     const s = inspect(kp);
-    const hexMatches = s.match(/[0-9a-f]{64}/gi) ?? [];
-    for (const m of hexMatches) {
-      expect(m.toLowerCase()).toBe(pubkeyHex);
-    }
+    expect(s).not.toContain(seedHex);
   });
 });
 
@@ -173,49 +166,48 @@ describe("FileKeyProvider private key confinement (SI-001)", () => {
   let kpPath: string;
   let fp: FileKeyProvider;
   let pubkeyHex: string;
-  const scope = createTestScope();
+  // FileKeyProvider wraps InMemoryKeyProvider — we cannot inject a known seed via the public API.
+  // Instead we read the key file after generation to extract the seed for assertion.
+  let seedHex: string;
+  let scope: ReturnType<typeof createTestScope>;
 
   beforeEach(async () => {
+    scope = createTestScope();
     kpPath = join(tmpdir(), `cello-si001-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     scope.addCleanup(async () => { try { await rm(kpPath); } catch { /* ok */ } });
     fp = await FileKeyProvider.load(kpPath);
     pubkeyHex = Buffer.from(await fp.getPublicKey()).toString("hex");
+    // Read the written key file to obtain the seed bytes (magic=4, version=1, seed=32)
+    const raw = await readFile(kpPath);
+    seedHex = raw.slice(5, 37).toString("hex");
   });
 
   afterEach(async () => { await scope.run(async () => {}); });
 
-  it("SI-001 FileKeyProvider: toString contains only pubkey hex, no private key material", () => {
+  it("SI-001 FileKeyProvider: toString does not expose private seed", () => {
     const s = fp.toString();
     expect(s).toContain(pubkeyHex);
-    const hexMatches = s.match(/[0-9a-f]{64}/gi) ?? [];
-    for (const m of hexMatches) {
-      expect(m.toLowerCase()).toBe(pubkeyHex);
-    }
+    expect(s).not.toContain(seedHex);
   });
 
-  it("SI-001 FileKeyProvider: toJSON contains only pubkey hex, no private key material", () => {
+  it("SI-001 FileKeyProvider: toJSON does not expose private seed", () => {
     const j = JSON.stringify(fp);
-    const hexMatches = j.match(/[0-9a-f]{64}/gi) ?? [];
-    for (const m of hexMatches) {
-      expect(m.toLowerCase()).toBe(pubkeyHex);
-    }
+    expect(j).not.toContain(seedHex);
   });
 
-  it("SI-001 FileKeyProvider: util.inspect contains only pubkey hex, no private key material", () => {
+  it("SI-001 FileKeyProvider: util.inspect does not expose private seed", () => {
     const s = inspect(fp);
-    const hexMatches = s.match(/[0-9a-f]{64}/gi) ?? [];
-    for (const m of hexMatches) {
-      expect(m.toLowerCase()).toBe(pubkeyHex);
-    }
+    expect(s).not.toContain(seedHex);
   });
 });
 
 // ─── CRYPTO-001 AC-008–012: FileKeyProvider ──────────────────────────────────
 describe("FileKeyProvider", () => {
   let tmpPath: string;
-  const scope = createTestScope();
+  let scope: ReturnType<typeof createTestScope>;
 
   beforeEach(() => {
+    scope = createTestScope();
     tmpPath = join(tmpdir(), `cello-test-key-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     scope.addCleanup(async () => {
       if (existsSync(tmpPath)) await rm(tmpPath);

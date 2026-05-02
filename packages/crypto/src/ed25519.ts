@@ -1,6 +1,6 @@
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { randomBytes } from "@noble/hashes/utils.js";
-import { readFile, writeFile, rename, chmod, mkdir } from "node:fs/promises";
+import { readFile, rename, mkdir, open as fsOpen } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { KeyProvider, PublicKey, Signature } from "./types.js";
 
@@ -90,9 +90,16 @@ export class FileKeyProvider implements KeyProvider {
     const dir = dirname(path);
     await mkdir(dir, { recursive: true });
     const tmp = join(dir, `.cello-key-tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    await writeFile(tmp, buf, { mode: 0o600 });
+    // Write to tmp fd with O_CREAT|O_EXCL, fchmod before close, then rename — so the file
+    // arrives at its final path with 0o600 already set (no post-rename chmod race window).
+    const fd = await fsOpen(tmp, "wx", 0o600);
+    try {
+      await fd.write(buf);
+      await fd.chmod(0o600);
+    } finally {
+      await fd.close();
+    }
     await rename(tmp, path);
-    await chmod(path, 0o600);
 
     return new FileKeyProvider(new InMemoryKeyProvider(seed));
   }
