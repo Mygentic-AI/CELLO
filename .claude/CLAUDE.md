@@ -92,14 +92,29 @@ Isolation: use `createTestScope()` for cleanup, not manual teardown.
 
 **No mocks for cryptographic operations.** Real keys, real signing, real verification. Always.
 
-### Phase C — Completion
-After all tests are green:
-1. `pnpm run typecheck` — zero errors
-2. `pnpm run lint` — zero errors
-3. `pnpm run test` — all pass
-4. Every AC in the story YAML has a corresponding named test
-5. Every SI in the story YAML has a negative test (adversarial condition)
-6. Commit with the story ID in the commit message
+### Phase C — Completion: Gate Sequence (ALL MANDATORY, IN ORDER)
+
+After all tests are green, run this exact sequence before committing:
+
+```
+Step 1 — Tests green:       pnpm run test         (all pass)
+Step 2 — Lint:              pnpm run lint         (zero errors)
+Step 3 — Typecheck:         pnpm run typecheck    (zero errors)
+Step 4 — Build:             pnpm --filter @cello/<name> run typecheck  (package compiles to dist/)
+Step 5 — Code Review:       Agent({ subagent_type: "feature-dev:code-reviewer", ... })
+Step 6 — Commit:            Story ID in commit message
+```
+
+**Step 5 — Code Review is mandatory.** After each phase (P pseudocode, A architecture, R implementation) dispatch a `feature-dev:code-reviewer` agent against what was just produced. Do not skip this for "simple" changes. The review agent must check:
+- Implementation matches the ACs exactly (no extra, no missing)
+- Security invariants enforced (no private key leakage paths, no silent failures)
+- Package boundaries respected
+- No YAGNI violations — no code beyond what the story requires
+- `@claude-flow/testing` used correctly
+
+Every AC in the story YAML has a corresponding named test.
+Every SI in the story YAML has a negative test (adversarial condition).
+Commit only after the reviewer returns no blocking issues.
 
 ## What Skipping Any Phase Looks Like
 
