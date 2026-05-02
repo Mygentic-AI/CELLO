@@ -234,18 +234,9 @@ trustless-cello/
 
 ```
 packages/
-├── protocol-types/                 # @cello/protocol-types — wire types, TBS schemas, envelope defs
-│   ├── package.json
-│   ├── tsconfig.json               # refs: (none — leaf package)
-│   ├── buildspec.yml
-│   └── src/
-│       ├── index.ts
-│       └── __tests__/
-│           └── fixtures/           # TBS byte vectors, canonical CBOR test cases
-│
 ├── crypto/                         # @cello/crypto — Ed25519, SHA-256, FROST (M2+)
 │   ├── package.json
-│   ├── tsconfig.json               # refs: protocol-types
+│   ├── tsconfig.json               # refs: (none — true leaf, pure primitives)
 │   ├── buildspec.yml
 │   └── src/
 │       ├── index.ts
@@ -253,9 +244,18 @@ packages/
 │       │   └── fixtures/           # RFC 8032 test vectors, domain-sep hash vectors
 │       └── frost/                  # M2+ — IThresholdSigner, FrostThresholdSigner
 │
+├── protocol-types/                 # @cello/protocol-types — wire types, TBS schemas, envelope defs
+│   ├── package.json
+│   ├── tsconfig.json               # refs: crypto (envelope construction needs hash + sign)
+│   ├── buildspec.yml
+│   └── src/
+│       ├── index.ts
+│       └── __tests__/
+│           └── fixtures/           # TBS byte vectors, canonical CBOR test cases
+│
 ├── transport/                      # @cello/transport — libp2p bootstrap, dial, stream handling
 │   ├── package.json
-│   ├── tsconfig.json               # refs: protocol-types, crypto
+│   ├── tsconfig.json               # refs: crypto (for KeyProvider type)
 │   ├── buildspec.yml
 │   └── src/
 │       ├── index.ts
@@ -264,7 +264,7 @@ packages/
 │
 ├── client/                         # @cello/client — CelloClient, MCP tool logic (no server)
 │   ├── package.json
-│   ├── tsconfig.json               # refs: transport, crypto, protocol-types
+│   ├── tsconfig.json               # refs: transport, protocol-types, crypto
 │   ├── buildspec.yml
 │   └── src/
 │       ├── index.ts
@@ -319,7 +319,11 @@ packages/
 ### Dependency Graph (enforced by TypeScript project references)
 
 ```
-adapter-claude-code → client → transport, crypto, protocol-types
+crypto              → (nothing — true leaf, pure primitives)
+protocol-types      → crypto
+transport           → crypto
+client              → transport, crypto, protocol-types
+adapter-claude-code → client
 directory           → transport, crypto, protocol-types
 relay               → transport, crypto, protocol-types
 e2e-tests           → client, adapter-claude-code, directory, relay, transport, crypto, protocol-types
