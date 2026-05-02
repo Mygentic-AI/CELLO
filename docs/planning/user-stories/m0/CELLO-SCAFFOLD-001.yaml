@@ -57,6 +57,9 @@ story: >
   dependencies via `"references"`. The dependency graph is:
 
   ```
+  crypto              → (nothing — true leaf, pure primitives)
+  protocol-types      → crypto
+  transport           → crypto
   adapter-claude-code → client → transport, crypto, protocol-types
   adapter-claude-code → client → (never directory, never relay)
   directory           → transport, crypto, protocol-types
