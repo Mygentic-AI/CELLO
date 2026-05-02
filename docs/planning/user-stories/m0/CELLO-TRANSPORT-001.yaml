@@ -23,10 +23,13 @@ story: >
   - `createNode({ keyProvider, listenAddresses })` — constructs a `js-libp2p` node configured
     with the CELLO transport/security/muxer stack: `@libp2p/tcp` and `@libp2p/websockets`
     transports, `@chainsafe/libp2p-noise` for security, `@chainsafe/libp2p-yamux` for
-    multiplexing. The node's Peer ID derives from the `KeyProvider`'s public key. In M0 the
-    `KeyProvider` is `InMemoryKeyProvider` holding the client's K_local; M1+ can supply an
-    `OSKeychainKeyProvider`, `TPMKeyProvider`, or cloud-secret-manager backend without any
-    change to the transport package — the injection point is the `KeyProvider` interface.
+    multiplexing. The node's Peer ID is derived from a freshly generated libp2p-managed
+    Ed25519 keypair — NOT from `KeyProvider`. The `KeyProvider` (K_local) is stored for
+    CELLO envelope signing by higher layers and is never wired into libp2p's transport
+    identity. See ADR-0001 and SI-002. In M0 the `KeyProvider` is `InMemoryKeyProvider`
+    holding the client's K_local; M1+ can supply an `OSKeychainKeyProvider`,
+    `TPMKeyProvider`, or cloud-secret-manager backend without any change to the transport
+    package — the injection point is the `KeyProvider` interface.
   - `node.start()` / `node.stop()` — lifecycle. Start/stop cycles follow libp2p's default
     semantics — the transport package does not add constraints beyond what libp2p provides.
   - `node.dial(multiaddr)` — opens a libp2p connection to a remote peer.
@@ -66,15 +69,14 @@ behavior:
     action: >
       the transport module shall construct a libp2p node configured with: (a) `@libp2p/tcp`
       and `@libp2p/websockets` as transports, (b) `@chainsafe/libp2p-noise` as the sole
-      security upgrader, (c) `@chainsafe/libp2p-yamux` as the sole muxer, (d) a Peer ID
-      derived from the supplied `KeyProvider`'s public key (the libp2p Peer ID construction
-      is the standard Ed25519-public-key → PeerId derivation), (e) circuit relay v2
-      transport configured (server + client capability), (f) DCuTR service enabled. The
-      node is returned in a stopped state — callers invoke `start()` explicitly. The
-      `KeyProvider` reference is retained for any future signing the transport might need
-      to perform; in M0 libp2p does its own handshake signing inside Noise using key
-      material it holds internally (libp2p's configuration requires a PeerId source, and
-      the transport package hands it the KeyProvider's public bytes).
+      security upgrader, (c) `@chainsafe/libp2p-yamux` as the sole muxer, (d) a fresh
+      libp2p-managed Ed25519 keypair is generated for the Peer ID — it is NOT derived from
+      the supplied `KeyProvider`. The `KeyProvider` (K_local) is stored for CELLO envelope
+      signing by higher layers; it must never be wired into libp2p's Peer ID derivation or
+      Noise handshake. The transport Peer ID and K_local are always different keys serving
+      different trust claims. See SI-002 and ADR-0001. (e) circuit relay v2 transport
+      configured (server + client capability), (f) DCuTR service enabled. The node is
+      returned in a stopped state — callers invoke `start()` explicitly.
   - trigger: "When the client calls `node.start()`"
     action: "the node shall begin listening on every supplied `listenAddresses` multiaddr and become dialable. `node.listenAddresses()` after start returns the full list including any libp2p-assigned ephemeral ports."
   - trigger: "When the client calls `node.handle(protocolId, handler)`"
@@ -93,7 +95,7 @@ acceptance_criteria:
   - id: AC-001
     given: "A `KeyProvider` (from CRYPTO-001) and a listen multiaddr `/ip4/127.0.0.1/tcp/0` (random port)"
     when: "The client calls `createNode({ keyProvider, listenAddresses })` and then `start`"
-    then: "The node transitions to started; `node.listenAddresses()` returns at least one multiaddr with a concrete non-zero port; the node's Peer ID is a valid libp2p PeerId derived from the `KeyProvider`'s public key (asserted by independently deriving the expected PeerId from `keyProvider.getPublicKey()` and comparing)"
+    then: "The node transitions to started; `node.listenAddresses()` returns at least one multiaddr with a concrete non-zero port; the node's Peer ID is a valid libp2p PeerId that is NOT derived from `keyProvider.getPublicKey()` — the transport Peer ID and K_local are different keys serving different trust claims (SI-002, ADR-0001)"
     test_type: unit
     component_under_test: transport
 
