@@ -19,6 +19,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cello/crypto": "workspace:*"
+    "@cello/crypto": "workspace:*",
+    "cbor-x": "^1.6.4"
   }
 }
