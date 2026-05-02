@@ -128,11 +128,15 @@ describe("second-preimage protection (SI-001)", () => {
   });
 });
 
-// ─── CRYPTO-002 AC-005: plain SHA-256 sanity ─────────────────────────────────
-describe("plain hash (AC-005 sanity)", () => {
-  it("hash(empty) is well-known SHA-256 of empty string", () => {
-    expect(toHex(hash(new Uint8Array(0)))).toBe(
-      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    );
-  });
+// ─── CRYPTO-002 AC-005: NIST CAVP SHA-256 vectors + CELLO fixtures ───────────
+// AC-005 requires NIST short/long message vectors as the cross-implementation contract
+// the Rust port must match, plus the 7 CELLO-specific fixtures (a)–(g).
+// NIST vectors are in merkle-primitives.json under "nist_sha256".
+// CELLO fixtures (a)–(g) are covered by the msgLeafHash/nodeHash/ctrlLeafHash tests above.
+describe("NIST CAVP SHA-256 vectors (AC-005)", () => {
+  for (const v of vectors.nist_sha256.vectors) {
+    it(`NIST: ${v.label}`, () => {
+      expect(toHex(hash(fromHex(v.input_hex)))).toBe(v.output_hex);
+    });
+  }
 });

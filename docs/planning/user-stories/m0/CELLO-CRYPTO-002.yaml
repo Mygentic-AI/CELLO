@@ -17,8 +17,7 @@ story: >
   - `0x00` — message leaves (MSG-001 envelope `content_hash`; M1 Structure 2 leaves with
     `leaf_kind = 0x00`).
   - `0x01` — Merkle internal nodes (M1 MERKLE-001 construction).
-  - `0x02` — control leaves (M1 SEAL; M7 CLOSE, CLOSE-ACK, ABORT, EXPIRE, REOPEN, RECEIPT,
-    etc. — M1 Structure 2 leaves with `leaf_kind = 0x02`).
+  - `0x02` — control leaves (M1 SEAL; session lifecycle control frames — M1 Structure 2 leaves with `leaf_kind = 0x02`).
 
   M0 uses `0x00` actively (for envelope content_hash). `0x01` and `0x02` are defined but have
   no M0 callers — they land in the crypto package now so M1 reuses primitives rather than

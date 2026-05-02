@@ -1,31 +1,67 @@
 {
-  "description": "CELLO domain-separated SHA-256 test vectors. Computed with Node.js native crypto (FIPS 180-4 compliant). Future Rust port must produce identical outputs.",
+  "description": "CELLO domain-separated SHA-256 test vectors. Computed with Node.js native crypto (FIPS 180-4 compliant). NIST CAVP plain SHA-256 vectors also included — the cross-implementation contract the future Rust port must match.",
+  "nist_sha256": {
+    "source": "NIST FIPS 180-4 CAVP SHA-256 ShortMsg / FIPS 180-4 Appendix B",
+    "note": "Plain SHA-256, no domain prefix. Verified against Node.js native crypto (FIPS 180-4 compliant).",
+    "vectors": [
+      {
+        "label": "empty string (Len=0)",
+        "input_hex": "",
+        "output_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "label": "single byte 0xd3 (CAVP ShortMsg Len=8)",
+        "input_hex": "d3",
+        "output_hex": "28969cdfa74a12c82f3bad960b0b000aca2ac329deea5c2328ebc6f2ba9802c1"
+      },
+      {
+        "label": "two bytes 0x11af (CAVP ShortMsg Len=16)",
+        "input_hex": "11af",
+        "output_hex": "5ca7133fa735326081558ac312c620eeca9970d1e70a4b95533d956f072d1f98"
+      },
+      {
+        "label": "three bytes 0xb0bd69 (CAVP ShortMsg Len=24)",
+        "input_hex": "b0bd69",
+        "output_hex": "4096804221093ddccfbf46831490ea63e9e99414858f8d75ff7f642c7ca61803"
+      },
+      {
+        "label": "\"abc\" (FIPS 180-4 Appendix B.1, 24-bit message)",
+        "input_hex": "616263",
+        "output_hex": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+      },
+      {
+        "label": "\"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq\" (FIPS 180-4 Appendix B.2, 448-bit message, crosses two SHA-256 blocks)",
+        "input_hex": "6162636462636465636465666465666765666768666768696768696a68696a6b696a6b6c6a6b6c6d6b6c6d6e6c6d6e6f6d6e6f706e6f7071",
+        "output_hex": "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+      }
+    ]
+  },
   "message_leaf": [
     {
-      "label": "empty input",
+      "label": "(a) empty input — AC-005(a)",
       "input_hex": "",
       "output_hex": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
     },
     {
-      "label": "single byte 0x42",
+      "label": "(b) single byte 0x42 — AC-005(b); paired with control_leaf[1] to prove domain separation",
       "input_hex": "42",
       "output_hex": "87afe6086fe4571e37657e76281301f189c75ebae1d2eaafb56d578067a1d95e"
     },
     {
-      "label": "64-byte all-zeros",
+      "label": "(c) 64-byte all-zeros — AC-005(c)",
       "input_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
       "output_hex": "98ce42deef51d40269d542f5314bef2c7468d401ad5d85168bfab4c0108f75f7"
     }
   ],
   "internal_node": [
     {
-      "label": "two all-zero 32-byte child hashes",
+      "label": "(d) two all-zero 32-byte child hashes — AC-005(d)",
       "left_hex": "0000000000000000000000000000000000000000000000000000000000000000",
       "right_hex": "0000000000000000000000000000000000000000000000000000000000000000",
       "output_hex": "ae0798d0ecaed2b778eddebf18f071a561c53658c05e76cedecc27cafbdbc577"
     },
     {
-      "label": "two distinct child hashes (msgLeaf(empty) and msgLeaf(0x42))",
+      "label": "(e) two distinct child hashes: msgLeaf(empty) and msgLeaf(0x42) — AC-005(e)",
       "left_hex": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
       "right_hex": "87afe6086fe4571e37657e76281301f189c75ebae1d2eaafb56d578067a1d95e",
       "output_hex": "1728c4a4bace3881cd6dd3c46ecd457e93c6ce4b2e67bc181d6da43c1db69b73"
@@ -33,12 +69,12 @@
   ],
   "control_leaf": [
     {
-      "label": "empty input",
+      "label": "(f) empty input — AC-005(f)",
       "input_hex": "",
       "output_hex": "dbc1b4c900ffe48d575b5da5c638040125f65db0fe3e24494b76ea986457d986"
     },
     {
-      "label": "single byte 0x42 — distinct from msgLeaf(0x42) proving domain separation",
+      "label": "(g) single byte 0x42 — AC-005(g); distinct from message_leaf[1] proving cross-domain second-preimage protection",
       "input_hex": "42",
       "output_hex": "ba14365b34c02cc7fc1ee35c5c7ec4170a031fe6a374a3592cc08d3622674de4"
     }
