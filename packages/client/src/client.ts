@@ -114,8 +114,9 @@ class CelloClientImpl implements CelloClient {
     try {
       stream = await this.#node.newStream(peerId, CELLO_PROTOCOL_ID);
     } catch (err) {
-      const reason = isStructuredError(err, "node_stopped") ? "connection_lost"
-        : isStructuredError(err, "connection_lost") ? "connection_lost"
+      // node_stopped → transport issue; connection_lost from newStream means no prior
+      // connection to this peer (= unreachable); protocol error also = unreachable
+      const reason = isStructuredError(err, "node_stopped") ? "transport_not_started"
         : "peer_unreachable";
       return { delivered: false, reason };
     }
@@ -256,8 +257,8 @@ function isStructuredError(err: unknown, reason: string): boolean {
   );
 }
 
-function mapSendError(err: unknown): "remote_rejected" | "connection_lost" | "peer_unreachable" {
-  if (isStructuredError(err, "node_stopped")) return "connection_lost";
+function mapSendError(err: unknown): "remote_rejected" | "connection_lost" | "peer_unreachable" | "transport_not_started" {
+  if (isStructuredError(err, "node_stopped")) return "transport_not_started";
   if (isStructuredError(err, "connection_lost")) return "connection_lost";
   if (isStructuredError(err, "protocol_not_supported")) return "peer_unreachable";
   const msg = err instanceof Error ? err.message : String(err);

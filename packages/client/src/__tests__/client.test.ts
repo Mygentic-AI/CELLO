@@ -232,7 +232,7 @@ describe("AC-006: send to dead address → peer_unreachable", () => {
     const result = await client.send(fakePubkeyHex, new TextEncoder().encode("unreachable"));
     expect(result.delivered).toBe(false);
     if (!result.delivered) {
-      expect(["peer_unreachable", "connection_lost"]).toContain(result.reason);
+      expect(result.reason).toBe("peer_unreachable");
     }
   }, 15_000);
 });
@@ -343,15 +343,17 @@ describe("AC-010: three clients, A routes messages to B and C independently", ()
 // ─── AC-012: truncated frame → malformed_envelope, B stays healthy ────────────
 
 describe("AC-012: truncated frame → malformed_envelope (read timeout)", () => {
-  it("AC-012: sender writes partial frame and goes silent → 5s timeout fires, B rejects and recovers", async () => {
+  it("AC-012: sender writes partial frame and goes silent → B's 5s timeout fires, resets stream → remote_rejected to sender, B recovers", async () => {
     const { clientA, clientB, pubkeyAHex, pubkeyBHex, cleanup } = await makeClientPair();
     scope.addCleanup(cleanup);
 
     // Open a raw stream and write a length prefix claiming 100 bytes, then
-    // send only 20 bytes — DO NOT close the stream. The receiver hangs
-    // waiting for remaining 80 bytes until the 5s timeout fires.
+    // send only 20 bytes — DO NOT close the stream or abort it from the sender side.
+    // B's 5s read timeout fires, B calls stream.abort() on its end.
+    // The sender observes stream.status === 'reset' → remote_rejected.
     const rawClient = clientA as unknown as {
       openRawStream(peerPubkeyHex: string): Promise<import("@libp2p/interface").Stream>;
+      sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<import("../types.js").SendResult>;
     };
     const stream = await rawClient.openRawStream(pubkeyBHex);
 
@@ -361,11 +363,13 @@ describe("AC-012: truncated frame → malformed_envelope (read timeout)", () => 
     // 1-byte varint (value 100) + first 20 bytes — remaining 80 bytes never sent
     const partial = encoded.slice(0, 1 + 20);
     stream.send(partial);
-    // No stream.close() — sender is deliberately silent
+    // No stream.close(), no stream.abort() — sender goes deliberately silent
 
-    // Wait >5s for B's read timeout to fire and abort the handler
+    // Wait >5s for B's read timeout to fire and reset the stream
     await new Promise((r) => setTimeout(r, 6_000));
-    stream.abort(new Error("test: stall complete"));
+
+    // After B's timeout, the stream should be reset — verify via stream.status
+    expect(["reset", "aborted"]).toContain(stream.status);
 
     // B must still be healthy — send a valid message and verify receipt
     const result = await clientA.send(pubkeyBHex, new TextEncoder().encode("recovery after timeout"));
@@ -516,17 +520,22 @@ describe("AC-011: byte-flip inside content field of CBOR payload → content_has
     const buildResult = await buildEnvelope(content, kpA, Date.now());
     if (!buildResult.ok) throw new Error("build failed");
 
-    // Flip first byte of the content field in the serialized envelope
+    // Flip a byte at a known offset within the content field.
+    // Locate the content bytes by searching for a 3-byte sequence that is unique
+    // to the content value: bytes 4–6 of "ac-011 content target" (0x31 0x31 0x20).
     const bytes = serializeEnvelope(buildResult.envelope);
-    // Find the content bytes inside the CBOR map and flip one byte.
-    // The envelope content is "ac-011 content target" — find the first 0x61 ('a') and flip it
+    const needle = new Uint8Array([0x31, 0x31, 0x20]); // "11 " from "ac-011 content"
     const mutable = new Uint8Array(bytes);
-    for (let i = 0; i < mutable.length; i++) {
-      if (mutable[i] === 0x61) { // 'a' — first byte of "ac-011..."
-        mutable[i] ^= 0x01;
-        break;
+    let flipIdx = -1;
+    outer: for (let i = 0; i < mutable.length - needle.length; i++) {
+      for (let j = 0; j < needle.length; j++) {
+        if (mutable[i + j] !== needle[j]) continue outer;
       }
+      flipIdx = i; // first byte of "11 " — guaranteed inside the content bytestring
+      break;
     }
+    if (flipIdx === -1) throw new Error("content marker not found in serialized envelope");
+    mutable[flipIdx] ^= 0x01;
 
     const rawResult = await (clientA as unknown as {
       sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<import("../types.js").SendResult>;
@@ -542,25 +551,57 @@ describe("AC-011: byte-flip inside content field of CBOR payload → content_has
 
 // ─── DB-001: transport not started → send rejected ────────────────────────────
 
-describe("DB-001: transport not started → send returns connection_lost", () => {
-  it("DB-001: send before node.start() → connection_lost (or peer_not_connected)", async () => {
+describe("DB-001: transport not started → send returns transport_not_started", () => {
+  it("DB-001: send before node.start() → transport_not_started", async () => {
     const kp = generateKeypair();
     const node = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     // Deliberately do NOT call node.start()
     scope.addCleanup(async () => { try { await node.stop(); } catch {} });
 
     const client = createClient(node, kp);
-    // Cannot register handler on a stopped node — but at minimum send must not hang
     const fakePubkeyHex = Buffer.from(new Uint8Array(32).fill(0xab)).toString("hex");
     client.addPeer(fakePubkeyHex, "12D3KooWFakePeer", ["/ip4/127.0.0.1/tcp/19998"]);
 
     const result = await client.send(fakePubkeyHex, new TextEncoder().encode("not started"));
     expect(result.delivered).toBe(false);
     if (!result.delivered) {
-      // A stopped node returns node_stopped → mapped to connection_lost or peer_unreachable
-      expect(["connection_lost", "peer_unreachable"]).toContain(result.reason);
+      expect(result.reason).toBe("transport_not_started");
     }
   }, 10_000);
+});
+
+// ─── DB-002: connection drops after stream open → connection_lost ─────────────
+
+describe("DB-002: connection drops mid-send → connection_lost", () => {
+  it("DB-002: remote node stops after stream opened → send returns connection_lost", async () => {
+    const kpX = generateKeypair();
+    const kpY = generateKeypair();
+    const nodeX = await createNode({ keyProvider: kpX, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    const nodeY = await createNode({ keyProvider: kpY, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeX.start(); await nodeY.start();
+    scope.addCleanup(async () => { try { await nodeX.stop(); } catch {} });
+    // nodeY is stopped during the test — no scope cleanup needed
+
+    const clientX = createClient(nodeX, kpX);
+    await clientX.registerHandler();
+    // Register Y's handler so it can process the stream before we stop it
+    const clientY = createClient(nodeY, kpY);
+    await clientY.registerHandler();
+
+    const pubkeyYHex = Buffer.from(await kpY.getPublicKey()).toString("hex");
+    const dialResult = await nodeX.dial(nodeY.listenAddresses()[0]!);
+    clientX.addPeer(pubkeyYHex, dialResult.peerId, nodeY.listenAddresses());
+
+    // Stop Y — X now has a stale connection
+    await nodeY.stop();
+    await new Promise((r) => setTimeout(r, 200));
+
+    const result = await clientX.send(pubkeyYHex, new TextEncoder().encode("mid-send drop"));
+    expect(result.delivered).toBe(false);
+    if (!result.delivered) {
+      expect(["connection_lost", "peer_unreachable"]).toContain(result.reason);
+    }
+  }, 15_000);
 });
 
 // ─── peer_not_connected when no registry entry ────────────────────────────────

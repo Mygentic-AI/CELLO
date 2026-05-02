@@ -22,7 +22,8 @@ export type SendFailureReason =
   | "content_too_large"
   | "peer_unreachable"
   | "remote_rejected"
-  | "connection_lost";
+  | "connection_lost"
+  | "transport_not_started";
 
 export type SendResult =
   | { delivered: true; contentHash: string }

@@ -261,6 +261,7 @@ export async function createNode(opts: CreateNodeOptions): Promise<CelloNode> {
   const transportKey = await generateKeyPair("Ed25519");
 
   const libp2p = await createLibp2p({
+    start: false,
     privateKey: transportKey,
     addresses: {
       listen: opts.listenAddresses,
