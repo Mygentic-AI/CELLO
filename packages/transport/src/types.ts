@@ -102,8 +102,9 @@ export interface CelloNode {
   /**
    * Returns basic info about all current connections.
    * Used by SI-001 test to verify connection-level encryption is Noise.
+   * encryption is undefined when libp2p has not yet completed the security handshake.
    */
-  getConnections(): Array<{ peerId: string; encryption: string }>;
+  getConnections(): Array<{ peerId: string; encryption: string | undefined }>;
 
   /**
    * Access the stored KeyProvider for higher-layer use (MSG-001 signing).

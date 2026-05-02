@@ -173,10 +173,10 @@ class CelloNodeImpl implements CelloNode {
     return this.#libp2p.getProtocols();
   }
 
-  getConnections(): Array<{ peerId: string; encryption: string }> {
+  getConnections(): Array<{ peerId: string; encryption: string | undefined }> {
     return this.#libp2p.getConnections().map((c) => ({
       peerId: c.remotePeer.toString(),
-      encryption: c.encryption ?? "/noise",
+      encryption: c.encryption,
     }));
   }
 }

@@ -82,7 +82,14 @@ function encodeTBS(
   senderPubkey: Uint8Array,
   timestamp: number
 ): Uint8Array {
-  const tbs = [protocolVersion, contentHash, senderPubkey, BigInt(timestamp)];
+  // RFC 8949 §4.2.1: integers must use the shortest encoding.
+  // cbor-x encodes JS numbers ≤ 0xFFFFFFFF as 4-byte uint (minimal) but numbers
+  // above that threshold as float64 (0xfb…) — not canonical. BigInt always emits
+  // 8-byte uint64 regardless of value — non-minimal for small values.
+  // Solution: use BigInt only when the value exceeds uint32 range, ensuring
+  // shortest encoding across all valid Unix millisecond timestamps.
+  const tsEncoded = timestamp > 0xFFFFFFFF ? BigInt(timestamp) : timestamp;
+  const tbs = [protocolVersion, contentHash, senderPubkey, tsEncoded];
   return CBOR_ENC.encode(tbs);
 }
 
@@ -279,7 +286,7 @@ export function validateEnvelope(envelope: MessageEnvelope): ValidateResult {
  * Serialize a MessageEnvelope to canonical CBOR bytes (RFC 8949 §4.2.1).
  *
  * The envelope is encoded as a CBOR map with string keys.
- * timestamp is encoded as BigInt to ensure uint64 (not float64) encoding.
+ * timestamp uses minimal encoding per RFC 8949 §4.2.1 — see encodeTBS comment.
  */
 export function serializeEnvelope(envelope: MessageEnvelope): Uint8Array {
   const map = {
@@ -287,7 +294,7 @@ export function serializeEnvelope(envelope: MessageEnvelope): Uint8Array {
     sender_pubkey: envelope.sender_pubkey,
     content: envelope.content,
     content_hash: envelope.content_hash,
-    timestamp: BigInt(envelope.timestamp),
+    timestamp: envelope.timestamp > 0xFFFFFFFF ? BigInt(envelope.timestamp) : envelope.timestamp,
     sender_signature: envelope.sender_signature,
   };
   return CBOR_ENC.encode(map);
