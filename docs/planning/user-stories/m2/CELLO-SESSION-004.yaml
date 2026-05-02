@@ -221,6 +221,16 @@ degraded_behavior:
     test_type: integration
     component_under_test: client
 
+  - id: DB-002
+    condition: "While M1-established sessions (signature_type: 'single') are still active when M2 deploys"
+    fallback: >
+      Sessions established under M1 that are still active when M2 deploys are
+      sealed using M1 mechanics (single-key directory notarization). The hard cut
+      applies to new session establishments only — it does not retroactively
+      invalidate in-flight sessions whose SessionAssignment was already accepted.
+    test_type: integration
+    component_under_test: client
+
 # ─── Stubs ───────────────────────────────────────────────────
 stubs:
   - what: "Accept/decline policy evaluation at session establishment"

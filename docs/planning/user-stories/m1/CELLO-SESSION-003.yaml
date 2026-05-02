@@ -233,7 +233,10 @@ acceptance_criteria:
       NOT submit for seal and does not destroy state; both clients see the session listed
       as `sealing`. Unilateral seal (SEAL-UNILATERAL) mechanics are deferred to M7 — M1
       just stalls in `sealing` rather than failing closed, because M1 has no close
-      attestation semantics to attach to a unilateral path
+      attestation semantics to attach to a unilateral path. Note: this "SEAL-response
+      timeout" is relay-side (waiting for the second SEAL leaf) and is distinct from M2's
+      client-side "seal-frost-timeout" (waiting for the FROST notarization after bilateral
+      SEAL completes).
     test_type: integration
     component_under_test: relay
 
