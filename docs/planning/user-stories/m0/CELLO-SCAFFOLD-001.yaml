@@ -26,9 +26,9 @@ story: >
   trustless-cello/
   ├── package.json                  ← root — devDeps, scripts (typecheck, test, lint)
   ├── pnpm-workspace.yaml           ← lists packages/*
-  ├── tsconfig.base.json            ← strict mode, ES2022 target, Node22 lib
+  ├── tsconfig.base.json            ← strict mode, ES2022 target, Node24 lib
   ├── vitest.workspace.ts           ← workspace config pointing at each package
-  ├── .nvmrc                        ← 22
+  ├── .nvmrc                        ← 24
   ├── CONTEXT.md
   ├── docs/adr/
   └── packages/
@@ -46,7 +46,7 @@ story: >
 
   ```
   packages/<name>/
-  ├── package.json        ← name: @cello/<name>, engines: node>=22, scripts: typecheck/test
+  ├── package.json        ← name: @cello/<name>, engines: node>=24, scripts: typecheck/test
   ├── tsconfig.json       ← extends ../../tsconfig.base.json, declares project references
   ├── buildspec.yml       ← CodeBuild: install pnpm, typecheck, test this package only
   └── src/
@@ -67,7 +67,7 @@ story: >
   This means an `import` from `adapter-claude-code` into `directory` is a TypeScript
   compile error — the package boundary is enforced by the build system, not by convention.
 
-  **npm scope:** all packages are `@cello/<name>`. Node.js 22 LTS. TypeScript `target: ES2022`.
+  **npm scope:** all packages are `@cello/<name>`. Node.js 24 LTS (Krypton). TypeScript `target: ES2022`.
 
   **Root scripts:**
   - `pnpm run typecheck` — `tsc --build` from root (builds all packages via project references)
@@ -92,7 +92,7 @@ story: >
   phases:
     install:
       runtime-versions:
-        nodejs: 22
+        nodejs: 24
       commands:
         - npm install -g pnpm
         - pnpm install --frozen-lockfile
@@ -126,7 +126,7 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "A freshly cloned repo with Node.js 22 and pnpm installed"
+    given: "A freshly cloned repo with Node.js 24 and pnpm installed"
     when: "Developer runs `pnpm install && pnpm run typecheck && pnpm run test`"
     then: "All three commands exit 0; no errors; smoke test in each of the 8 packages passes"
     test_type: unit
@@ -156,14 +156,14 @@ acceptance_criteria:
   - id: AC-005
     given: "All 8 packages"
     when: "`package.json` of each is inspected"
-    then: "Each has `name: @cello/<name>`, `engines: { node: '>=22' }`, and scripts for `typecheck` and `test`"
+    then: "Each has `name: @cello/<name>`, `engines: { node: '>=24' }`, and scripts for `typecheck` and `test`"
     test_type: unit
     component_under_test: monorepo
 
   - id: AC-006
     given: "All 8 packages"
     when: "Each package's `buildspec.yml` is inspected"
-    then: "Each uses `nodejs: 22` runtime, runs `pnpm install --frozen-lockfile`, and runs typecheck + test scoped to that package via `pnpm --filter @cello/<name>`"
+    then: "Each uses `nodejs: 24` runtime, runs `pnpm install --frozen-lockfile`, and runs typecheck + test scoped to that package via `pnpm --filter @cello/<name>`"
     test_type: unit
     component_under_test: monorepo
 

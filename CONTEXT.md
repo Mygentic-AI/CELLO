@@ -76,7 +76,7 @@ The domain context string is the cross-ceremony confusion guard — an establish
 
 **npm scope: `@cello/`** — all packages publish as `@cello/package-name` (e.g. `@cello/client`, `@cello/crypto`, `@cello/adapter-claude-code`).
 
-**Runtime: Node.js 22 LTS.** TypeScript `target: ES2022`. All `package.json` files declare `"engines": { "node": ">=22" }`.
+**Runtime: Node.js 24 LTS (Krypton).** TypeScript `target: ES2022`. All `package.json` files declare `"engines": { "node": ">=24" }`.
 
 **CI/CD: AWS CodeBuild + CodePipeline, eu-west-1.** Same webhook chain as cello-agent: GitHub push → HMAC-validated Lambda → EventBridge → path-filter Lambda → per-package CodePipeline. Each package has its own `buildspec.yml` running `pnpm run typecheck && pnpm run test` for that package only. No Docker/ECR/ECS in M0 — deployment pipelines added when directory and relay nodes need to run (M1+). Path filter maps `packages/<name>/**` → `cello-<name>-pipeline`.
 

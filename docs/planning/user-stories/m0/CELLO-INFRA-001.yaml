@@ -39,7 +39,7 @@ story: >
   pipelines concurrently. A change to root config files (`tsconfig.base.json`,
   `pnpm-workspace.yaml`, root `package.json`) triggers all pipelines.
 
-  **CodeBuild environment:** `aws/codebuild/standard:7.0` image (Node.js 22 available),
+  **CodeBuild environment:** `aws/codebuild/standard:7.0` image (Node.js 24 available),
   ARM64 compute (`BUILD_GENERAL1_SMALL`). Source: GitHub via CodeStar connection.
 
   **Deployment pipelines** (Docker → ECR → ECS) for `directory` and `relay` nodes are
@@ -55,7 +55,7 @@ story: >
   from `packages/e2e-tests/` permanently. Assigned an Elastic IP. The public address is
   recorded in `/cello/test-relay-multiaddr` in SSM Parameter Store and hardcoded in
   `packages/e2e-tests/README.md`. Security group: inbound TCP on the relay's listen port
-  from 0.0.0.0/0; SSH restricted to operator IP. Node.js 22 installed; relay process
+  from 0.0.0.0/0; SSH restricted to operator IP. Node.js 24 installed; relay process
   managed by systemd. This is the only always-on infrastructure in M0 — all other nodes
   are ephemeral developer machines.
 

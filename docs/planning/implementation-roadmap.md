@@ -215,7 +215,7 @@ The repo is a pnpm-workspace monorepo designed for eventual extraction: the clie
 
 ```
 trustless-cello/
-├── .nvmrc                          # 22
+├── .nvmrc                          # 24
 ├── eslint.config.mjs               # flat config, shared across all packages
 ├── package.json                    # root — devDeps only, scripts: typecheck, test, lint
 ├── pnpm-workspace.yaml             # packages: ["packages/*"]
@@ -333,9 +333,9 @@ Violations are compile errors — not lint warnings, not convention. An import f
 
 ### Per-Package Conventions
 
-- **`package.json`:** `name: @cello/<name>`, `engines: { "node": ">=22" }`, scripts: `typecheck`, `test`
+- **`package.json`:** `name: @cello/<name>`, `engines: { "node": ">=24" }`, scripts: `typecheck`, `test`
 - **`tsconfig.json`:** extends `../../tsconfig.base.json`, `composite: true`, declares only direct deps in `references`
-- **`buildspec.yml`:** CodeBuild spec — `nodejs: 22`, `pnpm install --frozen-lockfile`, `pnpm --filter @cello/<name> run typecheck && test`
+- **`buildspec.yml`:** CodeBuild spec — `nodejs: 24`, `pnpm install --frozen-lockfile`, `pnpm --filter @cello/<name> run typecheck && test`
 - **Tests:** co-located at `src/__tests__/*.test.ts`. Fixtures in `src/__tests__/fixtures/`
 - **No barrel re-exports beyond `index.ts`** — each package has one public entry point
 
