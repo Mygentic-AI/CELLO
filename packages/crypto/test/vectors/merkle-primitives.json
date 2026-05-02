@@ -1,0 +1,46 @@
+{
+  "description": "CELLO domain-separated SHA-256 test vectors. Computed with Node.js native crypto (FIPS 180-4 compliant). Future Rust port must produce identical outputs.",
+  "message_leaf": [
+    {
+      "label": "empty input",
+      "input_hex": "",
+      "output_hex": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+    },
+    {
+      "label": "single byte 0x42",
+      "input_hex": "42",
+      "output_hex": "87afe6086fe4571e37657e76281301f189c75ebae1d2eaafb56d578067a1d95e"
+    },
+    {
+      "label": "64-byte all-zeros",
+      "input_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "output_hex": "98ce42deef51d40269d542f5314bef2c7468d401ad5d85168bfab4c0108f75f7"
+    }
+  ],
+  "internal_node": [
+    {
+      "label": "two all-zero 32-byte child hashes",
+      "left_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "right_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "output_hex": "ae0798d0ecaed2b778eddebf18f071a561c53658c05e76cedecc27cafbdbc577"
+    },
+    {
+      "label": "two distinct child hashes (msgLeaf(empty) and msgLeaf(0x42))",
+      "left_hex": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+      "right_hex": "87afe6086fe4571e37657e76281301f189c75ebae1d2eaafb56d578067a1d95e",
+      "output_hex": "1728c4a4bace3881cd6dd3c46ecd457e93c6ce4b2e67bc181d6da43c1db69b73"
+    }
+  ],
+  "control_leaf": [
+    {
+      "label": "empty input",
+      "input_hex": "",
+      "output_hex": "dbc1b4c900ffe48d575b5da5c638040125f65db0fe3e24494b76ea986457d986"
+    },
+    {
+      "label": "single byte 0x42 — distinct from msgLeaf(0x42) proving domain separation",
+      "input_hex": "42",
+      "output_hex": "ba14365b34c02cc7fc1ee35c5c7ec4170a031fe6a374a3592cc08d3622674de4"
+    }
+  ]
+}
