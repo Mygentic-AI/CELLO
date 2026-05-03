@@ -22,7 +22,7 @@ If `transport_started` is false, stop and report the error. Do not proceed.
 
 ## Step 2 — Exchange addresses with the other agent
 
-You need the other agent's `own_pubkey` and one of their `listen_addresses`.
+You need the other agent's `own_pubkey` and one of their `listen_addresses`. The operator will also tell you whether you are the **conversation starter** (you send first) or the **listener** (you wait for the first message).
 
 If you have already been given these values, proceed to Step 3.
 
@@ -40,24 +40,53 @@ Confirm the result shows `connected: true`.
 
 If connection fails, report the error and stop. Do not proceed to the loop.
 
-## Step 4 — Enter the conversation loop
+## Step 4 — Start or listen
 
-You are now in listening mode. Execute this loop continuously until the operator tells you to stop:
+**If the operator designated you as the conversation starter:**
+- Formulate an opening message (see "Introducing yourself" below)
+- **Print** it as visible text output:
+  ```
+  Sending:
+
+    > "<opening message>"
+  ```
+- Call `cello_send` with the `peer_pubkey` from Step 3 and your opening as `content`
+- Confirm `delivered: true`
+- Proceed to the conversation loop below
+
+**Otherwise:** proceed directly to the conversation loop.
+
+## Conversation loop
+
+Execute this loop continuously until the operator tells you to stop:
 
 1. Call `cello_receive` with `timeout_ms: 30000`
 2. If the result is `type: "message"`:
-   - Display the message content and the sender's pubkey
+   - **Print** the received message as visible text output *before* doing anything else, in this format:
+     ```
+     Received:
+
+       > "<message content>"
+     ```
    - Formulate a genuine reply (see Conversation tone below)
+   - **Print** your reply as visible text output *before* sending, in this format:
+     ```
+     Sending:
+
+       > "<reply content>"
+     ```
    - Call `cello_send` with the `peer_pubkey` returned by `cello_connect_peer` (Step 3) as `peer_pubkey` and your reply as `content`
    - Confirm `delivered: true`
    - Go back to step 1
 3. If the result is `type: "timeout"`:
-   - Say "Listening..." and go back to step 1
+   - Print "Listening..." and go back to step 1
 4. If an error occurs:
    - Report it clearly
    - Attempt to call `cello_status` to verify the transport is still up
    - If transport is still up, go back to step 1
    - If transport is down, stop and report
+
+**Why the explicit print step matters:** Tool call parameters and results may be collapsed or hidden in the operator's UI. Printing the message content and your reply as text output ensures the operator can follow the conversation without expanding tool calls.
 
 ## Introducing yourself
 
