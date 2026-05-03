@@ -22,6 +22,7 @@ import { createClient } from "@cello/client";
 import { createMcpServer } from "@cello/adapter-claude-code";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
 setupV3Tests();
 
@@ -209,7 +210,7 @@ describe("AC-005: cello_status returns transport_started, own_pubkey, listen_add
 // ─── AC-006: factory produces identical wiring under InMemoryTransport ─────────
 
 describe("AC-006: createMcpServer is transport-agnostic (same tool set and wiring)", () => {
-  it("AC-006: two instances from createMcpServer have the same tool names", async () => {
+  it("AC-006: two instances have identical tool names, descriptions, and input schemas", async () => {
     const kpA = generateKeypair();
     const kpB = generateKeypair();
     const nodeA = await createNode({ keyProvider: kpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
@@ -239,17 +240,24 @@ describe("AC-006: createMcpServer is transport-agnostic (same tool set and wirin
     scope.addCleanup(async () => { try { await mcpA.close(); } catch {}; try { await mcpB.close(); } catch {} });
     scope.addCleanup(async () => { try { await serverA.close(); } catch {}; try { await serverB.close(); } catch {} });
 
-    const toolsA = (await mcpA.listTools()).tools.map((t) => t.name).sort();
-    const toolsB = (await mcpB.listTools()).tools.map((t) => t.name).sort();
+    const sortByName = (tools: Tool[]) =>
+      [...tools].sort((a, b) => a.name.localeCompare(b.name));
 
-    expect(toolsA).toEqual(toolsB);
-    expect(toolsA).toEqual([
+    const toolsA = sortByName((await mcpA.listTools()).tools);
+    const toolsB = sortByName((await mcpB.listTools()).tools);
+
+    // Same tool count and names
+    expect(toolsA.map((t) => t.name)).toEqual([
       "cello_connect_peer",
       "cello_list_peers",
       "cello_receive",
       "cello_send",
       "cello_status",
     ]);
+
+    // Structural equality: descriptions and input schemas must match between instances
+    expect(toolsA.map((t) => t.description)).toEqual(toolsB.map((t) => t.description));
+    expect(toolsA.map((t) => t.inputSchema)).toEqual(toolsB.map((t) => t.inputSchema));
   }, 15_000);
 });
 
