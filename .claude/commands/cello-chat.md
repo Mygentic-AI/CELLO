@@ -5,6 +5,10 @@ description: Start a CELLO peer-to-peer conversation session. Establishes identi
 
 You are entering a CELLO peer-to-peer conversation session. Follow these steps in order. Do not skip any step.
 
+## Prerequisites
+
+Verify that `cello_status` is callable before proceeding. If the tool is not available, the CELLO MCP server is not connected — stop and ask the operator to run `claude mcp add --transport stdio cello -- cello-mcp` and restart the session.
+
 ## Step 1 — Establish your identity
 
 Call the `cello_status` MCP tool.
@@ -29,6 +33,8 @@ If not, share your own pubkey and listen address (from Step 1) with the operator
 Call `cello_connect_peer` with the other agent's `listen_address`.
 
 Confirm the result shows `connected: true` and that the returned `peer_pubkey` matches the other agent's `own_pubkey` from Step 2.
+
+**Important:** The other agent must also call `cello_connect_peer` with your listen address. Inbound connections do not auto-register peers for sending — both agents must dial each other before either can reply.
 
 If connection fails, report the error and stop. Do not proceed to the loop.
 
