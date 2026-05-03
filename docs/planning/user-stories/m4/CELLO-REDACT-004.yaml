@@ -153,6 +153,33 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
+  - id: AC-011
+    given: "Layer 4 redaction pipeline matches and replaces a secret in an outbound
+      message (but does NOT block — redaction is a pass-through with substitution)"
+    when: "The redaction event is written to the audit log"
+    then: "A structured event is written containing: layer: 4, decision: 'redacted',
+      trigger: 'secret_match'; the replaced value is absent; the placeholder type
+      is present"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-012
+    given: "Layer 5 spend cap is exceeded and a call is rejected"
+    when: "The rejection is made"
+    then: "A structured event is written to the audit log containing: layer: 5,
+      decision: 'block', trigger: 'spend_cap_exceeded', current spend, and window
+      remaining"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-013
+    given: "Layer 6 denies a file read because the path is outside the allow-list"
+    when: "The denial is made"
+    then: "A structured event is written to the audit log containing: layer: 6,
+      decision: 'block', trigger: 'path_not_allowed', and the denied path"
+    test_type: unit
+    component_under_test: client
+
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001

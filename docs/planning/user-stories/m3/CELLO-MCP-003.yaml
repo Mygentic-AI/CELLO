@@ -19,18 +19,27 @@ story: >
 
   - `cello_register({ phone_stub })` — NEW. Triggers REG-001 registration flow. Returns
     `{ registered: true, agent_id: hex, primary_pubkey: hex, ml_dsa_pubkey: hex }` on
-    success, or `{ error: { reason } }` on failure. Idempotent: calling on an already-
-    registered agent returns `{ error: { reason: 'already_registered' } }`.
+    success, or `{ error: { reason } }` on failure. Rejection-on-duplicate: calling on
+    an already-registered agent returns `{ error: { reason: 'already_registered' } }`
+    (not idempotent — a fresh success response is not replayed).
 
   - `cello_request_connection({ target_pubkey, include_endorsements?: hex[],
     include_attestations?: hex[] })` — NEW. Constructs a connection package with the
     agent's pseudonym binding plus the specified optional items (identified by their
     content hashes — the agent selects which pre-stored items to disclose). Sends the
-    request via CONNREQ-002. Returns one of:
+    request via CONNREQ-002. Blocks until the counterparty responds or a 30-second
+    timeout fires. Returns one of:
     - `{ result: 'accepted', connection_id: hex, counterparty_pubkey: hex }`
     - `{ result: 'insufficient', unmet_requirements: [...] }`
     - `{ result: 'rejected', reason: string }`
+    - `{ result: 'timeout' }` — counterparty did not respond within 30 seconds
     - `{ error: { reason: 'target_not_found' | 'already_connected' | 'not_registered' } }`
+
+    **M3 scope note on `include_endorsements` / `include_attestations`:** In M3 agents
+    use pseudonym-binding-only packages. Trust data management tools
+    (`cello_store_endorsement`, `cello_store_attestation`) are deferred to M6 when the
+    social trust machinery exists. The `include_*` parameters are defined now so the
+    schema is stable — in M3 they are always empty arrays or omitted.
 
   - `cello_await_connection_request({ timeout_ms })` — NEW. Blocks until an inbound
     connection request arrives and is auto-evaluated by the client's policy engine.
@@ -104,9 +113,15 @@ behavior:
   - trigger: "When the agent calls any M3 tool before registration"
     action: >
       tools that require registration (`cello_request_connection`,
-      `cello_initiate_session`, `cello_set_policy`) shall return
+      `cello_initiate_session`, `cello_set_policy`, `cello_close_session`,
+      `cello_send`, `cello_await_session`) shall return
       `{ error: { reason: 'not_registered' } }`. Tools that work without registration
-      (`cello_status`, `cello_register`) continue to function.
+      (`cello_status`, `cello_register`) continue to function. Read tools that return
+      empty results without registration: `cello_list_connections` returns `[]`,
+      `cello_list_sessions` returns `[]`, `cello_get_policy` returns the default policy
+      (`{ mode: 'open', requirements: [] }`), `cello_await_connection_request` blocks
+      normally and returns `{ type: 'timeout' }` (no events will arrive without
+      registration, but the tool does not error).
   - trigger: "When the MCP server factory is invoked with a transport argument"
     action: >
       the factory shall register the full M3 tool set identically under stdio and
@@ -178,6 +193,13 @@ acceptance_criteria:
     component_under_test: client
 
   - id: AC-010
+    given: "Two registered MCP servers A and B; B's signaling stream is disconnected (simulating offline)"
+    when: "A calls `cello_request_connection({ target_pubkey: B_pubkey })` and 30 seconds elapse without B responding"
+    then: "Returns `{ result: 'timeout' }`; no connection is created; A can retry"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-011
     given: "The MCP server factory"
     when: "Invoked with InMemoryTransport and with stdio transport"
     then: >
@@ -188,10 +210,17 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-011
+  - id: AC-012
     given: "A registered MCP server"
     when: "Agent calls `cello_status()`"
     then: "Response includes `registered: true`, `agent_id: hex`, `connection_count: int`, `policy_mode: 'open'` (default) alongside all existing M2 fields"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-013
+    given: "An unregistered MCP server"
+    when: "Agent calls `cello_list_connections()`"
+    then: "Returns `[]` (empty array, not an error)"
     test_type: unit
     component_under_test: client
 

@@ -225,6 +225,17 @@ security_invariants:
     test_type: unit
     component_under_test: client
 
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the local model used by the terms-violation self-check is
+      unavailable (not yet downloaded, corrupt, or hash mismatch)"
+    fallback: "the client shall fail closed and block all outbound messages until
+      the local model is healthy, instead of silently skipping the self-check and
+      delivering content that may contain manipulation artifacts"
+    test_type: unit
+    component_under_test: client
+
 # ─── References ─────────────────────────────────────────────
 references:
   protocol_map: "Security and Prompt Injection Defense"

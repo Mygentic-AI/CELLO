@@ -235,6 +235,8 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
+  # P1 — AC-013 and AC-014 apply only when custom mode is implemented; they must
+  # not block M4 ship on failing tests if custom mode has not been implemented yet.
   - id: AC-013
     given: "Custom mode is configured with a valid public HTTPS endpoint, API key,
       and model name"
@@ -322,7 +324,7 @@ references:
   attack_corpus: "docs/planning/user-stories/m4/attack-corpus-reference.md §2, §4"
   external_sources:
     - "https://github.com/elder-plinius/L1B3RT4S — semantic injection patterns (role-play, social engineering, indirect injection) that Layer 2 must catch; see §2 of attack-corpus-reference"
-    - "https://huggingface.co/cross-encoder/ms-marco-MiniLM-L-6-v2 — DeBERTa-v3-small INT8 model source (download URL pinned in postinstall script)"
+    - "https://huggingface.co/microsoft/deberta-v3-small — DeBERTa-v3-small base model; the specific prompt-injection-fine-tuned INT8 variant and its SHA-256 hash are implementation decisions that must be pinned in the postinstall script before M4 ships; the pinned URL and hash must be committed to source control alongside the download script"
   discussion_logs:
     - "2026-04-11_1400_security-architecture-layers-and-trust-signal-classes"
     - "2026-04-08_1900_connection-staking-and-institutional-defense"

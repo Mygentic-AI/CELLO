@@ -138,6 +138,10 @@ references:
   end_to_end_flow: "{section reference, e.g. §6.1}"
   discussion_logs:
     - "{YYYY-MM-DD_HHMM_slug}"
+  # Optional extensions — include when relevant:
+  attack_corpus: "{path and section of attack-corpus-reference.md, e.g. §1, §2}"
+  external_sources:
+    - "{URL — description of what it provides for testing this story}"
 ```
 
 ---

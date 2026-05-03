@@ -32,7 +32,11 @@ story: >
   notification — only the pubkey and verdict.
 
   **Connection event queue:** populated by `CelloClient.onConnectionResult` (new event
-  on `CelloClient` in M3). Drained by `cello_await_connection_request`.
+  on `CelloClient` in M3, defined in CONNREQ-002). Drained by
+  `cello_await_connection_request`. Bounded at 256 events; if the agent never drains and
+  the bound is exceeded, the oldest event is dropped silently (the connection record
+  still exists and is visible via `cello_list_connections` — only the notification is
+  lost). This matches the M1 relay's leaf_deliver queue bound pattern.
 
   **Registration trigger:** the adapter does NOT auto-register at startup. Registration
   is explicit via `cello_register`. This is deliberate — the owner must opt in to
@@ -66,12 +70,15 @@ behavior:
       immediately if one is present, or block until one arrives or the timeout expires.
       Events are consumed in arrival order.
 
-  - trigger: "When the adapter starts and an ML-DSA key file exists at the configured path"
+  - trigger: "When the adapter starts and an ML-DSA key file exists at the configured path (`CELLO_ML_DSA_KEY_FILE` env var, default `~/.cello/ml-dsa-key`)"
     action: >
       the adapter shall load the ML-DSA key via `FileMlDsaKeyProvider` and make it
       available to the CelloClient for connection package construction. If the file does
       not exist (agent not yet registered), the adapter starts normally — registration
-      creates the key file.
+      creates the key file. If the file exists but is unreadable or corrupt, the adapter
+      starts but logs a `ml_dsa_key_load_failed` warning and tools requiring the ML-DSA
+      key (`cello_request_connection`) return `{ error: { reason: 'ml_dsa_key_unavailable' } }`
+      until registration re-creates the key.
 
   - trigger: "When the MCP server factory is invoked with a transport argument"
     action: >
@@ -149,6 +156,13 @@ acceptance_criteria:
     when: "The ML-DSA key file path is inspected"
     then: "The file exists with permissions 0o600; subsequent adapter restarts load the key without re-registration"
     test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-010
+    given: "An adapter whose ML-DSA key file exists but contains corrupt bytes"
+    when: "The adapter starts"
+    then: "The adapter starts successfully (transport, MCP server functional); logs `ml_dsa_key_load_failed`; `cello_request_connection` returns `{ error: { reason: 'ml_dsa_key_unavailable' } }`; `cello_status` shows `registered: false`; no private key bytes appear in logs"
+    test_type: unit
     component_under_test: adapter-claude-code
 
 # ─── Security Invariants ───────────────────────────────────

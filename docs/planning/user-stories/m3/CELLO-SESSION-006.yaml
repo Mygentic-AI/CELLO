@@ -29,8 +29,16 @@ story: >
   - The client's `cello_initiate_session` checks its local connection list before sending
     the session_request. If no local connection record exists → error returned to the
     agent immediately without network round-trip.
-  - The `session_request` frame gains an optional `connection_id` field. The directory
-    verifies this connection_id matches an active connection between the two parties.
+  - The `session_request` frame gains a required `connection_id` field (16 bytes, hex on
+    the wire). The frame schema is defined in `@cello/protocol-types` alongside the
+    existing `session_request` frame type from NODE-001/SESSION-004 — the field is added
+    to the same canonical-CBOR map. The directory verifies this connection_id matches an
+    active connection between the two parties.
+
+  **M2 → M3 compatibility:** M3 is a hard cut for new session establishments. Any M2
+  client connecting to an M3 directory will receive `connection_id_required` on
+  session_request. Existing M2 sessions (already established) are unaffected — the gate
+  applies only at establishment time. There is no negotiation or fallback path.
 
   **Why both client and directory enforce:**
   - Client-side check: fast fail, no wasted network RTT for an obviously-doomed request.
@@ -155,17 +163,17 @@ security_invariants:
 
   - id: SI-002
     statement: >
-      The directory's `no_connection` rejection shall be indistinguishable from a
-      `target_not_found` rejection in timing and response structure — no side channel
-      reveals whether the target exists but has no connection with the initiator versus
-      does not exist at all.
+      The directory's `no_connection` rejection shall use the same response structure
+      and field set as `target_not_found` — both return a single `reason` string with
+      no additional fields that would distinguish the two cases. Timing
+      indistinguishability is a design intent (both exit before the FROST ceremony) but
+      is not asserted at the microsecond level in tests.
     adversarial_condition: >
       even when an attacker probes the directory with session_requests to various pubkeys
-      to map which agents exist — the error response timing and structure must not leak
-      existence information beyond what `target_offline` already reveals (an online
-      target reveals existence via the signaling stream; an offline target is
-      indistinguishable from nonexistent).
-    test_type: integration
+      — the response frame structure for `no_connection` and `target_not_found` must be
+      identical in shape (same CBOR map keys, same field count). The test asserts
+      structural equality of the two error responses (field names and types match).
+    test_type: unit
     component_under_test: directory
 
   - id: SI-003

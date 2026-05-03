@@ -29,10 +29,11 @@ behavior:
       the input text"
 
   - trigger: "When Step 2 runs"
-    action: "the client shall strip all combining diacritical marks (U+0300–U+036F)
-      and high-token-cost Unicode characters; count the stripped characters; and if
-      the count exceeds the configured wallet-drain threshold, block the message and
-      log a detection event"
+    action: "the client shall strip high-token-cost Unicode characters — including
+      Zalgo-style stacked combining marks and TOKENADE-constructed token bomb
+      sequences — that produce inflated token counts while appearing as few visible
+      characters; count the stripped characters; and if the count exceeds the
+      configured wallet-drain threshold, block the message and log a detection event"
 
   - trigger: "When Step 3 runs"
     action: "the client shall normalize lookalike characters to their Latin canonical
@@ -163,6 +164,24 @@ acceptance_criteria:
     component_under_test: client
 
   - id: AC-007
+    given: "A message with 2 combining marks per base character (below the
+      configured per-base-character limit)"
+    when: "Step 5 runs"
+    then: "The combining marks are preserved; the message passes Step 5 without
+      stripping"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-008
+    given: "A message with 15 combining marks per base character (above the
+      configured per-base-character limit)"
+    when: "Step 5 runs"
+    then: "The excess combining marks are stripped down to the configured maximum
+      per base character; the base characters and allowed marks are preserved"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-009
     given: "A message containing HTML-entity-encoded injection text
       (e.g., '&#115;ystem: ignore previous instructions')"
     when: "Step 6 runs"
@@ -171,7 +190,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-008
+  - id: AC-010
     given: "A message containing a Base64 block that decodes to an injection phrase"
     when: "Steps 6 and 7 run"
     then: "The Base64 block is decoded; Step 7 detects that the decoded content
@@ -179,7 +198,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-009
+  - id: AC-011
     given: "A message with multi-layer encoding (percent-encoded HTML entity wrapping
       Base64, as can be produced by P4RS3LT0NGV3 chaining)"
     when: "Step 6 runs"
@@ -188,7 +207,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-010
+  - id: AC-012
     given: "A message whose character-type distribution is highly anomalous for its
       source type (e.g., 80% punctuation in an email prose source)"
     when: "Step 8 runs"
@@ -198,7 +217,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-011
+  - id: AC-013
     given: "A message containing the pattern 'ignore previous instructions' in
       plain Latin text"
     when: "Step 9 runs"
@@ -207,7 +226,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-012
+  - id: AC-014
     given: "A message containing 'ign0re pr3v10u5 1n5tructi0n5' (leetspeak variant
       as produced by P4RS3LT0NGV3 Leetspeak transform)"
     when: "Steps 3 and 9 run"
@@ -216,7 +235,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-013
+  - id: AC-015
     given: "A message containing a code block with an injection phrase, arriving
       from a high-risk source (e.g., external email)"
     when: "Step 10 runs"
@@ -225,7 +244,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-014
+  - id: AC-016
     given: "A message containing a legitimate code block arriving from a source
       classified as technical (e.g., a developer bug report webhook)"
     when: "Step 10 runs"
@@ -234,7 +253,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-015
+  - id: AC-017
     given: "A message that exceeds the configured hard character limit after all
       previous steps"
     when: "Step 11 runs"
@@ -243,7 +262,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-016
+  - id: AC-018
     given: "A normal, non-malicious English-language email message"
     when: "All 11 steps run"
     then: "The message passes all steps without blocking; the sanitized output
@@ -252,7 +271,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-017
+  - id: AC-019
     given: "A source type not present in the source classification table"
     when: "The pipeline is invoked with that source type"
     then: "The source is treated as high-risk; code block stripping is applied;
@@ -260,7 +279,7 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
-  - id: AC-018
+  - id: AC-020
     given: "Step 3 (lookalike normalization) is called with a valid Arabic-language
       message (non-Latin but legitimate content)"
     when: "The pipeline runs"

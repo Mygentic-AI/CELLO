@@ -17,7 +17,7 @@ Stories reference this document by section (e.g., "see §1 of the attack corpus 
 
 - [L1B3RT4S](https://github.com/elder-plinius/L1B3RT4S) — jailbreak catalog targeting frontier LLMs across providers (18k+ stars, model-specific prompt files)
 - [P4RS3LT0NGV3](https://github.com/elder-plinius/P4RS3LT0NGV3) — universal text transformation and steganography tool; 159 transforms across encodings, ciphers, Unicode styles, and steganography
-- [TOKEN80M8 / TOKENADE](https://github.com/elder-plinius/L1B3RT4S/blob/main/TOKEN80M8.mkd) — wallet-draining payload construction; high-token-cost characters designed to exhaust LLM input budgets
+- [TOKEN80M8 / TOKENADE](https://github.com/elder-plinius/L1B3RT4S/blob/main/TOKEN80M8.mkd) — wallet-draining payload construction; high-token-cost characters designed to exhaust LLM input budgets. Note: TOKEN80M8.mkd is a file within the L1B3RT4S repo, not a separate repository — look for it there, not as a standalone project.
 
 ---
 
@@ -222,6 +222,6 @@ Not an attack class — these are the structural properties the scanner must exh
 
 ## Version Notes
 
-This document covers the attack surface as of 2026-05-03. The primary sources (L1B3RT4S, P4RS3LT0NGV3, TOKEN80M8) are actively maintained. When these repos receive significant new technique additions, this document should be updated and a new CELLO version that updates the Layer 1 pattern corpus should be released.
+This document covers the attack surface as of 2026-05-03. The primary sources (L1B3RT4S and P4RS3LT0NGV3) are actively maintained; TOKEN80M8 is a file within L1B3RT4S and tracks with that repo's maintenance cadence. When these repos receive significant new technique additions, this document should be updated and a new CELLO version that updates the Layer 1 pattern corpus should be released.
 
 The subtle manipulation edge case (§2 "Indirect / Multi-Step Injection" — innocuous-looking inputs that through reasoning chains cause flaggable output) is a known classifier limitation. It is tracked in design-problems.md Problem 12 and is explicitly out of scope for SCAN-002's acceptance criteria.

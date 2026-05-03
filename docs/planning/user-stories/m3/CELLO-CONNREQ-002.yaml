@@ -114,6 +114,18 @@ behavior:
       On the target's next authenticated signaling stream, queued requests are delivered
       in arrival order. If the queue bound is exceeded, the oldest request is dropped and
       the sender receives `target_unavailable`.
+  - trigger: "When the target does not respond within 30 seconds of receiving `connection_request_inbound`"
+    action: >
+      the directory shall push `connection_timeout { target_pubkey }` to the sender's
+      signaling stream. No connection record is created. The sender may retry. The
+      target's pending evaluation (if it arrives late) is discarded by the directory.
+  - trigger: "When a `connection_established` or `connection_insufficient` or `connection_rejected` or `connection_timeout` event is delivered to a client"
+    action: >
+      the client shall invoke the `CelloClient.onConnectionResult` callback with
+      `{ type: 'accepted' | 'insufficient' | 'rejected' | 'timeout', counterparty_pubkey,
+      connection_id?: hex, unmet_requirements?: [...], reason?: string }`. This callback
+      is the integration point for adapters (ADAPTER-003) to populate their event queues
+      and push channel notifications.
   - trigger: "When a client queries its connections"
     action: >
       the client shall return the list of active connections with `{ connection_id,
@@ -189,6 +201,13 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-009
+    given: "Agent A sends a connection request to B; B is online but the test harness suppresses B's connection_response (simulating a hung evaluation)"
+    when: "30 seconds elapse without B's response reaching the directory"
+    then: "The directory pushes `connection_timeout { target_pubkey: B_pubkey }` to A's signaling stream; no connection record is created; B's late response (if it arrives) is discarded"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010
     given: "An established connection between A and B"
     when: "Both clients query their connection list"
     then: >
@@ -198,7 +217,7 @@ acceptance_criteria:
     test_type: integration
     component_under_test: client
 
-  - id: AC-010
+  - id: AC-011
     given: "A connection request whose package has a tampered pseudonym binding (ML-DSA signature invalid)"
     when: "B's client validates the package"
     then: >
@@ -208,14 +227,14 @@ acceptance_criteria:
     test_type: integration
     component_under_test: client
 
-  - id: AC-011
+  - id: AC-012
     given: "A connection request where A's package endorsement has `target_pubkey` set to a different agent's pubkey"
     when: "B's client validates the package"
     then: "The endorsement is marked `target_mismatch` and does not count; if B's policy requires endorsements, the verdict may be `insufficient`"
     test_type: integration
     component_under_test: client
 
-  - id: AC-012
+  - id: AC-013
     given: "256 connection requests from distinct agents to agent B in rapid succession"
     when: "All are processed"
     then: "All 256 connection_ids are unique; each is 16 bytes; no collisions among the established connections"
@@ -288,9 +307,25 @@ degraded_behavior:
       If the verdict is `accept`, the connection record is created — connection
       establishment is not conditioned on the sender being online for the response.
       The `connection_established` event is queued for delivery on the sender's next
-      authenticated signaling stream.
+      authenticated signaling stream (up to 32 pending events per client, same bound as
+      DB-001's inbound queue; if exceeded, oldest is dropped — the connection record
+      still exists and `cello_list_connections` will show it on next query).
     test_type: integration
     component_under_test: directory
+
+  - id: DB-003
+    condition: "While the directory is unreachable when the target client attempts to cross-check the sender's `ml_dsa_pubkey` against the directory profile during inbound request validation"
+    fallback: >
+      the target client shall accept the pseudonym binding's embedded `ml_dsa_pubkey` as
+      the verification key for this request without the cross-check. The connection is
+      established with a `profile_unchecked: true` flag in the local record. On the next
+      directory interaction the client performs the deferred cross-check; if the pubkey
+      does not match the directory profile, the connection is flagged but not
+      retroactively revoked (the ML-DSA signature on the pseudonym binding was valid at
+      acceptance time). This is acceptable because ML-DSA key compromise is a M7 concern
+      and the pseudonym binding signature itself proves the sender held the secret key.
+    test_type: integration
+    component_under_test: client
 
 # ─── References ─────────────────────────────────────────────
 references:
