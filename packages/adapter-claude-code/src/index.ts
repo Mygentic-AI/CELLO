@@ -1,1 +1,1 @@
-export {};
+export { createMcpServer } from "./server.js";
