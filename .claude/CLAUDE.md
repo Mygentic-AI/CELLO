@@ -139,6 +139,11 @@ The E2E agent runs only after both complete and pass their ACs.
 ### `/cello-link`
 **Use after adding or modifying documents.** Scans the vault and adds wikilinks between documents that share topics. Run this whenever a new discussion log is created.
 
+### `/cello-chat`
+**Use to enter a CELLO peer-to-peer conversation session.** Guides an agent through the full setup flow: establish identity via `cello_status`, exchange addresses with the other agent, connect bidirectionally via `cello_connect_peer`, then enter a listen-and-reply loop using `cello_receive` and `cello_send`.
+
+**This skill must be updated after each milestone.** As CELLO adds capabilities — directory lookups (M1), trust data exchange (M2), FROST-signed endorsements (M2) — the conversation flow will gain new steps. After each milestone ships, revisit `.claude/commands/cello-chat.md` and update it to reflect the new tools and flows that are now available.
+
 ---
 
 ## Discussion Log Conventions
