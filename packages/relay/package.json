@@ -14,13 +14,21 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "bin": {
+    "cello-relay": "./dist/bin/relay.js"
+  },
   "scripts": {
     "typecheck": "tsc --build",
     "test": "vitest run"
   },
   "dependencies": {
-    "@cello/crypto": "workspace:*",
-    "@cello/protocol-types": "workspace:*",
-    "@cello/transport": "workspace:*"
+    "@libp2p/crypto": "^5.0.0",
+    "@libp2p/interface": "^3.0.0",
+    "@chainsafe/libp2p-noise": "^17.0.0",
+    "@chainsafe/libp2p-yamux": "^8.0.1",
+    "@libp2p/circuit-relay-v2": "^4.2.3",
+    "@libp2p/identify": "^4.0.0",
+    "@libp2p/tcp": "^11.0.18",
+    "libp2p": "^3.2.3"
   }
 }

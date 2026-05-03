@@ -5,9 +5,5 @@
     "outDir": "dist"
   },
   "include": ["src"],
-  "references": [
-    { "path": "../crypto" },
-    { "path": "../protocol-types" },
-    { "path": "../transport" }
-  ]
+  "references": []
 }
