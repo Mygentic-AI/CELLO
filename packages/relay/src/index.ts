@@ -50,7 +50,6 @@ export async function loadOrGenerateRelayKey(keyPath: string): Promise<PrivateKe
   const fd = await fsOpen(tmp, "wx", 0o600);
   try {
     await fd.write(encoded);
-    await fd.chmod(0o600);
   } finally {
     await fd.close();
   }
