@@ -1,0 +1,252 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-CONNREQ-001
+domain: Connection Requests
+actor: CLIENT
+priority: P0
+components:
+  - protocol-types
+  - crypto
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want a connection package schema with ML-DSA-44 signed items (pseudonym binding,
+  attestations, endorsements) and selective disclosure semantics
+  so that when an agent presents itself to a counterparty during a connection request,
+  the presented trust signals are cryptographically verifiable, tamper-evident, and the
+  sender controls exactly which items to include.
+
+  This is the wire-type story for M3 — same architectural role as MSG-001 (envelope
+  schema) and MERKLE-002 (two-structure leaf format). It defines what an agent presents
+  when requesting or responding to a connection, and the cryptographic envelope around
+  each presented item.
+
+  **Connection package:** the bundle of signed items an agent presents to a counterparty
+  during a connection request. The package is constructed by the sender client, relayed
+  by the directory (which sees the package but cannot modify it — items are ML-DSA signed
+  by the sender), and evaluated by the receiver against its connection policy.
+
+  **Items in a connection package (M3 set):**
+
+  1. **Pseudonym binding** — binds `(pseudonym_label, k_local_pubkey, primary_pubkey,
+     ml_dsa_pubkey, created_at)` under the agent's ML-DSA signature. This is always
+     present — it establishes "I am this identity." The pseudonym_label is a human-readable
+     string chosen by the owner (max 64 UTF-8 bytes). It is NOT unique across the
+     directory — uniqueness is not enforced or expected. It is a display name, not an
+     identifier.
+
+  2. **Endorsement** (optional, 0..N) — a signed statement from a third-party agent
+     vouching for this agent. Format:
+     `{ endorser_pubkey, endorser_ml_dsa_pubkey, target_pubkey, endorsement_type,
+     created_at, expires_at, endorser_ml_dsa_signature }`. The endorser signs the
+     canonical-CBOR encoding of all fields except the signature itself. Endorsements are
+     pre-computed (the endorser signs them ahead of time and gives them to the target
+     agent to present). The verifier retrieves `endorser_ml_dsa_pubkey` from the
+     endorser's directory profile to verify.
+
+  3. **Attestation** (optional, 0..N) — a self-signed statement about a verifiable
+     property. Format:
+     `{ attester_pubkey, attester_ml_dsa_pubkey, attestation_type, attestation_data,
+     created_at, expires_at, attester_ml_dsa_signature }`. M3 defines no specific
+     attestation types — the schema is extensible; M5 adds carrier attestation, M6 adds
+     social attestation types.
+
+  **Selective disclosure:** the sender chooses which items to include in a connection
+  package. The pseudonym binding is always required (it's the identity anchor). Beyond
+  that, including 0 endorsements or 0 attestations is valid — the receiver's connection
+  policy determines whether the disclosed set is sufficient. Selective disclosure is
+  encoded as "what you include is your choice" — there is no zero-knowledge proof or
+  cryptographic hiding of withheld items; the receiver simply does not see items the
+  sender chose not to include.
+
+  **Wire encoding:** canonical CBOR (RFC 8949 §4.2.1), consistent with all other CELLO
+  wire types. The connection package is a CBOR map with a defined key set. Each item
+  within the package is independently verifiable — the receiver can verify each ML-DSA
+  signature against the signer's public key without needing the full package context.
+
+  **Item expiry:** endorsements and attestations carry `expires_at` (Unix milliseconds).
+  The receiver's policy engine (CONNPOL-001) rejects expired items. The sender should
+  not include expired items, but the receiver is the enforcement point.
+
+  **Size budget:** a complete connection package with pseudonym binding + 5 endorsements
+  + 2 attestations is approximately 18-25 KB (dominated by ML-DSA-44 signatures at
+  2420 bytes each). This is a one-time exchange per connection request, not per-message
+  overhead.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the client constructs a connection package for an outbound connection request"
+    action: >
+      the protocol-types module shall produce a ConnectionPackage containing: (a) a
+      pseudonym binding (always present, ML-DSA signed by the sender), (b) zero or more
+      endorsements (each ML-DSA signed by the endorser), (c) zero or more attestations
+      (each ML-DSA signed by the attester). The package is CBOR-encoded as a map with
+      keys `pseudonym_binding`, `endorsements` (array), `attestations` (array). The
+      sender controls which optional items to include.
+  - trigger: "When the client constructs a pseudonym binding"
+    action: >
+      the protocol-types module shall produce the canonical-CBOR encoding of
+      `[pseudonym_label, k_local_pubkey, primary_pubkey, ml_dsa_pubkey, created_at]`
+      and sign it with the sender's `MlDsaKeyProvider`. The result is
+      `{ fields: [...], ml_dsa_signature }`.
+  - trigger: "When any component validates a pseudonym binding"
+    action: >
+      the validator shall (a) verify all field lengths (k_local_pubkey = 32,
+      primary_pubkey varies by FROST config, ml_dsa_pubkey = 1312, pseudonym_label <=
+      64 UTF-8 bytes), (b) verify the ML-DSA-44 signature over canonical-CBOR of the
+      fields against the embedded `ml_dsa_pubkey`, (c) confirm `ml_dsa_pubkey` in the
+      binding matches the `ml_dsa_pubkey` on the sender's directory profile (if
+      available — in-flight connection requests carry the binding to establish this
+      mapping; the receiver cross-checks against the directory after acceptance).
+  - trigger: "When any component validates an endorsement item"
+    action: >
+      the validator shall (a) verify field lengths and presence, (b) verify the ML-DSA
+      signature over canonical-CBOR of all fields except `endorser_ml_dsa_signature`
+      against `endorser_ml_dsa_pubkey`, (c) check `expires_at` has not passed (relative
+      to the current timestamp), (d) confirm `target_pubkey` matches the connection
+      package sender's `k_local_pubkey`.
+  - trigger: "When any component validates an attestation item"
+    action: >
+      the validator shall (a) verify field lengths and presence, (b) verify the ML-DSA
+      signature over canonical-CBOR of all fields except `attester_ml_dsa_signature`
+      against `attester_ml_dsa_pubkey`, (c) check `expires_at` has not passed.
+  - trigger: "When a connection package contains an endorsement whose `expires_at` is in the past"
+    action: "the validator shall mark the endorsement as `expired` — it does not count toward policy satisfaction but does not invalidate the entire package."
+  - trigger: "When a connection package's pseudonym binding signature does not verify"
+    action: "the validator shall reject the entire package with `pseudonym_binding_invalid` — the identity anchor is the minimum viable trust signal."
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A registered agent with K_local, primary_pubkey, and an MlDsaKeyProvider"
+    when: "The client constructs a connection package with a pseudonym binding and no optional items"
+    then: >
+      The package contains a valid pseudonym binding; the ML-DSA signature verifies
+      against the embedded ml_dsa_pubkey; the CBOR-encoded package is deterministic
+      (re-encoding produces identical bytes)
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-002
+    given: "A connection package with a pseudonym binding + 3 endorsements + 1 attestation"
+    when: "Structural validation and signature verification are performed on each item"
+    then: >
+      All 5 signatures verify independently; the pseudonym binding signature verifies
+      against the sender's ml_dsa_pubkey; each endorsement verifies against its
+      `endorser_ml_dsa_pubkey`; the attestation verifies against its
+      `attester_ml_dsa_pubkey`
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-003
+    given: "A connection package with a pseudonym binding whose ML-DSA signature has been tampered (one byte flipped)"
+    when: "Validation is performed"
+    then: "Validation rejects with `pseudonym_binding_invalid`; the entire package is rejected"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-004
+    given: "A connection package with a valid pseudonym binding and one endorsement whose ML-DSA signature has been tampered"
+    when: "Validation is performed"
+    then: >
+      The pseudonym binding passes; the tampered endorsement is marked `signature_invalid`
+      and does not count toward policy satisfaction; the package itself is not wholly
+      rejected (the pseudonym binding anchor is intact)
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-005
+    given: "A connection package with an endorsement whose `expires_at` is 1 millisecond in the past"
+    when: "Validation is performed"
+    then: "The endorsement is marked `expired`; it does not count toward policy satisfaction; the package is not rejected"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-006
+    given: "A connection package with an endorsement whose `target_pubkey` does not match the sender's `k_local_pubkey`"
+    when: "Validation is performed"
+    then: "The endorsement is marked `target_mismatch` — it endorses a different agent and cannot count for this sender"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-007
+    given: "A pseudonym_label of exactly 64 UTF-8 bytes"
+    when: "A pseudonym binding is constructed"
+    then: "Construction succeeds"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-008
+    given: "A pseudonym_label of 65 UTF-8 bytes"
+    when: "A pseudonym binding is constructed"
+    then: "Construction is rejected with `pseudonym_label_too_long`"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-009
+    given: "Fixture values for a connection package stored under `packages/protocol-types/test/vectors/connection-package-canonical.json`"
+    when: "The TypeScript implementation encodes the package from fixture values"
+    then: "The produced CBOR bytes match the expected hex in the fixture exactly"
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-010
+    given: "Two connection packages constructed by the same agent — one with 3 endorsements, one with 1 endorsement"
+    when: "Both are validated"
+    then: >
+      Both pass validation; the sender exercised selective disclosure by choosing how
+      many endorsements to include; the receiver sees only what was included; there is
+      no indicator of how many items were withheld
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: AC-011
+    given: "A connection package with endorsements from two different endorsers"
+    when: "Validation retrieves each endorser's `ml_dsa_pubkey` (from test fixture simulating directory lookup)"
+    then: "Each endorsement's signature verifies against its respective endorser's public key independently"
+    test_type: unit
+    component_under_test: protocol-types
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The protocol-types module shall never accept a connection package whose pseudonym
+      binding signature does not verify. The pseudonym binding is the identity anchor —
+      without it nothing in the package is trustworthy.
+    adversarial_condition: >
+      even when other items in the package (endorsements, attestations) have valid
+      signatures — a forged pseudonym binding means the entire package's claimed identity
+      is suspect.
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: SI-002
+    statement: >
+      Each item in a connection package shall be independently verifiable. An endorsement
+      signed by endorser E must verify against E's ml_dsa_pubkey without requiring any
+      other item in the package or any shared secret.
+    adversarial_condition: >
+      even when an attacker strips other items from the package and presents only the
+      endorsement — the endorsement's signature is self-contained and verifiable in
+      isolation.
+    test_type: unit
+    component_under_test: protocol-types
+
+  - id: SI-003
+    statement: >
+      The protocol-types module shall never construct a pseudonym binding without signing
+      it with the sender's `MlDsaKeyProvider`. There is no unsigned pseudonym binding.
+    adversarial_condition: >
+      even when the caller supplies pre-computed fields — the module always signs via
+      the provider; callers cannot inject a pre-computed signature.
+    test_type: unit
+    component_under_test: protocol-types
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Connection Requests"
+  end_to_end_flow: "§4.1"
+  discussion_logs:
+    - "2026-04-08_1930_client-side-trust-data-ownership"
+    - "2026-04-09_1400_connection-request-flow"

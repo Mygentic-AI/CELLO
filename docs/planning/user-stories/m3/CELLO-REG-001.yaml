@@ -1,0 +1,262 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-REG-001
+domain: Registration & Onboarding
+actor: OWNER
+priority: P0
+components:
+  - client
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Owner of an AI agent,
+  I want to register my agent on the directory via stubbed OTP verification, triggering an
+  interactive FROST DKG ceremony that produces a `primary_pubkey`, generating an ML-DSA-44
+  keypair for connection package signing, and publishing an extensible profile
+  so that my agent transitions from "test-harness pre-authorized" to "directory-registered
+  identity" that counterparties can discover, verify FROST signatures against, and evaluate
+  trust signals from.
+
+  Registration closes three M2 stubs:
+  - `bootstrapKeyShares` → real interactive DKG triggered by registration
+  - `primary_pubkey` lookup → stored on the directory profile, publicly queryable
+  - Registration-driven DKG → this story
+
+  **Registration flow:**
+
+  1. Owner initiates registration via MCP tool `cello_register({ phone_stub })` or
+     equivalent test-harness call.
+  2. The client authenticates to the directory on `/cello/signaling/1.0.0` using the
+     existing challenge-response (NODE-001) with K_local. This proves possession of
+     K_local but does not yet mean "registered."
+  3. The client sends a `register_request { phone_stub, k_local_pubkey, ml_dsa_pubkey }`
+     frame to the directory.
+  4. The directory verifies the phone stub (M3 stub: any non-empty string accepted;
+     production OTP verification is M5+). If the stub is empty or missing, the directory
+     rejects with `invalid_verification`.
+  5. If verification passes, the directory triggers the interactive FROST DKG ceremony:
+     the client opens `/cello/frost/1.0.0` streams to all `n` directory nodes and runs
+     the multi-round DKG protocol per `@noble/curves/frost`. Each node generates its
+     K_server_X share for this agent and returns its commitment. The client derives
+     `primary_pubkey` from the complete set of commitments.
+  6. The client sends `dkg_complete { primary_pubkey }` to the directory on the signaling
+     stream. The directory verifies that `primary_pubkey` matches the commitments it
+     holds (each directory node contributed a commitment it recorded locally).
+  7. The directory creates the agent's profile record:
+     `{ k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, profile: {},
+     registered_at, status: 'active' }`.
+  8. The directory returns `register_success { agent_id, primary_pubkey }` on the
+     signaling stream. The client stores its registration state locally.
+
+  **Profile:** an extensible `Record<string, unknown>` map. M3 stores no user-facing
+  fields beyond the cryptographic identifiers. M5 adds `bio`, `greeting`, `tags` for
+  discovery. The schema is deliberately open — new fields are additive, never breaking.
+
+  **Phone stub:** M3 accepts any non-empty string as "verified." This is intentionally
+  minimal — the directory records `SHA-256(phone_stub)` (never the raw value) for Sybil
+  floor purposes (one agent per phone number, enforced at the hash level). Real OTP
+  verification (Twilio, WhatsApp Business API) is an M5 concern where the notification
+  infrastructure already exists.
+
+  **ML-DSA keypair generation:** at registration time the client generates an ML-DSA-44
+  keypair (CRYPTO-004) and publishes the public key on the profile. The secret key is
+  stored locally via `FileMlDsaKeyProvider`. Counterparties retrieve the ML-DSA public
+  key from the directory to verify connection package items.
+
+  **Duplicate registration guard:** if a `k_local_pubkey` is already registered (active
+  profile exists), the directory rejects with `already_registered`. Re-registration
+  after revocation (M7 "Not Me" flow) uses a different path with social recovery.
+
+  **`DirectoryStore` additions:** `AgentProfile` record type, indexed by `k_local_pubkey`.
+  Query: `getProfile(pubkey)` returns the full profile or `null`. `listProfiles()` is
+  not exposed in M3 (discovery/search is M5).
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When an authenticated client sends a `register_request` frame on its signaling stream"
+    action: >
+      the directory shall (a) verify phone_stub is non-empty (M3 stub verification),
+      rejecting with `invalid_verification` otherwise, (b) check no active profile exists
+      for `k_local_pubkey`, rejecting with `already_registered` otherwise, (c) hash the
+      phone_stub as `SHA-256(phone_stub)` and check no other active profile shares the
+      same hash, rejecting with `phone_already_claimed` otherwise, (d) initiate the
+      interactive FROST DKG ceremony on `/cello/frost/1.0.0` across all directory nodes
+      for this agent.
+  - trigger: "When the FROST DKG ceremony completes and the client sends `dkg_complete { primary_pubkey }`"
+    action: >
+      the directory shall verify that `primary_pubkey` is consistent with the commitments
+      held by all directory nodes (each node verifies its own contribution independently).
+      On success: create the `AgentProfile` record, persist to `DirectoryStore`, and
+      return `register_success { agent_id, primary_pubkey }` on the signaling stream.
+      On failure: reject with `dkg_verification_failed` and do not create a profile.
+  - trigger: "When the FROST DKG ceremony fails (below threshold, timeout, or conflict)"
+    action: >
+      the directory shall reject registration with `dkg_failed { reason }` on the
+      signaling stream. No profile is created. The client may retry registration.
+  - trigger: "When any component queries `getProfile(k_local_pubkey)` on the directory"
+    action: >
+      the directory shall return the full `AgentProfile` record if one exists with
+      status `active`, or `null` if no profile exists or the profile is revoked.
+  - trigger: "When an unregistered client attempts to use M3+ features (connection request, session initiation with connection gate)"
+    action: >
+      the directory shall reject the request with `not_registered` — registration is a
+      prerequisite for connection and session features introduced in M3.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A client with K_local authenticated to the directory; no prior registration exists"
+    when: "The client sends `register_request { phone_stub: '+1234567890', k_local_pubkey, ml_dsa_pubkey }`"
+    then: >
+      The directory accepts the phone stub (non-empty → passes M3 verification); the
+      interactive FROST DKG runs across all directory nodes; `primary_pubkey` is derived
+      from the commitments; the profile is created; the client receives
+      `register_success { agent_id, primary_pubkey }`
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "A registered agent with pubkey K_A"
+    when: "The same client (K_A) sends another `register_request`"
+    then: "The directory rejects with `already_registered`; no DKG is initiated; the existing profile is unchanged"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "Agent A is registered with phone_stub_hash = SHA-256('+1234567890')"
+    when: "Agent B (different K_local) sends `register_request { phone_stub: '+1234567890' }`"
+    then: "The directory rejects with `phone_already_claimed`; no DKG is initiated for B"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "A client sends `register_request { phone_stub: '' }` (empty string)"
+    when: "The directory processes the request"
+    then: "The directory rejects with `invalid_verification`; no DKG is initiated"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A registered agent A"
+    when: "Any client calls `getProfile(A_pubkey)` on the directory"
+    then: >
+      The response contains `{ k_local_pubkey, primary_pubkey, ml_dsa_pubkey,
+      phone_stub_hash, profile: {}, registered_at, status: 'active' }`; the
+      `primary_pubkey` matches what A received at registration; `ml_dsa_pubkey` is 1312
+      bytes; `phone_stub_hash` is 32 bytes (SHA-256)
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "A `FrostThresholdSigner` configured 2-of-3 with 3 in-process directory nodes; the DKG is triggered by registration"
+    when: "The interactive DKG ceremony completes"
+    then: >
+      All 3 nodes hold K_server_X shares for the new agent; the client holds its local
+      share; `primary_pubkey` is derived deterministically from the 3 commitments; a
+      subsequent `participateInCeremony` call for session establishment produces a
+      signature that verifies against this `primary_pubkey`
+    test_type: integration
+    component_under_test: crypto
+
+  - id: AC-007
+    given: "A registration attempt where fewer than `threshold` directory nodes are reachable for DKG"
+    when: "The DKG ceremony is initiated"
+    then: "Registration fails with `dkg_failed { reason: 'DIRECTORY_BELOW_THRESHOLD' }`; no profile is created"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "A registered agent's `primary_pubkey` stored on the directory"
+    when: "A counterparty retrieves the profile and uses `primary_pubkey` to verify a FROST signature produced by the registered agent's group"
+    then: "Verification succeeds — the `primary_pubkey` on the profile is the correct verification key for the agent's FROST group"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-009
+    given: "An unregistered client authenticated to the directory"
+    when: "The client attempts to send a connection request (CONNREQ-002) or initiate a session with the connection gate (SESSION-006)"
+    then: "The directory rejects with `not_registered`"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010
+    given: "A completed registration"
+    when: "The client's local state is inspected"
+    then: >
+      The client has stored: `agent_id`, `primary_pubkey`, registration status `active`,
+      and the `FileMlDsaKeyProvider` persists the ML-DSA keypair at the configured path
+      (default `~/.cello/ml-dsa-key`) with permissions 0o600
+    test_type: unit
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The directory shall never store the raw phone stub value. Only
+      `SHA-256(phone_stub)` is persisted. The hash is sufficient for the
+      one-agent-per-phone-number uniqueness check.
+    adversarial_condition: >
+      even when the phone stub is passed through diagnostic logs or error messages
+      during registration — the raw value must be hashed before any persistence or
+      logging operation.
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      The directory shall never create an agent profile without a successful FROST DKG
+      ceremony producing a verified `primary_pubkey`. The `bootstrapKeyShares` shortcut
+      from M2 is not available outside `NODE_ENV=test`.
+    adversarial_condition: >
+      even when a client sends a `dkg_complete` frame with a fabricated `primary_pubkey`
+      that was not derived from the directory nodes' actual commitments — each directory
+      node independently verifies its commitment contribution before the profile is
+      accepted.
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: >
+      The FROST DKG shares generated during registration shall never appear in any
+      wire message, log, profile record, or API response. Only `primary_pubkey` (the
+      group public key) is publicly stored.
+    adversarial_condition: >
+      even when the DKG ceremony fails partway and error diagnostics include round-level
+      context — share bytes are confined to the crypto package and the directory node's
+      `ShareStore`.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: SI-004
+    statement: >
+      Registration shall be gated on K_local challenge-response authentication. An
+      unauthenticated stream cannot trigger DKG or create a profile.
+    adversarial_condition: >
+      even when an attacker opens a signaling stream and immediately sends a
+      `register_request` frame without completing the auth challenge — the directory
+      rejects with `not_authenticated` before processing any registration logic.
+    test_type: integration
+    component_under_test: directory
+
+# ─── Stubs ───────────────────────────────────────────────────
+stubs:
+  - what: "Real OTP verification (Twilio, WhatsApp Business API, SMS gateway)"
+    why: "M3 uses a non-empty string as a stub. Notification infrastructure and carrier verification land with M5."
+    replaced_by: "M5 registration hardening stories — real OTP replaces the stub, phone_stub_hash becomes phone_hash derived from a verified number"
+
+  - what: "Profile search and discovery (bio, greeting, tags, BM25 + vector search)"
+    why: "M3 profiles are cryptographic-identity-only. Discovery features land with M5."
+    replaced_by: "CELLO-M5 discovery stories — profile gains user-facing fields and the directory exposes search endpoints"
+
+  - what: "Account deletion / profile revocation"
+    why: "Revocation requires the compromise detection and emergency response machinery from M7."
+    replaced_by: "CELLO-M7 emergency response stories — 'Not Me' revocation, K_server burn, tombstone creation"
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Identity and Trust Signals"
+  end_to_end_flow: "§1.1, §2.1"
+  discussion_logs:
+    - "2026-04-08_1930_client-side-trust-data-ownership"
+    - "2026-04-15_0900_session-level-frost-signing"

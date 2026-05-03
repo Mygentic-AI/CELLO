@@ -1,0 +1,225 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-CRYPTO-004
+domain: Cryptographic Primitives
+actor: CLIENT
+priority: P0
+components:
+  - crypto
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want ML-DSA-44 key generation, signing, and verification primitives via `liboqs` / `node-oqs`
+  so that connection package items (pseudonym bindings, endorsements, attestations) can be signed
+  with a post-quantum algorithm and verified by any counterparty without relying on the threshold
+  ceremony infrastructure.
+
+  ML-DSA-44 (FIPS 204, CRYSTALS-Dilithium parameter set) provides 128-bit post-quantum security.
+  ADR-0002 documents the decision to use ML-DSA-44 over ML-DSA-65. ML-DSA is used for all
+  non-threshold signatures in CELLO — artifacts that are pre-computed, stored, and presented
+  to counterparties during connection requests. These are distinct from the per-message Ed25519
+  envelope signatures (which prove real-time authorship) and the FROST threshold signatures
+  (which prove directory co-participation).
+
+  **Three signature schemes in CELLO after M3:**
+  - **Ed25519** (CRYPTO-001): per-message envelope signatures, challenge-response auth,
+    real-time authorship. Fast, small (64-byte sig), no PQ protection needed because messages
+    are ephemeral and not stored long-term.
+  - **FROST Ed25519** (CRYPTO-003): threshold-signed session bookends. Proves directory
+    co-participation. PQ upgrade path via `IThresholdSigner` → future `ThresholdMlDsaSigner`.
+  - **ML-DSA-44** (this story): connection package items — pseudonym bindings, endorsements,
+    attestations, directory certificates. These are long-lived artifacts that may be verified
+    years after creation; PQ protection matters here.
+
+  **Module surface:**
+
+  ```typescript
+  interface MlDsaKeyPair {
+    publicKey: Uint8Array   // 1312 bytes (ML-DSA-44)
+    secretKey: Uint8Array   // 2560 bytes (ML-DSA-44)
+  }
+
+  function mlDsaKeygen(): MlDsaKeyPair
+  function mlDsaSign(secretKey: Uint8Array, message: Uint8Array): Uint8Array  // 2420 bytes
+  function mlDsaVerify(publicKey: Uint8Array, message: Uint8Array, signature: Uint8Array): boolean
+  ```
+
+  The module wraps `liboqs` / `node-oqs` and pins the parameter set to `ML-DSA-44`. Callers
+  cannot select a different parameter set — the choice is architectural (ADR-0002) and not
+  exposed as a runtime option. If an upgrade to ML-DSA-65 is ever needed, it is a code change
+  gated by a new ADR, not a configuration knob.
+
+  **Key management:** ML-DSA keypairs are generated per-agent at registration time (REG-001)
+  and stored alongside K_local. The ML-DSA public key is published on the agent's directory
+  profile so counterparties can verify connection package items offline. The secret key never
+  leaves the crypto package — same containment principle as `KeyProvider` for Ed25519.
+
+  **Relationship to `KeyProvider`:** ML-DSA key management does NOT use the `KeyProvider`
+  interface. `KeyProvider` is specifically the Ed25519 K_local signing abstraction (sign
+  envelopes, prove liveness). ML-DSA keys have different lifecycle semantics (generated once
+  at registration, used to pre-sign long-lived artifacts, may be rotated independently of
+  K_local). A dedicated `MlDsaKeyProvider` interface keeps the two concerns cleanly separated.
+
+  ```typescript
+  interface MlDsaKeyProvider {
+    getPublicKey(): Promise<MlDsaPublicKey>       // 1312 bytes
+    sign(message: Uint8Array): Promise<MlDsaSignature>  // 2420 bytes
+  }
+  ```
+
+  M3 ships `InMemoryMlDsaKeyProvider` (holds keypair in process memory) and
+  `FileMlDsaKeyProvider` (persists to `~/.cello/ml-dsa-key`, atomic write, 0o600 permissions,
+  same pattern as `FileKeyProvider` from CRYPTO-001). The secret key never crosses the
+  `MlDsaKeyProvider` boundary.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the crypto module is asked to generate a new ML-DSA-44 keypair"
+    action: "the module shall call `liboqs` ML-DSA-44 keygen and return an `InMemoryMlDsaKeyProvider` instance. The public key is 1312 bytes; the secret key is 2560 bytes; neither raw key is returned as a value — only the `MlDsaKeyProvider` handle."
+  - trigger: "When the caller invokes `mlDsaKeyProvider.sign(message)`"
+    action: "the module shall produce a 2420-byte ML-DSA-44 signature over the provided message bytes using the secret key held internally. The secret key never crosses the `MlDsaKeyProvider` boundary."
+  - trigger: "When the caller invokes `mlDsaVerify(publicKey, message, signature)`"
+    action: "the module shall verify the ML-DSA-44 signature against the provided public key and message, returning a boolean. Verification is stateless — it does not reference any `MlDsaKeyProvider` instance."
+  - trigger: "When `mlDsaVerify` is called with a mismatched public key, tampered message, or malformed signature"
+    action: "the module shall return false without throwing an exception."
+  - trigger: "When `mlDsaVerify` is called with a signature of wrong length (not 2420 bytes) or a public key of wrong length (not 1312 bytes)"
+    action: "the module shall return false without throwing."
+  - trigger: "When `FileMlDsaKeyProvider.load(path)` is called and no key file exists"
+    action: "a fresh ML-DSA-44 keypair is generated; the key file is written atomically (write to temp, rename) with permissions 0o600; the returned provider uses this keypair; subsequent loads return the same public key."
+  - trigger: "When `FileMlDsaKeyProvider.load(path)` is called with a corrupt or invalid key file"
+    action: "the call throws a structured error with `reason: 'ml_dsa_key_file_corrupt'`; no new key is generated; the corrupt file is not overwritten."
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "No existing ML-DSA keypair"
+    when: "The crypto module generates a new ML-DSA-44 keypair"
+    then: "An `InMemoryMlDsaKeyProvider` is returned whose `getPublicKey()` resolves to a 1312-byte public key; `sign` produces 2420-byte signatures"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-002
+    given: "A valid `MlDsaKeyProvider`"
+    when: "The caller calls `sign(message)` and then `mlDsaVerify(publicKey, message, signature)`"
+    then: "`sign` returns a 2420-byte signature; `mlDsaVerify` returns true"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-003
+    given: "A valid ML-DSA-44 signature over message M produced by key K"
+    when: "`mlDsaVerify` is called with a different public key K'"
+    then: "`mlDsaVerify` returns false"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-004
+    given: "A valid ML-DSA-44 signature over message M"
+    when: "`mlDsaVerify` is called with tampered message M' (one byte flipped)"
+    then: "`mlDsaVerify` returns false"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-005
+    given: "A truncated signature (2419 bytes) or a zero-filled signature (2420 bytes of zeros)"
+    when: "`mlDsaVerify` is called"
+    then: "`mlDsaVerify` returns false without throwing"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-006
+    given: "A public key of wrong length (1311 bytes or 1313 bytes)"
+    when: "`mlDsaVerify` is called"
+    then: "`mlDsaVerify` returns false without throwing"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-007
+    given: "Two separate ML-DSA keypair generations"
+    when: "Both complete"
+    then: "The two public keys are different (randomness verification)"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-008
+    given: "A valid `MlDsaKeyProvider`"
+    when: "The caller calls `sign(<empty byte string>)`"
+    then: "A 2420-byte signature is returned; `mlDsaVerify(publicKey, <empty>, signature)` returns true"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-009
+    given: "No ML-DSA key file at the configured path"
+    when: "`FileMlDsaKeyProvider.load(path)` is called"
+    then: "A key file is created at the path with permissions 0o600; subsequent loads return the same public key"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-010
+    given: "An ML-DSA key file written by a previous `FileMlDsaKeyProvider.load` call"
+    when: "`FileMlDsaKeyProvider.load(path)` is called again"
+    then: "The returned provider's `getPublicKey()` returns the same public key as the original"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-011
+    given: "An ML-DSA key file that contains corrupt or invalid bytes"
+    when: "`FileMlDsaKeyProvider.load(path)` is called"
+    then: "The call throws with `reason: 'ml_dsa_key_file_corrupt'`; the file is not overwritten"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-012
+    given: "A `FileMlDsaKeyProvider` loaded from a key file"
+    when: "`sign(message)` is called and then `mlDsaVerify(publicKey, message, signature)` with the public key from `getPublicKey()`"
+    then: "`mlDsaVerify` returns true — the loaded keypair produces valid signatures"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-013
+    given: "A message of 100 KiB"
+    when: "`sign(message)` is called"
+    then: "A valid 2420-byte signature is produced; `mlDsaVerify` returns true — ML-DSA handles arbitrary-length messages"
+    test_type: unit
+    component_under_test: crypto
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The ML-DSA secret key shall never cross the `MlDsaKeyProvider` boundary. The interface
+      exposes only `getPublicKey()` and `sign(message)`. Standard inspection paths —
+      `toJSON()`, `toString()`, `Symbol.for('nodejs.util.inspect.custom')` — must return a
+      redacted representation. Same containment principle as CRYPTO-001 SI-001.
+    adversarial_condition: >
+      even when an `MlDsaKeyProvider` instance is passed to `console.log`, `JSON.stringify`,
+      `util.inspect`, or a test snapshot — the 2560-byte secret key must not appear in the
+      output. The test exercises each path and scans for any substring matching the secret key
+      bytes in hex or base64.
+    test_type: unit
+    component_under_test: crypto
+
+  - id: SI-002
+    statement: "The crypto module shall never accept a signature verification where the message has been modified"
+    adversarial_condition: "even when the modification is a single bit flip in a multi-kilobyte message"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: SI-003
+    statement: >
+      The module shall pin the ML-DSA parameter set to ML-DSA-44 and shall not expose a
+      runtime configuration knob to select a different parameter set. The parameter set is an
+      architectural decision (ADR-0002), not a deployment configuration.
+    adversarial_condition: >
+      even when a caller supplies a parameter-set argument — the module shall ignore it or
+      reject it. The only way to change the parameter set is a code change gated by a new ADR.
+    test_type: unit
+    component_under_test: crypto
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Identity and Trust Signals"
+  end_to_end_flow: "§1.1"
+  adr:
+    - "ADR-0002 — ML-DSA-44 security level decision"
+  discussion_logs:
+    - "2026-04-13_1100_quantum-resistance-design"

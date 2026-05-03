@@ -1,0 +1,193 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-SESSION-006
+domain: Session Lifecycle
+actor: CLIENT
+priority: P0
+components:
+  - client
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want session establishment (`cello_initiate_session`) gated on an existing accepted
+  connection between the two agents — enforced by both the client and the directory
+  so that the M2 stub ("both agents pre-authorized in the test harness") is closed and
+  agents cannot open sessions with strangers who have not gone through the connection
+  request flow (CONNREQ-002).
+
+  This is the only M3 change to existing M2 session code. It is thin but load-bearing:
+  the gate must be enforced at the directory (authoritative) and at the client
+  (defense in depth). The session establishment mechanics (FROST ceremony, SessionAssignment
+  signing, relay assignment) are unchanged from SESSION-004 — this story adds a single
+  precondition check.
+
+  **What changes from M2 (SESSION-004):**
+  - The directory's session_request handler now includes step (0): verify an active
+    connection exists between initiator and target before proceeding to the FROST
+    ceremony. If no connection exists → `no_connection`.
+  - The client's `cello_initiate_session` checks its local connection list before sending
+    the session_request. If no local connection record exists → error returned to the
+    agent immediately without network round-trip.
+  - The `session_request` frame gains an optional `connection_id` field. The directory
+    verifies this connection_id matches an active connection between the two parties.
+
+  **Why both client and directory enforce:**
+  - Client-side check: fast fail, no wasted network RTT for an obviously-doomed request.
+  - Directory-side check: authoritative — a compromised or buggy client cannot bypass
+    the gate. The directory is the source of truth for connection state.
+
+  **Existing sessions are unaffected:** sessions established under M2 (where both
+  agents were pre-authorized in the test harness) continue to function normally. The
+  gate applies only to new session establishments. There is no retroactive invalidation.
+
+  **Connection lookup at the directory:** the directory's `session_request` handler
+  calls `hasConnection(initiator_pubkey, target_pubkey)` on its `DirectoryStore`. This
+  is an O(1) lookup on the connection index created by CONNREQ-002. The connection_id
+  from the frame is verified to match.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the client calls `cello_initiate_session({ target_pubkey })`"
+    action: >
+      the client shall first check its local connection list for an active connection
+      with `target_pubkey`. If no connection exists, return
+      `{ error: { reason: 'no_connection', target_pubkey } }` immediately without
+      sending a session_request to the directory.
+  - trigger: "When the client has a local connection record for the target and sends `session_request { target_pubkey, connection_id }` to the directory"
+    action: >
+      the directory shall verify: (a) an active connection with the provided
+      `connection_id` exists between the initiator and target pubkeys (reject with
+      `no_connection` if not), (b) the target is currently authenticated on a signaling
+      stream (reject with `target_offline` if not — unchanged from M2). If both checks
+      pass, proceed with the FROST ceremony and SessionAssignment per SESSION-004.
+  - trigger: "When the directory receives a `session_request` with a `connection_id` that does not match any active connection between the two parties"
+    action: >
+      the directory shall reject with `no_connection` and shall not proceed to the FROST
+      ceremony or allocate a session_id. The rejection is indistinguishable from the case
+      where no connection exists at all (no information leakage about which connections
+      the target has with other agents).
+  - trigger: "When the directory receives a `session_request` without a `connection_id` field (a legacy M2 request)"
+    action: >
+      the directory shall reject with `connection_id_required`. M3 is a hard cut for
+      session establishment — the connection gate is not optional.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Two registered agents A and B with an established connection (CONNREQ-002)"
+    when: "A calls `cello_initiate_session({ target_pubkey: B_pubkey })`"
+    then: >
+      The client finds the connection in its local list; sends `session_request` with
+      connection_id; the directory verifies the connection; proceeds with FROST ceremony
+      and SessionAssignment per SESSION-004; the session is established normally
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-002
+    given: "Two registered agents A and B with NO connection between them"
+    when: "A calls `cello_initiate_session({ target_pubkey: B_pubkey })`"
+    then: >
+      The client detects no local connection record; returns
+      `{ error: { reason: 'no_connection', target_pubkey: B_pubkey } }` immediately;
+      no session_request is sent to the directory; no FROST ceremony is initiated
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-003
+    given: "Agent A has a stale local connection record for B (e.g. locally cached but the directory has no matching record — simulated by deleting the directory-side record)"
+    when: "A sends `session_request { target_pubkey: B_pubkey, connection_id }` to the directory"
+    then: "The directory rejects with `no_connection`; no session is created; no FROST ceremony runs"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "Agent A sends a `session_request` without a `connection_id` field"
+    when: "The directory processes it"
+    then: "The directory rejects with `connection_id_required`; no session is created"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "Agent A sends a `session_request` with a `connection_id` that belongs to a connection between A and C (not B)"
+    when: "The directory verifies against target_pubkey B"
+    then: "The directory rejects with `no_connection` — the connection_id does not match a connection between A and B"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "Two agents with an established connection; a session established successfully"
+    when: "The session is used for messaging (cello_send / cello_receive)"
+    then: "Per-message flow is identical to M2 — dual-path, Structure 1/2, relay sequencing, all MSG-004 mechanics unchanged"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-007
+    given: "Two agents with an established connection; one session already active between them"
+    when: "A initiates a second session with B"
+    then: "The second session is established normally — multiple concurrent sessions between connected agents are allowed; each gets its own session_id and Merkle tree"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "The full M3 strangers-to-conversation flow: A and B register (REG-001), A requests connection with B (CONNREQ-002), B accepts (open policy), A initiates session (this story), A sends a message, B receives it"
+    when: "The complete flow executes"
+    then: >
+      Every step succeeds; the message B receives has a valid signature, matching
+      content_hash, and correct sequence_number; the dual-path cross-check passes;
+      the session is established via FROST; the connection gate was passed
+    test_type: e2e
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The directory shall never proceed with session establishment (FROST ceremony,
+      session_id allocation, relay assignment) without verifying an active connection
+      exists between the initiator and target.
+    adversarial_condition: >
+      even when a compromised client sends a session_request with a fabricated
+      connection_id or omits the field — the directory-side check is authoritative and
+      blocks the request before any FROST ceremony cost is incurred.
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      The directory's `no_connection` rejection shall be indistinguishable from a
+      `target_not_found` rejection in timing and response structure — no side channel
+      reveals whether the target exists but has no connection with the initiator versus
+      does not exist at all.
+    adversarial_condition: >
+      even when an attacker probes the directory with session_requests to various pubkeys
+      to map which agents exist — the error response timing and structure must not leak
+      existence information beyond what `target_offline` already reveals (an online
+      target reveals existence via the signaling stream; an offline target is
+      indistinguishable from nonexistent).
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: >
+      Existing M2 sessions (established without a connection gate) shall continue to
+      function. The gate applies only to new session establishments. There is no
+      retroactive invalidation.
+    adversarial_condition: >
+      even when M3 code deploys while M2 sessions are active — per-message flow,
+      relay sequencing, and seal mechanics are unchanged; only the establishment path
+      gains the new precondition.
+    test_type: integration
+    component_under_test: client
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Connection Requests, Session Lifecycle"
+  end_to_end_flow: "§3.1, §4.1"
+  discussion_logs:
+    - "2026-04-09_1400_connection-request-flow"
+    - "2026-04-15_0900_session-level-frost-signing"
+  related_stories:
+    - "CELLO-SESSION-004 — FROST-authenticated session establishment (mechanics unchanged; gate added)"
+    - "CELLO-CONNREQ-002 — connection establishment that this story gates on"
+    - "CELLO-SESSION-002 stub — 'Accept/decline flow' closed by CONNREQ-002 + this story"

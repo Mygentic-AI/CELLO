@@ -1,0 +1,250 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-CONNPOL-001
+domain: Connection Policies
+actor: CLIENT
+priority: P0
+components:
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want a `SignalRequirementPolicy` engine that evaluates a validated connection package
+  against the receiver's configured policy and returns accept/reject/insufficient
+  so that connection acceptance is deterministic, testable in isolation, and the receiver
+  controls who reaches them without manual per-request intervention.
+
+  This is pure logic — no network, no directory, no libp2p. It takes a validated
+  connection package (CONNREQ-001) and a policy configuration, and produces a verdict.
+  Separating it from the network flow (CONNREQ-002) prevents a monolithic story and
+  enables exhaustive unit testing of policy combinations.
+
+  **Policy model — `SignalRequirementPolicy`:**
+
+  A policy is a set of requirements. Each requirement specifies a signal type and a
+  condition. A connection package satisfies the policy if ALL requirements are met.
+  Requirements are conjunctive (AND) — the receiver wants all of these to be true.
+
+  ```typescript
+  interface SignalRequirementPolicy {
+    mode: 'open' | 'selective' | 'guarded' | 'closed'
+    requirements: SignalRequirement[]
+  }
+
+  interface SignalRequirement {
+    signal_type: 'endorsement' | 'attestation' | 'pseudonym_age' | 'registration_age'
+    condition: SignalCondition
+  }
+
+  type SignalCondition =
+    | { type: 'min_count', count: number }             // at least N valid endorsements
+    | { type: 'min_age_days', days: number }           // pseudonym/registration >= N days old
+    | { type: 'from_shared_contact', min: number }     // endorsements from mutual connections (M6)
+    | { type: 'attestation_type', required: string[] } // specific attestation types present
+  ```
+
+  **Modes:**
+  - `open` — accept all packages with a valid pseudonym binding. No additional requirements.
+  - `selective` — accept packages meeting the configured requirements.
+  - `guarded` — same as selective but with stricter defaults (M6 adds endorsement-from-
+    shared-contact as a guarded default).
+  - `closed` — reject all connection requests. The agent does not accept new connections.
+
+  **Evaluation output:**
+
+  ```typescript
+  type PolicyVerdict =
+    | { result: 'accept' }
+    | { result: 'reject', reason: 'policy_closed' | 'pseudonym_binding_invalid' }
+    | { result: 'insufficient', unmet_requirements: UnmetRequirement[] }
+  ```
+
+  `insufficient` means the package is valid but does not meet the policy. The
+  `unmet_requirements` array tells the sender exactly what is missing, so the sender
+  can choose to disclose additional items and retry. This supports the one-round
+  negotiation pattern: sender discloses minimally → receiver says "insufficient, need
+  X" → sender decides whether to disclose more or walk away.
+
+  **M3 supported conditions:**
+  - `min_count` for endorsements: "I require at least 2 valid, non-expired endorsements"
+  - `min_age_days` for pseudonym_age: "pseudonym must be at least 7 days old"
+  - `min_age_days` for registration_age: "registration must be at least 3 days old"
+  - `attestation_type` with `required`: "attestation of type X must be present"
+
+  **M6 additions (not in M3):**
+  - `from_shared_contact`: requires endorsements from agents the receiver is also connected
+    to. This cannot be evaluated without the receiver's connection graph, which is a M6
+    social trust concern.
+
+  **Default policies (shipped with client):**
+  - `OPEN_POLICY`: `{ mode: 'open', requirements: [] }`
+  - `SELECTIVE_DEFAULT`: `{ mode: 'selective', requirements: [{ signal_type: 'endorsement', condition: { type: 'min_count', count: 1 } }] }`
+  - `CLOSED_POLICY`: `{ mode: 'closed', requirements: [] }`
+
+  M3 test harness uses `OPEN_POLICY` for simplicity. Agents in production configure
+  their policy via `cello_set_policy` (MCP-003).
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the policy engine is asked to evaluate a validated connection package against a `SignalRequirementPolicy`"
+    action: >
+      the engine shall (a) check the policy mode — if `closed`, immediately return
+      `{ result: 'reject', reason: 'policy_closed' }` without examining the package,
+      (b) if `open`, verify the pseudonym binding is valid (it passed CONNREQ-001
+      validation) and return `{ result: 'accept' }`, (c) if `selective` or `guarded`,
+      evaluate each requirement against the package items and return `accept` if all
+      are satisfied, or `insufficient` with the list of unmet requirements.
+  - trigger: "When a requirement of type `min_count` for endorsements is evaluated"
+    action: >
+      the engine shall count the number of valid, non-expired endorsements in the
+      package whose `target_pubkey` matches the sender's `k_local_pubkey`. Endorsements
+      marked `signature_invalid`, `expired`, or `target_mismatch` by CONNREQ-001
+      validation do not count.
+  - trigger: "When a requirement of type `min_age_days` for pseudonym_age is evaluated"
+    action: >
+      the engine shall compute `(current_timestamp - pseudonym_binding.created_at)` in
+      days and compare against the requirement's `days` threshold.
+  - trigger: "When a requirement of type `min_age_days` for registration_age is evaluated"
+    action: >
+      the engine shall compute `(current_timestamp - profile.registered_at)` in days
+      and compare against the requirement's `days` threshold. The `registered_at` value
+      comes from the sender's directory profile (fetched by the connection request flow
+      in CONNREQ-002 and passed to the engine).
+  - trigger: "When a requirement of type `attestation_type` is evaluated"
+    action: >
+      the engine shall check that for each required attestation type in the `required`
+      array, at least one valid non-expired attestation with that type exists in the
+      package.
+  - trigger: "When evaluation produces `insufficient`"
+    action: >
+      the engine shall return the full list of unmet requirements with enough detail for
+      the sender to understand what additional items to disclose (e.g., `{ signal_type:
+      'endorsement', condition: { type: 'min_count', count: 2 }, provided: 1 }`).
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A policy with mode `open` and a package with a valid pseudonym binding"
+    when: "The engine evaluates"
+    then: "Returns `{ result: 'accept' }`"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-002
+    given: "A policy with mode `closed`"
+    when: "The engine evaluates any package (even one with 10 endorsements)"
+    then: "Returns `{ result: 'reject', reason: 'policy_closed' }` without examining the package contents"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-003
+    given: "A `selective` policy requiring `min_count: 2` endorsements; a package with 3 valid endorsements"
+    when: "The engine evaluates"
+    then: "Returns `{ result: 'accept' }`"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-004
+    given: "A `selective` policy requiring `min_count: 2` endorsements; a package with 1 valid endorsement"
+    when: "The engine evaluates"
+    then: "Returns `{ result: 'insufficient', unmet_requirements: [{ signal_type: 'endorsement', condition: { type: 'min_count', count: 2 }, provided: 1 }] }`"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-005
+    given: "A `selective` policy requiring `min_count: 2` endorsements; a package with 2 endorsements but one is expired"
+    when: "The engine evaluates"
+    then: "Returns `{ result: 'insufficient' }` — only 1 valid endorsement counts; the expired one does not"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-006
+    given: "A `selective` policy requiring `min_age_days: 7` for pseudonym_age; a pseudonym binding created 8 days ago"
+    when: "The engine evaluates"
+    then: "Returns `{ result: 'accept' }`"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-007
+    given: "A `selective` policy requiring `min_age_days: 7` for pseudonym_age; a pseudonym binding created 3 days ago"
+    when: "The engine evaluates"
+    then: "Returns `{ result: 'insufficient', unmet_requirements: [{ signal_type: 'pseudonym_age', condition: { type: 'min_age_days', days: 7 }, provided_days: 3 }] }`"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-008
+    given: "A `selective` policy requiring both `min_count: 1` endorsements AND `min_age_days: 3` registration_age; a package with 2 endorsements but registration_age is 1 day"
+    when: "The engine evaluates"
+    then: "Returns `{ result: 'insufficient' }` — endorsement requirement met, registration_age requirement unmet; unmet_requirements contains only the registration_age entry"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-009
+    given: "A `selective` policy requiring `attestation_type: { required: ['carrier_verified'] }`; a package with an attestation of type `carrier_verified` that is valid and non-expired"
+    when: "The engine evaluates"
+    then: "Returns `{ result: 'accept' }`"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-010
+    given: "A `selective` policy requiring `attestation_type: { required: ['carrier_verified'] }`; a package with no attestations"
+    when: "The engine evaluates"
+    then: "Returns `{ result: 'insufficient' }` with the missing attestation type in unmet_requirements"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-011
+    given: "A package whose pseudonym binding was marked `pseudonym_binding_invalid` by CONNREQ-001 validation"
+    when: "The engine evaluates against any policy (including `open`)"
+    then: "Returns `{ result: 'reject', reason: 'pseudonym_binding_invalid' }`"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-012
+    given: "A `selective` policy with a `from_shared_contact` requirement (M6 condition)"
+    when: "The engine encounters this condition type in M3"
+    then: "The engine treats it as unsatisfiable (`insufficient`) with a clear `unsupported_condition` marker in the unmet_requirements — M6 implements the shared-contact check"
+    test_type: unit
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The policy engine shall never return `accept` when the pseudonym binding is
+      invalid. A valid pseudonym binding is the minimum prerequisite for any acceptance
+      verdict, regardless of policy mode.
+    adversarial_condition: >
+      even when the policy mode is `open` and the package contains many valid
+      endorsements — without a valid identity anchor the package is untrusted.
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: >
+      The policy engine shall never count expired items toward requirement satisfaction.
+      An endorsement or attestation past its `expires_at` is treated as absent.
+    adversarial_condition: >
+      even when the item's signature is valid and all other fields are correct — expiry
+      is a temporal validity bound that must be enforced.
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-003
+    statement: >
+      The policy engine shall never count endorsements whose `target_pubkey` does not
+      match the connection package sender's `k_local_pubkey`.
+    adversarial_condition: >
+      even when the endorsement signature is valid — it endorses a different agent and
+      cannot be claimed by this sender. A sender presenting another agent's endorsement
+      must be rejected.
+    test_type: unit
+    component_under_test: client
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Connection Policies"
+  end_to_end_flow: "§4.2"
+  discussion_logs:
+    - "2026-04-09_1400_connection-request-flow"
+    - "2026-04-08_1930_client-side-trust-data-ownership"

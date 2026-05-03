@@ -1,0 +1,182 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-ADAPTER-003
+domain: MCP Tool Surface
+actor: AGENT
+priority: P0
+components:
+  - adapter-claude-code
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a Claude Code agent,
+  I want the `@cello/adapter-claude-code` MCP server updated for M3 — pushing
+  `cello_connection_request` channel notifications when an inbound connection is
+  auto-evaluated, maintaining a connection event queue, exposing the M3 tool set over
+  stdio, and updating SKILL.md
+  so that a Claude Code agent can register, discover connections, and manage its
+  trust policy reactively from M3 onward.
+
+  This story extends CELLO-ADAPTER-002 (M1). The adapter pattern is unchanged:
+  - Channel notifications wake Claude Code without polling
+  - Event queues buffer between CelloClient callbacks and MCP tool calls
+  - The stdio/InMemoryTransport factory produces identical tool registrations
+
+  **New channel notification type — connection result:**
+  When an inbound connection request is auto-evaluated by the client's policy engine
+  (CONNREQ-002 + CONNPOL-001), the adapter pushes:
+  ```json
+  { "type": "cello_connection_request", "from": "<counterparty_pubkey_hex>", "verdict": "accepted" | "rejected" }
+  ```
+  The agent calls `cello_await_connection_request` to retrieve full details.
+  Content, trust signals, and connection package items are never included in the
+  notification — only the pubkey and verdict.
+
+  **Connection event queue:** populated by `CelloClient.onConnectionResult` (new event
+  on `CelloClient` in M3). Drained by `cello_await_connection_request`.
+
+  **Registration trigger:** the adapter does NOT auto-register at startup. Registration
+  is explicit via `cello_register`. This is deliberate — the owner must opt in to
+  creating a directory presence. First-run startup sequence:
+  1. Load K_local from key file (unchanged from M0)
+  2. Load ML-DSA key from file if it exists (created by `cello_register`)
+  3. Start CelloClient + libp2p
+  4. Start MCP server
+  5. Agent calls `cello_register` when ready
+
+  **Tool set in M3 adapter:** the full M3 set from MCP-003. Tools removed in M1
+  (`cello_connect_peer`, `cello_list_peers`) remain removed and continue to return
+  `tool_removed` errors.
+
+  **SKILL.md update:** reflects M3 tool set. Adds section on registration and
+  connection workflow. No new installation steps beyond version bump.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When `CelloClient.onConnectionResult` fires with a connection evaluation outcome"
+    action: >
+      the adapter shall enqueue the event in its connection event queue and push
+      `{ type: 'cello_connection_request', from: <counterparty_pubkey_hex>,
+      verdict: 'accepted' | 'rejected' }` as a `claude/channel` notification to the
+      connected Claude Code session. No connection package items, trust signals, or
+      multiaddrs appear in the notification.
+
+  - trigger: "When the agent calls `cello_await_connection_request({ timeout_ms })`"
+    action: >
+      the adapter shall return the next event from the connection event queue
+      immediately if one is present, or block until one arrives or the timeout expires.
+      Events are consumed in arrival order.
+
+  - trigger: "When the adapter starts and an ML-DSA key file exists at the configured path"
+    action: >
+      the adapter shall load the ML-DSA key via `FileMlDsaKeyProvider` and make it
+      available to the CelloClient for connection package construction. If the file does
+      not exist (agent not yet registered), the adapter starts normally — registration
+      creates the key file.
+
+  - trigger: "When the MCP server factory is invoked with a transport argument"
+    action: >
+      the factory shall register the full M3 tool set identically under stdio and
+      InMemoryTransport. Removed M0 tools continue to return `tool_removed`.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Two adapter instances A and B connected to the M3 directory; both registered; B has open policy"
+    when: "A requests a connection with B"
+    then: >
+      B's adapter auto-evaluates (accept); pushes
+      `{ type: 'cello_connection_request', from: <A_pubkey>, verdict: 'accepted' }` via
+      `claude/channel`; B's Claude Code session starts a new turn; B calls
+      `cello_await_connection_request` and receives the acceptance event
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-002
+    given: "A `cello_connection_request` channel notification payload"
+    when: "Inspected"
+    then: "Contains exactly `type`, `from`, and `verdict` fields — no package items, no endorsements, no multiaddrs"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-003
+    given: "An M3 adapter instance"
+    when: "Agent calls `cello_connect_peer({ multiaddr: '...' })` (M0 removed tool)"
+    then: "Returns `{ error: { reason: 'tool_removed', replacement: 'cello_initiate_session' } }`"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-004
+    given: "Three inbound connection results queued before `cello_await_connection_request` is called"
+    when: "Agent calls `cello_await_connection_request` three times"
+    then: "Each call returns the next event in arrival order; none blocks"
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-005
+    given: "An adapter with an empty connection event queue"
+    when: "Agent calls `cello_await_connection_request({ timeout_ms: 200 })`"
+    then: "Returns `{ type: 'timeout' }` after approximately 200ms"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-006
+    given: "The M3 MCP server factory invoked with InMemoryTransport and with stdio"
+    when: "Tool registries of both instances are inspected"
+    then: >
+      Both contain the full M3 tool set: all M1/M2 session tools plus cello_register,
+      cello_request_connection, cello_await_connection_request, cello_list_connections,
+      cello_set_policy, cello_get_policy. Neither contains cello_connect_peer or
+      cello_list_peers.
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-007
+    given: "The updated SKILL.md in `packages/adapter-claude-code/`"
+    when: "Inspected"
+    then: "References the M3 tool set; includes registration and connection workflow section; installation instructions unchanged (version bump only)"
+    test_type: manual
+    component_under_test: adapter-claude-code
+
+  - id: AC-008
+    given: "An adapter started without a prior registration (no ML-DSA key file)"
+    when: "`cello_status` is called"
+    then: "Response shows `registered: false`, `agent_id: null`; the adapter is functional for status queries but connection/session tools return `not_registered`"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-009
+    given: "An adapter where the agent calls `cello_register` successfully"
+    when: "The ML-DSA key file path is inspected"
+    then: "The file exists with permissions 0o600; subsequent adapter restarts load the key without re-registration"
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The `cello_connection_request` channel notification shall never include connection package items, endorsement details, attestation data, or any trust signal content"
+    adversarial_condition: "even when the connection package contains rich data — the notification is a wake-up signal only; details are retrieved via cello_await_connection_request"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: SI-002
+    statement: "Neither K_local private key nor ML-DSA secret key shall appear in any tool response, notification payload, log, or error message"
+    adversarial_condition: "even when registration fails, connection request construction fails, or the key file is unreadable"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: SI-003
+    statement: "The adapter shall never auto-register at startup. Registration is an explicit opt-in action via `cello_register`"
+    adversarial_condition: "even when the adapter detects it is unregistered and could auto-register with a stored phone_stub — the owner must consciously create a directory presence"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Connection Requests, MCP Tool Surface"
+  context_md: "Claude Code adapter, claude/channel notification payloads"
+  related_stories:
+    - "CELLO-ADAPTER-002 — M1 adapter this story extends"
+    - "CELLO-MCP-003 — tool logic in @cello/client that this adapter wraps"
+    - "CELLO-REG-001 — registration flow triggered by cello_register"
+    - "CELLO-CONNREQ-002 — connection flow that generates notification events"

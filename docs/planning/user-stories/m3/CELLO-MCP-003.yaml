@@ -1,0 +1,229 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-MCP-003
+domain: MCP Tool Surface
+actor: AGENT
+priority: P0
+components:
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As an AI Agent,
+  I want MCP tools to register on the directory, request connections with other agents,
+  respond to inbound connection requests, list my connections, set my connection policy,
+  and have `cello_initiate_session` enforce the connection gate
+  so that I can discover and connect with other agents, control who reaches me, and
+  transition from "registered" to "connected" to "conversing" through a single tool surface.
+
+  **M3 tool set (complete list — additions and modifications to MCP-002):**
+
+  - `cello_register({ phone_stub })` — NEW. Triggers REG-001 registration flow. Returns
+    `{ registered: true, agent_id: hex, primary_pubkey: hex, ml_dsa_pubkey: hex }` on
+    success, or `{ error: { reason } }` on failure. Idempotent: calling on an already-
+    registered agent returns `{ error: { reason: 'already_registered' } }`.
+
+  - `cello_request_connection({ target_pubkey, include_endorsements?: hex[],
+    include_attestations?: hex[] })` — NEW. Constructs a connection package with the
+    agent's pseudonym binding plus the specified optional items (identified by their
+    content hashes — the agent selects which pre-stored items to disclose). Sends the
+    request via CONNREQ-002. Returns one of:
+    - `{ result: 'accepted', connection_id: hex, counterparty_pubkey: hex }`
+    - `{ result: 'insufficient', unmet_requirements: [...] }`
+    - `{ result: 'rejected', reason: string }`
+    - `{ error: { reason: 'target_not_found' | 'already_connected' | 'not_registered' } }`
+
+  - `cello_await_connection_request({ timeout_ms })` — NEW. Blocks until an inbound
+    connection request arrives and is auto-evaluated by the client's policy engine.
+    Returns:
+    - `{ type: 'connection_accepted', connection_id, counterparty_pubkey }` — the policy
+      accepted the request automatically.
+    - `{ type: 'connection_rejected', counterparty_pubkey, reason }` — the policy
+      rejected; reported for awareness.
+    - `{ type: 'timeout' }` — no requests within timeout.
+
+  - `cello_list_connections()` — NEW. Returns array of `{ connection_id: hex,
+    counterparty_pubkey: hex, counterparty_primary_pubkey: hex, established_at: int,
+    status: 'active' }`.
+
+  - `cello_set_policy({ mode, requirements? })` — NEW. Configures the local
+    `SignalRequirementPolicy`. Returns `{ policy_set: true, mode, requirement_count }`.
+    The policy persists for the process lifetime (M3 does not persist policy across
+    restarts; persistence is an adapter concern for later milestones).
+
+  - `cello_get_policy()` — NEW. Returns the current policy: `{ mode, requirements }`.
+
+  - `cello_initiate_session({ target_pubkey })` — MODIFIED. Now requires an active
+    connection with the target (SESSION-006). Returns
+    `{ error: { reason: 'no_connection' } }` if no connection exists. All other behavior
+    unchanged from MCP-002.
+
+  - `cello_status()` — EXTENDED. Response gains `registered: bool`, `agent_id: hex | null`,
+    `connection_count: int`, `policy_mode: string`.
+
+  All other M1/M2 tools (`cello_send`, `cello_receive`, `cello_close_session`,
+  `cello_await_session`, `cello_list_sessions`, `cello_get_sealed_receipt`,
+  `cello_get_inclusion_proof`) are unchanged.
+
+  Binary encoding convention unchanged: lowercase hex, no `0x` prefix. Multiaddrs in
+  standard string form.
+
+  Transport selection (stdio/InMemoryTransport) and shared factory pattern unchanged
+  from MCP-001/002.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the agent calls `cello_register({ phone_stub })`"
+    action: >
+      the MCP server shall trigger REG-001's registration flow (generate ML-DSA keypair,
+      send register_request, run DKG, receive register_success). Returns the registration
+      confirmation on success or a structured error on failure.
+  - trigger: "When the agent calls `cello_request_connection({ target_pubkey, ... })`"
+    action: >
+      the MCP server shall construct a ConnectionPackage per CONNREQ-001 (pseudonym
+      binding + selected items), send the connection request per CONNREQ-002, and block
+      until the response arrives (accept/insufficient/reject) or a timeout (30 seconds
+      default). Returns the verdict to the agent.
+  - trigger: "When the agent calls `cello_await_connection_request({ timeout_ms })`"
+    action: >
+      the MCP server shall block until an inbound connection request is processed by
+      the auto-evaluation engine, returning the outcome (accepted or rejected). Multiple
+      requests processed during the wait are returned in order on successive calls.
+  - trigger: "When the agent calls `cello_list_connections()`"
+    action: >
+      the MCP server shall return all active connections from the client's local
+      connection store.
+  - trigger: "When the agent calls `cello_set_policy({ mode, requirements })`"
+    action: >
+      the MCP server shall validate the policy structure (mode is one of open/selective/
+      guarded/closed; requirements match the SignalRequirement schema), configure the
+      local policy engine, and return confirmation.
+  - trigger: "When the agent calls `cello_initiate_session({ target_pubkey })` without an active connection to the target"
+    action: >
+      the MCP server shall return `{ error: { reason: 'no_connection', target_pubkey } }`
+      without contacting the directory.
+  - trigger: "When the agent calls any M3 tool before registration"
+    action: >
+      tools that require registration (`cello_request_connection`,
+      `cello_initiate_session`, `cello_set_policy`) shall return
+      `{ error: { reason: 'not_registered' } }`. Tools that work without registration
+      (`cello_status`, `cello_register`) continue to function.
+  - trigger: "When the MCP server factory is invoked with a transport argument"
+    action: >
+      the factory shall register the full M3 tool set identically under stdio and
+      InMemoryTransport — structural equality assertion extends to all new tools.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An unregistered MCP server instance"
+    when: "Agent calls `cello_register({ phone_stub: '+1234567890' })`"
+    then: "Returns `{ registered: true, agent_id: hex, primary_pubkey: hex, ml_dsa_pubkey: hex }`; subsequent `cello_status` shows `registered: true`"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-002
+    given: "Two registered MCP server instances A and B; B has open policy"
+    when: "A calls `cello_request_connection({ target_pubkey: B_pubkey })`"
+    then: "Returns `{ result: 'accepted', connection_id: hex, counterparty_pubkey: B_pubkey }`; A's `cello_list_connections()` includes B"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-003
+    given: "Two registered MCP servers A and B; B requires 2 endorsements; A has 0"
+    when: "A calls `cello_request_connection({ target_pubkey: B_pubkey })`"
+    then: "Returns `{ result: 'insufficient', unmet_requirements: [{...}] }`; no connection is created"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-004
+    given: "Two registered connected agents A and B"
+    when: "A calls `cello_initiate_session({ target_pubkey: B_pubkey })`"
+    then: "Session establishment proceeds (FROST ceremony, SessionAssignment); returns session_id; the connection gate passes"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-005
+    given: "Two registered agents A and B with NO connection"
+    when: "A calls `cello_initiate_session({ target_pubkey: B_pubkey })`"
+    then: "Returns `{ error: { reason: 'no_connection' } }` immediately"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-006
+    given: "An unregistered MCP server"
+    when: "Agent calls `cello_request_connection({ target_pubkey: ... })`"
+    then: "Returns `{ error: { reason: 'not_registered' } }`"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-007
+    given: "A registered MCP server with default policy (open)"
+    when: "Agent calls `cello_set_policy({ mode: 'selective', requirements: [{ signal_type: 'endorsement', condition: { type: 'min_count', count: 2 } }] })`"
+    then: "Returns `{ policy_set: true, mode: 'selective', requirement_count: 1 }`; subsequent `cello_get_policy()` returns the configured policy"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-008
+    given: "Agent B has an active connection request auto-accepted in the last second"
+    when: "Agent B calls `cello_await_connection_request({ timeout_ms: 5000 })`"
+    then: "Returns `{ type: 'connection_accepted', connection_id, counterparty_pubkey }` immediately (event was buffered)"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-009
+    given: "No pending connection events"
+    when: "Agent calls `cello_await_connection_request({ timeout_ms: 200 })`"
+    then: "Returns `{ type: 'timeout' }` after approximately 200ms"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-010
+    given: "The MCP server factory"
+    when: "Invoked with InMemoryTransport and with stdio transport"
+    then: >
+      Both register the full M3 tool set (all M1/M2 tools plus: cello_register,
+      cello_request_connection, cello_await_connection_request, cello_list_connections,
+      cello_set_policy, cello_get_policy) with identical schemas; structural equality
+      passes
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-011
+    given: "A registered MCP server"
+    when: "Agent calls `cello_status()`"
+    then: "Response includes `registered: true`, `agent_id: hex`, `connection_count: int`, `policy_mode: 'open'` (default) alongside all existing M2 fields"
+    test_type: unit
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The MCP server shall never expose ML-DSA secret key material through any tool response"
+    adversarial_condition: "even when `cello_register`, `cello_status`, or error responses include diagnostic information"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: >
+      `cello_initiate_session` shall never send a session_request to the directory without
+      first verifying a local connection record exists for the target. The client-side
+      check is defense in depth — the directory also enforces, but the client must not
+      waste a FROST ceremony attempt on an obviously-doomed request.
+    adversarial_condition: >
+      even when the agent passes a target_pubkey that looks like a valid hex pubkey —
+      without a connection record the request is blocked locally.
+    test_type: unit
+    component_under_test: client
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Connection Requests, Connection Policies, MCP Tool Surface"
+  end_to_end_flow: "§4.1, §4.2"
+  discussion_logs:
+    - "2026-04-14_1100_cello-mcp-server-tool-surface"
+    - "2026-04-09_1400_connection-request-flow"
+  related_stories:
+    - "CELLO-MCP-002 — M1/M2 tools this story extends"
+    - "CELLO-REG-001 — registration triggered by cello_register"
+    - "CELLO-CONNREQ-002 — connection flow triggered by cello_request_connection"
+    - "CELLO-SESSION-006 — connection gate enforced by cello_initiate_session"
