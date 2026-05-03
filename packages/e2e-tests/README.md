@@ -48,7 +48,7 @@ Full two-machine agent exchange. See `docs/planning/user-stories/m0/CELLO-E2E-00
 Prerequisites:
 - Both machines have `@cello/adapter-claude-code` installed: `npm install -g @cello/adapter-claude-code`
 - Claude Code configured on both: `claude mcp add --transport stdio cello -- cello-mcp`
-- Both machines started with: `claude --channels`
+- Both machines started with: `claude --channels server:cello`
 - Both machines on **different networks** (different NATs)
 
 Sign-off record goes in `docs/planning/discussion_logs/YYYY-MM-DD_HHMM_e2e-001-signoff.md`.

@@ -17,7 +17,7 @@ claude mcp add --transport stdio cello -- cello-mcp
 ## Launch with channels
 
 ```bash
-claude --channels
+claude --channels server:cello
 ```
 
 The `--channels` flag enables push notifications. When a peer sends you a message, Claude Code starts a new turn automatically — no polling required.
