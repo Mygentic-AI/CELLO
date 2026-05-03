@@ -193,10 +193,10 @@ export function createMcpServer(
         const all = client.peekAll();
 
         if (peer_pubkey !== undefined) {
-          if (all.some((e) => e.senderPubkeyHex === peer_pubkey)) {
-            // receive() dequeues from the per-sender FIFO — use its return value, not the
-            // peekAll snapshot, because peekAll is a non-destructive arrival log that never shrinks
-            const envelope = client.receive(peer_pubkey)!;
+          // peekAll() is a non-destructive arrival log that never shrinks — a historical entry
+          // for peer_pubkey may exist even after its queue was drained. Always guard the result.
+          const envelope = client.receive(peer_pubkey);
+          if (envelope) {
             return jsonText(formatMessage(envelope, peer_pubkey));
           }
         } else if (all.length > 0) {
