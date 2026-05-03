@@ -103,22 +103,36 @@ packages/
 
 ## CelloClient interface (adapter boundary)
 
-`CelloClient` in `packages/client` exposes a push-only event model. It fires events; adapters decide what to do with them. The receive queue, per-peer filtering, and timeout logic live in the adapter, not in `CelloClient`.
+`CelloClient` is defined in `packages/client/src/types.ts`. Adapters import this type directly — do not infer the interface from CONTEXT.md.
 
 ```typescript
 interface CelloClient {
-  start(): Promise<void>
-  stop(): Promise<void>
-  getOwnPublicKey(): Promise<string>           // lowercase hex, no 0x prefix
-  getListenAddresses(): string[]               // multiaddrs
-  connectPeer(multiaddr: string): Promise<{ peerId: string, peerPubkey: string }>  // peerPubkey from CELLO identification exchange
-  send(peerPubkey: string, content: Uint8Array): Promise<{ contentHash: string }>
-  listPeers(): Peer[]
-  onMessage(handler: (msg: InboundMessage) => void): void  // push only — no receive() on CelloClient
+  /** Register a peer in the local registry. Called by cello_connect_peer after dial succeeds. */
+  addPeer(peerPubkeyHex: string, peerId: string, multiaddrs: string[]): void;
+
+  /** Send content to the peer identified by their K_local pubkey hex. Never throws. */
+  send(peerPubkeyHex: string, content: Uint8Array): Promise<SendResult>;
+
+  /** Register the inbound stream handler on the node. Call once after node.start(). */
+  registerHandler(): Promise<void>;
+
+  /** Dequeue the oldest received envelope from a given sender. Returns null if queue is empty. */
+  receive(senderPubkeyHex: string): ReceivedEnvelope | null;
+
+  /**
+   * Return all queued envelopes (in arrival order) regardless of sender.
+   * Non-destructive — items remain in the queue until receive() drains them.
+   */
+  peekAll(): Array<{ senderPubkeyHex: string; envelope: ReceivedEnvelope }>;
 }
+
+// SendResult is a discriminated union:
+type SendResult =
+  | { delivered: true; contentHash: string }
+  | { delivered: false; reason: SendFailureReason };
 ```
 
-`adapter-claude-code` registers an `onMessage` handler at startup. When a message arrives: (1) the adapter enqueues it in its own receive queue, (2) pushes a `claude/channel` notification to wake Claude Code. `cello_receive` drains the adapter's queue with per-peer filtering.
+`adapter-claude-code` (MCP-001) owns the receive queue, per-peer filtering, and timeout logic. `CelloClient` has no `onMessage` push model — `peekAll()` + `receive()` is the polling interface used by the adapter.
 
 ---
 

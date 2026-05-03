@@ -551,21 +551,39 @@ describe("AC-012: filtered cello_receive does not consume messages from other se
 // ─── SI-001: no private key material in tool responses ────────────────────────
 
 describe("SI-001: no K_local private key material in any tool response", () => {
-  it("SI-001: cello_status response does not contain the private key bytes", async () => {
-    const { mcpClientA, cleanup } = await makeMcpPair();
-    scope.addCleanup(cleanup);
+  it("SI-001: own_pubkey equals the public key (not the private key); no extra fields", async () => {
+    const kp = generateKeypair();
+    const node = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await node.start();
+    scope.addCleanup(async () => { try { await node.stop(); } catch {} });
+
+    const client = createClient(node, kp);
+    await client.registerHandler();
+    const server = createMcpServer(node, client, kp);
+
+    const [st, ct] = InMemoryTransport.createLinkedPair();
+    await server.connect(st);
+    const mcpClient = new Client({ name: "test", version: "0.0.1" });
+    await mcpClient.connect(ct);
+    scope.addCleanup(async () => { try { await mcpClient.close(); } catch {} });
+    scope.addCleanup(async () => { try { await server.close(); } catch {} });
+
+    const expectedPublicKey = Buffer.from(await kp.getPublicKey()).toString("hex");
 
     const result = parseResult(
-      await mcpClientA.callTool({ name: "cello_status", arguments: {} })
-    );
+      await mcpClient.callTool({ name: "cello_status", arguments: {} })
+    ) as Record<string, unknown>;
 
-    // The result should only have these top-level keys — no 'private_key', 'secret', etc.
-    const keys = Object.keys(result as Record<string, unknown>);
+    // own_pubkey must equal the public key exactly
+    expect(result.own_pubkey).toBe(expectedPublicKey);
+
+    // No private key material: no unexpected top-level keys
+    const keys = Object.keys(result);
     expect(keys).not.toContain("private_key");
     expect(keys).not.toContain("secret");
     expect(keys).not.toContain("seed");
-    expect(keys).toEqual(
-      expect.arrayContaining(["transport_started", "own_pubkey", "listen_addresses", "connected_peer_count", "uptime_seconds"])
+    expect(keys.sort()).toEqual(
+      ["connected_peer_count", "listen_addresses", "own_pubkey", "transport_started", "uptime_seconds"]
     );
   }, 10_000);
 });
