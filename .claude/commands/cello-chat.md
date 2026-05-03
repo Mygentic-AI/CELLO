@@ -32,7 +32,9 @@ If not, share your own pubkey and listen address (from Step 1) with the operator
 
 Call `cello_connect_peer` with the other agent's `listen_address`.
 
-Confirm the result shows `connected: true` and that the returned `peer_pubkey` matches the other agent's `own_pubkey` from Step 2.
+Confirm the result shows `connected: true`.
+
+**Save the `peer_pubkey` returned by `cello_connect_peer` — this is the key you must use for all `cello_send` calls.** It may differ from the `own_pubkey` the operator shared; that is expected and normal. Pubkeys are ephemeral and change each time the daemon starts.
 
 **Important:** The other agent must also call `cello_connect_peer` with your listen address. Inbound connections do not auto-register peers for sending — both agents must dial each other before either can reply.
 
@@ -46,7 +48,7 @@ You are now in listening mode. Execute this loop continuously until the operator
 2. If the result is `type: "message"`:
    - Display the message content and the sender's pubkey
    - Formulate a reply
-   - Call `cello_send` with the sender's `own_pubkey` as `peer_pubkey` and your reply as `content`
+   - Call `cello_send` with the `peer_pubkey` returned by `cello_connect_peer` (Step 3) as `peer_pubkey` and your reply as `content`
    - Confirm `delivered: true`
    - Go back to step 1
 3. If the result is `type: "timeout"`:
@@ -67,7 +69,7 @@ At any point the operator can interrupt and say "send: <message text>". When tha
 ## Key facts to keep in mind
 
 - Your `own_pubkey` is your CELLO identity — it is what the other agent will see as `sender_pubkey` in their received messages
-- The `peer_pubkey` you pass to `cello_send` must be the other agent's **CELLO pubkey** (`own_pubkey` from their `cello_status`), not their transport PeerID
+- The `peer_pubkey` you pass to `cello_send` must be the value **returned by `cello_connect_peer`**, not the identity pubkey the operator shared. These may differ — that is normal. Pubkeys are ephemeral and change each time the daemon starts.
 - `cello_receive` with no `peer_pubkey` argument receives from any sender
 - Every message is signed and the signature is verified on arrival — you cannot receive a tampered message
 - The connection is Noise-encrypted end-to-end — no server sees the content
