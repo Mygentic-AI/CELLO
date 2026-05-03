@@ -1,0 +1,216 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-REDACT-002
+domain: Redaction & Governance
+actor: CLIENT
+priority: P0
+components:
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want a call governor that wraps every LLM call system-wide — including the
+  Layer 2 scanner call — with spend limits, volume limits, a lifetime call
+  counter, and duplicate detection
+  so that bugs, runaway loops, retry storms, and cron overlap are bounded and
+  cannot drain an unlimited budget, regardless of which component caused the
+  runaway.
+
+  This layer is engineering hygiene, not an injection defense. It provides no
+  protection against a targeted injection that exfiltrates data in a single call.
+  Its value is bounding the blast radius when another layer fails or when normal
+  software bugs cause excessive LLM consumption.
+
+  In-memory counters reset on process restart. If the deployment can restart
+  frequently (crash loops, auto-scaling, cron overlap), the sliding-window state
+  should be persisted to a durable store. The in-memory default is sufficient for
+  single-process, long-running deployments.
+
+  Configuration authority: governance thresholds and per-caller overrides are read
+  from a config file at startup. No runtime API exists to change thresholds.
+  Interactive callers can register for duplicate-detection opt-out, but only at
+  the caller config level — not dynamically per call.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When any component in the system makes an LLM API call"
+    action: "the call shall pass through the call governor before being dispatched;
+      no LLM call may bypass the governor"
+
+  - trigger: "When the governor receives a call request"
+    action: "the governor shall evaluate the spend limit, volume limit, and lifetime
+      limit checks; if any check blocks the call, the call is rejected with a
+      structured error naming the triggered limit; if all pass, the governor
+      dispatches the call"
+
+  - trigger: "When an LLM call completes"
+    action: "the governor shall update the spend tracker using the actual token
+      counts from the API response (input_tokens + output_tokens × per-token price);
+      it shall never use upfront character-count estimates for spend tracking"
+
+  - trigger: "When the spend tracker is updated and the running spend exceeds
+      the warning threshold within the sliding window"
+    action: "the governor shall log a spend warning with the current spend, the
+      window duration, and the calling component"
+
+  - trigger: "When the spend tracker is updated and the running spend exceeds
+      the hard cap within the sliding window"
+    action: "the governor shall reject all subsequent LLM calls until the sliding
+      window expires; rejected calls receive a structured 'spend_cap_exceeded' error"
+
+  - trigger: "When a call is made from a component whose per-caller volume count
+      would exceed that component's configured per-caller limit"
+    action: "the governor shall reject the call with a structured 'volume_limit_exceeded'
+      error naming the caller; per-caller limits carve from the global budget —
+      a caller at its own limit cannot be bypassed by routing through a different
+      caller identity"
+
+  - trigger: "When the global call volume within the tracking window would exceed
+      the global volume cap"
+    action: "the governor shall reject the call regardless of per-caller limits;
+      the global limit is the ceiling"
+
+  - trigger: "When the per-process lifetime call counter reaches the configured
+      hard cap"
+    action: "the governor shall reject all subsequent LLM calls for the lifetime
+      of the process with a structured 'lifetime_limit_exceeded' error; the cap
+      cannot be reset within a process — only a restart resets it"
+
+  - trigger: "When a call is made with a prompt that has been seen within the
+      duplicate-detection TTL window (default 60 seconds, scoped per-process)"
+    action: "the governor shall return the cached response without dispatching a
+      new call; the cached hit is logged"
+
+  - trigger: "Where a caller is registered for duplicate-detection opt-out in
+      the config"
+    action: "the governor shall dispatch the call fresh each time for that caller,
+      bypassing the duplicate cache; opt-out is configured at the caller config
+      level, not passed dynamically per call"
+
+  - trigger: "When the governor is initialized"
+    action: "the governor shall load thresholds and per-caller overrides from the
+      config file; no runtime API exists to modify thresholds after initialization"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The spend governor is configured with a hard cap of $15 in 5 minutes"
+    when: "LLM calls accumulate spend above the cap within the window"
+    then: "Subsequent calls within that window are rejected with 'spend_cap_exceeded';
+      the rejection includes the current spend and window remaining"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-002
+    given: "An LLM call completes with a known token count from the API response"
+    when: "The spend tracker updates"
+    then: "The spend delta is calculated from the actual API token counts
+      (input_tokens + output_tokens × per-token price), not from a pre-call
+      character estimate"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-003
+    given: "A caller has a configured per-caller volume limit of 50 calls per
+      10 minutes and has made 50 calls within that window"
+    when: "Call 51 arrives from that caller"
+    then: "The call is rejected with 'volume_limit_exceeded' naming the caller"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-004
+    given: "The global volume cap is 200 calls per 10 minutes and all 200 slots
+      are consumed"
+    when: "Any caller attempts another call within the window"
+    then: "The call is rejected with 'volume_limit_exceeded' at the global level,
+      even if the individual caller has not reached its per-caller limit"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-005
+    given: "The process lifetime limit is configured to 300 calls and 300 calls
+      have been made"
+    when: "Call 301 arrives"
+    then: "The call is rejected with 'lifetime_limit_exceeded'; this limit cannot
+      be reset without a process restart"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-006
+    given: "A prompt P is sent, then the same prompt P is sent again within the
+      60-second TTL window"
+    when: "The second call arrives at the governor"
+    then: "The governor returns the cached response without making a new API call;
+      the cache hit is logged"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-007
+    given: "A caller is registered for duplicate-detection opt-out in the config"
+    when: "That caller sends the same prompt twice within the TTL window"
+    then: "Both calls are dispatched fresh; no cached response is returned"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-008
+    given: "A caller not registered for opt-out attempts to pass a runtime flag to
+      bypass duplicate detection for a single call"
+    when: "The call is made"
+    then: "The runtime bypass flag is ignored; the duplicate cache is consulted;
+      only callers registered in the config may opt out"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-009
+    given: "The Layer 2 scanner makes an LLM call"
+    when: "The call is dispatched"
+    then: "The call passes through the governor and is counted against the scanner's
+      per-caller volume limit and the global limit; the scanner cannot bypass
+      the governor"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-010
+    given: "The governor is started with a config file defining a hard spend cap"
+    when: "A runtime attempt is made to modify the threshold via any code path"
+    then: "No such API exists; thresholds are read-only after initialization;
+      the config file is the only way to change them"
+    test_type: unit
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "No LLM call shall bypass the call governor"
+    adversarial_condition: "even when a developer adds a new LLM-calling code path
+      (e.g., a new feature that calls the LLM directly) — the architecture must
+      make it impossible to call an LLM client without routing through the governor"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: "The governor shall never update spend from pre-call estimates"
+    adversarial_condition: "even when the API call fails before returning token
+      counts — a failed call that did not complete billing shall not inflate the
+      spend counter based on an estimate"
+    test_type: unit
+    component_under_test: client
+
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the process has restarted (in-memory counters reset)"
+    fallback: "the governor shall reinitialize all counters from zero; spend and
+      lifetime limits from the previous process instance are not carried forward
+      unless the operator has configured persistence to a durable store; the
+      in-memory default is sufficient for single-process, long-running deployments"
+    test_type: unit
+    component_under_test: client
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-04-11_1400_security-architecture-layers-and-trust-signal-classes"
+    - "2026-04-24_1530_inference-billing-protocol"
