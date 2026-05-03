@@ -55,9 +55,13 @@ class CelloClientImpl implements CelloClient {
   // ordered arrival list for peekAll()
   readonly #arrivalLog: Array<{ senderPubkeyHex: string; envelope: ReceivedEnvelope }> = [];
 
-  constructor(node: CelloNode, keyProvider: KeyProvider) {
+  // Optional callback invoked after each successful inbound enqueue
+  readonly #onMessageQueued: ((senderPubkeyHex: string) => void) | undefined;
+
+  constructor(node: CelloNode, keyProvider: KeyProvider, onMessageQueued?: (senderPubkeyHex: string) => void) {
     this.#node = node;
     this.#keyProvider = keyProvider;
+    this.#onMessageQueued = onMessageQueued;
   }
 
   addPeer(peerPubkeyHex: string, peerId: string, multiaddrs: string[]): void {
@@ -221,6 +225,7 @@ class CelloClientImpl implements CelloClient {
     }
     this.#receiveQueues.get(senderHex)!.push(received);
     this.#arrivalLog.push({ senderPubkeyHex: senderHex, envelope: received });
+    this.#onMessageQueued?.(senderHex);
 
     // Clean close — signals delivered:true to sender
     await stream.close().catch(() => {});
@@ -239,11 +244,15 @@ class CelloClientImpl implements CelloClient {
 
 // ─── Factory ─────────────────────────────────────────────────────────────────
 
-export function createClient(node: CelloNode, keyProvider: KeyProvider): CelloClient & {
+export function createClient(
+  node: CelloNode,
+  keyProvider: KeyProvider,
+  opts?: { onMessageQueued?: (senderPubkeyHex: string) => void }
+): CelloClient & {
   sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
   openRawStream(peerPubkeyHex: string): Promise<Stream>;
 } {
-  return new CelloClientImpl(node, keyProvider);
+  return new CelloClientImpl(node, keyProvider, opts?.onMessageQueued);
 }
 
 // ─── Error helpers ────────────────────────────────────────────────────────────

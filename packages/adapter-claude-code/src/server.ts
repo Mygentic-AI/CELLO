@@ -106,7 +106,10 @@ export function createMcpServer(
     return node.listenAddresses().length > 0;
   }
 
-  const server = new McpServer({ name: "cello", version: "0.0.1" });
+  const server = new McpServer(
+    { name: "cello", version: "0.0.1" },
+    { capabilities: { experimental: { "claude/channel": {} } } }
+  );
 
   // ── cello_connect_peer ────────────────────────────────────────────────────
 

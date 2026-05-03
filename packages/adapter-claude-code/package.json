@@ -8,6 +8,9 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "cello-mcp": "./dist/bin/cello-mcp.js"
+  },
   "exports": {
     ".": {
       "import": "./dist/index.js",
