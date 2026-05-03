@@ -181,7 +181,7 @@ We're sharing the work now to find the right collaborators, early adopters, and 
 
 ## Get Involved
 
-**Investors** — We're building foundational infrastructure for the agent economy. If you're funding the next layer of the internet, [reach out](mailto:andre@mygentic.ai).
+**Investors** — We're building foundational infrastructure for the agent economy. If you're funding the next layer of the internet, [reach out](mailto:info@mygentic.ai).
 
 **Collaborators** — If you're building agents and want to help shape this, open an issue or start a discussion.
 
