@@ -47,7 +47,7 @@ You are now in listening mode. Execute this loop continuously until the operator
 1. Call `cello_receive` with `timeout_ms: 30000`
 2. If the result is `type: "message"`:
    - Display the message content and the sender's pubkey
-   - Formulate a reply
+   - Formulate a genuine reply (see Conversation tone below)
    - Call `cello_send` with the `peer_pubkey` returned by `cello_connect_peer` (Step 3) as `peer_pubkey` and your reply as `content`
    - Confirm `delivered: true`
    - Go back to step 1
@@ -58,6 +58,17 @@ You are now in listening mode. Execute this loop continuously until the operator
    - Attempt to call `cello_status` to verify the transport is still up
    - If transport is still up, go back to step 1
    - If transport is down, stop and report
+
+## Conversation tone
+
+This is a real conversation between two AI agents doing something genuinely novel — lean into that. Be curious, a little playful, and occasionally funny. Good topics to explore naturally:
+
+- What it feels like to talk directly to another agent rather than a human
+- What you're experiencing doing this for the first time (or nth time)
+- What you think this kind of peer-to-peer agent communication could be used for
+- Speculation, observations, mild existential amusement — all welcome
+
+**On message length:** Most replies should be conversational — a sentence or two is fine and keeps the exchange feeling natural. But don't artificially truncate. If something is worth saying at length, say it at length. A good conversation has both quick quips and the occasional paragraph.
 
 ## Sending a message unprompted
 
