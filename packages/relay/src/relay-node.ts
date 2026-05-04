@@ -221,6 +221,13 @@ export class CelloRelayNode {
   // ─── Stream handler ─────────────────────────────────────────────────────────
 
   async #handleRelayStream(stream: Stream): Promise<void> {
+    // Sweep expired nonces on each new connection to prevent unbounded accumulation
+    // from abandoned auth attempts (client opens stream but never sends a response).
+    const now = Date.now();
+    for (const [k, e] of this.#nonces) {
+      if (now > e.expiresAt) this.#nonces.delete(k);
+    }
+
     const nonce = new Uint8Array(randomBytes(32));
     const nonceHex = Buffer.from(nonce).toString("hex");
     this.#nonces.set(nonceHex, { nonce, expiresAt: Date.now() + NONCE_TTL_MS, used: false });
@@ -376,7 +383,9 @@ export class CelloRelayNode {
 
     const seq = state.seq_counter + 1;
 
-    // Compute prev_root: genesis for seq=1, else Merkle root of all prior leaves
+    // Compute prev_root: genesis for seq=1, else Merkle root of all prior leaves.
+    // O(n log n) per submit — acceptable for M1 short sessions; production needs
+    // an incremental tree that tracks the running root across appends.
     const prevRoot = seq === 1
       ? state.genesis_prev_root
       : (() => {

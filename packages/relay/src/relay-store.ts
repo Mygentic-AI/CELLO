@@ -66,6 +66,7 @@ export class InMemoryRelayStore implements RelayStore {
     }
     if (queue.length >= DELIVERY_QUEUE_BOUND) {
       queue.shift(); // drop oldest per spec (DB-001)
+      console.warn(`[relay] relay_backpressure: delivery queue full for ${pubkeyHex.slice(0, 16)}…, oldest frame dropped`);
     }
     queue.push(delivery);
   }
