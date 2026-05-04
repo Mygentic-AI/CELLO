@@ -21,7 +21,13 @@
     "typecheck": "tsc --build",
     "test": "vitest run"
   },
+  "devDependencies": {
+    "@claude-flow/testing": "*"
+  },
   "dependencies": {
+    "@cello/crypto": "workspace:*",
+    "@cello/protocol-types": "workspace:*",
+    "@cello/transport": "workspace:*",
     "@libp2p/crypto": "^5.0.0",
     "@libp2p/interface": "^3.0.0",
     "@chainsafe/libp2p-noise": "^17.0.0",
@@ -29,6 +35,10 @@
     "@libp2p/circuit-relay-v2": "^4.2.3",
     "@libp2p/identify": "^4.0.0",
     "@libp2p/tcp": "^11.0.18",
+    "@multiformats/multiaddr": "^12.3.5",
+    "cbor-x": "^1.6.4",
+    "it-length-prefixed": "^9.1.0",
+    "it-pipe": "^3.0.1",
     "libp2p": "^3.2.3"
   }
 }
