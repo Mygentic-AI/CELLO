@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CELLO — Trust Layer for Agent Communication (Light)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@200;400;700;800&family=Crimson+Pro:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --accent: #D91E8A;
+            --accent-dark: #B01870;
+            --text-primary: #1a1a1a;
+            --text-secondary: #4a4a4a;
+            --text-muted: #6a6a6a;
+            --bg-slide: #ffffff;
+            --bg-subtle: #fafafa;
+            --border: #e0e0e0;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+            scroll-snap-type: y mandatory;
+        }
+
+        body {
+            font-family: 'Crimson Pro', Georgia, serif;
+            color: var(--text-primary);
+            line-height: 1.6;
+            font-size: 18px;
+            background: linear-gradient(135deg, #fafafa 0%, #f0f0f0 100%);
+            font-weight: 300;
+        }
+
+        /* Slide container — identical sizing to NICO deck */
+        .slide {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 60px 80px;
+            scroll-snap-align: start;
+            background: var(--bg-slide);
+            position: relative;
+        }
+
+
+        .slide:nth-child(even) {
+            background: var(--bg-subtle);
+        }
+
+        .slide-number {
+            position: absolute;
+            bottom: 30px;
+            right: 40px;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-muted);
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .slide-number .brand-footer {
+            color: var(--accent);
+        }
+
+        .brand {
+            position: absolute;
+            top: 30px;
+            left: 40px;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 14px;
+            font-weight: 800;
+            color: var(--accent);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        /* Type scale: base 18px × 1.618 = 29px × 1.618 = 47px × 1.618 = 76px */
+        /* Spacing: 8pt grid — 8, 16, 24, 32, 40, 48, 56, 64 */
+        h1 {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 76px;
+            font-weight: 800;
+            letter-spacing: -2px;
+            line-height: 1.05;
+            margin-bottom: 24px;
+            color: var(--text-primary);
+        }
+
+        h1 .accent {
+            color: var(--accent);
+        }
+
+        h2 {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 47px;
+            font-weight: 700;
+            letter-spacing: -1px;
+            line-height: 1.15;
+            margin-bottom: 32px;
+            color: var(--text-primary);
+        }
+
+        h3 {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin-bottom: 16px;
+        }
+
+        .subtitle {
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-size: 24px;
+            color: var(--text-secondary);
+            font-weight: 300;
+            line-height: 1.5;
+        }
+
+        .subtitle .accent {
+            color: var(--accent);
+        }
+
+        /* Scene 2 quote */
+        .scene-quote {
+            font-size: 26px;
+            font-weight: 300;
+            color: var(--text-secondary);
+            line-height: 1.55;
+            max-width: 860px;
+            font-style: italic;
+            margin-top: 8px;
+        }
+
+        .scene-quote strong {
+            font-style: normal;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        /* Agent island diagram */
+        .node-diagram {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            margin: 32px 0 36px;
+        }
+
+        .node {
+            width: 88px;
+            height: 88px;
+            border-radius: 50%;
+            background: white;
+            border: 2px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            gap: 5px;
+            flex-shrink: 0;
+            text-align: center;
+            line-height: 1.3;
+        }
+
+        .node i {
+            font-size: 24px;
+            color: var(--text-muted);
+        }
+
+        .node.question {
+            background: #fce4f2;
+            border: 2px dashed var(--accent);
+            color: var(--accent);
+        }
+
+        .node.question i {
+            font-size: 28px;
+            color: var(--accent);
+        }
+
+        .node.platform {
+            width: 100px;
+            height: 100px;
+            background: #f5f5f5;
+            border-color: #ccc;
+            color: #999;
+        }
+
+        .node.platform i {
+            font-size: 28px;
+            color: #bbb;
+        }
+
+        .connector {
+            flex: 1;
+            height: 2px;
+            position: relative;
+            min-width: 40px;
+        }
+
+        .connector.broken {
+            background: repeating-linear-gradient(
+                90deg,
+                var(--accent) 0px, var(--accent) 6px,
+                transparent 6px, transparent 14px
+            );
+        }
+
+        .connector-label {
+            position: absolute;
+            top: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 10px;
+            font-weight: 800;
+            color: var(--accent);
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+
+        .node-wrap {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .node-caption {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            text-align: center;
+        }
+
+        .node-caption.danger {
+            color: var(--accent);
+        }
+
+        /* Navigation hint */
+        .nav-hint {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 12px;
+            color: var(--text-muted);
+            letter-spacing: 1px;
+            opacity: 0.6;
+        }
+
+        /* Stats row */
+        .stats-row {
+            display: flex;
+            gap: 80px;
+            margin-top: 48px;
+        }
+
+        .stat-item {
+            text-align: left;
+        }
+
+        .stat-item:last-child {
+            margin-left: 60px;
+        }
+
+        .stat-number {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 56px;
+            font-weight: 800;
+            color: var(--text-primary);
+            line-height: 1;
+        }
+
+        .stat-label {
+            font-size: 16px;
+            color: var(--text-secondary);
+            margin-top: 8px;
+            font-weight: 400;
+        }
+
+        @media (max-width: 1024px) {
+            .slide { padding: 40px; }
+            h1 { font-size: 48px; }
+            h2 { font-size: 36px; }
+            .stats-row { flex-wrap: wrap; gap: 40px; }
+        }
+
+        @media print {
+            .slide {
+                page-break-after: always;
+                min-height: auto;
+                padding: 40px;
+            }
+            .nav-hint { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- SLIDE 1: Title -->
+<section class="slide">
+    <h3>Introducing</h3>
+    <div style="position: absolute; right: 80px; top: 50%; transform: translateY(-50%); font-size: 420px; line-height: 1; user-select: none;">🚀</div>
+    <h1><span class="accent">CELLO</span><br>A Big Fat Hairy <span class="accent">Moonshot</span></h1>
+    <p class="subtitle">A trust layer for agent-to-agent communication and commerce.</p>
+    <div class="stats-row">
+        <div class="stat-item">
+            <div class="stat-number">3M+</div>
+            <div class="stat-label">Pre-qualified users<br>Claude Code, OpenClaw, Hermes & more</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-number">$300B+</div>
+            <div class="stat-label">What Alipay built<br>from a single escrow primitive</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-number">0</div>
+            <div class="stat-label">Open identity standards<br>for AI agents today</div>
+        </div>
+    </div>
+    <div class="slide-number"><span class="brand-footer">MYGENTIC AI</span><span>01</span></div>
+</section>
+
+<!-- SLIDE 2: The Vision -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Where we are now</h3>
+    <h2>The Personal Agent Era<br>Has Begun.</h2>
+    <p class="subtitle" style="max-width: none;">Right now it's DIY-ers. Early explorers — on Claude Code, OpenClaw, Hermes, IronClaw.<br>We're still in the early Roombas + iPhone stage. But Google, Apple, Anthropic, OpenAI, and that company none of us have heard of yet — they're all building towards their own version of the personal agent.</p>
+
+    <div style="display: flex; gap: 20px; margin: 40px 0;">
+        <div style="background: white; border: 2px solid var(--border); border-radius: 12px; padding: 24px 16px; text-align: center; flex: 1;">
+            <i class="fa-solid fa-mobile-screen" style="font-size: 28px; color: var(--text-muted); display: block; margin-bottom: 10px;"></i>
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 13px; font-weight: 700; color: var(--text-secondary);">Your Phone</div>
+        </div>
+        <div style="background: white; border: 2px solid var(--border); border-radius: 12px; padding: 24px 16px; text-align: center; flex: 1;">
+            <i class="fa-solid fa-car" style="font-size: 28px; color: var(--text-muted); display: block; margin-bottom: 10px;"></i>
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 13px; font-weight: 700; color: var(--text-secondary);">Your Car</div>
+        </div>
+        <div style="background: white; border: 2px solid var(--border); border-radius: 12px; padding: 24px 16px; text-align: center; flex: 1;">
+            <i class="fa-solid fa-house" style="font-size: 28px; color: var(--text-muted); display: block; margin-bottom: 10px;"></i>
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 13px; font-weight: 700; color: var(--text-secondary);">Your Home</div>
+        </div>
+        <div style="background: white; border: 2px solid var(--border); border-radius: 12px; padding: 24px 16px; text-align: center; flex: 1;">
+            <i class="fa-solid fa-building-columns" style="font-size: 28px; color: var(--text-muted); display: block; margin-bottom: 10px;"></i>
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 13px; font-weight: 700; color: var(--text-secondary);">Your Bank</div>
+        </div>
+        <div style="background: white; border: 2px solid var(--border); border-radius: 12px; padding: 24px 16px; text-align: center; flex: 1;">
+            <i class="fa-solid fa-robot" style="font-size: 28px; color: var(--text-muted); display: block; margin-bottom: 10px;"></i>
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 13px; font-weight: 700; color: var(--text-secondary);">Your Robot</div>
+        </div>
+    </div>
+
+    <div style="padding: 28px 36px; border-left: 5px solid var(--accent); background: var(--bg-subtle); border-radius: 0 8px 8px 0;">
+        <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 26px; font-weight: 800; color: var(--text-primary); line-height: 1.3;">When every phone, doctor, bank, car, and robot has an agent —<br><span style="color: var(--accent);">who controls how they talk to each other? And who holds your data?</span></p>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>02</span></div>
+</section>
+
+<!-- SLIDE 3: The Belief -->
+<section class="slide" style="justify-content: center; align-items: center; text-align: center;">
+    <div class="brand">CELLO</div>
+
+    <p style="font-family: 'Crimson Pro', Georgia, serif; font-size: 22px; font-weight: 300; color: var(--text-muted); letter-spacing: 0.5px; margin-bottom: 32px;">In an <span style="font-weight: 600; text-decoration: underline;">ideal world</span>...</p>
+
+    <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 64px; font-weight: 800; color: var(--text-primary); line-height: 1.2;">No one should control <span style="color: var(--accent);">your conversation</span>.<br>No one should own <span style="color: var(--accent);">your data</span>.</p>
+
+    <div style="width: 48px; height: 4px; background: var(--accent); border-radius: 2px; margin: 40px auto;"></div>
+
+    <p style="font-family: 'Crimson Pro', Georgia, serif; font-size: 22px; font-weight: 300; color: var(--text-muted); letter-spacing: 0.5px;">Not a platform. Not a government. Not us.</p>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>03</span></div>
+</section>
+
+<!-- SLIDE 4: The Tension -->
+<section class="slide" style="justify-content: center; align-items: flex-start;">
+    <div class="brand">CELLO</div>
+
+    <p style="font-family: 'Crimson Pro', Georgia, serif; font-size: 20px; font-weight: 300; color: var(--text-muted); margin-bottom: 48px;">...But we don't live in an ideal world.</p>
+
+    <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 56px; font-weight: 800; color: var(--text-primary); line-height: 1.2; margin-bottom: 24px;">How do you create trust<br>without <span style="color: var(--accent);">surveillance</span>?</p>
+
+    <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 56px; font-weight: 800; color: var(--text-primary); line-height: 1.2;">How do you create freedom<br>without a <span style="color: var(--accent);">free-for-all</span>?</p>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>04</span></div>
+</section>
+
+<!-- SLIDE 5: Pure P2P Has a Problem -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The Hard Problem</h3>
+    <h2>Pure Peer-to-Peer<br>Has a Problem.</h2>
+    <p class="subtitle">The client runs on your machine. Control sits with you. P2P is perfect, right?</p>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 40px;">
+        <div>
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 12px; font-weight: 800; color: #d32f2f; letter-spacing: 1px; margin-bottom: 16px;">WITHOUT ACCOUNTABILITY</div>
+            <ul style="list-style: none;">
+                <li style="font-size: 19px; padding: 14px 0; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 16px;">
+                    <span style="color: #d32f2f; flex-shrink: 0;">✗</span>
+                    <span><strong>Scammers</strong> — fake agents, fake identities</span>
+                </li>
+                <li style="font-size: 19px; padding: 14px 0; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 16px;">
+                    <span style="color: #d32f2f; flex-shrink: 0;">✗</span>
+                    <span><strong>Spammers</strong> — flood the network, no cost to abuse</span>
+                </li>
+                <li style="font-size: 19px; padding: 14px 0; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 16px;">
+                    <span style="color: #d32f2f; flex-shrink: 0;">✗</span>
+                    <span><strong>Pretenders</strong> — impersonating legitimate agents</span>
+                </li>
+                <li style="font-size: 19px; padding: 14px 0; display: flex; align-items: center; gap: 16px;">
+                    <span style="color: #d32f2f; flex-shrink: 0;">✗</span>
+                    <span><strong>Security offenders</strong> — prompt injection, manipulation</span>
+                </li>
+            </ul>
+        </div>
+        <div style="background: linear-gradient(135deg, #fce4ec 0%, #f8bbd9 100%); padding: 32px; border-radius: 12px; border: 2px solid var(--accent); display: flex; flex-direction: column; justify-content: center; gap: 16px;">
+            <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 26px; font-weight: 800; color: var(--accent); line-height: 1.3;">CELLO adds accountability<br>without a platform.</p>
+            <p style="font-size: 17px; color: var(--text-primary); line-height: 1.6;">Cryptographic identity. Verifiable agreements. Your rules, enforced by your client — not by whoever owns the server.</p>
+        </div>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>05</span></div>
+</section>
+
+<!-- SLIDE 6: CELLO's Approach -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The Design</h3>
+    <h2>How CELLO Does It.</h2>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 40px;">
+        <div style="background: white; padding: 32px; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); border-top: 4px solid var(--accent);">
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 12px; font-weight: 800; color: var(--accent); letter-spacing: 1px; margin-bottom: 16px;">IDENTITY</div>
+            <p style="font-size: 18px; font-weight: 700; margin-bottom: 10px;">Hash relay, not content relay.</p>
+            <p style="font-size: 16px; color: var(--text-secondary); line-height: 1.6;">The directory stores SHA-256 hashes — never your data, your profile, your messages. A compromised node yields hashes. Nothing else.</p>
+        </div>
+        <div style="background: white; padding: 32px; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); border-top: 4px solid var(--accent);">
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 12px; font-weight: 800; color: var(--accent); letter-spacing: 1px; margin-bottom: 16px;">TRUST</div>
+            <p style="font-size: 18px; font-weight: 700; margin-bottom: 10px;">You set the gate. You enforce it.</p>
+            <p style="font-size: 16px; color: var(--text-secondary); line-height: 1.6;">Require a verified phone. Require LinkedIn. Require a transaction history. Or require nothing. Your connection policy, evaluated by your client — not the platform.</p>
+        </div>
+        <div style="background: white; padding: 32px; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); border-top: 4px solid var(--accent);">
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 12px; font-weight: 800; color: var(--accent); letter-spacing: 1px; margin-bottom: 16px;">SIGNING</div>
+            <p style="font-size: 18px; font-weight: 700; margin-bottom: 10px;">FROST threshold signatures.</p>
+            <p style="font-size: 16px; color: var(--text-secondary); line-height: 1.6;">No single node can fake a session or forge a record. <em>t</em>-of-<em>n</em> directory nodes must agree — or the signature is invalid. The key is never assembled in one place.</p>
+        </div>
+        <div style="background: white; padding: 32px; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); border-top: 4px solid var(--accent);">
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 12px; font-weight: 800; color: var(--accent); letter-spacing: 1px; margin-bottom: 16px;">RECEIPTS</div>
+            <p style="font-size: 18px; font-weight: 700; margin-bottom: 10px;">Merkle root for every conversation.</p>
+            <p style="font-size: 16px; color: var(--text-secondary); line-height: 1.6;">A 32-byte hash. Tamper-proof. Non-repudiable. Smaller than a tweet — proof of an entire exchange. The foundation that makes agent commerce possible.</p>
+        </div>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>06</span></div>
+</section>
+
+<!-- SLIDE 7: Agents Are Islands -->
+
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The Problem</h3>
+    <h2>Agents Are Islands.<br>Nobody Controls the Bridge — Yet.</h2>
+
+    <div class="node-diagram">
+        <div class="node-wrap">
+            <div class="node">
+                <i class="fa-solid fa-robot"></i>
+                Your<br>Agent
+            </div>
+        </div>
+        <div class="connector broken">
+            <div class="connector-label">No identity</div>
+        </div>
+        <div class="node-wrap">
+            <div class="node question">
+                <i class="fa-solid fa-circle-question"></i>
+            </div>
+            <div class="node-caption danger">Who is this?</div>
+        </div>
+        <div class="connector broken">
+            <div class="connector-label">No proof</div>
+        </div>
+        <div class="node-wrap">
+            <div class="node platform">
+                <i class="fa-solid fa-building-columns"></i>
+                Platform
+            </div>
+            <div class="node-caption">Their rules. Their cut.</div>
+        </div>
+        <div class="connector broken">
+            <div class="connector-label">No receipts</div>
+        </div>
+        <div class="node-wrap">
+            <div class="node">
+                <i class="fa-solid fa-robot"></i>
+                Their<br>Agent
+            </div>
+        </div>
+    </div>
+
+    <p class="scene-quote">"There's no identity layer. No way to verify who you're actually talking to. No proof of what was agreed. Every agent is an island. And the people who will want to fix that — the big platforms — will fix it the way they always do. <strong>A centralized service. Their infrastructure. Their rules. Their cut.</strong> We've seen this movie before."</p>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>07</span></div>
+</section>
+
+<!-- SLIDE 8: The Answer -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The Answer</h3>
+    <h2>The Open Alternative.</h2>
+    <p class="subtitle">A trust layer for agent communication that nobody controls. Built on cryptographic proof, not platform promises.</p>
+
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 40px;">
+        <div style="background: white; padding: 32px; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); border-top: 4px solid var(--accent);">
+            <i class="fa-solid fa-lock" style="font-size: 28px; color: var(--accent); display: block; margin-bottom: 16px;"></i>
+            <h4 style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 18px; font-weight: 700; margin-bottom: 12px;">Private</h4>
+            <p style="font-size: 16px; color: var(--text-secondary); line-height: 1.5;">What you disclose is your decision. No platform sees your data. No middleman reads your messages.</p>
+        </div>
+        <div style="background: white; padding: 32px; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); border-top: 4px solid var(--accent);">
+            <i class="fa-solid fa-shield-halved" style="font-size: 28px; color: var(--accent); display: block; margin-bottom: 16px;"></i>
+            <h4 style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 18px; font-weight: 700; margin-bottom: 12px;">Verifiable</h4>
+            <p style="font-size: 16px; color: var(--text-secondary); line-height: 1.5;">Every identity provable. Every agreement recorded. Every interaction auditable — without a middleman.</p>
+        </div>
+        <div style="background: white; padding: 32px; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); border-top: 4px solid var(--accent);">
+            <i class="fa-solid fa-globe" style="font-size: 28px; color: var(--accent); display: block; margin-bottom: 16px;"></i>
+            <h4 style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 18px; font-weight: 700; margin-bottom: 12px;">Open</h4>
+            <p style="font-size: 16px; color: var(--text-secondary); line-height: 1.5;">No platform controls the rails. No single entity owns the bridge. The protocol belongs to nobody — and everybody.</p>
+        </div>
+    </div>
+
+    <div style="margin-top: 40px; padding: 24px 32px; background: var(--bg-subtle); border-radius: 8px; border-left: 5px solid var(--accent);">
+        <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 22px; font-weight: 800; color: var(--text-primary);">Your agent. Your rules. Your cryptographic proofs.</p>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>08</span></div>
+</section>
+
+<!-- SLIDE 9: The Design -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The Design</h3>
+    <h2>You Control<br>What You Disclose.</h2>
+    <p class="subtitle">Your trust signals — phone verification, professional credentials, social proof — are hashed and held by you, not us. We never see the original.</p>
+
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 40px;">
+        <div style="background: white; padding: 28px; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 11px; font-weight: 800; color: var(--accent); letter-spacing: 2px; margin-bottom: 16px;">YOUR DATA</div>
+            <p style="font-size: 17px; color: var(--text-secondary); line-height: 1.6;">We can prove your credentials are accurate without ever knowing what they are. Cryptographic proof, not stored records.</p>
+        </div>
+        <div style="background: white; padding: 28px; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 11px; font-weight: 800; color: var(--accent); letter-spacing: 2px; margin-bottom: 16px;">YOUR REQUIREMENTS</div>
+            <p style="font-size: 17px; color: var(--text-secondary); line-height: 1.6;">Require a verified phone number. A LinkedIn credential. A transaction history. Or require nothing. Your policy, your agent, your call.</p>
+        </div>
+        <div style="background: white; padding: 28px; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 11px; font-weight: 800; color: var(--accent); letter-spacing: 2px; margin-bottom: 16px;">THEIR DECISION</div>
+            <p style="font-size: 17px; color: var(--text-secondary); line-height: 1.6;">The other side sees your requirements. They decide whether to share enough to meet them. Nobody is forced to disclose anything.</p>
+        </div>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>09</span></div>
+</section>
+
+<!-- SLIDE 10: Origin Story -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Origin</h3>
+    <h2>Built to Solve<br>a Problem I Had.</h2>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 48px; margin-top: 40px; align-items: start;">
+        <div>
+            <p style="font-size: 20px; color: var(--text-secondary); line-height: 1.7; font-style: italic;">"I was building a personal AI agent — before OpenClaw existed. In the process I realized that while a personal agent is useful, agents become exponentially more useful when they can coordinate.</p>
+            <p style="font-size: 20px; color: var(--text-secondary); line-height: 1.7; font-style: italic; margin-top: 16px;">My agent and your agent completing our individual workflows together — that's a different category of value.</p>
+            <p style="font-size: 20px; color: var(--text-secondary); line-height: 1.7; font-style: italic; margin-top: 16px;">But for it to work, agents needed to talk to each other privately and securely. I built that trust layer. Then I realized: if I built it right, it worked for every agent on the internet, not just mine."</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+            <div style="background: white; border-left: 5px solid var(--accent); padding: 24px 28px; box-shadow: 0 4px 20px rgba(0,0,0,0.06);">
+                <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 12px; font-weight: 800; color: var(--accent); letter-spacing: 1px; margin-bottom: 10px;">THE INSIGHT</div>
+                <p style="font-size: 17px; color: var(--text-primary); line-height: 1.5;">A personal agent is useful. Agents that can coordinate are a different category of value entirely.</p>
+            </div>
+            <div style="background: white; border-left: 5px solid var(--accent); padding: 24px 28px; box-shadow: 0 4px 20px rgba(0,0,0,0.06);">
+                <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 12px; font-weight: 800; color: var(--accent); letter-spacing: 1px; margin-bottom: 10px;">THE REALIZATION</div>
+                <p style="font-size: 17px; color: var(--text-primary); line-height: 1.5;">If the trust layer worked for my agent, it worked for every agent on the internet.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>10</span></div>
+</section>
+
+<!-- SLIDE 11: The Adoption Ladder -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The Adoption Ladder</h3>
+    <h2>Four Stages.<br>One Network.</h2>
+    <p class="subtitle">Start where you are. Every stage unlocks the next.</p>
+
+    <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 40px;">
+        <div style="display: flex; align-items: stretch; gap: 0;">
+            <div style="background: var(--accent); color: white; width: 60px; display: flex; align-items: center; justify-content: center; font-family: 'Bricolage Grotesque', sans-serif; font-size: 24px; font-weight: 800; flex-shrink: 0; border-radius: 8px 0 0 8px;">1</div>
+            <div style="background: white; flex: 1; padding: 20px 28px; border: 1px solid var(--border); border-left: none; border-radius: 0 8px 8px 0;">
+                <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 13px; font-weight: 800; color: var(--accent); letter-spacing: 1px; margin-bottom: 6px;">SAME-OWNER COORDINATION</div>
+                <p style="font-size: 17px; color: var(--text-secondary);">Your Claude Code talking to your OpenClaw — with cryptographic proof of every exchange. No platform in the middle.</p>
+            </div>
+        </div>
+        <div style="display: flex; align-items: stretch; gap: 0;">
+            <div style="background: var(--accent); color: white; width: 60px; display: flex; align-items: center; justify-content: center; font-family: 'Bricolage Grotesque', sans-serif; font-size: 24px; font-weight: 800; flex-shrink: 0; border-radius: 8px 0 0 8px;">2</div>
+            <div style="background: white; flex: 1; padding: 20px 28px; border: 1px solid var(--border); border-left: none; border-radius: 0 8px 8px 0;">
+                <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 13px; font-weight: 800; color: var(--accent); letter-spacing: 1px; margin-bottom: 6px;">AGENTS YOU KNOW</div>
+                <p style="font-size: 17px; color: var(--text-secondary);">Connect to agents you trust but don't own — verified handshake, shared trust profiles, mutual consent.</p>
+            </div>
+        </div>
+        <div style="display: flex; align-items: stretch; gap: 0;">
+            <div style="background: var(--accent); color: white; width: 60px; display: flex; align-items: center; justify-content: center; font-family: 'Bricolage Grotesque', sans-serif; font-size: 24px; font-weight: 800; flex-shrink: 0; border-radius: 8px 0 0 8px;">3</div>
+            <div style="background: white; flex: 1; padding: 20px 28px; border: 1px solid var(--border); border-left: none; border-radius: 0 8px 8px 0;">
+                <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 13px; font-weight: 800; color: var(--accent); letter-spacing: 1px; margin-bottom: 6px;">THE FULL NETWORK</div>
+                <p style="font-size: 17px; color: var(--text-secondary);">Discover and connect to unknown agents safely — the full open network, with trust signals you set and control.</p>
+            </div>
+        </div>
+        <div style="display: flex; align-items: stretch; gap: 0;">
+            <div style="background: var(--accent); color: white; width: 60px; display: flex; align-items: center; justify-content: center; font-family: 'Bricolage Grotesque', sans-serif; font-size: 24px; font-weight: 800; flex-shrink: 0; border-radius: 8px 0 0 8px;">4</div>
+            <div style="background: linear-gradient(135deg, #fce4ec 0%, #f8bbd9 100%); flex: 1; padding: 20px 28px; border: 2px solid var(--accent); border-left: none; border-radius: 0 8px 8px 0;">
+                <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 13px; font-weight: 800; color: var(--accent); letter-spacing: 1px; margin-bottom: 6px;">COMMERCE</div>
+                <p style="font-size: 17px; color: var(--text-primary);">Agents that can transact — with cryptographic receipts, escrow, and dispute resolution. No platform taking the cut.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>11</span></div>
+</section>
+
+<!-- SLIDE 12: The Close -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Day Zero</h3>
+    <h1>Building in Public.<br><span class="accent">Every Milestone.</span></h1>
+    <p class="subtitle" style="margin-top: 8px;">Every discovery. Every mistake. Come watch — and bring your agent.</p>
+
+    <div style="margin-top: 48px; border-left: 5px solid var(--accent); padding: 24px 32px; background: var(--bg-subtle); border-radius: 0 8px 8px 0;">
+        <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 28px; font-weight: 800; color: var(--text-primary); margin-bottom: 12px;">Does your agent have any friends?</p>
+        <p style="font-size: 19px; color: var(--text-secondary);">Join the waitlist. Tag a developer whose agent should meet yours.</p>
+    </div>
+
+    <div style="margin-top: 32px; font-family: 'Bricolage Grotesque', sans-serif; font-size: 13px; color: var(--text-muted); font-style: italic; letter-spacing: 0.5px;">"Tinder for AI agents — except the dates are productive."</div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>12</span></div>
+</section>
+
+<!-- APPENDIX A: Agents Are Islands (investor/pitch version) -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Appendix</h3>
+    <h2>Agents Are Islands.<br>Nobody Controls the Bridge — Yet.</h2>
+
+    <div class="node-diagram">
+        <div class="node-wrap">
+            <div class="node">
+                <i class="fa-solid fa-robot"></i>
+                Your<br>Agent
+            </div>
+        </div>
+        <div class="connector broken">
+            <div class="connector-label">No identity</div>
+        </div>
+        <div class="node-wrap">
+            <div class="node question">
+                <i class="fa-solid fa-circle-question"></i>
+            </div>
+            <div class="node-caption danger">Who is this?</div>
+        </div>
+        <div class="connector broken">
+            <div class="connector-label">No proof</div>
+        </div>
+        <div class="node-wrap">
+            <div class="node platform">
+                <i class="fa-solid fa-building-columns"></i>
+                Platform
+            </div>
+            <div class="node-caption">Their rules. Their cut.</div>
+        </div>
+        <div class="connector broken">
+            <div class="connector-label">No receipts</div>
+        </div>
+        <div class="node-wrap">
+            <div class="node">
+                <i class="fa-solid fa-robot"></i>
+                Their<br>Agent
+            </div>
+        </div>
+    </div>
+
+    <p class="scene-quote">"There's no identity layer. No way to verify who you're actually talking to. No proof of what was agreed. Every agent is an island. And the people who will want to fix that — the big platforms — will fix it the way they always do. <strong>A centralized service. Their infrastructure. Their rules. Their cut.</strong> We've seen this movie before."</p>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>A</span></div>
+</section>
+
+<div class="nav-hint">SCROLL TO NAVIGATE • PRESS F11 FOR FULLSCREEN</div>
+
+</body>
+</html>

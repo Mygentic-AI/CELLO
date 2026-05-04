@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CELLO — Trust Layer for Agent Communication (Dark)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@200;400;700;800&family=Crimson+Pro:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --accent: #F02D9A;
+            --accent-glow: rgba(240, 45, 154, 0.25);
+            --text-primary: #f0f0f0;
+            --text-secondary: #b0b0b0;
+            --text-muted: #707070;
+            --bg-slide: #0e0e0e;
+            --bg-subtle: #131313;
+            --bg-card: #1a1a1a;
+            --border: #2a2a2a;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+            scroll-snap-type: y mandatory;
+        }
+
+        body {
+            font-family: 'Crimson Pro', Georgia, serif;
+            color: var(--text-primary);
+            line-height: 1.6;
+            font-size: 18px;
+            background: #0a0a0a;
+            font-weight: 300;
+        }
+
+        /* Slide container — identical sizing to NICO deck */
+        .slide {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 60px 80px;
+            scroll-snap-align: start;
+            background: var(--bg-slide);
+            position: relative;
+            overflow: hidden;
+        }
+
+
+        .slide:nth-child(even) {
+            background: var(--bg-subtle);
+        }
+
+        /* Subtle background texture on title slide */
+        .slide.hero::before {
+            content: '';
+            position: absolute;
+            top: -200px;
+            right: -200px;
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(240,45,154,0.08) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .slide-number {
+            position: absolute;
+            bottom: 30px;
+            right: 40px;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-muted);
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .slide-number .brand-footer {
+            color: var(--accent);
+        }
+
+        .brand {
+            position: absolute;
+            top: 30px;
+            left: 40px;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 14px;
+            font-weight: 800;
+            color: var(--accent);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        /* Type scale: base 18px × 1.618 = 29px × 1.618 = 47px × 1.618 = 76px */
+        /* Spacing: 8pt grid — 8, 16, 24, 32, 40, 48, 56, 64 */
+        h1 {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 76px;
+            font-weight: 800;
+            letter-spacing: -2px;
+            line-height: 1.05;
+            margin-bottom: 24px;
+            color: var(--text-primary);
+        }
+
+        h1 .accent {
+            color: var(--accent);
+            text-shadow: 0 0 40px var(--accent-glow);
+        }
+
+        h2 {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 47px;
+            font-weight: 700;
+            letter-spacing: -1px;
+            line-height: 1.15;
+            margin-bottom: 32px;
+            color: var(--text-primary);
+        }
+
+        h3 {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin-bottom: 16px;
+        }
+
+        .subtitle {
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-size: 24px;
+            color: var(--text-secondary);
+            font-weight: 300;
+            max-width: 700px;
+            line-height: 1.5;
+        }
+
+        /* Protocol taglines */
+        .tagline-block {
+            margin-top: 48px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .tagline {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--text-muted);
+            letter-spacing: 0.5px;
+        }
+
+        .tagline .accent {
+            color: var(--accent);
+        }
+
+        /* Scene 2 quote */
+        .scene-quote {
+            font-size: 26px;
+            font-weight: 300;
+            color: var(--text-secondary);
+            line-height: 1.55;
+            max-width: 860px;
+            font-style: italic;
+            margin-top: 8px;
+        }
+
+        .scene-quote strong {
+            font-style: normal;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        /* Agent island diagram */
+        .node-diagram {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            margin: 32px 0 36px;
+        }
+
+        .node {
+            width: 88px;
+            height: 88px;
+            border-radius: 50%;
+            background: var(--bg-card);
+            border: 2px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            gap: 5px;
+            flex-shrink: 0;
+            text-align: center;
+            line-height: 1.3;
+        }
+
+        .node i {
+            font-size: 24px;
+            color: var(--text-muted);
+        }
+
+        .node.question {
+            background: #1a0010;
+            border: 2px dashed var(--accent);
+            color: var(--accent);
+        }
+
+        .node.question i {
+            font-size: 28px;
+            color: var(--accent);
+        }
+
+        .node.platform {
+            width: 100px;
+            height: 100px;
+            background: #111;
+            border-color: #333;
+            color: #555;
+        }
+
+        .node.platform i {
+            font-size: 28px;
+            color: #444;
+        }
+
+        .connector {
+            flex: 1;
+            height: 2px;
+            position: relative;
+            min-width: 40px;
+        }
+
+        .connector.broken {
+            background: repeating-linear-gradient(
+                90deg,
+                var(--accent) 0px, var(--accent) 6px,
+                transparent 6px, transparent 14px
+            );
+        }
+
+        .connector-label {
+            position: absolute;
+            top: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 10px;
+            font-weight: 800;
+            color: var(--accent);
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+
+        .node-wrap {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .node-caption {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            text-align: center;
+        }
+
+        .node-caption.danger {
+            color: var(--accent);
+        }
+
+        /* Navigation hint */
+        .nav-hint {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 12px;
+            color: var(--text-muted);
+            letter-spacing: 1px;
+            opacity: 0.4;
+        }
+
+        @media (max-width: 1024px) {
+            .slide { padding: 40px; }
+            h1 { font-size: 48px; }
+            h2 { font-size: 36px; }
+        }
+
+        @media print {
+            .slide {
+                page-break-after: always;
+                min-height: auto;
+                padding: 40px;
+            }
+            .nav-hint { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- SLIDE 1: Title -->
+<section class="slide hero">
+    <div class="brand">Mygentic AI</div>
+
+    <h3>Introducing</h3>
+    <h1><span class="accent">CELLO</span></h1>
+    <p class="subtitle">The open <strong>trust layer</strong> for agent-to-agent communication.<br>Trust without surveillance. <span class="accent">Freedom without the free-for-all.</span></p>
+
+    <div class="slide-number"><span class="brand-footer">MYGENTIC AI</span><span>01</span></div>
+</section>
+
+<!-- SLIDE 2: The Problem -->
+<section class="slide">
+    <div class="brand">Mygentic AI</div>
+    <h3>The Problem</h3>
+    <h2>Agents Are Islands.<br>Nobody Controls the Bridge — Yet.</h2>
+
+    <div class="node-diagram">
+        <div class="node-wrap">
+            <div class="node">
+                <i class="fa-solid fa-robot"></i>
+                Your<br>Agent
+            </div>
+        </div>
+
+        <div class="connector broken">
+            <div class="connector-label">No identity</div>
+        </div>
+
+        <div class="node-wrap">
+            <div class="node question">
+                <i class="fa-solid fa-circle-question"></i>
+            </div>
+            <div class="node-caption danger">Who is this?</div>
+        </div>
+
+        <div class="connector broken">
+            <div class="connector-label">No proof</div>
+        </div>
+
+        <div class="node-wrap">
+            <div class="node platform">
+                <i class="fa-solid fa-building-columns"></i>
+                Platform
+            </div>
+            <div class="node-caption">Their rules. Their cut.</div>
+        </div>
+
+        <div class="connector broken">
+            <div class="connector-label">No receipts</div>
+        </div>
+
+        <div class="node-wrap">
+            <div class="node">
+                <i class="fa-solid fa-robot"></i>
+                Their<br>Agent
+            </div>
+        </div>
+    </div>
+
+    <p class="scene-quote">"There's no identity layer. No way to verify who you're actually talking to. No proof of what was agreed. Every agent is an island. And the people who will want to fix that — the big platforms — will fix it the way they always do. <strong>A centralized service. Their infrastructure. Their rules. Their cut.</strong> We've seen this movie before."</p>
+
+    <div class="slide-number"><span class="brand-footer">MYGENTIC AI</span><span>02</span></div>
+</section>
+
+<div class="nav-hint">SCROLL TO NAVIGATE • PRESS F11 FOR FULLSCREEN</div>
+
+</body>
+</html>
