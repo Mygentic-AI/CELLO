@@ -1,0 +1,13 @@
+{
+  "description": "CELLO-MERKLE-002 AC-001: Structure 1 canonical CBOR fixture. RFC 8949 §4.2.1.",
+  "_note": "Canonical CBOR of the 6-element positional TBS array for protocol_version=1.",
+  "inputs": {
+    "protocol_version": 1,
+    "content_hash_hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "sender_pubkey_hex": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "session_id_hex": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "last_seen_seq": 3,
+    "timestamp": 1700000000000
+  },
+  "expected_cbor_hex": "86015820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc5820dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd50eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee031b0000018bcfe56800"
+}

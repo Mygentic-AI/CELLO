@@ -1,0 +1,16 @@
+{
+  "description": "CELLO-MSG-003 AC-007 canonical v1 envelope fixture. Cross-implementation regression guard. RFC 8949 §4.2.1.",
+  "_note": "full_envelope_cbor_hex excludes sender_signature (keypair-dependent). Tests verify tbs_cbor_hex and content_hash_hex; signature is tested separately with a generated keypair.",
+  "inputs": {
+    "protocol_version": 1,
+    "content_hex": "68656c6c6f",
+    "sender_pubkey_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "session_id_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "last_seen_seq": 0,
+    "timestamp": 1700000000000
+  },
+  "expected": {
+    "content_hash_hex": "8a2a5c9b768827de5a9552c38a044c66959c68f6d2f21b5260af54d2f87db827",
+    "tbs_cbor_hex": "860158208a2a5c9b768827de5a9552c38a044c66959c68f6d2f21b5260af54d2f87db8275820aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa50bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb001b0000018bcfe56800"
+  }
+}
