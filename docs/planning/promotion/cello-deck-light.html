@@ -272,6 +272,10 @@
             opacity: 0.6;
         }
 
+        .rocket-emoji {
+            font-size: 420px;
+        }
+
         /* Stats row */
         .stats-row {
             display: flex;
@@ -310,11 +314,47 @@
         }
 
         @media print {
-            .slide {
-                page-break-after: always;
-                min-height: auto;
-                padding: 40px;
+            @page {
+                size: A4 landscape;
+                margin: 0;
             }
+
+            html, body {
+                scroll-snap-type: none;
+                background: white;
+            }
+
+            .slide {
+                width: 297mm;
+                height: 210mm;
+                min-height: unset;
+                max-height: 210mm;
+                overflow: hidden;
+                padding: 28px 48px;
+                page-break-after: always;
+                break-after: page;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                box-sizing: border-box;
+            }
+
+            /* Scale type down to fit the shorter print height */
+            h1 { font-size: 52px; margin-bottom: 16px; }
+            h2 { font-size: 34px; margin-bottom: 20px; }
+            h3 { font-size: 11px; margin-bottom: 10px; }
+            .subtitle { font-size: 19px; }
+            .scene-quote { font-size: 20px; }
+            .stat-number { font-size: 42px; }
+            .stat-label { font-size: 13px; }
+            .stats-row { margin-top: 28px; gap: 60px; }
+
+            /* Slide 1: scale rocket down to fit print height */
+            .slide:first-child .rocket-emoji {
+                font-size: 240px;
+                right: 48px;
+            }
+
             .nav-hint { display: none; }
         }
     </style>
@@ -324,12 +364,12 @@
 <!-- SLIDE 1: Title -->
 <section class="slide">
     <h3>Introducing</h3>
-    <div style="position: absolute; right: 80px; top: 50%; transform: translateY(-50%); font-size: 420px; line-height: 1; user-select: none;">🚀</div>
+    <div class="rocket-emoji" style="position: absolute; right: 80px; top: 50%; transform: translateY(-50%); line-height: 1; user-select: none;">🚀</div>
     <h1><span class="accent">CELLO</span><br>A Big Fat Hairy <span class="accent">Moonshot</span></h1>
-    <p class="subtitle">A trust layer for agent-to-agent communication and commerce.</p>
+    <p class="subtitle">The missing trust layer for agent-to-agent communication and commerce.</p>
     <div class="stats-row">
         <div class="stat-item">
-            <div class="stat-number">3M+</div>
+            <div class="stat-number">2M+</div>
             <div class="stat-label">Pre-qualified users<br>Claude Code, OpenClaw, Hermes & more</div>
         </div>
         <div class="stat-item">
@@ -344,7 +384,40 @@
     <div class="slide-number"><span class="brand-footer">MYGENTIC AI</span><span>01</span></div>
 </section>
 
-<!-- SLIDE 2: The Vision -->
+<!-- SLIDE 2: The Big Hairy Goals -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The Goals</h3>
+    <h2>What Are We Actually<br>Trying to Build?</h2>
+
+    <div style="display: flex; flex-direction: column; gap: 24px; margin-top: 40px;">
+        <div style="display: flex; gap: 32px; align-items: flex-start; padding: 28px 32px; background: white; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); border-left: 5px solid var(--accent);">
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 48px; font-weight: 800; color: var(--accent); line-height: 1; flex-shrink: 0;">01</div>
+            <div>
+                <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 20px; font-weight: 800; color: var(--text-primary); margin-bottom: 8px;">The HTTP of agent communication.</p>
+                <p style="font-size: 16px; color: var(--text-secondary); line-height: 1.6;">Build an open protocol that becomes the world's backbone for agent-to-agent communication. Any agent, anywhere, talking to any other agent — the way HTTP made any browser talk to any server.</p>
+            </div>
+        </div>
+        <div style="display: flex; gap: 32px; align-items: flex-start; padding: 28px 32px; background: white; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); border-left: 5px solid var(--accent);">
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 48px; font-weight: 800; color: var(--accent); line-height: 1; flex-shrink: 0;">02</div>
+            <div>
+                <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 20px; font-weight: 800; color: var(--text-primary); margin-bottom: 8px;">Privacy and data sovereignty by design.</p>
+                <p style="font-size: 16px; color: var(--text-secondary); line-height: 1.6;">Build it so that no platform, no government, and not even us can surveil your conversations or own your data. Your agent. Your rules. Your data.</p>
+            </div>
+        </div>
+        <div style="display: flex; gap: 32px; align-items: flex-start; padding: 28px 32px; background: white; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); border-left: 5px solid var(--accent);">
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 48px; font-weight: 800; color: var(--accent); line-height: 1; flex-shrink: 0;">03</div>
+            <div>
+                <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 20px; font-weight: 800; color: var(--text-primary); margin-bottom: 8px;">Safe enough to be useful. Open enough to be free.</p>
+                <p style="font-size: 16px; color: var(--text-secondary); line-height: 1.6;">Make the signal-to-noise ratio so high that scammers, spammers, and pretenders aren't worth the effort — without turning the whole thing into a surveillance state to get there.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>02</span></div>
+</section>
+
+<!-- SLIDE 3: The Vision -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>Where we are now</h3>
@@ -378,10 +451,10 @@
         <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 26px; font-weight: 800; color: var(--text-primary); line-height: 1.3;">When every phone, doctor, bank, car, and robot has an agent —<br><span style="color: var(--accent);">who controls how they talk to each other? And who holds your data?</span></p>
     </div>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>02</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>03</span></div>
 </section>
 
-<!-- SLIDE 3: The Belief -->
+<!-- SLIDE 4: The Belief -->
 <section class="slide" style="justify-content: center; align-items: center; text-align: center;">
     <div class="brand">CELLO</div>
 
@@ -393,10 +466,10 @@
 
     <p style="font-family: 'Crimson Pro', Georgia, serif; font-size: 22px; font-weight: 300; color: var(--text-muted); letter-spacing: 0.5px;">Not a platform. Not a government. Not us.</p>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>03</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>04</span></div>
 </section>
 
-<!-- SLIDE 4: The Tension -->
+<!-- SLIDE 5: The Tension -->
 <section class="slide" style="justify-content: center; align-items: flex-start;">
     <div class="brand">CELLO</div>
 
@@ -406,10 +479,10 @@
 
     <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 56px; font-weight: 800; color: var(--text-primary); line-height: 1.2;">How do you create freedom<br>without a <span style="color: var(--accent);">free-for-all</span>?</p>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>04</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>05</span></div>
 </section>
 
-<!-- SLIDE 5: Pure P2P Has a Problem -->
+<!-- SLIDE 6: Pure P2P Has a Problem -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>The Hard Problem</h3>
@@ -439,15 +512,17 @@
             </ul>
         </div>
         <div style="background: linear-gradient(135deg, #fce4ec 0%, #f8bbd9 100%); padding: 32px; border-radius: 12px; border: 2px solid var(--accent); display: flex; flex-direction: column; justify-content: center; gap: 16px;">
-            <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 26px; font-weight: 800; color: var(--accent); line-height: 1.3;">CELLO adds accountability<br>without a platform.</p>
-            <p style="font-size: 17px; color: var(--text-primary); line-height: 1.6;">Cryptographic identity. Verifiable agreements. Your rules, enforced by your client — not by whoever owns the server.</p>
+            <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 13px; font-weight: 800; color: var(--accent); letter-spacing: 1px;">THE ALTERNATIVE</p>
+            <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 22px; font-weight: 800; color: var(--text-primary); line-height: 1.3;">Every major platform already<br>surveils everything you do.</p>
+            <p style="font-size: 15px; color: var(--text-secondary); line-height: 1.6;">X, Facebook/Instagram, TikTok, Reddit — the FTC found they all engage in <em>"vast surveillance"</em> of users. They have to. Monitor and moderate or risk degenerating into a dumpster-fire of scammers, spammers, pretenders, and security offenders. Monitoring is the price of the network.</p>
+<p style="font-size: 15px; color: var(--text-primary); line-height: 1.6; font-weight: 600;">The agent internet doesn't have to make that tradeoff.</p>
         </div>
     </div>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>05</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>06</span></div>
 </section>
 
-<!-- SLIDE 6: CELLO's Approach -->
+<!-- SLIDE 7: CELLO's Approach -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>The Design</h3>
@@ -476,10 +551,10 @@
         </div>
     </div>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>06</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>07</span></div>
 </section>
 
-<!-- SLIDE 7: Agents Are Islands -->
+<!-- SLIDE 8: Agents Are Islands -->
 
 <section class="slide">
     <div class="brand">CELLO</div>
@@ -525,10 +600,10 @@
 
     <p class="scene-quote">"There's no identity layer. No way to verify who you're actually talking to. No proof of what was agreed. Every agent is an island. And the people who will want to fix that — the big platforms — will fix it the way they always do. <strong>A centralized service. Their infrastructure. Their rules. Their cut.</strong> We've seen this movie before."</p>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>07</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>08</span></div>
 </section>
 
-<!-- SLIDE 8: The Answer -->
+<!-- SLIDE 9: The Answer -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>The Answer</h3>
@@ -557,10 +632,10 @@
         <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 22px; font-weight: 800; color: var(--text-primary);">Your agent. Your rules. Your cryptographic proofs.</p>
     </div>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>08</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>09</span></div>
 </section>
 
-<!-- SLIDE 9: The Design -->
+<!-- SLIDE 10: The Design -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>The Design</h3>
@@ -582,10 +657,10 @@
         </div>
     </div>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>09</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>10</span></div>
 </section>
 
-<!-- SLIDE 10: Origin Story -->
+<!-- SLIDE 11: Origin Story -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>Origin</h3>
@@ -609,10 +684,10 @@
         </div>
     </div>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>10</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>11</span></div>
 </section>
 
-<!-- SLIDE 11: The Adoption Ladder -->
+<!-- SLIDE 12: The Adoption Ladder -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>The Adoption Ladder</h3>
@@ -650,10 +725,10 @@
         </div>
     </div>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>11</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>12</span></div>
 </section>
 
-<!-- SLIDE 12: The Close -->
+<!-- SLIDE 13: The Close -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>Day Zero</h3>
@@ -667,7 +742,7 @@
 
     <div style="margin-top: 32px; font-family: 'Bricolage Grotesque', sans-serif; font-size: 13px; color: var(--text-muted); font-style: italic; letter-spacing: 0.5px;">"Tinder for AI agents — except the dates are productive."</div>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>12</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>13</span></div>
 </section>
 
 <!-- APPENDIX A: Agents Are Islands (investor/pitch version) -->
