@@ -18,13 +18,14 @@ import {
   it,
   expect,
 } from "@claude-flow/testing";
-import { msgLeafHash } from "../hashing.js";
+import { msgLeafHash, ctrlLeafHash } from "../hashing.js";
 import {
   buildMerkleTree,
   merkleRoot,
   inclusionProof,
   verifyInclusion,
 } from "../merkle.js";
+import type { LeafInput } from "../merkle.js";
 
 setupV3Tests();
 
@@ -67,6 +68,10 @@ const leafHashVectors = JSON.parse(
   expected_leaf_hash_hex: string;
 }>;
 
+// ── Helper to wrap raw bytes as msg leaves ──────────────────────────────────
+const msgLeaf = (data: Uint8Array): LeafInput => ({ kind: "msg", data });
+const ctrlLeaf = (data: Uint8Array): LeafInput => ({ kind: "ctrl", data });
+
 // ── AC-007: empty leaf sequence ─────────────────────────────────────────────
 describe("empty tree (AC-007)", () => {
   it("AC-007: empty leaf sequence produces SHA-256('') — verified independently", () => {
@@ -86,7 +91,7 @@ describe("tree construction (AC-001)", () => {
   for (const n of sizes) {
     it(`AC-001: size=${n} — root is 32 bytes`, () => {
       const leaves = Array.from({ length: n }, (_, i) =>
-        new Uint8Array([i % 256])
+        msgLeaf(new Uint8Array([i % 256]))
       );
       const tree = buildMerkleTree(leaves);
       expect(merkleRoot(tree).length).toBe(32);
@@ -94,7 +99,7 @@ describe("tree construction (AC-001)", () => {
 
     it(`AC-001: size=${n} — same inputs produce same root`, () => {
       const leaves = Array.from({ length: n }, (_, i) =>
-        new Uint8Array([i % 256])
+        msgLeaf(new Uint8Array([i % 256]))
       );
       const root1 = toHex(merkleRoot(buildMerkleTree(leaves)));
       const root2 = toHex(merkleRoot(buildMerkleTree(leaves)));
@@ -113,7 +118,7 @@ describe("RFC 6962 fixture vectors (AC-002)", () => {
 
   for (const tree of vectors.trees) {
     it(`AC-002: fixture root matches — ${tree.description.slice(0, 60)}`, () => {
-      const leaves = tree.leaves.map(fromHex);
+      const leaves = tree.leaves.map((h) => msgLeaf(fromHex(h)));
       const built = buildMerkleTree(leaves);
       expect(toHex(merkleRoot(built))).toBe(tree.root);
     });
@@ -125,14 +130,14 @@ describe("inclusion proof round-trip (AC-003)", () => {
   for (const tree of vectors.trees) {
     for (const { index, proof: expectedProof } of tree.proofs) {
       it(`AC-003: tree="${tree.description.slice(0, 40)}…" leaf=${index} — proof produces expected siblings`, () => {
-        const leaves = tree.leaves.map(fromHex);
+        const leaves = tree.leaves.map((h) => msgLeaf(fromHex(h)));
         const built = buildMerkleTree(leaves);
         const proof = inclusionProof(built, index);
         expect(proof.map(toHex)).toEqual(expectedProof);
       });
 
       it(`AC-003: tree="${tree.description.slice(0, 40)}…" leaf=${index} — verifyInclusion returns true`, () => {
-        const leaves = tree.leaves.map(fromHex);
+        const leaves = tree.leaves.map((h) => msgLeaf(fromHex(h)));
         const built = buildMerkleTree(leaves);
         const root = merkleRoot(built);
         const lh = msgLeafHash(fromHex(tree.leaves[index]));
@@ -147,11 +152,11 @@ describe("inclusion proof round-trip (AC-003)", () => {
 describe("tampered root (AC-004)", () => {
   it("AC-004: valid proof with one-bit-flipped expected_root → false", () => {
     const tree = vectors.trees[0];
-    const leaves = tree.leaves.map(fromHex);
+    const leaves = tree.leaves.map((h) => msgLeaf(fromHex(h)));
     const built = buildMerkleTree(leaves);
     const root = merkleRoot(built);
     const index = 0;
-    const lh = msgLeafHash(leaves[index]);
+    const lh = msgLeafHash(fromHex(tree.leaves[index]));
     const proof = inclusionProof(built, index);
 
     const tamperedRoot = Uint8Array.from(root);
@@ -165,14 +170,14 @@ describe("tampered root (AC-004)", () => {
 describe("wrong leaf hash (AC-005)", () => {
   it("AC-005: valid proof with wrong leaf_hash → false", () => {
     const tree = vectors.trees[0];
-    const leaves = tree.leaves.map(fromHex);
+    const leaves = tree.leaves.map((h) => msgLeaf(fromHex(h)));
     const built = buildMerkleTree(leaves);
     const root = merkleRoot(built);
     const index = 0;
     const proof = inclusionProof(built, index);
 
     // Use leaf hash of a different leaf
-    const wrongLeafHash = msgLeafHash(leaves[1]);
+    const wrongLeafHash = msgLeafHash(fromHex(tree.leaves[1]));
 
     expect(verifyInclusion(wrongLeafHash, index, leaves.length, proof, root)).toBe(false);
   });
@@ -181,13 +186,13 @@ describe("wrong leaf hash (AC-005)", () => {
 // ── AC-006: replace single sibling hash with random bytes → false ────────────
 describe("tampered proof sibling (AC-006)", () => {
   const tree = vectors.trees[0];
-  const leaves = tree.leaves.map(fromHex);
+  const rawLeaves = tree.leaves.map(fromHex);
 
   for (const { index } of tree.proofs) {
     it(`AC-006: replacing any sibling in proof for leaf=${index} → false`, () => {
-      const built = buildMerkleTree(leaves);
+      const built = buildMerkleTree(rawLeaves.map((d) => msgLeaf(d)));
       const root = merkleRoot(built);
-      const lh = msgLeafHash(leaves[index]);
+      const lh = msgLeafHash(rawLeaves[index]);
       const proof = inclusionProof(built, index);
 
       // Replace each sibling one at a time
@@ -199,7 +204,7 @@ describe("tampered proof sibling (AC-006)", () => {
           return t;
         });
         expect(
-          verifyInclusion(lh, index, leaves.length, tamperedProof, root)
+          verifyInclusion(lh, index, rawLeaves.length, tamperedProof, root)
         ).toBe(false);
       }
     });
@@ -209,36 +214,40 @@ describe("tampered proof sibling (AC-006)", () => {
 // ── AC-008: edge cases return false, never throw ──────────────────────────────
 describe("edge cases return false, no throw (AC-008)", () => {
   it("AC-008: index out of range (index === treeSize) → false", () => {
-    const leaves = [new Uint8Array([0x01])];
-    const built = buildMerkleTree(leaves);
+    const data = new Uint8Array([0x01]);
+    const built = buildMerkleTree([msgLeaf(data)]);
     const root = merkleRoot(built);
-    const lh = msgLeafHash(leaves[0]);
+    const lh = msgLeafHash(data);
     const proof = inclusionProof(built, 0);
     expect(verifyInclusion(lh, 1, 1, proof, root)).toBe(false);
   });
 
   it("AC-008: wrong proof length (empty proof for multi-leaf tree) → false", () => {
-    const leaves = [new Uint8Array([0x01]), new Uint8Array([0x02])];
-    const built = buildMerkleTree(leaves);
+    const built = buildMerkleTree([msgLeaf(new Uint8Array([0x01])), msgLeaf(new Uint8Array([0x02]))]);
     const root = merkleRoot(built);
-    const lh = msgLeafHash(leaves[0]);
+    const lh = msgLeafHash(new Uint8Array([0x01]));
     expect(verifyInclusion(lh, 0, 2, [], root)).toBe(false);
   });
 
   it("AC-008: 31-byte sibling hash in proof → false", () => {
-    const leaves = [new Uint8Array([0x01]), new Uint8Array([0x02])];
-    const built = buildMerkleTree(leaves);
+    const built = buildMerkleTree([msgLeaf(new Uint8Array([0x01])), msgLeaf(new Uint8Array([0x02]))]);
     const root = merkleRoot(built);
-    const lh = msgLeafHash(leaves[0]);
-    const badProof = [new Uint8Array(31)]; // 31 bytes, not 32
+    const lh = msgLeafHash(new Uint8Array([0x01]));
+    const badProof = [new Uint8Array(31)];
     expect(verifyInclusion(lh, 0, 2, badProof, root)).toBe(false);
+  });
+
+  it("AC-008: non-32-byte leafHash → false, no throw", () => {
+    const built = buildMerkleTree([msgLeaf(new Uint8Array([0x01])), msgLeaf(new Uint8Array([0x02]))]);
+    const root = merkleRoot(built);
+    const proof = inclusionProof(built, 0);
+    expect(verifyInclusion(new Uint8Array(20), 0, 2, proof, root)).toBe(false);
   });
 });
 
 // ── SI-001: second-preimage protection ────────────────────────────────────────
 describe("second-preimage protection (SI-001)", () => {
-  it("SI-001: leaf content that looks like an internal node still hashes differently from nodeHash", () => {
-    // Attacker crafts message data that looks like 0x01 || hash_A || hash_B
+  it("SI-001: msg leaf whose content looks like 0x01||hashA||hashB differs from nodeHash", () => {
     const hashA = new Uint8Array(32).fill(0xaa);
     const hashB = new Uint8Array(32).fill(0xbb);
     const craftedPayload = new Uint8Array(1 + 32 + 32);
@@ -246,44 +255,58 @@ describe("second-preimage protection (SI-001)", () => {
     craftedPayload.set(hashA, 1);
     craftedPayload.set(hashB, 33);
 
-    // Build a single-leaf tree with crafted payload
-    const tree = buildMerkleTree([craftedPayload]);
-    const treeRoot = merkleRoot(tree);
-
-    // Build a two-leaf tree so we can get nodeHash(hashA, hashB)
-    // The internal node of a 2-leaf tree is the root
-    const twoLeafTree = buildMerkleTree([hashA, hashB]);
-    const twoLeafRoot = merkleRoot(twoLeafTree);
-
-    // The single-leaf root (msgLeafHash of crafted payload) must not equal any internal node
-    expect(toHex(treeRoot)).not.toBe(toHex(twoLeafRoot));
-
-    // More directly: msgLeafHash(craftedPayload) must differ from what nodeHash would give
     const craftedLeafHash = msgLeafHash(craftedPayload);
-    // nodeHash(hashALeaf, hashBLeaf) would be different
-    expect(toHex(craftedLeafHash)).not.toBe(
-      sha256(
-        (() => {
-          const buf = new Uint8Array(1 + 32 + 32);
-          buf[0] = 0x01;
-          buf.set(hashA, 1);
-          buf.set(hashB, 33);
-          return buf;
-        })()
-      )
+    // nodeHash uses 0x01 prefix on already-hashed children — must differ
+    const internalNodeHash = sha256(
+      (() => {
+        const buf = new Uint8Array(1 + 32 + 32);
+        buf[0] = 0x01;
+        buf.set(hashA, 1);
+        buf.set(hashB, 33);
+        return buf;
+      })()
     );
+    expect(toHex(craftedLeafHash)).not.toBe(internalNodeHash);
+  });
+
+  it("SI-001: ctrlLeafHash (0x02) differs from msgLeafHash (0x00) and nodeHash (0x01) on same data", () => {
+    const data = new Uint8Array(32).fill(0xcc);
+    const msgHash = msgLeafHash(data);
+    const ctrlHash = ctrlLeafHash(data);
+    // 0x00 prefix vs 0x02 prefix — must differ
+    expect(toHex(msgHash)).not.toBe(toHex(ctrlHash));
+    // ctrl hash also differs from what nodeHash would produce on same 32-byte input pair
+    const internalHash = sha256(
+      (() => {
+        const buf = new Uint8Array(1 + 32 + 32);
+        buf[0] = 0x01;
+        buf.set(data, 1);
+        buf.set(data, 33);
+        return buf;
+      })()
+    );
+    expect(toHex(ctrlHash)).not.toBe(internalHash);
+  });
+
+  it("SI-001: buildMerkleTree with ctrl leaf uses 0x02 prefix — root differs from msg leaf on same data", () => {
+    const data = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+    const msgTree = buildMerkleTree([msgLeaf(data)]);
+    const ctrlTree = buildMerkleTree([ctrlLeaf(data)]);
+    expect(toHex(merkleRoot(msgTree))).not.toBe(toHex(merkleRoot(ctrlTree)));
+    // Verify ctrl root equals ctrlLeafHash(data) directly
+    expect(toHex(merkleRoot(ctrlTree))).toBe(toHex(ctrlLeafHash(data)));
   });
 });
 
 // ── SI-002: one-bit difference in root → false ────────────────────────────────
 describe("one-bit root difference (SI-002)", () => {
   it("SI-002: reconstructed root differing by one bit → verifyInclusion returns false", () => {
-    const leaves = [
+    const rawLeaves = [
       new Uint8Array([0x10]),
       new Uint8Array([0x20]),
       new Uint8Array([0x30]),
     ];
-    const built = buildMerkleTree(leaves);
+    const built = buildMerkleTree(rawLeaves.map(msgLeaf));
     const root = merkleRoot(built);
 
     for (let bitPos = 0; bitPos < 256; bitPos++) {
@@ -292,10 +315,10 @@ describe("one-bit root difference (SI-002)", () => {
       const tweaked = Uint8Array.from(root);
       tweaked[byteIdx] ^= bitMask;
 
-      const lh = msgLeafHash(leaves[0]);
+      const lh = msgLeafHash(rawLeaves[0]);
       const proof = inclusionProof(built, 0);
 
-      expect(verifyInclusion(lh, 0, leaves.length, proof, tweaked)).toBe(false);
+      expect(verifyInclusion(lh, 0, rawLeaves.length, proof, tweaked)).toBe(false);
     }
   });
 });
@@ -324,10 +347,15 @@ describe("leaf-hash-vectors.json fixture (MERKLE-002 domain separation)", () => 
     it(`leaf-hash-vector: ${v.description}`, () => {
       const bytes = fromHex(v.structure2_cbor_hex);
       const prefixByte = parseInt(v.leaf_kind_byte, 16);
-      const prefixed = new Uint8Array(1 + bytes.length);
-      prefixed[0] = prefixByte;
-      prefixed.set(bytes, 1);
-      const computed = sha256(prefixed);
+      // Call the actual hashing functions — not a manual reimplementation
+      let computed: string;
+      if (prefixByte === 0x00) {
+        computed = toHex(msgLeafHash(bytes));
+      } else if (prefixByte === 0x02) {
+        computed = toHex(ctrlLeafHash(bytes));
+      } else {
+        throw new Error(`Unexpected leaf_kind_byte in fixture: ${v.leaf_kind_byte}`);
+      }
       expect(computed).toBe(v.expected_leaf_hash_hex);
     });
   }

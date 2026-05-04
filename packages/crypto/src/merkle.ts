@@ -69,7 +69,7 @@
  *   because nodeHash uses 0x01 prefix on the already-hashed children, not the raw data.
  */
 
-import { msgLeafHash, nodeHash, hash } from "./hashing.js";
+import { msgLeafHash, ctrlLeafHash, nodeHash, hash } from "./hashing.js";
 
 /**
  * Internal representation of a built Merkle tree.
@@ -81,7 +81,7 @@ export interface MerkleTree {
   readonly size: number;
   /**
    * All levels of the tree.
-   * levelHashes[0] = leaf hashes (SHA-256(0x00 || data) for each leaf)
+   * levelHashes[0] = leaf hashes (SHA-256(prefix || data) for each leaf)
    * levelHashes[k] = hashes at level k (pairs merged with nodeHash, odd promoted)
    * levelHashes[levelHashes.length - 1] = [root]
    *
@@ -91,24 +91,41 @@ export interface MerkleTree {
 }
 
 /**
- * Build a left-balanced Merkle tree from an ordered list of raw leaf data.
+ * A leaf input with an explicit kind for domain separation.
+ * - "msg":  hashed as SHA-256(0x00 || data) — message leaves
+ * - "ctrl": hashed as SHA-256(0x02 || data) — control leaves (SEAL, etc.)
+ * - "hash": data is already a 32-byte leaf hash; used directly (no prefix applied)
+ */
+export type LeafInput =
+  | { kind: "msg"; data: Uint8Array }
+  | { kind: "ctrl"; data: Uint8Array }
+  | { kind: "hash"; data: Uint8Array };
+
+/**
+ * Build a left-balanced Merkle tree from an ordered list of leaf inputs.
  *
  * Per RFC 6962 §2.1:
- *   - Each leaf is hashed as SHA-256(0x00 || data) using msgLeafHash from hashing.ts
- *   - Internal nodes are SHA-256(0x01 || left || right) using nodeHash from hashing.ts
+ *   - "msg"  leaves: SHA-256(0x00 || data) using msgLeafHash from hashing.ts
+ *   - "ctrl" leaves: SHA-256(0x02 || data) using ctrlLeafHash from hashing.ts
+ *   - "hash" leaves: data used as-is (caller pre-computed the leaf hash)
+ *   - Internal nodes: SHA-256(0x01 || left || right) using nodeHash from hashing.ts
  *   - Odd nodes at each level are promoted unchanged (not duplicated)
  *   - Empty tree root = SHA-256("") (SHA-256 of empty byte string)
  *
- * @param leaves - Raw leaf data. Each entry is hashed with the MSG_LEAF (0x00) prefix.
+ * @param leaves - Leaf inputs with explicit kind for correct prefix application.
  * @returns MerkleTree with all level hashes stored for O(log n) proof generation.
  */
-export function buildMerkleTree(leaves: Uint8Array[]): MerkleTree {
+export function buildMerkleTree(leaves: LeafInput[]): MerkleTree {
   if (leaves.length === 0) {
     return { size: 0, levelHashes: [] };
   }
 
   const levels: Uint8Array[][] = [];
-  let current: Uint8Array[] = leaves.map((l) => msgLeafHash(l));
+  let current: Uint8Array[] = leaves.map((l) => {
+    if (l.kind === "ctrl") return ctrlLeafHash(l.data);
+    if (l.kind === "hash") return l.data;
+    return msgLeafHash(l.data);
+  });
   levels.push(current);
 
   while (current.length > 1) {
@@ -206,6 +223,9 @@ export function verifyInclusion(
   proof: Uint8Array[],
   expectedRoot: Uint8Array
 ): boolean {
+  // AC-008: malformed leafHash — must be exactly 32 bytes
+  if (leafHash.length !== 32) return false;
+
   // AC-008: index out of range
   if (treeSize === 0 || index >= treeSize) return false;
 
