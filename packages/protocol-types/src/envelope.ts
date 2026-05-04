@@ -89,6 +89,7 @@ import type {
   BuildResult,
   BuildResultV1,
   ValidateResult,
+  ValidateResultV1,
   DeserializeResult,
   DeserializeResultV1,
 } from "./types.js";
@@ -547,7 +548,7 @@ export async function buildEnvelopeV1(
  *   5. content_hash recomputation (BEFORE signature check) (AC-006)
  *   6. Signature verification over Structure 1 TBS
  */
-export function validateEnvelopeV1(envelope: MessageEnvelopeV1): ValidateResult {
+export function validateEnvelopeV1(envelope: MessageEnvelopeV1): ValidateResultV1 {
   // Step 1: version gate — hard-reject any version != 1 (M1 drops v0; no negotiation)
   if (envelope.protocol_version !== 1) {
     return {
