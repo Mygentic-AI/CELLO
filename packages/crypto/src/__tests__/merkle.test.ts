@@ -325,8 +325,8 @@ describe("one-bit root difference (SI-002)", () => {
 
 // ── leaf-hash-vectors.json domain separation (MERKLE-002 fixture) ─────────────
 describe("leaf-hash-vectors.json fixture (MERKLE-002 domain separation)", () => {
-  it("fixture file includes exactly 6 entries", () => {
-    expect(leafHashVectors.length).toBe(6);
+  it("fixture file includes exactly 8 entries (6 primitive + 2 Structure 2 real CBOR)", () => {
+    expect(leafHashVectors.length).toBe(8);
   });
 
   it("domain separation pair: same bytes, leaf_kind_byte 0x00 vs 0x02 produce different hashes", () => {
@@ -341,6 +341,20 @@ describe("leaf-hash-vectors.json fixture (MERKLE-002 domain separation)", () => 
     expect(msgEntry!.expected_leaf_hash_hex).not.toBe(
       ctrlEntry!.expected_leaf_hash_hex
     );
+  });
+
+  it("AC-006 / SI-003: Structure 2 real CBOR — 0x00 and 0x02 prefix produce different leaf hashes", () => {
+    // Use the real Structure 2 CBOR entries (entries 6 and 7)
+    const msgS2Entry = leafHashVectors.find(
+      (v) => v.leaf_kind_byte === "00" && v.structure2_cbor_hex.startsWith("8601")
+    );
+    const ctrlS2Entry = leafHashVectors.find(
+      (v) => v.leaf_kind_byte === "02" && v.structure2_cbor_hex.startsWith("8601")
+    );
+    expect(msgS2Entry).toBeDefined();
+    expect(ctrlS2Entry).toBeDefined();
+    expect(msgS2Entry!.structure2_cbor_hex).toBe(ctrlS2Entry!.structure2_cbor_hex);
+    expect(msgS2Entry!.expected_leaf_hash_hex).not.toBe(ctrlS2Entry!.expected_leaf_hash_hex);
   });
 
   for (const v of leafHashVectors) {

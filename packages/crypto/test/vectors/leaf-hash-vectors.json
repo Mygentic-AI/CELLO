@@ -34,5 +34,17 @@
     "leaf_kind_byte": "02",
     "structure2_cbor_hex": "deadbeef",
     "expected_leaf_hash_hex": "bb6724ac0cbf7e07d33094a5dbb1098c1ae85f295349be140405fb2568c96ae3"
+  },
+  {
+    "description": "Structure 2 canonical CBOR (fixture from structure2-canonical.json), MSG_LEAF prefix 0x00 — AC-002 / SI-003",
+    "leaf_kind_byte": "00",
+    "structure2_cbor_hex": "86015820dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc5840aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa36573636f7265f6677665726469637469756e7363616e6e65646a6d6f64656c5f686173685820000000000000000000000000000000000000000000000000000000000000000058200000000000000000000000000000000000000000000000000000000000000000",
+    "expected_leaf_hash_hex": "d2b2a3b2c971c46e8c1a179f3833320ea0fa81c8b74e3994368b22d4469c4e40"
+  },
+  {
+    "description": "Structure 2 canonical CBOR (same bytes as above), CTRL_LEAF prefix 0x02 — AC-002 / SI-003 domain separation",
+    "leaf_kind_byte": "02",
+    "structure2_cbor_hex": "86015820dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc5840aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa36573636f7265f6677665726469637469756e7363616e6e65646a6d6f64656c5f686173685820000000000000000000000000000000000000000000000000000000000000000058200000000000000000000000000000000000000000000000000000000000000000",
+    "expected_leaf_hash_hex": "08d3ffafda157a0e145a44946d1091df0b122684e5b362738d84b966f181990b"
   }
 ]

@@ -22,3 +22,12 @@ export {
   validateEnvelopeV1,
   extractStructure1,
 } from "./envelope.js";
+
+export type { ScanResultSentinel, Structure2, BuildStructure2Result } from "./structure2.js";
+export {
+  SCAN_RESULT_SENTINEL,
+  buildStructure2,
+  encodeStructure2,
+  encodeScanResultSentinel,
+  verifyStructure2Signature,
+} from "./structure2.js";

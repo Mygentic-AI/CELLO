@@ -624,3 +624,13 @@ describe("peer_not_connected when peer not in registry", () => {
     }
   }, 5_000);
 });
+
+// ─── CELLO-MERKLE-002 deferred client-layer ACs ───────────────────────────────
+// AC-005 and SI-002 require client-side Merkle tree state (per-session tree tracking).
+// These are deferred until the Merkle tree is wired into the client (NODE-002 / SESSION-002).
+
+describe("MERKLE-002 AC-005 / SI-002 (deferred)", () => {
+  it.todo("AC-005: Structure 2 with honest signature but wrong prev_root → mismatch detected and leaf rejected");
+  it.todo("SI-002: client never computes prev_root — only the relay populates it in Structure 2");
+});
+
