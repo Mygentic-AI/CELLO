@@ -344,12 +344,20 @@ describe("leaf-hash-vectors.json fixture (MERKLE-002 domain separation)", () => 
   });
 
   it("AC-006 / SI-003: Structure 2 real CBOR — 0x00 and 0x02 prefix produce different leaf hashes", () => {
-    // Use the real Structure 2 CBOR entries (entries 6 and 7)
+    // Look up by exact CBOR hex from the structure2-canonical.json fixture
+    // (avoids fragile prefix match if future entries add more Structure 2 shapes)
+    const s2CanonicalHex = (JSON.parse(
+      readFileSync(
+        join(import.meta.dirname ?? __dirname, "../../../protocol-types/test/vectors/structure2-canonical.json"),
+        "utf8"
+      )
+    ) as { expected_cbor_hex: string }).expected_cbor_hex;
+
     const msgS2Entry = leafHashVectors.find(
-      (v) => v.leaf_kind_byte === "00" && v.structure2_cbor_hex.startsWith("8601")
+      (v) => v.leaf_kind_byte === "00" && v.structure2_cbor_hex === s2CanonicalHex
     );
     const ctrlS2Entry = leafHashVectors.find(
-      (v) => v.leaf_kind_byte === "02" && v.structure2_cbor_hex.startsWith("8601")
+      (v) => v.leaf_kind_byte === "02" && v.structure2_cbor_hex === s2CanonicalHex
     );
     expect(msgS2Entry).toBeDefined();
     expect(ctrlS2Entry).toBeDefined();
