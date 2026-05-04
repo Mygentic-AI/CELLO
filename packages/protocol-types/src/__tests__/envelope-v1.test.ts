@@ -359,6 +359,48 @@ describe("AC-009: oversized content → content_too_large before crypto", () => 
   });
 });
 
+// ─── session_id length validation at build time ──────────────────────────────
+
+describe("buildEnvelopeV1: session_id length validation", () => {
+  it("session_id of 15 bytes → invalid_field(session_id) before any crypto", async () => {
+    const kp = generateKeypair();
+    const shortSid = new Uint8Array(15).fill(0x01);
+    const result = await buildEnvelopeV1(
+      new TextEncoder().encode("test"),
+      kp,
+      1_700_000_000_000,
+      shortSid,
+      0
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.reason).toBe("invalid_field");
+      if (result.error.reason === "invalid_field") {
+        expect(result.error.field).toBe("session_id");
+      }
+    }
+  });
+
+  it("session_id of 17 bytes → invalid_field(session_id) before any crypto", async () => {
+    const kp = generateKeypair();
+    const longSid = new Uint8Array(17).fill(0x01);
+    const result = await buildEnvelopeV1(
+      new TextEncoder().encode("test"),
+      kp,
+      1_700_000_000_000,
+      longSid,
+      0
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.reason).toBe("invalid_field");
+      if (result.error.reason === "invalid_field") {
+        expect(result.error.field).toBe("session_id");
+      }
+    }
+  });
+});
+
 // ─── AC-010: extractStructure1 returns canonical TBS bytes ───────────────────
 
 describe("AC-010: extractStructure1 returns canonical TBS bytes", () => {

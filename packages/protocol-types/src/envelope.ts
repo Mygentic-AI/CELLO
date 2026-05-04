@@ -488,6 +488,18 @@ export async function buildEnvelopeV1(
   session_id: Uint8Array,
   last_seen_seq: number
 ): Promise<BuildResultV1> {
+  // session_id must be exactly 16 bytes — catch at build time, not just validation time
+  if (session_id.length !== 16) {
+    return {
+      ok: false,
+      error: {
+        reason: "invalid_field",
+        field: "session_id",
+        message: `session_id must be 16 bytes, got ${session_id.length}`,
+      },
+    };
+  }
+
   // AC-009: reject oversized content before any crypto
   if (content.length > MAX_CONTENT_BYTES) {
     return {
