@@ -19,14 +19,10 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   setupV3Tests,
-  createTestScope,
   describe,
   it,
   expect,
-  beforeEach,
-  afterEach,
 } from "@claude-flow/testing";
-import type { TestScope } from "@claude-flow/testing";
 import { generateKeypair, msgLeafHash, verify } from "@cello/crypto";
 import { Encoder } from "cbor-x";
 import {
@@ -95,16 +91,6 @@ async function makeEnvelopeV1(
   if (!result.ok) throw new Error(`buildEnvelopeV1 failed: ${result.error.reason}`);
   return { envelope: result.envelope, kp };
 }
-
-// ─── scope ────────────────────────────────────────────────────────────────────
-
-let scope: TestScope;
-beforeEach(() => {
-  scope = createTestScope();
-});
-afterEach(async () => {
-  await scope.run(async () => {});
-});
 
 // ─── AC-001: construction — all fields populated correctly ───────────────────
 

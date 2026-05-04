@@ -142,4 +142,5 @@ export type DeserializeResult = { ok: true; envelope: MessageEnvelope } | { ok: 
 // ─── v1 Result types ──────────────────────────────────────────────────────────
 
 export type BuildResultV1 = { ok: true; envelope: MessageEnvelopeV1 } | { ok: false; error: EnvelopeError };
+export type ValidateResultV1 = { ok: true } | { ok: false; error: EnvelopeError };
 export type DeserializeResultV1 = { ok: true; envelope: MessageEnvelopeV1 } | { ok: false; error: EnvelopeError };

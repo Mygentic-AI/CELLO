@@ -5,11 +5,13 @@ export type {
   BuildResult,
   BuildResultV1,
   ValidateResult,
+  ValidateResultV1,
   DeserializeResult,
   DeserializeResultV1,
 } from "./types.js";
 
 export {
+  MAX_CONTENT_BYTES,
   buildEnvelope,
   serializeEnvelope,
   deserializeEnvelope,
