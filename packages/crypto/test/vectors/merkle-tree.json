@@ -1,0 +1,117 @@
+{
+  "description": "RFC 6962 Merkle tree test vectors. Computed with Node.js native crypto (FIPS 180-4 compliant). Leaf hashes use SHA-256(0x00 || data) per RFC 6962 §2.1. Internal nodes use SHA-256(0x01 || left || right). Odd nodes at a level are promoted unchanged (left-balanced).",
+  "empty_root": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "trees": [
+    {
+      "description": "RFC 6962 8-leaf example. Leaves are single bytes 0x00..0x07. Leaf hashes via SHA-256(0x00 || byte).",
+      "leaves": [
+        "00",
+        "01",
+        "02",
+        "03",
+        "04",
+        "05",
+        "06",
+        "07"
+      ],
+      "root": "ef7f49b620f6c7ea9b963a214da34b5021c6ded8ed57734380a311ab726aa907",
+      "proofs": [
+        {
+          "index": 0,
+          "proof": [
+            "b413f47d13ee2fe6c845b2ee141af81de858df4ec549a58b7970bb96645bc8d2",
+            "52c56b473e5246933e7852989cd9feba3b38f078742b93afff1e65ed46797825",
+            "c1fe42b33ebb8e8a7e4a90abc481c7434e2be02cff2f6a18d7ffab4f1e25891b"
+          ]
+        },
+        {
+          "index": 1,
+          "proof": [
+            "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+            "52c56b473e5246933e7852989cd9feba3b38f078742b93afff1e65ed46797825",
+            "c1fe42b33ebb8e8a7e4a90abc481c7434e2be02cff2f6a18d7ffab4f1e25891b"
+          ]
+        },
+        {
+          "index": 2,
+          "proof": [
+            "583c7dfb7b3055d99465544032a571e10a134b1b6f769422bbb71fd7fa167a5d",
+            "a20bf9a7cc2dc8a08f5f415a71b19f6ac427bab54d24eec868b5d3103449953a",
+            "c1fe42b33ebb8e8a7e4a90abc481c7434e2be02cff2f6a18d7ffab4f1e25891b"
+          ]
+        },
+        {
+          "index": 3,
+          "proof": [
+            "fcf0a6c700dd13e274b6fba8deea8dd9b26e4eedde3495717cac8408c9c5177f",
+            "a20bf9a7cc2dc8a08f5f415a71b19f6ac427bab54d24eec868b5d3103449953a",
+            "c1fe42b33ebb8e8a7e4a90abc481c7434e2be02cff2f6a18d7ffab4f1e25891b"
+          ]
+        },
+        {
+          "index": 4,
+          "proof": [
+            "9f1afa4dc124cba73134e82ff50f17c8f7164257c79fed9a13f5943a6acb8e3d",
+            "bbb0feb32f648c73fe170518bcec1f675af1b780dc23d6fbf30b745c1ca5fa11",
+            "9bcd51240af4005168f033121ba85be5a6ed4f0e6a5fac262066729b8fbfdecb"
+          ]
+        },
+        {
+          "index": 5,
+          "proof": [
+            "4f35212d12f9ad2036492c95f1fe79baf4ec7bd9bef3dffa7579f2293ff546a4",
+            "bbb0feb32f648c73fe170518bcec1f675af1b780dc23d6fbf30b745c1ca5fa11",
+            "9bcd51240af4005168f033121ba85be5a6ed4f0e6a5fac262066729b8fbfdecb"
+          ]
+        },
+        {
+          "index": 6,
+          "proof": [
+            "2ecd8a6b7d2845546659ad4cf443533cf921b19dc81fa83934e83821b4dfdcb7",
+            "4b8c129ed14cce2c08cfc6766db7f8cdb133b5f698b8de3d5890ea7ff7f0a8d1",
+            "9bcd51240af4005168f033121ba85be5a6ed4f0e6a5fac262066729b8fbfdecb"
+          ]
+        },
+        {
+          "index": 7,
+          "proof": [
+            "40d88127d4d31a3891f41598eeed41174e5bc89b1eb9bbd66a8cbfc09956a3fd",
+            "4b8c129ed14cce2c08cfc6766db7f8cdb133b5f698b8de3d5890ea7ff7f0a8d1",
+            "9bcd51240af4005168f033121ba85be5a6ed4f0e6a5fac262066729b8fbfdecb"
+          ]
+        }
+      ]
+    },
+    {
+      "description": "CELLO 3-leaf tree. Leaves are the raw inputs from merkle-primitives.json: empty string, 0x42, 64-byte all-zeros. Leaf hashes via SHA-256(0x00 || data).",
+      "leaves": [
+        "",
+        "42",
+        "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "root": "6f9f4f078be05ce4df1acbf172a64202bc70997b9996cb5bc8553495d40a60fd",
+      "proofs": [
+        {
+          "index": 0,
+          "proof": [
+            "87afe6086fe4571e37657e76281301f189c75ebae1d2eaafb56d578067a1d95e",
+            "98ce42deef51d40269d542f5314bef2c7468d401ad5d85168bfab4c0108f75f7"
+          ]
+        },
+        {
+          "index": 1,
+          "proof": [
+            "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+            "98ce42deef51d40269d542f5314bef2c7468d401ad5d85168bfab4c0108f75f7"
+          ]
+        },
+        {
+          "index": 2,
+          "proof": [
+            "1728c4a4bace3881cd6dd3c46ecd457e93c6ce4b2e67bc181d6da43c1db69b73"
+          ]
+        }
+      ]
+    }
+  ]
+}
