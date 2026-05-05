@@ -68,6 +68,11 @@ export interface SessionAssignmentFrame {
 
 // ─── Session outcome frame types ──────────────────────────────────────────────
 
+export interface SessionAbandoned {
+  type: "session_abandoned";
+  session_id: Uint8Array; // 16 bytes
+}
+
 export interface SessionSealed {
   type: "session_sealed";
   session_id: Uint8Array; // 16 bytes

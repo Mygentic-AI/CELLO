@@ -31,6 +31,7 @@ import type { Stream } from "@libp2p/interface";
 import type {
   SessionAssignment,
   SessionAssignmentFrame,
+  SessionAbandoned,
   SessionSealed,
   SessionSealRejected,
   SealNotarization,
@@ -45,6 +46,7 @@ import {
   encodeSignalingAuthChallenge,
   encodeSignalingAuthFailed,
   encodeSessionAssignment,
+  encodeSessionAbandoned,
   encodeSessionSealed,
   encodeSessionSealRejected,
   encodeSessionRequestError,
@@ -73,6 +75,7 @@ interface NonceEntry {
  */
 export interface RelayAdapter {
   recordAssignment(assignment: RelaySessionAssignment): { ok: true } | { ok: false; reason: string };
+  discardSession(sessionId: Uint8Array): void;
   submitForSeal(sessionId: Uint8Array): { ok: true; data: RelaySealData } | { ok: false; reason: string };
   confirmSeal(sessionId: Uint8Array): void;
   rejectSeal(sessionId: Uint8Array, reason: string): void;
@@ -105,6 +108,18 @@ export class CelloDirectoryNode {
 
   // pubkey_hex → { peer_id, multiaddrs } (from the Noise handshake / client info)
   readonly #peerInfo = new Map<string, { peer_id: string; multiaddrs: string[] }>();
+
+  // session_id_hex → provisional session (relay registered, frames may not yet be delivered)
+  // Entry remains until the stream's finally block processes it.
+  // fullyEstablished = true means both frames were sent and the session is live — no discard.
+  readonly #pendingSessions = new Map<string, {
+    sessionId: Uint8Array;
+    initiatorHex: string;
+    targetHex: string;
+    initiatorGotAssignment: boolean;
+    targetGotAssignment: boolean;
+    fullyEstablished: boolean;
+  }>();
 
   constructor(opts: DirectoryNodeOptions) {
     this.#node = opts.node;
@@ -200,7 +215,9 @@ export class CelloDirectoryNode {
           const queued = this.#store.drainNotifications(authedPubkeyHex);
           for (const evt of queued) {
             try {
-              if (evt.type === "session_sealed") {
+              if (evt.type === "session_abandoned") {
+                this.#sendFrame(stream, encodeSessionAbandoned(evt));
+              } else if (evt.type === "session_sealed") {
                 this.#sendFrame(stream, encodeSessionSealed(evt));
               } else {
                 this.#sendFrame(stream, encodeSessionSealRejected(evt));
@@ -224,6 +241,40 @@ export class CelloDirectoryNode {
       if (authedPubkeyHex && this.#streams.get(authedPubkeyHex) === stream) {
         this.#streams.delete(authedPubkeyHex);
       }
+
+      // AC-011: clean up any provisional sessions where this client was a participant
+      // but the session was not fully established before the stream closed.
+      if (authedPubkeyHex) {
+        for (const [sessionIdHex, pending] of this.#pendingSessions) {
+          if (pending.initiatorHex === authedPubkeyHex || pending.targetHex === authedPubkeyHex) {
+            this.#pendingSessions.delete(sessionIdHex);
+            if (pending.fullyEstablished) continue; // session is live — no relay action needed
+            this.#relay.discardSession(pending.sessionId);
+            // Notify the counterparty if they already received the assignment frame.
+            // Which party received the frame depends on which side is disconnecting.
+            const counterpartyHex = pending.initiatorHex === authedPubkeyHex
+              ? pending.targetHex
+              : pending.initiatorHex;
+            const counterpartyGotAssignment = pending.initiatorHex === authedPubkeyHex
+              ? pending.targetGotAssignment
+              : pending.initiatorGotAssignment;
+            if (counterpartyGotAssignment) {
+              const abandonedFrame: SessionAbandoned = { type: "session_abandoned", session_id: pending.sessionId };
+              const counterpartyStream = this.#streams.get(counterpartyHex);
+              if (counterpartyStream) {
+                try {
+                  this.#sendFrame(counterpartyStream, encodeSessionAbandoned(abandonedFrame));
+                } catch {
+                  this.#store.enqueueNotification(counterpartyHex, abandonedFrame);
+                }
+              } else {
+                this.#store.enqueueNotification(counterpartyHex, abandonedFrame);
+              }
+            }
+          }
+        }
+      }
+
       // Close the write side so yamux can fully release the stream slot.
       // Without this, the stream stays half-open until the remote side closes its read,
       // which causes yamux to count it as active and eventually hit the stream limit.
@@ -303,16 +354,34 @@ export class CelloDirectoryNode {
       return;
     }
 
+    // Track as provisional: relay has registered it, but clients haven't yet received it.
+    // If the initiator's stream closes before both frames are sent, AC-011 cleanup fires.
+    const sessionIdHex = Buffer.from(session_id).toString("hex");
+    this.#pendingSessions.set(sessionIdHex, {
+      sessionId: session_id,
+      initiatorHex,
+      targetHex,
+      initiatorGotAssignment: false,
+      targetGotAssignment: false,
+      fullyEstablished: false,
+    });
+
     // (f) Deliver to both clients
     const assignmentFrame: SessionAssignmentFrame = { type: "session_assignment", assignment };
     const encoded = encodeSessionAssignment(assignmentFrame);
     this.#sendFrame(stream, encoded);
+    const pending = this.#pendingSessions.get(sessionIdHex);
+    if (pending) pending.initiatorGotAssignment = true;
     try {
       this.#sendFrame(targetStream, encoded);
+      if (pending) {
+        pending.targetGotAssignment = true;
+        // Both frames sent — session is fully established; finally block will just clean up.
+        pending.fullyEstablished = true;
+      }
     } catch {
       // Target stream failed mid-delivery; session is still registered on relay.
-      // M1 scope: session_assignment re-delivery on reconnect is not implemented.
-      // The relay will handle the half-connected case at the transport level.
+      // Leave fullyEstablished=false so the finally block discards the relay state.
     }
   }
 

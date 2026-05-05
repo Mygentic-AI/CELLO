@@ -159,6 +159,11 @@ export class CelloRelayNode {
     return { ok: true };
   }
 
+  discardSession(sessionId: Uint8Array): void {
+    const key = Buffer.from(sessionId).toString("hex");
+    this.#store.destroySession(key);
+  }
+
   submitForSeal(sessionId: Uint8Array): { ok: true; data: SealData } | { ok: false; reason: string } {
     const key = Buffer.from(sessionId).toString("hex");
     const state = this.#store.getSession(key);

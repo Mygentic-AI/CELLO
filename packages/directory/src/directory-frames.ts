@@ -13,6 +13,7 @@ import type {
   SessionRequest,
   SessionAssignment,
   SessionAssignmentFrame,
+  SessionAbandoned,
   SessionSealed,
   SessionSealRejected,
   SessionRequestError,
@@ -56,6 +57,10 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
       directory_signature: a.directory_signature,
     },
   });
+}
+
+export function encodeSessionAbandoned(frame: SessionAbandoned): Uint8Array {
+  return ENC.encode({ type: frame.type, session_id: frame.session_id });
 }
 
 export function encodeSessionSealed(frame: SessionSealed): Uint8Array {
@@ -124,6 +129,7 @@ export type OutboundSignalingFrame =
   | SignalingAuthChallenge
   | SignalingAuthFailed
   | SessionAssignmentFrame
+  | SessionAbandoned
   | SessionSealed
   | SessionSealRejected
   | SessionRequestError
@@ -219,6 +225,12 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       reason !== "seal_leaves_invalid"
     ) return null;
     return { type: "session_seal_rejected", session_id, reason };
+  }
+
+  if (o["type"] === "session_abandoned") {
+    const session_id = toUint8Array(o["session_id"]);
+    if (!session_id || session_id.length !== 16) return null;
+    return { type: "session_abandoned", session_id };
   }
 
   if (o["type"] === "session_request_error") {

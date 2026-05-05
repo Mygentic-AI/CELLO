@@ -5,7 +5,9 @@
  * InMemoryDirectoryStore: in-process implementation for M1 testing.
  */
 
-import type { SealNotarization, SessionSealed, SessionSealRejected } from "./directory-types.js";
+import type { SealNotarization, SessionAbandoned, SessionSealed, SessionSealRejected } from "./directory-types.js";
+
+export type DirectoryNotification = SessionAbandoned | SessionSealed | SessionSealRejected;
 
 export interface DirectoryStore {
   /** Store a completed SealNotarization. */
@@ -15,22 +17,22 @@ export interface DirectoryStore {
   getNotarization(sessionIdHex: string): SealNotarization | undefined;
 
   /**
-   * Enqueue a session_sealed or session_seal_rejected event for a pubkey
-   * that has no active signaling stream. Drops oldest if at the 256-event bound.
+   * Enqueue a notification event for a pubkey that has no active signaling stream.
+   * Drops oldest if at the 256-event bound.
    */
-  enqueueNotification(pubkeyHex: string, event: SessionSealed | SessionSealRejected): void;
+  enqueueNotification(pubkeyHex: string, event: DirectoryNotification): void;
 
   /**
    * Drain the pending notification queue for a pubkey. Returns [] if none.
    */
-  drainNotifications(pubkeyHex: string): Array<SessionSealed | SessionSealRejected>;
+  drainNotifications(pubkeyHex: string): DirectoryNotification[];
 }
 
 const NOTIFICATION_QUEUE_BOUND = 256;
 
 export class InMemoryDirectoryStore implements DirectoryStore {
   readonly #notarizations = new Map<string, SealNotarization>();
-  readonly #notificationQueues = new Map<string, Array<SessionSealed | SessionSealRejected>>();
+  readonly #notificationQueues = new Map<string, DirectoryNotification[]>();
 
   recordNotarization(notarization: SealNotarization): void {
     const key = Buffer.from(notarization.session_id).toString("hex");
@@ -41,7 +43,7 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     return this.#notarizations.get(sessionIdHex);
   }
 
-  enqueueNotification(pubkeyHex: string, event: SessionSealed | SessionSealRejected): void {
+  enqueueNotification(pubkeyHex: string, event: DirectoryNotification): void {
     let queue = this.#notificationQueues.get(pubkeyHex);
     if (!queue) {
       queue = [];
@@ -54,7 +56,7 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     queue.push(event);
   }
 
-  drainNotifications(pubkeyHex: string): Array<SessionSealed | SessionSealRejected> {
+  drainNotifications(pubkeyHex: string): DirectoryNotification[] {
     const queue = this.#notificationQueues.get(pubkeyHex);
     if (!queue || queue.length === 0) return [];
     return queue.splice(0);
