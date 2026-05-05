@@ -63,7 +63,6 @@ const CBOR_ENC = new Encoder({ tagUint8Array: false });
 interface NonceEntry {
   nonce: Uint8Array;
   expiresAt: number;
-  used: boolean;
 }
 
 // ─── RelayAdapter: in-process relay interface ─────────────────────────────────
@@ -133,7 +132,7 @@ export class CelloDirectoryNode {
 
     const nonce = new Uint8Array(randomBytes(32));
     const nonceHex = Buffer.from(nonce).toString("hex");
-    this.#nonces.set(nonceHex, { nonce, expiresAt: this.#clock.now() + NONCE_TTL_MS, used: false });
+    this.#nonces.set(nonceHex, { nonce, expiresAt: this.#clock.now() + NONCE_TTL_MS });
 
     try {
       await this.#sendFrame(stream, encodeSignalingAuthChallenge({ type: "signaling_auth_challenge", nonce }));
@@ -172,12 +171,6 @@ export class CelloDirectoryNode {
             stream.abort(new Error("nonce_expired"));
             return;
           }
-          if (nonceEntry.used) {
-            this.#sendFrame(stream, encodeSignalingAuthFailed({ type: "signaling_auth_failed", reason: "nonce_reused" }));
-            stream.abort(new Error("nonce_reused"));
-            return;
-          }
-          nonceEntry.used = true;
           this.#nonces.delete(nonceHex);
 
           // Verify Ed25519(SHA-256("CELLO-DIR-AUTH-v1" || nonce || pubkey)) per spec

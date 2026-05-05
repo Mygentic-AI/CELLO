@@ -148,7 +148,7 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
 
   if (o["type"] === "signaling_auth_failed") {
     const reason = o["reason"];
-    if (reason !== "nonce_expired" && reason !== "nonce_unknown" && reason !== "nonce_reused" && reason !== "signature_invalid") return null;
+    if (reason !== "nonce_expired" && reason !== "nonce_unknown" && reason !== "signature_invalid") return null;
     return { type: "signaling_auth_failed", reason };
   }
 

@@ -193,27 +193,7 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     return { stream, reader, pubkeyHex, clientNode };
   }
 
-  // ─── AC-001: Valid auth challenge-response ────────────────────────────────────
-
-  it("AC-001: valid signature authenticates the client", async () => {
-    const clientKey = generateKeypair();
-    await connectAndAuth(clientKey);
-
-    // After auth, directory is silent (no error frame) — send a session_request to
-    // a non-existent target to provoke a response and prove the stream is authed
-    const fakePubkey = new Uint8Array(randomBytes(32));
-    sendFrame(
-      (await connectAndAuth(clientKey)).stream, // reuse approach — actually send on existing
-      CBOR_ENC.encode({ type: "session_request", target_pubkey: fakePubkey })
-    );
-    // We just need the stream to have survived auth — reading a response would confirm it.
-    // The cleanest check is: directory emits no auth_failed frame after valid auth.
-    // Since we can't easily "assert silence", we verify by checking the relay is unaffected
-    // and the stream remains open by doing a second connection attempt.
-    expect(true).toBe(true); // structural — see AC-008 for behavioral proof
-  });
-
-  // ─── AC-001 (behavioral): valid auth + session_request to offline target returns target_offline ──
+  // ─── AC-001: Valid auth → stream accepts session_request frames ─────────────────
 
   it("AC-001/AC-008: authenticated stream accepts session_request frames", async () => {
     const clientKey = generateKeypair();

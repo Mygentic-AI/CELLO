@@ -26,7 +26,6 @@ export interface SignalingAuthResponse {
 export type DirAuthFailedReason =
   | "nonce_expired"
   | "nonce_unknown"
-  | "nonce_reused"
   | "signature_invalid";
 
 export interface SignalingAuthFailed {
