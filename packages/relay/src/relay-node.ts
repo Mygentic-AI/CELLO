@@ -411,7 +411,7 @@ export class CelloRelayNode {
     const newState: RelaySessionState = {
       ...state,
       seq_counter: seq,
-      leaf_log: [...state.leaf_log, { kind: leafKind, s2: s2Result.structure2 }],
+      leaf_log: [...state.leaf_log, { kind: leafKind, s2: s2Result.structure2, structure1_cbor: frame.structure1_cbor }],
     };
     this.#store.setSession(sessionKey, newState);
 

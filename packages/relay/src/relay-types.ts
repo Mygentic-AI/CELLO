@@ -92,14 +92,14 @@ export interface RelaySessionState {
   assignment: SessionAssignment;
   genesis_prev_root: Uint8Array; // SHA-256(sorted(A,B) || session_id || session_timestamp)
   seq_counter: number;           // 0 initially; incremented to 1 on first leaf
-  leaf_log: Array<{ kind: "msg" | "ctrl"; s2: Structure2 }>; // ordered
+  leaf_log: Array<{ kind: "msg" | "ctrl"; s2: Structure2; structure1_cbor: Uint8Array }>; // ordered
   status: SessionStatus;
 }
 
 // ─── Seal interface ────────────────────────────────────────────────────────────
 
 export interface SealData {
-  leaves: Array<{ kind: "msg" | "ctrl"; s2: Structure2 }>;
+  leaves: Array<{ kind: "msg" | "ctrl"; s2: Structure2; structure1_cbor: Uint8Array }>;
   seq_count: number;
   merkle_root: Uint8Array;
 }

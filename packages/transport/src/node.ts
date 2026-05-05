@@ -120,10 +120,10 @@ class CelloNodeImpl implements CelloNode {
     }
   }
 
-  async handle(protocolId: string, handler: CelloStreamHandler): Promise<void> {
+  async handle(protocolId: string, handler: CelloStreamHandler, opts?: { maxInboundStreams?: number }): Promise<void> {
     // libp2p v3 StreamHandler receives (stream, connection); we only need stream
     const streamHandler: StreamHandler = (stream: Stream) => handler(stream);
-    await this.#libp2p.handle(protocolId, streamHandler);
+    await this.#libp2p.handle(protocolId, streamHandler, opts);
   }
 
   async newStream(peerIdStr: string, protocolId: string): Promise<Stream> {

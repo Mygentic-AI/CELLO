@@ -73,7 +73,7 @@ export interface CelloNode {
    * Register a stream handler for a protocol ID.
    * The handler is called when a remote peer opens a stream on this protocol.
    */
-  handle(protocolId: string, handler: CelloStreamHandler): Promise<void>;
+  handle(protocolId: string, handler: CelloStreamHandler, opts?: { maxInboundStreams?: number }): Promise<void>;
 
   /**
    * Open a new multiplexed stream to a connected remote peer.

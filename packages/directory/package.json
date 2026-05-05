@@ -18,9 +18,15 @@
     "typecheck": "tsc --build",
     "test": "vitest run"
   },
+  "devDependencies": {
+    "@claude-flow/testing": "*"
+  },
   "dependencies": {
     "@cello/crypto": "workspace:*",
     "@cello/protocol-types": "workspace:*",
-    "@cello/transport": "workspace:*"
+    "@cello/transport": "workspace:*",
+    "@libp2p/interface": "^3.0.0",
+    "cbor-x": "^1.6.4",
+    "it-length-prefixed": "^9.1.0"
   }
 }

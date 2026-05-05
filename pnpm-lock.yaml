@@ -98,6 +98,19 @@ importers:
       '@cello/transport':
         specifier: workspace:*
         version: link:../transport
+      '@libp2p/interface':
+        specifier: ^3.0.0
+        version: 3.2.2
+      cbor-x:
+        specifier: ^1.6.4
+        version: 1.6.4
+      it-length-prefixed:
+        specifier: ^9.1.0
+        version: 9.1.1
+    devDependencies:
+      '@claude-flow/testing':
+        specifier: '*'
+        version: 3.0.0-alpha.1(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.0)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.0))
 
   packages/e2e-tests:
     dependencies:
