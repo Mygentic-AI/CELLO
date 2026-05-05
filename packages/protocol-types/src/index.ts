@@ -31,3 +31,5 @@ export {
   encodeScanResultSentinel,
   verifyStructure2Signature,
 } from "./structure2.js";
+
+export { computeGenesisPrevRoot } from "./session.js";
