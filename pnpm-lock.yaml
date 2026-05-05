@@ -71,12 +71,25 @@ importers:
       '@libp2p/interface':
         specifier: ^3.2.2
         version: 3.2.2
+      cbor-x:
+        specifier: ^1.6.0
+        version: 1.6.4
       it-length-prefixed:
         specifier: ^10.0.1
         version: 10.0.1
       it-pipe:
         specifier: ^3.0.1
         version: 3.0.1
+    devDependencies:
+      '@cello/directory':
+        specifier: workspace:*
+        version: link:../directory
+      '@cello/relay':
+        specifier: workspace:*
+        version: link:../relay
+      '@claude-flow/testing':
+        specifier: '*'
+        version: 3.0.0-alpha.1(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.0)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.0))
 
   packages/crypto:
     dependencies:

@@ -1,8 +1,41 @@
 /**
  * @cello/client — types.ts
  *
- * Public types for the CelloClient (MSG-002).
+ * Public types for the CelloClient (MSG-002, SESSION-002).
  */
+
+// ─── Session types (SESSION-002) ──────────────────────────────────────────────
+
+export type SessionStatus = "active" | "transport_lost" | "sealing" | "sealed";
+
+export interface SessionRecord {
+  session_id: Uint8Array;
+  counterparty_pubkey: Uint8Array;
+  counterparty_peer_id: string;
+  counterparty_multiaddrs: string[];
+  relay_endpoint: { peer_id: string; multiaddrs: string[] };
+  genesis_prev_root: Uint8Array;
+  last_seen_seq: number;
+  status: SessionStatus;
+}
+
+/**
+ * Result of receiveSessionAssignment().
+ *
+ * Failure reasons:
+ *   directory_signature_invalid — Ed25519 verify failed; assignment discarded before any I/O.
+ *   relay_auth_failed           — relay explicitly rejected the auth response (signature_invalid etc.).
+ *   relay_auth_error            — could not open a stream to the relay or read the challenge.
+ *   dial_counterparty_failed    — reserved for future use. Currently the counterparty dial is
+ *                                 best-effort (soft failure): if the counterparty is not yet
+ *                                 listening on /cello/content/1.0.0 the session is still stored
+ *                                 as active and ok:true is returned. This variant will be returned
+ *                                 once strict dial is required (e.g. when the session cannot
+ *                                 proceed without a confirmed content channel).
+ */
+export type ReceiveAssignmentResult =
+  | { ok: true; sessionId: Uint8Array }
+  | { ok: false; reason: "directory_signature_invalid" | "relay_auth_failed" | "relay_auth_error" | "dial_counterparty_failed" };
 
 // ─── Peer registry ───────────────────────────────────────────────────────────
 
@@ -70,4 +103,23 @@ export interface CelloClient {
    * Non-destructive — items remain in the queue until receive() drains them.
    */
   peekAll(): Array<{ senderPubkeyHex: string; envelope: ReceivedEnvelope }>;
+
+  /**
+   * Process an inbound SessionAssignment pushed by the directory.
+   * Verifies the directory signature, computes genesis prev_root, dials the relay
+   * on /cello/relay/1.0.0, authenticates, dials the counterparty on /cello/content/1.0.0,
+   * and stores the session record.
+   * Resolves with ok:true and the session_id on success, ok:false with a reason on failure.
+   * SESSION-002 AC-002, AC-003, AC-004, AC-005, SI-003.
+   */
+  receiveSessionAssignment(
+    assignment: import("@cello/directory").SessionAssignment,
+    myPubkey: Uint8Array,
+  ): Promise<ReceiveAssignmentResult>;
+
+  /**
+   * Return all currently known session records.
+   * SESSION-002 AC-004.
+   */
+  listSessions(): SessionRecord[];
 }

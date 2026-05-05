@@ -13,4 +13,4 @@ export type {
   NodeStoppedError,
   ListenFailedError,
 } from "./types.js";
-export { CELLO_PROTOCOL_ID, CIRCUIT_RELAY_V2_HOP_PROTOCOL_ID } from "./protocols.js";
+export { CELLO_PROTOCOL_ID, CIRCUIT_RELAY_V2_HOP_PROTOCOL_ID, CELLO_CONTENT_PROTOCOL_ID } from "./protocols.js";

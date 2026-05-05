@@ -19,3 +19,10 @@ export const CELLO_PROTOCOL_ID = "/cello/m0/1.0.0";
  * Source: @libp2p/circuit-relay-v2 v4.2.3, src/constants.ts
  */
 export const CIRCUIT_RELAY_V2_HOP_PROTOCOL_ID = "/libp2p/circuit/relay/0.2.0/hop";
+
+/**
+ * CELLO content protocol identifier.
+ * Used for direct peer-to-peer content exchange after session establishment (SESSION-002).
+ * Stream framing: it-length-prefixed varint-prefixed frames.
+ */
+export const CELLO_CONTENT_PROTOCOL_ID = "/cello/content/1.0.0";
