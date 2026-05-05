@@ -21,7 +21,7 @@ import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import { verify, buildMerkleTree, merkleRoot, generateKeypair } from "@cello/crypto";
 import type { KeyProvider, LeafInput } from "@cello/crypto";
-import { buildStructure2, encodeStructure2 } from "@cello/protocol-types";
+import { buildStructure2, encodeStructure2, computeGenesisPrevRoot } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
 import type { CelloNode } from "@cello/transport";
 import type { Stream } from "@libp2p/interface";
@@ -54,30 +54,6 @@ interface NonceEntry {
   nonce: Uint8Array;
   expiresAt: number;
   used: boolean;
-}
-
-// ─── Genesis prev_root ────────────────────────────────────────────────────────
-
-/**
- * SHA-256(sorted(A_pubkey, B_pubkey) || session_id || session_timestamp)
- * "sorted" = lexicographic on raw bytes; the smaller key comes first.
- * Per SESSION-002. FIPS 180-4 (SHA-256).
- */
-function computeGenesisPrevRoot(assignment: SessionAssignment): Uint8Array {
-  const a = assignment.participant_a;
-  const b = assignment.participant_b;
-  const cmp = Buffer.compare(Buffer.from(a), Buffer.from(b));
-  const [first, second] = cmp <= 0 ? [a, b] : [b, a];
-
-  const tsBytes = Buffer.allocUnsafe(8);
-  tsBytes.writeBigUInt64BE(BigInt(assignment.session_timestamp));
-
-  const h = createHash("sha256");
-  h.update(first);
-  h.update(second);
-  h.update(assignment.session_id);
-  h.update(tsBytes);
-  return new Uint8Array(h.digest());
 }
 
 // ─── Structure 1 CBOR decoder ─────────────────────────────────────────────────
@@ -172,7 +148,12 @@ export class CelloRelayNode {
       return { ok: false, reason: "directory_signature_invalid" };
     }
 
-    const genesisRoot = computeGenesisPrevRoot(assignment);
+    const genesisRoot = computeGenesisPrevRoot(
+      assignment.participant_a,
+      assignment.participant_b,
+      assignment.session_id,
+      assignment.session_timestamp,
+    );
     const recorded = this.#store.recordSession(assignment, genesisRoot);
     if (!recorded) return { ok: false, reason: "session_already_exists" };
     return { ok: true };

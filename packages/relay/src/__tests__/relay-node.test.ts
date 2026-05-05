@@ -4,7 +4,7 @@
  * TDD Phase R — written BEFORE implementation is complete.
  * All new tests must be RED until relay-node.ts is corrected.
  *
- * Covers: AC-001–AC-012, SI-001–SI-005, DB-001–DB-002
+ * Covers: AC-001–AC-012, SI-001–SI-005, DB-001–DB-002, relay-SI-NEW (SESSION-002)
  *
  * Auth domain: "CELLO-RELAY-AUTH-v1"
  * Signature: Ed25519(SHA-256(domain || nonce || pubkey), privkey) — per RFC 8032, FIPS 180-4
@@ -863,6 +863,115 @@ describe("DB-002: rejectSeal retains state, marks session seal_rejected", () => 
     const resp = await rA.readDecoded();
     expect(resp["type"]).toBe("hash_submit_error");
     expect(resp["reason"]).toBe("session_sealed");
+
+    sA.close().catch(() => {}); sB.close().catch(() => {});
+    await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
+  }, 20_000);
+});
+
+// ─── relay-SI-NEW (SESSION-002) ───────────────────────────────────────────────
+// relay rejects recordAssignment when directory signature fails Ed25519 verification
+
+describe("relay-SI-NEW: recordAssignment rejects invalid directory signature", () => {
+  it("returns directory_signature_invalid when signature is tampered (one byte flipped)", async () => {
+    const fix = await makeFixture();
+    const cA = await makeClient(fix.relayAddr);
+    const cB = await makeClient(fix.relayAddr);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const assignment = await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp);
+
+    // Tamper the signature — flip bit 0 of byte 0
+    const tamperedSig = new Uint8Array(assignment.directory_signature);
+    tamperedSig[0] ^= 0x01;
+    const tampered: SessionAssignment = { ...assignment, directory_signature: tamperedSig };
+
+    const result = fix.relay.recordAssignment(tampered);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("directory_signature_invalid");
+    }
+
+    await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
+  });
+
+  it("returns directory_signature_invalid when signed by a different (non-directory) key", async () => {
+    const fix = await makeFixture();
+    const cA = await makeClient(fix.relayAddr);
+    const cB = await makeClient(fix.relayAddr);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+
+    // Sign with a random key that is NOT the directory key
+    const impostor = generateKeypair();
+    const assignment = await makeAssignment(sessionId, cA.pubkey, cB.pubkey, impostor);
+
+    const result = fix.relay.recordAssignment(assignment);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("directory_signature_invalid");
+    }
+
+    await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
+  });
+
+  it("accepts a validly-signed assignment and rejects hash_submit on an unregistered session_id", async () => {
+    const fix = await makeFixture();
+    const cA = await makeClient(fix.relayAddr);
+    const cB = await makeClient(fix.relayAddr);
+
+    // Valid assignment records successfully
+    const sessionId = new Uint8Array(randomBytes(16));
+    const assignment = await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp);
+    const result = fix.relay.recordAssignment(assignment);
+    expect(result.ok).toBe(true);
+
+    // An unregistered session_id returns session_not_found (SI-001 / AC-010)
+    const unregisteredId = new Uint8Array(randomBytes(16));
+    const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
+    await performAuth(rA, sA, cA.kp);
+
+    const { structure1_cbor, sender_signature } = await makeStructure1(unregisteredId, new Uint8Array(randomBytes(32)), cA.kp, 0);
+    sendFrame(sA, CBOR_ENC.encode({ type: "hash_submit", session_id: unregisteredId, leaf_kind: 0x00, structure1_cbor, sender_signature }));
+
+    const resp = await rA.readDecoded();
+    expect(resp["type"]).toBe("hash_submit_error");
+    expect(resp["reason"]).toBe("session_not_found");
+
+    sA.close().catch(() => {});
+    await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
+  }, 20_000);
+});
+
+// ─── SESSION-002 AC-002 (relay side) ─────────────────────────────────────────
+// relay computes genesis prev_root byte-identical to computeGenesisPrevRoot from @cello/protocol-types
+
+describe("SESSION-002 AC-002: relay genesis prev_root matches computeGenesisPrevRoot from protocol-types", () => {
+  it("Structure 2 prev_root for seq=1 equals computeGenesisPrevRoot(A, B, session_id, ts)", async () => {
+    const fix = await makeFixture();
+    const cA = await makeClient(fix.relayAddr);
+    const cB = await makeClient(fix.relayAddr);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const assignment = await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp);
+    fix.relay.recordAssignment(assignment);
+
+    const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
+    const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
+    await performAuth(rA, sA, cA.kp);
+    await performAuth(rB, sB, cB.kp);
+
+    const contentHash = new Uint8Array(randomBytes(32));
+    const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, contentHash, cA.kp, 0);
+    sendFrame(sA, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: 0x00, structure1_cbor, sender_signature }));
+
+    await rA.readDecoded(); // hash_submit_ack
+    const deliver = await rB.readDecoded(); // leaf_deliver
+
+    // The prev_root in Structure 2 for seq=1 must equal computeGenesisPrevRoot
+    const expected = computeGenesisPrevRoot(cA.pubkey, cB.pubkey, sessionId, assignment.session_timestamp);
+    const actual = decodePrevRoot(toU8(deliver["structure2_cbor"]));
+    expect(Buffer.from(actual).toString("hex")).toBe(Buffer.from(expected).toString("hex"));
 
     sA.close().catch(() => {}); sB.close().catch(() => {});
     await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
