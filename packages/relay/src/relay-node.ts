@@ -329,7 +329,9 @@ export class CelloRelayNode {
     const reply = async (error: HashSubmitErrorReason) => {
       try {
         await this.#sendFrame(stream, encodeHashSubmitError({ type: "hash_submit_error", reason: error }));
-      } catch {}
+      } catch (err) {
+        console.debug("[relay] hash_submit_error send failed", { reason: error, err });
+      }
     };
 
     // Serialize per-session to guarantee monotonic sequencing (SI-002)
@@ -423,7 +425,9 @@ export class CelloRelayNode {
 
     try {
       await this.#sendFrame(stream, encodeHashSubmitAck({ type: "hash_submit_ack", sequence_number: seq }));
-    } catch {}
+    } catch (err) {
+      console.debug("[relay] hash_submit_ack send failed", { seq, err });
+    }
 
     const counterpartyHex = senderPubkeyHex === aHex ? bHex : aHex;
     const deliveryFrame = encodeLeafDeliver({
@@ -439,7 +443,9 @@ export class CelloRelayNode {
     // to update last_seen_seq and release the per-session outbound lock).
     try {
       await this.#sendFrame(stream, deliveryFrame);
-    } catch {}
+    } catch (err) {
+      console.debug("[relay] leaf echo send failed", { seq, err });
+    }
 
     // Deliver to counterparty
     const counterpartyStream = this.#streams.get(counterpartyHex);
