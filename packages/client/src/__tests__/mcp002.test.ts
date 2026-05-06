@@ -33,6 +33,9 @@ import {
   afterEach,
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
+import { readFile } from "node:fs/promises";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { generateKeypair, buildMerkleTree, merkleRoot, verifyInclusion } from "@cello/crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -51,6 +54,9 @@ function parseResult(result: Awaited<ReturnType<Client["callTool"]>>): unknown {
   if (!text) throw new Error("No text content in tool result");
   return JSON.parse(text);
 }
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 function toHex(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("hex");
@@ -217,47 +223,43 @@ afterEach(() => scope.run(async () => {}));
 
 describe("AC-006: RFC 6962 cross-implementation fixture", () => {
   it("AC-006: MERKLE-001 verifyInclusion agrees with the pre-committed rfc6962-external-verify.json fixture", async () => {
-    // Load the committed fixture — no external dependency at runtime.
-    // The fixture is the cross-implementation contract between MERKLE-001 and an
-    // independent RFC 6962 reference implementation.
-    const fixture = {
-      sealed_root: "611c26d5faf56b1fa11429e0bfd19d32ba952bd481b9d22613f6d8b00e1ec868",
-      leaf_hash: "1da033bf8927ed69376d91533748494f7f5e88c20603dede2afc9bfd43d46f17",
-      leaf_index: 3,
-      tree_size: 7,
-      proof: [
-        "acaa04663a8547a2f70c60cc18f9378796b13c4f9a08f70d6adae662365b30c6",
-        "3a066e0f40c6a1981ebfa60d2411625d0517ae22c2fc8c7c1784ff8a75c78565",
-        "febfddf6411a22d52844b3472c15fa476387094f589e57b335eb1931caa8d5b7",
-      ],
-      expected: true,
+    // Load the committed fixture from disk — cross-validates the inline constants below
+    // against the JSON file so they cannot drift independently.
+    const fixturePath = join(__dirname, "../../../../packages/e2e-tests/test/vectors/rfc6962-external-verify.json");
+    const fixtureJson = JSON.parse(await readFile(fixturePath, "utf-8")) as {
+      sealed_root: string;
+      leaf_hash: string;
+      leaf_index: number;
+      tree_size: number;
+      proof: string[];
+      expected: boolean;
     };
 
-    const leafHashBytes = fromHex(fixture.leaf_hash);
-    const sealedRootBytes = fromHex(fixture.sealed_root);
-    const proofBytes = fixture.proof.map(fromHex);
+    const leafHashBytes = fromHex(fixtureJson.leaf_hash);
+    const sealedRootBytes = fromHex(fixtureJson.sealed_root);
+    const proofBytes = fixtureJson.proof.map(fromHex);
 
     const result = verifyInclusion(
       leafHashBytes,
-      fixture.leaf_index,
-      fixture.tree_size,
+      fixtureJson.leaf_index,
+      fixtureJson.tree_size,
       proofBytes,
       sealedRootBytes,
     );
 
-    expect(result).toBe(fixture.expected);
+    expect(result).toBe(fixtureJson.expected);
 
-    // Also verify the fixture's leaf_hash is correct for the fixture's tree construction
-    // (msg leaf at index 3 with data 0x04 * 32 bytes)
+    // Also verify the fixture's leaf_hash and sealed_root match what MERKLE-001 computes
+    // from the same fixture leaves (msg leaf at index 3 with data 0x04 * 32 bytes).
+    // This confirms the JSON file and local computation agree on the same tree.
     const leaves = buildFixtureLeaves();
     const inputs = leaves.map((l) => ({ kind: l.kind, data: l.s2_cbor }));
     const tree = buildMerkleTree(inputs);
-    const expectedLeafHash = tree.levelHashes[0][fixture.leaf_index];
-    expect(toHex(expectedLeafHash)).toBe(fixture.leaf_hash);
+    const expectedLeafHash = tree.levelHashes[0][fixtureJson.leaf_index];
+    expect(toHex(expectedLeafHash)).toBe(fixtureJson.leaf_hash);
 
-    // And the sealed_root matches
     const expectedRoot = merkleRoot(tree);
-    expect(toHex(expectedRoot)).toBe(fixture.sealed_root);
+    expect(toHex(expectedRoot)).toBe(fixtureJson.sealed_root);
   });
 });
 
@@ -736,5 +738,36 @@ describe("cello_receive: timeout when no messages", () => {
     ) as { type: string };
 
     expect(result.type).toBe("timeout");
+  });
+});
+
+// ─── SI-003 adversarial: local tree root ≠ directory sealed_root ──────────────
+
+describe("SI-003 adversarial: local tree root inconsistent with directory sealed_root → local_tree_inconsistent error", () => {
+  it("SI-003: session with sealed_root that does not match local tree root → local_tree_inconsistent error, no proof emitted", async () => {
+    // Create a sealed session where sealed_root is deliberately wrong (all 0xff bytes).
+    // The local tree root computed from the leaves will differ from this value,
+    // so cello_get_inclusion_proof must detect the inconsistency and return an error.
+    const wrongSealedRoot = new Uint8Array(32).fill(0xff);
+    const session = makeSealedSession({ sealed_root: wrongSealedRoot });
+    const sessionIdHex = toHex(session.session_id);
+    const { mcpClient, cleanup } = await makeServerAndClient([session]);
+    scope.addCleanup(cleanup);
+
+    const result = parseResult(
+      await mcpClient.callTool({
+        name: "cello_get_inclusion_proof",
+        arguments: { session_id: sessionIdHex, leaf_index: 0 },
+      })
+    ) as Record<string, unknown>;
+
+    // Must return an error, not a proof
+    expect(result["error"]).toBeDefined();
+    const err = result["error"] as { reason: string; session_id: string; local_root: string; directory_root: string };
+    expect(err.reason).toBe("local_tree_inconsistent");
+    expect(err.session_id).toBe(sessionIdHex);
+    // Must not include proof or sealed_root at top level
+    expect(result["proof"]).toBeUndefined();
+    expect(result["sealed_root"]).toBeUndefined();
   });
 });

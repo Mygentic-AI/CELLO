@@ -176,6 +176,7 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { buildMerkleTree, merkleRoot, inclusionProof } from "@cello/crypto";
 import type { LeafInput } from "@cello/crypto";
@@ -201,6 +202,9 @@ function sleep(ms: number): Promise<void> {
 
 // ─── createMcpSessionServer ───────────────────────────────────────────────────
 
+// INVARIANT: construct at most one McpSessionServer per CelloClient instance.
+// CelloClient.onSessionAssignment is last-writer-wins — a second call replaces the first
+// handler, silently dropping all inbound session events from the earlier server instance.
 export function createMcpSessionServer(
   node: CelloNode,
   client: CelloClient,
@@ -321,7 +325,7 @@ export function createMcpSessionServer(
 
       const deadline = Date.now() + timeout_ms;
 
-      while (Date.now() <= deadline) {
+      while (Date.now() < deadline) {
         if (inboundSessionQueue.length > 0) {
           const event = inboundSessionQueue.shift()!;
           return jsonText({
@@ -374,21 +378,16 @@ export function createMcpSessionServer(
         return jsonText({ delivered: false, reason: "session_not_found" });
       }
 
-      // The last leaf is the one we just sent. Recompute its hash to return it.
+      // Compute leaf hash directly from the last leaf — SHA-256(kind_byte || s2_cbor).
+      // No full-tree rebuild needed; the hash of a single leaf is derivable from its data alone.
       const lastLeaf = record.local_tree_leaves[record.local_tree_leaves.length - 1];
-      const inputs: LeafInput[] = record.local_tree_leaves.map((l) => ({
-        kind: l.kind,
-        data: l.s2_cbor,
-      }));
-      const tree = buildMerkleTree(inputs);
-      const leafHashes = tree.levelHashes[0];
-      const leafHash = leafHashes[leafHashes.length - 1];
-      // Guard against build failure (shouldn't happen since we just sent a leaf)
-      if (!leafHash) {
-        return jsonText({ delivered: false, reason: "leaf_hash_unavailable" });
-      }
-      // Suppress unused variable warning — lastLeaf confirms we got the right leaf
-      void lastLeaf;
+      const kindByte = lastLeaf.kind === "ctrl" ? 0x02 : 0x00;
+      const leafHash = new Uint8Array(
+        createHash("sha256")
+          .update(new Uint8Array([kindByte]))
+          .update(lastLeaf.s2_cbor)
+          .digest()
+      );
 
       return jsonText({ delivered: true, leaf_hash: toHex(leafHash) });
     },
@@ -414,7 +413,7 @@ export function createMcpSessionServer(
 
       const deadline = Date.now() + timeout_ms;
 
-      while (Date.now() <= deadline) {
+      while (Date.now() < deadline) {
         const msg = client.receiveMessage(session_id);
         if (msg) {
           let content: string;
@@ -488,7 +487,10 @@ export function createMcpSessionServer(
           return jsonText({
             status: "sealed",
             sealed_root: record.sealed_root ? toHex(record.sealed_root) : null,
-            close_timestamp: Date.now(),
+            // Use the directory-confirmed close_timestamp from the sealed session record,
+            // not Date.now() — this is the timestamp the directory signed and is the
+            // authoritative value for verification against the directory signature.
+            close_timestamp: record.close_timestamp ?? Date.now(),
             reason: null,
             mmr_peak: null,
           });
@@ -626,9 +628,10 @@ export function createMcpSessionServer(
         session_id,
         sealed_root: record.sealed_root ? toHex(record.sealed_root) : null,
         participants: [ownPubkeyHex, counterpartyPubkeyHex],
-        // close_timestamp is not stored in SessionRecord; use 0 as M1 placeholder.
-        // E2E tests verify directory_signature which is more important than timestamp.
-        close_timestamp: record.close_timestamp ?? 0,
+        // close_timestamp comes from the directory-signed session_sealed frame.
+        // If absent (invariant violation — sealed sessions always have it), emit null
+        // rather than a misleading epoch timestamp.
+        close_timestamp: record.close_timestamp ?? null,
         attestation_self: "PENDING",
         attestation_counterparty: "PENDING",
         leaf_count: record.local_tree_leaves.length,
@@ -690,17 +693,29 @@ export function createMcpSessionServer(
       const proof = inclusionProof(tree, leaf_index);
       const root = merkleRoot(tree);
 
-      // SI-003: self-consistency check — reconstructed root must equal sealed_root
-      // If sealed_root from directory differs from local tree root, the local tree
-      // is inconsistent. Return the local root to let the caller verify independently.
-      const sealedRootHex = record.sealed_root ? toHex(record.sealed_root) : toHex(root);
+      // SI-003: self-consistency check — local tree root MUST equal directory-confirmed sealed_root.
+      // A mismatch means the local tree is inconsistent with what the directory notarized.
+      const localRootHex = toHex(root);
+      if (record.sealed_root) {
+        const directoryRootHex = toHex(record.sealed_root);
+        if (localRootHex !== directoryRootHex) {
+          return jsonText({
+            error: {
+              reason: "local_tree_inconsistent",
+              session_id,
+              local_root: localRootHex,
+              directory_root: directoryRootHex,
+            },
+          });
+        }
+      }
 
       return jsonText({
         leaf_hash: toHex(leafHash),
         leaf_index,
         tree_size: treeSize,
         proof: proof.map(toHex),
-        sealed_root: sealedRootHex,
+        sealed_root: localRootHex,
       });
     },
   );

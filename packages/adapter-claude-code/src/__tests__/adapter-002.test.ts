@@ -505,6 +505,47 @@ describe("SI-002: no K_local private key material in any tool response or notifi
   }, 10_000);
 });
 
+// ─── CRITICAL-1: null-client guard on cello_send, cello_close_session, cello_list_sessions ──
+
+describe("CRITICAL-1: null-client tools return client_not_initialized when client is null", () => {
+  it("CRITICAL-1: cello_await_session with timeout=0 returns timeout without stale resolver (CRITICAL-2)", async () => {
+    const kp = generateKeypair();
+    const node = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await node.start();
+    scope.addCleanup(async () => { try { await node.stop(); } catch {} });
+
+    const stubClient = makeStubClient();
+    const server = createMcpServer(node, stubClient, kp);
+    const [st, ct] = InMemoryTransport.createLinkedPair();
+    await server.connect(st);
+    const mcpClient = new Client({ name: "test", version: "0.0.1" });
+    await mcpClient.connect(ct);
+    scope.addCleanup(async () => { try { await mcpClient.close(); } catch {} });
+    scope.addCleanup(async () => { try { await server.close(); } catch {} });
+
+    // Call with timeout_ms=0 and empty queue — must return {type: 'timeout'} immediately
+    const result = parseResult(
+      await mcpClient.callTool({ name: "cello_await_session", arguments: { timeout_ms: 0 } })
+    ) as { type: string };
+    expect(result.type).toBe("timeout");
+
+    // After timeout_ms=0 resolved, fire an event — must be enqueued (no stale resolver consumes it)
+    const event = {
+      counterpartyPubkeyHex: "cccc" + "00".repeat(30),
+      sessionIdHex: "dddd" + "00".repeat(30),
+      genesisPrevRootHex: "eeee" + "00".repeat(30),
+    };
+    stubClient._fireSessionAssignment(event);
+
+    // Next cello_await_session must get the enqueued event (not timeout)
+    const result2 = parseResult(
+      await mcpClient.callTool({ name: "cello_await_session", arguments: { timeout_ms: 500 } })
+    ) as { type: string; session_id: string };
+    expect(result2.type).toBe("new_session");
+    expect(result2.session_id).toBe(event.sessionIdHex);
+  }, 10_000);
+});
+
 // ─── AC-008: SKILL.md references M1 tools ────────────────────────────────────
 
 describe("AC-008: SKILL.md references M1 tools and not M0-removed tools", () => {

@@ -103,6 +103,7 @@ function jsonText(value: unknown): { content: [{ type: "text"; text: string }] }
 }
 
 const TRANSPORT_NOT_STARTED = jsonText({ error: { reason: "transport_not_started" } });
+const CLIENT_NOT_INITIALIZED = jsonText({ error: { reason: "client_not_initialized" } });
 
 // ─── createMcpServer ─────────────────────────────────────────────────────────
 
@@ -210,21 +211,24 @@ export function createMcpServer(
         });
       }
 
-      // Block until an event arrives or timeout fires
+      // Block until an event arrives or timeout fires.
+      // Resolver is pushed BEFORE the timer starts to avoid stale-resolver leak
+      // when timeout_ms === 0 (timer fires synchronously on next tick).
       const result = await new Promise<InboundSessionEvent | null>((resolve) => {
-        const timer = setTimeout(() => {
-          // Remove this resolver from the waiting list
-          const idx = sessionEventResolvers.indexOf(resolveEvent);
-          if (idx !== -1) sessionEventResolvers.splice(idx, 1);
-          resolve(null);
-        }, timeout_ms);
+        let timerId: ReturnType<typeof setTimeout>;
 
         function resolveEvent(event: InboundSessionEvent): void {
-          clearTimeout(timer);
+          clearTimeout(timerId);
           resolve(event);
         }
 
         sessionEventResolvers.push(resolveEvent);
+
+        timerId = setTimeout(() => {
+          const idx = sessionEventResolvers.indexOf(resolveEvent);
+          if (idx !== -1) sessionEventResolvers.splice(idx, 1);
+          resolve(null);
+        }, timeout_ms);
       });
 
       if (result === null) {
@@ -252,6 +256,7 @@ export function createMcpServer(
       },
     },
     async ({ session_id, content }) => {
+      if (client == null) return CLIENT_NOT_INITIALIZED;
       if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
       const contentBytes = new TextEncoder().encode(content);
@@ -279,6 +284,7 @@ export function createMcpServer(
       },
     },
     async ({ session_id, timeout_ms }) => {
+      if (client == null) return CLIENT_NOT_INITIALIZED;
       if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
       const deadline = Date.now() + timeout_ms;
@@ -309,6 +315,7 @@ export function createMcpServer(
       },
     },
     async ({ session_id }) => {
+      if (client == null) return CLIENT_NOT_INITIALIZED;
       client.closeSession(session_id);
       return jsonText({ closed: true });
     }
@@ -323,6 +330,7 @@ export function createMcpServer(
       inputSchema: {},
     },
     async () => {
+      if (client == null) return CLIENT_NOT_INITIALIZED;
       const sessions = client.listSessions().map((s) => ({
         session_id: Buffer.from(s.session_id).toString("hex"),
         counterparty_pubkey: Buffer.from(s.counterparty_pubkey).toString("hex"),
