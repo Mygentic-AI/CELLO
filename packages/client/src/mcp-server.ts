@@ -216,13 +216,6 @@ export function createMcpSessionServer(
   // Populated by client.onSessionAssignment callback.
   const inboundSessionQueue: SessionAssignmentEvent[] = [];
 
-  // Register inbound session assignment handler (participant B role).
-  // When a session_assignment arrives for a session where we are participant B,
-  // the client fires this callback so cello_await_session can return it.
-  client.onSessionAssignment((event: SessionAssignmentEvent) => {
-    inboundSessionQueue.push(event);
-  });
-
   function transportStarted(): boolean {
     return node.listenAddresses().length > 0;
   }
@@ -240,6 +233,24 @@ export function createMcpSessionServer(
     { name: "cello-session", version: "0.1.0" },
     { capabilities: { experimental: { "claude/channel": {} } } },
   );
+
+  // Register inbound session assignment handler (participant B role).
+  // Fires after server is created so the notification push can reference server.
+  // SI-001: notification payload contains exactly type, from, and session_id.
+  client.onSessionAssignment((event: SessionAssignmentEvent) => {
+    inboundSessionQueue.push(event);
+    // Push claude/channel wake-up notification — agent calls cello_await_session for details
+    server.server.notification({
+      method: "notifications/claude/channel",
+      params: {
+        type: "cello_session_request",
+        from: event.counterpartyPubkeyHex,
+        session_id: event.sessionIdHex,
+      },
+    }).catch(() => {
+      // Transport may not be connected or may have closed — silently swallow
+    });
+  });
 
   // ── cello_initiate_session ─────────────────────────────────────────────────
   //

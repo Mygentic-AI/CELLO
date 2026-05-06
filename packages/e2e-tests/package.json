@@ -19,7 +19,9 @@
     "@cello/protocol-types": "workspace:*",
     "@cello/relay": "workspace:*",
     "@cello/transport": "workspace:*",
+    "@claude-flow/testing": "*",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "cbor-x": "^1.6.0",
     "zod": "^4.4.2"
   }
 }

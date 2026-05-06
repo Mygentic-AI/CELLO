@@ -154,9 +154,15 @@ importers:
       '@cello/transport':
         specifier: workspace:*
         version: link:../transport
+      '@claude-flow/testing':
+        specifier: '*'
+        version: 3.0.0-alpha.1(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.0)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.0))
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.2)
+      cbor-x:
+        specifier: ^1.6.0
+        version: 1.6.4
       zod:
         specifier: ^4.4.2
         version: 4.4.2

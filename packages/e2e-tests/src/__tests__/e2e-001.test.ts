@@ -1,16 +1,18 @@
 /**
- * CELLO-E2E-001 — Same-machine proxy for two-agent signed message exchange
+ * CELLO-E2E-001 — M0 same-machine proxy tests (RETIRED)
  *
- * Covers AC-002 through AC-007 using in-process libp2p nodes.
- * Uses real Noise-encrypted TCP connections on loopback.
+ * These tests cover the M0 peer-keyed surface (cello_connect_peer, peer-keyed
+ * cello_send/cello_receive, pushChannelNotification). ADAPTER-002 removed the
+ * M0 tool set. All tests are skipped to preserve historical context.
  *
- * Exclusions (require two physical machines on different networks):
- *   AC-001 — real network boundary verification
- *   AC-008 — DCuTR / circuit relay path recording
+ * M1 e2e session coverage lives in mcp-002.test.ts.
  *
- * AC-003 proxy: "Claude Code wakes up automatically" is validated here as
- * "notifications/claude/channel fires on the MCP wire with correct params."
- * The --channels runtime behaviour itself requires a live Claude Code session.
+ * Original scope:
+ *   Covers AC-002 through AC-007 using in-process libp2p nodes.
+ *   Uses real Noise-encrypted TCP connections on loopback.
+ *   Exclusions (require two physical machines):
+ *     AC-001 — real network boundary verification
+ *     AC-008 — DCuTR / circuit relay path recording
  */
 
 import {
@@ -134,7 +136,7 @@ afterEach(() => scope.run(async () => {}));
 
 // ─── AC-002 + AC-003 + AC-004 ─────────────────────────────────────────────────
 
-describe("AC-002 + AC-003 + AC-004: send delivers; channel notification fires on B; B receives correct message", () => {
+describe.skip("AC-002 + AC-003 + AC-004: send delivers; channel notification fires on B; B receives correct message", () => {
   it("AC-002+003+004: delivered:true with content_hash; notifications/claude/channel on B's MCP wire; B receive returns correct content and sender", async () => {
     const { mcpA, mcpB, ownPubkeyA, listenAddrB, notificationsB, cleanup } = await makeE2EPair();
     scope.addCleanup(cleanup);
@@ -179,7 +181,7 @@ describe("AC-002 + AC-003 + AC-004: send delivers; channel notification fires on
 
 // ─── AC-005 ───────────────────────────────────────────────────────────────────
 
-describe("AC-005: B replies; A's channel notification fires; A receives reply", () => {
+describe.skip("AC-005: B replies; A's channel notification fires; A receives reply", () => {
   it("AC-005: full A→B→A signed exchange; notifications on both sides; both receives return correct content", async () => {
     const {
       mcpA, mcpB,
@@ -253,7 +255,7 @@ describe("AC-005: B replies; A's channel notification fires; A receives reply", 
 
 // ─── AC-006 ───────────────────────────────────────────────────────────────────
 
-describe("AC-006: byte-flipped envelope is silently rejected; no notification; cello_receive times out", () => {
+describe.skip("AC-006: byte-flipped envelope is silently rejected; no notification; cello_receive times out", () => {
   it("AC-006: tampered content causes content_hash mismatch → B rejects; no notifications/claude/channel; B receive → timeout", async () => {
     const { mcpA, mcpB, clientA, notificationsB, listenAddrB, cleanup } = await makeE2EPair();
     scope.addCleanup(cleanup);
@@ -298,7 +300,7 @@ describe("AC-006: byte-flipped envelope is silently rejected; no notification; c
 
 // ─── AC-007 ───────────────────────────────────────────────────────────────────
 
-describe("AC-007: cello_status cross-check — connected_peer_count:1; own_pubkey matches sender_pubkey", () => {
+describe.skip("AC-007: cello_status cross-check — connected_peer_count:1; own_pubkey matches sender_pubkey", () => {
   it("AC-007: both statuses show 1 connection; B's received sender_pubkey equals A's own_pubkey", async () => {
     const { mcpA, mcpB, ownPubkeyA, ownPubkeyB, listenAddrB, cleanup } = await makeE2EPair();
     scope.addCleanup(cleanup);

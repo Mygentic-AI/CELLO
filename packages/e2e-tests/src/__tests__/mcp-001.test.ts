@@ -1,8 +1,12 @@
 /**
- * CELLO-MCP-001 — MCP Tool Surface tests
+ * CELLO-MCP-001 — M0 MCP Tool Surface tests (RETIRED)
  *
- * Tests run via InMemoryTransport against real in-process libp2p nodes.
- * Every AC and SI from the story spec has a named test here.
+ * ADAPTER-002 removed the M0 tool set (cello_connect_peer, cello_list_peers,
+ * peer-keyed cello_send/cello_receive) and replaced it with the M1 session-aware
+ * surface. These tests are skipped to preserve historical context.
+ *
+ * M1 e2e coverage lives in mcp-002.test.ts.
+ * Adapter-layer unit coverage lives in adapter-001.test.ts and adapter-002.test.ts.
  */
 
 import {
@@ -102,7 +106,7 @@ afterEach(() => scope.run(async () => {}));
 
 // ─── AC-001: cello_connect_peer returns connected:true, peer_pubkey ───────────
 
-describe("AC-001: cello_connect_peer succeeds, returns connected:true and peer_pubkey", () => {
+describe.skip("AC-001: cello_connect_peer succeeds, returns connected:true and peer_pubkey", () => {
   it("AC-001: A connects to B via multiaddr → connected:true, peer_pubkey is 64-char hex", async () => {
     const { mcpClientA, listenAddrB, cleanup } = await makeMcpPair();
     scope.addCleanup(cleanup);
@@ -118,7 +122,7 @@ describe("AC-001: cello_connect_peer succeeds, returns connected:true and peer_p
 
 // ─── AC-002: send + receive round-trip ────────────────────────────────────────
 
-describe("AC-002: cello_send + cello_receive round-trip", () => {
+describe.skip("AC-002: cello_send + cello_receive round-trip", () => {
   it("AC-002: A sends 'hello', B receives it with correct sender_pubkey and content_hash", async () => {
     const { mcpClientA, mcpClientB, listenAddrB, ownPubkeyA, cleanup } = await makeMcpPair();
     scope.addCleanup(cleanup);
@@ -150,7 +154,7 @@ describe("AC-002: cello_send + cello_receive round-trip", () => {
 
 // ─── AC-003: cello_receive with no messages → timeout ────────────────────────
 
-describe("AC-003: cello_receive with empty queue → timeout", () => {
+describe.skip("AC-003: cello_receive with empty queue → timeout", () => {
   it("AC-003: no messages in queue → {type: 'timeout'} after ~200ms", async () => {
     const { mcpClientA, cleanup } = await makeMcpPair();
     scope.addCleanup(cleanup);
@@ -167,7 +171,7 @@ describe("AC-003: cello_receive with empty queue → timeout", () => {
 
 // ─── AC-004: cello_send without connect → peer_not_connected, no dial ─────────
 
-describe("AC-004: cello_send without prior connect → peer_not_connected", () => {
+describe.skip("AC-004: cello_send without prior connect → peer_not_connected", () => {
   it("AC-004: unknown peer_pubkey → {delivered: false, reason: 'peer_not_connected'}", async () => {
     const { mcpClientA, cleanup } = await makeMcpPair();
     scope.addCleanup(cleanup);
@@ -184,7 +188,7 @@ describe("AC-004: cello_send without prior connect → peer_not_connected", () =
 
 // ─── AC-005: cello_status returns expected fields ─────────────────────────────
 
-describe("AC-005: cello_status returns transport_started, own_pubkey, listen_addresses, etc.", () => {
+describe.skip("AC-005: cello_status returns transport_started, own_pubkey, listen_addresses, etc.", () => {
   it("AC-005: all required fields present and valid", async () => {
     const { mcpClientA, ownPubkeyA, cleanup } = await makeMcpPair();
     scope.addCleanup(cleanup);
@@ -209,7 +213,7 @@ describe("AC-005: cello_status returns transport_started, own_pubkey, listen_add
 
 // ─── AC-006: factory produces identical wiring under InMemoryTransport ─────────
 
-describe("AC-006: createMcpServer is transport-agnostic (same tool set and wiring)", () => {
+describe.skip("AC-006: createMcpServer is transport-agnostic (same tool set and wiring)", () => {
   it("AC-006: two instances have identical tool names, descriptions, and input schemas", async () => {
     const kpA = generateKeypair();
     const kpB = generateKeypair();
@@ -263,7 +267,7 @@ describe("AC-006: createMcpServer is transport-agnostic (same tool set and wirin
 
 // ─── AC-007: bidirectional messaging ─────────────────────────────────────────
 
-describe("AC-007: A sends 5 to B, B sends 3 to A, all arrive with correct attribution", () => {
+describe.skip("AC-007: A sends 5 to B, B sends 3 to A, all arrive with correct attribution", () => {
   it("AC-007: bidirectional drain — A has 3 from B, B has 5 from A", async () => {
     const { mcpClientA, mcpClientB, celloClientA, celloClientB, listenAddrB, ownPubkeyA, ownPubkeyB, cleanup } = await makeMcpPair();
     scope.addCleanup(cleanup);
@@ -343,7 +347,7 @@ describe("AC-007: A sends 5 to B, B sends 3 to A, all arrive with correct attrib
 
 // ─── AC-008: cello_list_peers ─────────────────────────────────────────────────
 
-describe("AC-008: cello_list_peers returns connected peers", () => {
+describe.skip("AC-008: cello_list_peers returns connected peers", () => {
   it("AC-008: after connecting to B and C, A lists 2 peers", async () => {
     const kpA = generateKeypair();
     const kpB = generateKeypair();
@@ -388,7 +392,7 @@ describe("AC-008: cello_list_peers returns connected peers", () => {
 
 // ─── AC-009: transport_not_started guard on operational tools ─────────────────
 
-describe("AC-009: tools return transport_not_started before transport is started", () => {
+describe.skip("AC-009: tools return transport_not_started before transport is started", () => {
   it("AC-009: cello_send, cello_connect_peer, cello_receive, cello_list_peers return transport_not_started; cello_status responds normally", async () => {
     const kp = generateKeypair();
     // createNode without start() — transport is not started
@@ -430,7 +434,7 @@ describe("AC-009: tools return transport_not_started before transport is started
 
 // ─── AC-010: content_too_large ────────────────────────────────────────────────
 
-describe("AC-010: content whose UTF-8 encoding exceeds 1 MiB → content_too_large", () => {
+describe.skip("AC-010: content whose UTF-8 encoding exceeds 1 MiB → content_too_large", () => {
   it("AC-010: 1 MiB + 1 byte content → {delivered: false, reason: 'content_too_large', content_hash: null}", async () => {
     const { mcpClientA, listenAddrB, cleanup } = await makeMcpPair();
     scope.addCleanup(cleanup);
@@ -454,7 +458,7 @@ describe("AC-010: content whose UTF-8 encoding exceeds 1 MiB → content_too_lar
 
 // ─── AC-011: peer_pubkey round-trip (connect output → send input) ─────────────
 
-describe("AC-011: peer_pubkey from cello_connect_peer is directly usable in cello_send", () => {
+describe.skip("AC-011: peer_pubkey from cello_connect_peer is directly usable in cello_send", () => {
   it("AC-011: exact peer_pubkey string from connect output passed to send — no case-folding needed", async () => {
     const { mcpClientA, listenAddrB, cleanup } = await makeMcpPair();
     scope.addCleanup(cleanup);
@@ -479,7 +483,7 @@ describe("AC-011: peer_pubkey from cello_connect_peer is directly usable in cell
 
 // ─── AC-012: filtered receive does not consume non-matching messages ───────────
 
-describe("AC-012: filtered cello_receive does not consume messages from other senders", () => {
+describe.skip("AC-012: filtered cello_receive does not consume messages from other senders", () => {
   it("AC-012: filter for B while C's message is queued → timeout; C's message survives for subsequent receive", async () => {
     const kpA = generateKeypair();
     const kpB = generateKeypair();
@@ -558,7 +562,7 @@ describe("AC-012: filtered cello_receive does not consume messages from other se
 
 // ─── SI-001: no private key material in tool responses ────────────────────────
 
-describe("SI-001: no K_local private key material in any tool response", () => {
+describe.skip("SI-001: no K_local private key material in any tool response", () => {
   it("SI-001: own_pubkey equals the public key (not the private key); no extra fields", async () => {
     const kp = generateKeypair();
     const node = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
@@ -598,7 +602,7 @@ describe("SI-001: no K_local private key material in any tool response", () => {
 
 // ─── SI-002: cello_receive only delivers MSG-002-verified envelopes ───────────
 
-describe("SI-002: cello_receive never surfaces messages with invalid signatures", () => {
+describe.skip("SI-002: cello_receive never surfaces messages with invalid signatures", () => {
   it("SI-002: tampered-signature envelope injected via sendRaw does not appear in cello_receive; valid envelope does", async () => {
     const { mcpClientA, mcpClientB, celloClientA, celloClientB, listenAddrB, ownPubkeyA, cleanup } = await makeMcpPair();
     scope.addCleanup(cleanup);
