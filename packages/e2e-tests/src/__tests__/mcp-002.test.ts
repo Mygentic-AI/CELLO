@@ -264,6 +264,19 @@ describe("AC-001: cello_initiate_session returns session_id when assignment arri
     expect((result.session_id as string)).toMatch(/^[0-9a-f]{32}$/);
     expect(result.counterparty_pubkey).toBe(fix.pubkeyBHex);
     expect(result.genesis_prev_root).toMatch(/^[0-9a-f]+$/);
+
+    // SESSION-002 AC-002: B's genesis_prev_root must be byte-identical to A's.
+    // Both are computed from computeGenesisPrevRoot(pubA, pubB, session_id, timestamp)
+    // — a deterministic pure function — so any divergence means the inputs differed.
+    const bResult = parseResult(
+      await fix.mcpB.callTool({
+        name: "cello_await_session",
+        arguments: { timeout_ms: 1_000 },
+      })
+    ) as { type: string; session_id: string; genesis_prev_root: string };
+    expect(bResult.type).toBe("new_session");
+    expect(bResult.session_id).toBe(result.session_id);
+    expect(bResult.genesis_prev_root).toBe(result.genesis_prev_root);
   }, 15_000);
 });
 
