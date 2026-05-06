@@ -70,7 +70,7 @@ import type { Stream } from "@libp2p/interface";
 import type { SessionAssignment } from "@cello/protocol-types";
 import type {
   CelloClient, PeerEntry, ReceivedEnvelope, SendResult, SessionRecord,
-  ReceiveAssignmentResult, ReceivedMessage, SendMessageResult,
+  ReceiveAssignmentResult, ReceivedMessage, SendMessageResult, SessionAssignmentEvent,
 } from "./types.js";
 
 const RELAY_PROTOCOL_ID = "/cello/relay/1.0.0";
@@ -149,6 +149,9 @@ class CelloClientImpl implements CelloClient {
 
   // Optional callback invoked after each successful inbound enqueue
   readonly #onMessageQueued: ((senderPubkeyHex: string) => void) | undefined;
+
+  // Callback for inbound session assignments (participant B role). MCP-002.
+  #onSessionAssignmentHandler: ((event: SessionAssignmentEvent) => void) | undefined;
 
   // session_id_hex → SessionRecord (SESSION-002)
   readonly #sessions = new Map<string, SessionRecord>();
@@ -477,6 +480,17 @@ class CelloClientImpl implements CelloClient {
     if (!this.#myPubkeyHex) this.#myPubkeyHex = myPubkeyHex;
 
     void this.#runRelayStreamReader(sessionIdHex, relayStream, myPubkeyHex, relayIter);
+
+    // Fire inbound session handler if this client is participant B (session was initiated
+    // by a remote peer). MCP-002: cello_await_session uses this to populate its queue.
+    // myPubkeyHex !== pubAHex means we are B (the non-initiator).
+    if (myPubkeyHex !== pubAHex && this.#onSessionAssignmentHandler) {
+      this.#onSessionAssignmentHandler({
+        sessionIdHex: sessionIdHex,
+        counterpartyPubkeyHex: Buffer.from(counterparty.pubkey).toString("hex"),
+        genesisPrevRootHex: Buffer.from(genesis_prev_root).toString("hex"),
+      });
+    }
 
     // SESSION-003: dial directory signaling stream and start reader (for session_sealed events)
     void this.#connectDirectorySignalingStream(sessionIdHex, assignment, myPubkey);
@@ -880,6 +894,8 @@ class CelloClientImpl implements CelloClient {
 
     session.status = "sealed";
     session.sealed_root = sealedRoot;
+    session.directory_signature = dirSig;
+    session.close_timestamp = closeTimestamp;
   }
 
   #handleDirectorySessionSealRejected(sessionIdHex: string, _frame: Record<string, unknown>): void {
@@ -1567,6 +1583,10 @@ class CelloClientImpl implements CelloClient {
 
   peekAll(): Array<{ senderPubkeyHex: string; envelope: ReceivedEnvelope }> {
     return [...this.#arrivalLog];
+  }
+
+  onSessionAssignment(handler: (event: SessionAssignmentEvent) => void): void {
+    this.#onSessionAssignmentHandler = handler;
   }
 }
 

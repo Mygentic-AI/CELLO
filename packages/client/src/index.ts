@@ -1,4 +1,5 @@
 export { createClient } from "./client.js";
+export { createMcpSessionServer } from "./mcp-server.js";
 export type {
   CelloClient,
   PeerEntry,
@@ -11,4 +12,5 @@ export type {
   SessionRecord,
   SessionStatus,
   ReceiveAssignmentResult,
+  SessionAssignmentEvent,
 } from "./types.js";

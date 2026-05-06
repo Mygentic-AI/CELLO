@@ -1,0 +1,12 @@
+{
+  "sealed_root": "611c26d5faf56b1fa11429e0bfd19d32ba952bd481b9d22613f6d8b00e1ec868",
+  "leaf_hash": "1da033bf8927ed69376d91533748494f7f5e88c20603dede2afc9bfd43d46f17",
+  "leaf_index": 3,
+  "tree_size": 7,
+  "proof": [
+    "acaa04663a8547a2f70c60cc18f9378796b13c4f9a08f70d6adae662365b30c6",
+    "3a066e0f40c6a1981ebfa60d2411625d0517ae22c2fc8c7c1784ff8a75c78565",
+    "febfddf6411a22d52844b3472c15fa476387094f589e57b335eb1931caa8d5b7"
+  ],
+  "expected": true
+}

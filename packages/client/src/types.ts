@@ -6,7 +6,7 @@
 
 // ─── Session types (SESSION-002) ──────────────────────────────────────────────
 
-export type SessionStatus = "active" | "transport_lost" | "sealing" | "sealed" | "seal_rejected";
+export type SessionStatus = "active" | "transport_lost" | "sealing" | "sealed" | "seal_rejected" | "seal_deferred";
 
 export interface SessionRecord {
   session_id: Uint8Array;
@@ -36,6 +36,12 @@ export interface SessionRecord {
 
   /** Sealed root after seal completes. SESSION-003. */
   sealed_root?: Uint8Array;
+
+  /** Directory-identity signature over the SealNotarization. SESSION-003. MCP-002 AC-004. */
+  directory_signature?: Uint8Array;
+
+  /** Unix timestamp (ms) when the seal was confirmed. SESSION-003. MCP-002 AC-004. */
+  close_timestamp?: number;
 
   // ─── MSG-004 additions ────────────────────────────────────────────────────
 
@@ -213,4 +219,27 @@ export interface CelloClient {
    * can no longer be used. Idempotent — no-op if the session does not exist. MSG-004.
    */
   closeSession(sessionIdHex: string): void;
+
+  /**
+   * Register a handler that fires when a `session_assignment` frame arrives for an
+   * inbound session (one where this client is participant B — the session was initiated
+   * by a remote peer). The MCP server uses this to populate its inbound session queue
+   * so `cello_await_session` can return the new session to the agent.
+   *
+   * The handler receives a rich event with all session fields pre-encoded as hex strings
+   * so the MCP layer does not need to re-encode them.
+   * Multiple calls to onSessionAssignment replace the previous handler (last-writer wins).
+   * CELLO-MCP-002.
+   */
+  onSessionAssignment(handler: (event: SessionAssignmentEvent) => void): void;
+}
+
+/** Event fired by CelloClient when an inbound session_assignment arrives. CELLO-MCP-002. */
+export interface SessionAssignmentEvent {
+  /** Session ID as lowercase hex. */
+  sessionIdHex: string;
+  /** Counterparty K_local pubkey as lowercase hex. */
+  counterpartyPubkeyHex: string;
+  /** Genesis prev_root as lowercase hex. */
+  genesisPrevRootHex: string;
 }
