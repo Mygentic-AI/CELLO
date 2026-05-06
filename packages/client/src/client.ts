@@ -881,8 +881,10 @@ class CelloClientImpl implements CelloClient {
         this.#desync(sessionIdHex, "prev_root_mismatch"); return;
       }
 
-      // Causal chain check: s1.last_seen_seq <= number of confirmed prior leaves
-      if (s1_fields.last_seen_seq > session.local_tree_leaves.length) {
+      // Causal chain check per SI-004: sender's claimed last_seen_seq can't exceed B's
+      // highest confirmed global relay seq (session.last_seen_seq). Both represent the
+      // same global counter; at this point session.last_seen_seq == local_tree_leaves.length.
+      if (s1_fields.last_seen_seq > session.last_seen_seq) {
         this.#desync(sessionIdHex, "sequence_causal_inconsistency"); return;
       }
 
@@ -897,10 +899,14 @@ class CelloClientImpl implements CelloClient {
         createHash("sha256").update(new Uint8Array([leaf_kind])).update(s2_cbor).digest()
       );
 
+      // last_seen_seq tracks the highest global relay seq confirmed on this session.
+      // Per SI-003: TBS last_seen_seq must equal the highest relay seq received, not
+      // only own-send echoes. Updated for every confirmed leaf (own-send and counterparty).
+      session.last_seen_seq = s2.sequence_number;
+
       if (is_own_send) {
-        // Own-send echo: update last_seen_seq and fire the send lock release.
+        // Own-send echo: fire the send lock release.
         // Do NOT enqueue into receiveMessage queues — callers don't "receive" their own sends.
-        session.last_seen_seq = s2.sequence_number;
         echo_resolve?.();
       } else {
         // Counterparty message: enqueue for receiveMessage callers.

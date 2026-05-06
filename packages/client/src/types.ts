@@ -16,10 +16,10 @@ export interface SessionRecord {
   relay_endpoint: { peer_id: string; multiaddrs: string[] };
   genesis_prev_root: Uint8Array;
   /**
-   * MSG-004: highest sequence number confirmed by the relay's echoed leaf_deliver for
-   * messages WE sent. Used as `last_seen_seq` in the next outbound Structure 1 TBS.
-   * Updated inside crossCheckDelivery only for our own sends (is_own_send == true).
-   * Starts at 0 (no messages sent yet).
+   * MSG-004: highest global relay sequence_number confirmed on this session (from any sender).
+   * Used as `last_seen_seq` in the next outbound Structure 1 TBS per SI-003.
+   * Updated for every confirmed leaf (own-send echo and counterparty message).
+   * Starts at 0 (no messages confirmed yet).
    */
   last_seen_seq: number;
   status: SessionStatus;
