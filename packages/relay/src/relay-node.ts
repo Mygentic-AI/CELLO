@@ -410,9 +410,18 @@ export class CelloRelayNode {
       type: "leaf_deliver",
       session_id: frame.session_id,
       leaf_kind: frame.leaf_kind,
+      sequence_number: seq,
       structure2_cbor: s2Cbor,
+      structure1_cbor: frame.structure1_cbor,
     });
 
+    // Echo leaf_deliver back to the sender on the same stream (MSG-004: sender waits for own echo
+    // to update last_seen_seq and release the per-session outbound lock).
+    try {
+      await this.#sendFrame(stream, deliveryFrame);
+    } catch {}
+
+    // Deliver to counterparty
     const counterpartyStream = this.#streams.get(counterpartyHex);
     if (counterpartyStream) {
       try {
@@ -425,7 +434,9 @@ export class CelloRelayNode {
     this.#store.enqueueDelivery(counterpartyHex, {
       session_id: frame.session_id,
       leaf_kind: frame.leaf_kind,
+      sequence_number: seq,
       structure2_cbor: s2Cbor,
+      structure1_cbor: frame.structure1_cbor,
     });
   }
 

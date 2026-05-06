@@ -159,6 +159,9 @@ async function submitAndAck(
   }));
   const resp = await reader.readDecoded();
   expect(resp["type"]).toBe("hash_submit_ack");
+  // MSG-004: relay echoes leaf_deliver back to sender after the ack; drain it.
+  const echo = await reader.readDecoded();
+  expect(echo["type"]).toBe("leaf_deliver");
   return resp["sequence_number"] as number;
 }
 

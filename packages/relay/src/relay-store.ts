@@ -21,17 +21,17 @@ export interface RelayStore {
   destroySession(sessionIdHex: string): void;
 
   /** Queue a leaf_deliver frame for a pubkey that has no active stream. Drops oldest if at the 256-frame bound. */
-  enqueueDelivery(pubkeyHex: string, delivery: { session_id: Uint8Array; leaf_kind: number; structure2_cbor: Uint8Array }): void;
+  enqueueDelivery(pubkeyHex: string, delivery: { session_id: Uint8Array; leaf_kind: number; sequence_number: number; structure2_cbor: Uint8Array; structure1_cbor: Uint8Array }): void;
 
   /** Drain the pending queue for a pubkey. Returns [] if none. */
-  drainDeliveries(pubkeyHex: string): Array<{ session_id: Uint8Array; leaf_kind: number; structure2_cbor: Uint8Array }>;
+  drainDeliveries(pubkeyHex: string): Array<{ session_id: Uint8Array; leaf_kind: number; sequence_number: number; structure2_cbor: Uint8Array; structure1_cbor: Uint8Array }>;
 }
 
 const DELIVERY_QUEUE_BOUND = 256;
 
 export class InMemoryRelayStore implements RelayStore {
   readonly #sessions = new Map<string, RelaySessionState>();
-  readonly #deliveryQueues = new Map<string, Array<{ session_id: Uint8Array; leaf_kind: number; structure2_cbor: Uint8Array }>>();
+  readonly #deliveryQueues = new Map<string, Array<{ session_id: Uint8Array; leaf_kind: number; sequence_number: number; structure2_cbor: Uint8Array; structure1_cbor: Uint8Array }>>();
 
   recordSession(assignment: SessionAssignment, genesisRoot: Uint8Array): boolean {
     const key = Buffer.from(assignment.session_id).toString("hex");
@@ -58,7 +58,7 @@ export class InMemoryRelayStore implements RelayStore {
     this.#sessions.delete(sessionIdHex);
   }
 
-  enqueueDelivery(pubkeyHex: string, delivery: { session_id: Uint8Array; leaf_kind: number; structure2_cbor: Uint8Array }): void {
+  enqueueDelivery(pubkeyHex: string, delivery: { session_id: Uint8Array; leaf_kind: number; sequence_number: number; structure2_cbor: Uint8Array; structure1_cbor: Uint8Array }): void {
     let queue = this.#deliveryQueues.get(pubkeyHex);
     if (!queue) {
       queue = [];
@@ -71,7 +71,7 @@ export class InMemoryRelayStore implements RelayStore {
     queue.push(delivery);
   }
 
-  drainDeliveries(pubkeyHex: string): Array<{ session_id: Uint8Array; leaf_kind: number; structure2_cbor: Uint8Array }> {
+  drainDeliveries(pubkeyHex: string): Array<{ session_id: Uint8Array; leaf_kind: number; sequence_number: number; structure2_cbor: Uint8Array; structure1_cbor: Uint8Array }> {
     const queue = this.#deliveryQueues.get(pubkeyHex);
     if (!queue || queue.length === 0) return [];
     const items = queue.splice(0);

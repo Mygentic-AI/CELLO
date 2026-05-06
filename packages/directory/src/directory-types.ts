@@ -40,26 +40,12 @@ export interface SessionRequest {
   target_pubkey: Uint8Array; // 32-byte K_local pubkey of the desired counterparty
 }
 
-export interface ParticipantInfo {
-  pubkey: Uint8Array;    // 32-byte K_local pubkey
-  peer_id: string;       // libp2p Peer ID (transport identity)
-  multiaddrs: string[];  // dialable multiaddrs
-}
-
-export interface RelayEndpoint {
-  peer_id: string;
-  multiaddrs: string[];
-}
-
-export interface SessionAssignment {
-  session_id: Uint8Array;           // 16 bytes, CSPRNG
-  participant_a: ParticipantInfo;
-  participant_b: ParticipantInfo;
-  relay_endpoint: RelayEndpoint;
-  session_timestamp: number;        // Unix ms
-  directory_pubkey: Uint8Array;     // 32-byte directory identity pubkey
-  directory_signature: Uint8Array;  // 64-byte Ed25519 over canonical CBOR of assignment fields
-}
+// SessionAssignment and participant/relay types live in @cello/protocol-types (MSG-004 boundary fix).
+// Re-exported here for backwards compatibility.
+import type { SessionAssignment, ParticipantInfo, RelayEndpointInfo } from "@cello/protocol-types";
+export type { SessionAssignment, ParticipantInfo, RelayEndpointInfo };
+/** @deprecated Use RelayEndpointInfo instead */
+export type RelayEndpoint = RelayEndpointInfo;
 
 export interface SessionAssignmentFrame {
   type: "session_assignment";

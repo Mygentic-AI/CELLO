@@ -33,3 +33,4 @@ export {
 } from "./structure2.js";
 
 export { computeGenesisPrevRoot } from "./session.js";
+export type { SessionAssignment, ParticipantInfo, RelayEndpointInfo } from "./session.js";

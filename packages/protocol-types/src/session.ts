@@ -1,5 +1,8 @@
 /**
- * CELLO-SESSION-002 — session.ts
+ * CELLO-SESSION-002/MSG-004 — session.ts
+ *
+ * SessionAssignment: shared wire type used by directory (sender), client (receiver),
+ * and relay (verifier). Lives here so client can import it without touching @cello/directory.
  *
  * computeGenesisPrevRoot: deterministic genesis prev_root for a two-party session.
  *
@@ -15,6 +18,30 @@
  */
 
 import { createHash } from "node:crypto";
+
+// ─── SessionAssignment (shared wire type — SESSION-002) ───────────────────────
+
+export interface ParticipantInfo {
+  pubkey: Uint8Array;    // 32-byte K_local pubkey
+  peer_id: string;       // libp2p Peer ID string
+  multiaddrs: string[];  // dialing multiaddrs
+}
+
+export interface RelayEndpointInfo {
+  peer_id: string;
+  multiaddrs: string[];
+}
+
+/** Directory-signed session assignment delivered to both participants and the relay. */
+export interface SessionAssignment {
+  session_id: Uint8Array;           // 16 bytes, CSPRNG
+  participant_a: ParticipantInfo;
+  participant_b: ParticipantInfo;
+  relay_endpoint: RelayEndpointInfo;
+  session_timestamp: number;        // Unix ms
+  directory_pubkey: Uint8Array;     // 32-byte directory identity pubkey
+  directory_signature: Uint8Array;  // 64-byte Ed25519 over canonical CBOR of assignment fields
+}
 
 /**
  * Compute the genesis prev_root for a two-party CELLO session.

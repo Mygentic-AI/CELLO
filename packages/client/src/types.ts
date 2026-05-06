@@ -1,7 +1,7 @@
 /**
  * @cello/client — types.ts
  *
- * Public types for the CelloClient (MSG-002, SESSION-002).
+ * Public types for the CelloClient (MSG-002, SESSION-002, MSG-004).
  */
 
 // ─── Session types (SESSION-002) ──────────────────────────────────────────────
@@ -15,8 +15,25 @@ export interface SessionRecord {
   counterparty_multiaddrs: string[];
   relay_endpoint: { peer_id: string; multiaddrs: string[] };
   genesis_prev_root: Uint8Array;
+  /**
+   * MSG-004: highest sequence number confirmed by the relay's echoed leaf_deliver for
+   * messages WE sent. Used as `last_seen_seq` in the next outbound Structure 1 TBS.
+   * Updated inside crossCheckDelivery only for our own sends (is_own_send == true).
+   * Starts at 0 (no messages sent yet).
+   */
   last_seen_seq: number;
   status: SessionStatus;
+
+  // ─── MSG-004 additions ────────────────────────────────────────────────────
+
+  /** Ordered list of accepted leaves; used to recompute prev_root locally. MSG-004. */
+  local_tree_leaves: Array<{ kind: "msg" | "ctrl"; s2_cbor: Uint8Array }>;
+
+  /** Next expected sequence number from the relay (starts at 1). MSG-004. */
+  next_expected_seq: number;
+
+  /** Fail-closed flag. Once true all send/receive return session_desynchronized. MSG-004. */
+  desynchronized: boolean;
 }
 
 /**
@@ -48,7 +65,7 @@ export interface PeerEntry {
   connected: boolean;
 }
 
-// ─── Send result ─────────────────────────────────────────────────────────────
+// ─── Send result (M0 path) ───────────────────────────────────────────────────
 
 export type SendFailureReason =
   | "peer_not_connected"
@@ -61,6 +78,28 @@ export type SendFailureReason =
 export type SendResult =
   | { delivered: true; contentHash: string }
   | { delivered: false; reason: SendFailureReason };
+
+// ─── MSG-004: session message types ──────────────────────────────────────────
+
+/** A cross-checked, verified message delivered from a session. MSG-004. */
+export interface ReceivedMessage {
+  content: Uint8Array;
+  senderPubkey: Uint8Array;
+  sequenceNumber: number;
+  /** SHA-256(leaf_kind_byte || structure2_cbor) per MERKLE-001 (RFC 6962). */
+  leafHash: Uint8Array;
+}
+
+export type SendMessageFailureReason =
+  | "session_not_found"
+  | "session_desynchronized"
+  | "transport_unavailable"
+  | "relay_rejected"
+  | "content_path_failed";
+
+export type SendMessageResult =
+  | { ok: true }
+  | { ok: false; reason: SendMessageFailureReason };
 
 // ─── Received envelope ───────────────────────────────────────────────────────
 
@@ -113,7 +152,7 @@ export interface CelloClient {
    * SESSION-002 AC-002, AC-003, AC-004, AC-005, SI-003.
    */
   receiveSessionAssignment(
-    assignment: import("@cello/directory").SessionAssignment,
+    assignment: import("@cello/protocol-types").SessionAssignment,
     myPubkey: Uint8Array,
   ): Promise<ReceiveAssignmentResult>;
 
@@ -122,4 +161,34 @@ export interface CelloClient {
    * SESSION-002 AC-004.
    */
   listSessions(): SessionRecord[];
+
+  // ─── MSG-004: session message send/receive ──────────────────────────────
+
+  /**
+   * Send content on an active session using the dual-path protocol:
+   * hash on /cello/relay/1.0.0 and content on /cello/content/1.0.0.
+   * Serializes sends per session; the next send is not constructed until
+   * the relay has echoed back our own Structure 2 leaf_deliver.
+   * Never throws — returns SendMessageResult.
+   * MSG-004.
+   */
+  sendMessage(sessionIdHex: string, content: Uint8Array): Promise<SendMessageResult>;
+
+  /**
+   * Dequeue the oldest verified ReceivedMessage for the given session.
+   * Returns null if the queue is empty. MSG-004.
+   */
+  receiveMessage(sessionIdHex: string): ReceivedMessage | null;
+
+  /**
+   * Dequeue the oldest verified ReceivedMessage from any session (FIFO arrival order).
+   * Returns null if all queues are empty. MSG-004.
+   */
+  receiveAnyMessage(): { sessionIdHex: string; message: ReceivedMessage } | null;
+
+  /**
+   * Close and remove a session record. Call after a desynchronized or sealed session
+   * can no longer be used. Idempotent — no-op if the session does not exist. MSG-004.
+   */
+  closeSession(sessionIdHex: string): void;
 }

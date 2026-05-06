@@ -41,7 +41,9 @@ export function encodeLeafDeliver(frame: LeafDeliver): Uint8Array {
     type: frame.type,
     session_id: frame.session_id,
     leaf_kind: frame.leaf_kind,
+    sequence_number: frame.sequence_number,
     structure2_cbor: frame.structure2_cbor,
+    structure1_cbor: frame.structure1_cbor,
   });
 }
 

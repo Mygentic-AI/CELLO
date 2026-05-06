@@ -48,9 +48,11 @@ export interface HashSubmit {
 
 export interface LeafDeliver {
   type: "leaf_deliver";
-  session_id: Uint8Array;   // 16 bytes
-  leaf_kind: number;        // 0x00 or 0x02
+  session_id: Uint8Array;       // 16 bytes
+  leaf_kind: number;             // 0x00 or 0x02
+  sequence_number: number;       // MSG-004: seq from Structure 2; client uses this to update last_seen_seq without decoding structure2_cbor
   structure2_cbor: Uint8Array;
+  structure1_cbor: Uint8Array;  // MSG-004: exact bytes sender signed; receiver needs last_seen_seq + timestamp
 }
 
 // ─── Error response types ─────────────────────────────────────────────────────
