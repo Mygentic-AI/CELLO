@@ -1,86 +1,100 @@
 /**
- * CELLO Adapter — server.ts (MCP-001)
+ * CELLO Adapter — server.ts (ADAPTER-002 / M1)
  *
  * createMcpServer(node, client, keyProvider): McpServer
- *   Registers the M0 tool set (5 tools) against a CelloClient.
+ *   Registers the M1 tool set against a CelloClient.
  *   Transport-agnostic: identical tool names, schemas, and wiring under
- *   InMemoryTransport (tests) and stdio (production). AC-006.
+ *   InMemoryTransport (tests) and stdio (production). AC-007.
  *
- * PSEUDOCODE (Phase P):
+ * PSEUDOCODE (Phase P — ADAPTER-002):
  *
  * State held by the MCP server instance:
- *   peerRegistry: Map<peerPubkeyHex, { peerId: string; multiaddrs: string[] }>
- *   startedAt: number = Date.now()  (for uptime_seconds in cello_status)
+ *   sessionEventQueue: Array<InboundSessionEvent>  FIFO; populated by onSessionAssignment handler
+ *   sessionEventResolvers: Array<(event: InboundSessionEvent) => void>  blocked cello_await_session waiters
+ *   startedAt: number = Date.now()
  *
- * transportStarted():
- *   return node.listenAddresses().length > 0
- *   (if false, every tool returns { error: { reason: 'transport_not_started' } })
+ * Session event enqueue (onSessionAssignment handler):
+ *   Receives: SessionAssignmentEvent { sessionIdHex, counterpartyPubkeyHex, genesisPrevRootHex }
+ *   (from CelloClient.onSessionAssignment per CELLO-MCP-002; fields are pre-encoded as hex)
+ *   1. Push cello_session_request notification via claude/channel (SI-001: only type, from, session_id)
+ *   2. If sessionEventResolvers.length > 0:
+ *      - shift the first resolver and call it with the event (wake up blocked cello_await_session)
+ *   3. Else:
+ *      - Push event to sessionEventQueue
  *
- * tool: cello_connect_peer({ multiaddr: string })
- *   1. Guard: if !transportStarted() → return transport_not_started error
- *   2. node.dial(multiaddr) → { peerId }
- *      on throw: return { connected: false, reason: 'peer_unreachable' }
- *   3. peerIdFromString(peerId) → Ed25519PeerId
- *      if type !== 'Ed25519': return { connected: false, reason: 'dial_failed' }
- *   4. peerPubkeyHex = Buffer.from(peerId.publicKey.raw).toString('hex')
- *   5. peerRegistry.set(peerPubkeyHex, { peerId, multiaddrs: [multiaddr] })
- *   6. client.addPeer(peerPubkeyHex, peerId, [multiaddr])
- *   7. return { connected: true, peer_pubkey: peerPubkeyHex }
+ * tool: cello_initiate_session({ target_pubkey: string })
+ *   Delegates to CelloClient.initiateSession (added by MCP-002).
+ *   Returns { ok: true, session_id: hex } or { ok: false, reason: string }.
+ *   Stubbed if method not present on client.
  *
- * tool: cello_send({ peer_pubkey: string, content: string })
+ * tool: cello_await_session({ timeout_ms: number })
+ *   1. If sessionEventQueue.length > 0:
+ *      - shift first event
+ *      - return { type: 'new_session', session_id, counterparty_pubkey, genesis_prev_root }
+ *   2. Else: block until event arrives or timeout expires:
+ *      - Create a Promise that resolves when an event arrives or deadline fires
+ *      - Push a resolver into sessionEventResolvers
+ *      - Race: event arrival vs setTimeout(timeout_ms)
+ *      - On arrival: return new_session
+ *      - On timeout: remove resolver from array; return { type: 'timeout' }
+ *
+ * tool: cello_send({ session_id: string, content: string })
  *   1. Guard: transport_not_started
  *   2. UTF-8 encode content → contentBytes
- *   3. client.send(peer_pubkey, contentBytes) → SendResult
- *   4. Map SendResult to MCP output:
- *      delivered:true  → { delivered: true, content_hash: result.contentHash }
- *      delivered:false → { delivered: false, reason: result.reason, content_hash: null }
+ *   3. client.sendMessage(session_id, contentBytes) → SendMessageResult
+ *   4. Map to MCP output:
+ *      ok:true  → { delivered: true }
+ *      ok:false → { delivered: false, reason: result.reason }
  *
- * tool: cello_receive({ peer_pubkey?: string, timeout_ms: number })
+ * tool: cello_receive({ session_id: string, timeout_ms: number })
  *   1. Guard: transport_not_started
  *   2. deadline = Date.now() + timeout_ms
  *   3. Poll every 20ms until deadline:
- *      a. all = client.peekAll()
- *      b. if peer_pubkey filter:
- *           match = all.find(e => e.senderPubkeyHex === peer_pubkey)
- *           if match: client.receive(peer_pubkey) to dequeue; return message result
- *         else (no filter):
- *           if all.length > 0: client.receive(all[0].senderPubkeyHex) to dequeue; return message result
- *      c. await sleep(20)
+ *      a. msg = client.receiveMessage(session_id)
+ *      b. if msg: return formatted message result
+ *      c. await sleep(Math.min(20, remaining))
  *   4. return { type: 'timeout' }
  *
- *   Message result: try UTF-8 decode envelope.content:
- *     success → { type: 'message', content, sender_pubkey: hex, content_hash: hex, timestamp: int }
- *     failure → { type: 'decode_error', sender_pubkey: hex, content_hash: hex }
+ * tool: cello_close_session({ session_id: string })
+ *   client.closeSession(session_id)
+ *   return { closed: true }
  *
- * tool: cello_list_peers()
- *   1. Guard: transport_not_started
- *   2. connections = node.getConnections()  → Array<{ peerId, encryption }>
- *   3. connectedPeerIds = new Set(connections.map(c => c.peerId))
- *   4. For each [peerPubkeyHex, { peerId, multiaddrs }] in peerRegistry:
- *      emit { peer_pubkey: peerPubkeyHex, multiaddrs, connected: connectedPeerIds.has(peerId) }
- *   5. return array
+ * tool: cello_list_sessions()
+ *   return client.listSessions() mapped to wire shape
+ *
+ * tool: cello_get_sealed_receipt({ session_id: string })
+ *   Stubbed in M1: return { available: false, reason: 'not_yet_sealed' }
+ *   (SESSION-003 implements real seals)
+ *
+ * tool: cello_get_inclusion_proof({ session_id: string, content_hash: string })
+ *   Stubbed in M1: return { available: false, reason: 'not_yet_sealed' }
  *
  * tool: cello_status()
- *   NOTE: no transport_not_started guard — cello_status always responds regardless of
- *   transport state, returning transport_started: false when not yet started. AC-005/AC-009.
  *   1. ownPubkey = Buffer.from(await keyProvider.getPublicKey()).toString('hex')
- *   2. return {
+ *   2. sessions = client.listSessions()
+ *   3. return {
  *        transport_started: transportStarted(),
  *        own_pubkey: ownPubkey,
  *        listen_addresses: node.listenAddresses(),
  *        connected_peer_count: node.getConnections().length,
- *        uptime_seconds: Math.floor((Date.now() - startedAt) / 1000)
+ *        uptime_seconds: Math.floor((Date.now() - startedAt) / 1000),
+ *        active_session_count: sessions.filter(s => s.status === 'active').length,
+ *        directory_reachable: false  // M1 stub — directory reachability check deferred
  *      }
- *   NOTE: cello_status does NOT return transport_not_started error — it always responds
- *   (transport_started: false shows the state). The guard only applies to operational tools.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { peerIdFromString } from "@libp2p/peer-id";
-import type { CelloClient } from "@cello/client";
+import type { CelloClient, SessionAssignmentEvent } from "@cello/client";
 import type { CelloNode } from "@cello/transport";
 import type { KeyProvider } from "@cello/crypto";
+import { pushSessionRequestNotification } from "./notifications.js";
+
+// ─── InboundSessionEvent ─────────────────────────────────────────────────────
+// Alias for SessionAssignmentEvent — both have identical shape; using the alias
+// makes clear this is internal adapter state distinct from the wire type.
+
+type InboundSessionEvent = SessionAssignmentEvent;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -99,121 +113,182 @@ export function createMcpServer(
 ): McpServer {
   const startedAt = Date.now();
 
-  // peer_pubkey_hex → { peerId, multiaddrs }
-  const peerRegistry = new Map<string, { peerId: string; multiaddrs: string[] }>();
+  // ─── Session event queue (FIFO) ─────────────────────────────────────────
+  // Populated by onSessionAssignment callback; drained by cello_await_session.
+  const sessionEventQueue: InboundSessionEvent[] = [];
+
+  // Resolvers for currently-blocked cello_await_session calls.
+  // When an event arrives and a resolver exists, the event is passed directly
+  // to the resolver (skipping the queue) to wake up the blocked call.
+  const sessionEventResolvers: Array<(event: InboundSessionEvent) => void> = [];
 
   function transportStarted(): boolean {
     return node.listenAddresses().length > 0;
   }
 
   const server = new McpServer(
-    { name: "cello", version: "0.0.1" },
+    { name: "cello", version: "0.1.0" },
     { capabilities: { experimental: { "claude/channel": {} } } }
   );
 
-  // ── cello_connect_peer ────────────────────────────────────────────────────
+  // ─── Register onSessionAssignment handler ────────────────────────────────
+  // CelloClient.onSessionAssignment (CELLO-MCP-002) fires with a rich SessionAssignmentEvent
+  // containing sessionIdHex, counterpartyPubkeyHex, and genesisPrevRootHex — all pre-encoded
+  // as lowercase hex by the client layer so the adapter does not need to re-encode.
+  //
+  // PSEUDOCODE for handler:
+  //   1. Push cello_session_request notification (SI-001: only type, from, session_id)
+  //   2. If a cello_await_session call is waiting, wake it up directly.
+  //   3. Otherwise, enqueue the event for the next cello_await_session call.
+  if (client != null && typeof client.onSessionAssignment === "function") {
+    client.onSessionAssignment((event: SessionAssignmentEvent) => {
+      // Push the wake-up notification (SI-001: only type, from, session_id)
+      void pushSessionRequestNotification(server, event.counterpartyPubkeyHex, event.sessionIdHex);
+
+      if (sessionEventResolvers.length > 0) {
+        // Wake up a blocked cello_await_session call directly — no queue entry needed
+        const resolve = sessionEventResolvers.shift()!;
+        resolve(event);
+      } else {
+        // No blocked caller — enqueue for the next cello_await_session call
+        sessionEventQueue.push(event);
+      }
+    });
+  }
+
+  // ── cello_initiate_session ────────────────────────────────────────────────
 
   server.registerTool(
-    "cello_connect_peer",
+    "cello_initiate_session",
     {
-      description: "Dial a peer by multiaddr and register them in the local peer registry.",
+      description: "Initiate a CELLO session with a target agent identified by their public key.",
       inputSchema: {
-        multiaddr: z.string().describe("Multiaddr string of the peer to connect to"),
+        target_pubkey: z.string().describe("Target agent public key hex (K_local pubkey of the peer)"),
       },
     },
-    async ({ multiaddr }) => {
+    async ({ target_pubkey }) => {
       if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
-      let peerId: string;
-      try {
-        const result = await node.dial(multiaddr);
-        peerId = result.peerId;
-      } catch {
-        return jsonText({ connected: false, reason: "peer_unreachable" });
+      const clientWithInitiate = client as CelloClient & {
+        initiateSession?: (targetPubkeyHex: string) => Promise<
+          { ok: true; sessionIdHex: string } | { ok: false; reason: string }
+        >;
+      };
+
+      if (typeof clientWithInitiate.initiateSession !== "function") {
+        return jsonText({ ok: false, reason: "not_available_in_m1" });
       }
 
-      let peerPubkeyHex: string;
-      try {
-        const pid = peerIdFromString(peerId);
-        if (pid.type !== "Ed25519" || !pid.publicKey) {
-          return jsonText({ connected: false, reason: "dial_failed" });
-        }
-        peerPubkeyHex = Buffer.from(pid.publicKey.raw).toString("hex");
-      } catch {
-        return jsonText({ connected: false, reason: "dial_failed" });
+      const result = await clientWithInitiate.initiateSession(target_pubkey);
+      if (result.ok) {
+        return jsonText({ ok: true, session_id: result.sessionIdHex });
       }
-
-      peerRegistry.set(peerPubkeyHex, { peerId, multiaddrs: [multiaddr] });
-      client.addPeer(peerPubkeyHex, peerId, [multiaddr]);
-
-      return jsonText({ connected: true, peer_pubkey: peerPubkeyHex });
+      return jsonText({ ok: false, reason: result.reason });
     }
   );
 
-  // ── cello_send ────────────────────────────────────────────────────────────
+  // ── cello_await_session ───────────────────────────────────────────────────
+
+  server.registerTool(
+    "cello_await_session",
+    {
+      description:
+        "Wait for an inbound session request. Returns immediately if one is already queued, or blocks until one arrives or the timeout expires.",
+      inputSchema: {
+        timeout_ms: z.number().int().min(0).describe("Maximum wait time in milliseconds"),
+      },
+    },
+    async ({ timeout_ms }) => {
+      // If a queued event exists, return it immediately (FIFO)
+      if (sessionEventQueue.length > 0) {
+        const event = sessionEventQueue.shift()!;
+        return jsonText({
+          type: "new_session",
+          session_id: event.sessionIdHex,
+          counterparty_pubkey: event.counterpartyPubkeyHex,
+          genesis_prev_root: event.genesisPrevRootHex,
+        });
+      }
+
+      // Block until an event arrives or timeout fires
+      const result = await new Promise<InboundSessionEvent | null>((resolve) => {
+        const timer = setTimeout(() => {
+          // Remove this resolver from the waiting list
+          const idx = sessionEventResolvers.indexOf(resolveEvent);
+          if (idx !== -1) sessionEventResolvers.splice(idx, 1);
+          resolve(null);
+        }, timeout_ms);
+
+        function resolveEvent(event: InboundSessionEvent): void {
+          clearTimeout(timer);
+          resolve(event);
+        }
+
+        sessionEventResolvers.push(resolveEvent);
+      });
+
+      if (result === null) {
+        return jsonText({ type: "timeout" });
+      }
+
+      return jsonText({
+        type: "new_session",
+        session_id: result.sessionIdHex,
+        counterparty_pubkey: result.counterpartyPubkeyHex,
+        genesis_prev_root: result.genesisPrevRootHex,
+      });
+    }
+  );
+
+  // ── cello_send (session-keyed, M1) ────────────────────────────────────────
 
   server.registerTool(
     "cello_send",
     {
-      description: "Send a UTF-8 message to a connected peer.",
+      description: "Send a UTF-8 message on an active CELLO session.",
       inputSchema: {
-        peer_pubkey: z.string().describe("Peer public key hex (from cello_connect_peer)"),
+        session_id: z.string().describe("Session ID hex (from cello_initiate_session or cello_await_session)"),
         content: z.string().describe("UTF-8 message content"),
       },
     },
-    async ({ peer_pubkey, content }) => {
+    async ({ session_id, content }) => {
       if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
       const contentBytes = new TextEncoder().encode(content);
-      const result = await client.send(peer_pubkey, contentBytes);
+      const result = await client.sendMessage(session_id, contentBytes);
 
-      if (result.delivered) {
-        return jsonText({ delivered: true, content_hash: result.contentHash });
+      if (result.ok) {
+        return jsonText({ delivered: true });
       }
-      return jsonText({ delivered: false, reason: result.reason, content_hash: null });
+      return jsonText({ delivered: false, reason: result.reason });
     }
   );
 
-  // ── cello_receive ─────────────────────────────────────────────────────────
+  // ── cello_receive (session-keyed, M1) ─────────────────────────────────────
 
   server.registerTool(
     "cello_receive",
     {
-      description: "Wait for a message, optionally filtered by sender peer_pubkey.",
+      description:
+        "Wait for a message on a specific CELLO session. Blocks until a message arrives or the timeout expires.",
       inputSchema: {
-        peer_pubkey: z.string().optional().describe("Filter by sender pubkey hex (optional)"),
+        session_id: z
+          .string()
+          .describe("Session ID hex (from cello_initiate_session or cello_await_session)"),
         timeout_ms: z.number().int().min(0).describe("Maximum wait time in milliseconds"),
       },
     },
-    async ({ peer_pubkey, timeout_ms }) => {
+    async ({ session_id, timeout_ms }) => {
       if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
       const deadline = Date.now() + timeout_ms;
 
       while (Date.now() < deadline) {
-        // SI-002: peekAll() only surfaces envelopes that passed MSG-002 verify
-        // (content_hash recompute + Ed25519 signature check). No re-verification here.
-        const all = client.peekAll();
-
-        if (peer_pubkey !== undefined) {
-          // peekAll() is a non-destructive arrival log that never shrinks — a historical entry
-          // for peer_pubkey may exist even after its queue was drained. Always guard the result.
-          const envelope = client.receive(peer_pubkey);
-          if (envelope) {
-            return jsonText(formatMessage(envelope, peer_pubkey));
-          }
-        } else if (all.length > 0) {
-          // Find the oldest unread message: the first senderPubkeyHex whose per-sender queue
-          // is non-empty. We can't rely on all[0] because it may already be dequeued.
-          for (const { senderPubkeyHex } of all) {
-            const envelope = client.receive(senderPubkeyHex);
-            if (envelope) {
-              return jsonText(formatMessage(envelope, senderPubkeyHex));
-            }
-          }
+        const msg = client.receiveMessage(session_id);
+        if (msg) {
+          return jsonText(formatSessionMessage(msg, session_id));
         }
 
-        // Check deadline before sleeping to avoid overshooting by 20ms on last iteration
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
         await sleep(Math.min(20, remaining));
@@ -223,46 +298,98 @@ export function createMcpServer(
     }
   );
 
-  // ── cello_list_peers ──────────────────────────────────────────────────────
+  // ── cello_close_session ───────────────────────────────────────────────────
 
   server.registerTool(
-    "cello_list_peers",
+    "cello_close_session",
     {
-      description: "List all peers currently in the local registry.",
-      inputSchema: {},
+      description: "Close and remove a CELLO session. Idempotent.",
+      inputSchema: {
+        session_id: z.string().describe("Session ID hex to close"),
+      },
     },
-    async () => {
-      if (!transportStarted()) return TRANSPORT_NOT_STARTED;
-
-      const connections = node.getConnections();
-      const connectedPeerIds = new Set(connections.map((c) => c.peerId));
-
-      const peers = Array.from(peerRegistry.entries()).map(([pubkeyHex, { peerId, multiaddrs }]) => ({
-        peer_pubkey: pubkeyHex,
-        multiaddrs,
-        connected: connectedPeerIds.has(peerId),
-      }));
-
-      return jsonText(peers);
+    async ({ session_id }) => {
+      client.closeSession(session_id);
+      return jsonText({ closed: true });
     }
   );
 
-  // ── cello_status ─────────────────────────────────────────────────────────
+  // ── cello_list_sessions ───────────────────────────────────────────────────
+
+  server.registerTool(
+    "cello_list_sessions",
+    {
+      description: "List all current CELLO sessions and their status.",
+      inputSchema: {},
+    },
+    async () => {
+      const sessions = client.listSessions().map((s) => ({
+        session_id: Buffer.from(s.session_id).toString("hex"),
+        counterparty_pubkey: Buffer.from(s.counterparty_pubkey).toString("hex"),
+        status: s.status,
+      }));
+      return jsonText(sessions);
+    }
+  );
+
+  // ── cello_get_sealed_receipt ──────────────────────────────────────────────
+  // Stubbed in M1 — SESSION-003 implements the real seal ceremony.
+
+  server.registerTool(
+    "cello_get_sealed_receipt",
+    {
+      description:
+        "Retrieve the FROST-signed sealed receipt for a closed session. Not yet available in M1.",
+      inputSchema: {
+        session_id: z.string().describe("Session ID hex"),
+      },
+    },
+    async () => {
+      return jsonText({ available: false, reason: "not_yet_sealed" });
+    }
+  );
+
+  // ── cello_get_inclusion_proof ─────────────────────────────────────────────
+  // Stubbed in M1 — requires sealed tree from SESSION-003.
+
+  server.registerTool(
+    "cello_get_inclusion_proof",
+    {
+      description:
+        "Retrieve a Merkle inclusion proof for a specific message in a sealed session. Not yet available in M1.",
+      inputSchema: {
+        session_id: z.string().describe("Session ID hex"),
+        content_hash: z.string().describe("Content hash hex of the message"),
+      },
+    },
+    async () => {
+      return jsonText({ available: false, reason: "not_yet_sealed" });
+    }
+  );
+
+  // ── cello_status (extended with M1 fields) ────────────────────────────────
 
   server.registerTool(
     "cello_status",
     {
-      description: "Return transport status, own pubkey, and connection info.",
+      description:
+        "Return transport status, own pubkey, connection info, and M1 session summary.",
       inputSchema: {},
     },
     async () => {
       const ownPubkey = Buffer.from(await keyProvider.getPublicKey()).toString("hex");
+      const sessions = client.listSessions();
+      const activeSessionCount = sessions.filter((s) => s.status === "active").length;
+
       return jsonText({
         transport_started: transportStarted(),
         own_pubkey: ownPubkey,
         listen_addresses: node.listenAddresses(),
         connected_peer_count: node.getConnections().length,
         uptime_seconds: Math.floor((Date.now() - startedAt) / 1000),
+        active_session_count: activeSessionCount,
+        // M1 stub: directory reachability check is deferred to M2 directory integration
+        directory_reachable: false,
       });
     }
   );
@@ -272,24 +399,27 @@ export function createMcpServer(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function formatMessage(
-  envelope: { content: Uint8Array; senderPubkey: Uint8Array; contentHash: Uint8Array; timestamp: number },
-  senderPubkeyHex: string
+function formatSessionMessage(
+  msg: { content: Uint8Array; senderPubkey: Uint8Array; sequenceNumber: number; leafHash: Uint8Array },
+  sessionIdHex: string
 ): object {
   try {
-    const content = new TextDecoder("utf-8", { fatal: true }).decode(envelope.content);
+    const content = new TextDecoder("utf-8", { fatal: true }).decode(msg.content);
     return {
       type: "message",
       content,
-      sender_pubkey: senderPubkeyHex,
-      content_hash: Buffer.from(envelope.contentHash).toString("hex"),
-      timestamp: envelope.timestamp,
+      session_id: sessionIdHex,
+      sender_pubkey: Buffer.from(msg.senderPubkey).toString("hex"),
+      sequence_number: msg.sequenceNumber,
+      leaf_hash: Buffer.from(msg.leafHash).toString("hex"),
     };
   } catch {
     return {
       type: "decode_error",
-      sender_pubkey: senderPubkeyHex,
-      content_hash: Buffer.from(envelope.contentHash).toString("hex"),
+      session_id: sessionIdHex,
+      sender_pubkey: Buffer.from(msg.senderPubkey).toString("hex"),
+      sequence_number: msg.sequenceNumber,
+      leaf_hash: Buffer.from(msg.leafHash).toString("hex"),
     };
   }
 }

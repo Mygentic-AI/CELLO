@@ -1,2 +1,2 @@
 export { createMcpServer } from "./server.js";
-export { pushChannelNotification } from "./notifications.js";
+export { pushChannelNotification, pushSessionRequestNotification } from "./notifications.js";

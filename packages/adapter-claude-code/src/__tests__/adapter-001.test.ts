@@ -148,9 +148,14 @@ describe("AC-004: factory produces identical tool names, schemas, wiring under I
     expect(toolsA.map((t) => t.name)).toEqual(toolsB.map((t) => t.name));
     expect(toolsA.map((t) => t.description)).toEqual(toolsB.map((t) => t.description));
     expect(toolsA.map((t) => t.inputSchema)).toEqual(toolsB.map((t) => t.inputSchema));
+    // M1 tool set (ADAPTER-002): cello_connect_peer and cello_list_peers removed
     expect(toolsA.map((t) => t.name)).toEqual([
-      "cello_connect_peer",
-      "cello_list_peers",
+      "cello_await_session",
+      "cello_close_session",
+      "cello_get_inclusion_proof",
+      "cello_get_sealed_receipt",
+      "cello_initiate_session",
+      "cello_list_sessions",
       "cello_receive",
       "cello_send",
       "cello_status",
@@ -218,11 +223,23 @@ describe("SI-003: no K_local private key bytes in any tool response", () => {
 
     expect(result.own_pubkey).toBe(expectedPubkey);
     const keys = Object.keys(result).sort();
-    expect(keys).toEqual(["connected_peer_count", "listen_addresses", "own_pubkey", "transport_started", "uptime_seconds"]);
+    // M1 (ADAPTER-002) extended status with active_session_count and directory_reachable
+    expect(keys).toEqual([
+      "active_session_count",
+      "connected_peer_count",
+      "directory_reachable",
+      "listen_addresses",
+      "own_pubkey",
+      "transport_started",
+      "uptime_seconds",
+    ]);
   }, 10_000);
 });
 
 // ─── AC-002 / SI-001: inbound message → notification on MCP wire, content-free ──
+// NOTE (ADAPTER-002): cello_connect_peer and cello_send({peer_pubkey}) are removed from the M1
+// MCP tool surface. This test uses the CelloClient API directly to trigger the inbound message
+// path, verifying that pushChannelNotification still fires correctly via the onMessageQueued hook.
 
 describe("AC-002 + SI-001: inbound message pushes claude/channel notification via MCP wire without content", () => {
   it("AC-002: notifications/claude/channel fires with {type:'cello_message', from:<pubkey>}; no content field", async () => {
@@ -236,11 +253,13 @@ describe("AC-002 + SI-001: inbound message pushes claude/channel notification vi
     scope.addCleanup(async () => { try { await nodeB.stop(); } catch {} });
 
     const ownPubkeyA = Buffer.from(await kpA.getPublicKey()).toString("hex");
+    const ownPubkeyB = Buffer.from(await kpB.getPublicKey()).toString("hex");
 
     // Capture MCP wire notifications received by B's MCP client
     const wireNotifications: Notification[] = [];
 
-    const serverB = createMcpServer(nodeB, /* client wired below */ null as never, kpB);
+    // Create serverB with a real client that has onMessageQueued wired to pushChannelNotification
+    const serverB = createMcpServer(nodeB, /* placeholder; clientB wired below */ null as never, kpB);
     const [stB, ctB] = InMemoryTransport.createLinkedPair();
     await serverB.connect(stB);
     const mcpB = new Client({ name: "test-b", version: "0.0.1" });
@@ -260,20 +279,13 @@ describe("AC-002 + SI-001: inbound message pushes claude/channel notification vi
     const clientA = createClient(nodeA, kpA);
     await clientA.registerHandler();
 
-    const serverA = createMcpServer(nodeA, clientA, kpA);
-    const [stA, ctA] = InMemoryTransport.createLinkedPair();
-    await serverA.connect(stA);
-    const mcpA = new Client({ name: "test-a", version: "0.0.1" });
-    await mcpA.connect(ctA);
-    scope.addCleanup(async () => { try { await mcpA.close(); } catch {} });
-    scope.addCleanup(async () => { try { await serverA.close(); } catch {} });
+    // Use CelloClient API directly (M0 peer-to-peer path still works at client level)
+    clientA.addPeer(ownPubkeyB, nodeB.getConnections().length.toString(), nodeB.listenAddresses());
+    // Dial nodeB manually via node.dial, then add peer for A's registry
+    const dialResult = await nodeA.dial(nodeB.listenAddresses()[0]!);
+    clientA.addPeer(ownPubkeyB, dialResult.peerId, nodeB.listenAddresses());
 
-    const connectResult = parseResult(
-      await mcpA.callTool({ name: "cello_connect_peer", arguments: { multiaddr: nodeB.listenAddresses()[0]! } })
-    ) as { connected: boolean; peer_pubkey: string };
-    expect(connectResult.connected).toBe(true);
-
-    await mcpA.callTool({ name: "cello_send", arguments: { peer_pubkey: connectResult.peer_pubkey, content: "hello" } });
+    await clientA.send(ownPubkeyB, new TextEncoder().encode("hello"));
 
     await waitFor(
       () => wireNotifications.some((n) => n.method === "notifications/claude/channel"),
@@ -292,10 +304,12 @@ describe("AC-002 + SI-001: inbound message pushes claude/channel notification vi
   }, 20_000);
 });
 
-// ─── AC-003: cello_receive returns message after notification ──────────────────
+// ─── AC-003: CelloClient.receive() works after onMessageQueued fires ───────────
+// NOTE (ADAPTER-002): This test uses the CelloClient API directly since cello_connect_peer
+// and old cello_send({peer_pubkey}) are no longer in the M1 MCP tool surface.
 
-describe("AC-003: cello_receive returns message after notification fires", () => {
-  it("AC-003: receive after onMessageQueued fires returns message with correct sender_pubkey", async () => {
+describe("AC-003: CelloClient.receive() returns message after onMessageQueued fires", () => {
+  it("AC-003: receive after onMessageQueued fires returns message with correct sender pubkey", async () => {
     const kpA = generateKeypair();
     const kpB = generateKeypair();
     const nodeA = await createNode({ keyProvider: kpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
@@ -306,6 +320,7 @@ describe("AC-003: cello_receive returns message after notification fires", () =>
     scope.addCleanup(async () => { try { await nodeB.stop(); } catch {} });
 
     const ownPubkeyA = Buffer.from(await kpA.getPublicKey()).toString("hex");
+    const ownPubkeyB = Buffer.from(await kpB.getPublicKey()).toString("hex");
     let notified = false;
 
     const clientB = createClient(nodeB, kpB, { onMessageQueued: () => { notified = true; } });
@@ -313,37 +328,18 @@ describe("AC-003: cello_receive returns message after notification fires", () =>
     const clientA = createClient(nodeA, kpA);
     await clientA.registerHandler();
 
-    const serverB = createMcpServer(nodeB, clientB, kpB);
-    const serverA = createMcpServer(nodeA, clientA, kpA);
+    // Dial and register peer at client level (M0 path, not via MCP tool)
+    const dialResult = await nodeA.dial(nodeB.listenAddresses()[0]!);
+    clientA.addPeer(ownPubkeyB, dialResult.peerId, nodeB.listenAddresses());
 
-    const [stB, ctB] = InMemoryTransport.createLinkedPair();
-    const [stA, ctA] = InMemoryTransport.createLinkedPair();
-    await serverB.connect(stB);
-    await serverA.connect(stA);
-    const mcpB = new Client({ name: "b", version: "0.0.1" });
-    const mcpA = new Client({ name: "a", version: "0.0.1" });
-    await mcpB.connect(ctB);
-    await mcpA.connect(ctA);
-    scope.addCleanup(async () => {
-      try { await mcpA.close(); } catch {}; try { await mcpB.close(); } catch {};
-      try { await serverA.close(); } catch {}; try { await serverB.close(); } catch {};
-    });
-
-    const connectResult = parseResult(
-      await mcpA.callTool({ name: "cello_connect_peer", arguments: { multiaddr: nodeB.listenAddresses()[0]! } })
-    ) as { connected: boolean; peer_pubkey: string };
-    expect(connectResult.connected).toBe(true);
-
-    await mcpA.callTool({ name: "cello_send", arguments: { peer_pubkey: connectResult.peer_pubkey, content: "ping" } });
+    await clientA.send(ownPubkeyB, new TextEncoder().encode("ping"));
 
     await waitFor(() => notified, { timeout: 5000 });
 
-    const result = parseResult(
-      await mcpB.callTool({ name: "cello_receive", arguments: { timeout_ms: 2000 } })
-    ) as { type: string; content: string; sender_pubkey: string };
-
-    expect(result.type).toBe("message");
-    expect(result.content).toBe("ping");
-    expect(result.sender_pubkey).toBe(ownPubkeyA);
+    // Receive via CelloClient.receive() directly (M0 API still works at client level)
+    const envelope = clientB.receive(ownPubkeyA);
+    expect(envelope).not.toBeNull();
+    const content = new TextDecoder().decode(envelope!.content);
+    expect(content).toBe("ping");
   }, 20_000);
 });

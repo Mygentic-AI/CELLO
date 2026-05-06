@@ -20,7 +20,7 @@ claude mcp add --transport stdio cello -- cello-mcp
 claude --channels server:cello
 ```
 
-The `--channels` flag enables push notifications. When a peer sends you a message, Claude Code starts a new turn automatically — no polling required.
+The `--channels` flag enables push notifications. When a peer sends a message or initiates a session, Claude Code starts a new turn automatically — no polling required.
 
 ## Verify
 
@@ -32,11 +32,13 @@ Call the `cello_status` tool. You should see:
   "own_pubkey": "<your 64-char hex pubkey>",
   "listen_addresses": ["/ip4/..."],
   "connected_peer_count": 0,
-  "uptime_seconds": 0
+  "uptime_seconds": 0,
+  "active_session_count": 0,
+  "directory_reachable": false
 }
 ```
 
-Share your `own_pubkey` and one of your `listen_addresses` with the peer you want to communicate with.
+Share your `own_pubkey` with the peer you want to communicate with.
 
 ## Configuration
 
@@ -48,17 +50,39 @@ Share your `own_pubkey` and one of your `listen_addresses` with the peer you wan
 ## Usage
 
 ```
-# Connect to a peer (they give you their multiaddr)
-cello_connect_peer({ multiaddr: "/ip4/1.2.3.4/tcp/54321/p2p/<peer-id>" })
-→ { connected: true, peer_pubkey: "<hex>" }
+# Initiate a session with a peer (they give you their own_pubkey)
+cello_initiate_session({ target_pubkey: "<hex>" })
+→ { ok: true, session_id: "<hex>" }
 
-# Send a message
-cello_send({ peer_pubkey: "<hex>", content: "hello" })
-→ { delivered: true, content_hash: "<hex>" }
+# Wait for an inbound session request (blocks until one arrives or times out)
+cello_await_session({ timeout_ms: 30000 })
+→ { type: "new_session", session_id: "<hex>", counterparty_pubkey: "<hex>", genesis_prev_root: "<hex>" }
 
-# Receive (blocks until message or timeout)
-cello_receive({ timeout_ms: 30000 })
-→ { type: "message", content: "hello back", sender_pubkey: "<hex>", ... }
+# Send a message on an active session
+cello_send({ session_id: "<hex>", content: "hello" })
+→ { delivered: true }
+
+# Receive a message on an active session (blocks until message or timeout)
+cello_receive({ session_id: "<hex>", timeout_ms: 30000 })
+→ { type: "message", content: "hello back", session_id: "<hex>", sender_pubkey: "<hex>", ... }
+
+# List all active sessions
+cello_list_sessions()
+→ [{ session_id: "<hex>", counterparty_pubkey: "<hex>", status: "active" }]
+
+# Close a session
+cello_close_session({ session_id: "<hex>" })
+→ { closed: true }
+
+# Get the sealed receipt (available after seal ceremony)
+cello_get_sealed_receipt({ session_id: "<hex>" })
+→ { available: false, reason: "not_yet_sealed" }
+
+# Get a Merkle inclusion proof for a message
+cello_get_inclusion_proof({ session_id: "<hex>", content_hash: "<hex>" })
+→ { available: false, reason: "not_yet_sealed" }
 ```
 
 When a message arrives, Claude Code wakes up automatically (via `--channels`) and you can call `cello_receive` immediately.
+
+When a session request arrives, Claude Code wakes up automatically and you can call `cello_await_session` immediately.
