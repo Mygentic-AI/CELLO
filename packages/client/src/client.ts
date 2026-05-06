@@ -128,7 +128,6 @@ interface ReadyEntry {
   echo_resolve?: () => void;
 }
 
-const CONTENT_GRACE_MS = 30_000;
 const PENDING_CONTENT_BOUND = 256;
 
 // ─── CelloClientImpl ─────────────────────────────────────────────────────────
@@ -136,6 +135,7 @@ const PENDING_CONTENT_BOUND = 256;
 class CelloClientImpl implements CelloClient {
   readonly #node: CelloNode;
   readonly #keyProvider: KeyProvider;
+  readonly #contentGraceMs: number;
   #myPubkeyHex: string | null = null;
 
   // peer_pubkey_hex → PeerEntry
@@ -197,10 +197,16 @@ class CelloClientImpl implements CelloClient {
   // FIFO arrival order across all sessions: { sessionIdHex, message }
   readonly #anyMessageQueue: Array<{ sessionIdHex: string; message: ReceivedMessage }> = [];
 
-  constructor(node: CelloNode, keyProvider: KeyProvider, onMessageQueued?: (senderPubkeyHex: string) => void) {
+  constructor(
+    node: CelloNode,
+    keyProvider: KeyProvider,
+    onMessageQueued?: (senderPubkeyHex: string) => void,
+    contentGraceMs = 30_000,
+  ) {
     this.#node = node;
     this.#keyProvider = keyProvider;
     this.#onMessageQueued = onMessageQueued;
+    this.#contentGraceMs = contentGraceMs;
   }
 
   addPeer(peerPubkeyHex: string, peerId: string, multiaddrs: string[]): void {
@@ -241,6 +247,14 @@ class CelloClientImpl implements CelloClient {
   // Used by AC-003 to inject tampered content frames directly.
   async openContentStreamByPeerId(peerId: string): Promise<Stream> {
     return this.#node.newStream(peerId, CELLO_CONTENT_PROTOCOL_ID);
+  }
+
+  // Internal test escape: directly feed a leaf_deliver frame into the relay stream handler.
+  // Used by AC-004 through AC-008 to inject adversarial frames without a compromised relay.
+  injectLeafDeliver(sessionIdHex: string, frame: Record<string, unknown>): void {
+    const myPubkeyHex = this.#myPubkeyHex;
+    if (!myPubkeyHex) throw new Error("injectLeafDeliver: client not yet authenticated (no session registered)");
+    this.#handleInboundLeafDeliver(sessionIdHex, frame, myPubkeyHex);
   }
 
   // Internal: open stream, write LP-framed bytes, await close type.
@@ -808,7 +822,7 @@ class CelloClientImpl implements CelloClient {
           ps2Map.delete(contentHashHex);
           this.#desync(sessionIdHex, "content_missing");
         }
-      }, CONTENT_GRACE_MS);
+      }, this.#contentGraceMs);
 
       const entry: PendingS2Entry = {
         s2,
@@ -1078,11 +1092,8 @@ class CelloClientImpl implements CelloClient {
    * Protocol: relay sends relay_auth_challenge immediately on connect.
    * We read it, sign the nonce, send relay_auth_response.
    * On auth failure, relay sends relay_auth_failed then aborts the stream.
-   * On success, relay stays silent (waiting for hash_submit frames).
-   * We check for failure with a short 200ms window; timeout = success.
-   *
-   * KNOWN M1 LIMITATION — 200ms window fragility: if the host is under heavy CPU load
-   * the relay may not send relay_auth_failed within 200ms. Long-term fix: add relay_auth_ok.
+   * On success, relay sends relay_auth_ok then waits for hash_submit frames.
+   * Protocol: challenge → response → relay_auth_ok | relay_auth_failed
    */
   async #performRelayAuth(
     stream: Stream,
@@ -1127,59 +1138,26 @@ class CelloClientImpl implements CelloClient {
     }) as Uint8Array;
     stream.send(lp.encode.single(responseFrame));
 
-    // Start a SINGLE pending next() to detect relay_auth_failed.
-    // We must not call iter.next() a second time until this resolves (would be concurrent).
-    const pendingNext = iter.next();
+    // Read relay_auth_ok or relay_auth_failed — relay always sends one of these.
+    const { value: ackRaw, done: ackDone } = await iter.next();
+    if (ackDone || ackRaw === undefined) {
+      return { ok: false, reason: "relay_auth_error" };
+    }
+    let ackFrame: Record<string, unknown>;
+    try {
+      ackFrame = decode(toU8(ackRaw)) as Record<string, unknown>;
+    } catch {
+      return { ok: false, reason: "relay_auth_error" };
+    }
 
-    type FrameResult =
-      | { kind: "frame"; bytes: Uint8Array }
-      | { kind: "done" }
-      | { kind: "error" }
-      | { kind: "timeout" };
-
-    const frameRace = pendingNext.then(
-      ({ value, done: d }): FrameResult => {
-        if (d || value === undefined) return { kind: "done" };
-        return { kind: "frame", bytes: toU8(value) };
-      },
-      (): FrameResult => ({ kind: "error" }),
-    );
-    const timerRace = new Promise<FrameResult>((resolve) => {
-      setTimeout(() => resolve({ kind: "timeout" }), 200);
-    });
-
-    const result = await Promise.race([frameRace, timerRace]);
-
-    if (result.kind === "error") {
-      // Stream reset/aborted — auth rejected
+    if (ackFrame["type"] === "relay_auth_failed") {
       return { ok: false, reason: "relay_auth_failed" };
     }
-
-    if (result.kind === "done") {
-      // Stream ended cleanly after response — treat as success
-      return { ok: true, iter };
+    if (ackFrame["type"] !== "relay_auth_ok") {
+      return { ok: false, reason: "relay_auth_error" };
     }
 
-    if (result.kind === "frame") {
-      // A frame arrived before timeout
-      let nextFrame: Record<string, unknown>;
-      try {
-        nextFrame = decode(result.bytes) as Record<string, unknown>;
-      } catch {
-        return { ok: false, reason: "relay_auth_error" };
-      }
-      if (nextFrame["type"] === "relay_auth_failed") {
-        return { ok: false, reason: "relay_auth_failed" };
-      }
-      // Non-failure frame arrived early (unexpected but not fatal).
-      // Wrap iter to prepend the consumed frame so #runRelayStreamReader sees it.
-      return { ok: true, iter: makePrependedIter(result.bytes, iter) };
-    }
-
-    // result.kind === "timeout": pendingNext is still in flight.
-    // Wrap iter so the reader awaits the pending promise first, then continues from iter.
-    // This ensures exactly one outstanding next() call at any time.
-    return { ok: true, iter: makeAwaitPendingIter(pendingNext, iter) };
+    return { ok: true, iter };
   }
 
   // ─── MSG-002 handlers ─────────────────────────────────────────────────────────
@@ -1273,60 +1251,17 @@ class CelloClientImpl implements CelloClient {
 
 // ─── Stream iterator helpers ──────────────────────────────────────────────────
 
-/**
- * Returns an AsyncIterator that yields `first` then delegates to `rest`.
- * Used when a non-failure frame was consumed during the auth window.
- */
-function makePrependedIter(first: Uint8Array, rest: AsyncIterator<Uint8Array>): AsyncIterator<Uint8Array> {
-  let yielded = false;
-  return {
-    next(): Promise<IteratorResult<Uint8Array>> {
-      if (!yielded) {
-        yielded = true;
-        return Promise.resolve({ value: first, done: false });
-      }
-      return rest.next();
-    },
-    return: rest.return?.bind(rest),
-    throw: rest.throw?.bind(rest),
-  };
-}
-
-/**
- * Returns an AsyncIterator that awaits `pending` (one in-flight next() call from auth),
- * yields its result, then delegates to `rest`.
- * Used when the 200ms auth window timed out with a pending iter.next() still outstanding.
- */
-function makeAwaitPendingIter(
-  pending: Promise<IteratorResult<Uint8Array>>,
-  rest: AsyncIterator<Uint8Array>,
-): AsyncIterator<Uint8Array> {
-  let pendingConsumed = false;
-  return {
-    async next(): Promise<IteratorResult<Uint8Array>> {
-      if (!pendingConsumed) {
-        pendingConsumed = true;
-        return pending;
-      }
-      return rest.next();
-    },
-    return: rest.return?.bind(rest),
-    throw: rest.throw?.bind(rest),
-  };
-}
-
 // ─── Factory ─────────────────────────────────────────────────────────────────
 
 export function createClient(
   node: CelloNode,
   keyProvider: KeyProvider,
-  opts?: { onMessageQueued?: (senderPubkeyHex: string) => void }
+  opts?: { onMessageQueued?: (senderPubkeyHex: string) => void; contentGraceMs?: number }
 ): CelloClient & {
   sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
   openRawStream(peerPubkeyHex: string): Promise<Stream>;
-  openContentStreamByPeerId(peerId: string): Promise<Stream>;
 } {
-  return new CelloClientImpl(node, keyProvider, opts?.onMessageQueued);
+  return new CelloClientImpl(node, keyProvider, opts?.onMessageQueued, opts?.contentGraceMs);
 }
 
 // ─── Error helpers ────────────────────────────────────────────────────────────

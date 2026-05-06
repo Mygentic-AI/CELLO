@@ -36,6 +36,10 @@ export interface RelayAuthFailed {
   reason: AuthFailedReason;
 }
 
+export interface RelayAuthOk {
+  type: "relay_auth_ok";
+}
+
 // ─── Data frame types ─────────────────────────────────────────────────────────
 
 export interface HashSubmit {

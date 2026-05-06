@@ -10,6 +10,7 @@ import type {
   RelayAuthChallenge,
   RelayAuthResponse,
   RelayAuthFailed,
+  RelayAuthOk,
   HashSubmit,
   HashSubmitAck,
   HashSubmitError,
@@ -26,6 +27,10 @@ export function encodeAuthChallenge(frame: RelayAuthChallenge): Uint8Array {
 
 export function encodeAuthFailed(frame: RelayAuthFailed): Uint8Array {
   return ENC.encode({ type: frame.type, reason: frame.reason });
+}
+
+export function encodeAuthOk(_frame: RelayAuthOk): Uint8Array {
+  return ENC.encode({ type: "relay_auth_ok" });
 }
 
 export function encodeHashSubmitAck(frame: HashSubmitAck): Uint8Array {

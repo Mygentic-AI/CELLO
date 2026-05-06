@@ -32,6 +32,11 @@ import { randomBytes, createHash } from "node:crypto";
 import { Encoder } from "cbor-x";
 import { generateKeypair, buildMerkleTree, merkleRoot } from "@cello/crypto";
 import type { LeafInput } from "@cello/crypto";
+import {
+  buildStructure2,
+  encodeStructure2,
+  computeGenesisPrevRoot,
+} from "@cello/protocol-types";
 import type { SessionAssignment } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
 import { createRelayNode } from "@cello/relay";
@@ -244,6 +249,66 @@ async function waitForMessage(
   throw new Error(`timeout waiting for message on session ${sessionIdHex}`);
 }
 
+/**
+ * Build a valid leaf_deliver frame for injection into a client's relay handler.
+ *
+ * @param opts.senderKp - Keypair to sign the Structure 1 TBS with.
+ * @param opts.sessionId - Session ID bytes.
+ * @param opts.prevRoot - Merkle root of the tree prior to this leaf.
+ * @param opts.seqNum - Sequence number to assign to this leaf.
+ * @param opts.contentHash - SHA-256(0x00 || content).
+ * @param opts.lastSeenSeq - Value to embed in Structure 1 TBS last_seen_seq.
+ * @param opts.overrides - Optional raw overrides applied to the resulting frame object.
+ */
+async function buildLeafDeliverFrame(opts: {
+  senderKp: ReturnType<typeof generateKeypair>;
+  sessionId: Uint8Array;
+  prevRoot: Uint8Array;
+  seqNum: number;
+  contentHash: Uint8Array;
+  lastSeenSeq?: number;
+  overrides?: Partial<Record<string, unknown>>;
+}): Promise<Record<string, unknown>> {
+  const senderPubkey = await opts.senderKp.getPublicKey();
+
+  // Build and sign Structure 1 TBS: [1, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]
+  const tbs = CBOR_ENC.encode([
+    1,
+    opts.contentHash,
+    senderPubkey,
+    opts.sessionId,
+    opts.lastSeenSeq ?? 0,
+    Date.now(),
+  ]) as Uint8Array;
+  const signature = await opts.senderKp.sign(tbs);
+
+  const s2Result = buildStructure2(
+    opts.seqNum,
+    senderPubkey,
+    opts.contentHash,
+    signature,
+    opts.prevRoot,
+  );
+  if (!s2Result.ok) throw new Error(`buildStructure2 failed: ${s2Result.error}`);
+
+  const s2Cbor = encodeStructure2(s2Result.structure2);
+
+  return {
+    type: "leaf_deliver",
+    session_id: opts.sessionId,
+    leaf_kind: 0x00,
+    sequence_number: opts.seqNum,
+    structure2_cbor: s2Cbor,
+    structure1_cbor: tbs,
+    ...opts.overrides,
+  };
+}
+
+/** Genesis prev_root for a session (same as computed by client). */
+async function genesisRoot(fix: Fixture, sessionId: Uint8Array, sessionTimestamp: number): Promise<Uint8Array> {
+  return computeGenesisPrevRoot(fix.clientA.pubkey, fix.clientB.pubkey, sessionId, sessionTimestamp);
+}
+
 // ─── Test scope ───────────────────────────────────────────────────────────────
 
 let scope: TestScope;
@@ -396,25 +461,40 @@ describe("AC-003: content_frame hash mismatch → B session desynchronized, cont
 // ─── AC-004: forged Structure 2 signature → desync ────────────────────────────
 
 describe("AC-004: Structure 2 with replaced sender_signature → B desynchronized, signature_verification_failed", () => {
-  it("sendMessage returns ok:true for A; B session becomes desynchronized after receiving forged S2", async () => {
+  it("injected S2 with random 64-byte sender_signature causes B to desync", async () => {
     const fix = await makeFixture();
     scope.addCleanup(fix.stopAll);
 
-    const { sessionIdHex } = await setupSession(fix);
+    const { sessionIdHex, sessionId, assignment } = await setupSession(fix);
 
-    // A sends normally — relay builds valid S2
-    const sendResult = await fix.clientA.client.sendMessage(sessionIdHex, Buffer.from("hello"));
-    expect(sendResult.ok).toBe(true); // RED — stub returns false
+    const prevRoot = await genesisRoot(fix, sessionId, assignment.session_timestamp);
+    const contentHash = computeContentHash(Buffer.from("hello"));
 
-    // The message arrives at B. B verifies the S2 signature.
-    // In this test, we just confirm that the send succeeds for A.
-    // The tampered-signature scenario requires the test infrastructure
-    // to intercept the relay stream, which is covered in SI-001 below.
-    // This AC is satisfied by AC-001 (signature verified on valid path) +
-    // the SI-001 adversarial test. We just verify basic send works here.
-    const msg = await waitForMessage(fix.clientB.client, sessionIdHex, 5000);
-    expect(msg.senderPubkey).toBeDefined();
-  }, 15_000);
+    // Build a valid frame then replace sender_signature with random bytes.
+    const frame = await buildLeafDeliverFrame({
+      senderKp: fix.clientA.kp,
+      sessionId,
+      prevRoot,
+      seqNum: 1,
+      contentHash,
+    });
+
+    // Replace sender_signature inside structure2_cbor with random bytes.
+    // Easiest: override the structure2_cbor with a re-encoded S2 containing a bad sig.
+    const { encodeStructure2: enc2, buildStructure2: build2 } = await import("@cello/protocol-types");
+    const senderPubkey = await fix.clientA.kp.getPublicKey();
+    const badSig = new Uint8Array(randomBytes(64));
+    const s2bad = build2(1, senderPubkey, contentHash, badSig, prevRoot);
+    if (!s2bad.ok) throw new Error("build2 failed");
+    (frame as Record<string, unknown>)["structure2_cbor"] = enc2(s2bad.structure2);
+
+    const injectB = fix.clientB.client as unknown as { injectLeafDeliver(h: string, f: Record<string, unknown>): void };
+    injectB.injectLeafDeliver(sessionIdHex, frame);
+
+    const sessB = fix.clientB.client.listSessions()
+      .find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
+    expect(sessB?.desynchronized).toBe(true);
+  }, 10_000);
 });
 
 // ─── AC-005: sequence_number replay → desync ──────────────────────────────────
@@ -424,24 +504,36 @@ describe("AC-005: replayed Structure 2 (seq already seen) → B desynchronized",
     const fix = await makeFixture();
     scope.addCleanup(fix.stopAll);
 
-    const { sessionIdHex } = await setupSession(fix);
+    const { sessionIdHex, sessionId, assignment } = await setupSession(fix);
 
     // Advance to seq 2
     await fix.clientA.client.sendMessage(sessionIdHex, Buffer.from("msg1"));
     await fix.clientA.client.sendMessage(sessionIdHex, Buffer.from("msg2"));
+    await waitForMessage(fix.clientB.client, sessionIdHex, 5000);
+    await waitForMessage(fix.clientB.client, sessionIdHex, 5000);
 
-    expect((await waitForMessage(fix.clientB.client, sessionIdHex, 5000)).sequenceNumber).toBe(1); // RED
-    expect((await waitForMessage(fix.clientB.client, sessionIdHex, 5000)).sequenceNumber).toBe(2);
-
-    // B has next_expected_seq = 3. Inject a replay with seq=2.
-    // The client's handleInboundLeafDeliver must detect s2.sequence_number < next_expected_seq.
+    // B has confirmed seqs 1 and 2 (relayRecvSeq = 2). Inject seq=2 again.
     const recB = fix.clientB.client.listSessions()
       .find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
     expect(recB!.next_expected_seq).toBe(3);
 
-    // Subsequent send on B returns session_desynchronized if session was desync'd.
-    // The replay injection is internal — we test via the state contract.
-    // This test is primarily RED because sendMessage stub returns false.
+    // Build the first leaf's prevRoot (genesis) to sign a plausible seq=2 replay.
+    const prevRoot = await genesisRoot(fix, sessionId, assignment.session_timestamp);
+    const contentHash = computeContentHash(Buffer.from("msg1"));
+    const frame = await buildLeafDeliverFrame({
+      senderKp: fix.clientA.kp,
+      sessionId,
+      prevRoot,
+      seqNum: 2, // replay — relay already delivered seq=2
+      contentHash,
+    });
+
+    const injectB = fix.clientB.client as unknown as { injectLeafDeliver(h: string, f: Record<string, unknown>): void };
+    injectB.injectLeafDeliver(sessionIdHex, frame);
+
+    const sessB2 = fix.clientB.client.listSessions()
+      .find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
+    expect(sessB2?.desynchronized).toBe(true);
   }, 15_000);
 });
 
@@ -452,16 +544,30 @@ describe("AC-006: Structure 2 with seq=4 when expected seq=3 → B desynchronize
     const fix = await makeFixture();
     scope.addCleanup(fix.stopAll);
 
-    const { sessionIdHex } = await setupSession(fix);
+    const { sessionIdHex, sessionId, assignment } = await setupSession(fix);
 
     await fix.clientA.client.sendMessage(sessionIdHex, Buffer.from("msg1"));
     await fix.clientA.client.sendMessage(sessionIdHex, Buffer.from("msg2"));
-
-    await waitForMessage(fix.clientB.client, sessionIdHex, 5000); // RED
+    await waitForMessage(fix.clientB.client, sessionIdHex, 5000);
     await waitForMessage(fix.clientB.client, sessionIdHex, 5000);
 
-    // B's next_expected_seq = 3. A gap would cause desync.
-    // Verified implicitly by the client's handleInboundLeafDeliver seq check.
+    // B's relayRecvSeq = 2, next expected = 3. Inject seq=4 (skip seq=3).
+    const prevRoot = await genesisRoot(fix, sessionId, assignment.session_timestamp);
+    const contentHash = computeContentHash(Buffer.from("gap"));
+    const frame = await buildLeafDeliverFrame({
+      senderKp: fix.clientA.kp,
+      sessionId,
+      prevRoot,
+      seqNum: 4, // seq=3 was skipped
+      contentHash,
+    });
+
+    const injectB = fix.clientB.client as unknown as { injectLeafDeliver(h: string, f: Record<string, unknown>): void };
+    injectB.injectLeafDeliver(sessionIdHex, frame);
+
+    const sessB = fix.clientB.client.listSessions()
+      .find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
+    expect(sessB?.desynchronized).toBe(true);
   }, 15_000);
 });
 
@@ -472,21 +578,59 @@ describe("AC-007: Structure 2 with wrong prev_root → B desynchronized, prev_ro
     const fix = await makeFixture();
     scope.addCleanup(fix.stopAll);
 
-    const { sessionIdHex } = await setupSession(fix);
+    const { sessionIdHex, sessionId } = await setupSession(fix);
 
     for (let i = 0; i < 3; i++) {
       await fix.clientA.client.sendMessage(sessionIdHex, Buffer.from(`msg-${i}`));
     }
     for (let i = 0; i < 3; i++) {
-      await waitForMessage(fix.clientB.client, sessionIdHex, 5000); // RED
+      await waitForMessage(fix.clientB.client, sessionIdHex, 5000);
     }
 
-    // B's local tree has 3 leaves. Root is R3.
-    // An incoming S2 with prev_root != R3 would trigger desync.
-    // Tested implicitly via the client's prev_root check in handleInboundLeafDeliver.
     const recB = fix.clientB.client.listSessions()
       .find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
-    expect(recB!.local_tree_leaves.length).toBe(3); // RED
+    expect(recB!.local_tree_leaves.length).toBe(3);
+
+    // Inject seq=4 with a random wrong prev_root (not R3).
+    const wrongPrevRoot = new Uint8Array(randomBytes(32));
+    const contentHash = computeContentHash(Buffer.from("bad-root"));
+    const frame = await buildLeafDeliverFrame({
+      senderKp: fix.clientA.kp,
+      sessionId,
+      prevRoot: wrongPrevRoot, // should be R3 computed from the 3-leaf tree
+      seqNum: 4,
+      contentHash,
+    });
+
+    const injectB = fix.clientB.client as unknown as { injectLeafDeliver(h: string, f: Record<string, unknown>): void };
+    injectB.injectLeafDeliver(sessionIdHex, frame);
+
+    // Must inject content too (so the frame reaches #drainReadyQueue where prev_root is checked)
+    const contentStream = await (fix.clientA.client as unknown as {
+      openContentStreamByPeerId(p: string): Promise<import("@libp2p/interface").Stream>;
+    }).openContentStreamByPeerId(fix.clientB.peerId);
+    const { encode: lpEncode } = await import("it-length-prefixed");
+    const cf = CBOR_ENC.encode({
+      type: "content_frame",
+      session_id: sessionId,
+      content_bytes: Buffer.from("bad-root"),
+      content_hash: contentHash,
+    }) as Uint8Array;
+    contentStream.send(lpEncode.single(cf));
+    await contentStream.close();
+
+    // Wait for B to desync
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const sess = fix.clientB.client.listSessions()
+        .find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
+      if (sess?.desynchronized) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    const sessB = fix.clientB.client.listSessions()
+      .find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
+    expect(sessB?.desynchronized).toBe(true);
   }, 20_000);
 });
 
@@ -497,50 +641,134 @@ describe("AC-008: embedded S1.last_seen_seq > highest observed counterparty seq 
     const fix = await makeFixture();
     scope.addCleanup(fix.stopAll);
 
-    const { sessionIdHex } = await setupSession(fix);
+    const { sessionIdHex, sessionId, assignment } = await setupSession(fix);
 
-    // B's counterparty (A) sends 2 messages. B's last observed counterparty seq = 2.
+    // A sends 2 messages. B confirms both. B's session.last_seen_seq = 2.
     await fix.clientA.client.sendMessage(sessionIdHex, Buffer.from("msg1"));
     await fix.clientA.client.sendMessage(sessionIdHex, Buffer.from("msg2"));
-    await waitForMessage(fix.clientB.client, sessionIdHex, 5000); // RED
+    await waitForMessage(fix.clientB.client, sessionIdHex, 5000);
     await waitForMessage(fix.clientB.client, sessionIdHex, 5000);
 
-    // The causal chain check is: s1.last_seen_seq <= session.last_seen_seq.
-    // In our setup, B's last_seen_seq tracks B's OWN sends echoed back (starts at 0).
-    // A sends with last_seen_seq values that are A's own observed seqs.
-    // This test verifies B is not desync'd by legitimate A sends.
-    // Injecting a forged last_seen_seq=5 would require relay-level injection.
-    //
-    // For Phase R: verify B is still synchronized after 2 valid messages.
     const recB = fix.clientB.client.listSessions()
       .find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
-    expect(recB!.desynchronized).toBe(false); // RED
-    expect(recB!.next_expected_seq).toBe(3); // RED
+    expect(recB!.last_seen_seq).toBe(2);
+
+    // Inject seq=3 with last_seen_seq=5 — impossible since B's ceiling is 2.
+    // We need a real content hash and must deliver the content so the frame reaches
+    // #drainReadyQueue where the causal check fires.
+    const prevRoot = await genesisRoot(fix, sessionId, assignment.session_timestamp);
+    const contentHash = computeContentHash(Buffer.from("causal"));
+    const frame = await buildLeafDeliverFrame({
+      senderKp: fix.clientA.kp,
+      sessionId,
+      prevRoot, // wrong (not R2) — but causal check fires first in #drainReadyQueue
+      seqNum: 3,
+      contentHash,
+      lastSeenSeq: 5, // impossible — B's ceiling is 2
+    });
+
+    const injectB = fix.clientB.client as unknown as { injectLeafDeliver(h: string, f: Record<string, unknown>): void };
+    injectB.injectLeafDeliver(sessionIdHex, frame);
+
+    // Deliver matching content so #crossCheckDelivery fires and reaches #drainReadyQueue
+    const contentStream = await (fix.clientA.client as unknown as {
+      openContentStreamByPeerId(p: string): Promise<import("@libp2p/interface").Stream>;
+    }).openContentStreamByPeerId(fix.clientB.peerId);
+    const { encode: lpEncode } = await import("it-length-prefixed");
+    const cf = CBOR_ENC.encode({
+      type: "content_frame",
+      session_id: sessionId,
+      content_bytes: Buffer.from("causal"),
+      content_hash: contentHash,
+    }) as Uint8Array;
+    contentStream.send(lpEncode.single(cf));
+    await contentStream.close();
+
+    // Wait for desync
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const sess = fix.clientB.client.listSessions()
+        .find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
+      if (sess?.desynchronized) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    const sessB = fix.clientB.client.listSessions()
+      .find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
+    expect(sessB?.desynchronized).toBe(true);
   }, 15_000);
 });
 
-// ─── AC-009: content_missing after 30s → desync ──────────────────────────────
+// ─── AC-009: content_missing after grace window → desync ─────────────────────
 
 describe("AC-009: content_missing after grace window → B desynchronized", () => {
   it("S2 delivered but no content frame within grace period marks session desynchronized", async () => {
+    // Use a short grace period (200ms) so the timer fires without a 30s wait.
     const fix = await makeFixture();
     scope.addCleanup(fix.stopAll);
 
-    // This test requires intercepting the content path so content never arrives.
-    // Without content path interception, we can only test that:
-    // 1. The session starts active
-    // 2. The grace timer mechanism exists
-    //
-    // For Phase R: this test is intentionally marked as needing the grace timer
-    // implementation. The fact that sendMessage returns ok:false (stub) makes it RED.
-    const { sessionIdHex } = await setupSession(fix);
+    // Recreate clientB with a short contentGraceMs for this test.
+    const { createClient: cc } = await import("../client.js");
+    const { createNode: cn } = await import("@cello/transport");
+    const { generateKeypair: gkp } = await import("@cello/crypto");
+    const kpB2 = gkp();
+    const pubkeyB2 = await kpB2.getPublicKey();
+    const nodeB2 = await cn({ keyProvider: kpB2, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeB2.start();
+    scope.addCleanup(async () => { try { await nodeB2.stop(); } catch {} });
 
-    const sessA = fix.clientA.client.listSessions()
+    const clientB2 = cc(nodeB2, kpB2, { contentGraceMs: 200 });
+    await clientB2.registerHandler();
+
+    // Build a session assignment where B2 is participant_b.
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sessionIdHex = Buffer.from(sessionId).toString("hex");
+    const assignment = await makeDirectoryAssignment({
+      sessionId,
+      pubA: fix.clientA.pubkey,
+      peerIdA: fix.clientA.peerId,
+      multiaddrsA: fix.clientA.multiaddrs,
+      pubB: pubkeyB2,
+      peerIdB: nodeB2.getPeerId(),
+      multiaddrsB: nodeB2.listenAddresses(),
+      relayPeerId: fix.relayPeerId,
+      relayMultiaddrs: [fix.relayAddr],
+      dirKp: fix.dirKp,
+    });
+    fix.relayNode.recordAssignment({
+      session_id: sessionId,
+      participant_a: fix.clientA.pubkey,
+      participant_b: pubkeyB2,
+      session_timestamp: assignment.session_timestamp,
+      directory_signature: assignment.directory_signature,
+    });
+    const [rA, rB2] = await Promise.all([
+      fix.clientA.client.receiveSessionAssignment(assignment, fix.clientA.pubkey),
+      clientB2.receiveSessionAssignment(assignment, pubkeyB2),
+    ]);
+    if (!rA.ok || !rB2.ok) throw new Error(`session setup failed: A=${JSON.stringify(rA)}, B2=${JSON.stringify(rB2)}`);
+
+    // Inject a leaf_deliver to B2 directly (bypass content path — no content frame).
+    // B2's 200ms grace timer will fire and desync the session.
+    const prevRoot = await computeGenesisPrevRoot(fix.clientA.pubkey, pubkeyB2, sessionId, assignment.session_timestamp);
+    const contentHash = computeContentHash(Buffer.from("no-content"));
+    const frame = await buildLeafDeliverFrame({
+      senderKp: fix.clientA.kp,
+      sessionId,
+      prevRoot,
+      seqNum: 1,
+      contentHash,
+    });
+
+    const injectB2 = clientB2 as unknown as { injectLeafDeliver(h: string, f: Record<string, unknown>): void };
+    injectB2.injectLeafDeliver(sessionIdHex, frame);
+
+    // Wait for the 200ms grace timer to fire.
+    await new Promise((r) => setTimeout(r, 400));
+
+    const sessB2 = clientB2.listSessions()
       .find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
-    expect(sessA!.desynchronized).toBe(false); // RED (session must exist)
-
-    // AC-009 full test: needs content path injection. Deferred to integration.
-    // The timer path is tested implicitly by the 30s timer in handleInboundLeafDeliver.
+    expect(sessB2?.desynchronized).toBe(true);
   }, 5_000);
 });
 

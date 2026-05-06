@@ -36,6 +36,7 @@ import { InMemoryRelayStore } from "./relay-store.js";
 import {
   encodeAuthChallenge,
   encodeAuthFailed,
+  encodeAuthOk,
   encodeHashSubmitAck,
   encodeHashSubmitError,
   encodeLeafDeliver,
@@ -275,12 +276,20 @@ export class CelloRelayNode {
           this.#streams.set(authedPubkeyHex, stream);
           authed = true;
 
-          // Flush any queued deliveries
+          // Confirm auth success to client — eliminates the client's 200ms race window
+          await this.#sendFrame(stream, encodeAuthOk({ type: "relay_auth_ok" }));
+
+          // Flush any queued deliveries; re-enqueue any not sent before a send failure.
           const queued = this.#store.drainDeliveries(authedPubkeyHex);
+          let sentCount = 0;
           for (const d of queued) {
             try {
               await this.#sendFrame(stream, encodeLeafDeliver({ type: "leaf_deliver", ...d }));
+              sentCount++;
             } catch { break; }
+          }
+          for (const d of queued.slice(sentCount)) {
+            this.#store.enqueueDelivery(authedPubkeyHex, d);
           }
           continue;
         }
