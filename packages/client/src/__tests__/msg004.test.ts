@@ -654,14 +654,16 @@ describe("AC-008: embedded S1.last_seen_seq > highest observed counterparty seq 
     expect(recB!.last_seen_seq).toBe(2);
 
     // Inject seq=3 with last_seen_seq=5 — impossible since B's ceiling is 2.
-    // We need a real content hash and must deliver the content so the frame reaches
-    // #drainReadyQueue where the causal check fires.
-    const prevRoot = await genesisRoot(fix, sessionId, assignment.session_timestamp);
+    // Use the REAL R2 (Merkle root of B's 2 accepted leaves) so prev_root_mismatch
+    // does NOT fire first; only the causal check fires (sequence_causal_inconsistency).
+    const r2Inputs: LeafInput[] = recB!.local_tree_leaves.map(l => ({ kind: l.kind, data: l.s2_cbor }));
+    const realPrevRoot = merkleRoot(buildMerkleTree(r2Inputs));
+
     const contentHash = computeContentHash(Buffer.from("causal"));
     const frame = await buildLeafDeliverFrame({
       senderKp: fix.clientA.kp,
       sessionId,
-      prevRoot, // wrong (not R2) — but causal check fires first in #drainReadyQueue
+      prevRoot: realPrevRoot, // correct R2 — only causal check (last_seen_seq=5 > ceiling=2) fires
       seqNum: 3,
       contentHash,
       lastSeenSeq: 5, // impossible — B's ceiling is 2
