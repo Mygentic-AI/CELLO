@@ -1581,12 +1581,10 @@ export function createClient(
 ): CelloClient & {
   sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
   openRawStream(peerPubkeyHex: string): Promise<Stream>;
-  injectDirectoryFrame(sessionIdHex: string, frame: Record<string, unknown>): void;
 } {
   return new CelloClientImpl(node, keyProvider, opts?.onMessageQueued, opts?.contentGraceMs) as CelloClient & {
     sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
     openRawStream(peerPubkeyHex: string): Promise<Stream>;
-    injectDirectoryFrame(sessionIdHex: string, frame: Record<string, unknown>): void;
   };
 }
 

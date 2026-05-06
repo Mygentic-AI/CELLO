@@ -992,3 +992,49 @@ describe("SESSION-002 AC-002: relay genesis prev_root matches computeGenesisPrev
     await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
   }, 20_000);
 });
+
+// ─── SESSION-003 AC-010: unilateral SEAL stalls in sealing ───────────────────
+
+describe("SESSION-003 AC-010: only A submits SEAL ctrl leaf; relay stays active (never triggers bilateral seal)", () => {
+  it("one ctrl leaf from A → relay does not submit for seal; B's subsequent hash_submit succeeds", async () => {
+    const fix = await makeFixture();
+    const cA = await makeClient(fix.relayAddr);
+    const cB = await makeClient(fix.relayAddr);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const assignment = await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp);
+    fix.relay.recordAssignment(assignment);
+
+    const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
+    const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
+    await performAuth(rA, sA, cA.kp);
+    await performAuth(rB, sB, cB.kp);
+
+    // A submits a msg leaf (seq=1)
+    await submitAndAck(rA, sA, sessionId, 0x00, cA.kp, 0);
+    await rB.readDecoded(); // drain B's leaf_deliver for seq=1
+
+    // A submits a SEAL ctrl leaf (seq=2, leaf_kind=0x02) — only A sealing
+    const contentHashSeal = new Uint8Array(randomBytes(32));
+    const { structure1_cbor: s1Seal, sender_signature: sigSeal } = await makeStructure1(sessionId, contentHashSeal, cA.kp, 0);
+    sendFrame(sA, CBOR_ENC.encode({
+      type: "hash_submit",
+      session_id: sessionId,
+      leaf_kind: 0x02,
+      structure1_cbor: s1Seal,
+      sender_signature: sigSeal,
+    }));
+    const ackSeal = await rA.readDecoded();
+    expect(ackSeal["type"]).toBe("hash_submit_ack");
+    await rA.readDecoded(); // drain own echo
+    await rB.readDecoded(); // drain B's leaf_deliver for seq=2
+
+    // Relay internal state: only one ctrl leaf (from A) → bilateral condition not met.
+    // Session stays "active" in the relay; B can still submit successfully.
+    await submitAndAck(rB, sB, sessionId, 0x00, cB.kp, 2);
+    await rA.readDecoded(); // drain A's leaf_deliver for B's msg
+
+    sA.close().catch(() => {}); sB.close().catch(() => {});
+    await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
+  }, 20_000);
+});

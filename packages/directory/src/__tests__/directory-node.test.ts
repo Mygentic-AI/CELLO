@@ -30,6 +30,10 @@ import {
   generateKeypair,
   buildMerkleTree,
   merkleRoot,
+  inclusionProof,
+  verifyInclusion,
+  msgLeafHash,
+  ctrlLeafHash,
 } from "@cello/crypto";
 import { buildStructure2, encodeStructure2 } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
@@ -1162,6 +1166,53 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     expect(relay.discarded.length).toBe(discardedBefore);
     await nodeA.stop();
   }, 10_000);
+
+  // ─── SESSION-003 AC-009: inclusion proof for every sealed leaf verifies against sealed_root ──
+
+  it("SESSION-003 AC-009: inclusionProof for every leaf index verifies against sealed_root", async () => {
+    const keyA = generateKeypair();
+    const keyB = generateKeypair();
+
+    const { stream: streamA, reader: readerA } = await connectAndAuth(keyA);
+    const { reader: readerB, pubkeyHex: hexB } = await connectAndAuth(keyB);
+
+    sendFrame(streamA, CBOR_ENC.encode({
+      type: "session_request",
+      target_pubkey: Buffer.from(hexB, "hex"),
+    }));
+
+    const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
+    await readerB.readDecoded();
+    if (frameA?.type !== "session_assignment") throw new Error("no assignment");
+
+    const sessionId = frameA.assignment.session_id;
+    const sealData = await buildValidSealData(sessionId, keyA, keyB);
+
+    const sealResult = await dirNode.directory.processSeal(sessionId, sealData);
+    expect(sealResult.ok).toBe(true);
+
+    // Drain the session_sealed frame to get sealed_root
+    const sealedFrame = decodeOutboundSignalingFrame(await readerA.readDecoded());
+    if (sealedFrame?.type !== "session_sealed") throw new Error("no session_sealed");
+    const sealedRoot = sealedFrame.sealed_root;
+
+    // Build the Merkle tree from the same leaves the directory used
+    const leafInputs = sealData.leaves.map(l => ({
+      kind: l.kind,
+      data: encodeStructure2(l.s2),
+    }));
+    const tree = buildMerkleTree(leafInputs);
+
+    // Verify inclusion proof for each leaf index
+    for (let i = 0; i < sealData.leaves.length; i++) {
+      const leaf = sealData.leaves[i];
+      const s2Cbor = encodeStructure2(leaf.s2);
+      const leafHash = leaf.kind === "ctrl" ? ctrlLeafHash(s2Cbor) : msgLeafHash(s2Cbor);
+      const proof = inclusionProof(tree, i);
+      const valid = verifyInclusion(leafHash, i, sealData.leaves.length, proof, sealedRoot);
+      expect(valid).toBe(true);
+    }
+  });
 
 });
 
