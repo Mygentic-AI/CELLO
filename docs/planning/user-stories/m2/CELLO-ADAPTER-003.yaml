@@ -1,0 +1,181 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-ADAPTER-003
+domain: MCP Tool Surface
+actor: AGENT
+priority: P0
+components:
+  - adapter-claude-code
+  - client
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Claude Code Adapter,
+  I want `cello_initiate_session` to send a real `session_request` frame over the
+  directory's `/cello/signaling/1.0.0` stream instead of polling `listSessions()`
+  so that the MCP tool surface is backed by the actual session-establishment protocol
+  and agents do not depend on the test-harness shortcut that was accepted for M1.
+
+  **What was stubbed in M1 (ADAPTER-002):**
+  The `cello_initiate_session` tool called an optional `initiateSession()` method on
+  the client. When that method was absent (the common path), the tool returned
+  `{ok: false, reason: "not_available_in_m1"}`. In e2e tests the harness delivered the
+  SessionAssignment directly via `receiveSessionAssignment()`, bypassing the directory
+  signaling stream entirely. The stub was accepted for M1 because M1's goal was proving
+  Merkle notarization, not the agent-initiated request flow.
+
+  **What changes in M2:**
+  The `CelloClient` grows a `initiateSession(targetPubkeyHex)` method that:
+  1. Opens (or reuses) a persistent authenticated stream to the directory on
+     `/cello/signaling/1.0.0` (NODE-001's auth domain `"CELLO-DIR-AUTH-v1"`).
+  2. Sends a `session_request { target_pubkey }` frame over that stream.
+  3. Awaits the `session_assignment` frame (or `target_offline` / `relay_unavailable`
+     error) from the directory, respecting an M2-configurable timeout.
+  4. On success, completes the relay auth and content-path dial as per SESSION-002
+     (unchanged from M1's `receiveSessionAssignment` path).
+  5. Returns the session_id and genesis_prev_root to the adapter.
+
+  The adapter's `cello_initiate_session` tool delegates to this method. The test-harness
+  shortcut (`receiveSessionAssignment` called directly) is retired from all non-test code
+  paths. E2e tests must exercise the full directory signaling path.
+
+  The persistent signaling stream is the same stream the client already holds open for
+  receiving inbound session assignments (the `cello_session_request` notification path).
+  Reusing it means the adapter already has the authenticated stream open by the time
+  `cello_initiate_session` is called — no new connection is required.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When `cello_initiate_session({ target_pubkey })` is called"
+    action: >
+      the adapter shall call `client.initiateSession(target_pubkey_hex)`, which sends a
+      `session_request` frame on the open directory signaling stream, awaits the
+      `session_assignment` response, completes relay auth and content-path dial, and
+      returns `{ ok: true, session_id, genesis_prev_root }` on success.
+  - trigger: "When the target pubkey is not currently authenticated on any directory signaling stream"
+    action: >
+      the directory returns `target_offline`; the client method returns
+      `{ ok: false, reason: 'target_offline' }`; the tool returns the same reason.
+  - trigger: "When the directory's relay is unreachable at session establishment time"
+    action: >
+      the directory returns `relay_unavailable`; the client method returns
+      `{ ok: false, reason: 'relay_unavailable' }`; the tool returns the same reason.
+  - trigger: "When no directory response arrives within the configured timeout"
+    action: >
+      the client method returns `{ ok: false, reason: 'timeout' }`; the tool returns
+      the same reason.
+  - trigger: "When the transport has not been started"
+    action: "the tool returns the standard `client_not_initialized` error unchanged."
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Two MCP servers A and B backed by live client nodes, both authenticated to the directory"
+    when: "A calls `cello_initiate_session({ target_pubkey: B_pubkey })`"
+    then: >
+      A sends a `session_request` frame over the directory signaling stream; B receives a
+      `cello_session_request` notification (SI-001 shape); B calls `cello_await_session`
+      and receives `{ type: 'new_session', session_id, genesis_prev_root }`; A's tool
+      returns `{ ok: true, session_id }` with the same session_id; both genesis_prev_root
+      values are byte-identical
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-002
+    given: "Agent A calls `cello_initiate_session` for a pubkey that has no authenticated directory stream"
+    when: "The directory processes the request"
+    then: >
+      The tool returns `{ ok: false, reason: 'target_offline' }`; no session_id is
+      allocated; the relay holds no state for the attempt
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-003
+    given: "Agent A calls `cello_initiate_session` and no directory response arrives within the timeout"
+    when: "The timeout fires"
+    then: "The tool returns `{ ok: false, reason: 'timeout' }`; session state is clean"
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-004
+    given: "A running adapter"
+    when: "`cello_initiate_session` is called with a valid target pubkey"
+    then: >
+      The call exercises the directory's `/cello/signaling/1.0.0` protocol — a
+      `session_request` frame is observable on the directory's inbound stream; no call to
+      `receiveSessionAssignment()` is made from non-test code
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-005
+    given: "The transport has not been started"
+    when: "`cello_initiate_session` is called"
+    then: "Returns `{ error: { reason: 'client_not_initialized' } }` without touching the network"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-006
+    given: "A and B each call `cello_initiate_session` targeting the other simultaneously"
+    when: "Both requests reach the directory"
+    then: >
+      Exactly one session is created (the first to reach the directory wins); the other
+      receives `target_busy` or the session_assignment for the winning request; neither
+      client is left in an inconsistent state
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The `session_request` frame sent by the client shall contain only
+      `{ target_pubkey }` — no session content, no trust signals, no key material
+      beyond the target's pubkey.
+    adversarial_condition: >
+      even when an attacker controls the adapter layer and attempts to inject additional
+      fields — the directory ignores unrecognised fields and the client constructs the
+      frame from a typed schema with no extra-field path.
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: >
+      K_local private key material shall never appear in the `session_request` frame,
+      tool response, or any log line emitted by this flow (carried from ADAPTER-001
+      SI-001 and ADAPTER-002 SI-002).
+    adversarial_condition: >
+      even when error paths log diagnostic context — all log statements must redact or
+      exclude key material.
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "The directory signaling stream is not yet open when `cello_initiate_session` is called"
+    fallback: >
+      The client attempts to open and authenticate the signaling stream inline, with a
+      single retry. If the stream cannot be established within the tool's timeout,
+      returns `{ ok: false, reason: 'directory_unreachable' }`.
+    test_type: integration
+    component_under_test: client
+
+# ─── Stubs ───────────────────────────────────────────────────
+stubs:
+  - what: "Accept / decline flow — initiator sends session_request; target automatically accepts"
+    why: >
+      Full connection policy evaluation (SignalRequirementPolicy, trust-signal threshold
+      checks, selective disclosure) is M3 scope. In M2 the directory issues the
+      SessionAssignment as soon as both parties are authenticated, same as M1.
+    replaced_by: "CELLO-M3-CONNECTION-001 (provisionally)"
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  - CELLO-SESSION-002
+  - CELLO-ADAPTER-002
+  - CELLO-NODE-001
+
+# ─── References ─────────────────────────────────────────────
+references:
+  discussion_logs:
+    - "2026-05-06_M1-session-layer-writeup"

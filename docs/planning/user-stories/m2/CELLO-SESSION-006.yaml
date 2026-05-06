@@ -1,0 +1,212 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-SESSION-006
+domain: Session Lifecycle
+actor: CLIENT
+priority: P0
+components:
+  - client
+  - relay
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want to recover from relay stream disconnection mid-session — reopening the
+  authenticated relay stream, draining the relay's queued `leaf_deliver` frames, and
+  resuming sends — without data loss and without desynchronizing the Merkle tree
+  so that a transient network interruption does not permanently destroy an active session.
+
+  **What was deferred from M1:**
+  SESSION-002 DB-001 and DB-002 defined the expected behaviour but the client-side
+  implementation was not written. The relay's delivery queue (NODE-002 DB-001) was built
+  and tested: the relay holds up to 256 queued `leaf_deliver` frames per pubkey and
+  flushes them on re-authentication. The missing piece is the client detecting the
+  disconnect, reopening the relay stream, re-authenticating, and re-integrating the
+  queued frames into the running Merkle tree state.
+
+  The five `it.todo()` tests in `packages/client/src/__tests__/session.test.ts` define
+  the exact behaviour expected:
+  - AC-008 (session.test.ts): client resumes relay connection after transport loss
+  - DB-001 (session.test.ts): relay queues pending `leaf_deliver` during client reconnect
+  - DB-002 (session.test.ts): client handles relay rejection during transport recovery
+
+  And two in `packages/client/src/__tests__/client.test.ts`:
+  - AC-005 / SI-002 (client.test.ts): prev_root mismatch detected on receive; client never
+    computes prev_root (relay-only invariant)
+
+  **Reconnect flow:**
+  1. Client detects relay stream close (the `catch` at line 984 of client.ts fires).
+  2. Client marks session `transport_lost`; pending `sendMessage` calls fail with
+     `transport_unavailable`; pending `receiveMessage` calls are not affected (content
+     path is independent).
+  3. Client starts a reconnect loop: dial relay endpoint from cached SessionAssignment,
+     complete `"CELLO-RELAY-AUTH-v1"` challenge-response, await `relay_auth_ok`.
+  4. Relay flushes queued `leaf_deliver` frames after auth (already implemented in
+     NODE-002 DB-001); client integrates them in sequence order into the running tree.
+  5. Session status returns to `active`; sends resume.
+  6. If reconnect does not succeed within 60 seconds, mark session `transport_lost`
+     permanently and reject all further sends/receives with `transport_unavailable`.
+
+  **Content path independence:**
+  The `/cello/content/1.0.0` stream is peer-to-peer and independent of the relay stream.
+  Content-path disconnection (SESSION-002 DB-002) is a separate concern: if the content
+  stream drops, the client attempts redial using the cached SessionAssignment multiaddrs.
+  That flow is in scope here as well (the two `it.todo` items in client.test.ts touch
+  the prev_root invariant which is exercised during reconnect).
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the client's relay stream closes unexpectedly (stream error or reset)"
+    action: >
+      the client shall mark the session `transport_lost`, unblock any pending
+      `sendMessage` calls with `transport_unavailable`, and begin a reconnect attempt:
+      dial the relay endpoint from the cached SessionAssignment and authenticate with
+      `"CELLO-RELAY-AUTH-v1"`. On success, status returns to `active` and queued
+      `leaf_deliver` frames are integrated.
+  - trigger: "When the reconnect attempt does not succeed within 60 seconds"
+    action: >
+      the client shall permanently mark the session `transport_lost` and reject all
+      further `sendMessage` / `receiveMessage` / `closeSession` calls on that session
+      with `transport_unavailable`.
+  - trigger: "When the relay flushes queued `leaf_deliver` frames after reconnect auth"
+    action: >
+      the client shall process them in sequence order, verifying Structure 1 signatures
+      and updating the local Merkle tree exactly as for live delivery; any frame that
+      fails validation desynchronizes the session.
+  - trigger: "When a `leaf_deliver` frame arrives whose `prev_root` does not match the locally running root"
+    action: >
+      the client shall desynchronize the session with `prev_root_mismatch`; further
+      sends and receives are rejected with `session_desynchronized`.
+  - trigger: "When the content stream to the counterparty drops"
+    action: >
+      the client shall attempt redial using the Peer ID and multiaddrs from the cached
+      SessionAssignment; if redial succeeds within 60 seconds, the session continues;
+      if it fails, the session is marked `transport_lost`.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: >
+      An active session with 3 leaves; the relay stream is forcibly closed on the
+      client side (stream abort)
+    when: "The client detects the close"
+    then: >
+      The session status transitions to `transport_lost`; any in-flight `sendMessage`
+      returns `transport_unavailable`; the client starts a reconnect attempt
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-002
+    given: >
+      Session is `transport_lost`; relay is reachable; client reconnects and
+      re-authenticates within 60 seconds
+    when: "Relay sends `relay_auth_ok` and flushes 2 queued `leaf_deliver` frames"
+    then: >
+      Session status transitions back to `active`; the 2 queued leaves are integrated
+      into the local Merkle tree in sequence order; `sendMessage` succeeds; tree root
+      matches relay's root
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-003
+    given: "Session is `transport_lost`; 60 seconds elapse without a successful reconnect"
+    when: "The timeout fires"
+    then: >
+      Session status remains `transport_lost` permanently; `sendMessage` and
+      `receiveMessage` return `transport_unavailable`; no further reconnect attempts
+      are made
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-004
+    given: "A reconnect attempt succeeds; relay flushes a queued `leaf_deliver` whose Structure 1 signature is invalid (64 random bytes)"
+    when: "The client validates the frame"
+    then: >
+      The session desynchronizes with `signature_verification_failed`; subsequent
+      `sendMessage` returns `session_desynchronized`
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-005
+    given: "An active session receiving a live `leaf_deliver` from the relay"
+    when: "The `prev_root` field in Structure 2 does not match the locally computed root after the prior leaf"
+    then: >
+      The client desynchronizes with `prev_root_mismatch`; the leaf is not appended to
+      the local tree; subsequent operations return `session_desynchronized`
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-006
+    given: "A client reconstructing its local Merkle tree"
+    when: "Any code path is inspected"
+    then: >
+      The client never sets the `prev_root` field in any outbound frame; `prev_root`
+      in every outbound Structure 1 / hash_submit is absent; only the relay populates
+      `prev_root` in Structure 2 (MERKLE-002 SI-002)
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-007
+    given: "Active session; the `/cello/content/1.0.0` stream to the counterparty drops"
+    when: "The client detects the disconnect"
+    then: >
+      The client attempts redial using the Peer ID and multiaddrs from the cached
+      SessionAssignment; on success, the session continues and the next `sendMessage`
+      succeeds; the relay stream is unaffected
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-008
+    given: "Active session; the content stream redial fails to complete within 60 seconds"
+    when: "The timeout fires"
+    then: >
+      The session is marked `transport_lost`; `sendMessage` returns `transport_unavailable`
+    test_type: integration
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The client shall never accept a queued `leaf_deliver` frame without fully
+      validating its Structure 1 signature and sequence number, even during reconnect
+      flush — the relay's delivery queue is not a trusted channel.
+    adversarial_condition: >
+      even when a compromised relay injects forged frames into the reconnect flush; the
+      client applies identical validation to queued frames as to live frames.
+    test_type: integration
+    component_under_test: client
+
+  - id: SI-002
+    statement: >
+      After any validation failure during reconnect flush (bad signature, sequence gap,
+      prev_root mismatch), the client shall desynchronize the session and reject all
+      subsequent operations — it shall not skip the offending frame and continue.
+    adversarial_condition: >
+      even when only one frame in a batch of queued deliveries is forged — one failure
+      is sufficient to halt the session.
+    test_type: integration
+    component_under_test: client
+
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "Relay is temporarily unreachable during the reconnect window"
+    fallback: >
+      The client retries the relay dial with exponential backoff within the 60-second
+      window. If any attempt succeeds before the timeout, the session recovers normally.
+    test_type: integration
+    component_under_test: client
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  - CELLO-SESSION-002
+  - CELLO-NODE-002
+  - CELLO-MSG-004
+
+# ─── References ─────────────────────────────────────────────
+references:
+  discussion_logs:
+    - "2026-05-06_M1-session-layer-writeup"
+  prior_stubs:
+    - "session.test.ts it.todo AC-008, DB-001, DB-002"
+    - "client.test.ts it.todo AC-005, SI-002"

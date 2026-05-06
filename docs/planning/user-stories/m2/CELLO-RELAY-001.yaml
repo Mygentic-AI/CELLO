@@ -1,0 +1,139 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-RELAY-001
+domain: Node Operations
+actor: RELAY
+priority: P2
+components:
+  - relay
+  - crypto
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Relay Node,
+  I want to maintain a running incremental Merkle tree root across leaf appends —
+  updating it in O(1) amortised time per append instead of rebuilding the full tree
+  on every `hash_submit` — so that relay throughput does not degrade as session length
+  grows.
+
+  **Current behaviour (M1):**
+  In `#processHashSubmitLocked` (relay-node.ts line 395–403), `prev_root` for leaf N is
+  computed by calling `buildMerkleTree(all N-1 prior leaves)` and taking the root. This
+  is O(n log n) work per submit and O(n) memory per session, both growing with session
+  length. For M1's short test sessions this is acceptable; for production sessions with
+  hundreds of messages it is not.
+
+  **Target behaviour:**
+  The relay stores a single running root value alongside the leaf log in
+  `RelaySessionState`. On each append it updates the root using an incremental RFC 6962
+  left-balanced tree algorithm (O(log n) work, O(log n) auxiliary state in the form of
+  the current "stack" of subtree roots). The `submitForSeal` path continues to build the
+  full tree from the leaf log for seal verification — that path is infrequent (once per
+  session) and correctness is more important than speed there.
+
+  **RFC 6962 incremental append:**
+  A left-balanced Merkle tree can be maintained incrementally using a stack of at most
+  ⌈log₂(n)⌉ subtree roots. On each append of leaf L:
+  1. Start with a new node = msgLeafHash(L) or ctrlLeafHash(L).
+  2. While the stack's top was produced from a complete subtree of the same height as the
+     new node, pop it and combine: new node = nodeHash(popped, new node).
+  3. Push the new node onto the stack.
+  4. The running root is nodeHash-fold of all stack entries right-to-left (or the sole
+     entry if the stack has one element). This matches the RFC 6962 root exactly.
+
+  The `RelaySessionState` gains a `tree_stack: Uint8Array[]` field alongside the
+  existing `leaf_log`. The `leaf_log` is still retained because `submitForSeal` needs
+  the full leaf sequence for the directory's recomputation step; the stack is additive,
+  not a replacement.
+
+  **Scope boundary:**
+  This story touches only the relay's internal state and the `prev_root` computation in
+  `#processHashSubmitLocked`. The external protocol, frame formats, Merkle root values,
+  and all ACs from NODE-002 are unchanged — the same roots must result; the only
+  observable difference is throughput.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the relay appends a leaf to a session"
+    action: >
+      the relay shall update the running root using the incremental stack algorithm in
+      O(log n) time; the resulting root shall be byte-identical to
+      `merkleRoot(buildMerkleTree(all leaves so far))`.
+  - trigger: "When `submitForSeal` is called"
+    action: >
+      the relay shall continue to build the full tree from `leaf_log` for the seal
+      submission; the incremental stack is not used on this path.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A session accumulating n leaves (n in {1, 2, 3, 7, 8, 15, 16, 17, 50, 100})"
+    when: "Each leaf is appended via the incremental stack"
+    then: >
+      After every append, the running root is byte-identical to
+      `merkleRoot(buildMerkleTree(all leaves so far))` computed via the reference
+      implementation; this must hold for all tested values of n
+    test_type: unit
+    component_under_test: relay
+
+  - id: AC-002
+    given: "A relay processing 100 `hash_submit` frames on a single session"
+    when: "Timing is measured with `measureTime()`"
+    then: >
+      Total relay-side Merkle work (prev_root computation across all 100 appends) is
+      O(n log n) or better; no single append takes more than O(log n) Merkle operations;
+      verified by counting `nodeHash` invocations (not wall-clock)
+    test_type: unit
+    component_under_test: relay
+
+  - id: AC-003
+    given: "The incremental implementation is in place"
+    when: "All existing NODE-002 tests are run"
+    then: >
+      All 27 relay-node tests continue to pass without modification; the observable
+      protocol behaviour (prev_root values, structure2 contents, seal roots) is unchanged
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-004
+    given: "A 7-leaf session matching the existing RFC 6962 fixture in packages/crypto/test/vectors/merkle-tree.json"
+    when: "The incremental stack produces the running root after each of the 7 appends"
+    then: >
+      All 7 intermediate roots and the final root match the fixture's expected values
+      exactly
+    test_type: unit
+    component_under_test: relay
+
+  - id: AC-005
+    given: "The incremental implementation is in place"
+    when: "The O(n log n) comment at relay-node.ts line 395 is removed"
+    then: "No TODO or debt comment referencing the rebuild cost remains in relay-node.ts"
+    test_type: unit
+    component_under_test: relay
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The incremental running root shall produce byte-identical values to the reference
+      `merkleRoot(buildMerkleTree(...))` for all leaf sequences; any divergence is a
+      correctness defect that would cause clients to reject `prev_root` values.
+    adversarial_condition: >
+      verified by cross-checking against the reference implementation for all n in
+      AC-001 and AC-004; the implementation must not trade correctness for speed.
+    test_type: unit
+    component_under_test: relay
+
+# ─── Dependencies ────────────────────────────────────────────
+dependencies:
+  - CELLO-NODE-002
+  - CELLO-MERKLE-001
+
+# ─── Priority note ──────────────────────────────────────────
+# P2: does not block any M2 feature story. Pull into the sprint when relay throughput
+# becomes a measurable constraint or when session lengths exceed ~50 messages in testing.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  discussion_logs:
+    - "2026-05-06_M1-session-layer-writeup"
+  rfc: "RFC 6962 §2.1 (left-balanced binary Merkle trees)"
