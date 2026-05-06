@@ -58,7 +58,7 @@ import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import {
   buildEnvelope, serializeEnvelope, deserializeEnvelope, validateEnvelope,
-  computeGenesisPrevRoot,
+  computeGenesisPrevRoot, encodeSealPayload,
 } from "@cello/protocol-types";
 import type { Structure2 } from "@cello/protocol-types";
 import { verify, buildMerkleTree, merkleRoot } from "@cello/crypto";
@@ -197,6 +197,13 @@ class CelloClientImpl implements CelloClient {
   // FIFO arrival order across all sessions: { sessionIdHex, message }
   readonly #anyMessageQueue: Array<{ sessionIdHex: string; message: ReceivedMessage }> = [];
 
+  // session_id_hex → directory signaling stream (SESSION-003)
+  readonly #directoryStreams = new Map<string, Stream>();
+
+  // session_id_hex → Promise: set when the initiator SEAL echo is expected (SESSION-003)
+  // Allows non-initiator auto-response to know when its own SEAL echo confirms the seal
+  readonly #sealInitiatedSessions = new Set<string>();
+
   constructor(
     node: CelloNode,
     keyProvider: KeyProvider,
@@ -255,6 +262,19 @@ class CelloClientImpl implements CelloClient {
     const myPubkeyHex = this.#myPubkeyHex;
     if (!myPubkeyHex) throw new Error("injectLeafDeliver: client not yet authenticated (no session registered)");
     this.#handleInboundLeafDeliver(sessionIdHex, frame, myPubkeyHex);
+  }
+
+  // Internal test escape: directly feed a session_sealed or session_seal_rejected frame into
+  // the directory stream handler — bypasses the real directory signaling stream so tests can
+  // verify client-side rejection of tampered directory signatures (SI-005 / AC-011).
+  injectDirectoryFrame(sessionIdHex: string, frame: Record<string, unknown>): void {
+    const session = this.#sessions.get(sessionIdHex);
+    if (!session) throw new Error(`injectDirectoryFrame: session not found: ${sessionIdHex}`);
+    if (frame["type"] === "session_sealed") {
+      this.#handleDirectorySessionSealed(sessionIdHex, frame, session.directory_pubkey);
+    } else if (frame["type"] === "session_seal_rejected") {
+      this.#handleDirectorySessionSealRejected(sessionIdHex, frame);
+    }
   }
 
   // Internal: open stream, write LP-framed bytes, await close type.
@@ -427,8 +447,14 @@ class CelloClientImpl implements CelloClient {
         peer_id: assignment.relay_endpoint.peer_id,
         multiaddrs: assignment.relay_endpoint.multiaddrs,
       },
+      directory_endpoint: {
+        peer_id: assignment.directory_endpoint.peer_id,
+        multiaddrs: assignment.directory_endpoint.multiaddrs,
+      },
+      directory_pubkey: assignment.directory_pubkey,
       genesis_prev_root,
       last_seen_seq: 0,
+      last_sent_seq: 0,
       status: "active",
       local_tree_leaves: [],
       next_expected_seq: 1,
@@ -451,6 +477,9 @@ class CelloClientImpl implements CelloClient {
     if (!this.#myPubkeyHex) this.#myPubkeyHex = myPubkeyHex;
 
     void this.#runRelayStreamReader(sessionIdHex, relayStream, myPubkeyHex, relayIter);
+
+    // SESSION-003: dial directory signaling stream and start reader (for session_sealed events)
+    void this.#connectDirectorySignalingStream(sessionIdHex, assignment, myPubkey);
 
     return { ok: true, sessionId: session_id };
   }
@@ -479,6 +508,7 @@ class CelloClientImpl implements CelloClient {
     const session = this.#sessions.get(sessionIdHex);
     if (!session) return { ok: false, reason: "session_not_found" };
     if (session.desynchronized) return { ok: false, reason: "session_desynchronized" };
+    if (session.status === "sealing" || session.status === "sealed") return { ok: false, reason: "session_sealed" };
 
     const relayStream = this.#relayStreams.get(sessionIdHex);
     if (!relayStream || relayStream.status !== "open") {
@@ -608,8 +638,263 @@ class CelloClientImpl implements CelloClient {
     return this.#anyMessageQueue.shift() ?? null;
   }
 
+  // ─── SESSION-003: seal ceremony ──────────────────────────────────────────────
+
+  async initiateSessionSeal(sessionIdHex: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const session = this.#sessions.get(sessionIdHex);
+    if (!session) return { ok: false, reason: "session_not_found" };
+    if (session.status !== "active") return { ok: false, reason: "session_not_active" };
+
+    const result = await this.#submitSealLeaf(sessionIdHex, session, "initiator");
+    if (!result.ok) return result;
+
+    session.status = "sealing";
+    this.#sealInitiatedSessions.add(sessionIdHex);
+    return { ok: true };
+  }
+
+  async #submitSealLeaf(
+    sessionIdHex: string,
+    session: SessionRecord,
+    _role: "initiator" | "responder",
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const relayStream = this.#relayStreams.get(sessionIdHex);
+    if (!relayStream || relayStream.status !== "open") {
+      return { ok: false, reason: "transport_unavailable" };
+    }
+
+    // Compute current local tree root (R_tail for initiator, root-after-initiator-SEAL for responder)
+    const finalRoot = session.local_tree_leaves.length === 0
+      ? session.genesis_prev_root
+      : (() => {
+          const inputs: LeafInput[] = session.local_tree_leaves.map(l => ({
+            kind: l.kind,
+            data: l.s2_cbor,
+          }));
+          return merkleRoot(buildMerkleTree(inputs));
+        })();
+
+    const close_timestamp = Date.now();
+    const sealPayload = encodeSealPayload({
+      session_id: session.session_id,
+      final_root: finalRoot,
+      close_timestamp,
+      attestation: "PENDING",
+    });
+
+    // content_hash = SHA-256(0x02 || seal_payload) — ctrl leaf kind byte is 0x02
+    const contentHash = new Uint8Array(
+      createHash("sha256").update(new Uint8Array([0x02])).update(sealPayload).digest()
+    );
+
+    const myPubkeyHex = this.#myPubkeyHex!;
+    const myPubkeyBytes = Buffer.from(myPubkeyHex, "hex");
+
+    const tbs = CBOR_ENC.encode([
+      1,
+      contentHash,
+      myPubkeyBytes,
+      session.session_id,
+      session.last_seen_seq,
+      close_timestamp,
+    ]) as Uint8Array;
+    const signature = await this.#keyProvider.sign(tbs);
+
+    const hashSubmitFrame = CBOR_ENC.encode({
+      type: "hash_submit",
+      session_id: session.session_id,
+      leaf_kind: 0x02,
+      structure1_cbor: tbs,
+      sender_signature: signature,
+    }) as Uint8Array;
+
+    const contentHashHex = Buffer.from(contentHash).toString("hex");
+    this.#ownPendingContent.get(sessionIdHex)?.set(contentHashHex, {
+      content_bytes: sealPayload,
+      arrived_at: Date.now(),
+    });
+
+    if (this.#pendingAckResolvers.has(sessionIdHex)) {
+      return { ok: false, reason: "ack_resolver_conflict" };
+    }
+    let ackResolve!: (v: { ok: true; sequence_number: number } | { ok: false; reason: string }) => void;
+    const ackPromise = new Promise<{ ok: true; sequence_number: number } | { ok: false; reason: string }>(
+      (r) => { ackResolve = r; }
+    );
+    this.#pendingAckResolvers.set(sessionIdHex, ackResolve);
+
+    try {
+      relayStream.send(lp.encode.single(hashSubmitFrame));
+    } catch {
+      this.#pendingAckResolvers.delete(sessionIdHex);
+      this.#ownPendingContent.get(sessionIdHex)?.delete(contentHashHex);
+      return { ok: false, reason: "transport_unavailable" };
+    }
+
+    const ack = await ackPromise;
+    if (!ack.ok) return { ok: false, reason: "relay_rejected" };
+
+    const mySeq = ack.sequence_number;
+
+    // Send SEAL payload as content_frame to counterparty so they can cross-check
+    const sess2 = this.#sessions.get(sessionIdHex);
+    if (sess2 && !sess2.desynchronized) {
+      void this.#sendContentFrame(sess2, sealPayload, contentHash);
+    }
+
+    // Wait for own echo
+    await this.#waitForOwnEcho(sessionIdHex, mySeq);
+
+    const sess3 = this.#sessions.get(sessionIdHex);
+    if (!sess3 || sess3.desynchronized) return { ok: false, reason: "session_desynchronized" };
+
+    return { ok: true };
+  }
+
+  // ─── Directory signaling stream (SESSION-003) ────────────────────────────────
+
+  async #connectDirectorySignalingStream(
+    sessionIdHex: string,
+    assignment: SessionAssignment,
+    myPubkey: Uint8Array,
+  ): Promise<void> {
+    const dirPeerId = assignment.directory_endpoint.peer_id;
+    const dirMultiaddr = assignment.directory_endpoint.multiaddrs[0];
+
+    if (!dirPeerId) return; // no directory endpoint — skip (test env may not have one)
+
+    try {
+      if (dirMultiaddr) {
+        try { await this.#node.dial(dirMultiaddr); } catch { /* already connected */ }
+      }
+      const SIGNALING_PROTOCOL_ID = "/cello/signaling/1.0.0";
+      const AUTH_DOMAIN_DIR = "CELLO-DIR-AUTH-v1";
+      let dirStream: Stream;
+      try {
+        dirStream = await this.#node.newStream(dirPeerId, SIGNALING_PROTOCOL_ID);
+      } catch {
+        return; // directory not reachable — session still active, sealed notification just won't arrive
+      }
+
+      this.#directoryStreams.set(sessionIdHex, dirStream);
+
+      // Directory signaling auth: read challenge, sign, respond
+      const iter = (lp.decode(dirStream) as AsyncIterable<unknown>)[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
+      const { value: challengeRaw, done } = await iter.next();
+      if (done || challengeRaw === undefined) { dirStream.abort(new Error("dir_auth_error")); return; }
+
+      let challengeFrame: Record<string, unknown>;
+      try {
+        challengeFrame = decode(toU8(challengeRaw)) as Record<string, unknown>;
+      } catch { dirStream.abort(new Error("dir_auth_error")); return; }
+
+      if (challengeFrame["type"] !== "signaling_auth_challenge") { dirStream.abort(new Error("dir_auth_error")); return; }
+
+      const nonce = toU8(challengeFrame["nonce"]);
+      const domain = Buffer.from(AUTH_DOMAIN_DIR, "utf8");
+      const authMsg = new Uint8Array(Buffer.concat([domain, nonce, myPubkey]));
+      const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
+      const sig = await this.#keyProvider.sign(msgHash);
+
+      const authResponseFrame = CBOR_ENC.encode({
+        type: "signaling_auth_response",
+        pubkey: myPubkey,
+        signature: sig,
+      }) as Uint8Array;
+      dirStream.send(lp.encode.single(authResponseFrame));
+
+      void this.#runDirectoryStreamReader(sessionIdHex, dirStream, assignment.directory_pubkey, iter);
+    } catch {
+      // Directory connection failure — session still active
+    }
+  }
+
+  async #runDirectoryStreamReader(
+    sessionIdHex: string,
+    stream: Stream,
+    directoryPubkey: Uint8Array,
+    iter: AsyncIterator<Uint8Array>,
+  ): Promise<void> {
+    try {
+      while (true) {
+        let result: IteratorResult<Uint8Array>;
+        try {
+          result = await iter.next();
+        } catch { break; }
+        if (result.done || result.value === undefined) break;
+
+        let frame: Record<string, unknown>;
+        try {
+          frame = decode(toU8(result.value as unknown)) as Record<string, unknown>;
+        } catch { continue; }
+
+        if (frame["type"] === "session_sealed") {
+          this.#handleDirectorySessionSealed(sessionIdHex, frame, directoryPubkey);
+        } else if (frame["type"] === "session_seal_rejected") {
+          this.#handleDirectorySessionSealRejected(sessionIdHex, frame);
+        }
+      }
+    } catch { /* stream closed */ }
+
+    if (this.#directoryStreams.get(sessionIdHex) === stream) {
+      this.#directoryStreams.delete(sessionIdHex);
+    }
+  }
+
+  #handleDirectorySessionSealed(
+    sessionIdHex: string,
+    frame: Record<string, unknown>,
+    directoryPubkey: Uint8Array,
+  ): void {
+    const session = this.#sessions.get(sessionIdHex);
+    if (!session) return;
+
+    const sealedRootRaw = frame["sealed_root"];
+    const sealedRoot = sealedRootRaw instanceof Uint8Array ? sealedRootRaw
+      : Buffer.isBuffer(sealedRootRaw) ? new Uint8Array(sealedRootRaw as Buffer) : null;
+    const dirSigRaw = frame["directory_signature"];
+    const dirSig = dirSigRaw instanceof Uint8Array ? dirSigRaw
+      : Buffer.isBuffer(dirSigRaw) ? new Uint8Array(dirSigRaw as Buffer) : null;
+    const ctRaw = frame["close_timestamp"];
+    const closeTimestamp = typeof ctRaw === "number" ? ctRaw : typeof ctRaw === "bigint" ? Number(ctRaw) : null;
+    const sidRaw = frame["session_id"];
+    const sessionId = sidRaw instanceof Uint8Array ? sidRaw
+      : Buffer.isBuffer(sidRaw) ? new Uint8Array(sidRaw as Buffer) : null;
+
+    if (!sealedRoot || sealedRoot.length !== 32) return;
+    if (!dirSig || dirSig.length !== 64) return;
+    if (closeTimestamp === null) return;
+    if (!sessionId) return;
+
+    // SI-005: verify directory signature against pinned directory pubkey
+    const tbs = CBOR_ENC.encode([
+      sessionId,
+      sealedRoot,
+      closeTimestamp > 0xffffffff ? BigInt(closeTimestamp) : closeTimestamp,
+    ]) as Uint8Array;
+
+    if (!verify(directoryPubkey, tbs, dirSig)) {
+      console.warn(`[cello-client] directory_signature_invalid on session_sealed: ${sessionIdHex}`);
+      return;
+    }
+
+    session.status = "sealed";
+    session.sealed_root = sealedRoot;
+  }
+
+  #handleDirectorySessionSealRejected(sessionIdHex: string, _frame: Record<string, unknown>): void {
+    const session = this.#sessions.get(sessionIdHex);
+    if (!session) return;
+    session.status = "seal_rejected";
+  }
+
   closeSession(sessionIdHex: string): void {
     this.#sessions.delete(sessionIdHex);
+    const ackResolve = this.#pendingAckResolvers.get(sessionIdHex);
+    if (ackResolve) {
+      this.#pendingAckResolvers.delete(sessionIdHex);
+      ackResolve({ ok: false, reason: "session_closed" });
+    }
     this.#relayRecvSeq.delete(sessionIdHex);
     this.#readyQueue.delete(sessionIdHex);
     this.#pendingS2.delete(sessionIdHex);
@@ -619,10 +904,16 @@ class CelloClientImpl implements CelloClient {
     this.#ownEchoResolvers.delete(sessionIdHex);
     this.#sessionMessageQueues.delete(sessionIdHex);
     this.#outboundQueues.delete(sessionIdHex);
+    this.#sealInitiatedSessions.delete(sessionIdHex);
     const stream = this.#relayStreams.get(sessionIdHex);
     if (stream) {
       this.#relayStreams.delete(sessionIdHex);
       stream.abort(new Error("session_closed"));
+    }
+    const dirStream = this.#directoryStreams.get(sessionIdHex);
+    if (dirStream) {
+      this.#directoryStreams.delete(sessionIdHex);
+      dirStream.abort(new Error("session_closed"));
     }
   }
 
@@ -895,10 +1186,11 @@ class CelloClientImpl implements CelloClient {
         this.#desync(sessionIdHex, "prev_root_mismatch"); return;
       }
 
-      // Causal chain check per SI-004: sender's claimed last_seen_seq can't exceed B's
-      // highest confirmed global relay seq (session.last_seen_seq). Both represent the
-      // same global counter; at this point session.last_seen_seq == local_tree_leaves.length.
-      if (s1_fields.last_seen_seq > session.last_seen_seq) {
+      // Causal chain check per MSG-004 AC-008: sender's last_seen_seq = sender's highest
+      // observed counterparty seq. Receiver checks: that value can't exceed the receiver's
+      // own highest echoed seq (last_sent_seq), since the sender can only have seen leaves
+      // the receiver actually sent.
+      if (s1_fields.last_seen_seq > session.last_sent_seq) {
         this.#desync(sessionIdHex, "sequence_causal_inconsistency"); return;
       }
 
@@ -913,25 +1205,37 @@ class CelloClientImpl implements CelloClient {
         createHash("sha256").update(new Uint8Array([leaf_kind])).update(s2_cbor).digest()
       );
 
-      // last_seen_seq tracks the highest global relay seq confirmed on this session.
-      // Per SI-003: TBS last_seen_seq must equal the highest relay seq received, not
-      // only own-send echoes. Updated for every confirmed leaf (own-send and counterparty).
-      session.last_seen_seq = s2.sequence_number;
-
       if (is_own_send) {
-        // Own-send echo: fire the send lock release.
+        // Own-send echo: fire the send lock release and advance own-seq tracker.
         // Do NOT enqueue into receiveMessage queues — callers don't "receive" their own sends.
+        session.last_sent_seq = s2.sequence_number;
         echo_resolve?.();
       } else {
-        // Counterparty message: enqueue for receiveMessage callers.
-        const msg: ReceivedMessage = {
-          content: content_bytes,
-          senderPubkey: s2.sender_pubkey,
-          sequenceNumber: s2.sequence_number,
-          leafHash,
-        };
-        this.#sessionMessageQueues.get(sessionIdHex)?.push(msg);
-        this.#anyMessageQueue.push({ sessionIdHex, message: msg });
+        // last_seen_seq = highest counterparty relay seq confirmed on this session.
+        // Per MSG-004: TBS last_seen_seq must equal the highest relay seq from the *counterparty*,
+        // so the causal-chain check at seal can verify we couldn't have seen msgs that don't exist.
+        session.last_seen_seq = s2.sequence_number;
+        if (kind === "ctrl" && session.status === "active") {
+          // SESSION-003: non-initiator auto-response to counterparty's SEAL leaf.
+          // Transition to sealing and submit our own SEAL leaf asynchronously.
+          session.status = "sealing";
+          void this.#submitSealLeaf(sessionIdHex, session, "responder").then((result) => {
+            if (!result.ok) {
+              const s = this.#sessions.get(sessionIdHex);
+              if (s && s.status === "sealing") s.status = "seal_rejected";
+            }
+          });
+        } else {
+          // Counterparty message: enqueue for receiveMessage callers.
+          const msg: ReceivedMessage = {
+            content: content_bytes,
+            senderPubkey: s2.sender_pubkey,
+            sequenceNumber: s2.sequence_number,
+            leafHash,
+          };
+          this.#sessionMessageQueues.get(sessionIdHex)?.push(msg);
+          this.#anyMessageQueue.push({ sessionIdHex, message: msg });
+        }
       }
     }
   }
@@ -1016,35 +1320,52 @@ class CelloClientImpl implements CelloClient {
       : Buffer.isBuffer(contentBytesRaw) ? new Uint8Array(contentBytesRaw as Buffer) : null;
     if (!contentBytes) { stream.close().catch(() => {}); return; }
 
-    // Verify internal consistency: recompute content_hash
-    const recomputed = new Uint8Array(
-      createHash("sha256").update(new Uint8Array([0x00])).update(contentBytes).digest()
-    );
     const declaredHashRaw = frame["content_hash"];
     const declaredHash = declaredHashRaw instanceof Uint8Array ? declaredHashRaw
       : Buffer.isBuffer(declaredHashRaw) ? new Uint8Array(declaredHashRaw as Buffer) : null;
+    if (!declaredHash || declaredHash.length !== 32) { stream.close().catch(() => {}); return; }
 
-    if (!declaredHash || Buffer.compare(Buffer.from(recomputed), Buffer.from(declaredHash)) !== 0) {
-      // Frame internally inconsistent: declared_hash != SHA-256(0x00 || content_bytes).
-      if (declaredHash) {
-        const declaredHashHex = Buffer.from(declaredHash).toString("hex");
-        const ps2Map = this.#pendingS2.get(sessionIdHex);
-        if (ps2Map?.has(declaredHashHex)) {
-          // S2 already buffered and this tampered content arrived after — desync immediately.
-          const entry = ps2Map.get(declaredHashHex)!;
-          clearTimeout(entry.timer_handle);
-          ps2Map.delete(declaredHashHex);
-          this.#desync(sessionIdHex, "content_hash_mismatch");
-        } else {
-          // S2 not yet arrived — remember the tampered claim so S2 can desync on arrival.
-          this.#tamperedContentClaims.get(sessionIdHex)?.add(declaredHashHex);
-        }
+    const declaredHashHex = Buffer.from(declaredHash).toString("hex");
+
+    // If S2 is already buffered, we know the leaf_kind and can verify the hash immediately.
+    // leaf_kind may be 0x00 (msg) or 0x02 (ctrl/SEAL) — the sender uses it in SHA-256(kind||bytes).
+    // If S2 has not yet arrived, we cannot know the leaf_kind and must defer verification:
+    // store the content and let the S2-arrival path (which has leaf_kind) verify it then.
+    const ps2MapEarly = this.#pendingS2.get(sessionIdHex);
+    const s2EntryEarly = ps2MapEarly?.get(declaredHashHex);
+
+    if (s2EntryEarly) {
+      // S2 already buffered — verify hash immediately using known leaf_kind.
+      const recomputed = new Uint8Array(
+        createHash("sha256").update(new Uint8Array([s2EntryEarly.leaf_kind])).update(contentBytes).digest()
+      );
+      if (Buffer.compare(Buffer.from(recomputed), Buffer.from(declaredHash)) !== 0) {
+        clearTimeout(s2EntryEarly.timer_handle);
+        ps2MapEarly!.delete(declaredHashHex);
+        this.#desync(sessionIdHex, "content_hash_mismatch");
+        stream.close().catch(() => {});
+        return;
       }
-      stream.close().catch(() => {});
-      return;
+    } else {
+      // S2 not yet buffered — try both possible leaf_kind values: 0x00 (msg) and 0x02 (ctrl/SEAL).
+      // If neither hash matches the declared hash, the frame is tampered; flag it for desync
+      // when the corresponding S2 arrives.
+      const msgHash = new Uint8Array(
+        createHash("sha256").update(new Uint8Array([0x00])).update(contentBytes).digest()
+      );
+      const ctrlHash = new Uint8Array(
+        createHash("sha256").update(new Uint8Array([0x02])).update(contentBytes).digest()
+      );
+      const matchesMsg = Buffer.compare(Buffer.from(msgHash), Buffer.from(declaredHash)) === 0;
+      const matchesCtrl = Buffer.compare(Buffer.from(ctrlHash), Buffer.from(declaredHash)) === 0;
+      if (!matchesMsg && !matchesCtrl) {
+        this.#tamperedContentClaims.get(sessionIdHex)?.add(declaredHashHex);
+        stream.close().catch(() => {});
+        return;
+      }
     }
 
-    const contentHashHex = Buffer.from(recomputed).toString("hex");
+    const contentHashHex = declaredHashHex;
 
     // Check if matching S2 is already buffered
     const ps2Map = this.#pendingS2.get(sessionIdHex);
@@ -1260,8 +1581,13 @@ export function createClient(
 ): CelloClient & {
   sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
   openRawStream(peerPubkeyHex: string): Promise<Stream>;
+  injectDirectoryFrame(sessionIdHex: string, frame: Record<string, unknown>): void;
 } {
-  return new CelloClientImpl(node, keyProvider, opts?.onMessageQueued, opts?.contentGraceMs);
+  return new CelloClientImpl(node, keyProvider, opts?.onMessageQueued, opts?.contentGraceMs) as CelloClient & {
+    sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
+    openRawStream(peerPubkeyHex: string): Promise<Stream>;
+    injectDirectoryFrame(sessionIdHex: string, frame: Record<string, unknown>): void;
+  };
 }
 
 // ─── Error helpers ────────────────────────────────────────────────────────────

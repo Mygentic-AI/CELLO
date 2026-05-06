@@ -88,6 +88,7 @@ export interface DirectoryNodeOptions {
   keyProvider: KeyProvider;        // directory-identity signing key
   relay: RelayAdapter;
   relayEndpoint: { peer_id: string; multiaddrs: string[] };
+  directoryEndpoint?: { peer_id: string; multiaddrs: string[] };
   store?: DirectoryStore;
   clock?: TimeSource;
 }
@@ -97,6 +98,7 @@ export class CelloDirectoryNode {
   readonly #keyProvider: KeyProvider;
   readonly #relay: RelayAdapter;
   readonly #relayEndpoint: { peer_id: string; multiaddrs: string[] };
+  readonly #directoryEndpoint: { peer_id: string; multiaddrs: string[] };
   readonly #store: DirectoryStore;
   readonly #clock: TimeSource;
 
@@ -126,6 +128,7 @@ export class CelloDirectoryNode {
     this.#keyProvider = opts.keyProvider;
     this.#relay = opts.relay;
     this.#relayEndpoint = opts.relayEndpoint;
+    this.#directoryEndpoint = opts.directoryEndpoint ?? { peer_id: "", multiaddrs: [] };
     this.#store = opts.store ?? new InMemoryDirectoryStore();
     this.#clock = opts.clock ?? WALL_CLOCK;
   }
@@ -335,6 +338,7 @@ export class CelloDirectoryNode {
       participant_a: { pubkey: new Uint8Array(initiatorPubkey), peer_id: initiatorInfo.peer_id, multiaddrs: initiatorInfo.multiaddrs },
       participant_b: { pubkey: new Uint8Array(targetPubkey), peer_id: targetInfo.peer_id, multiaddrs: targetInfo.multiaddrs },
       relay_endpoint: this.#relayEndpoint,
+      directory_endpoint: this.#directoryEndpoint,
       session_timestamp,
       directory_pubkey: new Uint8Array(dirPubkey),
       directory_signature: new Uint8Array(dirSig),
@@ -420,7 +424,6 @@ export class CelloDirectoryNode {
 
     // (b–d) Verify per-leaf Structure 1 signatures, prev_root chain, last_seen_seq causal chain
     let runningRoot = leaves.length > 0 ? leaves[0].s2.prev_root : new Uint8Array(32);
-    let lastSeqByParticipant = new Map<string, number>();
 
     for (let i = 0; i < leaves.length; i++) {
       const leaf = leaves[i];
@@ -448,15 +451,22 @@ export class CelloDirectoryNode {
         return { ok: false, reason: "prev_root_chain_broken" };
       }
 
-      // (d) Verify causal-chain on last_seen_seq: each participant's last_seen_seq
-      // must be non-decreasing. We track the last sequence number seen per sender.
+      // (d) Verify causal-chain: declared last_seen_seq must not exceed the effective seen
+      // sequence — the max sequence number assigned to any counterparty leaf strictly
+      // before position i in the log. Per SESSION-003 SI-003.
       const senderHex = Buffer.from(leaf.s2.sender_pubkey).toString("hex");
-      const prevSeqThisSender = lastSeqByParticipant.get(senderHex) ?? 0;
-      if (s1Fields.last_seen_seq < prevSeqThisSender) {
+      // effective_seen = max sequence_number of all leaves from other senders before index i
+      let effectiveSeen = 0;
+      for (let j = 0; j < i; j++) {
+        const otherHex = Buffer.from(leaves[j].s2.sender_pubkey).toString("hex");
+        if (otherHex !== senderHex && leaves[j].s2.sequence_number > effectiveSeen) {
+          effectiveSeen = leaves[j].s2.sequence_number;
+        }
+      }
+      if (s1Fields.last_seen_seq > effectiveSeen) {
         this.#notifySealRejected(sessionIdHex, sessionId, "causal_chain_violated");
         return { ok: false, reason: "causal_chain_violated" };
       }
-      lastSeqByParticipant.set(senderHex, leaf.s2.sequence_number);
 
       // Advance running root: after leaf i, root = merkleRoot(leaves[0..i]).
       // O(n²) per processSeal call — acceptable for M1 short sessions.
@@ -500,7 +510,13 @@ export class CelloDirectoryNode {
     this.#store.recordNotarization(notarization);
 
     // Notify both clients
-    const sealedEvent: SessionSealed = { type: "session_sealed", session_id: sessionId, sealed_root: recomputedRoot };
+    const sealedEvent: SessionSealed = {
+      type: "session_sealed",
+      session_id: sessionId,
+      sealed_root: recomputedRoot,
+      directory_signature: notarizationSig,
+      close_timestamp,
+    };
     this.#deliverOrEnqueue(participants[0] ?? "", sealedEvent);
     if (participants.length >= 2) this.#deliverOrEnqueue(participants[1], sealedEvent);
 
@@ -576,15 +592,20 @@ function decodeStructure1Fields(cbor: Uint8Array): Structure1Fields | null {
 function verifySealLeaves(
   leaves: Array<{ kind: "msg" | "ctrl"; s2: import("@cello/protocol-types").Structure2; structure1_cbor: Uint8Array }>  // RelaySealLeaf
 ): { ok: true } | { ok: false } {
-  // Final two leaves must be ctrl-kind (0x02)
+  // Final two leaves must be ctrl-kind (0x02) from distinct participants.
   if (leaves.length < 2) return { ok: false };
   const last = leaves[leaves.length - 1];
   const secondLast = leaves[leaves.length - 2];
   if (last.kind !== "ctrl" || secondLast.kind !== "ctrl") return { ok: false };
-  // They must be from distinct participants
   const lastSender = Buffer.from(last.s2.sender_pubkey).toString("hex");
   const secondLastSender = Buffer.from(secondLast.s2.sender_pubkey).toString("hex");
   if (lastSender === secondLastSender) return { ok: false };
+  // M1 DEBT (SESSION-003-AC-002): directory should also verify that each SEAL leaf's payload
+  // final_root matches the Merkle root at the appropriate stage (before initiator SEAL, after
+  // initiator SEAL, after both). This requires the relay to include ctrl leaf content bytes in
+  // SealData (currently only content_hash is available). Deferred to a follow-on story since
+  // clients perform this verification locally (AC-001), maintaining the trust guarantee at the
+  // client level. See: CELLO-SESSION-003 AC-002 step (f).
   return { ok: true };
 }
 
@@ -595,6 +616,7 @@ export interface CreateDirectoryNodeOptions {
   keyProvider: KeyProvider;
   relay: RelayAdapter;
   relayEndpoint: { peer_id: string; multiaddrs: string[] };
+  directoryEndpoint?: { peer_id: string; multiaddrs: string[] };
   store?: DirectoryStore;
   clock?: TimeSource;
 }
@@ -615,6 +637,7 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     keyProvider: opts.keyProvider,
     relay: opts.relay,
     relayEndpoint: opts.relayEndpoint,
+    directoryEndpoint: opts.directoryEndpoint,
     store: opts.store,
     clock: opts.clock,
   });

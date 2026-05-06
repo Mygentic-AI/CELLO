@@ -1,5 +1,5 @@
 export { CelloRelayNode, createRelayNode, RELAY_PROTOCOL_ID } from "./relay-node.js";
-export type { RelayNodeOptions, CreateRelayNodeOptions } from "./relay-node.js";
+export type { RelayNodeOptions, CreateRelayNodeOptions, DirectoryAdapter } from "./relay-node.js";
 
 import { createLibp2p } from "libp2p";
 import { tcp } from "@libp2p/tcp";

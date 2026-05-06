@@ -89,6 +89,10 @@ async function makeDirectoryAssignment(opts: {
       peer_id: opts.relayPeerId,
       multiaddrs: opts.relayMultiaddrs,
     },
+    directory_endpoint: {
+      peer_id: "",
+      multiaddrs: [],
+    },
     session_timestamp,
     directory_pubkey: dirPubkey,
     directory_signature,
@@ -641,7 +645,7 @@ describe("AC-008: embedded S1.last_seen_seq > highest observed counterparty seq 
     const fix = await makeFixture();
     scope.addCleanup(fix.stopAll);
 
-    const { sessionIdHex, sessionId, assignment } = await setupSession(fix);
+    const { sessionIdHex, sessionId } = await setupSession(fix);
 
     // A sends 2 messages. B confirms both. B's session.last_seen_seq = 2.
     await fix.clientA.client.sendMessage(sessionIdHex, Buffer.from("msg1"));
@@ -953,9 +957,11 @@ describe("SI-003: outbound last_seen_seq never exceeds actually-observed relay s
     const recA = fix.clientA.client.listSessions()
       .find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex)!;
 
-    // last_seen_seq is updated only after the relay echoes our own leaf_deliver.
-    // After 3 echoed sends, last_seen_seq == 3.
-    expect(recA.last_seen_seq).toBe(3); // RED
+    // last_seen_seq tracks the highest *counterparty* relay seq A has confirmed.
+    // B hasn't sent anything, so last_seen_seq stays 0.
+    // last_sent_seq tracks A's own echoed seqs — should be 3 after 3 sends.
+    expect(recA.last_seen_seq).toBe(0); // counterparty seq (B sent nothing)
+    expect(recA.last_sent_seq).toBe(3); // own sent seq after 3 echoed sends
     expect(recA.local_tree_leaves.length).toBe(3); // RED
   }, 20_000);
 });
@@ -1036,11 +1042,12 @@ describe("DB-001: relay stream closed → sendMessage returns transport_unavaila
       expect(result.reason).toBe("transport_unavailable"); // RED
     }
 
-    // Session state must be unmodified (last_seen_seq not incremented)
+    // Session state must be unmodified
     const recA = fix.clientA.client.listSessions()
       .find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex)!;
     expect(recA.desynchronized).toBe(false); // RED — transport loss != desync
-    expect(recA.last_seen_seq).toBe(1); // only 1 message succeeded before relay stopped
+    expect(recA.last_sent_seq).toBe(1); // 1 own-send echoed before relay stopped
+    expect(recA.last_seen_seq).toBe(0); // B sent nothing (counterparty seq stays 0)
 
     // Cleanup
     try { await fix.clientA.client.listSessions(); } catch {}

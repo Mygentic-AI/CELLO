@@ -88,6 +88,10 @@ async function makeDirectoryAssignment(opts: {
       peer_id: opts.relayPeerId,
       multiaddrs: opts.relayMultiaddrs,
     },
+    directory_endpoint: {
+      peer_id: "",
+      multiaddrs: [],
+    },
     session_timestamp,
     directory_pubkey: dirPubkey,
     directory_signature,
@@ -418,6 +422,7 @@ describe("SI-003: client NEVER participates in a session without verifying dir s
       participant_a: { pubkey: fix.clientA.pubkey, peer_id: fix.clientA.peerId, multiaddrs: fix.clientA.multiaddrs },
       participant_b: { pubkey: fix.clientB.pubkey, peer_id: fix.clientB.peerId, multiaddrs: fix.clientB.multiaddrs },
       relay_endpoint: { peer_id: fix.relayPeerId, multiaddrs: [fix.relayAddr] },
+      directory_endpoint: { peer_id: "", multiaddrs: [] },
       session_timestamp,
       directory_pubkey: attackerPubkey,   // attacker's key, not the real directory's
       directory_signature: attackerSig,   // valid under attacker's key — self-consistent forgery

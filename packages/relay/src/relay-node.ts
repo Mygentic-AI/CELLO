@@ -101,15 +101,25 @@ function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
 
 // ─── CelloRelayNode ────────────────────────────────────────────────────────────
 
+/**
+ * DirectoryAdapter: in-process interface the relay calls to trigger seal processing.
+ * Uses structural typing so relay package does not import @cello/directory.
+ */
+export interface DirectoryAdapter {
+  processSeal(sessionId: Uint8Array, sealData: import("./relay-types.js").SealData): Promise<{ ok: true } | { ok: false; reason: string }>;
+}
+
 export interface RelayNodeOptions {
   node: CelloNode;
   directoryPubkey: Uint8Array;
+  directory?: DirectoryAdapter;
   store?: RelayStore;
 }
 
 export class CelloRelayNode {
   readonly #node: CelloNode;
   readonly #directoryPubkey: Uint8Array;
+  readonly #directory: DirectoryAdapter | null;
   readonly #store: RelayStore;
 
   // nonce_hex → NonceEntry
@@ -124,6 +134,7 @@ export class CelloRelayNode {
   constructor(opts: RelayNodeOptions) {
     this.#node = opts.node;
     this.#directoryPubkey = opts.directoryPubkey;
+    this.#directory = opts.directory ?? null;
     this.#store = opts.store ?? new InMemoryRelayStore();
   }
 
@@ -435,18 +446,52 @@ export class CelloRelayNode {
     if (counterpartyStream) {
       try {
         await this.#sendFrame(counterpartyStream, deliveryFrame);
-        return;
       } catch {
         this.#streams.delete(counterpartyHex);
+        this.#store.enqueueDelivery(counterpartyHex, {
+          session_id: frame.session_id,
+          leaf_kind: frame.leaf_kind,
+          sequence_number: seq,
+          structure2_cbor: s2Cbor,
+          structure1_cbor: frame.structure1_cbor,
+        });
       }
+    } else {
+      this.#store.enqueueDelivery(counterpartyHex, {
+        session_id: frame.session_id,
+        leaf_kind: frame.leaf_kind,
+        sequence_number: seq,
+        structure2_cbor: s2Cbor,
+        structure1_cbor: frame.structure1_cbor,
+      });
     }
-    this.#store.enqueueDelivery(counterpartyHex, {
-      session_id: frame.session_id,
-      leaf_kind: frame.leaf_kind,
-      sequence_number: seq,
-      structure2_cbor: s2Cbor,
-      structure1_cbor: frame.structure1_cbor,
-    });
+
+    // SESSION-003: after a ctrl leaf, check if both participants have now submitted SEAL leaves.
+    // Two ctrl leaves from distinct senders in the log → trigger directory processSeal.
+    if (leafKind === "ctrl" && this.#directory) {
+      await this.#maybeProcessSeal(frame.session_id, sessionKey);
+    }
+  }
+
+  async #maybeProcessSeal(sessionId: Uint8Array, sessionKey: string): Promise<void> {
+    const state = this.#store.getSession(sessionKey);
+    if (!state || state.status !== "active") return;
+
+    // Check bilateral seal condition: two ctrl leaves from distinct participants
+    const ctrlLeaves = state.leaf_log.filter((l) => l.kind === "ctrl");
+    if (ctrlLeaves.length < 2) return;
+    const senders = new Set(ctrlLeaves.map((l) => Buffer.from(l.s2.sender_pubkey).toString("hex")));
+    if (senders.size < 2) return;
+
+    const sealResult = this.submitForSeal(sessionId);
+    if (!sealResult.ok) return;
+
+    const dirResult = await this.#directory!.processSeal(sessionId, sealResult.data);
+    if (dirResult.ok) {
+      this.confirmSeal(sessionId);
+    } else {
+      this.rejectSeal(sessionId, dirResult.reason);
+    }
   }
 
   // ─── Transport helpers ───────────────────────────────────────────────────────
@@ -461,6 +506,7 @@ export class CelloRelayNode {
 export interface CreateRelayNodeOptions {
   listenAddresses?: string[];
   directoryPubkey: Uint8Array;
+  directory?: DirectoryAdapter;
   keyProvider?: KeyProvider;
   store?: RelayStore;
 }
@@ -480,6 +526,7 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
   const relay = new CelloRelayNode({
     node,
     directoryPubkey: opts.directoryPubkey,
+    directory: opts.directory,
     store: opts.store,
   });
   await relay.start();

@@ -104,7 +104,8 @@ function sendFrame(stream: Stream, data: Uint8Array): void {
   stream.send(lp.encode.single(data));
 }
 
-// performAuth reads the challenge and sends the response via a persistent reader
+// performAuth reads the challenge, sends the response, and reads relay_auth_ok.
+// The relay always sends relay_auth_ok (or relay_auth_failed) after the response.
 async function performAuth(
   reader: StreamReader,
   stream: Stream,
@@ -123,6 +124,13 @@ async function performAuth(
   const signature = await kp.sign(msgHash);
 
   sendFrame(stream, CBOR_ENC.encode({ type: "relay_auth_response", pubkey, signature }));
+
+  // Read relay_auth_ok or relay_auth_failed confirmation
+  const ack = await reader.readDecoded();
+  if (ack["type"] === "relay_auth_failed") {
+    throw new Error(`relay_auth_failed: ${ack["reason"]}`);
+  }
+  expect(ack["type"]).toBe("relay_auth_ok");
 }
 
 async function makeStructure1(
@@ -470,6 +478,10 @@ describe("AC-007: session_not_found after confirmSeal destroys state", () => {
     const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
     const sig = await cA.kp.sign(msgHash);
     sendFrame(sA2, CBOR_ENC.encode({ type: "relay_auth_response", pubkey: pubA, signature: sig }));
+
+    // Consume relay_auth_ok before sending hash_submit
+    const authOk = await rA2.readDecoded();
+    expect(authOk["type"]).toBe("relay_auth_ok");
 
     const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), cA.kp, 0);
     sendFrame(sA2, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: 0x00, structure1_cbor, sender_signature }));

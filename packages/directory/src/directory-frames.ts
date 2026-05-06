@@ -52,6 +52,10 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
         peer_id: a.relay_endpoint.peer_id,
         multiaddrs: a.relay_endpoint.multiaddrs,
       },
+      directory_endpoint: {
+        peer_id: a.directory_endpoint.peer_id,
+        multiaddrs: a.directory_endpoint.multiaddrs,
+      },
       session_timestamp: a.session_timestamp,
       directory_pubkey: a.directory_pubkey,
       directory_signature: a.directory_signature,
@@ -64,7 +68,15 @@ export function encodeSessionAbandoned(frame: SessionAbandoned): Uint8Array {
 }
 
 export function encodeSessionSealed(frame: SessionSealed): Uint8Array {
-  return ENC.encode({ type: frame.type, session_id: frame.session_id, sealed_root: frame.sealed_root });
+  return ENC.encode({
+    type: frame.type,
+    session_id: frame.session_id,
+    sealed_root: frame.sealed_root,
+    directory_signature: frame.directory_signature,
+    close_timestamp: frame.close_timestamp > 0xffffffff
+      ? BigInt(frame.close_timestamp)
+      : frame.close_timestamp,
+  });
 }
 
 export function encodeSessionSealRejected(frame: SessionSealRejected): Uint8Array {
@@ -183,7 +195,13 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (!re || typeof re !== "object") return null;
     const re_peer_id = typeof re["peer_id"] === "string" ? re["peer_id"] : null;
     const re_multiaddrs = toStringArray(re["multiaddrs"]);
-    if (!re_peer_id || !re_multiaddrs) return null;
+    if (re_peer_id === null || !re_multiaddrs) return null;
+
+    const de = raw["directory_endpoint"] as Record<string, unknown> | undefined;
+    if (!de || typeof de !== "object") return null;
+    const de_peer_id = typeof de["peer_id"] === "string" ? de["peer_id"] : null;
+    const de_multiaddrs = toStringArray(de["multiaddrs"]);
+    if (de_peer_id === null || !de_multiaddrs) return null;
 
     const session_timestamp = typeof raw["session_timestamp"] === "number" ? raw["session_timestamp"] : null;
     if (session_timestamp === null) return null;
@@ -198,6 +216,7 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       participant_a: pa,
       participant_b: pb,
       relay_endpoint: { peer_id: re_peer_id, multiaddrs: re_multiaddrs },
+      directory_endpoint: { peer_id: de_peer_id, multiaddrs: de_multiaddrs },
       session_timestamp,
       directory_pubkey,
       directory_signature,
@@ -208,9 +227,14 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
   if (o["type"] === "session_sealed") {
     const session_id = toUint8Array(o["session_id"]);
     const sealed_root = toUint8Array(o["sealed_root"]);
+    const directory_signature = toUint8Array(o["directory_signature"]);
     if (!session_id || session_id.length !== 16) return null;
     if (!sealed_root || sealed_root.length !== 32) return null;
-    return { type: "session_sealed", session_id, sealed_root };
+    if (!directory_signature || directory_signature.length !== 64) return null;
+    const _ct = o["close_timestamp"];
+    const close_timestamp = typeof _ct === "number" ? _ct : typeof _ct === "bigint" ? Number(_ct) : null;
+    if (close_timestamp === null) return null;
+    return { type: "session_sealed", session_id, sealed_root, directory_signature, close_timestamp };
   }
 
   if (o["type"] === "session_seal_rejected") {

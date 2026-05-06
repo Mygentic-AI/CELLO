@@ -6,7 +6,7 @@
 
 // ─── Session types (SESSION-002) ──────────────────────────────────────────────
 
-export type SessionStatus = "active" | "transport_lost" | "sealing" | "sealed";
+export type SessionStatus = "active" | "transport_lost" | "sealing" | "sealed" | "seal_rejected";
 
 export interface SessionRecord {
   session_id: Uint8Array;
@@ -14,15 +14,28 @@ export interface SessionRecord {
   counterparty_peer_id: string;
   counterparty_multiaddrs: string[];
   relay_endpoint: { peer_id: string; multiaddrs: string[] };
+  directory_endpoint: { peer_id: string; multiaddrs: string[] };
+  directory_pubkey: Uint8Array;
   genesis_prev_root: Uint8Array;
   /**
-   * MSG-004: highest global relay sequence_number confirmed on this session (from any sender).
-   * Used as `last_seen_seq` in the next outbound Structure 1 TBS per SI-003.
-   * Updated for every confirmed leaf (own-send echo and counterparty message).
-   * Starts at 0 (no messages confirmed yet).
+   * MSG-004: highest global relay sequence_number of *counterparty* leaves confirmed on this session.
+   * Used as `last_seen_seq` in the next outbound Structure 1 TBS.
+   * Updated only when a counterparty leaf is confirmed (never on own-send echoes).
+   * Starts at 0 (no counterparty messages confirmed yet).
    */
   last_seen_seq: number;
+
+  /**
+   * MSG-004: highest global relay sequence_number of *own* leaves echoed back.
+   * Used by the client-side causal-chain check: incoming last_seen_seq must be <= this.
+   * Updated only when own-send echoes are confirmed.
+   * Starts at 0.
+   */
+  last_sent_seq: number;
   status: SessionStatus;
+
+  /** Sealed root after seal completes. SESSION-003. */
+  sealed_root?: Uint8Array;
 
   // ─── MSG-004 additions ────────────────────────────────────────────────────
 
@@ -93,6 +106,7 @@ export interface ReceivedMessage {
 export type SendMessageFailureReason =
   | "session_not_found"
   | "session_desynchronized"
+  | "session_sealed"
   | "transport_unavailable"
   | "relay_rejected"
   | "content_path_failed";
@@ -185,6 +199,14 @@ export interface CelloClient {
    * Returns null if all queues are empty. MSG-004.
    */
   receiveAnyMessage(): { sessionIdHex: string; message: ReceivedMessage } | null;
+
+  /**
+   * Initiate the bilateral SEAL ceremony. Constructs and submits the initiator SEAL
+   * ctrl leaf, transitions session to `sealing`. SESSION-003.
+   * Returns ok:false if the session is not active, already sealing/sealed, or if the
+   * relay submit fails.
+   */
+  initiateSessionSeal(sessionIdHex: string): Promise<{ ok: true } | { ok: false; reason: string }>;
 
   /**
    * Close and remove a session record. Call after a desynchronized or sealed session

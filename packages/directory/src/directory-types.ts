@@ -61,8 +61,10 @@ export interface SessionAbandoned {
 
 export interface SessionSealed {
   type: "session_sealed";
-  session_id: Uint8Array; // 16 bytes
-  sealed_root: Uint8Array; // 32-byte final Merkle root
+  session_id: Uint8Array;          // 16 bytes
+  sealed_root: Uint8Array;         // 32-byte final Merkle root
+  directory_signature: Uint8Array; // 64-byte Ed25519 over canonical CBOR([session_id, sealed_root, close_timestamp])
+  close_timestamp: number;         // Unix ms
 }
 
 export interface SessionSealRejected {
