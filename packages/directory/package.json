@@ -26,6 +26,7 @@
     "@cello/protocol-types": "workspace:*",
     "@cello/transport": "workspace:*",
     "@libp2p/interface": "^3.0.0",
+    "@noble/curves": "2.2.0",
     "cbor-x": "^1.6.4",
     "it-length-prefixed": "^9.1.0"
   }

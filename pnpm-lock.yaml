@@ -120,6 +120,9 @@ importers:
       '@libp2p/interface':
         specifier: ^3.0.0
         version: 3.2.2
+      '@noble/curves':
+        specifier: 2.2.0
+        version: 2.2.0
       cbor-x:
         specifier: ^1.6.4
         version: 1.6.4

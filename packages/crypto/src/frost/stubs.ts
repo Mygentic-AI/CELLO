@@ -57,6 +57,17 @@ export class InProcessDirectoryNodeStub implements DirectoryNodeStub {
     this.#key = { secret, pub };
   }
 
+  /**
+   * TEST-ONLY: Return the stored FROST key pair for use by external test harnesses
+   * (e.g., to inject a share into a FrostDirectoryHandler via injectShareForTest).
+   *
+   * This deliberately exposes the raw FrostSecret for test setup purposes.
+   * MUST NOT be called outside of test code.
+   */
+  getShareForTest(): { secret: FrostSecret; pub: FrostPublic } | null {
+    return this.#key;
+  }
+
   // ─── Test control methods ────────────────────────────────────────────────────
 
   /**

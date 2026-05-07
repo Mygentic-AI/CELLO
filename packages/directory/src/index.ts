@@ -39,3 +39,21 @@ export type { InboundSignalingFrame, OutboundSignalingFrame } from "./directory-
 
 export type { RelayAdapter, DirectoryNodeOptions, CreateDirectoryNodeOptions } from "./directory-node.js";
 export { CelloDirectoryNode, createDirectoryNode, SIGNALING_PROTOCOL_ID } from "./directory-node.js";
+
+export type { ShareStore, LocalShare } from "./share-store.js";
+export { InMemoryShareStore } from "./share-store.js";
+
+export type {
+  CeremonyRoundOk,
+  CeremonyRoundError,
+  CeremonyRoundResult,
+  CeremonyRoundParams,
+  DirectoryBootstrapResult,
+  FallbackCanaryEvent,
+  FrostDirectoryHandlerOptions,
+} from "./frost-handler.js";
+export {
+  FrostDirectoryHandler,
+  BootstrapNotAllowedInProduction,
+  FROST_PROTOCOL_ID,
+} from "./frost-handler.js";

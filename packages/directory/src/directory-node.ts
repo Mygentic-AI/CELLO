@@ -53,6 +53,12 @@ import {
   encodeNotAuthenticated,
   decodeInboundSignalingFrame,
 } from "./directory-frames.js";
+import {
+  FrostDirectoryHandler,
+  FROST_PROTOCOL_ID,
+} from "./frost-handler.js";
+import type { FrostDirectoryHandlerOptions } from "./frost-handler.js";
+import type { ShareStore } from "./share-store.js";
 
 export const SIGNALING_PROTOCOL_ID = "/cello/signaling/1.0.0";
 const AUTH_DOMAIN = "CELLO-DIR-AUTH-v1";
@@ -91,6 +97,12 @@ export interface DirectoryNodeOptions {
   directoryEndpoint?: { peer_id: string; multiaddrs: string[] };
   store?: DirectoryStore;
   clock?: TimeSource;
+  /** Node ID used for FROST identifier derivation (defaults to empty string) */
+  nodeId?: string;
+  /** K_server_X share store (defaults to InMemoryShareStore) */
+  shareStore?: ShareStore;
+  /** FALLBACK_CANARY event listener for conflict monitoring */
+  onFallbackCanary?: FrostDirectoryHandlerOptions["onFallbackCanary"];
 }
 
 export class CelloDirectoryNode {
@@ -101,6 +113,7 @@ export class CelloDirectoryNode {
   readonly #directoryEndpoint: { peer_id: string; multiaddrs: string[] };
   readonly #store: DirectoryStore;
   readonly #clock: TimeSource;
+  readonly #frostHandler: FrostDirectoryHandler;
 
   // nonce_hex → NonceEntry
   readonly #nonces = new Map<string, NonceEntry>();
@@ -131,12 +144,57 @@ export class CelloDirectoryNode {
     this.#directoryEndpoint = opts.directoryEndpoint ?? { peer_id: "", multiaddrs: [] };
     this.#store = opts.store ?? new InMemoryDirectoryStore();
     this.#clock = opts.clock ?? WALL_CLOCK;
+    this.#frostHandler = new FrostDirectoryHandler({
+      nodeId: opts.nodeId ?? "",
+      shareStore: opts.shareStore,
+      onFallbackCanary: opts.onFallbackCanary,
+    });
   }
 
   async start(): Promise<void> {
     await this.#node.handle(SIGNALING_PROTOCOL_ID, (stream) => {
       void this.#handleSignalingStream(stream);
     }, { maxInboundStreams: 512 });
+
+    await this.#node.handle(FROST_PROTOCOL_ID, (stream) => {
+      void this.#handleFrostStream(stream);
+    }, { maxInboundStreams: 256 });
+  }
+
+  // ─── FROST stream handler ────────────────────────────────────────────────────
+
+  async #handleFrostStream(stream: Stream): Promise<void> {
+    // /cello/frost/1.0.0 stream handler — delegates to FrostDirectoryHandler
+    // Stream protocol: length-prefixed CBOR frames (same encoding as signaling)
+    //
+    // Inbound frame: { agentPubkey, epochId, tbs, context, commitmentList, ceremonyId }
+    // Outbound frame: CeremonyRoundResult (ok/error)
+    //
+    // NOTE: This is the M2 skeletal registration. Full CBOR framing for the
+    // /cello/frost/1.0.0 wire protocol will be implemented in the follow-on
+    // stream protocol story once the wire format is finalized. For now, the
+    // handler is exercised in-process (via FrostDirectoryHandler directly)
+    // and the libp2p protocol is registered for discoverability.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _ of lp.decode(stream)) {
+        // TODO (M2 follow-on): decode CBOR frame and call this.#frostHandler.handleCeremonyRound
+        // For now: close stream immediately (handler is exercised in-process)
+        break;
+      }
+    } catch {
+      // stream closed or reset
+    } finally {
+      stream.close().catch(() => {});
+    }
+  }
+
+  /**
+   * Expose FrostDirectoryHandler for in-process use by tests and by the
+   * full-ceremony coordinator (FrostThresholdSigner with directoryNodes).
+   */
+  get frostHandler(): FrostDirectoryHandler {
+    return this.#frostHandler;
   }
 
   // ─── Stream handler ──────────────────────────────────────────────────────────
@@ -619,6 +677,12 @@ export interface CreateDirectoryNodeOptions {
   directoryEndpoint?: { peer_id: string; multiaddrs: string[] };
   store?: DirectoryStore;
   clock?: TimeSource;
+  /** Node ID used for FROST identifier derivation */
+  nodeId?: string;
+  /** K_server_X share store (defaults to InMemoryShareStore) */
+  shareStore?: ShareStore;
+  /** FALLBACK_CANARY event listener */
+  onFallbackCanary?: FrostDirectoryHandlerOptions["onFallbackCanary"];
 }
 
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{
@@ -640,6 +704,9 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     directoryEndpoint: opts.directoryEndpoint,
     store: opts.store,
     clock: opts.clock,
+    nodeId: opts.nodeId,
+    shareStore: opts.shareStore,
+    onFallbackCanary: opts.onFallbackCanary,
   });
   await directory.start();
 

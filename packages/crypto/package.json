@@ -12,6 +12,18 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./frost/frost-threshold-signer.js": {
+      "import": "./src/frost/frost-threshold-signer.js",
+      "types": "./src/frost/frost-threshold-signer.ts"
+    },
+    "./frost/stubs.js": {
+      "import": "./src/frost/stubs.js",
+      "types": "./src/frost/stubs.ts"
+    },
+    "./frost/types.js": {
+      "import": "./src/frost/types.js",
+      "types": "./src/frost/types.ts"
     }
   },
   "scripts": {
