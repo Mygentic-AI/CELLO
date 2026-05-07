@@ -95,6 +95,7 @@ import type {
   FrostThresholdSignerConfig,
   DirectoryNodeStub,
   BootstrapResult,
+  FrostContext,
 } from "./types.js";
 import { CONTEXT_SESSION_ESTABLISHMENT, CONTEXT_SEAL } from "./types.js";
 
@@ -303,7 +304,7 @@ export class FrostThresholdSigner implements IThresholdSigner {
   async participateInCeremony(
     ceremonyId: string,
     tbs: Uint8Array,
-    context: string,
+    context: FrostContext,
   ): Promise<ThresholdSignature> {
     const localShare = _localShares.get(toHex(this.#agentPubkey));
     if (!localShare) {
@@ -515,7 +516,7 @@ export class MockThresholdSigner implements IThresholdSigner {
   async participateInCeremony(
     _ceremonyId: string,
     tbs: Uint8Array,
-    _context: string,
+    _context: FrostContext,
   ): Promise<ThresholdSignature> {
     // Return a 64-byte mock signature derived from the TBS
     // Not cryptographically valid — only for interface shape testing
