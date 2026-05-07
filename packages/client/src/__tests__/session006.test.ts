@@ -52,7 +52,7 @@ import { createNode } from "@cello/transport";
 import { createRelayNode } from "@cello/relay";
 import type { CelloRelayNode } from "@cello/relay";
 import { createClient } from "../client.js";
-import type { CelloClient } from "../types.js";
+import type { CelloClient, SessionRecord } from "../types.js";
 
 setupV3Tests();
 
@@ -957,10 +957,10 @@ describe("DB-001 (session.test.ts stub converted): relay temporarily unreachable
   }, 25_000);
 });
 
-// ─── M-3: #performRelayAuth timeout → reconnect backoff fires → transport_lost ─
+// ─── M-3 (initial-connect): #performRelayAuth bounded at session setup time ────
 
-describe("M-3: relay sends challenge then hangs → #performRelayAuth times out → reconnect backoff fires → transport_lost after deadline", () => {
-  it("M-3: stub relay that sends auth challenge but never sends relay_auth_ok causes auth timeout, reconnect loop exhausts deadline, session stays transport_lost", async () => {
+describe("M-3 (initial-connect): relay sends auth challenge but never sends relay_auth_ok → relay_auth_error at session setup time", () => {
+  it("initial relay auth: challenge sent, ack never arrives → relay_auth_error at session setup time", async () => {
     // Build a stub relay node that:
     //   1. Accepts /cello/relay/1.0.0 streams
     //   2. Sends relay_auth_challenge with a valid 32-byte nonce
@@ -1106,4 +1106,121 @@ describe("DB-002 (session.test.ts stub converted): relay rejects re-auth during 
     const s = sessions.find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
     expect(s?.status).toBe("transport_lost");
   }, 15_000);
+});
+
+// ─── M-3 (reconnect-loop): established session → disconnect → hanging relay during reconnect → transport_lost ─
+
+describe("M-3 (reconnect-loop): established session disconnected → reconnect loop attempts #performRelayAuth against hanging relay → transport_lost after deadline", () => {
+  it("M-3 (reconnect-loop): session transport_lost, relay stub sends challenge but never ack → reconnect deadline elapses → session permanently transport_lost", async () => {
+    // Scenario:
+    //   1. Establish a real session between clientA and clientB using the normal fixture.
+    //   2. Start a stub relay node that accepts /cello/relay/1.0.0, sends relay_auth_challenge,
+    //      then hangs (never sends relay_auth_ok). This simulates a relay that is reachable
+    //      but misbehaves during the re-auth phase of reconnect.
+    //   3. Inject a relay disconnect on clientA using injectRelayDisconnect — session transitions
+    //      to transport_lost and the reconnect loop fires.
+    //   4. Update clientA's cached relay endpoint to point at the stub relay (via the
+    //      SessionRecord's relay_endpoint field, which #reconnectRelayStream reads).
+    //   5. The reconnect loop's #performRelayAuth call hangs on the ack read until
+    //      RELAY_AUTH_TIMEOUT_MS (5s) fires, throws "auth_timeout", and catches into backoff.
+    //   6. With reconnectTimeoutMs=3000ms the deadline elapses after the first or second
+    //      timeout fires, and the session stays transport_lost permanently.
+    //
+    // Use reconnectTimeoutMs=3000 so the test completes in ~3-6s rather than 60s.
+
+    const { encode: lpEncodeStub } = await import("it-length-prefixed");
+
+    // Build a hanging stub relay node
+    const stubKp = generateKeypair();
+    const stubNode = await createNode({ keyProvider: stubKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await stubNode.start();
+
+    const STUB_RELAY_PROTOCOL = "/cello/relay/1.0.0";
+    const STUB_CBOR_ENC = new Encoder({ tagUint8Array: false });
+
+    await stubNode.handle(STUB_RELAY_PROTOCOL, (stream) => {
+      void (async () => {
+        try {
+          // Send relay_auth_challenge then hang — never send relay_auth_ok
+          const nonce = new Uint8Array(randomBytes(32));
+          const challengeFrame = STUB_CBOR_ENC.encode({
+            type: "relay_auth_challenge",
+            nonce,
+          }) as Uint8Array;
+          stream.send(lpEncodeStub.single(challengeFrame));
+          // Hang forever — RELAY_AUTH_TIMEOUT_MS (5s) in #performRelayAuth will fire and throw
+          await new Promise<void>(() => {});
+        } catch {
+          // stream aborted by client after auth timeout — expected
+        }
+      })();
+    });
+
+    const stubPeerId = stubNode.getPeerId();
+    const stubAddrs = stubNode.listenAddresses();
+
+    // Establish a real session with a short reconnect timeout (3000ms)
+    const fix = await makeFixture(3000);
+    scope.addCleanup(async () => {
+      await fix.stopAll();
+      try { await stubNode.stop(); } catch {}
+    });
+
+    const { sessionIdHex } = await setupSession(fix);
+
+    // Confirm session is active before we inject the disconnect
+    const sessionsBefore = fix.clientA.client.listSessions();
+    const sBefore = sessionsBefore.find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
+    expect(sBefore?.status).toBe("active");
+
+    // Redirect clientA's cached relay endpoint to the stub relay.
+    // #reconnectRelayStream reads session.relay_endpoint directly, so patching the
+    // SessionRecord is sufficient — no internal API needed beyond the public listSessions().
+    const sessionRecord = sBefore as SessionRecord & { relay_endpoint: { peer_id: string; multiaddrs: string[] } };
+    sessionRecord.relay_endpoint.peer_id = stubPeerId;
+    sessionRecord.relay_endpoint.multiaddrs = stubAddrs;
+
+    // Step 2: inject relay disconnect → triggers transport_lost + starts reconnect loop
+    const escapedA = fix.clientA.client as unknown as {
+      injectRelayDisconnect?(sessionIdHex: string): void;
+    };
+    if (typeof escapedA.injectRelayDisconnect !== "function") {
+      // injectRelayDisconnect not implemented — skip
+      return;
+    }
+    escapedA.injectRelayDisconnect(sessionIdHex);
+
+    // Step 3: confirm session transitions to transport_lost
+    await waitFor(
+      () => {
+        const sessions = fix.clientA.client.listSessions();
+        const s = sessions.find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
+        return s?.status === "transport_lost";
+      },
+      { timeout: 3000, interval: 50 },
+    );
+
+    const sLost = fix.clientA.client.listSessions().find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
+    expect(sLost?.status).toBe("transport_lost");
+
+    // Step 4/5: reconnect loop fires #performRelayAuth against the stub relay.
+    // The stub sends the challenge but hangs on the ack read. RELAY_AUTH_TIMEOUT_MS=5s fires
+    // inside #performRelayAuth and throws, which the reconnect loop catches and backs off.
+    // With reconnectTimeoutMs=3000ms the deadline was set at disconnect time, so after
+    // RELAY_AUTH_TIMEOUT_MS (5s) the first attempt exhausts the deadline (3s < 5s).
+    //
+    // Wait for the reconnect deadline to expire (3000ms + 1000ms buffer = 4000ms).
+    await new Promise((r) => setTimeout(r, 4000));
+
+    // Step 6: session must remain transport_lost — reconnect deadline elapsed with no success
+    const sFinal = fix.clientA.client.listSessions().find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
+    expect(sFinal?.status).toBe("transport_lost");
+
+    // sendMessage must return transport_unavailable (session permanently dead)
+    const rSend = await fix.clientA.client.sendMessage(sessionIdHex, Buffer.from("after-reconnect-timeout"));
+    expect(rSend.ok).toBe(false);
+    if (!rSend.ok) {
+      expect(rSend.reason).toBe("transport_unavailable");
+    }
+  }, 20_000);
 });

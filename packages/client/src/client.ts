@@ -999,7 +999,7 @@ class CelloClientImpl implements CelloClient {
         } catch {
           // CBOR decode failure = transport corruption (not adversarial injection — the relay
           // stream is authenticated). We skip the frame and let the sequence-gap check in
-          // #drainReadyQueue detect the missing sequence number on the next valid frame.
+          // #handleInboundLeafDeliver detect the missing sequence number on the next valid frame.
           continue;
         }
 
