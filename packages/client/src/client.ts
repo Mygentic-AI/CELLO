@@ -130,12 +130,25 @@ interface ReadyEntry {
 
 const PENDING_CONTENT_BOUND = 256;
 
+// ─── SESSION-006 reconnect constants ─────────────────────────────────────────
+
+/** Default reconnect timeout: 60 seconds per SESSION-006 AC-003. */
+const DEFAULT_RECONNECT_TIMEOUT_MS = 60_000;
+
+/** Initial backoff interval in ms (exponential: 200, 400, 800, …). */
+const RECONNECT_INITIAL_BACKOFF_MS = 200;
+
+/** Maximum backoff cap to avoid excessively long waits. */
+const RECONNECT_MAX_BACKOFF_MS = 5_000;
+
 // ─── CelloClientImpl ─────────────────────────────────────────────────────────
 
 class CelloClientImpl implements CelloClient {
   readonly #node: CelloNode;
   readonly #keyProvider: KeyProvider;
   readonly #contentGraceMs: number;
+  /** SESSION-006: max ms to attempt relay reconnect before giving up. */
+  readonly #reconnectTimeoutMs: number;
   #myPubkeyHex: string | null = null;
 
   // peer_pubkey_hex → PeerEntry
@@ -203,6 +216,9 @@ class CelloClientImpl implements CelloClient {
   // session_id_hex → directory signaling stream (SESSION-003)
   readonly #directoryStreams = new Map<string, Stream>();
 
+  // SESSION-006: track whether a reconnect loop is already running per session
+  readonly #reconnectInProgress = new Set<string>();
+
   // session_id_hex → Promise: set when the initiator SEAL echo is expected (SESSION-003)
   // Allows non-initiator auto-response to know when its own SEAL echo confirms the seal
   readonly #sealInitiatedSessions = new Set<string>();
@@ -212,11 +228,13 @@ class CelloClientImpl implements CelloClient {
     keyProvider: KeyProvider,
     onMessageQueued?: (senderPubkeyHex: string) => void,
     contentGraceMs = 30_000,
+    reconnectTimeoutMs = DEFAULT_RECONNECT_TIMEOUT_MS,
   ) {
     this.#node = node;
     this.#keyProvider = keyProvider;
     this.#onMessageQueued = onMessageQueued;
     this.#contentGraceMs = contentGraceMs;
+    this.#reconnectTimeoutMs = reconnectTimeoutMs;
   }
 
   addPeer(peerPubkeyHex: string, peerId: string, multiaddrs: string[]): void {
@@ -523,6 +541,8 @@ class CelloClientImpl implements CelloClient {
     if (!session) return { ok: false, reason: "session_not_found" };
     if (session.desynchronized) return { ok: false, reason: "session_desynchronized" };
     if (session.status === "sealing" || session.status === "sealed") return { ok: false, reason: "session_sealed" };
+    // SESSION-006 AC-001/AC-003: transport_lost means relay stream is gone or being reconnected
+    if (session.status === "transport_lost") return { ok: false, reason: "transport_unavailable" };
 
     const relayStream = this.#relayStreams.get(sessionIdHex);
     if (!relayStream || relayStream.status !== "open") {
@@ -982,7 +1002,7 @@ class CelloClientImpl implements CelloClient {
         }
       }
     } catch {
-      // Stream closed — relay disconnected (DB-001)
+      // Stream closed — relay disconnected (SESSION-006 DB-001)
     }
 
     // Relay stream disconnected: mark relay stream null so sendMessage returns transport_unavailable
@@ -990,12 +1010,151 @@ class CelloClientImpl implements CelloClient {
       this.#relayStreams.delete(sessionIdHex);
     }
 
-    // Unblock any waiting sendMessage calls
+    // SESSION-006 AC-001: transition session to transport_lost and unblock pending sends
+    this.#onRelayDisconnect(sessionIdHex, myPubkeyHex);
+  }
+
+  /**
+   * SESSION-006 AC-001: Called when the relay stream closes unexpectedly.
+   *
+   * Pseudocode (Phase P):
+   *   1. If session not found or already desynchronized → nothing to do
+   *   2. If session already transport_lost → already handling (reconnect in progress)
+   *   3. Mark session status = "transport_lost"
+   *   4. Unblock any pending ack resolver with transport_unavailable
+   *   5. Start reconnect loop (returns immediately, runs asynchronously)
+   */
+  #onRelayDisconnect(sessionIdHex: string, myPubkeyHex: string): void {
+    const session = this.#sessions.get(sessionIdHex);
+    if (!session) return;
+    if (session.desynchronized) return;
+    if (session.status === "transport_lost") return; // already reconnecting
+    // Sealing/sealed/seal_rejected: relay stream closing is expected; do not clobber status.
+    // In SESSION-003, the relay triggers processSeal → confirmSeal which destroys the relay session.
+    // The client's sealing→sealed transition is driven by the directory signaling stream, not relay.
+    if (session.status === "sealing" || session.status === "sealed" || session.status === "seal_rejected") return;
+
+    // Mark session transport_lost (SESSION-006 AC-001)
+    session.status = "transport_lost";
+
+    // Unblock any waiting sendMessage calls with transport_unavailable
     const ackResolve = this.#pendingAckResolvers.get(sessionIdHex);
     if (ackResolve) {
       this.#pendingAckResolvers.delete(sessionIdHex);
       ackResolve({ ok: false, reason: "transport_unavailable" });
     }
+
+    // Start reconnect loop asynchronously (SESSION-006 AC-002, DB-001, AC-003)
+    void this.#reconnectRelayStream(sessionIdHex, myPubkeyHex);
+  }
+
+  /**
+   * SESSION-006 reconnect loop with exponential backoff.
+   *
+   * Pseudocode (Phase P):
+   *   deadline = now + reconnectTimeoutMs
+   *   backoff = RECONNECT_INITIAL_BACKOFF_MS
+   *   while now < deadline:
+   *     try:
+   *       newStream = dial relay endpoint from cached SessionAssignment
+   *       complete "CELLO-RELAY-AUTH-v1" challenge-response
+   *       await relay_auth_ok
+   *       relay sends queued leaf_deliver frames (already implemented in NODE-002)
+   *       update relayStreams[sessionIdHex] = newStream
+   *       start new #runRelayStreamReader loop (passing auth iter)
+   *       mark session status = "active"
+   *       return
+   *     catch:
+   *       wait backoff ms
+   *       backoff = min(backoff * 2, RECONNECT_MAX_BACKOFF_MS)
+   *   // timeout elapsed
+   *   session stays "transport_lost" permanently (AC-003)
+   */
+  async #reconnectRelayStream(sessionIdHex: string, myPubkeyHex: string): Promise<void> {
+    // Guard: only one reconnect loop per session at a time
+    if (this.#reconnectInProgress.has(sessionIdHex)) return;
+    this.#reconnectInProgress.add(sessionIdHex);
+
+    const deadline = Date.now() + this.#reconnectTimeoutMs;
+    let backoff = RECONNECT_INITIAL_BACKOFF_MS;
+
+    try {
+      while (Date.now() < deadline) {
+        const session = this.#sessions.get(sessionIdHex);
+        // Stop if session was closed, desynchronized, or sealed during reconnect
+        if (!session || session.desynchronized) return;
+        if (session.status !== "transport_lost") return;
+
+        try {
+          const relayPeerId = session.relay_endpoint.peer_id;
+          const relayMultiaddr = session.relay_endpoint.multiaddrs[0];
+
+          if (relayMultiaddr) {
+            try { await this.#node.dial(relayMultiaddr); } catch { /* already connected or not yet reachable */ }
+          }
+
+          let newStream: Stream;
+          try {
+            newStream = await this.#node.newStream(relayPeerId, RELAY_PROTOCOL_ID);
+          } catch {
+            throw new Error("relay_unreachable");
+          }
+
+          // Complete relay auth challenge-response (CELLO-RELAY-AUTH-v1)
+          const myPubkey = Buffer.from(myPubkeyHex, "hex");
+          const authResult = await this.#performRelayAuth(newStream, myPubkey);
+          if (!authResult.ok) {
+            newStream.abort(new Error("auth_failed"));
+            throw new Error("relay_auth_failed");
+          }
+
+          // Re-check session state after async auth
+          const sessionAfterAuth = this.#sessions.get(sessionIdHex);
+          if (!sessionAfterAuth || sessionAfterAuth.desynchronized) {
+            newStream.abort(new Error("session_gone"));
+            return;
+          }
+
+          // Reconnect succeeded: install new stream and resume
+          this.#relayStreams.set(sessionIdHex, newStream);
+          sessionAfterAuth.status = "active";
+
+          // Start the new reader loop (authResult.iter is the continuation iterator)
+          void this.#runRelayStreamReader(sessionIdHex, newStream, myPubkeyHex, authResult.iter);
+          return;
+
+        } catch {
+          // Reconnect attempt failed — wait with exponential backoff
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) break;
+          const waitMs = Math.min(backoff, remaining);
+          await new Promise<void>((r) => setTimeout(r, waitMs));
+          backoff = Math.min(backoff * 2, RECONNECT_MAX_BACKOFF_MS);
+        }
+      }
+
+      // Timeout elapsed: session remains transport_lost permanently (AC-003)
+      // No further state change needed — session.status is already "transport_lost"
+    } finally {
+      this.#reconnectInProgress.delete(sessionIdHex);
+    }
+  }
+
+  // Internal test escape: forcibly close the relay stream for a session to simulate disconnect.
+  // SESSION-006: used by AC-001, AC-002, DB-001 tests.
+  injectRelayDisconnect(sessionIdHex: string): void {
+    const stream = this.#relayStreams.get(sessionIdHex);
+    const myPubkeyHex = this.#myPubkeyHex;
+    if (!myPubkeyHex) return;
+
+    // Abort the stream if it exists (this will cause #runRelayStreamReader to exit)
+    if (stream) {
+      this.#relayStreams.delete(sessionIdHex);
+      try { stream.abort(new Error("test_inject_disconnect")); } catch { /* ignore */ }
+    }
+
+    // Directly trigger the disconnect handler
+    this.#onRelayDisconnect(sessionIdHex, myPubkeyHex);
   }
 
   #handleInboundLeafDeliver(
@@ -1597,14 +1756,29 @@ class CelloClientImpl implements CelloClient {
 export function createClient(
   node: CelloNode,
   keyProvider: KeyProvider,
-  opts?: { onMessageQueued?: (senderPubkeyHex: string) => void; contentGraceMs?: number }
+  opts?: {
+    onMessageQueued?: (senderPubkeyHex: string) => void;
+    contentGraceMs?: number;
+    /** SESSION-006: ms to attempt relay reconnect before giving up. Default: 60000. */
+    reconnectTimeoutMs?: number;
+  }
 ): CelloClient & {
   sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
   openRawStream(peerPubkeyHex: string): Promise<Stream>;
+  openContentStreamByPeerId(peerId: string): Promise<Stream>;
+  injectRelayDisconnect(sessionIdHex: string): void;
 } {
-  return new CelloClientImpl(node, keyProvider, opts?.onMessageQueued, opts?.contentGraceMs) as CelloClient & {
+  return new CelloClientImpl(
+    node,
+    keyProvider,
+    opts?.onMessageQueued,
+    opts?.contentGraceMs,
+    opts?.reconnectTimeoutMs,
+  ) as CelloClient & {
     sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
     openRawStream(peerPubkeyHex: string): Promise<Stream>;
+    openContentStreamByPeerId(peerId: string): Promise<Stream>;
+    injectRelayDisconnect(sessionIdHex: string): void;
   };
 }
 
