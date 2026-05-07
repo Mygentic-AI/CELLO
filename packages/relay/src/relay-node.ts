@@ -414,7 +414,10 @@ export class CelloRelayNode {
       ? ctrlLeafHash(s2Cbor)
       : msgLeafHash(s2Cbor);
 
-    const newStack: Array<{ hash: Uint8Array; height: number }> = [...state.tree_stack];
+    const newStack: Array<{ hash: Uint8Array; height: number }> = state.tree_stack.map((e) => ({
+      hash: e.hash.slice(),
+      height: e.height,
+    }));
     let newNode = newLeafHash;
     let height = 0;
     while (newStack.length > 0 && newStack[newStack.length - 1]!.height === height) {
