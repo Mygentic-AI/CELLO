@@ -141,6 +141,22 @@ const RECONNECT_INITIAL_BACKOFF_MS = 200;
 /** Maximum backoff cap to avoid excessively long waits. */
 const RECONNECT_MAX_BACKOFF_MS = 5_000;
 
+/** Timeout for each individual relay auth read (challenge or ack). */
+const RELAY_AUTH_TIMEOUT_MS = 5_000;
+
+/** Race an async iterator's next() call against a timeout. */
+async function nextWithTimeout<T>(
+  iter: AsyncIterator<T>,
+  timeoutMs: number,
+): Promise<IteratorResult<T>> {
+  return Promise.race([
+    iter.next(),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("auth_timeout")), timeoutMs),
+    ),
+  ]);
+}
+
 // ─── CelloClientImpl ─────────────────────────────────────────────────────────
 
 class CelloClientImpl implements CelloClient {
@@ -981,6 +997,9 @@ class CelloClientImpl implements CelloClient {
         try {
           frame = decode(bytes) as Record<string, unknown>;
         } catch {
+          // CBOR decode failure = transport corruption (not adversarial injection — the relay
+          // stream is authenticated). We skip the frame and let the sequence-gap check in
+          // #drainReadyQueue detect the missing sequence number on the next valid frame.
           continue;
         }
 
@@ -1598,8 +1617,9 @@ class CelloClientImpl implements CelloClient {
     // Create exactly ONE iterator for this stream's lifetime — never create a second one.
     const iter = (lp.decode(stream) as AsyncIterable<unknown>)[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
 
-    // Read challenge frame
-    const { value: challengeRaw, done } = await iter.next();
+    // Read challenge frame — bounded by RELAY_AUTH_TIMEOUT_MS to prevent indefinite hang
+    // if a misbehaving relay sends the challenge but never sends relay_auth_ok.
+    const { value: challengeRaw, done } = await nextWithTimeout(iter, RELAY_AUTH_TIMEOUT_MS);
     if (done || challengeRaw === undefined) {
       return { ok: false, reason: "relay_auth_error" };
     }
@@ -1634,8 +1654,11 @@ class CelloClientImpl implements CelloClient {
     }) as Uint8Array;
     stream.send(lp.encode.single(responseFrame));
 
-    // Read relay_auth_ok or relay_auth_failed — relay always sends one of these.
-    const { value: ackRaw, done: ackDone } = await iter.next();
+    // Read relay_auth_ok or relay_auth_failed — bounded by RELAY_AUTH_TIMEOUT_MS.
+    // A relay that sends the challenge but stalls before the ack would otherwise hang here
+    // indefinitely; the timeout causes #performRelayAuth to throw, which the outer reconnect
+    // loop's catch block handles via backoff/deadline logic.
+    const { value: ackRaw, done: ackDone } = await nextWithTimeout(iter, RELAY_AUTH_TIMEOUT_MS);
     if (ackDone || ackRaw === undefined) {
       return { ok: false, reason: "relay_auth_error" };
     }
@@ -1766,7 +1789,6 @@ export function createClient(
   sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
   openRawStream(peerPubkeyHex: string): Promise<Stream>;
   openContentStreamByPeerId(peerId: string): Promise<Stream>;
-  injectRelayDisconnect(sessionIdHex: string): void;
 } {
   return new CelloClientImpl(
     node,
@@ -1778,7 +1800,6 @@ export function createClient(
     sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
     openRawStream(peerPubkeyHex: string): Promise<Stream>;
     openContentStreamByPeerId(peerId: string): Promise<Stream>;
-    injectRelayDisconnect(sessionIdHex: string): void;
   };
 }
 

@@ -957,6 +957,122 @@ describe("DB-001 (session.test.ts stub converted): relay temporarily unreachable
   }, 25_000);
 });
 
+// ─── M-3: #performRelayAuth timeout → reconnect backoff fires → transport_lost ─
+
+describe("M-3: relay sends challenge then hangs → #performRelayAuth times out → reconnect backoff fires → transport_lost after deadline", () => {
+  it("M-3: stub relay that sends auth challenge but never sends relay_auth_ok causes auth timeout, reconnect loop exhausts deadline, session stays transport_lost", async () => {
+    // Build a stub relay node that:
+    //   1. Accepts /cello/relay/1.0.0 streams
+    //   2. Sends relay_auth_challenge with a valid 32-byte nonce
+    //   3. Then hangs (never sends relay_auth_ok or relay_auth_failed)
+    // This exercises the RELAY_AUTH_TIMEOUT_MS path in #performRelayAuth:
+    //   await nextWithTimeout(iter, RELAY_AUTH_TIMEOUT_MS) — the second read hangs →
+    //   Promise.race fires the reject with "auth_timeout" → #performRelayAuth throws →
+    //   reconnect loop catch fires → backoff → deadline elapses → transport_lost.
+    //
+    // Use a very short reconnect timeout (200ms) so the test doesn't take 5+ seconds.
+
+    const { encode: lpEncodeStub } = await import("it-length-prefixed");
+
+    const stubKp = generateKeypair();
+    const stubNode = await createNode({ keyProvider: stubKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await stubNode.start();
+
+    const STUB_RELAY_PROTOCOL = "/cello/relay/1.0.0";
+    const STUB_CBOR_ENC = new Encoder({ tagUint8Array: false });
+
+    // Register the hanging auth handler on the stub node
+    await stubNode.handle(STUB_RELAY_PROTOCOL, (stream) => {
+      void (async () => {
+        try {
+          // Send relay_auth_challenge then hang — never send relay_auth_ok
+          const nonce = new Uint8Array(randomBytes(32));
+          const challengeFrame = STUB_CBOR_ENC.encode({
+            type: "relay_auth_challenge",
+            nonce,
+          }) as Uint8Array;
+          stream.send(lpEncodeStub.single(challengeFrame));
+          // Deliberately hang — we never send relay_auth_ok
+          // (the client's RELAY_AUTH_TIMEOUT_MS will fire and throw)
+          await new Promise<void>(() => {}); // intentional hang
+        } catch {
+          // stream aborted by client after timeout — expected
+        }
+      })();
+    });
+
+    const stubPeerId = stubNode.getPeerId();
+    const stubAddrs = stubNode.listenAddresses();
+
+    // Create a real client pointing at the stub relay.
+    // Use a short reconnect timeout (300ms) so the test completes quickly.
+    // RELAY_AUTH_TIMEOUT_MS is 5000ms in production, but the stub will cause the
+    // ack-read to hang, so the 5s timeout fires, throws auth_timeout, and the
+    // reconnect loop's catch block increments backoff.
+    // With reconnectTimeoutMs=300ms the loop will exhaust the deadline quickly.
+    const clientKp = generateKeypair();
+    const clientNode = await createNode({ keyProvider: clientKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await clientNode.start();
+
+    const client = createClient(clientNode, clientKp, { reconnectTimeoutMs: 300 });
+    await client.registerHandler();
+
+    const dirKp = generateKeypair();
+    const dirPubkey = await dirKp.getPublicKey();
+    const clientPubkey = await clientKp.getPublicKey();
+    const sessionId = new Uint8Array(randomBytes(16));
+    const session_timestamp = Date.now();
+    const tbs = CBOR_ENC.encode([
+      sessionId,
+      clientPubkey,
+      clientPubkey, // both A and B are the same client for this test
+      session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
+    ]) as Uint8Array;
+    const directory_signature = await dirKp.sign(tbs);
+
+    const assignment: SessionAssignment = {
+      session_id: sessionId,
+      participant_a: {
+        pubkey: clientPubkey,
+        peer_id: clientNode.getPeerId(),
+        multiaddrs: clientNode.listenAddresses(),
+      },
+      participant_b: {
+        pubkey: clientPubkey,
+        peer_id: clientNode.getPeerId(),
+        multiaddrs: clientNode.listenAddresses(),
+      },
+      relay_endpoint: {
+        peer_id: stubPeerId,
+        multiaddrs: stubAddrs,
+      },
+      directory_endpoint: {
+        peer_id: "",
+        multiaddrs: [],
+      },
+      session_timestamp,
+      directory_pubkey: dirPubkey,
+      directory_signature,
+    };
+
+    // receiveSessionAssignment will call #performRelayAuth which will call nextWithTimeout
+    // for the challenge read (succeeds) and the ack read (hangs → timeout fires after
+    // RELAY_AUTH_TIMEOUT_MS). That throws, causing receiveSessionAssignment to return
+    // relay_auth_error. Session is never registered.
+    const result = await client.receiveSessionAssignment(assignment, clientPubkey);
+
+    // The initial connect (not a reconnect) times out too → relay_auth_error
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("relay_auth_error");
+    }
+
+    // Cleanup
+    try { await clientNode.stop(); } catch {}
+    try { await stubNode.stop(); } catch {}
+  }, 15_000);
+});
+
 // ─── DB-002 (session.test.ts stub): relay rejection during recovery ───────────
 
 describe("DB-002 (session.test.ts stub converted): relay rejects re-auth during recovery → session stays transport_lost", () => {
