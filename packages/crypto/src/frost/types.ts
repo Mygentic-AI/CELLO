@@ -24,8 +24,7 @@ export const CONTEXT_SEAL = "cello-frost-seal-v1" as const;
 
 export type FrostContext =
   | typeof CONTEXT_SESSION_ESTABLISHMENT
-  | typeof CONTEXT_SEAL
-  | string; // extensible for future M3+ contexts
+  | typeof CONTEXT_SEAL;
 
 // ─── Threshold signature result ───────────────────────────────────────────────
 

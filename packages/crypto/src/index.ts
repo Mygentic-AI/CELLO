@@ -17,5 +17,4 @@ export {
   CONTEXT_SEAL,
   FrostThresholdSigner,
   MockThresholdSigner,
-  bootstrapKeyShares,
 } from "./frost/index.js";

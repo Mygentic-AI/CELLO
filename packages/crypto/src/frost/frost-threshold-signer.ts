@@ -112,6 +112,22 @@ interface LocalShare {
 // Private (#) module-level map — not exported.
 const _localShares = new Map<AgentPubkeyHex, LocalShare>();
 
+/**
+ * Clear all local key shares stored in the module-level map.
+ *
+ * TEST-ONLY: guards against accumulation of key material across test cases.
+ * Call in afterEach/afterAll to evict shares seeded by bootstrapKeyShares.
+ *
+ * Throws if called outside NODE_ENV=test so it can never be misused in
+ * production (where it would collapse multi-party FROST to zero-share state).
+ */
+export function clearTestShares(): void {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("clearTestShares is test-only and must not be called in production");
+  }
+  _localShares.clear();
+}
+
 // ─── Message framing for domain separation ────────────────────────────────────
 
 /**
@@ -347,12 +363,17 @@ export class FrostThresholdSigner implements IThresholdSigner {
       const selected = available.slice(0, threshold - 1);
 
       if (selected.length < threshold - 1) {
-        // Not enough non-excluded nodes — wait roundTimeoutMs before retrying.
-        // This allows the ceremony timeout to fire naturally (AC-008: flapping nodes).
-        await new Promise<void>((resolve) =>
-          setTimeout(resolve, roundTimeoutMs),
-        );
-        continue;
+        // Not enough non-excluded nodes remain for this attempt (fewer than
+        // threshold - 1 stubs available after excluding failed nodes). Since the
+        // client counts as one of the threshold signers, fewer than (threshold - 1)
+        // stub participants means the ceremony cannot possibly succeed regardless of
+        // further retries. Return DIRECTORY_BELOW_THRESHOLD immediately — same as
+        // the pre-ceremony check — rather than sleeping and timing out with
+        // CEREMONY_TIMEOUT (which would diverge from the spec).
+        return {
+          ok: false,
+          error: { reason: "DIRECTORY_BELOW_THRESHOLD" },
+        };
       }
 
       // Round 1: generate fresh nonces + commitment list
@@ -419,7 +440,11 @@ export class FrostThresholdSigner implements IThresholdSigner {
         }
 
         const stubId = ed25519_FROST.Identifier.derive(stub.id);
-        sigShares[stubId] = partialSig;
+        // String(stubId) makes the bigint→string coercion explicit: @noble/curves
+        // Identifier is a bigint, and Record<string,…> keys are strings. Using
+        // String() here documents the conversion rather than relying on implicit
+        // JS coercion, and must match how aggregate() looks up shares.
+        sigShares[String(stubId)] = partialSig;
       }
 
       // If any stub failed, this round's commitment list is inconsistent —
@@ -439,7 +464,7 @@ export class FrostThresholdSigner implements IThresholdSigner {
           commitmentList,
           msg,
         );
-        sigShares[clientId] = clientSig;
+        sigShares[String(clientId)] = clientSig;
       } catch {
         continue;
       }

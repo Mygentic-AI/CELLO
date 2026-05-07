@@ -19,9 +19,14 @@ import {
 } from "@claude-flow/testing";
 import {
   FrostThresholdSigner,
-  bootstrapKeyShares,
   MockThresholdSigner,
 } from "../frost/index.js";
+// bootstrapKeyShares and clearTestShares are test-only — imported directly from
+// the implementation file, not from the production barrel (frost/index.ts).
+import {
+  bootstrapKeyShares,
+  clearTestShares,
+} from "../frost/frost-threshold-signer.js";
 import type { IThresholdSigner } from "../frost/types.js";
 import {
   CONTEXT_SESSION_ESTABLISHMENT,
@@ -32,6 +37,12 @@ import {
 import { createInProcessStubs } from "../frost/stubs.js";
 
 setupV3Tests();
+
+// Evict all local key shares after each test to prevent cross-test accumulation
+// of key material in the module-level _localShares map (L-2 fix).
+afterEach(() => {
+  clearTestShares();
+});
 
 // ─── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -415,7 +426,7 @@ describe("AC-008: ceremony timeout", () => {
     await scope.run(async () => {});
   });
 
-  it("AC-008: nodes respond first round then flap; ceremony times out with CEREMONY_TIMEOUT", async () => {
+  it("AC-008: nodes are unresponsive; ceremony deadline fires mid-attempt before all nodes excluded → CEREMONY_TIMEOUT", async () => {
     const stubs = createInProcessStubs(3);
 
     const agentPubkey = makeAgentPubkey(8);
@@ -425,11 +436,23 @@ describe("AC-008: ceremony timeout", () => {
       directoryNodeStubs: stubs,
     });
 
-    // Nodes are reachable (isReachable() = true) but never respond to signRound.
-    // setUnresponsive: signRound returns a Promise that never resolves, so the
-    // coordinator's roundTimeoutMs timer fires for each node.
-    // With maxRetries=100 and roundTimeoutMs=50ms, each attempt takes 50ms.
-    // After ~6 attempts (6×50ms = 300ms), ceremonyTimeoutMs fires → CEREMONY_TIMEOUT.
+    // All 3 nodes are reachable but never respond to signRound (signRound hangs
+    // until the per-node roundTimeoutMs fires). This is different from AC-007
+    // where nodes are unreachable at initiation — here they pass isReachable()
+    // but fail during the signing round itself.
+    //
+    // Timing: roundTimeoutMs=50ms, ceremonyTimeoutMs=80ms.
+    // Attempt 0:
+    //   - Pre-round: 3 nodes reachable → threshold-1=1 node selected
+    //   - Round 2: node 0 is contacted → deadline check before node 0 (t≈0ms, ok)
+    //   - node 0 times out after 50ms → excluded, anyFailedThisRound=true → continue
+    // Attempt 1 (t≈50ms):
+    //   - Deadline check at top: t≈50ms < 80ms → ok
+    //   - available: nodes 1,2 (node 0 excluded) → selected: node 1
+    //   - Round 2: deadline check before node 1 (t≈50ms, ok)
+    //   - node 1 times out after 50ms → t≈100ms > 80ms → excluded → continue
+    // Attempt 2 (t≈100ms):
+    //   - Deadline check at top: t≈100ms >= 80ms → CEREMONY_TIMEOUT
     stubs[0].setUnresponsive(true);
     stubs[1].setUnresponsive(true);
     stubs[2].setUnresponsive(true);
@@ -440,12 +463,9 @@ describe("AC-008: ceremony timeout", () => {
         participants: 3,
         directoryNodeStubs: stubs,
         roundTimeoutMs: 50,
-        // ceremonyTimeoutMs longer than time to exhaust all 3 nodes (3×50=150ms)
-        // but shorter than maxRetries × roundTimeoutMs (100×50=5000ms).
-        // After 3 node timeouts (150ms), remaining attempts sleep 50ms each.
-        // After ~7 total attempts the ceremony deadline is reached → CEREMONY_TIMEOUT.
-        ceremonyTimeoutMs: 600,
-        maxRetries: 100, // ensure timeout fires before exhaustion
+        ceremonyTimeoutMs: 80, // shorter than 2 × roundTimeoutMs (100ms) but longer
+        // than 1 × roundTimeoutMs (50ms), so deadline fires on the 2nd attempt
+        maxRetries: 100, // large enough that timeout fires before exhaustion
       },
       agentPubkey,
     );
@@ -459,6 +479,72 @@ describe("AC-008: ceremony timeout", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.reason).toBe("CEREMONY_TIMEOUT");
+  });
+});
+
+// ─── M-4 regression: all nodes excluded mid-ceremony → DIRECTORY_BELOW_THRESHOLD ──
+
+describe("M-4 regression: all nodes excluded mid-ceremony returns DIRECTORY_BELOW_THRESHOLD", () => {
+  let scope: ReturnType<typeof createTestScope>;
+
+  beforeEach(() => {
+    scope = createTestScope();
+  });
+
+  afterEach(async () => {
+    await scope.run(async () => {});
+  });
+
+  it("M-4: 2-of-3; all nodes excluded during signing (invalid sigs); returns DIRECTORY_BELOW_THRESHOLD immediately, not CEREMONY_TIMEOUT", async () => {
+    // Verifies the M-4 fix: when all available nodes are excluded mid-ceremony
+    // (not at initiation), the coordinator returns DIRECTORY_BELOW_THRESHOLD
+    // immediately rather than sleeping and eventually returning CEREMONY_TIMEOUT.
+    //
+    // All 3 nodes are reachable at initiation (pass isReachable()) but return
+    // invalid partial sigs — getting excluded one per attempt.
+    // After all 3 are excluded, available.length=0 < threshold-1=1 →
+    // DIRECTORY_BELOW_THRESHOLD, not CEREMONY_TIMEOUT.
+    const stubs = createInProcessStubs(3);
+    stubs[0].setInvalidResponse(true);
+    stubs[1].setInvalidResponse(true);
+    stubs[2].setInvalidResponse(true);
+
+    const agentPubkey = makeAgentPubkey(30);
+    await bootstrapKeyShares(agentPubkey, {
+      threshold: 2,
+      participants: 3,
+      directoryNodeStubs: stubs,
+    });
+
+    const signer = new FrostThresholdSigner(
+      {
+        threshold: 2,
+        participants: 3,
+        directoryNodeStubs: stubs,
+        roundTimeoutMs: 5000, // very long — if the bug were present, sleeping 5s per remaining attempt
+        ceremonyTimeoutMs: 60000, // very long — must NOT be the failure reason
+        maxRetries: 10,
+      },
+      agentPubkey,
+    );
+
+    const start = Date.now();
+    const result = await signer.participateInCeremony(
+      "ceremony-m4-regression",
+      makeTbs("m4-regression-tbs"),
+      CONTEXT_SESSION_ESTABLISHMENT,
+    );
+    const elapsed = Date.now() - start;
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+
+    // Must be DIRECTORY_BELOW_THRESHOLD, not CEREMONY_TIMEOUT
+    expect(result.error.reason).toBe("DIRECTORY_BELOW_THRESHOLD");
+
+    // Must complete quickly — invalid sigs respond immediately, no sleeping
+    // Old bug: would sleep roundTimeoutMs (5s) per remaining attempt
+    expect(elapsed).toBeLessThan(2000);
   });
 });
 
