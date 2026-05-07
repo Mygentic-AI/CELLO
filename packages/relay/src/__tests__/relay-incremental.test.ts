@@ -328,6 +328,113 @@ describe("AC-005: debt comment removed from relay-node.ts", () => {
   });
 });
 
+// ─── AC-001 (ctrl leaf): incremental stack with mixed msg and ctrl leaves ─────
+
+describe("AC-001 (ctrl leaf): running_root matches reference for session with mixed msg and ctrl leaves", () => {
+  it("relay session with mixed msg and ctrl leaves: running_root after each append matches reference rebuild", async () => {
+    const dirKp = generateKeypair();
+    const dirPubkey = await dirKp.getPublicKey();
+    const { relay, node: relayNode, stop: relayStop } = await createRelayNode({ directoryPubkey: dirPubkey });
+    const relayAddr = relayNode.listenAddresses()[0]!;
+
+    const kpA = generateKeypair();
+    const pubA = await kpA.getPublicKey();
+    const kpB = generateKeypair();
+    const pubB = await kpB.getPublicKey();
+
+    const nodeA = await createNode({ keyProvider: kpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    const nodeB = await createNode({ keyProvider: kpB, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeA.start();
+    await nodeB.start();
+    await nodeA.dial(relayAddr);
+    await nodeB.dial(relayAddr);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const assignment = await makeAssignment(sessionId, pubA, pubB, dirKp);
+    relay.recordAssignment(assignment);
+
+    const sA = await nodeA.newStream(relayNode.getPeerId(), "/cello/relay/1.0.0");
+    const sB = await nodeB.newStream(relayNode.getPeerId(), "/cello/relay/1.0.0");
+    const rA = new StreamReader(sA);
+    const rB = new StreamReader(sB);
+    await performAuth(rA, sA, kpA);
+    await performAuth(rB, sB, kpB);
+
+    // Leaf sequence: msg(0), msg(1), ctrl(2), msg(3), ctrl(4), msg(5)
+    // leaf_kind 0x00 = message, leaf_kind 0x02 = control (SEAL-like)
+    const leafKinds = [0x00, 0x00, 0x02, 0x00, 0x02, 0x00];
+    const n = leafKinds.length;
+
+    // Track delivered (kind, s2Cbor) pairs to reconstruct LeafInput for reference rebuild
+    const deliveredLeaves: Array<{ kind: "msg" | "ctrl"; s2Cbor: Uint8Array }> = [];
+
+    for (let i = 0; i < n; i++) {
+      const leafKind = leafKinds[i]!;
+      const contentHash = new Uint8Array(randomBytes(32));
+      const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, contentHash, kpA, i);
+      sendFrame(sA, CBOR_ENC.encode({
+        type: "hash_submit",
+        session_id: sessionId,
+        leaf_kind: leafKind,
+        structure1_cbor,
+        sender_signature,
+      }));
+      // Read ack
+      const ack = await rA.readDecoded();
+      expect(ack["type"]).toBe("hash_submit_ack");
+      // Read echo (sender gets leaf_deliver back)
+      const echo = await rA.readDecoded();
+      expect(echo["type"]).toBe("leaf_deliver");
+      // Read B's deliver
+      const deliver = await rB.readDecoded();
+      expect(deliver["type"]).toBe("leaf_deliver");
+      expect(deliver["leaf_kind"]).toBe(leafKind);
+
+      const s2Cbor = toU8(deliver["structure2_cbor"]);
+      deliveredLeaves.push({
+        kind: leafKind === 0x02 ? "ctrl" : "msg",
+        s2Cbor,
+      });
+    }
+
+    // Compute genesis_prev_root for reference
+    const cmp = Buffer.compare(Buffer.from(pubA), Buffer.from(pubB));
+    const [first, second] = cmp <= 0 ? [pubA, pubB] : [pubB, pubA];
+    const tsBytes = Buffer.allocUnsafe(8);
+    tsBytes.writeBigUInt64BE(BigInt(assignment.session_timestamp));
+    const h = createHash("sha256");
+    h.update(first); h.update(second); h.update(sessionId); h.update(tsBytes);
+    const genesisRoot = new Uint8Array(h.digest());
+
+    // For each leaf k (0-indexed), verify prev_root == reference root of leaves 0..k-1
+    for (let k = 0; k < n; k++) {
+      const actualPrevRoot = decodePrevRoot(deliveredLeaves[k]!.s2Cbor);
+
+      let expectedPrevRoot: Uint8Array;
+      if (k === 0) {
+        expectedPrevRoot = genesisRoot;
+      } else {
+        // Build LeafInput array for the first k leaves, using the correct kind per leaf
+        const leafInputs: LeafInput[] = deliveredLeaves.slice(0, k).map(({ kind, s2Cbor }) => ({
+          kind,
+          data: s2Cbor,
+        }));
+        expectedPrevRoot = merkleRoot(buildMerkleTree(leafInputs));
+      }
+
+      // AC-001 (ctrl leaf): prev_root must be byte-identical to reference for every leaf,
+      // including ctrl leaves (leaf_kind 0x02) which use ctrlLeafHash(s2Cbor) not msgLeafHash
+      expect(Buffer.from(actualPrevRoot).toString("hex")).toBe(Buffer.from(expectedPrevRoot).toString("hex"));
+    }
+
+    sA.close().catch(() => {});
+    sB.close().catch(() => {});
+    await nodeA.stop();
+    await nodeB.stop();
+    await relayStop();
+  }, 60_000);
+});
+
 // ─── SI-001: relay prev_root values are byte-identical to reference ───────────
 
 describe("SI-001: relay incremental stack produces byte-identical prev_root to reference for all n", () => {
