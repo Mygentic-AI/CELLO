@@ -224,12 +224,27 @@ describe("CELLO-NODE-003: Directory FROST Handler", () => {
   });
 
   // ─── AC-005: bootstrapKeyShares in NODE_ENV=test ───────────────────────────
+  //
+  // What this tests:
+  //   - Each directory node stores a K_server_X share at epoch 1 in its
+  //     InMemoryShareStore after bootstrapKeyShares is called.
+  //   - The return value contains only a shareCommitment (Uint8Array) — no raw
+  //     key material (no `secret`, no `keyShare`) leaves any node.
+  //
+  // What this does NOT test (and cannot):
+  //   FrostDirectoryHandler.bootstrapKeyShares generates an INDEPENDENT per-node
+  //   deal for each call — there is no shared multi-party DKG round across the
+  //   three handlers here. Consequently, combining the 3 commitments collected
+  //   below does NOT yield a single primary_pubkey. The primary_pubkey derivation
+  //   from combined commitments is a FrostThresholdSigner concern and is tested
+  //   via the createInProcessStubs path in AC-007 / CRYPTO-003.
 
   describe("AC-005: bootstrapKeyShares in NODE_ENV=test (3 directory nodes)", () => {
     it("each node stores K_server_X share and returns commitment (no key material)", () => {
       const agentPubkeyHex = randomAgentPubkeyHex();
 
-      // Create 3 FrostDirectoryHandlers (one per simulated node)
+      // Create 3 FrostDirectoryHandlers (one per simulated node).
+      // Note: each handler runs an independent deal — not a shared multi-party DKG.
       const handlers = Array.from({ length: 3 }, (_, i) => {
         const store = new InMemoryShareStore();
         const handler = new FrostDirectoryHandler({
