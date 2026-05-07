@@ -19,7 +19,7 @@
 import { randomBytes, createHash } from "node:crypto";
 import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { verify, buildMerkleTree, merkleRoot, generateKeypair } from "@cello/crypto";
+import { verify, buildMerkleTree, merkleRoot, generateKeypair, msgLeafHash, ctrlLeafHash, nodeHash } from "@cello/crypto";
 import type { KeyProvider, LeafInput } from "@cello/crypto";
 import { buildStructure2, encodeStructure2, computeGenesisPrevRoot } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
@@ -391,18 +391,9 @@ export class CelloRelayNode {
 
     const seq = state.seq_counter + 1;
 
-    // Compute prev_root: genesis for seq=1, else Merkle root of all prior leaves.
-    // O(n log n) per submit — acceptable for M1 short sessions; production needs
-    // an incremental tree that tracks the running root across appends.
-    const prevRoot = seq === 1
-      ? state.genesis_prev_root
-      : (() => {
-          const inputs: LeafInput[] = state.leaf_log.map((l) => ({
-            kind: l.kind,
-            data: encodeStructure2(l.s2),
-          }));
-          return merkleRoot(buildMerkleTree(inputs));
-        })();
+    // prev_root for this leaf = running root of all prior leaves (O(1) read from state).
+    // The running_root is updated below via the RFC 6962 incremental stack after the leaf is appended.
+    const prevRoot = state.running_root;
 
     const s2Result = buildStructure2(
       seq,
@@ -416,10 +407,35 @@ export class CelloRelayNode {
     const s2Cbor = encodeStructure2(s2Result.structure2);
     const leafKind: "msg" | "ctrl" = frame.leaf_kind === 0x02 ? "ctrl" : "msg";
 
+    // RFC 6962 incremental stack update: O(log n) per append.
+    // Push the new leaf hash onto the stack, merging with same-height entries as needed.
+    // The running_root is the right-to-left fold of the stack with nodeHash.
+    const newLeafHash = leafKind === "ctrl"
+      ? ctrlLeafHash(s2Cbor)
+      : msgLeafHash(s2Cbor);
+
+    const newStack: Array<{ hash: Uint8Array; height: number }> = [...state.tree_stack];
+    let newNode = newLeafHash;
+    let height = 0;
+    while (newStack.length > 0 && newStack[newStack.length - 1]!.height === height) {
+      const popped = newStack.pop()!;
+      newNode = nodeHash(popped.hash, newNode);
+      height++;
+    }
+    newStack.push({ hash: newNode, height });
+
+    // Fold stack right-to-left to produce the new running root
+    let newRunningRoot = newStack[newStack.length - 1]!.hash;
+    for (let i = newStack.length - 2; i >= 0; i--) {
+      newRunningRoot = nodeHash(newStack[i]!.hash, newRunningRoot);
+    }
+
     const newState: RelaySessionState = {
       ...state,
       seq_counter: seq,
       leaf_log: [...state.leaf_log, { kind: leafKind, s2: s2Result.structure2, structure1_cbor: frame.structure1_cbor }],
+      tree_stack: newStack,
+      running_root: newRunningRoot,
     };
     this.#store.setSession(sessionKey, newState);
 

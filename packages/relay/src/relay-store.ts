@@ -42,6 +42,8 @@ export class InMemoryRelayStore implements RelayStore {
       seq_counter: 0,
       leaf_log: [],
       status: "active",
+      tree_stack: [],
+      running_root: genesisRoot,
     });
     return true;
   }

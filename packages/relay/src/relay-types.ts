@@ -100,6 +100,18 @@ export interface RelaySessionState {
   seq_counter: number;           // 0 initially; incremented to 1 on first leaf
   leaf_log: Array<{ kind: "msg" | "ctrl"; s2: Structure2; structure1_cbor: Uint8Array }>; // ordered
   status: SessionStatus;
+  /**
+   * RFC 6962 incremental stack. Each entry is the root of a complete 2^height-leaf subtree.
+   * Invariant: entries are in ascending height order; no two entries share the same height.
+   * Used to compute the running Merkle root in O(log n) per append.
+   */
+  tree_stack: Array<{ hash: Uint8Array; height: number }>;
+  /**
+   * Merkle root of all leaves appended so far.
+   * Equals genesis_prev_root before the first leaf.
+   * Updated after each leaf append via the incremental stack.
+   */
+  running_root: Uint8Array;
 }
 
 // ─── Seal interface ────────────────────────────────────────────────────────────
