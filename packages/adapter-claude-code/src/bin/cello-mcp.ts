@@ -30,11 +30,13 @@ const node = await createNode({ keyProvider: kp, listenAddresses: [listenAddr] }
 // CELLO-E2E-002: Bootstrap FROST key shares (test-only)
 // In production (M3+), real DKG ceremony will replace this test-harness shortcut.
 let thresholdSigner: FrostThresholdSigner | undefined;
+let primaryPubkey: Uint8Array | undefined;
 if (process.env.NODE_ENV === "test") {
   const ownPubkey = await kp.getPublicKey();
   const stubs = createInProcessStubs(3);
-  await bootstrapKeyShares(ownPubkey, { threshold: 2, participants: 3, directoryNodeStubs: stubs });
+  const bootstrapResult = await bootstrapKeyShares(ownPubkey, { threshold: 2, participants: 3, directoryNodeStubs: stubs });
   thresholdSigner = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubs }, ownPubkey);
+  primaryPubkey = bootstrapResult.primaryPubkey;
 }
 
 // Late-bound server reference — set after createMcpServer returns.
@@ -47,6 +49,10 @@ const client = createClient(node, kp, {
     if (mcpServer) void pushChannelNotification(mcpServer, senderHex);
   },
 });
+
+if (primaryPubkey) {
+  client.setPrimaryPubkey(primaryPubkey);
+}
 
 const server = createMcpServer(node, client, kp);
 mcpServer = server;

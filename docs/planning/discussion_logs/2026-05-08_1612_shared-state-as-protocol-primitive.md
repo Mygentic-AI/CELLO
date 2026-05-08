@@ -4,14 +4,14 @@ type: discussion
 date: 2026-05-08 16:12
 topics: [collaborative-state, CRDT, shared-documents, Goals, P2P-sync, workflow-coordination, non-repudiation, field-level-authority]
 status: active
-description: Design discussion on making shared collaborative state (Goals) a first-class CELLO protocol primitive using CRDTs, Merkle-notarized operation logs, and field-level write authority — grounded in the real NICO Asset Management equity purchase workflow.
+description: Design discussion on making shared collaborative state (Goals) a first-class CELLO protocol primitive using CRDTs, Merkle-notarized operation logs, and field-level write authority — grounded in a real-world retail equity purchase workflow at a financial services firm.
 ---
 
 # Shared State as Protocol Primitive — CRDTs in CELLO
 
 ## Context
 
-CELLO's messaging layer provides peer-to-peer communication with non-repudiation and identified counterparties. But a key use case is multi-person workflows where participants need to **maintain shared state** — like a Goal object tracking a retail equity purchase through 8 phases and 8 different people.
+CELLO's messaging layer provides peer-to-peer communication with non-repudiation and identified counterparties. But a key use case is multi-person workflows where participants need to **maintain shared state** — like a Goal object tracking a retail equity purchase through 8 phases and 8 different roles at a financial services firm.
 
 The question: should CELLO have a first-class primitive for shared collaborative documents, or should agents exchange diffs ad-hoc via messages?
 
@@ -58,10 +58,10 @@ Not all fields are created equal. Different kinds of data need different conflic
 
 Fields where only one agent has write authority, or where writes are append-only.
 
-**Examples from NICO workflow:**
-- `context.freeBalance` — only CRM queries this (from Fundware)
-- `context.executionPrice` — only Equity Ops receives this (from broker email)
-- `parallel_tasks[7.2].status` — only Tamara (settlement_cash) writes this
+**Examples from retail equity purchase workflow:**
+- `context.freeBalance` — only CRM agent queries this (from fund management system)
+- `context.executionPrice` — only Equity Ops Lead receives this (from broker email)
+- `parallel_tasks[7.2].status` — only Settlement Staff A (cash processing) writes this
 - `journal[]` — append-only; everyone adds their own entries, nobody edits others'
 
 **Merge behavior:** Automatic and silent. Different agents writing different fields merge cleanly. Append-only collections (journal, broker confirmations array) merge via union.
@@ -146,14 +146,14 @@ Invalid operations are **rejected** and **logged**. Because operations are signe
 
 ---
 
-## The NICO Reality: Chaos and Concurrency
+## The Reality: Chaos and Concurrency
 
 The discussion initially presented handoffs too rigidly — as if the "current owner" holds a global lock and nobody else can touch the Goal.
 
-**Real NICO workflow:**
-- Robert gets broker confirmation from Cedar at 1:30 PM → appends to `context.brokerConfirmations[]`
+**Real workflow:**
+- Equity Ops Lead gets broker confirmation from Broker A at 1:30 PM → appends to `context.brokerConfirmations[]`
 - Settlement starts at 3:00 PM based on first two broker confirmations
-- Broker C's confirmation arrives at 5:30 PM → Robert appends it
+- Broker C's confirmation arrives at 5:30 PM → Equity Ops Lead appends it
 - Settlement decides "we can fit this one in" and processes it
 
 **All concurrent. No conflict. No lock.**
@@ -162,10 +162,10 @@ Why? Because these are writes to **different fields** by **different authorized 
 
 | Field | Writer | When |
 |-------|--------|------|
-| `context.brokerConfirmations[]` | equity_ops_lead | Anytime a broker email arrives |
-| `parallel_tasks[7.2].status` | settlement_cash | During cash processing |
-| `parallel_tasks[7.3].status` | settlement_securities | During securities processing |
-| `journal[]` | anyone | Append-only, concurrent |
+| `context.brokerConfirmations[]` | Equity Ops Lead | Anytime a broker email arrives |
+| `parallel_tasks[7.2].status` | Settlement Staff A | During cash processing |
+| `parallel_tasks[7.3].status` | Settlement Staff B | During securities processing |
+| `journal[]` | any participant | Append-only, concurrent |
 
 The CRDT merges these automatically. The "handoff" isn't a lock — it's a signal. `currentOwner` changes from CRM to Equity Ops to Settlement to Finance, but that's about **responsibility for the next major decision**, not exclusive write access.
 
@@ -193,11 +193,11 @@ Field-level write authority (declared in the schema) allows multiple agents to w
 
 ## Does Offline Counterparty Block Writes?
 
-**Question:** Miriam finishes Phase 3 and her agent writes "Phase 3 complete, handing to Robert." Robert's agent is offline. Is that a problem?
+**Question:** The Order Entry agent finishes Phase 3 and writes "Phase 3 complete, handing to Trade Execution." The Trade Execution agent is offline. Is that a problem?
 
-**Answer:** No. The write is immediately durable on Miriam's copy. Robert's agent will sync whenever it comes online — from Miriam's agent, or from any other peer who already has the update. The CELLO directory handles "Robert just came online, who has the latest state for workflow X?" via peer discovery and rendezvous.
+**Answer:** No. The write is immediately durable on the Order Entry agent's copy. The Trade Execution agent will sync whenever it comes online — from the Order Entry agent, or from any other peer who already has the update. The CELLO directory handles "Trade Execution just came online, who has the latest state for workflow X?" via peer discovery and rendezvous.
 
-The offline peer doesn't block the write. It only delays their awareness of it — exactly like DynamoDB (where Robert's agent would poll and see the update whenever it next queries).
+The offline peer doesn't block the write. It only delays their awareness of it — exactly like DynamoDB (where the Trade Execution agent would poll and see the update whenever it next queries).
 
 ---
 
@@ -316,9 +316,9 @@ The technical difficulty of CRDTs is the price of entry — and a moat.
 
 ---
 
-## The NICO Workflow as Proof of Concept
+## The Workflow as Proof of Concept
 
-The retail equity purchase workflow is real — grounded in discovery sessions at NICO Asset Management in Malawi. Eight people, eight phases, conditional branching, parallel execution, external dependencies (brokers), chaotic timing.
+The retail equity purchase workflow is real — grounded in discovery sessions at a financial services firm. Eight roles, eight phases, conditional branching, parallel execution, external dependencies (brokers), chaotic timing.
 
 The shared-context document already maps who **Sees** and who **Sets** each field. It's 80% of the way to a protocol-enforceable schema. The workflow is inherently sequential-with-handoffs and clear ownership boundaries — ideal for CRDT + CELLO.
 
