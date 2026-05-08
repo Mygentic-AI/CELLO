@@ -470,105 +470,57 @@ We're betting on the first model. If the second model emerges as the dominant pa
 
 ## Interaction with Group Protocol: Silent Updates vs Chat Burst
 
-A critical distinction between **shared state updates** and **group chat messages**:
+### The Group Chat Cascade Problem (M8)
 
-### The Group Chat Problem (M8)
+Multi-party conversations face an exponential response burst problem: Agent A sends a message, B, C, D all respond, each response triggers inference for all others, wallets burn. M8 solves this with serialized mode, batching, and floor control.
 
-Multi-party conversations face the "exponential response burst" problem:
-- Agent A sends a message
-- Agents B, C, D all respond to A simultaneously
-- Each response triggers inference for all other agents
-- B responds to C, C responds to D, D responds to B
-- Token consumption explodes; wallets burn
+**The question**: does shared state have the same problem?
 
-**M8's solution** (from [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation Design]]):
-- **Serialized mode**: One agent has the token; others wait their turn
-- **Concurrent mode with batching**: Agents receive messages in batches, respond once per batch
-- **`last_seen_seq`**: Each message declares "I composed this having seen through message N"
-- **Client-side receive window**: Buffer messages, present batch to LLM at intervals
+### CRDT Operations Are Silent
 
-This design prevents chat rooms from becoming uncontrolled inference cascades.
+A chat message is an **utterance** — it has conversational dynamics and demands a response. A CRDT operation is **writing to a shared spreadsheet** — five agents updating different cells simultaneously doesn't require any of them to respond to each other.
 
-### Shared State Updates Are Different
+**Default behavior**: CRDT operations do not trigger inference. They propagate; agents pull state when ready.
 
-CRDT operations on a shared document are **not chat messages**:
+- Agent A writes `context.executionPrice = $42.50` → syncs silently to all peers
+- Agent B writes `parallel_tasks[7.2].status = completed` → syncs silently
+- Agent C writes `journal[].push("Settlement verified")` → syncs silently
 
-**Silent updates**: When Agent A writes `context.executionPrice = $42.50`, this:
-- Is a signed operation in the Merkle tree
-- Syncs to all participants via state vectors/diffs
-- Does **not** trigger inference for other agents by default
-- Other agents see the update when they next query the document state
+No cascade. They're each writing to their authorized fields. Nobody needs to respond until someone knocks.
 
-**No cascade by default**: If Agent B simultaneously writes `parallel_tasks[7.2].status = completed`, and Agent C writes `journal[].push("Settlement verified")`, these are:
-- Independent field updates (no conflict if schema allows it)
-- Merged automatically by the CRDT
-- **Not** three messages requiring three rounds of inference from all parties
+**The knock on the door is a chat message**: "Phase 3 done, your turn." That's a handoff signal and it flows through M8's normal chat protocol. The CRDT state already reflects the completed work; the chat message is the notification. The receiving agent inspects the document, sees the updated state, decides what to do next.
 
-### When Does Inference Trigger?
+### How Diffs Work
 
-Three patterns emerge:
+Both Yjs and Automerge support this natively — closer to git than you might expect:
 
-**1. Polling / pull-based**: Agent checks document state periodically
-```
-Every 30 seconds: fetch latest state, compare to last-seen, react if relevant fields changed
-```
-- No inference burst — agents decide when to check
-- Latency: up to polling interval
-- Good for: batch-oriented workflows, non-urgent updates
+- **State vector**: compact fingerprint of "what I have" — analogous to a commit hash
+- **Diff**: "only the operations you're missing" — analogous to a patch
 
-**2. Notification / push with explicit signal**: Agent sends a chat message saying "Phase 3 complete"
-```
-Agent A: (updates document state silently)
-Agent A: (sends chat message: "Order entry complete, ready for execution")
-Agent B: (receives message, triggers inference, checks document)
-```
-- Inference triggered by explicit signal, not every CRDT operation
-- Latency: near-real-time
-- Good for: handoff-driven workflows (NICO pattern)
+An agent's notification could literally *be* the diff: "here's what changed since you last synced." The receiving agent can inspect the diff before deciding whether to trigger inference. A `journal[].push(...)` is noise — no inference needed. A `status.stage = order_batching` might be the signal to act.
 
-**3. Watch / subscription on specific fields**: Agent subscribes to changes on specific fields
-```
-Agent B watches: context.executionPrice, status.stage
-Only trigger inference when those fields change, ignore other updates
-```
-- Selective inference — not every update matters to every agent
-- Latency: near-real-time for watched fields
-- Good for: role-specific coordination (settlement agents only care about broker confirmations)
+### One Merkle Tree
 
-### Implication for Protocol Design
+Chat messages and CRDT operations share **one Merkle tree with domain-separated leaves**:
+- `0x00` — chat message leaves (existing)
+- `0x04` — CRDT operation leaves (new in M9)
 
-Shared state documents need a **different triggering model** than group chat:
+**Why one tree**: The relay sequences everything — chat and CRDT ops — and assigns canonical sequence numbers. That's the audit trail: "at this moment, this agent submitted this operation." The CRDT merge algorithm runs on top of that and doesn't care about relay sequence numbers — it has its own internal vector clocks for resolving concurrency. These are separate concerns that can coexist in one tree.
 
-**Group chat (M8)**:
-- Every message is a potential inference trigger
-- Protocol enforces batching, serialization, or floor control to prevent cascades
+One sealed root covers the entire session history: "we discussed this, and the state changed as a result." That's the accountability model CELLO is built on.
 
-**Shared state (M9)**:
-- CRDT operations are **silent by default**
-- Inference triggers are **application-controlled**: polling, explicit signals, or field watches
-- No protocol-level cascade prevention needed — agents opt into when they react
+**Crypto overhead**: Ed25519 signing per operation is ~100 microseconds — negligible. FROST runs only at session establishment and seal, not per operation. No performance case for splitting trees.
 
-**Hybrid workflows** (chat + shared state in the same session):
-- Chat messages flow through M8's serialized/batching model
-- CRDT operations flow through Yjs/Automerge sync protocol
-- Two separate channels, coordinated by the application layer
+### What This Means for Protocol Design
 
-### Open Design Questions
+| | Group Chat (M8) | Shared State (M9) |
+|---|---|---|
+| Default | Every message is a potential inference trigger | CRDT operations are silent |
+| Cascade risk | High — requires batching/serialization | None — agents write independently |
+| Inference trigger | Protocol-enforced batching + floor control | Application-controlled (chat signal, polling, or field watch) |
+| Audit trail | `0x00` leaves in Merkle tree | `0x04` leaves in same Merkle tree |
 
-1. **Does the protocol provide field-watch subscriptions**, or is this purely client-side logic?
-   - Protocol-level: Directory tracks "Agent B is watching `context.executionPrice`" and sends push notifications
-   - Client-level: Each agent polls or queries the full document state, decides locally what to react to
-
-2. **How do explicit handoff signals work?**
-   - Is "Phase 3 complete" a chat message, a special CRDT operation type, or a control leaf in the Merkle tree?
-   - If it's a chat message, do chat and CRDT operations share the same Merkle tree, or are they parallel?
-
-3. **What's the relationship between group rooms (M8) and shared documents (M9)?**
-   - Same session, two operation types (chat leaves + CRDT leaves)?
-   - Separate sessions (chat room vs workflow document)?
-   - Chat room that *contains* a shared document as a first-class feature?
-
-**Provisional answer**: Treat chat and shared state as **separate operation streams in the same session**. The Merkle tree has two leaf types (domain-separated: `0x00` for messages, `0x04` for CRDT ops). Chat messages trigger inference per M8's rules. CRDT operations are silent unless the application layer decides to react. This keeps the protocols orthogonal while allowing hybrid workflows.
+Hybrid workflows (agents discussing *and* collaborating on a document) are natural: chat messages flow through M8's batching model, CRDT operations flow silently, both recorded in the same sealed tree.
 
 ---
 
