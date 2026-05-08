@@ -86,6 +86,25 @@ export interface IThresholdSigner {
    * Throws if not bootstrapped (no local share available).
    */
   getPrimaryPubkey(): Uint8Array;
+
+  /**
+   * Verify a combined FROST threshold signature.
+   *
+   * Used by the seal verifier (both initiator and counterparty) to confirm
+   * that a session_sealed FROST signature is valid before transitioning to sealed.
+   *
+   * @param signature - 64-byte combined FROST signature
+   * @param tbs - The to-be-signed bytes (same as passed to participateInCeremony)
+   * @param context - Domain context string used during signing
+   * @param publicKey - 32-byte group public key (primary_pubkey) to verify against
+   * @returns true if the signature is valid
+   */
+  verifySignature(
+    signature: Uint8Array,
+    tbs: Uint8Array,
+    context: FrostContext,
+    publicKey: Uint8Array,
+  ): boolean;
 }
 
 // ─── Configuration ────────────────────────────────────────────────────────────

@@ -567,6 +567,16 @@ export class MockThresholdSigner implements IThresholdSigner {
     key[31] = 0x4d; // 'M' for Mock
     return key;
   }
+
+  verifySignature(
+    _signature: Uint8Array,
+    _tbs: Uint8Array,
+    _context: FrostContext,
+    _publicKey: Uint8Array,
+  ): boolean {
+    // Mock: always returns false (not a real verifier)
+    return false;
+  }
 }
 
 // Re-export context constants for convenience

@@ -59,13 +59,36 @@ export interface SessionAbandoned {
   session_id: Uint8Array; // 16 bytes
 }
 
-export interface SessionSealed {
+/**
+ * M1 session_sealed frame (single-key directory signature).
+ * Refused in M2 clients per SESSION-005 SI-003.
+ * @deprecated Use SessionSealedFrost instead in M2+.
+ */
+export interface SessionSealedSingle {
   type: "session_sealed";
+  signature_type: "single";
   session_id: Uint8Array;          // 16 bytes
   sealed_root: Uint8Array;         // 32-byte final Merkle root
   directory_signature: Uint8Array; // 64-byte Ed25519 over canonical CBOR([session_id, sealed_root, close_timestamp])
   close_timestamp: number;         // Unix ms
 }
+
+/**
+ * M2 session_sealed frame (FROST-notarized ceremony signature).
+ * SESSION-005: seal_type is 'frost' when the FROST ceremony completes.
+ */
+export interface SessionSealedFrost {
+  type: "session_sealed";
+  signature_type: "frost";
+  session_id: Uint8Array;          // 16 bytes
+  sealed_root: Uint8Array;         // 32-byte final Merkle root
+  frost_signature: Uint8Array;     // 64-byte combined FROST signature over seal TBS
+  signer_pubkey: Uint8Array;       // 32-byte initiator primary_pubkey (group public key)
+  close_timestamp: number;         // Unix ms
+}
+
+/** Discriminated union: M2 sends SessionSealedFrost; old M1 wire format is SessionSealedSingle. */
+export type SessionSealed = SessionSealedSingle | SessionSealedFrost;
 
 export interface SessionSealRejected {
   type: "session_seal_rejected";
@@ -78,7 +101,47 @@ export type SealRejectionReason =
   | "leaf_signature_invalid"
   | "prev_root_chain_broken"
   | "causal_chain_violated"
-  | "seal_leaves_invalid";
+  | "seal_leaves_invalid"
+  | "seal_signature_invalid";
+
+// ─── SESSION-005: New signaling frames ────────────────────────────────────────
+
+/**
+ * seal_verified: directory → seal initiator, after all three verification passes pass.
+ * Tells the initiator: "I've verified the tree — coordinate the FROST ceremony now."
+ * Per SESSION-005 step 4 in the seal ceremony flow.
+ */
+export interface SealVerified {
+  type: "seal_verified";
+  session_id: Uint8Array;  // 16 bytes
+  sealed_root: Uint8Array; // 32-byte final Merkle root (recomputed by directory)
+  leaf_count: number;      // total leaves in the verified tree
+  timestamp: number;       // Unix ms (used in FROST TBS)
+}
+
+/**
+ * seal_frost_signature: seal initiator → directory, after FROST ceremony completes.
+ * The combined 64-byte FROST signature over the seal TBS.
+ * Per SESSION-005 step 6 in the seal ceremony flow.
+ */
+export interface SealFrostSignature {
+  type: "seal_frost_signature";
+  session_id: Uint8Array;     // 16 bytes (identifies the session)
+  frost_signature: Uint8Array; // 64-byte combined FROST output
+}
+
+/**
+ * session_frost_sealed: directory → both clients, when a deferred seal ceremony completes.
+ * Used when the directory was unreachable at seal time (seal_deferred) and later returns.
+ * Per SESSION-005 deferred seal flow (DB-001/DB-002/DB-003).
+ */
+export interface SessionFrostSealed {
+  type: "session_frost_sealed";
+  session_id: Uint8Array;     // 16 bytes
+  sealed_root: Uint8Array;    // 32-byte final Merkle root
+  frost_signature: Uint8Array; // 64-byte combined FROST signature
+  signer_pubkey: Uint8Array;  // 32-byte initiator primary_pubkey
+}
 
 // ─── Error frame types ─────────────────────────────────────────────────────────
 

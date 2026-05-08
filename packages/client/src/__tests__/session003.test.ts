@@ -37,7 +37,7 @@ import { Encoder } from "cbor-x";
 import { generateKeypair, FrostThresholdSigner, CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto";
 import { bootstrapKeyShares, clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
 import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
-import { computeGenesisPrevRoot, buildSessionEstablishmentTbs } from "@cello/protocol-types";
+import { computeGenesisPrevRoot, buildSessionEstablishmentTbs, buildSealTbs } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
 import { createRelayNode, CelloRelayNode } from "@cello/relay";
 import type { DirectoryAdapter } from "@cello/relay";
@@ -183,12 +183,15 @@ async function makeFullFixture(): Promise<FullFixture> {
   const nodeB = await createNode({ keyProvider: kpB, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
   await nodeB.start();
 
-  // SESSION-004: bootstrap FROST for A so clientA can receive FROST-signed assignments
+  // SESSION-004/SESSION-005: bootstrap FROST for A so clientA can receive FROST-signed assignments
+  // and participate in the FROST seal ceremony.
   const stubsA = createInProcessStubs(3);
-  await bootstrapKeyShares(pubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
+  const bootstrapA = await bootstrapKeyShares(pubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
   const signerA = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsA }, pubkeyA);
 
   const clientA = createClient(nodeA, kpA, { thresholdSigner: signerA });
+  // SESSION-005: register A's primary_pubkey on clientA so it can verify seal FROST signatures.
+  clientA.setPrimaryPubkey(bootstrapA.primaryPubkey);
   const clientB = createClient(nodeB, kpB);
   await clientA.registerHandler();
   await clientB.registerHandler();
@@ -204,8 +207,10 @@ async function makeFullFixture(): Promise<FullFixture> {
   const pubkeyBHex = Buffer.from(pubkeyB).toString("hex");
   dirNodeRef.directory.registerPeerInfo(pubkeyAHex, peerIdA, multiaddrsA);
   dirNodeRef.directory.registerPeerInfo(pubkeyBHex, peerIdB, multiaddrsB);
-  // SESSION-004: register A's threshold signer so directory can issue FROST-signed assignments
+  // SESSION-004: register A's threshold signer so directory can issue FROST-signed assignments.
   dirNodeRef.directory.registerThresholdSigner(pubkeyAHex, signerA);
+  // SESSION-005: register A's primary_pubkey so directory can verify the FROST seal signature.
+  dirNodeRef.directory.registerPrimaryPubkey(pubkeyAHex, bootstrapA.primaryPubkey);
 
   const stopAll = async () => {
     try { await nodeA.stop(); } catch {}
@@ -329,9 +334,9 @@ describe("AC-001: A initiates seal after 5 messages; B auto-responds", () => {
     }).initiateSessionSeal(sessionIdHex);
     expect(sealResult.ok).toBe(true);
 
-    // A session should now be sealing
+    // A session should now be sealing or sealed (SESSION-005: FROST ceremony may complete inline)
     const sessA = fix.clientA.client.listSessions().find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex);
-    expect(sessA?.status).toBe("sealing");
+    expect(["sealing", "sealed"]).toContain(sessA?.status);
 
     // B should receive A's SEAL leaf and auto-respond → B transitions to sealing or sealed
     // Poll until B leaves "active" state (sealing or sealed both satisfy AC-001)
@@ -438,91 +443,78 @@ describe("AC-004: sealed_root byte-equal on both clients; directory signature ve
   }, 45_000);
 });
 
-// ─── AC-011 / SI-005: tampered directory_signature on session_sealed ──────────
+// ─── AC-011 / SI-005: tampered FROST signature on session_frost_sealed ──────────
+//
+// SESSION-005 note: M2 clients receive 'session_frost_sealed' (not 'session_sealed' with
+// single-key sig). The M2 seal rejection test verifies the FROST sig path. The M1 single-key
+// tampered-sig test would require an M1 client (no thresholdSigner) which can no longer
+// receive FROST-signed assignments. Full FROST seal rejection is covered by session005.test.ts.
+// Here we test the residual: injecting 'session_frost_sealed' with a tampered FROST sig.
 
-describe("AC-011 / SI-005: tampered directory_signature on session_sealed → client rejects", () => {
-  it("one bit flipped in directory_signature → client stays in sealing, never transitions to sealed", async () => {
-    // Setup: minimal stack — one client, no relay auth needed for this test.
-    // We just need a session record with a pinned directory_pubkey so we can inject
-    // a tampered session_sealed frame directly via the injectDirectoryFrame test escape.
+describe("AC-011 / SI-005: tampered FROST signature on session_frost_sealed → client rejects", () => {
+  it("one bit flipped in frost_signature → client stays in sealing, never transitions to sealed", async () => {
+    // Setup: minimal stack — one M2 client with thresholdSigner.
+    // We inject a session_frost_sealed frame with a tampered FROST sig.
     const kpA = generateKeypair();
     const nodeA = await createNode({ keyProvider: kpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await nodeA.start();
     scope.addCleanup(() => nodeA.stop());
 
-    const kpDir = generateKeypair();
-    const dirPubkeyReal = await kpDir.getPublicKey();
-    const relayResult = await createRelayNode({ directoryPubkey: dirPubkeyReal });
-    scope.addCleanup(relayResult.stop);
-
-    const kpB = generateKeypair();
-    const pubkeyB = await kpB.getPublicKey();
-    const nodeB = await createNode({ keyProvider: kpB, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-    await nodeB.start();
-    scope.addCleanup(() => nodeB.stop());
-
     const pubkeyA = await kpA.getPublicKey();
-    // SESSION-004: bootstrap FROST for A so clientA can accept FROST-signed assignments
+    // SESSION-004/SESSION-005: bootstrap FROST for A
     const stubsSI005 = createInProcessStubs(3);
-    await bootstrapKeyShares(pubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsSI005 });
+    const bootstrapSI005 = await bootstrapKeyShares(pubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsSI005 });
     const signerSI005 = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsSI005 }, pubkeyA);
     const clientA = createClient(nodeA, kpA, { thresholdSigner: signerSI005 });
+    // SESSION-005: register A's primary_pubkey so the client can verify seal FROST sigs.
+    clientA.setPrimaryPubkey(bootstrapSI005.primaryPubkey);
     await clientA.registerHandler();
 
-    const sid = new Uint8Array(randomBytes(16));
-    const session_timestamp = Date.now();
-    // SESSION-004: build FROST-signed assignment
-    const genesis_prev_root_si005 = computeGenesisPrevRoot(pubkeyA, pubkeyB, sid, session_timestamp);
-    const tbsAssignment = buildSessionEstablishmentTbs(sid, pubkeyA, pubkeyB, genesis_prev_root_si005, session_timestamp);
-    const ceremonySI005 = `session-${Buffer.from(sid).toString("hex")}`;
-    const sigResultSI005 = await signerSI005.participateInCeremony(ceremonySI005, tbsAssignment, CONTEXT_SESSION_ESTABLISHMENT);
-    if (!sigResultSI005.ok) throw new Error(`FROST ceremony failed: ${sigResultSI005.error.reason}`);
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sessionIdHex2 = Buffer.from(sessionId).toString("hex");
 
-    await clientA.receiveSessionAssignment({
-      session_id: sid,
-      participant_a: { pubkey: pubkeyA, peer_id: nodeA.getPeerId(), multiaddrs: nodeA.listenAddresses() },
-      participant_b: { pubkey: pubkeyB, peer_id: nodeB.getPeerId(), multiaddrs: nodeB.listenAddresses() },
-      relay_endpoint: { peer_id: relayResult.node.getPeerId(), multiaddrs: relayResult.node.listenAddresses() },
-      directory_endpoint: { peer_id: "", multiaddrs: [] },
-      session_timestamp,
-      directory_pubkey: dirPubkeyReal,
-      directory_signature: sigResultSI005.signature,
-      signature_type: "frost",
-      signer_pubkey: signerSI005.getPrimaryPubkey(),
-    }, pubkeyA);
-
-    const sessionIdHex2 = Buffer.from(sid).toString("hex");
-
-    // Manually transition the session to "sealing" to simulate the state just before
-    // a session_sealed notification arrives from the directory.
-    const session = clientA.listSessions().find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex2);
-    expect(session).toBeDefined();
-    session!.status = "sealing";
-
-    // Build a session_sealed frame with a tampered directory_signature (one bit flipped).
-    const sealedRoot = new Uint8Array(randomBytes(32));
-    const closeTimestamp = Date.now();
-    const tbsSeal = CBOR_ENC.encode([
-      sid,
-      sealedRoot,
-      closeTimestamp > 0xffffffff ? BigInt(closeTimestamp) : closeTimestamp,
-    ]) as Uint8Array;
-    const validDirSig = await kpDir.sign(tbsSeal);
-
-    // Flip one bit in the signature to create a tampered version.
-    const tamperedDirSig = new Uint8Array(validDirSig);
-    tamperedDirSig[0] ^= 0x01;
-
-    // Inject the tampered session_sealed frame directly into the client's handler.
+    // Inject a session in sealing state directly (no relay needed for this unit test).
     const clientAWithEscapes = clientA as unknown as {
       injectDirectoryFrame(sessionIdHex: string, frame: Record<string, unknown>): void;
+      injectTestSession(
+        sessionIdHex: string, sessionId: Uint8Array, myPubkeyHex: string,
+        directoryPubkey: Uint8Array, status?: string
+      ): void;
     };
+    const pubkeyAHex = Buffer.from(pubkeyA).toString("hex");
+    clientAWithEscapes.injectTestSession(sessionIdHex2, sessionId, pubkeyAHex, new Uint8Array(32), "sealing");
+
+    // Build a session_frost_sealed frame with a real and a tampered FROST signature.
+    const sealedRoot = new Uint8Array(32); sealedRoot.fill(0xAB);
+    const leafCount = 3;
+    const closeTimestamp = Date.now();
+    const tbsSeal = buildSealTbs(sessionId, sealedRoot, leafCount, closeTimestamp);
+
+    // Set the session's close_timestamp and local_tree_leaves so the handler can reconstruct TBS.
+    const session = clientA.listSessions().find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex2);
+    expect(session).toBeDefined();
+    if (session) {
+      session.close_timestamp = closeTimestamp;
+      session.local_tree_leaves = new Array(leafCount).fill(null) as [];
+    }
+
+    // Sign with A's signer to get a valid FROST sig.
+    const signResult = await signerSI005.participateInCeremony("si005-ceremony", tbsSeal, "cello-frost-seal-v1");
+    expect(signResult.ok).toBe(true);
+    if (!signResult.ok) return;
+
+    // Flip one bit in the FROST signature to create a tampered version.
+    const tamperedFrostSig = new Uint8Array(signResult.signature);
+    tamperedFrostSig[0] ^= 0x01;
+
+    // Inject the tampered session_frost_sealed frame.
     clientAWithEscapes.injectDirectoryFrame(sessionIdHex2, {
-      type: "session_sealed",
-      session_id: sid,
+      type: "session_frost_sealed",
+      session_id: sessionId,
       sealed_root: sealedRoot,
+      frost_signature: tamperedFrostSig,
+      signer_pubkey: bootstrapSI005.primaryPubkey,
       close_timestamp: closeTimestamp,
-      directory_signature: tamperedDirSig,
     });
 
     // SI-005: client MUST NOT transition to sealed — tampered signature must be rejected.
@@ -530,13 +522,14 @@ describe("AC-011 / SI-005: tampered directory_signature on session_sealed → cl
     expect(sessionAfter?.status).toBe("sealing");
     expect(sessionAfter?.sealed_root).toBeUndefined();
 
-    // Verify that a VALID signature does cause the transition (the verification path works).
+    // Verify that a VALID FROST signature does cause the transition.
     clientAWithEscapes.injectDirectoryFrame(sessionIdHex2, {
-      type: "session_sealed",
-      session_id: sid,
+      type: "session_frost_sealed",
+      session_id: sessionId,
       sealed_root: sealedRoot,
+      frost_signature: signResult.signature,
+      signer_pubkey: bootstrapSI005.primaryPubkey,
       close_timestamp: closeTimestamp,
-      directory_signature: validDirSig,
     });
 
     const sessionSealed = clientA.listSessions().find(s => Buffer.from(s.session_id).toString("hex") === sessionIdHex2);

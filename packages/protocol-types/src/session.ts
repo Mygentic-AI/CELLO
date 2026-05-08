@@ -1,5 +1,5 @@
 /**
- * CELLO-SESSION-002/MSG-004/SESSION-003/SESSION-004 — session.ts
+ * CELLO-SESSION-002/MSG-004/SESSION-003/SESSION-004/SESSION-005 — session.ts
  *
  * SessionAssignment: shared wire type used by directory (sender), client (receiver),
  * and relay (verifier). Lives here so client can import it without touching @cello/directory.
@@ -69,6 +69,12 @@
  *   added to its reason union.
  *
  * ─── End Phase P Pseudocode ───────────────────────────────────────────────────
+ *
+ * buildSealTbs: FROST TBS for conversation seal (SESSION-005).
+ * FROST TBS fields: [session_id, sealed_root, leaf_count, timestamp]
+ * Context string: "cello-frost-seal-v1" (per CONTEXT.md)
+ * Both sides (directory as signer, client as verifier) must use the same encoding.
+ * Per RFC 9591 (FROST), RFC 8949 (CBOR canonical), FIPS 180-4 (SHA-256).
  */
 
 import { createHash } from "node:crypto";
@@ -213,6 +219,37 @@ export function decodeSealPayload(bytes: Uint8Array): SealPayload | null {
   if (ts === null) return null;
   if (_attest !== "PENDING") return null;
   return { session_id: sid, final_root: root, close_timestamp: ts, attestation: "PENDING" };
+}
+
+// ─── buildSealTbs (SESSION-005) ───────────────────────────────────────────────
+
+/**
+ * Build the FROST to-be-signed bytes for a conversation seal ceremony.
+ *
+ * FROST TBS for seal (CONTEXT.md): canonical CBOR([session_id, sealed_root, leaf_count, timestamp])
+ * Context string: "cello-frost-seal-v1" (domain separation, prevents establishment replay)
+ * Per RFC 9591 (FROST) and RFC 8949 §4.2.1 (canonical CBOR).
+ *
+ * Both the directory (as ceremony participant verifying the signature) and the client
+ * (as the coordinator who submits the signature) MUST use this exact encoding.
+ *
+ * @param sessionId - 16-byte session identifier
+ * @param sealedRoot - 32-byte final Merkle root
+ * @param leafCount - total number of leaves in the sealed tree
+ * @param timestamp - Unix milliseconds at the time of verification
+ */
+export function buildSealTbs(
+  sessionId: Uint8Array,
+  sealedRoot: Uint8Array,
+  leafCount: number,
+  timestamp: number,
+): Uint8Array {
+  return CBOR_ENC.encode([
+    sessionId,
+    sealedRoot,
+    leafCount,
+    timestamp > 0xffffffff ? BigInt(timestamp) : timestamp,
+  ]) as Uint8Array;
 }
 
 /**
