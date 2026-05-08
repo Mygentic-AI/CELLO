@@ -10,6 +10,7 @@ import type {
   SignalingAuthChallenge,
   SignalingAuthResponse,
   SignalingAuthFailed,
+  SignalingAuthOk,
   SessionRequest,
   SessionAssignment,
   SessionAssignmentFrame,
@@ -34,6 +35,10 @@ export function encodeSignalingAuthChallenge(frame: SignalingAuthChallenge): Uin
 
 export function encodeSignalingAuthFailed(frame: SignalingAuthFailed): Uint8Array {
   return ENC.encode({ type: frame.type, reason: frame.reason });
+}
+
+export function encodeSignalingAuthOk(_frame: SignalingAuthOk): Uint8Array {
+  return ENC.encode({ type: "signaling_auth_ok" });
 }
 
 export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Array {
@@ -195,6 +200,7 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
 export type OutboundSignalingFrame =
   | SignalingAuthChallenge
   | SignalingAuthFailed
+  | SignalingAuthOk
   | SessionAssignmentFrame
   | SessionAbandoned
   | SessionSealed
@@ -225,6 +231,10 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     const reason = o["reason"];
     if (reason !== "nonce_expired" && reason !== "nonce_unknown" && reason !== "signature_invalid") return null;
     return { type: "signaling_auth_failed", reason };
+  }
+
+  if (o["type"] === "signaling_auth_ok") {
+    return { type: "signaling_auth_ok" };
   }
 
   if (o["type"] === "session_assignment") {

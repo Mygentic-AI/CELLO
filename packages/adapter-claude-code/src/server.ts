@@ -170,19 +170,13 @@ export function createMcpServer(
     async ({ target_pubkey }) => {
       if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
-      const clientWithInitiate = client as CelloClient & {
-        initiateSession?: (targetPubkeyHex: string) => Promise<
-          { ok: true; sessionIdHex: string } | { ok: false; reason: string }
-        >;
-      };
-
-      if (typeof clientWithInitiate.initiateSession !== "function") {
-        return jsonText({ ok: false, reason: "not_available_in_m1" });
-      }
-
-      const result = await clientWithInitiate.initiateSession(target_pubkey);
+      const result = await client.initiateSession(target_pubkey);
       if (result.ok) {
-        return jsonText({ ok: true, session_id: result.sessionIdHex });
+        return jsonText({
+          ok: true,
+          session_id: Buffer.from(result.sessionId).toString("hex"),
+          genesis_prev_root: Buffer.from(result.genesisPrevRoot).toString("hex"),
+        });
       }
       return jsonText({ ok: false, reason: result.reason });
     }

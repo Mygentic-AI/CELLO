@@ -128,6 +128,7 @@ import { InMemoryDirectoryStore } from "./directory-store.js";
 import {
   encodeSignalingAuthChallenge,
   encodeSignalingAuthFailed,
+  encodeSignalingAuthOk,
   encodeSessionAssignment,
   encodeSessionAbandoned,
   encodeSessionSealed,
@@ -244,7 +245,10 @@ export class CelloDirectoryNode {
     this.#keyProvider = opts.keyProvider;
     this.#relay = opts.relay;
     this.#relayEndpoint = opts.relayEndpoint;
-    this.#directoryEndpoint = opts.directoryEndpoint ?? { peer_id: "", multiaddrs: [] };
+    this.#directoryEndpoint = opts.directoryEndpoint ?? {
+      peer_id: opts.node.getPeerId(),
+      multiaddrs: opts.node.listenAddresses(),
+    };
     this.#store = opts.store ?? new InMemoryDirectoryStore();
     this.#clock = opts.clock ?? WALL_CLOCK;
     this.#frostHandler = new FrostDirectoryHandler({
@@ -364,6 +368,11 @@ export class CelloDirectoryNode {
 
           authedPubkeyHex = Buffer.from(resp.pubkey).toString("hex");
           this.#streams.set(authedPubkeyHex, stream);
+
+          // ADAPTER-003: send auth ack so client can synchronize on auth completion.
+          // This allows clients to know the directory has registered their stream
+          // before sending session_request frames.
+          this.#sendFrame(stream, encodeSignalingAuthOk({ type: "signaling_auth_ok" }));
 
           // Stash peer transport info for session assignments.
           // In M1 tests the peer_id is the node's Peer ID; multiaddrs are the listen addresses.

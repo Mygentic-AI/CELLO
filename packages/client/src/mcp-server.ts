@@ -254,20 +254,9 @@ export function createMcpSessionServer(
 
   // ── cello_initiate_session ─────────────────────────────────────────────────
   //
-  // In M1, session establishment is signaled through the directory. The client
-  // sends a session_request to the directory via receiveSessionAssignment (driven
-  // by the directory node). For the MCP surface, this tool polls listSessions()
-  // waiting for the directory to push a session_assignment back.
-  //
-  // Note: The full NODE-001 / SESSION-002 directory signaling stream path is
-  // implemented in the directory package and the relay package. The MCP server
-  // here exposes the client-side: it polls for the resulting SessionRecord after
-  // the external signaling completes. In e2e tests, the test harness drives
-  // receiveSessionAssignment on the target client directly.
-  //
-  // TODO: In a future milestone, this tool will send an explicit session_request
-  // frame over the directory's /cello/signaling/1.0.0 stream and await the response.
-  // For M1, the session_request is issued by the directory subsystem directly.
+  // ADAPTER-003: delegates to client.initiateSession() which opens a persistent
+  // signaling stream, sends session_request, and awaits session_assignment from
+  // the directory. The M1 polling stub has been replaced.
 
   server.registerTool(
     "cello_initiate_session",
@@ -275,46 +264,22 @@ export function createMcpSessionServer(
       description: "Initiate a session with a target agent by their K_local public key.",
       inputSchema: {
         target_pubkey: z.string().describe("Target agent K_local pubkey as lowercase hex (64 chars)"),
+        timeout_ms: z.number().int().min(0).optional().describe("Optional timeout in milliseconds"),
       },
     },
-    async ({ target_pubkey }) => {
+    async ({ target_pubkey, timeout_ms }) => {
       if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
-      // Poll for a new session with the target counterparty — the directory assigns it.
-      // Timeout: 10s.
-      const deadline = Date.now() + 10_000;
-      const existingSessionIds = new Set(
-        client.listSessions().map((s) => toHex(s.session_id))
-      );
+      const result = await client.initiateSession(target_pubkey, { timeoutMs: timeout_ms });
 
-      while (Date.now() < deadline) {
-        const sessions = client.listSessions();
-        const newSession = sessions.find(
-          (s) =>
-            !existingSessionIds.has(toHex(s.session_id)) &&
-            toHex(s.counterparty_pubkey) === target_pubkey
-        );
-        if (newSession) {
-          return jsonText({
-            session_id: toHex(newSession.session_id),
-            counterparty_pubkey: toHex(newSession.counterparty_pubkey),
-            relay_endpoint: {
-              peer_id: newSession.relay_endpoint.peer_id,
-              multiaddrs: newSession.relay_endpoint.multiaddrs,
-            },
-            genesis_prev_root: toHex(newSession.genesis_prev_root),
-          });
-        }
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) break;
-        await sleep(Math.min(100, remaining));
+      if (result.ok) {
+        return jsonText({
+          ok: true,
+          session_id: toHex(result.sessionId),
+          genesis_prev_root: toHex(result.genesisPrevRoot),
+        });
       }
-
-      // If directory is not reachable after timeout, report appropriately
-      if (!directoryReachable()) {
-        return jsonText({ error: { reason: "directory_unreachable" } });
-      }
-      return jsonText({ error: { reason: "target_offline" } });
+      return jsonText({ ok: false, reason: result.reason });
     },
   );
 

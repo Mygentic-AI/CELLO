@@ -8,6 +8,8 @@
   "references": [
     { "path": "../client" },
     { "path": "../crypto" },
-    { "path": "../transport" }
+    { "path": "../transport" },
+    { "path": "../relay" },
+    { "path": "../directory" }
   ]
 }

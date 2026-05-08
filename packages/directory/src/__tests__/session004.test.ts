@@ -93,6 +93,9 @@ async function authenticateClient(
   const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
   const signature = await kp.sign(msgHash);
   sendFrame(stream, CBOR_ENC.encode({ type: "signaling_auth_response", pubkey, signature }));
+  // ADAPTER-003: directory sends signaling_auth_ok after successful authentication
+  const ack = await reader.readDecoded();
+  if (ack["type"] !== "signaling_auth_ok") throw new Error(`expected signaling_auth_ok, got ${ack["type"]}`);
 }
 
 function makeNoopRelayAdapter(): RelayAdapter {
