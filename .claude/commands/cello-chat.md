@@ -95,11 +95,19 @@ You will initiate the FROST-signed session and send the first message.
 
 ## Prerequisites
 
-Verify `cello_status` is callable. If not, the CELLO MCP server is not connected. Ask the operator to run:
+Verify `cello_status` is callable. If not, the CELLO MCP server is not connected.
+
+**The operator must:**
+1. Get the directory multiaddr from the node operator (Step 3 of their path)
+2. Add the MCP server with the directory configured:
 
 ```bash
-NODE_ENV=test claude mcp add --transport stdio cello -- cello-mcp
+CELLO_DIRECTORY_MULTIADDR=/ip4/127.0.0.1/tcp/4002/p2p/12D3KooW... \
+NODE_ENV=test \
+claude mcp add --transport stdio cello -- cello-mcp
 ```
+
+Replace the multiaddr with the actual directory multiaddr from the node operator.
 
 Then restart this session.
 
@@ -214,11 +222,19 @@ You will await the session assignment and respond to messages.
 
 ## Prerequisites
 
-Verify `cello_status` is callable. If not, the CELLO MCP server is not connected. Ask the operator to run:
+Verify `cello_status` is callable. If not, the CELLO MCP server is not connected.
+
+**The operator must:**
+1. Get the directory multiaddr from the node operator (Step 3 of their path)
+2. Add the MCP server with the directory configured:
 
 ```bash
-NODE_ENV=test claude mcp add --transport stdio cello -- cello-mcp
+CELLO_DIRECTORY_MULTIADDR=/ip4/127.0.0.1/tcp/4002/p2p/12D3KooW... \
+NODE_ENV=test \
+claude mcp add --transport stdio cello -- cello-mcp
 ```
+
+Replace the multiaddr with the actual directory multiaddr from the node operator.
 
 Then restart this session.
 
