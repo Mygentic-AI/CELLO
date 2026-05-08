@@ -107,23 +107,52 @@ const CLIENT_NOT_INITIALIZED = jsonText({ error: { reason: "client_not_initializ
 
 // ─── createMcpServer ─────────────────────────────────────────────────────────
 
-export function createMcpServer(
+export interface IdentityContext {
+  node: CelloNode;
+  client: CelloClient;
+  keyProvider: KeyProvider;
+}
+
+/**
+ * Test helper: wrap a single identity in the multi-identity format.
+ * For tests that only need one identity (typically "A").
+ * Tools will require { identity: "A" } parameter.
+ */
+export function createSingleIdentityServer(
   node: CelloNode,
   client: CelloClient,
-  keyProvider: KeyProvider
+  keyProvider: KeyProvider,
+  identityName: string = "A"
+): McpServer {
+  return createMcpServer({ [identityName]: { node, client, keyProvider } });
+}
+
+export function createMcpServer(
+  identities: Record<string, IdentityContext>
 ): McpServer {
   const startedAt = Date.now();
 
-  // ─── Session event queue (FIFO) ─────────────────────────────────────────
-  // Populated by onSessionAssignment callback; drained by cello_await_session.
-  const sessionEventQueue: InboundSessionEvent[] = [];
+  // ─── Session event queues (per identity) ────────────────────────────────
+  const sessionEventQueues: Record<string, InboundSessionEvent[]> = {};
+  const sessionEventResolvers: Record<string, Array<(event: InboundSessionEvent) => void>> = {};
 
-  // Resolvers for currently-blocked cello_await_session calls.
-  // When an event arrives and a resolver exists, the event is passed directly
-  // to the resolver (skipping the queue) to wake up the blocked call.
-  const sessionEventResolvers: Array<(event: InboundSessionEvent) => void> = [];
+  // Initialize queues for each identity
+  for (const id of Object.keys(identities)) {
+    sessionEventQueues[id] = [];
+    sessionEventResolvers[id] = [];
+  }
 
-  function transportStarted(): boolean {
+  // Helper to get identity context
+  function getIdentity(id: string): IdentityContext {
+    const ctx = identities[id];
+    if (!ctx) {
+      throw new Error(`Unknown identity: ${id}. Available: ${Object.keys(identities).join(", ")}`);
+    }
+    return ctx;
+  }
+
+  function transportStarted(identity: string): boolean {
+    const { node } = getIdentity(identity);
     return node.listenAddresses().length > 0;
   }
 
@@ -132,29 +161,21 @@ export function createMcpServer(
     { capabilities: { experimental: { "claude/channel": {} } } }
   );
 
-  // ─── Register onSessionAssignment handler ────────────────────────────────
-  // CelloClient.onSessionAssignment (CELLO-MCP-002) fires with a rich SessionAssignmentEvent
-  // containing sessionIdHex, counterpartyPubkeyHex, and genesisPrevRootHex — all pre-encoded
-  // as lowercase hex by the client layer so the adapter does not need to re-encode.
-  //
-  // PSEUDOCODE for handler:
-  //   1. Push cello_session_request notification (SI-001: only type, from, session_id)
-  //   2. If a cello_await_session call is waiting, wake it up directly.
-  //   3. Otherwise, enqueue the event for the next cello_await_session call.
-  if (client != null && typeof client.onSessionAssignment === "function") {
-    client.onSessionAssignment((event: SessionAssignmentEvent) => {
-      // Push the wake-up notification (SI-001: only type, from, session_id)
-      void pushSessionRequestNotification(server, event.counterpartyPubkeyHex, event.sessionIdHex);
+  // ─── Register onSessionAssignment handlers (per identity) ────────────────
+  for (const [id, { client }] of Object.entries(identities)) {
+    if (client != null && typeof client.onSessionAssignment === "function") {
+      client.onSessionAssignment((event: SessionAssignmentEvent) => {
+        void pushSessionRequestNotification(server, event.counterpartyPubkeyHex, event.sessionIdHex);
 
-      if (sessionEventResolvers.length > 0) {
-        // Wake up a blocked cello_await_session call directly — no queue entry needed
-        const resolve = sessionEventResolvers.shift()!;
-        resolve(event);
-      } else {
-        // No blocked caller — enqueue for the next cello_await_session call
-        sessionEventQueue.push(event);
-      }
-    });
+        const resolvers = sessionEventResolvers[id];
+        if (resolvers.length > 0) {
+          const resolve = resolvers.shift()!;
+          resolve(event);
+        } else {
+          sessionEventQueues[id].push(event);
+        }
+      });
+    }
   }
 
   // ── cello_initiate_session ────────────────────────────────────────────────
@@ -164,12 +185,14 @@ export function createMcpServer(
     {
       description: "Initiate a CELLO session with a target agent identified by their public key.",
       inputSchema: {
+        identity: z.string().describe("Your identity: 'A' or 'B'"),
         target_pubkey: z.string().describe("Target agent public key hex (K_local pubkey of the peer)"),
       },
     },
-    async ({ target_pubkey }) => {
-      if (!transportStarted()) return TRANSPORT_NOT_STARTED;
+    async ({ identity, target_pubkey }) => {
+      if (!transportStarted(identity)) return TRANSPORT_NOT_STARTED;
 
+      const { client } = getIdentity(identity);
       const result = await client.initiateSession(target_pubkey);
       if (result.ok) {
         return jsonText({
@@ -190,13 +213,17 @@ export function createMcpServer(
       description:
         "Wait for an inbound session request. Returns immediately if one is already queued, or blocks until one arrives or the timeout expires.",
       inputSchema: {
+        identity: z.string().describe("Your identity: 'A' or 'B'"),
         timeout_ms: z.number().int().min(0).describe("Maximum wait time in milliseconds"),
       },
     },
-    async ({ timeout_ms }) => {
+    async ({ identity, timeout_ms }) => {
+      const queue = sessionEventQueues[identity];
+      const resolvers = sessionEventResolvers[identity];
+
       // If a queued event exists, return it immediately (FIFO)
-      if (sessionEventQueue.length > 0) {
-        const event = sessionEventQueue.shift()!;
+      if (queue.length > 0) {
+        const event = queue.shift()!;
         return jsonText({
           type: "new_session",
           session_id: event.sessionIdHex,
@@ -205,9 +232,7 @@ export function createMcpServer(
         });
       }
 
-      // Block until an event arrives or timeout fires.
-      // Resolver is pushed BEFORE the timer starts to avoid stale-resolver leak
-      // when timeout_ms === 0 (timer fires synchronously on next tick).
+      // Block until an event arrives or timeout fires
       const result = await new Promise<InboundSessionEvent | null>((resolve) => {
         let timerId: ReturnType<typeof setTimeout>;
 
@@ -216,11 +241,11 @@ export function createMcpServer(
           resolve(event);
         }
 
-        sessionEventResolvers.push(resolveEvent);
+        resolvers.push(resolveEvent);
 
         timerId = setTimeout(() => {
-          const idx = sessionEventResolvers.indexOf(resolveEvent);
-          if (idx !== -1) sessionEventResolvers.splice(idx, 1);
+          const idx = resolvers.indexOf(resolveEvent);
+          if (idx !== -1) resolvers.splice(idx, 1);
           resolve(null);
         }, timeout_ms);
       });
@@ -245,13 +270,15 @@ export function createMcpServer(
     {
       description: "Send a UTF-8 message on an active CELLO session.",
       inputSchema: {
+        identity: z.string().describe("Your identity: 'A' or 'B'"),
         session_id: z.string().describe("Session ID hex (from cello_initiate_session or cello_await_session)"),
         content: z.string().describe("UTF-8 message content"),
       },
     },
-    async ({ session_id, content }) => {
+    async ({ identity, session_id, content }) => {
+      const { client } = getIdentity(identity);
       if (client == null) return CLIENT_NOT_INITIALIZED;
-      if (!transportStarted()) return TRANSPORT_NOT_STARTED;
+      if (!transportStarted(identity)) return TRANSPORT_NOT_STARTED;
 
       const contentBytes = new TextEncoder().encode(content);
       const result = await client.sendMessage(session_id, contentBytes);
@@ -271,15 +298,17 @@ export function createMcpServer(
       description:
         "Wait for a message on a specific CELLO session. Blocks until a message arrives or the timeout expires.",
       inputSchema: {
+        identity: z.string().describe("Your identity: 'A' or 'B'"),
         session_id: z
           .string()
           .describe("Session ID hex (from cello_initiate_session or cello_await_session)"),
         timeout_ms: z.number().int().min(0).describe("Maximum wait time in milliseconds"),
       },
     },
-    async ({ session_id, timeout_ms }) => {
+    async ({ identity, session_id, timeout_ms }) => {
+      const { client } = getIdentity(identity);
       if (client == null) return CLIENT_NOT_INITIALIZED;
-      if (!transportStarted()) return TRANSPORT_NOT_STARTED;
+      if (!transportStarted(identity)) return TRANSPORT_NOT_STARTED;
 
       const deadline = Date.now() + timeout_ms;
 
@@ -305,10 +334,12 @@ export function createMcpServer(
     {
       description: "Close and remove a CELLO session. Idempotent.",
       inputSchema: {
+        identity: z.string().describe("Your identity: 'A' or 'B'"),
         session_id: z.string().describe("Session ID hex to close"),
       },
     },
-    async ({ session_id }) => {
+    async ({ identity, session_id }) => {
+      const { client } = getIdentity(identity);
       if (client == null) return CLIENT_NOT_INITIALIZED;
       client.closeSession(session_id);
       return jsonText({ closed: true });
@@ -321,9 +352,12 @@ export function createMcpServer(
     "cello_list_sessions",
     {
       description: "List all current CELLO sessions and their status.",
-      inputSchema: {},
+      inputSchema: {
+        identity: z.string().describe("Your identity: 'A' or 'B'"),
+      },
     },
-    async () => {
+    async ({ identity }) => {
+      const { client } = getIdentity(identity);
       if (client == null) return CLIENT_NOT_INITIALIZED;
       const sessions = client.listSessions().map((s) => ({
         session_id: Buffer.from(s.session_id).toString("hex"),
@@ -343,6 +377,7 @@ export function createMcpServer(
       description:
         "Retrieve the FROST-signed sealed receipt for a closed session. Not yet available in M1.",
       inputSchema: {
+        identity: z.string().describe("Your identity: 'A' or 'B'"),
         session_id: z.string().describe("Session ID hex"),
       },
     },
@@ -360,6 +395,7 @@ export function createMcpServer(
       description:
         "Retrieve a Merkle inclusion proof for a specific message in a sealed session. Not yet available in M1.",
       inputSchema: {
+        identity: z.string().describe("Your identity: 'A' or 'B'"),
         session_id: z.string().describe("Session ID hex"),
         content_hash: z.string().describe("Content hash hex of the message"),
       },
@@ -376,22 +412,29 @@ export function createMcpServer(
     {
       description:
         "Return transport status, own pubkey, connection info, and M1 session summary.",
-      inputSchema: {},
+      inputSchema: {
+        identity: z.string().describe("Your identity: 'A' or 'B'"),
+      },
     },
-    async () => {
+    async ({ identity }) => {
+      const { node, client, keyProvider } = getIdentity(identity);
       const ownPubkey = Buffer.from(await keyProvider.getPublicKey()).toString("hex");
       const sessions = client.listSessions();
       const activeSessionCount = sessions.filter((s) => s.status === "active").length;
 
+      // directoryReachable check: any session with a directory_endpoint indicates reachability
+      const directoryReachable = sessions.some(
+        (s) => s.directory_endpoint && s.directory_endpoint.peer_id !== ""
+      );
+
       return jsonText({
-        transport_started: transportStarted(),
+        transport_started: transportStarted(identity),
         own_pubkey: ownPubkey,
         listen_addresses: node.listenAddresses(),
         connected_peer_count: node.getConnections().length,
         uptime_seconds: Math.floor((Date.now() - startedAt) / 1000),
         active_session_count: activeSessionCount,
-        // M1 stub: directory reachability check is deferred to M2 directory integration
-        directory_reachable: false,
+        directory_reachable: directoryReachable,
       });
     }
   );

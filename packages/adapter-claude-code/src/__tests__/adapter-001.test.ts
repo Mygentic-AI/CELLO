@@ -185,7 +185,7 @@ describe("AC-005: cello_status returns expected fields", () => {
     const expectedPubkey = Buffer.from(await kp.getPublicKey()).toString("hex");
 
     const result = parseResult(
-      await mcpClient.callTool({ name: "cello_status", arguments: {} })
+      await mcpClient.callTool({ name: "cello_status", arguments: { identity: "A", identity: "A" } })
     ) as Record<string, unknown>;
 
     expect(result.transport_started).toBe(true);
@@ -218,7 +218,7 @@ describe("SI-003: no K_local private key bytes in any tool response", () => {
 
     const expectedPubkey = Buffer.from(await kp.getPublicKey()).toString("hex");
     const result = parseResult(
-      await mcpClient.callTool({ name: "cello_status", arguments: {} })
+      await mcpClient.callTool({ name: "cello_status", arguments: { identity: "A", identity: "A" } })
     ) as Record<string, unknown>;
 
     expect(result.own_pubkey).toBe(expectedPubkey);

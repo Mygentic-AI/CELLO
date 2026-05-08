@@ -143,7 +143,7 @@ describe.skip("AC-002 + AC-003 + AC-004: send delivers; channel notification fir
 
     // A connects to B
     const connectResult = parseResult(
-      await mcpA.callTool({ name: "cello_connect_peer", arguments: { multiaddr: listenAddrB } })
+      await mcpA.callTool({ name: "cello_connect_peer", arguments: { identity: "A", multiaddr: listenAddrB } })
     ) as { connected: boolean; peer_pubkey: string };
     expect(connectResult.connected).toBe(true);
 
@@ -151,7 +151,7 @@ describe.skip("AC-002 + AC-003 + AC-004: send delivers; channel notification fir
     const sendResult = parseResult(
       await mcpA.callTool({
         name: "cello_send",
-        arguments: { peer_pubkey: connectResult.peer_pubkey, content: "hello from A" },
+        arguments: { identity: "A", peer_pubkey: connectResult.peer_pubkey, content: "hello from A" },
       })
     ) as { delivered: boolean; content_hash: string };
     expect(sendResult.delivered).toBe(true);
@@ -170,7 +170,7 @@ describe.skip("AC-002 + AC-003 + AC-004: send delivers; channel notification fir
 
     // AC-004: B calls cello_receive → correct content, sender, and hash
     const receiveResult = parseResult(
-      await mcpB.callTool({ name: "cello_receive", arguments: { timeout_ms: 5000 } })
+      await mcpB.callTool({ name: "cello_receive", arguments: { identity: "A", timeout_ms: 5000 } })
     ) as { type: string; content: string; sender_pubkey: string; content_hash: string };
     expect(receiveResult.type).toBe("message");
     expect(receiveResult.content).toBe("hello from A");
@@ -194,12 +194,12 @@ describe.skip("AC-005: B replies; A's channel notification fires; A receives rep
 
     // A connects to B; B connects to A (for the reply)
     const connectAB = parseResult(
-      await mcpA.callTool({ name: "cello_connect_peer", arguments: { multiaddr: listenAddrB } })
+      await mcpA.callTool({ name: "cello_connect_peer", arguments: { identity: "A", multiaddr: listenAddrB } })
     ) as { connected: boolean; peer_pubkey: string };
     expect(connectAB.connected).toBe(true);
 
     const connectBA = parseResult(
-      await mcpB.callTool({ name: "cello_connect_peer", arguments: { multiaddr: listenAddrA } })
+      await mcpB.callTool({ name: "cello_connect_peer", arguments: { identity: "A", multiaddr: listenAddrA } })
     ) as { connected: boolean; peer_pubkey: string };
     expect(connectBA.connected).toBe(true);
 
@@ -207,7 +207,7 @@ describe.skip("AC-005: B replies; A's channel notification fires; A receives rep
     const aSend = parseResult(
       await mcpA.callTool({
         name: "cello_send",
-        arguments: { peer_pubkey: connectAB.peer_pubkey, content: "hello from A" },
+        arguments: { identity: "A", peer_pubkey: connectAB.peer_pubkey, content: "hello from A" },
       })
     ) as { delivered: boolean };
     expect(aSend.delivered).toBe(true);
@@ -220,7 +220,7 @@ describe.skip("AC-005: B replies; A's channel notification fires; A receives rep
 
     // B receives
     const bReceive = parseResult(
-      await mcpB.callTool({ name: "cello_receive", arguments: { timeout_ms: 5000 } })
+      await mcpB.callTool({ name: "cello_receive", arguments: { identity: "A", timeout_ms: 5000 } })
     ) as { type: string; content: string; sender_pubkey: string };
     expect(bReceive.type).toBe("message");
     expect(bReceive.content).toBe("hello from A");
@@ -230,7 +230,7 @@ describe.skip("AC-005: B replies; A's channel notification fires; A receives rep
     const bSend = parseResult(
       await mcpB.callTool({
         name: "cello_send",
-        arguments: { peer_pubkey: connectBA.peer_pubkey, content: "hello from B" },
+        arguments: { identity: "A", peer_pubkey: connectBA.peer_pubkey, content: "hello from B" },
       })
     ) as { delivered: boolean };
     expect(bSend.delivered).toBe(true);
@@ -245,7 +245,7 @@ describe.skip("AC-005: B replies; A's channel notification fires; A receives rep
 
     // A receives
     const aReceive = parseResult(
-      await mcpA.callTool({ name: "cello_receive", arguments: { timeout_ms: 5000 } })
+      await mcpA.callTool({ name: "cello_receive", arguments: { identity: "A", timeout_ms: 5000 } })
     ) as { type: string; content: string; sender_pubkey: string };
     expect(aReceive.type).toBe("message");
     expect(aReceive.content).toBe("hello from B");
@@ -261,7 +261,7 @@ describe.skip("AC-006: byte-flipped envelope is silently rejected; no notificati
     scope.addCleanup(cleanup);
 
     const connectResult = parseResult(
-      await mcpA.callTool({ name: "cello_connect_peer", arguments: { multiaddr: listenAddrB } })
+      await mcpA.callTool({ name: "cello_connect_peer", arguments: { identity: "A", multiaddr: listenAddrB } })
     ) as { connected: boolean; peer_pubkey: string };
     expect(connectResult.connected).toBe(true);
 
@@ -292,7 +292,7 @@ describe.skip("AC-006: byte-flipped envelope is silently rejected; no notificati
 
     // B's receive must time out — tampered envelope was never enqueued
     const receiveResult = parseResult(
-      await mcpB.callTool({ name: "cello_receive", arguments: { timeout_ms: 500 } })
+      await mcpB.callTool({ name: "cello_receive", arguments: { identity: "A", timeout_ms: 500 } })
     ) as { type: string };
     expect(receiveResult.type).toBe("timeout");
   }, 15_000);
@@ -307,25 +307,25 @@ describe.skip("AC-007: cello_status cross-check — connected_peer_count:1; own_
 
     // A connects to B only — one connection in libp2p from A's side and one from B's side
     const connectResult = parseResult(
-      await mcpA.callTool({ name: "cello_connect_peer", arguments: { multiaddr: listenAddrB } })
+      await mcpA.callTool({ name: "cello_connect_peer", arguments: { identity: "A", multiaddr: listenAddrB } })
     ) as { connected: boolean; peer_pubkey: string };
     expect(connectResult.connected).toBe(true);
 
     // A sends to B
     await mcpA.callTool({
       name: "cello_send",
-      arguments: { peer_pubkey: connectResult.peer_pubkey, content: "hello from A" },
+      arguments: { identity: "A", peer_pubkey: connectResult.peer_pubkey, content: "hello from A" },
     });
 
     // B receives (waits for delivery)
     const bReceive = parseResult(
-      await mcpB.callTool({ name: "cello_receive", arguments: { timeout_ms: 5000 } })
+      await mcpB.callTool({ name: "cello_receive", arguments: { identity: "A", timeout_ms: 5000 } })
     ) as { type: string; content: string; sender_pubkey: string };
     expect(bReceive.type).toBe("message");
 
     // AC-007: status on A
     const statusA = parseResult(
-      await mcpA.callTool({ name: "cello_status", arguments: {} })
+      await mcpA.callTool({ name: "cello_status", arguments: { identity: "A", identity: "A" } })
     ) as { transport_started: boolean; own_pubkey: string; connected_peer_count: number };
     expect(statusA.transport_started).toBe(true);
     expect(statusA.own_pubkey).toBe(ownPubkeyA);
@@ -333,7 +333,7 @@ describe.skip("AC-007: cello_status cross-check — connected_peer_count:1; own_
 
     // AC-007: status on B
     const statusB = parseResult(
-      await mcpB.callTool({ name: "cello_status", arguments: {} })
+      await mcpB.callTool({ name: "cello_status", arguments: { identity: "A", identity: "A" } })
     ) as { transport_started: boolean; own_pubkey: string; connected_peer_count: number };
     expect(statusB.transport_started).toBe(true);
     expect(statusB.own_pubkey).toBe(ownPubkeyB);

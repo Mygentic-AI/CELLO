@@ -11,13 +11,18 @@ import { createClient } from "@cello/client";
 import { createMcpServer } from "../server.js";
 import { pushChannelNotification } from "../notifications.js";
 
-const keyPath = process.env["CELLO_KEY_FILE"] ?? join(homedir(), ".cello", "key");
-const listenAddr = process.env["CELLO_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/tcp/0";
+const keyPathA = process.env["CELLO_KEY_FILE_A"] ?? join(homedir(), ".cello", "key");
+const keyPathB = process.env["CELLO_KEY_FILE_B"] ?? join(homedir(), ".cello", "key-agent-b");
+const listenAddrA = process.env["CELLO_LISTEN_ADDR_A"] ?? "/ip4/0.0.0.0/tcp/0";
+const listenAddrB = process.env["CELLO_LISTEN_ADDR_B"] ?? "/ip4/0.0.0.0/tcp/0";
 const directoryMultiaddr = process.env["CELLO_DIRECTORY_MULTIADDR"];
 
-let kp: FileKeyProvider;
+// Load both keys
+let kpA: FileKeyProvider;
+let kpB: FileKeyProvider;
 try {
-  kp = await FileKeyProvider.load(keyPath);
+  kpA = await FileKeyProvider.load(keyPathA);
+  kpB = await FileKeyProvider.load(keyPathB);
 } catch (err: unknown) {
   const msg = typeof err === "object" && err !== null && "message" in err
     ? (err as { message: string }).message
@@ -26,18 +31,28 @@ try {
   process.exit(1);
 }
 
-const node = await createNode({ keyProvider: kp, listenAddresses: [listenAddr] });
+// Create two nodes (one per identity)
+const nodeA = await createNode({ keyProvider: kpA, listenAddresses: [listenAddrA] });
+const nodeB = await createNode({ keyProvider: kpB, listenAddresses: [listenAddrB] });
 
 // CELLO-E2E-002: Bootstrap FROST key shares (test-only)
 // In production (M3+), real DKG ceremony will replace this test-harness shortcut.
-let thresholdSigner: FrostThresholdSigner | undefined;
-let primaryPubkey: Uint8Array | undefined;
+let thresholdSignerA: FrostThresholdSigner | undefined;
+let primaryPubkeyA: Uint8Array | undefined;
+let thresholdSignerB: FrostThresholdSigner | undefined;
+let primaryPubkeyB: Uint8Array | undefined;
 if (process.env.NODE_ENV === "test") {
-  const ownPubkey = await kp.getPublicKey();
-  const stubs = createInProcessStubs(3);
-  const bootstrapResult = await bootstrapKeyShares(ownPubkey, { threshold: 2, participants: 3, directoryNodeStubs: stubs });
-  thresholdSigner = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubs }, ownPubkey);
-  primaryPubkey = bootstrapResult.primaryPubkey;
+  const ownPubkeyA = await kpA.getPublicKey();
+  const stubsA = createInProcessStubs(3);
+  const bootstrapResultA = await bootstrapKeyShares(ownPubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
+  thresholdSignerA = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsA }, ownPubkeyA);
+  primaryPubkeyA = bootstrapResultA.primaryPubkey;
+
+  const ownPubkeyB = await kpB.getPublicKey();
+  const stubsB = createInProcessStubs(3);
+  const bootstrapResultB = await bootstrapKeyShares(ownPubkeyB, { threshold: 2, participants: 3, directoryNodeStubs: stubsB });
+  thresholdSignerB = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsB }, ownPubkeyB);
+  primaryPubkeyB = bootstrapResultB.primaryPubkey;
 }
 
 // Parse directory endpoint from CELLO_DIRECTORY_MULTIADDR (if set)
@@ -57,22 +72,41 @@ if (directoryMultiaddr) {
 // The closure captures the box; notifications fired before server is assigned are dropped.
 let mcpServer: McpServer | undefined;
 
-const client = createClient(node, kp, {
-  thresholdSigner,
+// Create two clients (one per identity)
+const clientA = createClient(nodeA, kpA, {
+  thresholdSigner: thresholdSignerA,
   directoryEndpoint,
   onMessageQueued: (senderHex) => {
     if (mcpServer) void pushChannelNotification(mcpServer, senderHex);
   },
 });
 
-if (primaryPubkey) {
-  client.setPrimaryPubkey(primaryPubkey);
+const clientB = createClient(nodeB, kpB, {
+  thresholdSigner: thresholdSignerB,
+  directoryEndpoint,
+  onMessageQueued: (senderHex) => {
+    if (mcpServer) void pushChannelNotification(mcpServer, senderHex);
+  },
+});
+
+if (primaryPubkeyA) {
+  clientA.setPrimaryPubkey(primaryPubkeyA);
 }
 
-const server = createMcpServer(node, client, kp);
+if (primaryPubkeyB) {
+  clientB.setPrimaryPubkey(primaryPubkeyB);
+}
+
+// Create server with both identities
+const server = createMcpServer({
+  A: { node: nodeA, client: clientA, keyProvider: kpA },
+  B: { node: nodeB, client: clientB, keyProvider: kpB },
+});
 mcpServer = server;
 
 // Transport must be live before inbound connections are accepted (node.start()).
 await server.connect(new StdioServerTransport());
-await client.registerHandler();
-await node.start();
+await clientA.registerHandler();
+await clientB.registerHandler();
+await nodeA.start();
+await nodeB.start();

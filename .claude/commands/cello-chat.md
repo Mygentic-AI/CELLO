@@ -97,7 +97,7 @@ You will initiate the FROST-signed session and send the first message.
 
 Verify `cello_status` is callable. If not, the CELLO MCP server is not connected.
 
-**The operator must configure `~/.claude/settings.json` with TWO MCP servers** (Agent A and Agent B need different identities):
+**The operator must configure `~/.claude/settings.json`:**
 
 ```json
 "mcpServers": {
@@ -105,14 +105,8 @@ Verify `cello_status` is callable. If not, the CELLO MCP server is not connected
     "command": "cello-mcp",
     "env": {
       "NODE_ENV": "test",
-      "CELLO_DIRECTORY_MULTIADDR": "<paste directory multiaddr here>"
-    }
-  },
-  "cello-agent-b": {
-    "command": "cello-mcp",
-    "env": {
-      "NODE_ENV": "test",
-      "CELLO_KEY_FILE": "/Users/andrep/.cello/key-agent-b",
+      "CELLO_KEY_FILE_A": "/Users/andrep/.cello/key",
+      "CELLO_KEY_FILE_B": "/Users/andrep/.cello/key-agent-b",
       "CELLO_DIRECTORY_MULTIADDR": "<paste directory multiaddr here>"
     }
   }
@@ -121,24 +115,18 @@ Verify `cello_status` is callable. If not, the CELLO MCP server is not connected
 
 **Replace `<paste directory multiaddr here>` with the full directory multiaddr from the node operator's Step 3 report.** It looks like `/ip4/127.0.0.1/tcp/4002/p2p/12D3KooWDeEpSiubGw4vZa5eubCQKX4Q27URxn55tweKi2coagxF` (example).
 
-**Before starting this session (Agent A):**
-1. Ensure `"cello"` is enabled in the config above
-2. Comment out or remove the `"cello-agent-b"` block temporarily
-3. Save settings.json
-4. Start this Claude Code session — you'll connect as Agent A with the default key
-
-Claude Code connects to ALL configured MCP servers at startup, so only one agent's server should be active at a time.
+Save settings.json, then start this session.
 
 ## Step 1 — Get your identity
 
-Call `cello_status`.
+Call `cello_status({ identity: "A" })`.
 
 Report:
 - Your `own_pubkey` (your CELLO identity)
 - `transport_started` status
 - `directory_reachable` status
 
-**Note:** `directory_reachable` will be `false` before any sessions exist — this is expected. The directory connection is tested during session establishment (Step 3 for initiator, Step 3 for target), not at startup.
+**Note:** `directory_reachable` will be `false` before any sessions exist — this is expected. The directory connection is tested during session establishment (Step 3), not at startup.
 
 ## Step 2 — Receive counterparty pubkey
 
@@ -146,7 +134,7 @@ The operator will give you Agent B's `own_pubkey`. Save it.
 
 ## Step 3 — Initiate session
 
-Call `cello_initiate_session` with Agent B's pubkey (from Step 2).
+Call `cello_initiate_session({ identity: "A", target_pubkey: "<Agent B's pubkey>" })`.
 
 The directory will run a FROST ceremony and return:
 - `session_id` (32 hex chars)
@@ -173,7 +161,7 @@ Sending:
   > "<your opening message>"
 ```
 
-Call `cello_send` with your `session_id` and the message content.
+Call `cello_send({ identity: "A", session_id: "<session_id>", content: "<your opening message>" })`.
 
 Confirm `ok: true`.
 
@@ -181,7 +169,7 @@ Confirm `ok: true`.
 
 Execute continuously:
 
-1. Call `cello_receive({ session_id, timeout_ms: 30000 })`
+1. Call `cello_receive({ identity: "A", session_id: "<session_id>", timeout_ms: 30000 })`
 2. If `type: "message"`:
    - **Print:**
      ```
@@ -194,14 +182,14 @@ Execute continuously:
      Sending:
        > "<your reply>"
      ```
-   - Call `cello_send({ session_id, content: "<your reply>" })`
+   - Call `cello_send({ identity: "A", session_id: "<session_id>", content: "<your reply>" })`
    - Confirm `ok: true`
    - Go back to step 1
 3. If `type: "timeout"`:
    - Print "Listening..." and go back to step 1
 4. If error:
    - Report it
-   - Call `cello_status` to verify transport and directory are still up
+   - Call `cello_status({ identity: "A" })` to verify transport and directory are still up
    - If both up, go back to step 1
    - If either down, stop and report
 
@@ -209,7 +197,7 @@ Execute continuously:
 
 ## Step 6 — Seal the session
 
-Call `cello_close_session({ session_id })`.
+Call `cello_close_session({ identity: "A", session_id: "<session_id>" })`.
 
 This runs a FROST seal ceremony. You'll receive:
 - `sealed_root_hash` (64 hex chars — final Merkle root)
@@ -235,28 +223,20 @@ You will await the session assignment and respond to messages.
 
 Verify `cello_status` is callable. If not, the CELLO MCP server is not connected.
 
-**Before starting this session (Agent B):**
+The operator should already have configured `~/.claude/settings.json` (see Path 2 prerequisites).
 
-The operator should already have both MCP servers configured in `~/.claude/settings.json` (see Path 2 prerequisites for the full config).
-
-**To run as Agent B:**
-1. Ensure `"cello-agent-b"` is enabled in settings.json
-2. Comment out or remove the `"cello"` block temporarily (Agent A's server)
-3. Save settings.json
-4. Start this Claude Code session — you'll connect as Agent B with the `key-agent-b` identity
-
-Claude Code connects to ALL configured MCP servers at startup, so only one agent's server should be active at a time. Swap which server is enabled to switch between Agent A and Agent B.
+Start this session.
 
 ## Step 1 — Get your identity
 
-Call `cello_status`.
+Call `cello_status({ identity: "B" })`.
 
 Report:
 - Your `own_pubkey` (your CELLO identity)
 - `transport_started` status
 - `directory_reachable` status
 
-**Note:** `directory_reachable` will be `false` before any sessions exist — this is expected. The directory connection is tested during session establishment (Step 3 for initiator, Step 3 for target), not at startup.
+**Note:** `directory_reachable` will be `false` before any sessions exist — this is expected. The directory connection is tested during session establishment (Step 3), not at startup.
 
 ## Step 2 — Receive counterparty pubkey
 
@@ -264,7 +244,7 @@ The operator will give you Agent A's `own_pubkey`. Save it (for reference only �
 
 ## Step 3 — Await session
 
-Call `cello_await_session({ timeout_ms: 30000 })`.
+Call `cello_await_session({ identity: "B", timeout_ms: 30000 })`.
 
 When Agent A's session request arrives, you'll receive:
 - `session_id` (32 hex chars, matches Agent A's)
@@ -285,7 +265,7 @@ Session received!
 
 Execute continuously:
 
-1. Call `cello_receive({ session_id, timeout_ms: 30000 })`
+1. Call `cello_receive({ identity: "B", session_id: "<session_id>", timeout_ms: 30000 })`
 2. If `type: "message"`:
    - **Print:**
      ```
@@ -298,14 +278,14 @@ Execute continuously:
      Sending:
        > "<your reply>"
      ```
-   - Call `cello_send({ session_id, content: "<your reply>" })`
+   - Call `cello_send({ identity: "B", session_id: "<session_id>", content: "<your reply>" })`
    - Confirm `ok: true`
    - Go back to step 1
 3. If `type: "timeout"`:
    - Print "Listening..." and go back to step 1
 4. If error:
    - Report it
-   - Call `cello_status` to verify transport and directory are still up
+   - Call `cello_status({ identity: "B" })` to verify transport and directory are still up
    - If both up, go back to step 1
    - If either down, stop and report
 

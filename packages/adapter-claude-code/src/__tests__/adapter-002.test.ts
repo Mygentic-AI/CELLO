@@ -29,7 +29,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateKeypair } from "@cello/crypto";
 import { createNode } from "@cello/transport";
-import { createMcpServer } from "../index.js";
+import { createSingleIdentityServer as createMcpServer } from "../index.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Tool, Notification } from "@modelcontextprotocol/sdk/types.js";
@@ -121,7 +121,7 @@ describe("AC-003: cello_connect_peer is not registered in M1 tool registry", () 
     expect(tools.map((t) => t.name)).not.toContain("cello_connect_peer");
 
     // Calling an unregistered tool returns an MCP error response (isError: true)
-    const result = await mcpClient.callTool({ name: "cello_connect_peer", arguments: { multiaddr: "/ip4/1.2.3.4/tcp/9999" } });
+    const result = await mcpClient.callTool({ name: "cello_connect_peer", arguments: { identity: "A", multiaddr: "/ip4/1.2.3.4/tcp/9999" } });
     expect((result as { isError?: boolean }).isError).toBe(true);
   }, 10_000);
 });
@@ -149,7 +149,7 @@ describe("AC-004: cello_list_peers is not registered in M1 tool registry", () =>
     expect(tools.map((t) => t.name)).not.toContain("cello_list_peers");
 
     // Calling an unregistered tool returns an MCP error response (isError: true)
-    const result = await mcpClient.callTool({ name: "cello_list_peers", arguments: {} });
+    const result = await mcpClient.callTool({ name: "cello_list_peers", arguments: { identity: "A", identity: "A" } });
     expect((result as { isError?: boolean }).isError).toBe(true);
   }, 10_000);
 });
@@ -366,7 +366,7 @@ describe("AC-001: inbound session fires notification and cello_await_session ret
 
     // Call cello_await_session — should return immediately (event is already queued)
     const result = parseResult(
-      await mcpClient.callTool({ name: "cello_await_session", arguments: { timeout_ms: 5000 } })
+      await mcpClient.callTool({ name: "cello_await_session", arguments: { identity: "A", timeout_ms: 5000 } })
     ) as Record<string, unknown>;
 
     expect(result.type).toBe("new_session");
@@ -412,7 +412,7 @@ describe("AC-005: two queued session events are returned by successive cello_awa
     // First call should return immediately with event1
     const start1 = Date.now();
     const result1 = parseResult(
-      await mcpClient.callTool({ name: "cello_await_session", arguments: { timeout_ms: 5000 } })
+      await mcpClient.callTool({ name: "cello_await_session", arguments: { identity: "A", timeout_ms: 5000 } })
     ) as Record<string, unknown>;
     const elapsed1 = Date.now() - start1;
 
@@ -425,7 +425,7 @@ describe("AC-005: two queued session events are returned by successive cello_awa
     // Second call should return immediately with event2
     const start2 = Date.now();
     const result2 = parseResult(
-      await mcpClient.callTool({ name: "cello_await_session", arguments: { timeout_ms: 5000 } })
+      await mcpClient.callTool({ name: "cello_await_session", arguments: { identity: "A", timeout_ms: 5000 } })
     ) as Record<string, unknown>;
     const elapsed2 = Date.now() - start2;
 
@@ -456,7 +456,7 @@ describe("AC-006: empty session queue + timeout_ms → {type: 'timeout'} after ~
 
     const start = Date.now();
     const result = parseResult(
-      await mcpClient.callTool({ name: "cello_await_session", arguments: { timeout_ms: 200 } })
+      await mcpClient.callTool({ name: "cello_await_session", arguments: { identity: "A", timeout_ms: 200 } })
     ) as Record<string, unknown>;
     const elapsed = Date.now() - start;
 
@@ -488,7 +488,7 @@ describe("SI-002: no K_local private key material in any tool response or notifi
     const expectedPubkey = Buffer.from(await kp.getPublicKey()).toString("hex");
 
     const result = parseResult(
-      await mcpClient.callTool({ name: "cello_status", arguments: {} })
+      await mcpClient.callTool({ name: "cello_status", arguments: { identity: "A", identity: "A" } })
     ) as Record<string, unknown>;
 
     // own_pubkey is the public key, not private
@@ -527,7 +527,7 @@ describe("CRITICAL-1: null-client tools return client_not_initialized when clien
 
     // Call with timeout_ms=0 and empty queue — must return {type: 'timeout'} immediately
     const result = parseResult(
-      await mcpClient.callTool({ name: "cello_await_session", arguments: { timeout_ms: 0 } })
+      await mcpClient.callTool({ name: "cello_await_session", arguments: { identity: "A", timeout_ms: 0 } })
     ) as { type: string };
     expect(result.type).toBe("timeout");
 
@@ -541,7 +541,7 @@ describe("CRITICAL-1: null-client tools return client_not_initialized when clien
 
     // Next cello_await_session must get the enqueued event (not timeout)
     const result2 = parseResult(
-      await mcpClient.callTool({ name: "cello_await_session", arguments: { timeout_ms: 500 } })
+      await mcpClient.callTool({ name: "cello_await_session", arguments: { identity: "A", timeout_ms: 500 } })
     ) as { type: string; session_id: string };
     expect(result2.type).toBe("new_session");
     expect(result2.session_id).toBe(event.sessionIdHex);
