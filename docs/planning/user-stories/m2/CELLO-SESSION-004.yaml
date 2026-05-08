@@ -237,6 +237,14 @@ stubs:
     why: "Full connection request flow requires trust signals, SignalRequirementPolicy evaluation, and selective disclosure — all M3 concerns. M2 pre-authorizes both agents in the test harness."
     replaced_by: "CELLO-M3-CONNECTION-001 (accept/decline flow with trust data and policy evaluation)"
 
+  - what: "DB-001 directory-unreachable test (full network-partition isolation)"
+    why: "DIRECTORY_BELOW_THRESHOLD (AC-004) covers the observable new-establishment failure mode. Full network-partition testing of existing sessions (verifying they remain unaffected) requires multi-process infrastructure not available until M4."
+    replaced_by: "AC-004 covers the new-establishment failure path; existing-session unaffectedness is implicit (per-message signing uses K_local only and does not require directory contact)"
+
+  - what: "DB-002 in-flight single-session preservation test"
+    why: "The hard cut is in receiveSessionAssignment (new assignments only). Sessions stored as active before M2 deploy are records in memory — receiveSessionAssignment is never called for them again. No code path retroactively invalidates stored sessions."
+    replaced_by: "Architecture guarantee: session records are immutable once stored; the hard cut is entry-point-only and applies only to frames arriving after M2 is deployed"
+
 # ─── References ─────────────────────────────────────────────
 references:
   protocol_map: "Authentication"

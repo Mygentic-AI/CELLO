@@ -410,6 +410,46 @@ describe("AC-005: cello_list_sessions shows active session on both A and B", () 
   }, 25_000);
 });
 
+// ─── AC-006 (SESSION-004): Post-FROST session message exchange = M1 behavior ──
+
+describe("AC-006 (SESSION-004): Post-FROST session message exchange is identical to M1", () => {
+  it("after FROST-established session, A sends message to B via dual-path; B receives with correct seq", async () => {
+    const fix = await makeFixture();
+    scope.addCleanup(fix.stopAll);
+
+    const { sessionIdHex } = await setupSession(fix);
+
+    // A sends a message on the FROST-established session
+    const sendResult = parseResult(
+      await fix.mcpA.callTool({
+        name: "cello_send",
+        arguments: { session_id: sessionIdHex, content: "frost-session-message" },
+      })
+    ) as { delivered: boolean; leaf_hash: string };
+
+    expect(sendResult.delivered).toBe(true);
+    expect(sendResult.leaf_hash).toMatch(/^[0-9a-f]{64}$/);
+
+    // B receives the message — identical behavior to M1 dual-path
+    const recvResult = parseResult(
+      await fix.mcpB.callTool({
+        name: "cello_receive",
+        arguments: { session_id: sessionIdHex, timeout_ms: 10_000 },
+      })
+    ) as { type: string; content: string; sender_pubkey: string; sequence_number: number; leaf_hash: string };
+
+    expect(recvResult.type).toBe("message");
+    expect(recvResult.content).toBe("frost-session-message");
+    expect(recvResult.sender_pubkey).toBe(fix.pubkeyAHex);
+    // sequence_number must be >= 1 (relay-assigned, monotone)
+    expect(recvResult.sequence_number).toBeGreaterThanOrEqual(1);
+    expect(recvResult.leaf_hash).toMatch(/^[0-9a-f]{64}$/);
+
+    // Verify leaf_hash from send and receive match (dual-path consistency)
+    expect(recvResult.leaf_hash).toBe(sendResult.leaf_hash);
+  }, 20_000);
+});
+
 // ─── AC-002 notification: cello_session_request fires on B ───────────────────
 
 describe("AC-002 notification: cello_session_request channel notification fires on B when assignment arrives", () => {

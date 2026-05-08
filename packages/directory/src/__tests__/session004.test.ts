@@ -177,6 +177,79 @@ describe("AC-002 (directory): frost_signer_not_configured when no IThresholdSign
   }, 20_000);
 });
 
+// ─── AC-004: DIRECTORY_BELOW_THRESHOLD → session_request_error ────────────────
+
+describe("AC-004: DIRECTORY_BELOW_THRESHOLD → session_request_error, no partial session state", () => {
+  it("when all stubs are unresponsive → ceremony returns DIRECTORY_BELOW_THRESHOLD → directory returns session_request_error", async () => {
+    const dirKp = generateKeypair();
+
+    const kpA = generateKeypair();
+    const pubkeyA = await kpA.getPublicKey();
+    const pubkeyAHex = Buffer.from(pubkeyA).toString("hex");
+
+    // Bootstrap A's FROST group with 3 stubs (2-of-3 threshold)
+    const stubsA = createInProcessStubs(3);
+    await bootstrapKeyShares(pubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
+    const signerA = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsA }, pubkeyA);
+
+    // Mark ALL stubs as unreachable so the ceremony fails DIRECTORY_BELOW_THRESHOLD.
+    // isReachable() returns false for each, so the coordinator sees 0/3 reachable
+    // nodes (threshold=2), triggering the below-threshold failure immediately.
+    for (const stub of stubsA) {
+      stub.setUnreachable(true);
+    }
+
+    const kpB = generateKeypair();
+    const pubkeyB = await kpB.getPublicKey();
+    const pubkeyBHex = Buffer.from(pubkeyB).toString("hex");
+
+    const { directory, node: dirNode, stop: dirStop } = await createDirectoryNode({
+      keyProvider: dirKp,
+      relay: makeNoopRelayAdapter(),
+      relayEndpoint: { peer_id: "relay-peer", multiaddrs: [] },
+    });
+    scope.addCleanup(dirStop);
+
+    // Register signer — it IS configured, but all nodes are unresponsive (below-threshold)
+    directory.registerThresholdSigner(pubkeyAHex, signerA);
+
+    const nodeA = await createNode({ keyProvider: kpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeA.start();
+    scope.addCleanup(() => nodeA.stop());
+
+    const nodeB = await createNode({ keyProvider: kpB, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeB.start();
+    scope.addCleanup(() => nodeB.stop());
+
+    const dirAddr = dirNode.listenAddresses()[0]!;
+    await nodeA.dial(dirAddr);
+    await nodeB.dial(dirAddr);
+
+    directory.registerPeerInfo(pubkeyAHex, nodeA.getPeerId(), nodeA.listenAddresses());
+    directory.registerPeerInfo(pubkeyBHex, nodeB.getPeerId(), nodeB.listenAddresses());
+
+    // B authenticates (target must be online for directory to attempt the ceremony)
+    const streamB = await nodeB.newStream(dirNode.getPeerId(), SIGNALING_PROTOCOL_ID);
+    const readerB = new StreamReader(streamB);
+    await authenticateClient(streamB, readerB, kpB);
+
+    // A authenticates and sends session_request
+    const streamA = await nodeA.newStream(dirNode.getPeerId(), SIGNALING_PROTOCOL_ID);
+    const readerA = new StreamReader(streamA);
+    await authenticateClient(streamA, readerA, kpA);
+
+    sendFrame(streamA, CBOR_ENC.encode({
+      type: "session_request",
+      target_pubkey: pubkeyB,
+    }));
+
+    // Directory should return session_request_error with reason=directory_below_threshold
+    const response = await readerA.readDecoded();
+    expect(response["type"]).toBe("session_request_error");
+    expect(response["reason"]).toBe("directory_below_threshold");
+  }, 20_000);
+});
+
 // ─── AC-005: CEREMONY_CONFLICT detection ─────────────────────────────────────
 
 describe("AC-005: CEREMONY_CONFLICT — second session_request while first in-flight is rejected", () => {

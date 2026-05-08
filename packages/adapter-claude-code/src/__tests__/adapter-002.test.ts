@@ -67,7 +67,7 @@ function makeStubClient(): CelloClient & {
     async registerHandler() {},
     receive() { return null; },
     peekAll() { return []; },
-    async receiveSessionAssignment() { return { ok: false, reason: "directory_signature_invalid" }; },
+    async receiveSessionAssignment() { return { ok: false, reason: "frost_signature_invalid" }; },
     listSessions() { return []; },
     async sendMessage() { return { ok: false, reason: "session_not_found" }; },
     receiveMessage() { return null; },

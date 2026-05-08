@@ -480,6 +480,83 @@ describe("AC-007: B verifies against signer_pubkey (A's key), not B's own group 
   });
 });
 
+// ─── AC-004: Note — AC-004 is a DIRECTORY-side test ──────────────────────────
+//
+// The DIRECTORY_BELOW_THRESHOLD scenario occurs when the directory's FROST
+// ceremony fails during #processSessionRequest (too few reachable stubs).
+// The directory returns session_request_error reason=directory_below_threshold.
+// This is tested in packages/directory/src/__tests__/session004.test.ts.
+// There is no separate client-side AC-004 path: the client receives a pre-built
+// SessionAssignment from the directory — by that point the ceremony has already
+// succeeded. The below-threshold failure happens before the assignment is created.
+
+// ─── SI-001 (L-1): Attacker substitutes signer_pubkey with own key ────────────
+
+describe("SI-001 (adversarial): Attacker substitutes signer_pubkey with own key, provides valid sig under it", () => {
+  it("initiator (A) receives assignment with attacker's signer_pubkey and valid attacker-FROST sig → frost_signature_invalid", async () => {
+    // Create attacker's own FROST group (completely independent from A's group)
+    const kpAttacker = generateKeypair();
+    const pubkeyAttacker = await kpAttacker.getPublicKey();
+    const stubsAttacker = createInProcessStubs(3);
+    await bootstrapKeyShares(pubkeyAttacker, {
+      threshold: 2,
+      participants: 3,
+      directoryNodeStubs: stubsAttacker,
+    });
+    const signerAttacker = new FrostThresholdSigner(
+      { threshold: 2, participants: 3, directoryNodeStubs: stubsAttacker },
+      pubkeyAttacker
+    );
+
+    const fix = await makeFixture();
+    scope.addCleanup(fix.stopAll);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const session_timestamp = Date.now();
+    const genesis_prev_root = computeGenesisPrevRoot(
+      fix.clientA.pubkey, fix.clientB.pubkey, sessionId, session_timestamp
+    );
+    const tbs = buildSessionEstablishmentTbs(
+      sessionId, fix.clientA.pubkey, fix.clientB.pubkey, genesis_prev_root, session_timestamp
+    );
+
+    // Attacker signs the TBS with their own FROST group key
+    const attackerCeremonyId = `session-attacker-${Buffer.from(sessionId).toString("hex")}`;
+    const attackerResult = await signerAttacker.participateInCeremony(
+      attackerCeremonyId, tbs, CONTEXT_SESSION_ESTABLISHMENT
+    );
+    if (!attackerResult.ok) throw new Error("attacker ceremony failed");
+
+    // Build assignment with attacker's signer_pubkey and their valid-under-attacker-key signature
+    // (session fields otherwise look valid — correct participants, relay, etc.)
+    const attackerPrimaryPubkey = signerAttacker.getPrimaryPubkey();
+    const spoofedAssignment: SessionAssignmentFrost = {
+      session_id: sessionId,
+      participant_a: { pubkey: fix.clientA.pubkey, peer_id: fix.clientA.peerId, multiaddrs: fix.clientA.multiaddrs },
+      participant_b: { pubkey: fix.clientB.pubkey, peer_id: fix.clientB.peerId, multiaddrs: fix.clientB.multiaddrs },
+      relay_endpoint: { peer_id: fix.relayPeerId, multiaddrs: [fix.relayAddr] },
+      directory_endpoint: { peer_id: "", multiaddrs: [] },
+      session_timestamp,
+      directory_pubkey: new Uint8Array(32),
+      directory_signature: attackerResult.signature,
+      signature_type: "frost",
+      // Attacker has replaced signer_pubkey with their own group key
+      signer_pubkey: attackerPrimaryPubkey,
+    };
+
+    // The attacker's sig IS valid under attackerPrimaryPubkey, but A verifies against
+    // its OWN primary_pubkey (which it stored at DKG time). Since the sig was made with
+    // attacker's key, it MUST NOT verify under A's primary_pubkey.
+    const result = await fix.clientA.client.receiveSessionAssignment(spoofedAssignment, fix.clientA.pubkey);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("frost_signature_invalid");
+    }
+    // No session must be stored
+    expect(fix.clientA.client.listSessions().length).toBe(0);
+  }, 25_000);
+});
+
 // ─── SI-001: Absent thresholdSigner on initiator side → frost_signer_not_configured ─────
 
 describe("SI-001: Initiator without thresholdSigner injected → frost_signer_not_configured", () => {
@@ -538,6 +615,58 @@ describe("SI-001: Initiator without thresholdSigner injected → frost_signer_no
       expect(result.reason).toBe("frost_signer_not_configured");
     }
     expect(clientNoSigner.listSessions().length).toBe(0);
+  }, 20_000);
+});
+
+// ─── SI-002 (L-2 client path): seal-context sig rejected by receiveSessionAssignment ──
+
+describe("SI-002 (client path): Seal-context sig rejected by receiveSessionAssignment", () => {
+  it("assignment signed with CONTEXT_SEAL (not CONTEXT_SESSION_ESTABLISHMENT) → frost_signature_invalid", async () => {
+    const fix = await makeFixture();
+    scope.addCleanup(fix.stopAll);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const session_timestamp = Date.now();
+    const genesis_prev_root = computeGenesisPrevRoot(
+      fix.clientA.pubkey, fix.clientB.pubkey, sessionId, session_timestamp
+    );
+    const tbs = buildSessionEstablishmentTbs(
+      sessionId, fix.clientA.pubkey, fix.clientB.pubkey, genesis_prev_root, session_timestamp
+    );
+
+    // Sign the TBS with the WRONG context: CONTEXT_SEAL instead of CONTEXT_SESSION_ESTABLISHMENT
+    const ceremonyId = `seal-context-${Buffer.from(sessionId).toString("hex")}`;
+    const sealContextResult = await fix.clientA.signer.participateInCeremony(
+      ceremonyId, tbs, CONTEXT_SEAL
+    );
+    if (!sealContextResult.ok) throw new Error("seal-context ceremony failed");
+
+    const primaryPubkey = fix.clientA.signer.getPrimaryPubkey();
+
+    // Build a SessionAssignmentFrost that carries a seal-context sig instead of an
+    // establishment-context sig. The signer_pubkey is correct (A's real primary pubkey),
+    // but the sig will fail because the domain context doesn't match.
+    const sealContextAssignment: SessionAssignmentFrost = {
+      session_id: sessionId,
+      participant_a: { pubkey: fix.clientA.pubkey, peer_id: fix.clientA.peerId, multiaddrs: fix.clientA.multiaddrs },
+      participant_b: { pubkey: fix.clientB.pubkey, peer_id: fix.clientB.peerId, multiaddrs: fix.clientB.multiaddrs },
+      relay_endpoint: { peer_id: fix.relayPeerId, multiaddrs: [fix.relayAddr] },
+      directory_endpoint: { peer_id: "", multiaddrs: [] },
+      session_timestamp,
+      directory_pubkey: new Uint8Array(32),
+      directory_signature: sealContextResult.signature,
+      signature_type: "frost",
+      signer_pubkey: primaryPubkey,
+    };
+
+    // receiveSessionAssignment verifies under CONTEXT_SESSION_ESTABLISHMENT.
+    // The seal-context sig must NOT verify → frost_signature_invalid.
+    const result = await fix.clientA.client.receiveSessionAssignment(sealContextAssignment, fix.clientA.pubkey);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("frost_signature_invalid");
+    }
+    expect(fix.clientA.client.listSessions().length).toBe(0);
   }, 20_000);
 });
 

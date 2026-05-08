@@ -502,7 +502,8 @@ export class CelloDirectoryNode {
     // peerIdString values → conflict fires correctly.
     // IMPORTANT-N3: conflict check and early return happen BEFORE markInFlight so
     // clearInFlight is only called when markInFlight was actually called.
-    const epochId = `${initiatorHex}:epoch:1`;  // M2 hardcoded; M3 uses actual key epoch
+    // M2: epoch 1 hardcoded. In M3, derive from the signer's active key rotation epoch.
+    const epochId = `${initiatorHex}:epoch:1`;
     const ceremonyId = `session-${Buffer.from(session_id).toString("hex")}`;  // unique per ceremony
     const conflict = this.#frostHandler.checkConflict(initiatorHex, epochId, ceremonyId, ceremonyId);
     if (conflict) {
@@ -511,7 +512,10 @@ export class CelloDirectoryNode {
       return;
     }
 
-    // markInFlight AFTER early return — clearInFlight only called when this runs
+    // markInFlight AFTER early return — clearInFlight only called when this runs.
+    // M2: ceremonyId used as peerIdString — each session generates a unique session_id,
+    // guaranteeing unique ceremony IDs. In M3, replace with the actual libp2p Peer ID of
+    // the requesting coordinator for proper retry-vs-conflict distinction.
     this.#frostHandler.markInFlight(initiatorHex, epochId, ceremonyId, ceremonyId);
 
     try {

@@ -59,7 +59,6 @@ export interface SessionRecord {
  * Result of receiveSessionAssignment().
  *
  * Failure reasons:
- *   directory_signature_invalid  — Ed25519/FROST verify failed; assignment discarded before I/O.
  *   relay_auth_failed            — relay explicitly rejected the auth response.
  *   relay_auth_error             — could not open a stream to the relay or read the challenge.
  *   dial_counterparty_failed     — reserved for future use.
@@ -67,13 +66,18 @@ export interface SessionRecord {
  *   frost_signature_invalid      — SESSION-004: FROST threshold signature verification failed.
  *   frost_signer_not_configured  — SESSION-004: initiator has no IThresholdSigner injected;
  *                                  cannot derive verification key for own primary_pubkey.
+ *
+ * NOTE (SESSION-004 L-5): `directory_signature_invalid` has been removed.
+ * It was the M1 Ed25519 single-key failure reason. In M2, `signature_type: 'single'` frames
+ * are hard-refused with `unsupported_signature_type` before any signature verification,
+ * and FROST signature failures surface as `frost_signature_invalid`. There is no code path
+ * that returns `directory_signature_invalid` in M2.
  */
 export type ReceiveAssignmentResult =
   | { ok: true; sessionId: Uint8Array }
   | {
       ok: false;
       reason:
-        | "directory_signature_invalid"
         | "relay_auth_failed"
         | "relay_auth_error"
         | "dial_counterparty_failed"
