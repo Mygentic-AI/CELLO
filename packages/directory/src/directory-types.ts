@@ -33,6 +33,10 @@ export interface SignalingAuthFailed {
   reason: DirAuthFailedReason;
 }
 
+export interface SignalingAuthOk {
+  type: "signaling_auth_ok";
+}
+
 // ─── Session request / assignment frame types ──────────────────────────────────
 
 export interface SessionRequest {

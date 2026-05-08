@@ -71,10 +71,14 @@ import type { SessionAssignment } from "@cello/protocol-types";
 import type {
   CelloClient, PeerEntry, ReceivedEnvelope, SendResult, SessionRecord,
   ReceiveAssignmentResult, ReceivedMessage, SendMessageResult, SessionAssignmentEvent,
+  InitiateSessionResult,
 } from "./types.js";
 
 const RELAY_PROTOCOL_ID = "/cello/relay/1.0.0";
 const AUTH_DOMAIN = "CELLO-RELAY-AUTH-v1";
+const SIGNALING_PROTOCOL_ID = "/cello/signaling/1.0.0";
+const AUTH_DOMAIN_DIR = "CELLO-DIR-AUTH-v1";
+const DEFAULT_INITIATE_TIMEOUT_MS = 30_000;
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
 function toU8(v: unknown): Uint8Array {
@@ -235,6 +239,24 @@ class CelloClientImpl implements CelloClient {
   // SESSION-006: track whether a reconnect loop is already running per session
   readonly #reconnectInProgress = new Set<string>();
 
+  // ─── ADAPTER-003: persistent directory signaling stream ────────────────────
+
+  /** Configured directory endpoint (required for initiateSession). ADAPTER-003. */
+  readonly #directoryEndpoint: { peer_id: string; multiaddrs: string[] } | null;
+
+  /** Single persistent signaling stream shared across all session_request outbound calls
+   * and inbound session_assignment / session_sealed events. ADAPTER-003. */
+  #persistentSignalingStream: Stream | null = null;
+  #persistentSignalingIter: AsyncIterator<Uint8Array> | null = null;
+
+  /** Pending resolver for the in-flight session_request → session_assignment/error.
+   * At most one session_request is in-flight at a time per signaling stream.
+   * Receives the raw decoded CBOR frame (session_assignment or session_request_error). */
+  #pendingSessionRequestResolve: ((frame: Record<string, unknown>) => void) | null = null;
+
+  /** In-flight promise for #openPersistentSignalingStream — prevents concurrent open attempts. */
+  #openingSignalingStream: Promise<boolean> | null = null;
+
   // session_id_hex → Promise: set when the initiator SEAL echo is expected (SESSION-003)
   // Allows non-initiator auto-response to know when its own SEAL echo confirms the seal
   readonly #sealInitiatedSessions = new Set<string>();
@@ -245,12 +267,14 @@ class CelloClientImpl implements CelloClient {
     onMessageQueued?: (senderPubkeyHex: string) => void,
     contentGraceMs = 30_000,
     reconnectTimeoutMs = DEFAULT_RECONNECT_TIMEOUT_MS,
+    directoryEndpoint: { peer_id: string; multiaddrs: string[] } | null = null,
   ) {
     this.#node = node;
     this.#keyProvider = keyProvider;
     this.#onMessageQueued = onMessageQueued;
     this.#contentGraceMs = contentGraceMs;
     this.#reconnectTimeoutMs = reconnectTimeoutMs;
+    this.#directoryEndpoint = directoryEndpoint;
   }
 
   addPeer(peerPubkeyHex: string, peerId: string, multiaddrs: string[]): void {
@@ -412,12 +436,17 @@ class CelloClientImpl implements CelloClient {
     // SHA-256(min(pubA, pubB) || max(pubA, pubB) || session_id || timestamp_be8) per FIPS 180-4
     const genesis_prev_root = computeGenesisPrevRoot(pubA, pubB, session_id, session_timestamp);
 
-    // Step 4: Register content protocol handler on this node (if not already registered)
+    // Step 4: Register content protocol handler on this node (if not already registered).
+    // Set the flag before awaiting handle() to prevent concurrent calls from both registering.
     if (!this.#contentHandlerRegistered) {
-      await this.#node.handle(CELLO_CONTENT_PROTOCOL_ID, (stream) => {
-        void this.#handleContentStream(stream);
-      });
       this.#contentHandlerRegistered = true;
+      try {
+        await this.#node.handle(CELLO_CONTENT_PROTOCOL_ID, (stream) => {
+          void this.#handleContentStream(stream);
+        });
+      } catch {
+        // Already registered by a concurrent call — safe to ignore.
+      }
     }
 
     // Step 5: Dial relay on /cello/relay/1.0.0 and complete challenge-response auth (AC-003)
@@ -526,8 +555,12 @@ class CelloClientImpl implements CelloClient {
       });
     }
 
-    // SESSION-003: dial directory signaling stream and start reader (for session_sealed events)
-    void this.#connectDirectorySignalingStream(sessionIdHex, assignment, myPubkey);
+    // ADAPTER-003: if the persistent signaling stream is already open (e.g. opened by
+    // initiateSession), it handles session_sealed/seal_rejected events for all sessions.
+    // Only open a per-session stream when the persistent stream is not available.
+    if (!this.#persistentSignalingStream) {
+      void this.#connectDirectorySignalingStream(sessionIdHex, assignment, myPubkey);
+    }
 
     return { ok: true, sessionId: session_id };
   }
@@ -852,6 +885,17 @@ class CelloClientImpl implements CelloClient {
         signature: sig,
       }) as Uint8Array;
       dirStream.send(lp.encode.single(authResponseFrame));
+
+      // ADAPTER-003: consume signaling_auth_ok so iter is in sync for session_sealed frames
+      const { value: ackRaw2, done: ackDone2 } = await nextWithTimeout(iter, RELAY_AUTH_TIMEOUT_MS);
+      if (ackDone2 || ackRaw2 === undefined) { dirStream.abort(new Error("dir_auth_error")); return; }
+      let ackFrame2: Record<string, unknown>;
+      try {
+        ackFrame2 = decode(toU8(ackRaw2)) as Record<string, unknown>;
+      } catch { dirStream.abort(new Error("dir_auth_error")); return; }
+      if (ackFrame2["type"] !== "signaling_auth_ok") {
+        dirStream.abort(new Error("dir_auth_error")); return;
+      }
 
       void this.#runDirectoryStreamReader(sessionIdHex, dirStream, assignment.directory_pubkey, iter);
     } catch {
@@ -1685,6 +1729,19 @@ class CelloClientImpl implements CelloClient {
     await this.#node.handle(CELLO_PROTOCOL_ID, (stream) => {
       void this.#handleInbound(stream);
     });
+
+    // ADAPTER-003: if a directory endpoint is configured, pre-authenticate now.
+    // This registers this client's stream with the directory so the directory can
+    // deliver inbound session_assignment frames (participant B role) without waiting
+    // for this client to call initiateSession first.
+    // Awaited here so that by the time registerHandler returns, the stream is established
+    // and the directory knows this client is reachable.
+    // Best-effort: failure is non-fatal (stream will be re-opened on first initiateSession call).
+    if (this.#directoryEndpoint && !this.#persistentSignalingStream) {
+      await this.#openPersistentSignalingStream().catch(() => {
+        // Ignore failure — stream will be opened lazily on first initiateSession call
+      });
+    }
   }
 
   async #handleInbound(stream: Stream): Promise<void> {
@@ -1770,9 +1827,424 @@ class CelloClientImpl implements CelloClient {
   onSessionAssignment(handler: (event: SessionAssignmentEvent) => void): void {
     this.#onSessionAssignmentHandler = handler;
   }
+
+  // ─── ADAPTER-003: initiateSession ──────────────────────────────────────────
+
+  /**
+   * Send a `session_request` over the persistent directory signaling stream and await
+   * the `session_assignment` or error response.
+   *
+   * PSEUDOCODE (Phase P — ADAPTER-003):
+   *
+   * initiateSession(targetPubkeyHex, opts):
+   *   1. If no #directoryEndpoint configured → return { ok: false, reason: 'directory_unreachable' }
+   *   2. Ensure #myPubkeyHex is set (read from keyProvider if not yet set)
+   *   3. Open persistent signaling stream if not already open (DB-001: single retry on failure)
+   *      If stream still cannot be opened → return { ok: false, reason: 'directory_unreachable' }
+   *   4. Encode session_request frame inline using CBOR (no @cello/directory import):
+   *        CBOR({ type: "session_request", target_pubkey: Buffer.from(targetPubkeyHex, 'hex') })
+   *      SI-001: only target_pubkey, no extra fields, no key material
+   *   5. Create response Promise:
+   *        Create resolve fn, store in #pendingSessionRequestResolve
+   *   6. Send frame on #persistentSignalingStream
+   *   7. Race: response Promise vs timeout (opts.timeoutMs ?? DEFAULT_INITIATE_TIMEOUT_MS)
+   *   8. On timeout:
+   *        Clear #pendingSessionRequestResolve
+   *        Return { ok: false, reason: 'timeout' }
+   *   9. On session_request_error frame:
+   *        reason = frame['reason'] ('target_offline' | 'relay_unavailable')
+   *        Return { ok: false, reason }
+   *  10. On session_assignment frame:
+   *        Decode assignment fields from frame['assignment']
+   *        Call receiveSessionAssignment(assignment, myPubkey)
+   *        If ok:true → return { ok: true, sessionId, genesisPrevRoot }
+   *        If ok:false → return { ok: false, reason: 'directory_unreachable' }
+   *
+   * SI-002: K_local private key never appears in frame, response, or log output.
+   *         keyProvider.getPublicKey() returns only the public key.
+   */
+  async initiateSession(
+    targetPubkeyHex: string,
+    opts?: { timeoutMs?: number },
+  ): Promise<InitiateSessionResult> {
+    const timeoutMs = opts?.timeoutMs ?? DEFAULT_INITIATE_TIMEOUT_MS;
+
+    if (!this.#directoryEndpoint) {
+      return { ok: false, reason: "directory_unreachable" };
+    }
+
+    // Ensure myPubkeyHex is set (needed for receiveSessionAssignment)
+    if (!this.#myPubkeyHex) {
+      const pubkey = await this.#keyProvider.getPublicKey();
+      this.#myPubkeyHex = Buffer.from(pubkey).toString("hex");
+    }
+    const myPubkey = Buffer.from(this.#myPubkeyHex, "hex");
+
+    // Open persistent signaling stream if not already open (DB-001)
+    if (!this.#persistentSignalingStream) {
+      const opened = await this.#openPersistentSignalingStream();
+      if (!opened) {
+        // Single retry per DB-001
+        const retried = await this.#openPersistentSignalingStream();
+        if (!retried) {
+          return { ok: false, reason: "directory_unreachable" };
+        }
+      }
+    }
+
+    // SI-001: session_request frame contains ONLY { type, target_pubkey }
+    // Encoded inline with raw CBOR — no import from @cello/directory
+    const targetPubkeyBytes = Buffer.from(targetPubkeyHex, "hex");
+    const sessionRequestFrame = CBOR_ENC.encode({
+      type: "session_request",
+      target_pubkey: new Uint8Array(targetPubkeyBytes),
+    }) as Uint8Array;
+
+    // Set up Promise that resolves when the directory responds
+    let responseResolve!: (frame: Record<string, unknown>) => void;
+    const responsePromise = new Promise<Record<string, unknown>>((resolve) => {
+      responseResolve = resolve;
+    });
+    this.#pendingSessionRequestResolve = responseResolve;
+
+    // Send session_request frame
+    try {
+      this.#persistentSignalingStream!.send(lp.encode.single(sessionRequestFrame));
+    } catch {
+      this.#pendingSessionRequestResolve = null;
+      return { ok: false, reason: "directory_unreachable" };
+    }
+
+    // Race: directory response vs timeout
+    let responseFrame: Record<string, unknown> | null = null;
+    let timedOut = false;
+    await Promise.race([
+      responsePromise.then((f) => { responseFrame = f; }),
+      new Promise<void>((resolve) =>
+        setTimeout(() => { timedOut = true; resolve(); }, timeoutMs)
+      ),
+    ]);
+
+    if (timedOut) {
+      this.#pendingSessionRequestResolve = null;
+      return { ok: false, reason: "timeout" };
+    }
+
+    const frame = responseFrame!;
+
+    if (frame["type"] === "session_request_error") {
+      const reason = frame["reason"];
+      if (reason === "target_offline") return { ok: false, reason: "target_offline" };
+      if (reason === "relay_unavailable") return { ok: false, reason: "relay_unavailable" };
+      return { ok: false, reason: "target_offline" }; // fallback
+    }
+
+    if (frame["type"] === "session_assignment") {
+      // Decode the assignment from the frame
+      const rawAssignment = frame["assignment"] as Record<string, unknown> | undefined;
+      if (!rawAssignment) return { ok: false, reason: "directory_unreachable" };
+
+      const assignment = parseSessionAssignment(rawAssignment);
+      if (!assignment) return { ok: false, reason: "directory_unreachable" };
+
+      const result = await this.receiveSessionAssignment(assignment, myPubkey);
+      if (!result.ok) {
+        return { ok: false, reason: "directory_unreachable" };
+      }
+
+      // Compute genesis_prev_root — already stored on the session record
+      const sessionIdHex = Buffer.from(result.sessionId).toString("hex");
+      const record = this.#sessions.get(sessionIdHex);
+      if (!record) return { ok: false, reason: "directory_unreachable" };
+
+      return {
+        ok: true,
+        sessionId: result.sessionId,
+        genesisPrevRoot: record.genesis_prev_root,
+      };
+    }
+
+    // Unknown frame type
+    return { ok: false, reason: "directory_unreachable" };
+  }
+
+  /**
+   * Open and authenticate the persistent directory signaling stream.
+   * Returns true on success, false on failure.
+   * Serializes concurrent calls: if an open is already in flight, awaits it instead of
+   * starting another.
+   *
+   * Auth protocol: "CELLO-DIR-AUTH-v1" challenge-response (same as session-level streams).
+   * Signature: Ed25519(SHA-256("CELLO-DIR-AUTH-v1" || nonce || pubkey), privkey)
+   *   per RFC 8032 (Ed25519), FIPS 180-4 (SHA-256)
+   */
+  #openPersistentSignalingStream(): Promise<boolean> {
+    // If stream is already open, nothing to do
+    if (this.#persistentSignalingStream) return Promise.resolve(true);
+    // If an open is already in flight, share its result
+    if (this.#openingSignalingStream) return this.#openingSignalingStream;
+
+    const p = this.#doOpenPersistentSignalingStream().finally(() => {
+      if (this.#openingSignalingStream === p) {
+        this.#openingSignalingStream = null;
+      }
+    });
+    this.#openingSignalingStream = p;
+    return p;
+  }
+
+  async #doOpenPersistentSignalingStream(): Promise<boolean> {
+    if (!this.#directoryEndpoint) return false;
+    if (this.#persistentSignalingStream) return true;
+
+    const dirPeerId = this.#directoryEndpoint.peer_id;
+    const dirMultiaddr = this.#directoryEndpoint.multiaddrs[0];
+
+    try {
+      if (dirMultiaddr) {
+        try { await this.#node.dial(dirMultiaddr); } catch { /* already connected */ }
+      }
+
+      let sigStream: Stream;
+      try {
+        sigStream = await this.#node.newStream(dirPeerId, SIGNALING_PROTOCOL_ID);
+      } catch {
+        return false;
+      }
+
+      // Auth challenge-response (same pattern as #connectDirectorySignalingStream)
+      const iter = (lp.decode(sigStream) as AsyncIterable<unknown>)[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
+
+      const { value: challengeRaw, done } = await nextWithTimeout(iter, RELAY_AUTH_TIMEOUT_MS);
+      if (done || challengeRaw === undefined) { sigStream.abort(new Error("dir_auth_error")); return false; }
+
+      let challengeFrame: Record<string, unknown>;
+      try {
+        challengeFrame = decode(toU8(challengeRaw)) as Record<string, unknown>;
+      } catch { sigStream.abort(new Error("dir_auth_error")); return false; }
+
+      if (challengeFrame["type"] !== "signaling_auth_challenge") {
+        sigStream.abort(new Error("dir_auth_error")); return false;
+      }
+
+      const nonce = toU8(challengeFrame["nonce"]);
+      if (nonce.length !== 32) { sigStream.abort(new Error("dir_auth_error")); return false; }
+
+      // Ensure myPubkeyHex is set
+      if (!this.#myPubkeyHex) {
+        const pubkey = await this.#keyProvider.getPublicKey();
+        this.#myPubkeyHex = Buffer.from(pubkey).toString("hex");
+      }
+      const myPubkey = Buffer.from(this.#myPubkeyHex, "hex");
+
+      const domain = Buffer.from(AUTH_DOMAIN_DIR, "utf8");
+      const authMsg = new Uint8Array(Buffer.concat([domain, nonce, myPubkey]));
+      const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
+      const sig = await this.#keyProvider.sign(msgHash);
+
+      const authResponseFrame = CBOR_ENC.encode({
+        type: "signaling_auth_response",
+        pubkey: myPubkey,
+        signature: sig,
+      }) as Uint8Array;
+      sigStream.send(lp.encode.single(authResponseFrame));
+
+      // Read signaling_auth_ok — the directory sends this after registering the client's
+      // stream in its #streams map. Awaiting it ensures the directory has processed the auth
+      // before the caller sends session_request frames (ADAPTER-003 sync guarantee).
+      const { value: ackRaw, done: ackDone } = await nextWithTimeout(iter, RELAY_AUTH_TIMEOUT_MS);
+      if (ackDone || ackRaw === undefined) { sigStream.abort(new Error("dir_auth_error")); return false; }
+      let ackFrame: Record<string, unknown>;
+      try {
+        ackFrame = decode(toU8(ackRaw)) as Record<string, unknown>;
+      } catch { sigStream.abort(new Error("dir_auth_error")); return false; }
+      if (ackFrame["type"] !== "signaling_auth_ok") {
+        sigStream.abort(new Error("dir_auth_error")); return false;
+      }
+
+      // Store stream and start reader
+      this.#persistentSignalingStream = sigStream;
+      this.#persistentSignalingIter = iter;
+
+      void this.#runPersistentSignalingReader(sigStream, iter);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Persistent signaling stream reader loop.
+   * Handles frames from the directory on the shared signaling stream:
+   *   - session_assignment  → routes to #pendingSessionRequestResolve (outbound init)
+   *                           or fires #onSessionAssignmentHandler (inbound assignment, participant B)
+   *   - session_request_error → routes to #pendingSessionRequestResolve
+   *   - session_sealed       → routes to the matching session's seal handler
+   *   - session_seal_rejected → routes to the matching session's seal handler
+   */
+  async #runPersistentSignalingReader(
+    stream: Stream,
+    iter: AsyncIterator<Uint8Array>,
+  ): Promise<void> {
+    try {
+      while (true) {
+        let result: IteratorResult<Uint8Array>;
+        try {
+          result = await iter.next();
+        } catch { break; }
+        if (result.done || result.value === undefined) break;
+
+        let frame: Record<string, unknown>;
+        try {
+          frame = decode(toU8(result.value as unknown)) as Record<string, unknown>;
+        } catch { continue; }
+
+        if (frame["type"] === "session_assignment" || frame["type"] === "session_request_error") {
+          // Route to pending session_request resolver (if one is waiting)
+          const resolve = this.#pendingSessionRequestResolve;
+          if (resolve) {
+            this.#pendingSessionRequestResolve = null;
+            resolve(frame);
+          } else if (frame["type"] === "session_assignment") {
+            // No pending outbound request — this is an inbound assignment (participant B role).
+            // Call receiveSessionAssignment and fire the onSessionAssignment handler.
+            const rawAssignment = frame["assignment"] as Record<string, unknown> | undefined;
+            if (rawAssignment) {
+              const assignment = parseSessionAssignment(rawAssignment);
+              if (assignment && this.#myPubkeyHex) {
+                const myPubkey = Buffer.from(this.#myPubkeyHex, "hex");
+                void this.receiveSessionAssignment(assignment, myPubkey);
+              }
+            }
+          }
+        } else if (frame["type"] === "session_sealed") {
+          // Route to matching session's seal handler
+          const sessionIdRaw = frame["session_id"];
+          const sessionId = sessionIdRaw instanceof Uint8Array ? sessionIdRaw
+            : Buffer.isBuffer(sessionIdRaw) ? new Uint8Array(sessionIdRaw as Buffer) : null;
+          if (sessionId) {
+            const sessionIdHex = Buffer.from(sessionId).toString("hex");
+            const session = this.#sessions.get(sessionIdHex);
+            if (session) {
+              this.#handleDirectorySessionSealed(sessionIdHex, frame, session.directory_pubkey);
+            }
+          }
+        } else if (frame["type"] === "session_seal_rejected") {
+          const sessionIdRaw = frame["session_id"];
+          const sessionId = sessionIdRaw instanceof Uint8Array ? sessionIdRaw
+            : Buffer.isBuffer(sessionIdRaw) ? new Uint8Array(sessionIdRaw as Buffer) : null;
+          if (sessionId) {
+            const sessionIdHex = Buffer.from(sessionId).toString("hex");
+            this.#handleDirectorySessionSealRejected(sessionIdHex, frame);
+          }
+        }
+      }
+    } catch { /* stream closed */ }
+
+    // Stream closed — clear persistent stream ref
+    if (this.#persistentSignalingStream === stream) {
+      this.#persistentSignalingStream = null;
+      this.#persistentSignalingIter = null;
+    }
+
+    // If a session_request is pending, unblock it with a synthetic error
+    const resolve = this.#pendingSessionRequestResolve;
+    if (resolve) {
+      this.#pendingSessionRequestResolve = null;
+      resolve({ type: "session_request_error", reason: "directory_unreachable" });
+    }
+  }
 }
 
 // ─── Stream iterator helpers ──────────────────────────────────────────────────
+
+// ─── ADAPTER-003: parseSessionAssignment ─────────────────────────────────────
+
+/**
+ * Decode a raw CBOR-decoded object (from frame["assignment"]) into a typed SessionAssignment.
+ * Returns null if any required field is missing or malformed.
+ *
+ * The object is already decoded by cbor-x from the outer frame — this function just
+ * validates and casts the fields. No @cello/directory import needed.
+ *
+ * Wire shape (from encodeSessionAssignment in directory-frames.ts):
+ *   {
+ *     session_id: Uint8Array (16),
+ *     participant_a: { pubkey: Uint8Array (32), peer_id: string, multiaddrs: string[] },
+ *     participant_b: { pubkey: Uint8Array (32), peer_id: string, multiaddrs: string[] },
+ *     relay_endpoint: { peer_id: string, multiaddrs: string[] },
+ *     directory_endpoint: { peer_id: string, multiaddrs: string[] },
+ *     session_timestamp: number,
+ *     directory_pubkey: Uint8Array (32),
+ *     directory_signature: Uint8Array (64),
+ *   }
+ */
+function parseSessionAssignment(raw: Record<string, unknown>): SessionAssignment | null {
+  const sessionId = toU8Safe(raw["session_id"]);
+  if (!sessionId || sessionId.length !== 16) return null;
+
+  const dirPubkey = toU8Safe(raw["directory_pubkey"]);
+  if (!dirPubkey || dirPubkey.length !== 32) return null;
+
+  const dirSig = toU8Safe(raw["directory_signature"]);
+  if (!dirSig || dirSig.length !== 64) return null;
+
+  const tsRaw = raw["session_timestamp"];
+  const sessionTimestamp = typeof tsRaw === "number" ? tsRaw
+    : typeof tsRaw === "bigint" ? Number(tsRaw) : null;
+  if (sessionTimestamp === null) return null;
+
+  const participantA = parseParticipantInfo(raw["participant_a"]);
+  if (!participantA) return null;
+
+  const participantB = parseParticipantInfo(raw["participant_b"]);
+  if (!participantB) return null;
+
+  const relayEndpoint = parseEndpointInfo(raw["relay_endpoint"]);
+  if (!relayEndpoint) return null;
+
+  const directoryEndpoint = parseEndpointInfo(raw["directory_endpoint"]);
+  if (!directoryEndpoint) return null;
+
+  return {
+    session_id: sessionId,
+    participant_a: participantA,
+    participant_b: participantB,
+    relay_endpoint: relayEndpoint,
+    directory_endpoint: directoryEndpoint,
+    session_timestamp: sessionTimestamp,
+    directory_pubkey: dirPubkey,
+    directory_signature: dirSig,
+  };
+}
+
+function parseParticipantInfo(raw: unknown): import("@cello/protocol-types").ParticipantInfo | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const pubkey = toU8Safe(r["pubkey"]);
+  if (!pubkey || pubkey.length !== 32) return null;
+  const peerId = typeof r["peer_id"] === "string" ? r["peer_id"] : null;
+  if (!peerId) return null;
+  const multiaddrs = parseStringArray(r["multiaddrs"]);
+  if (!multiaddrs) return null;
+  return { pubkey, peer_id: peerId, multiaddrs };
+}
+
+function parseEndpointInfo(raw: unknown): import("@cello/protocol-types").RelayEndpointInfo | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const peerId = typeof r["peer_id"] === "string" ? r["peer_id"] : null;
+  if (!peerId) return null;
+  const multiaddrs = parseStringArray(r["multiaddrs"]);
+  if (!multiaddrs) return null;
+  return { peer_id: peerId, multiaddrs };
+}
+
+function parseStringArray(v: unknown): string[] | null {
+  if (!Array.isArray(v)) return null;
+  if (!v.every((x) => typeof x === "string")) return null;
+  return v as string[];
+}
 
 // ─── Factory ─────────────────────────────────────────────────────────────────
 
@@ -1784,6 +2256,8 @@ export function createClient(
     contentGraceMs?: number;
     /** SESSION-006: ms to attempt relay reconnect before giving up. Default: 60000. */
     reconnectTimeoutMs?: number;
+    /** ADAPTER-003: directory endpoint for initiateSession. */
+    directoryEndpoint?: { peer_id: string; multiaddrs: string[] };
   }
 ): CelloClient & {
   sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
@@ -1796,6 +2270,7 @@ export function createClient(
     opts?.onMessageQueued,
     opts?.contentGraceMs,
     opts?.reconnectTimeoutMs,
+    opts?.directoryEndpoint ?? null,
   ) as CelloClient & {
     sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
     openRawStream(peerPubkeyHex: string): Promise<Stream>;

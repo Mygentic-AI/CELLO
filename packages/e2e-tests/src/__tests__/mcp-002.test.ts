@@ -134,8 +134,9 @@ async function makeFixture(): Promise<Fixture> {
   dirNodeRef.directory.registerPeerInfo(pubkeyAHex, peerIdA, multiaddrsA);
   dirNodeRef.directory.registerPeerInfo(pubkeyBHex, peerIdB, multiaddrsB);
 
-  const clientA = createClient(nodeA, kpA);
-  const clientB = createClient(nodeB, kpB);
+  const directoryEndpoint = { peer_id: dirPeerId, multiaddrs: dirMultiaddrs };
+  const clientA = createClient(nodeA, kpA, { directoryEndpoint });
+  const clientB = createClient(nodeB, kpB, { directoryEndpoint });
   await clientA.registerHandler();
   await clientB.registerHandler();
 
@@ -240,18 +241,20 @@ let scope: TestScope;
 beforeEach(() => { scope = createTestScope(); });
 afterEach(() => scope.run(async () => {}));
 
-// ─── AC-001: cello_initiate_session polls until session appears ───────────────
+// ─── AC-001: cello_initiate_session uses real directory signaling ─────────────
 
 describe("AC-001: cello_initiate_session returns session_id when assignment arrives", () => {
   it("AC-001: A polls for session with B's pubkey; directory issues assignment; session_id returned as 32-char hex", async () => {
     const fix = await makeFixture();
     scope.addCleanup(fix.stopAll);
 
-    // Deliver the session assignment after a short delay (simulating directory response)
-    setTimeout(() => {
-      void setupSession(fix);
-    }, 50);
+    // B awaits session assignment via real directory signaling
+    const bSessionPromise = fix.mcpB.callTool({
+      name: "cello_await_session",
+      arguments: { timeout_ms: 15_000 },
+    });
 
+    // A initiates via real directory signaling protocol (ADAPTER-003)
     const result = parseResult(
       await fix.mcpA.callTool({
         name: "cello_initiate_session",
@@ -259,25 +262,20 @@ describe("AC-001: cello_initiate_session returns session_id when assignment arri
       })
     ) as Record<string, unknown>;
 
-    // Must return a session_id, not an error
+    // Must return ok:true with a session_id
+    expect(result.ok).toBe(true);
     expect(typeof result.session_id).toBe("string");
     expect((result.session_id as string)).toMatch(/^[0-9a-f]{32}$/);
-    expect(result.counterparty_pubkey).toBe(fix.pubkeyBHex);
     expect(result.genesis_prev_root).toMatch(/^[0-9a-f]+$/);
 
     // SESSION-002 AC-002: B's genesis_prev_root must be byte-identical to A's.
-    // Both are computed from computeGenesisPrevRoot(pubA, pubB, session_id, timestamp)
-    // — a deterministic pure function — so any divergence means the inputs differed.
-    const bResult = parseResult(
-      await fix.mcpB.callTool({
-        name: "cello_await_session",
-        arguments: { timeout_ms: 1_000 },
-      })
-    ) as { type: string; session_id: string; genesis_prev_root: string };
+    const bResult = parseResult(await bSessionPromise) as {
+      type: string; session_id: string; genesis_prev_root: string;
+    };
     expect(bResult.type).toBe("new_session");
     expect(bResult.session_id).toBe(result.session_id);
     expect(bResult.genesis_prev_root).toBe(result.genesis_prev_root);
-  }, 15_000);
+  }, 25_000);
 });
 
 // ─── AC-002: cello_await_session returns new_session when assignment arrives ──

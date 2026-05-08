@@ -3,6 +3,7 @@ export type {
   SignalingAuthResponse,
   DirAuthFailedReason,
   SignalingAuthFailed,
+  SignalingAuthOk,
   SessionRequest,
   ParticipantInfo,
   RelayEndpoint,
@@ -28,6 +29,7 @@ export { InMemoryDirectoryStore } from "./directory-store.js";
 export {
   encodeSignalingAuthChallenge,
   encodeSignalingAuthFailed,
+  encodeSignalingAuthOk,
   encodeSessionAssignment,
   encodeSessionSealed,
   encodeSessionSealRejected,

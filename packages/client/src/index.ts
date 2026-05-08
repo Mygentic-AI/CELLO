@@ -13,4 +13,5 @@ export type {
   SessionStatus,
   ReceiveAssignmentResult,
   SessionAssignmentEvent,
+  InitiateSessionResult,
 } from "./types.js";

@@ -28,5 +28,11 @@
     "@libp2p/peer-id": "^6.0.8",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.2"
+  },
+  "devDependencies": {
+    "@cello/directory": "workspace:*",
+    "@cello/relay": "workspace:*",
+    "@claude-flow/testing": "*",
+    "cbor-x": "^1.6.0"
   }
 }

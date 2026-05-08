@@ -1,7 +1,7 @@
 /**
  * @cello/client — types.ts
  *
- * Public types for the CelloClient (MSG-002, SESSION-002, MSG-004).
+ * Public types for the CelloClient (MSG-002, SESSION-002, MSG-004, ADAPTER-003).
  */
 
 // ─── Session types (SESSION-002) ──────────────────────────────────────────────
@@ -130,6 +130,23 @@ export interface ReceivedEnvelope {
   timestamp: number;
 }
 
+// ─── ADAPTER-003: initiateSession ────────────────────────────────────────────
+
+/**
+ * Result of initiateSession().
+ *
+ * Success: session_id and genesis_prev_root from the directory-signed SessionAssignment.
+ * Failure reasons:
+ *   target_offline       — directory reports the target pubkey has no authenticated stream.
+ *   relay_unavailable    — directory cannot assign a relay for the session.
+ *   target_busy          — simultaneous initiation: target is already mid-handshake.
+ *   timeout              — no directory response within the configured timeout.
+ *   directory_unreachable — cannot open or authenticate the signaling stream.
+ */
+export type InitiateSessionResult =
+  | { ok: true; sessionId: Uint8Array; genesisPrevRoot: Uint8Array }
+  | { ok: false; reason: "target_offline" | "relay_unavailable" | "target_busy" | "timeout" | "directory_unreachable" };
+
 // ─── CelloClient interface ────────────────────────────────────────────────────
 
 export interface CelloClient {
@@ -232,6 +249,23 @@ export interface CelloClient {
    * CELLO-MCP-002.
    */
   onSessionAssignment(handler: (event: SessionAssignmentEvent) => void): void;
+
+  /**
+   * Send a `session_request` over the persistent directory signaling stream and await
+   * the `session_assignment` or error response. On success, completes relay auth and
+   * content-path dial (same as receiveSessionAssignment), and returns the session_id
+   * and genesis_prev_root.
+   *
+   * Opens the signaling stream inline if not already open (DB-001: single retry).
+   * Returns { ok: false, reason: 'directory_unreachable' } if the stream cannot be
+   * established within the tool's timeout.
+   *
+   * CELLO-ADAPTER-003.
+   */
+  initiateSession(
+    targetPubkeyHex: string,
+    opts?: { timeoutMs?: number },
+  ): Promise<InitiateSessionResult>;
 }
 
 /** Event fired by CelloClient when an inbound session_assignment arrives. CELLO-MCP-002. */

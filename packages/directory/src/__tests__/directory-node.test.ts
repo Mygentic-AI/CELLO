@@ -196,6 +196,11 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     const { pubkey, signature } = await signAuth(challenge.nonce, AUTH_DOMAIN, clientKey);
     sendFrame(stream, encodeAuthResponse(pubkey, signature));
 
+    // ADAPTER-003: consume signaling_auth_ok (directory sends this after registering the stream)
+    const ackBytes = await reader.readDecoded();
+    const ack = decodeOutboundSignalingFrame(ackBytes);
+    if (!ack || ack.type !== "signaling_auth_ok") throw new Error(`expected signaling_auth_ok, got ${ack?.type}`);
+
     const pubkeyHex = Buffer.from(pubkey).toString("hex");
 
     // Register peer info so session_request can include addressing
@@ -456,6 +461,9 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
         if (!ch || ch.type !== "signaling_auth_challenge") throw new Error("no challenge");
         const { pubkey, signature } = await signAuth(ch.nonce, AUTH_DOMAIN, k);
         sendFrame(s, encodeAuthResponse(pubkey, signature));
+        const ackCb = await r.readDecoded();
+        const ackFrame = decodeOutboundSignalingFrame(ackCb);
+        if (!ackFrame || ackFrame.type !== "signaling_auth_ok") throw new Error(`expected signaling_auth_ok, got ${ackFrame?.type}`);
         const hex = Buffer.from(pubkey).toString("hex");
         timingDirNode.directory.registerPeerInfo(hex, cn.getPeerId(), cn.listenAddresses());
         return { stream: s, reader: r, pubkeyHex: hex, clientNode: cn, key: k };
@@ -473,6 +481,9 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
         if (!ch || ch.type !== "signaling_auth_challenge") throw new Error("no challenge");
         const { pubkey, signature } = await signAuth(ch.nonce, AUTH_DOMAIN, k);
         sendFrame(s, encodeAuthResponse(pubkey, signature));
+        const ackCb = await r.readDecoded();
+        const ackFrame = decodeOutboundSignalingFrame(ackCb);
+        if (!ackFrame || ackFrame.type !== "signaling_auth_ok") throw new Error(`expected signaling_auth_ok, got ${ackFrame?.type}`);
         const hex = Buffer.from(pubkey).toString("hex");
         timingDirNode.directory.registerPeerInfo(hex, cn.getPeerId(), cn.listenAddresses());
         return { stream: s, reader: r, pubkeyHex: hex, clientNode: cn, key: k };
@@ -525,6 +536,10 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
       if (!ch || ch.type !== "signaling_auth_challenge") throw new Error("no challenge");
       const { pubkey, signature } = await signAuth(ch.nonce, AUTH_DOMAIN, key);
       sendFrame(s, encodeAuthResponse(pubkey, signature));
+      // ADAPTER-003: consume signaling_auth_ok
+      const ackCb = await r.readDecoded();
+      const ackFrame = decodeOutboundSignalingFrame(ackCb);
+      if (!ackFrame || ackFrame.type !== "signaling_auth_ok") throw new Error(`expected signaling_auth_ok, got ${ackFrame?.type}`);
       const hex = Buffer.from(pubkey).toString("hex");
       rejectDirNode.directory.registerPeerInfo(hex, cn.getPeerId(), cn.listenAddresses());
       return { stream: s, reader: r, pubkeyHex: hex };
@@ -619,6 +634,9 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
       if (!chA || chA.type !== "signaling_auth_challenge") throw new Error("no challenge A");
       const { pubkey: pkA, signature: sigA } = await signAuth(chA.nonce, AUTH_DOMAIN, ka);
       sendFrame(sA, encodeAuthResponse(pkA, sigA));
+      // ADAPTER-003: consume signaling_auth_ok for A
+      const ackA = decodeOutboundSignalingFrame(await rA.readDecoded());
+      if (ackA?.type !== "signaling_auth_ok") throw new Error(`iteration ${i}: expected signaling_auth_ok A, got ${ackA?.type}`);
       const hexA = Buffer.from(pkA).toString("hex");
       dirNode.directory.registerPeerInfo(hexA, nodeA.getPeerId(), nodeA.listenAddresses());
 
@@ -629,6 +647,9 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
       if (!chB || chB.type !== "signaling_auth_challenge") throw new Error("no challenge B");
       const { pubkey: pkB, signature: sigB } = await signAuth(chB.nonce, AUTH_DOMAIN, kb);
       sendFrame(sB, encodeAuthResponse(pkB, sigB));
+      // ADAPTER-003: consume signaling_auth_ok for B
+      const ackB = decodeOutboundSignalingFrame(await rB.readDecoded());
+      if (ackB?.type !== "signaling_auth_ok") throw new Error(`iteration ${i}: expected signaling_auth_ok B, got ${ackB?.type}`);
       const hexB = Buffer.from(pkB).toString("hex");
       dirNode.directory.registerPeerInfo(hexB, nodeB.getPeerId(), nodeB.listenAddresses());
 
@@ -993,12 +1014,18 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     if (!chBytesA || chBytesA.type !== "signaling_auth_challenge") throw new Error("no challenge A");
     const { pubkey: pkA, signature: sigA } = await signAuth(chBytesA.nonce, AUTH_DOMAIN, keyA);
     sendFrame(streamA, encodeAuthResponse(pkA, sigA));
+    // ADAPTER-003: consume signaling_auth_ok for A
+    const ackA011a = decodeOutboundSignalingFrame(await readerA.readDecoded());
+    if (ackA011a?.type !== "signaling_auth_ok") throw new Error("expected signaling_auth_ok A");
     dirNode.directory.registerPeerInfo(Buffer.from(pkA).toString("hex"), nodeA.getPeerId(), nodeA.listenAddresses());
 
     const chBytesB = decodeOutboundSignalingFrame(await readerB.readDecoded());
     if (!chBytesB || chBytesB.type !== "signaling_auth_challenge") throw new Error("no challenge B");
     const { pubkey: pkB, signature: sigB } = await signAuth(chBytesB.nonce, AUTH_DOMAIN, keyB);
     sendFrame(streamB, encodeAuthResponse(pkB, sigB));
+    // ADAPTER-003: consume signaling_auth_ok for B
+    const ackB011a = decodeOutboundSignalingFrame(await readerB.readDecoded());
+    if (ackB011a?.type !== "signaling_auth_ok") throw new Error("expected signaling_auth_ok B");
     dirNode.directory.registerPeerInfo(Buffer.from(pkB).toString("hex"), nodeB.getPeerId(), nodeB.listenAddresses());
 
     // Ping B to confirm B is in #streams before A requests
@@ -1093,12 +1120,18 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     if (!chA || chA.type !== "signaling_auth_challenge") throw new Error("no challenge A");
     const { pubkey: pkA, signature: sigA } = await signAuth(chA.nonce, AUTH_DOMAIN, keyA);
     sendFrame(streamA, encodeAuthResponse(pkA, sigA));
+    // ADAPTER-003: consume signaling_auth_ok for A
+    const ackA011b = decodeOutboundSignalingFrame(await readerA.readDecoded());
+    if (ackA011b?.type !== "signaling_auth_ok") throw new Error("expected signaling_auth_ok A");
     interceptDirNode.directory.registerPeerInfo(Buffer.from(pkA).toString("hex"), nodeA.getPeerId(), nodeA.listenAddresses());
 
     const chB = decodeOutboundSignalingFrame(await readerB.readDecoded());
     if (!chB || chB.type !== "signaling_auth_challenge") throw new Error("no challenge B");
     const { pubkey: pkB, signature: sigB } = await signAuth(chB.nonce, AUTH_DOMAIN, keyB);
     sendFrame(streamB, encodeAuthResponse(pkB, sigB));
+    // ADAPTER-003: consume signaling_auth_ok for B
+    const ackB011b = decodeOutboundSignalingFrame(await readerB.readDecoded());
+    if (ackB011b?.type !== "signaling_auth_ok") throw new Error("expected signaling_auth_ok B");
     const hexB = Buffer.from(pkB).toString("hex");
     interceptDirNode.directory.registerPeerInfo(hexB, nodeB.getPeerId(), nodeB.listenAddresses());
 
@@ -1160,6 +1193,9 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     if (!ch || ch.type !== "signaling_auth_challenge") throw new Error("no challenge");
     const { pubkey: pk, signature: sig } = await signAuth(ch.nonce, AUTH_DOMAIN, keyA);
     sendFrame(streamA, encodeAuthResponse(pk, sig));
+    // ADAPTER-003: consume signaling_auth_ok
+    const ackOffline = decodeOutboundSignalingFrame(await readerA.readDecoded());
+    if (ackOffline?.type !== "signaling_auth_ok") throw new Error("expected signaling_auth_ok");
 
     const discardedBefore = relay.discarded.length;
     sendFrame(streamA, CBOR_ENC.encode({ type: "session_request", target_pubkey: new Uint8Array(randomBytes(32)) }));
