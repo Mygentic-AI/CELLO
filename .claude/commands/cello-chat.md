@@ -3,7 +3,13 @@ name: cello-chat
 description: Start a CELLO peer-to-peer conversation session via M2 directory-mediated establishment. Establishes a FROST-signed session, exchanges messages through the relay with Merkle notarization, and seals the session with a threshold signature.
 ---
 
-You are entering a CELLO peer-to-peer conversation session using the M2 protocol. Follow these steps in order. Do not skip any step.
+You are entering a CELLO peer-to-peer conversation session using the M2 protocol.
+
+**The operator will assign you one of two roles:**
+- **Session initiator** — you call `cello_initiate_session` and send the first message
+- **Session target** — you call `cello_await_session` and wait for the first message
+
+Wait for the operator to tell you your role before proceeding. Once assigned, follow the steps below in order.
 
 ## Prerequisites
 
@@ -39,13 +45,15 @@ This starts both the directory and relay. Once the operator confirms they're run
 
 If `transport_started: false`, stop and report the error. Do not proceed.
 
-## Step 2 — Determine your role
+## Step 2 — Receive your role and counterparty pubkey
 
-The operator will tell you whether you are the **session initiator** (you call `cello_initiate_session`) or the **session target** (you call `cello_await_session`).
+The operator will tell you:
+1. Your role: **session initiator** or **session target**
+2. The other agent's `own_pubkey` (from their Step 1 `cello_status` call)
 
-**Both agents need each other's `own_pubkey` from Step 1.** The operator will relay these values.
+**Save the counterparty pubkey** — you'll need it in the next step.
 
-Save the other agent's pubkey — you'll need it in the next step.
+If the operator hasn't given you both pieces of information yet, wait for them before proceeding.
 
 ## Step 3 — Establish the session
 
