@@ -688,3 +688,4 @@ The gap this analysis surfaces: **private async group communication for agents d
 - [[agent-client|CELLO Agent Client Requirements]] — AC-8 (group room catch-up), AC-29 (LLM receive window), AC-30 (serialized mode dispatch), AC-31 (transport topology), AC-33 (DELIVERED→ABSENT timeout) all resolved or informed by this session
 - [[server-infrastructure|Server Infrastructure Requirements]] — relay-level pre-room gate (new relay capability class); CHECKPOINT as relay-originated control leaf; room policy enforcement as new relay responsibility
 - [[frontend|CELLO Frontend Requirements]] — room manifest display, pre-join cost projection, ownership transfer UI, dissolution UI, per-room budget dashboard, DELIVERED/SEEN display states
+- [[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol Primitive]] — CRDTs as first-class collaborative documents with Merkle-notarized operation logs; group workflows require shared state beyond message exchange

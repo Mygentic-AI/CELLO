@@ -3,7 +3,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { FileKeyProvider } from "@cello/crypto";
+import { FileKeyProvider, FrostThresholdSigner } from "@cello/crypto";
+import { bootstrapKeyShares } from "@cello/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
 import { createNode } from "@cello/transport";
 import { createClient } from "@cello/client";
 import { createMcpServer } from "../server.js";
@@ -25,11 +27,18 @@ try {
 
 const node = await createNode({ keyProvider: kp, listenAddresses: [listenAddr] });
 
+// CELLO-E2E-002: Bootstrap FROST key shares (test-only, guarded by NODE_ENV in bootstrapKeyShares)
+const ownPubkey = await kp.getPublicKey();
+const stubs = createInProcessStubs(3);
+await bootstrapKeyShares(ownPubkey, { threshold: 2, participants: 3, directoryNodeStubs: stubs });
+const thresholdSigner = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubs }, ownPubkey);
+
 // Late-bound server reference — set after createMcpServer returns.
 // The closure captures the box; notifications fired before server is assigned are dropped.
 let mcpServer: McpServer | undefined;
 
 const client = createClient(node, kp, {
+  thresholdSigner,
   onMessageQueued: (senderHex) => {
     if (mcpServer) void pushChannelNotification(mcpServer, senderHex);
   },

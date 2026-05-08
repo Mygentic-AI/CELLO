@@ -1,0 +1,279 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-E2E-002
+domain: End-to-End
+actor: AGENT
+priority: P0
+components:
+  - adapter-claude-code
+  - client
+  - directory
+  - relay
+  - crypto
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a milestone sign-off,
+  I want two real Claude Code agents to establish a FROST-signed CELLO session,
+  exchange messages through the relay with Merkle notarization, and seal the
+  session with a FROST threshold signature — with no human in the message path
+  so that M2 is provably done: the full FROST threshold layer (session establishment,
+  Merkle relay, and seal ceremony) is exercised end-to-end with real agent runtimes.
+
+  This story is the M2 finish line. All M2 stories (CRYPTO-003, NODE-003, RELAY-001,
+  SESSION-004, SESSION-005, SESSION-006, ADAPTER-003) are prerequisites. M2 is not
+  closed until this story's acceptance criteria are manually verified and signed off.
+
+  **What's different from E2E-001 (M0):**
+  - M0: Direct peer-to-peer with no directory or relay
+  - M2: Session establishment via directory; messages flow through relay; both
+    boundaries (establishment + seal) carry FROST threshold signatures
+
+  **Prerequisites for running this test:**
+  The `cello-mcp` binary must be updated to bootstrap FROST key shares and inject
+  a `FrostThresholdSigner` at startup. Without this, `cello_initiate_session`
+  would return `frost_signer_not_configured`.
+
+  **Setup:**
+  - Machine 1: Agent A — Claude Code session with M2-aware `cello-mcp` binary
+  - Machine 2: Agent B — same setup, independent Claude Code session
+  - Directory node running on localhost (or shared accessible instance)
+  - Relay node running on localhost (or shared accessible instance)
+  - Both agents configured with the same `CELLO_DIRECTORY_ADDR` and authenticated
+    via the directory's `/cello/signaling/1.0.0` stream
+
+  **Message path being verified:**
+
+  ```
+  Agent A (Claude Code)
+    → calls cello_initiate_session({ target_pubkey: <B's K_local pubkey> })
+      → client.initiateSession sends session_request on persistent signaling stream
+      → directory runs FROST ceremony with A's in-process stubs
+      → directory issues SessionAssignment with FROST signature
+      → both A and B verify FROST sig (A uses own primary_pubkey, B uses frame key)
+    → returns { session_id, counterparty_pubkey, genesis_prev_root }
+
+  Agent A
+    → calls cello_send({ session_id, content: "hello from A" })
+      → client builds Structure 1 (content hash, last_seen_seq, Ed25519 signature)
+      → sends hash_submit to relay on /cello/relay/1.0.0
+      → relay assigns sequence, computes prev_root from incremental stack, builds Structure 2
+      → relay delivers Structure 2 to B
+      → sends content frame to B on /cello/content/1.0.0
+
+  Agent B
+    → calls cello_receive({ session_id })
+      → returns { type: 'message', content: 'hello from A', sender_pubkey: <A's pubkey>,
+                  sequence_number: 1, leaf_hash: <SHA-256(kind || s2_cbor)> }
+
+  Agent A
+    → calls cello_close_session({ session_id })
+      → client sends bilateral SEAL control leaves to relay
+      → relay submits leaf sequence to directory for seal
+      → directory verifies tree (root recompute, sig verify, causal check)
+      → directory pushes seal_verified to A
+      → A coordinates FROST ceremony with context "cello-frost-seal-v1"
+      → A sends seal_frost_signature back to directory
+      → directory verifies FROST sig against A's primary_pubkey
+      → directory issues SealNotarization with FROST signature
+      → both A and B receive session_sealed with seal_type: 'frost'
+    → returns { sealed_root_hash, mmr_peak: null, seal_type: 'frost' }
+
+  Agent B
+    → calls cello_list_sessions
+    → sees session with status: 'sealed', seal_type: 'frost'
+  ```
+
+  **What FROST threshold signing means in this context:** Neither the agent nor
+  the directory can forge the session boundaries alone. Every `SessionAssignment`
+  and every `SealNotarization` with `signature_type: 'frost'` required:
+  - The agent's K_local actively participating in the ceremony (as coordinator)
+  - At least t-of-n directory nodes contributing K_server_X shares
+
+  A single compromised directory node cannot produce a valid FROST signature.
+  An agent without the directory's cooperation cannot forge a receipt.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Agent A's Claude Code session with M2-aware `cello-mcp` running; Agent B authenticated to the directory"
+    when: "Agent A calls `cello_initiate_session({ target_pubkey: <B's K_local pubkey> })`"
+    then: >
+      Returns `{ session_id: <hex>, counterparty_pubkey: <B's pubkey>,
+      genesis_prev_root: <hex> }` within 10 seconds; the `session_id` is 16 bytes
+      (32 hex chars); `genesis_prev_root` is 32 bytes
+    test_type: manual
+    component_under_test: adapter-claude-code
+
+  - id: AC-002
+    given: "Agent A has initiated a session; Agent B is authenticated and waiting"
+    when: "Agent B calls `cello_await_session({ timeout_ms: 30000 })`"
+    then: >
+      Returns `{ type: 'new_session', session_id: <hex>, counterparty_pubkey: <A's pubkey>,
+      genesis_prev_root: <hex> }`; `session_id` matches A's session_id byte-for-byte;
+      `genesis_prev_root` matches A's byte-for-byte
+    test_type: manual
+    component_under_test: adapter-claude-code
+
+  - id: AC-003
+    given: "Both agents have a session established"
+    when: "Agent A calls `cello_send({ session_id, content: 'hello from A' })`"
+    then: >
+      Returns `{ ok: true }` (or equivalent success shape); no errors; the message
+      flows through the relay (hash on /cello/relay/1.0.0, content peer-to-peer)
+    test_type: manual
+    component_under_test: client
+
+  - id: AC-004
+    given: "Agent A has sent 'hello from A' on the session"
+    when: "Agent B calls `cello_receive({ session_id })`"
+    then: >
+      Returns `{ type: 'message', content: 'hello from A', sender_pubkey: <A's pubkey>,
+      sequence_number: 1, leaf_hash: <hex> }`; `sender_pubkey` matches A's K_local pubkey;
+      `leaf_hash` is SHA-256(0x00 || structure2_cbor) — the Merkle leaf hash
+    test_type: manual
+    component_under_test: client
+
+  - id: AC-005
+    given: "Agent B has received A's message"
+    when: "Agent B calls `cello_send({ session_id, content: 'hello from B' })`"
+    then: >
+      Agent A calls `cello_receive({ session_id })` and gets
+      `{ type: 'message', content: 'hello from B', sender_pubkey: <B's pubkey>,
+      sequence_number: 2 }`; round-trip exchange complete
+    test_type: manual
+    component_under_test: client
+
+  - id: AC-006
+    given: "Both agents have exchanged at least one message"
+    when: "Agent A calls `cello_close_session({ session_id })`"
+    then: >
+      Returns `{ sealed_root_hash: <hex>, mmr_peak: null, seal_type: 'frost' }`
+      within 30 seconds; `seal_type` is 'frost' (not 'bilateral'); `sealed_root_hash`
+      is 32 bytes (64 hex chars)
+    test_type: manual
+    component_under_test: client
+
+  - id: AC-007
+    given: "Agent A has closed the session"
+    when: "Agent B calls `cello_list_sessions`"
+    then: >
+      The session appears with `status: 'sealed'` and `seal_type: 'frost'`;
+      B's `sealed_root_hash` is byte-identical to A's `sealed_root_hash`
+    test_type: manual
+    component_under_test: client
+
+  - id: AC-008
+    given: "The session is sealed with `seal_type: 'frost'`"
+    when: "Agent A calls `cello_get_inclusion_proof({ session_id, sequence_number: 1 })`"
+    then: >
+      Returns an inclusion proof (array of sibling hashes); calling
+      `cello_verify_inclusion_proof` with the proof and `sealed_root_hash` returns
+      `{ valid: true }` — the first message is provably in the sealed tree
+    test_type: manual
+    component_under_test: client
+
+  - id: AC-009
+    given: "The full session establishment and seal ceremony completed"
+    when: "The sign-off notes are reviewed"
+    then: >
+      Both agents' logs confirm: (1) `signature_type: 'frost'` on the
+      SessionAssignment frame, (2) `seal_type: 'frost'` in the final session state,
+      (3) no `frost_signer_not_configured` or `directory_below_threshold` errors
+    test_type: manual
+    component_under_test: directory
+
+# ─── Behavioral Requirements (EARS) ────────────────────────
+behavior:
+  - trigger: "When Agent A calls `cello_initiate_session` with B's target_pubkey"
+    action: >
+      The client SHALL send a `session_request` frame on the persistent signaling
+      stream to the directory; the directory SHALL run a FROST ceremony using A's
+      registered signer; the directory SHALL return a `session_assignment` frame
+      with `signature_type: 'frost'`; both A and B SHALL verify the FROST signature
+      before proceeding.
+
+  - trigger: "When both agents send messages on the session"
+    action: >
+      Each message SHALL flow through the relay as a Structure 1 hash (content never
+      reaches relay); the relay SHALL assign a global sequence number and compute
+      `prev_root` from the incremental Merkle stack; the relay SHALL deliver Structure 2
+      to the counterparty; content SHALL flow peer-to-peer on /cello/content/1.0.0.
+
+  - trigger: "When Agent A calls `cello_close_session`"
+    action: >
+      Both agents SHALL send SEAL control leaves; the relay SHALL submit the complete
+      leaf sequence to the directory; the directory SHALL verify the tree (root
+      recompute, signature checks, causal chain); the directory SHALL push
+      `seal_verified` to A; A SHALL coordinate a FROST ceremony with context
+      "cello-frost-seal-v1"; the directory SHALL verify the returned signature
+      and issue a `SealNotarization` with `signature_type: 'frost'`.
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The SessionAssignment SHALL carry a FROST threshold signature that required
+      active participation from both the agent's K_local (as ceremony coordinator)
+      and at least t-of-n directory nodes (K_server_X shares). A single compromised
+      directory node SHALL NOT be able to produce a valid signature alone.
+    adversarial_condition: >
+      even when an attacker controls n-1 directory nodes or has stolen the agent's
+      K_local — the FROST signature is invalid unless both parties cooperated
+    test_type: manual
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      The SealNotarization SHALL carry a FROST threshold signature over the
+      sealed_root that required the seal initiator's active participation
+      (via `participateInCeremony`). An agent who did not call
+      `cello_close_session` SHALL NOT be able to forge a seal receipt.
+    adversarial_condition: >
+      even when an attacker has access to prior SealNotarizations or has stolen
+      t-of-n directory shares — without the agent's K_local actively participating
+      in the ceremony, the signature is invalid
+    test_type: manual
+    component_under_test: directory
+
+  - id: SI-003
+    statement: >
+      Domain separation SHALL prevent a valid seal signature from being replayed
+      as an establishment signature. The context strings "cello-frost-seal-v1"
+      and "cello-frost-session-establishment-v1" SHALL produce distinct framed
+      messages even if the raw TBS payloads were identical.
+    adversarial_condition: >
+      even when an attacker captures a valid FROST seal signature and attempts
+      to present it as an establishment signature — verification fails because
+      the framed message `context\0tbs` differs
+    test_type: manual
+    component_under_test: crypto
+
+# ─── Sign-off ────────────────────────────────────────────────
+signoff:
+  required_before: "M2 closed / M3 stories begin"
+  performed_by: "Developer running both agents"
+  recorded_in: "docs/planning/discussion_logs/ — create a sign-off log entry with date, machines used, session_id, sealed_root_hash, and AC pass/fail for each item"
+
+# ─── Stubs ───────────────────────────────────────────────────
+stubs:
+  - what: "M2-aware `cello-mcp` startup with FROST bootstrap"
+    why: >
+      The current `cello-mcp` binary was built for M1 and does not bootstrap
+      FROST key shares or inject a `thresholdSigner` into `createClient`. Without
+      this, `cello_initiate_session` would return `frost_signer_not_configured`.
+    replaced_by: >
+      Update `packages/adapter-claude-code/src/cello-mcp.ts` to call
+      `bootstrapKeyShares` at startup (test-only, guarded by NODE_ENV check in
+      production) and pass a `FrostThresholdSigner` to `createClient`. This
+      enables local FROST ceremonies using in-process stubs.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Session, Authentication"
+  implementation_roadmap: "M2 — FROST Threshold Layer"
+  related_stories:
+    - "CELLO-SESSION-004 — FROST session establishment"
+    - "CELLO-SESSION-005 — FROST seal ceremony"
+    - "CELLO-ADAPTER-003 — real session initiation via directory signaling"
+    - "CELLO-CRYPTO-003 — IThresholdSigner + FrostThresholdSigner"
+    - "CELLO-E2E-001 — M0 e2e sign-off (predecessor)"
