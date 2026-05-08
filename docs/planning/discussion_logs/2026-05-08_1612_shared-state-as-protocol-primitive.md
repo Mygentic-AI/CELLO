@@ -361,14 +361,50 @@ The shared-context document already maps who **Sees** and who **Sets** each fiel
 
 ---
 
+## CRDT Library Choice: Yjs vs Automerge
+
+Follow-up Perplexity discussion explored the practical choice between the two mature CRDT libraries:
+
+**Yjs: "fast, binary, Y-shaped"**
+- **Speed and memory**: Benchmarks show 10–100× faster than Automerge for intensive workloads
+- **Binary encoding**: Compact representation for large, frequently updated docs
+- **Sync primitives**: `encodeStateVector` / `encodeStateAsUpdate` map directly to CELLO's catch-up protocol
+- **Production proven**: Used in Linear, Figma-style tools, real-time collaboration apps
+- **Trade-off**: Non-JSON API (Y.Map, Y.Array, Y.Text) requires translation layer for JSON/YAML schemas
+
+**Automerge: "JSON-like, history-rich"**
+- **JSON-native**: Works with plain JS objects, natural fit for user-defined JSON/YAML schemas
+- **Conflict-aware API**: `getConflicts()` surfaces which fields are in conflict — enables schema-driven resolution policies and user-friendly UX
+- **Full history by default**: Rewindable workflows, revision history for auditors, semantic diff of "who did what to which field"
+- **Trade-off**: Slower and more memory-intensive than Yjs; bigger snapshots due to history retention
+
+**For CELLO's use case:**
+
+The core question: **unknown schema at design time** — users define their own workflow schemas (JSON/YAML), and CELLO validates operations against those schemas at runtime.
+
+- **Yjs fits if**: Performance and memory are critical (high-throughput, many workflows, dense state). You treat schemas as a policy layer on top of Y-paths. Faster, more compact, battle-tested at scale.
+
+- **Automerge fits if**: You want to emphasize user-editable JSON-like workflows with rich conflict inspection and audit UX. The JSON-native model maps directly to user-defined schemas without translation. Slightly more expensive but smoother UX for schema authors.
+
+**Recommendation**: **Lean toward Yjs** for CELLO's multi-agent, high-frequency workflow coordination. Reasons:
+1. Performance headroom for many concurrent workflows
+2. Compact binary encoding reduces sync overhead
+3. State vector primitives align perfectly with CELLO's existing sync model
+4. Production-proven in similar use cases (Linear's workflow coordination)
+5. Translation layer (Y-paths → JSON schema) is manageable and contained
+
+Automerge's JSON-native ergonomics are appealing for schema authors, but Yjs's performance characteristics better match CELLO's infrastructure (many agents, real-time sync, Merkle-notarized operation logs). The validation/schema layer sits above the CRDT regardless of choice.
+
+---
+
 ## Next Steps
 
-1. **Write ADR** — Document the decision to make shared state a first-class CELLO primitive
+1. **Write ADR** — Document the decision to make shared state a first-class CELLO primitive, including Yjs as the CRDT implementation
 2. **Spec the schema format** — Define YAML/JSON schema for field-level write authority and operation types
 3. **Extend Merkle leaf format** — Domain separation for CRDT operation leaves (`0x04`)
-4. **Define sync protocol** — State vector exchange, diff encoding, catch-up on reconnect
-5. **Map to NICO fixture** — Express the retail-equity-purchase shared-context document as a protocol-enforceable schema
-6. **User story for M3** — Shared document primitive (after M0/M1/M2 messaging foundations)
+4. **Define sync protocol** — Yjs state vector exchange, diff encoding, catch-up on reconnect
+5. **Map to workflow fixture** — Express the retail-equity-purchase shared-context document as a protocol-enforceable schema
+6. **Milestone placement** — Slot as M9 (after M8 Group Rooms, before M10 Commerce)
 
 ---
 
