@@ -65,7 +65,7 @@ behavior:
       the client method returns `{ ok: false, reason: 'timeout' }`; the tool returns
       the same reason.
   - trigger: "When the transport has not been started"
-    action: "the tool returns the standard `client_not_initialized` error unchanged."
+    action: "the tool returns `{ error: { reason: 'transport_not_started' } }` without touching the network."
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -110,7 +110,7 @@ acceptance_criteria:
   - id: AC-005
     given: "The transport has not been started"
     when: "`cello_initiate_session` is called"
-    then: "Returns `{ error: { reason: 'client_not_initialized' } }` without touching the network"
+    then: "Returns `{ error: { reason: 'transport_not_started' } }` without touching the network"
     test_type: unit
     component_under_test: adapter-claude-code
 

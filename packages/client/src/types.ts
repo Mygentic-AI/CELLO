@@ -297,7 +297,14 @@ export interface CelloClient {
    */
   initiateSession(
     targetPubkeyHex: string,
-    opts?: { timeoutMs?: number },
+    opts?: {
+      /** Directory peer ID to connect to (overrides configured directoryEndpoint). */
+      directoryPeerId?: string;
+      /** Directory multiaddr for initial dial (overrides configured directoryEndpoint). */
+      directoryMultiaddr?: string;
+      /** Timeout in ms. Default: 30_000. */
+      timeoutMs?: number;
+    },
   ): Promise<InitiateSessionResult>;
 }
 

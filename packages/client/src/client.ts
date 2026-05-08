@@ -2331,11 +2331,18 @@ class CelloClientImpl implements CelloClient {
    */
   async initiateSession(
     targetPubkeyHex: string,
-    opts?: { timeoutMs?: number },
+    opts?: {
+      /** Directory peer ID to connect to (overrides configured directoryEndpoint). */
+      directoryPeerId?: string;
+      /** Directory multiaddr for initial dial (overrides configured directoryEndpoint). */
+      directoryMultiaddr?: string;
+      /** Timeout in ms. Default: 30_000. */
+      timeoutMs?: number;
+    },
   ): Promise<InitiateSessionResult> {
     const timeoutMs = opts?.timeoutMs ?? DEFAULT_INITIATE_TIMEOUT_MS;
 
-    if (!this.#directoryEndpoint) {
+    if (!this.#directoryEndpoint && !opts?.directoryPeerId) {
       return { ok: false, reason: "directory_unreachable" };
     }
 
@@ -2348,10 +2355,10 @@ class CelloClientImpl implements CelloClient {
 
     // Open persistent signaling stream if not already open (DB-001)
     if (!this.#persistentSignalingStream) {
-      const opened = await this.#openPersistentSignalingStream();
+      const opened = await this.#openPersistentSignalingStream(opts?.directoryPeerId, opts?.directoryMultiaddr);
       if (!opened) {
         // Single retry per DB-001
-        const retried = await this.#openPersistentSignalingStream();
+        const retried = await this.#openPersistentSignalingStream(opts?.directoryPeerId, opts?.directoryMultiaddr);
         if (!retried) {
           return { ok: false, reason: "directory_unreachable" };
         }
@@ -2444,13 +2451,13 @@ class CelloClientImpl implements CelloClient {
    * Signature: Ed25519(SHA-256("CELLO-DIR-AUTH-v1" || nonce || pubkey), privkey)
    *   per RFC 8032 (Ed25519), FIPS 180-4 (SHA-256)
    */
-  #openPersistentSignalingStream(): Promise<boolean> {
+  #openPersistentSignalingStream(directoryPeerId?: string, directoryMultiaddr?: string): Promise<boolean> {
     // If stream is already open, nothing to do
     if (this.#persistentSignalingStream) return Promise.resolve(true);
     // If an open is already in flight, share its result
     if (this.#openingSignalingStream) return this.#openingSignalingStream;
 
-    const p = this.#doOpenPersistentSignalingStream().finally(() => {
+    const p = this.#doOpenPersistentSignalingStream(directoryPeerId, directoryMultiaddr).finally(() => {
       if (this.#openingSignalingStream === p) {
         this.#openingSignalingStream = null;
       }
@@ -2459,12 +2466,12 @@ class CelloClientImpl implements CelloClient {
     return p;
   }
 
-  async #doOpenPersistentSignalingStream(): Promise<boolean> {
-    if (!this.#directoryEndpoint) return false;
+  async #doOpenPersistentSignalingStream(directoryPeerId?: string, directoryMultiaddr?: string): Promise<boolean> {
+    if (!this.#directoryEndpoint && !directoryPeerId) return false;
     if (this.#persistentSignalingStream) return true;
 
-    const dirPeerId = this.#directoryEndpoint.peer_id;
-    const dirMultiaddr = this.#directoryEndpoint.multiaddrs[0];
+    const dirPeerId = directoryPeerId ?? this.#directoryEndpoint!.peer_id;
+    const dirMultiaddr = directoryMultiaddr ?? this.#directoryEndpoint?.multiaddrs[0];
 
     try {
       if (dirMultiaddr) {
