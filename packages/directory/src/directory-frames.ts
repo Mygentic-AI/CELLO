@@ -16,6 +16,7 @@ import type {
   SessionAssignmentFrame,
   SessionAbandoned,
   SessionSealedSingle,
+  SessionSealedFrost,
   SessionSealed,
   SessionSealRejected,
   SessionRequestError,
@@ -82,7 +83,7 @@ export function encodeSessionAbandoned(frame: SessionAbandoned): Uint8Array {
 
 export function encodeSessionSealed(frame: SessionSealed): Uint8Array {
   if (frame.signature_type === "frost") {
-    return ENC.encode({
+    const encoded: Record<string, unknown> = {
       type: frame.type,
       signature_type: "frost",
       session_id: frame.session_id,
@@ -92,7 +93,11 @@ export function encodeSessionSealed(frame: SessionSealed): Uint8Array {
       close_timestamp: frame.close_timestamp > 0xffffffff
         ? BigInt(frame.close_timestamp)
         : frame.close_timestamp,
-    });
+    };
+    if (frame.leaf_count !== undefined) {
+      encoded["leaf_count"] = frame.leaf_count;
+    }
+    return ENC.encode(encoded);
   }
   // signature_type === "single" (deprecated M1 format)
   const f = frame as SessionSealedSingle;
@@ -320,7 +325,10 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       const signer_pubkey = toUint8Array(o["signer_pubkey"]);
       if (!frost_signature || frost_signature.length !== 64) return null;
       if (!signer_pubkey || signer_pubkey.length !== 32) return null;
-      return {
+      // H-003: parse leaf_count if present (optional for backward compat)
+      const leafCountRaw = o["leaf_count"];
+      const leaf_count = typeof leafCountRaw === "number" ? leafCountRaw : undefined;
+      const result: SessionSealedFrost = {
         type: "session_sealed" as const,
         signature_type: "frost" as const,
         session_id,
@@ -329,6 +337,8 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
         signer_pubkey,
         close_timestamp,
       };
+      if (leaf_count !== undefined) result.leaf_count = leaf_count;
+      return result;
     }
     // Legacy M1 or explicit "single"
     const directory_signature = toUint8Array(o["directory_signature"]);

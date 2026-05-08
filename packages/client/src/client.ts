@@ -426,6 +426,7 @@ class CelloClientImpl implements CelloClient {
     myPubkeyHex: string,
     directoryPubkey: Uint8Array,
     status: SessionRecord["status"] = "active",
+    opts?: { isInitiator?: boolean },
   ): void {
     const genesis_prev_root = new Uint8Array(32);
     const counterpartyPubkey = new Uint8Array(32);
@@ -448,6 +449,10 @@ class CelloClientImpl implements CelloClient {
     this.#sessions.set(sessionIdHex, record);
     if (!this.#myPubkeyHex) {
       this.#myPubkeyHex = myPubkeyHex;
+    }
+    // M-001: mark as seal-initiated so #handleFrostSealed uses own primary_pubkey for verification
+    if (opts?.isInitiator) {
+      this.#sealInitiatedSessions.add(sessionIdHex);
     }
   }
 
@@ -908,6 +913,12 @@ class CelloClientImpl implements CelloClient {
         // Timeout elapsed without session_sealed — bilateral fallback (DB-001)
         sess.status = "seal_deferred";
         sess.seal_type = "bilateral";
+        // M-003: store the verified timestamp so #handleSessionFrostSealed can reconstruct
+        // the exact TBS if the directory later completes the deferred FROST ceremony.
+        const sealVerifiedEntry = this.#sealVerifiedData.get(sessionIdHex);
+        if (sealVerifiedEntry) {
+          sess.close_timestamp = sealVerifiedEntry.timestamp;
+        }
       }
     }
 
@@ -1349,9 +1360,12 @@ class CelloClientImpl implements CelloClient {
       return;
     }
 
-    // Send seal_frost_signature to directory on the signaling stream
+    // Send seal_frost_signature to directory.
+    // Prefer the per-session directory stream; fall back to the persistent signaling stream
+    // (which is used when receiveSessionAssignment detects a persistent stream is already open).
     const dirStream = this.#directoryStreams.get(sessionIdHex);
-    if (!dirStream || dirStream.status !== "open") return;
+    const sendStream = (dirStream && dirStream.status === "open") ? dirStream : this.#persistentSignalingStream;
+    if (!sendStream) return;
 
     const sealFrostSigFrame = CBOR_ENC.encode({
       type: "seal_frost_signature",
@@ -1360,7 +1374,7 @@ class CelloClientImpl implements CelloClient {
     }) as Uint8Array;
 
     try {
-      dirStream.send(lp.encode.single(sealFrostSigFrame));
+      sendStream.send(lp.encode.single(sealFrostSigFrame));
     } catch {
       // Stream closed — bilateral fallback
     }
@@ -1397,16 +1411,13 @@ class CelloClientImpl implements CelloClient {
     // For deferred seals, leaf_count may not be in the session_frost_sealed frame.
     // Use local_tree_leaves count as fallback.
     const leafCount = session.local_tree_leaves.length;
-    // Timestamp must be available — use close_timestamp if stored, or derive from signed TBS.
-    // For deferred seals the directory includes timestamp in the TBS; we need it to verify.
-    // The session_frost_sealed frame doesn't carry a close_timestamp separately, so we
-    // use the leaf_count from the local tree and an approximate timestamp.
-    // Per AC-004: client verifies frost_signature against signer_pubkey.
-    // We cannot reconstruct the exact TBS without the close_timestamp from seal_verified.
-    // For M2, we accept the verification as best-effort by using the stored close_timestamp if available.
-    // If not available, we store the frost seal without verification (YAGNI: precise TBS for deferred seal).
-    // NOTE: This is a known limitation addressed in M7+ when full TBS reconstruction is required.
-    const closeTimestamp = session.close_timestamp ?? Date.now();
+    // M-003: close_timestamp must be set (stored during bilateral fallback from seal_verified).
+    // Without it we cannot reconstruct the exact TBS and verification would be unsound.
+    const closeTimestamp = session.close_timestamp;
+    if (closeTimestamp === undefined) {
+      console.warn(`[cello-client] session_frost_sealed: no close_timestamp for ${sessionIdHex}, cannot verify TBS`);
+      return;
+    }
     const tbs = buildSealTbs(sessionId, sealedRoot, leafCount, closeTimestamp);
 
     const isInitiator = this.#sealInitiatedSessions.has(sessionIdHex);
@@ -2592,6 +2603,26 @@ class CelloClientImpl implements CelloClient {
             const sessionIdHex = Buffer.from(sessionId).toString("hex");
             this.#handleDirectorySessionSealRejected(sessionIdHex, frame);
           }
+        } else if (frame["type"] === "seal_verified") {
+          // SESSION-005: route seal_verified to the FROST ceremony handler.
+          // This frame arrives when the directory has verified the Merkle tree and
+          // the initiator must now participate in the FROST ceremony.
+          const sessionIdRaw = frame["session_id"];
+          const sessionId = sessionIdRaw instanceof Uint8Array ? sessionIdRaw
+            : Buffer.isBuffer(sessionIdRaw) ? new Uint8Array(sessionIdRaw as Buffer) : null;
+          if (sessionId) {
+            const sessionIdHex = Buffer.from(sessionId).toString("hex");
+            void this.#handleSealVerified(sessionIdHex, frame);
+          }
+        } else if (frame["type"] === "session_frost_sealed") {
+          // SESSION-005: deferred FROST seal completed — upgrade bilateral → frost.
+          const sessionIdRaw = frame["session_id"];
+          const sessionId = sessionIdRaw instanceof Uint8Array ? sessionIdRaw
+            : Buffer.isBuffer(sessionIdRaw) ? new Uint8Array(sessionIdRaw as Buffer) : null;
+          if (sessionId) {
+            const sessionIdHex = Buffer.from(sessionId).toString("hex");
+            this.#handleSessionFrostSealed(sessionIdHex, frame);
+          }
         }
       }
     } catch { /* stream closed */ }
@@ -2748,7 +2779,7 @@ export function createClient(
   injectLeafDeliver(sessionIdHex: string, frame: Record<string, unknown>): void;
   injectRelayDisconnect(sessionIdHex: string): void;
   /** TEST-ONLY: register a minimal session record without a real relay connection. */
-  injectTestSession(sessionIdHex: string, sessionId: Uint8Array, myPubkeyHex: string, directoryPubkey: Uint8Array, status?: SessionRecord["status"]): void;
+  injectTestSession(sessionIdHex: string, sessionId: Uint8Array, myPubkeyHex: string, directoryPubkey: Uint8Array, status?: SessionRecord["status"], opts?: { isInitiator?: boolean }): void;
 } {
   return new CelloClientImpl(
     node,
@@ -2767,7 +2798,7 @@ export function createClient(
     injectDirectoryFrame(sessionIdHex: string, frame: Record<string, unknown>): void;
     injectLeafDeliver(sessionIdHex: string, frame: Record<string, unknown>): void;
     injectRelayDisconnect(sessionIdHex: string): void;
-    injectTestSession(sessionIdHex: string, sessionId: Uint8Array, myPubkeyHex: string, directoryPubkey: Uint8Array, status?: SessionRecord["status"]): void;
+    injectTestSession(sessionIdHex: string, sessionId: Uint8Array, myPubkeyHex: string, directoryPubkey: Uint8Array, status?: SessionRecord["status"], opts?: { isInitiator?: boolean }): void;
   };
 }
 

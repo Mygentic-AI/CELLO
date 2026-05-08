@@ -36,6 +36,7 @@ export {
   encodeSessionRequestError,
   encodeNotAuthenticated,
   decodeInboundSignalingFrame,
+  decodeOutboundSignalingFrame,
 } from "./directory-frames.js";
 export type { InboundSignalingFrame, OutboundSignalingFrame } from "./directory-frames.js";
 

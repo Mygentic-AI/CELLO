@@ -89,6 +89,7 @@ export interface SessionSealedFrost {
   frost_signature: Uint8Array;     // 64-byte combined FROST signature over seal TBS
   signer_pubkey: Uint8Array;       // 32-byte initiator primary_pubkey (group public key)
   close_timestamp: number;         // Unix ms
+  leaf_count?: number;             // total leaves in the sealed tree (SESSION-005 H-003)
 }
 
 /** Discriminated union: M2 sends SessionSealedFrost; old M1 wire format is SessionSealedSingle. */
@@ -173,7 +174,7 @@ export interface SealNotarization {
   participant_a_pubkey: Uint8Array; // 32 bytes
   participant_b_pubkey: Uint8Array; // 32 bytes
   close_timestamp: number;         // Unix ms
-  directory_signature: Uint8Array; // 64-byte Ed25519 over canonical CBOR of notarization fields
+  frost_signature: Uint8Array;     // 64-byte FROST (or legacy Ed25519) signature over the notarization
 }
 
 // ─── Relay seal data (mirror of relay-types SealData, kept local to avoid cross-package import) ──

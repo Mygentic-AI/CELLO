@@ -781,7 +781,7 @@ export class CelloDirectoryNode {
         participant_a_pubkey: new Uint8Array(pA),
         participant_b_pubkey: new Uint8Array(pB),
         close_timestamp,
-        directory_signature: notarizationSig,
+        frost_signature: notarizationSig,
       };
       this.#store.recordNotarization(notarization);
       const sealedEvent: SessionSealed = {
@@ -887,14 +887,14 @@ export class CelloDirectoryNode {
       participant_a_pubkey: new Uint8Array(pA),
       participant_b_pubkey: new Uint8Array(pB),
       close_timestamp: pending.timestamp,
-      directory_signature: new Uint8Array(frame.frost_signature), // store frost_sig in this field
+      frost_signature: new Uint8Array(frame.frost_signature),
     };
     this.#store.recordNotarization(notarization);
 
     // Confirm relay (destroys relay per-session state — AC-008)
     this.#relay.confirmSeal(frame.session_id);
 
-    // Notify both clients with session_sealed (frost variant)
+    // Notify both clients with session_sealed (frost variant; includes leaf_count for H-003)
     const sealedEvent: SessionSealed = {
       type: "session_sealed",
       signature_type: "frost",
@@ -903,6 +903,7 @@ export class CelloDirectoryNode {
       frost_signature: frame.frost_signature,
       signer_pubkey: primaryPubkey,
       close_timestamp: pending.timestamp,
+      leaf_count: pending.leafCount,
     };
     this.#deliverOrEnqueue(pending.participantAHex, sealedEvent);
     if (pending.participantBHex) this.#deliverOrEnqueue(pending.participantBHex, sealedEvent);
