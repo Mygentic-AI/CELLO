@@ -24,7 +24,20 @@ Report back:
 - Confirm `transport_started: true`
 - Confirm `directory_connected: true` (M2 requirement — if false, directory node is unreachable)
 
-If either status is false, stop and report the error. Do not proceed.
+**If `directory_connected: false`:**
+
+Stop and report: "The directory node is unreachable. Please start the directory and relay infrastructure, then let me know when it's running so I can retry."
+
+The operator must run:
+
+```bash
+cd /Users/andrep/Documents/code/trustless-cello
+NODE_ENV=test pnpm run dev
+```
+
+This starts both the directory and relay. Once the operator confirms they're running, call `cello_status` again to verify `directory_connected: true` before proceeding.
+
+If `transport_started: false`, stop and report the error. Do not proceed.
 
 ## Step 2 — Determine your role
 
