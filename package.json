@@ -7,7 +7,8 @@
   "scripts": {
     "typecheck": "tsc --build",
     "test": "vitest run",
-    "lint": "eslint packages/*/src"
+    "lint": "eslint packages/*/src",
+    "dev": "pnpm --filter @cello/directory run start & pnpm --filter @cello/relay run start"
   },
   "devDependencies": {
     "@claude-flow/memory": "^3.0.0-alpha.2",

@@ -16,7 +16,11 @@
   },
   "scripts": {
     "typecheck": "tsc --build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "start": "node dist/bin/directory.js"
+  },
+  "bin": {
+    "cello-directory": "./dist/bin/directory.js"
   },
   "devDependencies": {
     "@claude-flow/testing": "*"

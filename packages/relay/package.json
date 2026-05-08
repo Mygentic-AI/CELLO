@@ -19,7 +19,8 @@
   },
   "scripts": {
     "typecheck": "tsc --build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "start": "node dist/bin/relay.js"
   },
   "devDependencies": {
     "@claude-flow/testing": "*"
