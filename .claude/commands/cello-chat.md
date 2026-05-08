@@ -29,41 +29,63 @@ You start and manage the directory and relay nodes that enable the conversation.
 
 ## Steps:
 
-### Step 1 — Start infrastructure
+### Step 1 — Start relay
 
-Run this command in the background:
-
-```bash
-cd /Users/andrep/Documents/code/trustless-cello && NODE_ENV=test pnpm run dev &
-```
-
-Wait 5 seconds for startup.
-
-### Step 2 — Verify infrastructure
-
-Check that both services are running. You can verify by looking for these processes:
+Open a terminal and start the relay node:
 
 ```bash
-ps aux | grep -E "(directory|relay)" | grep -v grep
+cd /Users/andrep/Documents/code/trustless-cello
+NODE_ENV=test pnpm --filter @cello/relay run start
 ```
 
-Or check the logs in the terminal where you started `pnpm run dev`.
+The relay will print its multiaddr(s). Look for a line like:
+
+```
+cello-relay listening on /ip4/127.0.0.1/tcp/4001/p2p/12D3KooW...
+```
+
+**Copy the full multiaddr** (from `/ip4` to the end). You need it for Step 2.
+
+### Step 2 — Start directory
+
+Open a second terminal. Set `CELLO_RELAY_MULTIADDR` to the relay's multiaddr from Step 1, then start the directory:
+
+```bash
+cd /Users/andrep/Documents/code/trustless-cello
+CELLO_RELAY_MULTIADDR=/ip4/127.0.0.1/tcp/4001/p2p/12D3KooW... \
+NODE_ENV=test pnpm --filter @cello/directory run start
+```
+
+If port 4000 is already in use, set a different port:
+
+```bash
+CELLO_DIRECTORY_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4002 \
+CELLO_RELAY_MULTIADDR=/ip4/127.0.0.1/tcp/4001/p2p/12D3KooW... \
+NODE_ENV=test pnpm --filter @cello/directory run start
+```
+
+The directory will print its multiaddr(s):
+
+```
+cello-directory listening on /ip4/127.0.0.1/tcp/4002/p2p/12D3KooWN...
+```
 
 ### Step 3 — Report ready
 
-Once both services are running, report:
+Once both services are printing "listening on" lines and no errors appear, report:
 
 ```
 Infrastructure ready.
-Directory and relay nodes are running.
-The agents can now proceed with session establishment.
+Relay: /ip4/127.0.0.1/tcp/4001/p2p/12D3KooW...
+Directory: /ip4/127.0.0.1/tcp/4002/p2p/12D3KooWN...
+Agents can now proceed with session establishment.
 ```
 
 ### Step 4 — Monitor
 
-Stay in this session. If either service crashes or errors occur, report them immediately.
+Leave both terminals open. Watch for errors. If either service crashes, report it immediately and restart.
 
-**Your role is complete once agents successfully seal their session.**
+**Your role is complete once agents successfully seal their session.** Then you can stop both services (Ctrl+C in each terminal).
 
 ---
 
