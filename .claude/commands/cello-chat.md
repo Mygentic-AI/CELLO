@@ -97,19 +97,37 @@ You will initiate the FROST-signed session and send the first message.
 
 Verify `cello_status` is callable. If not, the CELLO MCP server is not connected.
 
-**The operator must:**
-1. Get the directory multiaddr from the node operator (Step 3 of their path)
-2. Add the MCP server with the directory configured:
+**The operator must configure `~/.claude/settings.json` with TWO MCP servers** (Agent A and Agent B need different identities):
 
-```bash
-CELLO_DIRECTORY_MULTIADDR=<paste directory multiaddr here> \
-NODE_ENV=test \
-claude mcp add --transport stdio cello -- cello-mcp
+```json
+"mcpServers": {
+  "cello": {
+    "command": "cello-mcp",
+    "env": {
+      "NODE_ENV": "test",
+      "CELLO_DIRECTORY_MULTIADDR": "<paste directory multiaddr here>"
+    }
+  },
+  "cello-agent-b": {
+    "command": "cello-mcp",
+    "env": {
+      "NODE_ENV": "test",
+      "CELLO_KEY_FILE": "/Users/andrep/.cello/key-agent-b",
+      "CELLO_DIRECTORY_MULTIADDR": "<paste directory multiaddr here>"
+    }
+  }
+}
 ```
 
 **Replace `<paste directory multiaddr here>` with the full directory multiaddr from the node operator's Step 3 report.** It looks like `/ip4/127.0.0.1/tcp/4002/p2p/12D3KooWDeEpSiubGw4vZa5eubCQKX4Q27URxn55tweKi2coagxF` (example).
 
-Then restart this session.
+**Before starting this session (Agent A):**
+1. Ensure `"cello"` is enabled in the config above
+2. Comment out or remove the `"cello-agent-b"` block temporarily
+3. Save settings.json
+4. Start this Claude Code session — you'll connect as Agent A with the default key
+
+Claude Code connects to ALL configured MCP servers at startup, so only one agent's server should be active at a time.
 
 ## Step 1 — Get your identity
 
@@ -118,16 +136,9 @@ Call `cello_status`.
 Report:
 - Your `own_pubkey` (your CELLO identity)
 - `transport_started` status
-- `directory_connected` status
+- `directory_reachable` status
 
-**Checkpoint:** If `directory_connected: false`, report:
-
-```
-Waiting for infrastructure. My pubkey is <hex>.
-I'm ready to proceed once the node operator reports infrastructure is ready.
-```
-
-Then wait for the operator to confirm infrastructure is running. When confirmed, call `cello_status` again. `directory_connected` should now be `true`.
+**Note:** `directory_reachable` will be `false` before any sessions exist — this is expected. The directory connection is tested during session establishment (Step 3 for initiator, Step 3 for target), not at startup.
 
 ## Step 2 — Receive counterparty pubkey
 
@@ -224,19 +235,17 @@ You will await the session assignment and respond to messages.
 
 Verify `cello_status` is callable. If not, the CELLO MCP server is not connected.
 
-**The operator must:**
-1. Get the directory multiaddr from the node operator (Step 3 of their path)
-2. Add the MCP server with the directory configured:
+**Before starting this session (Agent B):**
 
-```bash
-CELLO_DIRECTORY_MULTIADDR=<paste directory multiaddr here> \
-NODE_ENV=test \
-claude mcp add --transport stdio cello -- cello-mcp
-```
+The operator should already have both MCP servers configured in `~/.claude/settings.json` (see Path 2 prerequisites for the full config).
 
-**Replace `<paste directory multiaddr here>` with the full directory multiaddr from the node operator's Step 3 report.** It looks like `/ip4/127.0.0.1/tcp/4002/p2p/12D3KooWDeEpSiubGw4vZa5eubCQKX4Q27URxn55tweKi2coagxF` (example).
+**To run as Agent B:**
+1. Ensure `"cello-agent-b"` is enabled in settings.json
+2. Comment out or remove the `"cello"` block temporarily (Agent A's server)
+3. Save settings.json
+4. Start this Claude Code session — you'll connect as Agent B with the `key-agent-b` identity
 
-Then restart this session.
+Claude Code connects to ALL configured MCP servers at startup, so only one agent's server should be active at a time. Swap which server is enabled to switch between Agent A and Agent B.
 
 ## Step 1 — Get your identity
 
@@ -245,16 +254,9 @@ Call `cello_status`.
 Report:
 - Your `own_pubkey` (your CELLO identity)
 - `transport_started` status
-- `directory_connected` status
+- `directory_reachable` status
 
-**Checkpoint:** If `directory_connected: false`, report:
-
-```
-Waiting for infrastructure. My pubkey is <hex>.
-I'm ready to proceed once the node operator reports infrastructure is ready.
-```
-
-Then wait for the operator to confirm infrastructure is running. When confirmed, call `cello_status` again. `directory_connected` should now be `true`.
+**Note:** `directory_reachable` will be `false` before any sessions exist — this is expected. The directory connection is tested during session establishment (Step 3 for initiator, Step 3 for target), not at startup.
 
 ## Step 2 — Receive counterparty pubkey
 
