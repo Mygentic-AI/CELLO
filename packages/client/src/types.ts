@@ -43,6 +43,26 @@ export interface SessionRecord {
   /** Unix timestamp (ms) when the seal was confirmed. SESSION-003. MCP-002 AC-004. */
   close_timestamp?: number;
 
+  /**
+   * SESSION-005: seal notarization type.
+   * 'frost' — directory co-signed via FROST ceremony; fully notarized.
+   * 'bilateral' — directory unreachable at seal time; bilateral K_local seal only.
+   * Undefined until a seal ceremony completes (status becomes 'sealed' or 'seal_deferred').
+   */
+  seal_type?: "frost" | "bilateral";
+
+  /**
+   * SESSION-005: FROST combined signature on the SealNotarization.
+   * Populated when seal_type === 'frost'.
+   */
+  frost_signature?: Uint8Array;
+
+  /**
+   * SESSION-005: signer_pubkey from the session_sealed frame — initiator's primary_pubkey.
+   * Used by the counterparty to verify the FROST signature without a directory lookup.
+   */
+  signer_pubkey?: Uint8Array;
+
   // ─── MSG-004 additions ────────────────────────────────────────────────────
 
   /** Ordered list of accepted leaves; used to recompute prev_root locally. MSG-004. */

@@ -14,16 +14,16 @@
       "types": "./dist/index.d.ts"
     },
     "./frost/frost-threshold-signer.js": {
-      "import": "./src/frost/frost-threshold-signer.js",
-      "types": "./src/frost/frost-threshold-signer.ts"
+      "import": "./dist/frost/frost-threshold-signer.js",
+      "types": "./dist/frost/frost-threshold-signer.d.ts"
     },
     "./frost/stubs.js": {
-      "import": "./src/frost/stubs.js",
-      "types": "./src/frost/stubs.ts"
+      "import": "./dist/frost/stubs.js",
+      "types": "./dist/frost/stubs.d.ts"
     },
     "./frost/types.js": {
-      "import": "./src/frost/types.js",
-      "types": "./src/frost/types.ts"
+      "import": "./dist/frost/types.js",
+      "types": "./dist/frost/types.d.ts"
     }
   },
   "scripts": {

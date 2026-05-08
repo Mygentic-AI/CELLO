@@ -22,9 +22,9 @@
 import { randomBytes, createHash } from "node:crypto";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { verify, buildMerkleTree, merkleRoot } from "@cello/crypto";
+import { verify, buildMerkleTree, merkleRoot, FrostThresholdSigner } from "@cello/crypto";
 import type { KeyProvider, LeafInput } from "@cello/crypto";
-import { encodeStructure2 } from "@cello/protocol-types";
+import { encodeStructure2, buildSealTbs } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
 import type { CelloNode } from "@cello/transport";
 import type { Stream } from "@libp2p/interface";
@@ -38,6 +38,9 @@ import type {
   TimeSource,
   RelaySealData,
   RelaySessionAssignment,
+  SealVerified,
+  SealFrostSignature,
+  SessionFrostSealed,
 } from "./directory-types.js";
 import { WALL_CLOCK } from "./directory-types.js";
 import type { DirectoryStore } from "./directory-store.js";
@@ -51,6 +54,8 @@ import {
   encodeSessionSealRejected,
   encodeSessionRequestError,
   encodeNotAuthenticated,
+  encodeSealVerified,
+  encodeSessionFrostSealed,
   decodeInboundSignalingFrame,
 } from "./directory-frames.js";
 import {
@@ -123,6 +128,21 @@ export class CelloDirectoryNode {
 
   // pubkey_hex → { peer_id, multiaddrs } (from the Noise handshake / client info)
   readonly #peerInfo = new Map<string, { peer_id: string; multiaddrs: string[] }>();
+
+  // pubkey_hex → primary_pubkey (32-byte FROST group public key) — SESSION-005
+  // Populated by registerPrimaryPubkey (called by test harness or SESSION-004 establishment flow).
+  readonly #primaryPubkeys = new Map<string, Uint8Array>();
+
+  // session_id_hex → seal-pending state: waiting for seal_frost_signature from initiator — SESSION-005
+  readonly #pendingFrostSeals = new Map<string, {
+    initiatorHex: string;
+    participantAHex: string;
+    participantBHex: string;
+    sealedRoot: Uint8Array;
+    leafCount: number;
+    timestamp: number;
+    tbs: Uint8Array;
+  }>();
 
   // session_id_hex → provisional session (relay registered, frames may not yet be delivered)
   // Entry remains until the stream's finally block processes it.
@@ -280,6 +300,8 @@ export class CelloDirectoryNode {
                 this.#sendFrame(stream, encodeSessionAbandoned(evt));
               } else if (evt.type === "session_sealed") {
                 this.#sendFrame(stream, encodeSessionSealed(evt));
+              } else if (evt.type === "seal_verified") {
+                this.#sendFrame(stream, encodeSealVerified(evt));
               } else {
                 this.#sendFrame(stream, encodeSessionSealRejected(evt));
               }
@@ -288,13 +310,19 @@ export class CelloDirectoryNode {
           continue;
         }
 
-        // Authenticated: process session_request frames
+        // Authenticated: process session_request or seal_frost_signature frames
         const parsed = decodeInboundSignalingFrame(frameBytes);
-        if (!parsed || parsed.type !== "session_request") {
+        if (!parsed) {
           this.#sendFrame(stream, encodeNotAuthenticated({ type: "not_authenticated" }));
           continue;
         }
-        await this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"));
+        if (parsed.type === "session_request") {
+          await this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"));
+        } else if (parsed.type === "seal_frost_signature") {
+          void this.#processSealFrostSignature(authedPubkeyHex!, parsed);
+        } else {
+          // Unknown frame type for authenticated state — ignore
+        }
       }
     } catch {
       // stream closed or reset — normal disconnect
@@ -352,6 +380,17 @@ export class CelloDirectoryNode {
    */
   registerPeerInfo(pubkeyHex: string, peer_id: string, multiaddrs: string[]): void {
     this.#peerInfo.set(pubkeyHex, { peer_id, multiaddrs });
+  }
+
+  /**
+   * Register the FROST group public key (primary_pubkey) for a K_local identity.
+   * SESSION-005: called by the test harness or by the SESSION-004 establishment flow
+   * (once SESSION-004 is implemented) to associate a primary_pubkey with an agent.
+   * The directory uses this pubkey to verify the combined FROST signature submitted
+   * by the seal initiator during the seal ceremony.
+   */
+  registerPrimaryPubkey(pubkeyHex: string, primaryPubkey: Uint8Array): void {
+    this.#primaryPubkeys.set(pubkeyHex, new Uint8Array(primaryPubkey));
   }
 
   // ─── Session request processing ──────────────────────────────────────────────
@@ -543,42 +582,167 @@ export class CelloDirectoryNode {
       return { ok: false, reason: "seal_leaves_invalid" };
     }
 
-    // Sign the SealNotarization
-    const close_timestamp = this.#clock.now();
+    // Collect participants and identify the seal initiator.
+    // The seal initiator is the participant who submitted the first SEAL ctrl leaf
+    // (the second-to-last leaf if both are ctrl leaves — per verifySealLeaves, the
+    // last two leaves are both ctrl and from distinct participants).
     const participants = [...new Set(leaves.map((l) => Buffer.from(l.s2.sender_pubkey).toString("hex")))];
     const [pA, pB] = participants.length >= 2
       ? [Buffer.from(participants[0], "hex"), Buffer.from(participants[1], "hex")]
       : [new Uint8Array(32), new Uint8Array(32)];
 
-    const notarizationTbs = CBOR_ENC.encode([
-      sessionId,
-      recomputedRoot,
-      close_timestamp > 0xffffffff ? BigInt(close_timestamp) : close_timestamp,
-    ]);
-    const notarizationSig = new Uint8Array(await this.#keyProvider.sign(notarizationTbs));
+    // The seal initiator is the sender of the second-to-last leaf (the first SEAL ctrl leaf).
+    const secondLastLeaf = leaves[leaves.length - 2];
+    const initiatorHex = Buffer.from(secondLastLeaf.s2.sender_pubkey).toString("hex");
 
-    const notarization: SealNotarization = {
+    const close_timestamp = this.#clock.now();
+    const leafCount = leaves.length;
+    const tbs = buildSealTbs(sessionId, recomputedRoot, leafCount, close_timestamp);
+
+    // Look up the seal initiator's primary_pubkey (registered by SESSION-004 or test harness).
+    const initiatorPrimaryPubkey = this.#primaryPubkeys.get(initiatorHex);
+
+    if (!initiatorPrimaryPubkey) {
+      // No primary_pubkey registered for this initiator — fall back to M1 single-key notarization.
+      // This path is taken in environments where SESSION-004 DKG has not been performed
+      // (e.g. pure SESSION-003 test environment). The single-key path will be rejected by M2 clients.
+      const notarizationTbs = CBOR_ENC.encode([
+        sessionId,
+        recomputedRoot,
+        close_timestamp > 0xffffffff ? BigInt(close_timestamp) : close_timestamp,
+      ]);
+      const notarizationSig = new Uint8Array(await this.#keyProvider.sign(notarizationTbs));
+      const notarization: SealNotarization = {
+        session_id: sessionId,
+        sealed_root: recomputedRoot,
+        participant_a_pubkey: new Uint8Array(pA),
+        participant_b_pubkey: new Uint8Array(pB),
+        close_timestamp,
+        directory_signature: notarizationSig,
+      };
+      this.#store.recordNotarization(notarization);
+      const sealedEvent: SessionSealed = {
+        type: "session_sealed",
+        signature_type: "single",
+        session_id: sessionId,
+        sealed_root: recomputedRoot,
+        directory_signature: notarizationSig,
+        close_timestamp,
+      };
+      this.#deliverOrEnqueue(participants[0] ?? "", sealedEvent);
+      if (participants.length >= 2) this.#deliverOrEnqueue(participants[1], sealedEvent);
+      return { ok: true };
+    }
+
+    // SESSION-005: Push seal_verified to initiator; wait for seal_frost_signature.
+    const sealVerifiedEvent: SealVerified = {
+      type: "seal_verified",
       session_id: sessionId,
       sealed_root: recomputedRoot,
+      leaf_count: leafCount,
+      timestamp: close_timestamp,
+    };
+
+    // Store pending frost seal state for when the initiator returns the signature.
+    this.#pendingFrostSeals.set(sessionIdHex, {
+      initiatorHex,
+      participantAHex: participants[0] ?? "",
+      participantBHex: participants[1] ?? "",
+      sealedRoot: recomputedRoot,
+      leafCount,
+      timestamp: close_timestamp,
+      tbs,
+    });
+
+    // Deliver seal_verified to initiator or enqueue for deferred delivery.
+    const initiatorStream = this.#streams.get(initiatorHex);
+    if (initiatorStream) {
+      try {
+        this.#sendFrame(initiatorStream, encodeSealVerified(sealVerifiedEvent));
+      } catch {
+        this.#store.enqueueNotification(initiatorHex, sealVerifiedEvent);
+      }
+    } else {
+      // DB-003: initiator not connected — enqueue for delivery when they reconnect.
+      this.#store.enqueueNotification(initiatorHex, sealVerifiedEvent);
+    }
+
+    return { ok: true };
+  }
+
+  /**
+   * Process a seal_frost_signature frame from the seal initiator.
+   * SESSION-005: Called from the signaling stream handler when the initiator sends
+   * the combined FROST signature after completing the ceremony.
+   *
+   * Verifies the signature against the stored primary_pubkey for this initiator,
+   * then issues the SealNotarization and notifies both clients.
+   */
+  async #processSealFrostSignature(
+    initiatorHex: string,
+    frame: SealFrostSignature,
+  ): Promise<void> {
+    const sessionIdHex = Buffer.from(frame.session_id).toString("hex");
+    const pending = this.#pendingFrostSeals.get(sessionIdHex);
+
+    if (!pending) return; // No pending seal for this session — ignore
+    if (pending.initiatorHex !== initiatorHex) return; // Wrong sender — ignore
+
+    this.#pendingFrostSeals.delete(sessionIdHex);
+
+    const primaryPubkey = this.#primaryPubkeys.get(initiatorHex);
+    if (!primaryPubkey) return; // Should not happen; initiator's key was present at processSeal time
+
+    // Verify FROST signature (SI-002)
+    const verifier = new FrostThresholdSigner({ threshold: 1, participants: 1 }, Buffer.from(initiatorHex, "hex"));
+    const sigValid = verifier.verifySignature(
+      frame.frost_signature,
+      pending.tbs,
+      "cello-frost-seal-v1",
+      primaryPubkey,
+    );
+
+    if (!sigValid) {
+      // Signature invalid — reject the seal
+      const rejectedEvent: SessionSealRejected = {
+        type: "session_seal_rejected",
+        session_id: frame.session_id,
+        reason: "seal_signature_invalid",
+      };
+      this.#deliverOrEnqueue(pending.participantAHex, rejectedEvent);
+      if (pending.participantBHex) this.#deliverOrEnqueue(pending.participantBHex, rejectedEvent);
+      this.#relay.rejectSeal(frame.session_id, "seal_signature_invalid");
+      return;
+    }
+
+    // Build SealNotarization with frost signature
+    const pA = Buffer.from(pending.participantAHex, "hex");
+    const pB = Buffer.from(pending.participantBHex, "hex");
+    const notarization: SealNotarization = {
+      session_id: frame.session_id,
+      sealed_root: pending.sealedRoot,
       participant_a_pubkey: new Uint8Array(pA),
       participant_b_pubkey: new Uint8Array(pB),
-      close_timestamp,
-      directory_signature: notarizationSig,
+      close_timestamp: pending.timestamp,
+      directory_signature: new Uint8Array(frame.frost_signature), // store frost_sig in this field
     };
     this.#store.recordNotarization(notarization);
 
-    // Notify both clients
+    // Confirm relay (destroys relay per-session state — AC-008)
+    this.#relay.confirmSeal(frame.session_id);
+
+    // Notify both clients with session_sealed (frost variant)
     const sealedEvent: SessionSealed = {
       type: "session_sealed",
-      session_id: sessionId,
-      sealed_root: recomputedRoot,
-      directory_signature: notarizationSig,
-      close_timestamp,
+      signature_type: "frost",
+      session_id: frame.session_id,
+      sealed_root: pending.sealedRoot,
+      frost_signature: frame.frost_signature,
+      signer_pubkey: primaryPubkey,
+      close_timestamp: pending.timestamp,
     };
-    this.#deliverOrEnqueue(participants[0] ?? "", sealedEvent);
-    if (participants.length >= 2) this.#deliverOrEnqueue(participants[1], sealedEvent);
-
-    return { ok: true };
+    this.#deliverOrEnqueue(pending.participantAHex, sealedEvent);
+    if (pending.participantBHex) this.#deliverOrEnqueue(pending.participantBHex, sealedEvent);
   }
 
   #notifySealRejected(_sessionIdHex: string, sessionId: Uint8Array, reason: import("./directory-types.js").SealRejectionReason): void {
@@ -598,15 +762,37 @@ export class CelloDirectoryNode {
     const stream = this.#streams.get(pubkeyHex);
     if (stream) {
       try {
-        this.#sendFrame(stream, event.type === "session_sealed"
-          ? encodeSessionSealed(event)
-          : encodeSessionSealRejected(event as SessionSealRejected));
+        let encoded: Uint8Array;
+        if (event.type === "session_sealed") {
+          encoded = encodeSessionSealed(event);
+        } else {
+          encoded = encodeSessionSealRejected(event as SessionSealRejected);
+        }
+        this.#sendFrame(stream, encoded);
         return;
       } catch {
         this.#streams.delete(pubkeyHex);
       }
     }
     if (pubkeyHex) this.#store.enqueueNotification(pubkeyHex, event);
+  }
+
+  /**
+   * Deliver a SessionFrostSealed event to both clients when a deferred seal completes.
+   * SESSION-005 DB-001/DB-002/DB-003.
+   */
+  #deliverFrostSealed(pubkeyHex: string, event: SessionFrostSealed): void {
+    const stream = this.#streams.get(pubkeyHex);
+    if (stream) {
+      try {
+        this.#sendFrame(stream, encodeSessionFrostSealed(event));
+        return;
+      } catch {
+        this.#streams.delete(pubkeyHex);
+      }
+    }
+    // For session_frost_sealed, we don't persist — the client will see it on next reconnect
+    // via the deferred seal retry mechanism. This is acceptable for M2.
   }
 
   // ─── Transport helpers ───────────────────────────────────────────────────────

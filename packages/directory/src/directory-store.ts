@@ -5,9 +5,9 @@
  * InMemoryDirectoryStore: in-process implementation for M1 testing.
  */
 
-import type { SealNotarization, SessionAbandoned, SessionSealed, SessionSealRejected } from "./directory-types.js";
+import type { SealNotarization, SessionAbandoned, SessionSealed, SessionSealRejected, SealVerified } from "./directory-types.js";
 
-export type DirectoryNotification = SessionAbandoned | SessionSealed | SessionSealRejected;
+export type DirectoryNotification = SessionAbandoned | SessionSealed | SessionSealRejected | SealVerified;
 
 export interface DirectoryStore {
   /** Store a completed SealNotarization. */
