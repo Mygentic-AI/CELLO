@@ -130,6 +130,7 @@ function makeStubClient(opts: StubClientOptions = {}): CelloClient {
     onSessionAssignment: (handler) => {
       opts.onSessionAssignmentHandler?.(handler);
     },
+    initiateSession: async () => ({ ok: false, reason: "directory_unreachable" }),
   };
   return stub;
 }

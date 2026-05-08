@@ -80,6 +80,8 @@ function makeStubClient(): CelloClient & {
       sessionAssignmentHandler = handler;
     },
 
+    async initiateSession() { return { ok: false as const, reason: "directory_unreachable" as const }; },
+
     // Test-only escape: simulate an inbound session assignment event.
     _fireSessionAssignment(event: SessionAssignmentEvent) {
       sessionAssignmentHandler?.(event);

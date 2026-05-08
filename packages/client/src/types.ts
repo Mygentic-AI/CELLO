@@ -232,6 +232,34 @@ export interface CelloClient {
    * CELLO-MCP-002.
    */
   onSessionAssignment(handler: (event: SessionAssignmentEvent) => void): void;
+
+  /**
+   * Initiate a new session with the target agent identified by their K_local pubkey.
+   * Connects (or reuses) an authenticated signaling stream to the directory, sends a
+   * `session_request` frame, awaits the `session_assignment` or an error response.
+   * On success, completes relay auth and content-path dial identically to
+   * `receiveSessionAssignment`. CELLO-ADAPTER-003.
+   *
+   * Failure reasons:
+   *   target_offline       — directory reports the target is not authenticated
+   *   relay_unavailable    — directory's relay rejected the session registration
+   *   timeout              — no response arrived within the configured timeout
+   *   directory_unreachable — could not open or authenticate the signaling stream
+   */
+  initiateSession(
+    targetPubkeyHex: string,
+    opts?: {
+      /** Directory peer ID to connect to. Required unless the client already has a directory connection. */
+      directoryPeerId?: string;
+      /** Directory multiaddr for initial dial. */
+      directoryMultiaddr?: string;
+      /** Timeout in ms. Default: 10_000. */
+      timeoutMs?: number;
+    }
+  ): Promise<
+    | { ok: true; sessionIdHex: string; genesisPrevRootHex: string }
+    | { ok: false; reason: "target_offline" | "relay_unavailable" | "timeout" | "directory_unreachable" | "relay_auth_error" | "relay_auth_failed" }
+  >;
 }
 
 /** Event fired by CelloClient when an inbound session_assignment arrives. CELLO-MCP-002. */

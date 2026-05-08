@@ -170,17 +170,9 @@ export function createMcpServer(
     async ({ target_pubkey }) => {
       if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
-      const clientWithInitiate = client as CelloClient & {
-        initiateSession?: (targetPubkeyHex: string) => Promise<
-          { ok: true; sessionIdHex: string } | { ok: false; reason: string }
-        >;
-      };
-
-      if (typeof clientWithInitiate.initiateSession !== "function") {
-        return jsonText({ ok: false, reason: "not_available_in_m1" });
-      }
-
-      const result = await clientWithInitiate.initiateSession(target_pubkey);
+      // CelloClient.initiateSession is required in ADAPTER-003 (M2).
+      // The M1 stub that returned not_available_in_m1 is retired (L-003).
+      const result = await client.initiateSession(target_pubkey);
       if (result.ok) {
         return jsonText({ ok: true, session_id: result.sessionIdHex });
       }

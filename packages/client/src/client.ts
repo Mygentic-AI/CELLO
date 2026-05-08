@@ -74,7 +74,9 @@ import type {
 } from "./types.js";
 
 const RELAY_PROTOCOL_ID = "/cello/relay/1.0.0";
+const SIGNALING_PROTOCOL_ID = "/cello/signaling/1.0.0";
 const AUTH_DOMAIN = "CELLO-RELAY-AUTH-v1";
+const AUTH_DOMAIN_DIR = "CELLO-DIR-AUTH-v1";
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
 function toU8(v: unknown): Uint8Array {
@@ -238,6 +240,17 @@ class CelloClientImpl implements CelloClient {
   // session_id_hex → Promise: set when the initiator SEAL echo is expected (SESSION-003)
   // Allows non-initiator auto-response to know when its own SEAL echo confirms the seal
   readonly #sealInitiatedSessions = new Set<string>();
+
+  // ADAPTER-003: persistent directory signaling stream for session initiation and inbound
+  // session_assignment delivery (shared by initiateSession and onSessionAssignment path).
+  #persistentSignalingStream: Stream | null = null;
+
+  // ADAPTER-003: pending resolver for an in-flight initiateSession call.
+  // At most one initiateSession can be in flight at a time on a given persistent stream.
+  #pendingInitiateResolver: ((result:
+    | { ok: true; sessionIdHex: string; genesisPrevRootHex: string }
+    | { ok: false; reason: string }
+  ) => void) | null = null;
 
   constructor(
     node: CelloNode,
@@ -1769,6 +1782,401 @@ class CelloClientImpl implements CelloClient {
 
   onSessionAssignment(handler: (event: SessionAssignmentEvent) => void): void {
     this.#onSessionAssignmentHandler = handler;
+  }
+
+  // ─── ADAPTER-003: initiateSession ────────────────────────────────────────────
+
+  /**
+   * Initiate a new session with the target agent.
+   *
+   * PSEUDOCODE (Phase P — ADAPTER-003):
+   *   1. If no persistent signaling stream, open one and auth (challenge-response)
+   *   2. Send { type: "session_request", target_pubkey } CBOR frame
+   *   3. Block until session_assignment or session_request_error arrives on the persistent stream
+   *   4. On session_assignment: call receiveSessionAssignment (same path as inbound B role)
+   *      and return { ok: true, sessionIdHex, genesisPrevRootHex }
+   *   5. On session_request_error: return { ok: false, reason }
+   *   6. On timeout: return { ok: false, reason: "timeout" }
+   *
+   * Auth domain: "CELLO-DIR-AUTH-v1"
+   * Signature: Ed25519(SHA-256("CELLO-DIR-AUTH-v1" || nonce || pubkey)) per RFC 8032, FIPS 180-4
+   */
+  async initiateSession(
+    targetPubkeyHex: string,
+    opts?: {
+      directoryPeerId?: string;
+      directoryMultiaddr?: string;
+      timeoutMs?: number;
+    }
+  ): Promise<
+    | { ok: true; sessionIdHex: string; genesisPrevRootHex: string }
+    | { ok: false; reason: "target_offline" | "relay_unavailable" | "timeout" | "directory_unreachable" | "relay_auth_error" | "relay_auth_failed" }
+  > {
+    const timeoutMs = opts?.timeoutMs ?? 10_000;
+
+    // Open (or reuse) the persistent signaling stream
+    let stream = this.#persistentSignalingStream;
+    if (!stream || stream.status !== "open") {
+      const result = await this.#openPersistentSignalingStream(opts?.directoryPeerId, opts?.directoryMultiaddr);
+      if (!result.ok) return { ok: false, reason: result.reason };
+      stream = this.#persistentSignalingStream!;
+    }
+
+    // Get current pubkey for session matching
+    const myPubkey = await this.#keyProvider.getPublicKey();
+    const myPubkeyHex = Buffer.from(myPubkey).toString("hex");
+
+    // Set up pending resolver before sending to avoid race with fast directory
+    if (this.#pendingInitiateResolver !== null) {
+      // Another initiateSession is in flight — this is a usage error but we handle it gracefully
+      return { ok: false, reason: "directory_unreachable" };
+    }
+
+    let resolve!: (result:
+      | { ok: true; sessionIdHex: string; genesisPrevRootHex: string }
+      | { ok: false; reason: string }
+    ) => void;
+
+    const resultPromise = new Promise<
+      | { ok: true; sessionIdHex: string; genesisPrevRootHex: string }
+      | { ok: false; reason: string }
+    >((r) => { resolve = r; });
+
+    this.#pendingInitiateResolver = resolve;
+
+    // Send session_request frame
+    try {
+      const targetPubkeyBytes = Buffer.from(targetPubkeyHex, "hex");
+      const sessionRequestFrame = CBOR_ENC.encode({
+        type: "session_request",
+        target_pubkey: targetPubkeyBytes,
+      }) as Uint8Array;
+      stream.send(lp.encode.single(sessionRequestFrame));
+    } catch {
+      this.#pendingInitiateResolver = null;
+      return { ok: false, reason: "directory_unreachable" };
+    }
+
+    // Race: response vs timeout
+    const timeoutPromise = new Promise<{ ok: false; reason: "timeout" }>((r) =>
+      setTimeout(() => r({ ok: false, reason: "timeout" }), timeoutMs)
+    );
+
+    const rawResult = await Promise.race([resultPromise, timeoutPromise]);
+
+    // Clean up resolver (may already be null if it resolved naturally)
+    if (this.#pendingInitiateResolver === resolve) {
+      this.#pendingInitiateResolver = null;
+    }
+
+    if (!rawResult.ok) {
+      return rawResult as { ok: false; reason: "target_offline" | "relay_unavailable" | "timeout" | "directory_unreachable" | "relay_auth_error" | "relay_auth_failed" };
+    }
+
+    // Success: the session_assignment was processed by #runPersistentSignalingReader,
+    // which called receiveSessionAssignment. The session is now in #sessions.
+    // But we need the session_id — it was resolved into the result by the reader.
+    return rawResult;
+
+    void myPubkeyHex; // used via closure in #runPersistentSignalingReader
+  }
+
+  /**
+   * Open and authenticate a persistent directory signaling stream.
+   * Stores the stream in #persistentSignalingStream and starts #runPersistentSignalingReader.
+   */
+  async #openPersistentSignalingStream(
+    directoryPeerId?: string,
+    directoryMultiaddr?: string,
+  ): Promise<{ ok: true } | { ok: false; reason: "directory_unreachable" | "relay_auth_error" | "relay_auth_failed" }> {
+    // Resolve directory peer ID from existing sessions if not provided
+    let peerId = directoryPeerId;
+    if (!peerId) {
+      const sessions = Array.from(this.#sessions.values());
+      const withDir = sessions.find((s) => s.directory_endpoint.peer_id);
+      if (withDir) {
+        peerId = withDir.directory_endpoint.peer_id;
+        if (!directoryMultiaddr) {
+          directoryMultiaddr = withDir.directory_endpoint.multiaddrs[0];
+        }
+      }
+    }
+
+    if (!peerId) {
+      return { ok: false, reason: "directory_unreachable" };
+    }
+
+    // Dial if we have a multiaddr
+    if (directoryMultiaddr) {
+      try { await this.#node.dial(directoryMultiaddr); } catch { /* already connected or not yet reachable */ }
+    }
+
+    let stream: Stream;
+    try {
+      stream = await this.#node.newStream(peerId, SIGNALING_PROTOCOL_ID);
+    } catch {
+      return { ok: false, reason: "directory_unreachable" };
+    }
+
+    // Authenticate: read challenge, sign, send response
+    const myPubkey = new Uint8Array(await this.#keyProvider.getPublicKey());
+    const iter = (lp.decode(stream) as AsyncIterable<unknown>)[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
+
+    // Read auth challenge (5s timeout)
+    let challengeRaw: Uint8Array | undefined;
+    try {
+      const { value, done } = await Promise.race([
+        iter.next(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("auth_timeout")), 5_000)),
+      ]);
+      if (done || value === undefined) {
+        stream.abort(new Error("dir_auth_error"));
+        return { ok: false, reason: "directory_unreachable" };
+      }
+      challengeRaw = value instanceof Uint8Array ? value : (value as unknown as { slice(): Uint8Array }).slice();
+    } catch {
+      stream.abort(new Error("dir_auth_error"));
+      return { ok: false, reason: "directory_unreachable" };
+    }
+
+    let challengeFrame: Record<string, unknown>;
+    try {
+      challengeFrame = decode(toU8(challengeRaw)) as Record<string, unknown>;
+    } catch {
+      stream.abort(new Error("dir_auth_error"));
+      return { ok: false, reason: "directory_unreachable" };
+    }
+
+    if (challengeFrame["type"] !== "signaling_auth_challenge") {
+      stream.abort(new Error("dir_auth_error"));
+      return { ok: false, reason: "directory_unreachable" };
+    }
+
+    const nonce = toU8(challengeFrame["nonce"]);
+    if (nonce.length !== 32) {
+      stream.abort(new Error("dir_auth_error"));
+      return { ok: false, reason: "directory_unreachable" };
+    }
+
+    const domain = Buffer.from(AUTH_DOMAIN_DIR, "utf8");
+    const authMsg = new Uint8Array(Buffer.concat([domain, nonce, myPubkey]));
+    const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
+    const sig = await this.#keyProvider.sign(msgHash);
+
+    const authResponseFrame = CBOR_ENC.encode({
+      type: "signaling_auth_response",
+      pubkey: myPubkey,
+      signature: sig,
+    }) as Uint8Array;
+
+    try {
+      stream.send(lp.encode.single(authResponseFrame));
+    } catch {
+      stream.abort(new Error("dir_auth_error"));
+      return { ok: false, reason: "directory_unreachable" };
+    }
+
+    // Store and start the persistent reader
+    this.#persistentSignalingStream = stream;
+    void this.#runPersistentSignalingReader(stream, iter, myPubkey);
+
+    return { ok: true };
+  }
+
+  /**
+   * Persistent signaling stream reader (ADAPTER-003).
+   *
+   * Routes inbound frames from the directory on the persistent stream:
+   *   session_assignment   → deliver to this client as participant B (inbound session),
+   *                          OR resolve a pending initiateSession call (as participant A).
+   *   session_request_error → resolve pending initiateSession with error reason.
+   *   session_sealed        → route to #handleDirectorySessionSealed (same as per-session handler).
+   *   session_seal_rejected → route to #handleDirectorySessionSealRejected.
+   *
+   * Note (L-002): When SESSION-005 adds `seal_verified` and `session_frost_sealed` frame types
+   * to OutboundSignalingFrame, add routing here to #handleSealVerified and
+   * #handleSessionFrostSealed respectively. The session_id field is present in both frames
+   * and should be extracted and converted to hex for routing. This is a latent bug until
+   * SESSION-005 ships, since those frame types cannot currently arrive on any stream.
+   */
+  async #runPersistentSignalingReader(
+    stream: Stream,
+    iter: AsyncIterator<Uint8Array>,
+    myPubkey: Uint8Array,
+  ): Promise<void> {
+    const myPubkeyHex = Buffer.from(myPubkey).toString("hex");
+
+    try {
+      while (true) {
+        let result: IteratorResult<Uint8Array>;
+        try {
+          result = await iter.next();
+        } catch { break; }
+        if (result.done || result.value === undefined) break;
+
+        const bytes = toU8(result.value as unknown);
+        let frame: Record<string, unknown>;
+        try {
+          frame = decode(bytes) as Record<string, unknown>;
+        } catch { continue; }
+
+        const frameType = frame["type"];
+
+        if (frameType === "session_assignment") {
+          // Decode the session assignment and deliver it
+          await this.#handlePersistentSignalingAssignment(frame, myPubkey, myPubkeyHex);
+        } else if (frameType === "session_request_error") {
+          // Resolve pending initiateSession call with error
+          const reason = typeof frame["reason"] === "string" ? frame["reason"] : "directory_unreachable";
+          const resolve = this.#pendingInitiateResolver;
+          if (resolve) {
+            this.#pendingInitiateResolver = null;
+            resolve({ ok: false, reason });
+          }
+        } else if (frameType === "session_sealed") {
+          // Route to per-session sealed handler
+          const sessionIdRaw = frame["session_id"];
+          const sessionIdBytes = sessionIdRaw instanceof Uint8Array ? sessionIdRaw
+            : Buffer.isBuffer(sessionIdRaw) ? new Uint8Array(sessionIdRaw as Buffer) : null;
+          if (sessionIdBytes) {
+            const sessionIdHex = Buffer.from(sessionIdBytes).toString("hex");
+            const session = this.#sessions.get(sessionIdHex);
+            if (session) {
+              this.#handleDirectorySessionSealed(sessionIdHex, frame, session.directory_pubkey);
+            }
+          }
+        } else if (frameType === "session_seal_rejected") {
+          const sessionIdRaw = frame["session_id"];
+          const sessionIdBytes = sessionIdRaw instanceof Uint8Array ? sessionIdRaw
+            : Buffer.isBuffer(sessionIdRaw) ? new Uint8Array(sessionIdRaw as Buffer) : null;
+          if (sessionIdBytes) {
+            const sessionIdHex = Buffer.from(sessionIdBytes).toString("hex");
+            this.#handleDirectorySessionSealRejected(sessionIdHex, frame);
+          }
+        }
+        // Note: seal_verified and session_frost_sealed routing added here when SESSION-005 ships
+        // (see L-002 comment above).
+      }
+    } catch { /* stream closed */ }
+
+    // Clean up stream reference
+    if (this.#persistentSignalingStream === stream) {
+      this.#persistentSignalingStream = null;
+    }
+
+    // Unblock any pending initiateSession call
+    const resolve = this.#pendingInitiateResolver;
+    if (resolve) {
+      this.#pendingInitiateResolver = null;
+      resolve({ ok: false, reason: "directory_unreachable" });
+    }
+  }
+
+  /**
+   * Handle a session_assignment frame arriving on the persistent signaling stream.
+   * Decodes the assignment, calls receiveSessionAssignment, and either:
+   *   - Resolves a pending initiateSession call (if we are participant A), or
+   *   - Fires onSessionAssignment handler (if we are participant B, inbound session).
+   */
+  async #handlePersistentSignalingAssignment(
+    frame: Record<string, unknown>,
+    myPubkey: Uint8Array,
+    myPubkeyHex: string,
+  ): Promise<void> {
+    // Decode SessionAssignment from the frame
+    const raw = frame["assignment"] as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return;
+
+    const toU8Field = (v: unknown): Uint8Array | null => {
+      if (v instanceof Uint8Array) return v;
+      if (Buffer.isBuffer(v)) return new Uint8Array(v as Buffer);
+      return null;
+    };
+
+    const toStringArr = (v: unknown): string[] | null => {
+      if (!Array.isArray(v)) return null;
+      if (!v.every((x) => typeof x === "string")) return null;
+      return v as string[];
+    };
+
+    const parseParticipant = (p: unknown) => {
+      if (!p || typeof p !== "object") return null;
+      const pp = p as Record<string, unknown>;
+      const pubkey = toU8Field(pp["pubkey"]);
+      const peer_id = typeof pp["peer_id"] === "string" ? pp["peer_id"] : null;
+      const multiaddrs = toStringArr(pp["multiaddrs"]);
+      if (!pubkey || pubkey.length !== 32 || peer_id === null || !multiaddrs) return null;
+      return { pubkey, peer_id, multiaddrs };
+    };
+
+    const session_id = toU8Field(raw["session_id"]);
+    if (!session_id || session_id.length !== 16) return;
+
+    const pa = parseParticipant(raw["participant_a"]);
+    const pb = parseParticipant(raw["participant_b"]);
+    if (!pa || !pb) return;
+
+    const re = raw["relay_endpoint"] as Record<string, unknown> | undefined;
+    if (!re || typeof re !== "object") return;
+    const rePeerId = typeof re["peer_id"] === "string" ? re["peer_id"] : null;
+    const reMultiaddrs = toStringArr(re["multiaddrs"]);
+    if (rePeerId === null || !reMultiaddrs) return;
+
+    const de = raw["directory_endpoint"] as Record<string, unknown> | undefined;
+    if (!de || typeof de !== "object") return;
+    const dePeerId = typeof de["peer_id"] === "string" ? de["peer_id"] : null;
+    const deMultiaddrs = toStringArr(de["multiaddrs"]);
+    if (dePeerId === null || !deMultiaddrs) return;
+
+    const tsRaw = raw["session_timestamp"];
+    const session_timestamp = typeof tsRaw === "number" ? tsRaw : null;
+    if (session_timestamp === null) return;
+
+    const directory_pubkey = toU8Field(raw["directory_pubkey"]);
+    const directory_signature = toU8Field(raw["directory_signature"]);
+    if (!directory_pubkey || directory_pubkey.length !== 32) return;
+    if (!directory_signature || directory_signature.length !== 64) return;
+
+    const assignment = {
+      session_id,
+      participant_a: pa,
+      participant_b: pb,
+      relay_endpoint: { peer_id: rePeerId, multiaddrs: reMultiaddrs },
+      directory_endpoint: { peer_id: dePeerId, multiaddrs: deMultiaddrs },
+      session_timestamp,
+      directory_pubkey,
+      directory_signature,
+    };
+
+    const assignResult = await this.receiveSessionAssignment(assignment, myPubkey);
+    if (!assignResult.ok) {
+      // If a pending initiateSession was waiting, resolve with error
+      const resolve = this.#pendingInitiateResolver;
+      if (resolve) {
+        this.#pendingInitiateResolver = null;
+        resolve({ ok: false, reason: "relay_auth_error" });
+      }
+      return;
+    }
+
+    const sessionIdHex = Buffer.from(session_id).toString("hex");
+    const session = this.#sessions.get(sessionIdHex);
+    if (!session) return;
+
+    const genesisPrevRootHex = Buffer.from(session.genesis_prev_root).toString("hex");
+    const pubAHex = Buffer.from(pa.pubkey).toString("hex");
+    const isInitiator = myPubkeyHex === pubAHex;
+
+    if (isInitiator) {
+      // We are participant A (initiated the session): resolve the pending initiateSession call
+      const resolve = this.#pendingInitiateResolver;
+      if (resolve) {
+        this.#pendingInitiateResolver = null;
+        resolve({ ok: true, sessionIdHex, genesisPrevRootHex });
+      }
+    }
+    // If we are participant B, the onSessionAssignment handler was already fired by
+    // receiveSessionAssignment (which checks myPubkeyHex !== pubAHex).
   }
 }
 
