@@ -34,33 +34,37 @@ export function encodeSignalingAuthFailed(frame: SignalingAuthFailed): Uint8Arra
 
 export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Array {
   const a = frame.assignment;
-  return ENC.encode({
-    type: frame.type,
-    assignment: {
-      session_id: a.session_id,
-      participant_a: {
-        pubkey: a.participant_a.pubkey,
-        peer_id: a.participant_a.peer_id,
-        multiaddrs: a.participant_a.multiaddrs,
-      },
-      participant_b: {
-        pubkey: a.participant_b.pubkey,
-        peer_id: a.participant_b.peer_id,
-        multiaddrs: a.participant_b.multiaddrs,
-      },
-      relay_endpoint: {
-        peer_id: a.relay_endpoint.peer_id,
-        multiaddrs: a.relay_endpoint.multiaddrs,
-      },
-      directory_endpoint: {
-        peer_id: a.directory_endpoint.peer_id,
-        multiaddrs: a.directory_endpoint.multiaddrs,
-      },
-      session_timestamp: a.session_timestamp,
-      directory_pubkey: a.directory_pubkey,
-      directory_signature: a.directory_signature,
+  // Build the encoded assignment object. Include signature_type always.
+  // signer_pubkey is only present for 'frost' assignments (discriminated union).
+  const encodedAssignment: Record<string, unknown> = {
+    session_id: a.session_id,
+    participant_a: {
+      pubkey: a.participant_a.pubkey,
+      peer_id: a.participant_a.peer_id,
+      multiaddrs: a.participant_a.multiaddrs,
     },
-  });
+    participant_b: {
+      pubkey: a.participant_b.pubkey,
+      peer_id: a.participant_b.peer_id,
+      multiaddrs: a.participant_b.multiaddrs,
+    },
+    relay_endpoint: {
+      peer_id: a.relay_endpoint.peer_id,
+      multiaddrs: a.relay_endpoint.multiaddrs,
+    },
+    directory_endpoint: {
+      peer_id: a.directory_endpoint.peer_id,
+      multiaddrs: a.directory_endpoint.multiaddrs,
+    },
+    session_timestamp: a.session_timestamp,
+    directory_pubkey: a.directory_pubkey,
+    directory_signature: a.directory_signature,
+    signature_type: a.signature_type,
+  };
+  if (a.signature_type === "frost") {
+    encodedAssignment["signer_pubkey"] = a.signer_pubkey;
+  }
+  return ENC.encode({ type: frame.type, assignment: encodedAssignment });
 }
 
 export function encodeSessionAbandoned(frame: SessionAbandoned): Uint8Array {
@@ -211,7 +215,11 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (!directory_pubkey || directory_pubkey.length !== 32) return null;
     if (!directory_signature || directory_signature.length !== 64) return null;
 
-    const assignment: SessionAssignment = {
+    // SESSION-004: parse signature_type and signer_pubkey
+    const signature_type = raw["signature_type"];
+    if (signature_type !== "frost" && signature_type !== "single") return null;
+
+    const commonFields = {
       session_id,
       participant_a: pa,
       participant_b: pb,
@@ -221,6 +229,16 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       directory_pubkey,
       directory_signature,
     };
+
+    let assignment: SessionAssignment;
+    if (signature_type === "frost") {
+      const signer_pubkey = toUint8Array(raw["signer_pubkey"]);
+      if (!signer_pubkey || signer_pubkey.length !== 32) return null;
+      assignment = { ...commonFields, signature_type: "frost", signer_pubkey };
+    } else {
+      assignment = { ...commonFields, signature_type: "single" };
+    }
+
     return { type: "session_assignment", assignment };
   }
 
@@ -259,7 +277,13 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
 
   if (o["type"] === "session_request_error") {
     const reason = o["reason"];
-    if (reason !== "target_offline" && reason !== "relay_unavailable") return null;
+    if (
+      reason !== "target_offline" &&
+      reason !== "relay_unavailable" &&
+      reason !== "frost_signer_not_configured" &&
+      reason !== "directory_below_threshold" &&
+      reason !== "ceremony_conflict"
+    ) return null;
     return { type: "session_request_error", reason };
   }
 

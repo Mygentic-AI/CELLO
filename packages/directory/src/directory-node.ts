@@ -14,6 +14,86 @@
  *   [session_id, participant_a_pubkey, participant_b_pubkey, session_timestamp]
  *   per SESSION-001.
  *
+ * SESSION-004 additions:
+ *   #processSessionRequest now embeds a FROST-signed SessionAssignment with:
+ *     signature_type: 'frost'
+ *     signer_pubkey: initiator.primary_pubkey
+ *
+ * ─── Phase P (rev3): SESSION-004 Pseudocode ──────────────────────────────────
+ *
+ * #processSessionRequest(stream, initiatorHex, targetHex) — SESSION-004 flow:
+ *   // After computing session_id, session_timestamp:
+ *
+ *   // 1. Check for injected IThresholdSigner (CRITICAL-2: fail loudly if absent)
+ *   signer = this.#thresholdSigners.get(initiatorHex)
+ *   if signer is null:
+ *     sendFrame(stream, encodeSessionRequestError({ reason: 'frost_signer_not_configured' }))
+ *     return
+ *
+ *   // 2. Compute genesis_prev_root — RFC 8032 (Ed25519), FIPS 180-4 (SHA-256)
+ *   genesis_prev_root = computeGenesisPrevRoot(initiatorPubkey, targetPubkey,
+ *                                              session_id, session_timestamp)
+ *
+ *   // 3. Build TBS (HIGH-5: from protocol-types, same encoding on both sides)
+ *   //    Fields: [session_id, pubA, pubB, genesis_prev_root, timestamp] — RFC 9591 / CONTEXT.md
+ *   tbs = buildSessionEstablishmentTbs(session_id, initiatorPubkey, targetPubkey,
+ *                                      genesis_prev_root, session_timestamp)
+ *
+ *   // 4. Conflict detection (MEDIUM-N1 fix + IMPORTANT-N3 fix):
+ *   //    ceremonyId is unique per session → used as peerIdString so two concurrent
+ *   //    ceremonies for the same agent produce different peerIdString values → conflict fires.
+ *   //    IMPORTANT-N3: conflict check and early return happen BEFORE markInFlight so
+ *   //    clearInFlight is only called when markInFlight was actually called.
+ *   epochId = `${initiatorHex}:epoch:1`   // M2 hardcoded; M3 uses actual key epoch
+ *   ceremonyId = `session-${Buffer.from(session_id).toString('hex')}`  // unique per ceremony
+ *   conflict = this.#frostHandler.checkConflict(initiatorHex, epochId, ceremonyId, ceremonyId)
+ *   if conflict:
+ *     console.warn(`[directory] CEREMONY_CONFLICT: agent=${initiatorHex.slice(0,16)}`)
+ *     sendFrame(stream, encodeSessionRequestError({ reason: 'ceremony_conflict' }))
+ *     return
+ *   // markInFlight AFTER early return — clearInFlight is only called when this runs
+ *   this.#frostHandler.markInFlight(initiatorHex, epochId, ceremonyId, ceremonyId)
+ *   try {
+ *     // 5. FROST ceremony (RFC 9591 §5 coordinator flow)
+ *     result = await signer.participateInCeremony(ceremonyId, tbs, CONTEXT_SESSION_ESTABLISHMENT)
+ *     if result.ok is false:
+ *       sendFrame(stream, encodeSessionRequestError({ reason: 'directory_below_threshold' }))
+ *       return
+ *     frostedSig = result.signature
+ *
+ *     // 6. getPrimaryPubkey() — HIGH-4: method required on IThresholdSigner interface
+ *     initiatorPrimaryPubkey = signer.getPrimaryPubkey()
+ *
+ *     // 7. Build SessionAssignment with signature_type: 'frost' (MEDIUM-6: discriminated union)
+ *     assignment = {
+ *       ...(all common fields),
+ *       signature_type: 'frost',
+ *       signer_pubkey: initiatorPrimaryPubkey,
+ *       directory_signature: frostedSig,
+ *     }
+ *   } finally {
+ *     this.#frostHandler.clearInFlight(initiatorHex, epochId)
+ *   }
+ *
+ *   // AC-005 test pattern: directly call frostHandler.markInFlight(initiatorHex, epochId,
+ *   //   "first-ceremony-id", "first-ceremony-id") before sending the second session_request
+ *   //   to simulate a competing in-flight ceremony.
+ *
+ * registerThresholdSigner(initiatorPubkeyHex, signer):
+ *   this.#thresholdSigners.set(initiatorPubkeyHex, signer)
+ *
+ * DirectoryNodeOptions additions:
+ *   thresholdSigners?: Map<string, IThresholdSigner>
+ *
+ * IThresholdSigner interface update (HIGH-4):
+ *   getPrimaryPubkey(): Uint8Array  — in packages/crypto/src/frost/types.ts
+ *   FrostThresholdSigner already has this; MockThresholdSigner needs a no-op stub.
+ *
+ * SessionRequestErrorReason additions (directory-types.ts):
+ *   'frost_signer_not_configured' | 'directory_below_threshold' | 'ceremony_conflict'
+ *
+ * ─── End Phase P (rev3) Pseudocode ───────────────────────────────────────────
+ *
  * SealNotarization TBS: canonical CBOR of
  *   [session_id, sealed_root, close_timestamp]
  *   per SESSION-003.
@@ -22,9 +102,9 @@
 import { randomBytes, createHash } from "node:crypto";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { verify, buildMerkleTree, merkleRoot } from "@cello/crypto";
-import type { KeyProvider, LeafInput } from "@cello/crypto";
-import { encodeStructure2 } from "@cello/protocol-types";
+import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto";
+import type { KeyProvider, LeafInput, IThresholdSigner } from "@cello/crypto";
+import { encodeStructure2, computeGenesisPrevRoot, buildSessionEstablishmentTbs } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
 import type { CelloNode } from "@cello/transport";
 import type { Stream } from "@libp2p/interface";
@@ -120,6 +200,9 @@ export class CelloDirectoryNode {
 
   // pubkey_hex → authenticated signaling stream
   readonly #streams = new Map<string, Stream>();
+
+  // SESSION-004: initiator_pubkey_hex → IThresholdSigner (registered per-agent)
+  readonly #thresholdSigners = new Map<string, IThresholdSigner>();
 
   // pubkey_hex → { peer_id, multiaddrs } (from the Noise handshake / client info)
   readonly #peerInfo = new Map<string, { peer_id: string; multiaddrs: string[] }>();
@@ -354,6 +437,15 @@ export class CelloDirectoryNode {
     this.#peerInfo.set(pubkeyHex, { peer_id, multiaddrs });
   }
 
+  /**
+   * SESSION-004: Register a FROST threshold signer for the given initiator pubkey.
+   * The signer is invoked when the initiator sends a session_request to produce
+   * a FROST-signed SessionAssignment.
+   */
+  registerThresholdSigner(pubkeyHex: string, signer: IThresholdSigner): void {
+    this.#thresholdSigners.set(pubkeyHex, signer);
+  }
+
   // ─── Session request processing ──────────────────────────────────────────────
 
   async #processSessionRequest(
@@ -368,12 +460,17 @@ export class CelloDirectoryNode {
       return;
     }
 
+    // SESSION-004 Step 1: Check for injected IThresholdSigner (CRITICAL-2: fail loudly if absent)
+    const signer = this.#thresholdSigners.get(initiatorHex);
+    if (!signer) {
+      this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "frost_signer_not_configured" }));
+      return;
+    }
+
     // (b) Generate 16-byte CSPRNG session_id
     const session_id = new Uint8Array(randomBytes(16));
 
-    // (c) Relay endpoint is pinned in configuration
-
-    // (d) Construct SessionAssignment
+    // (d) Collect participant info
     const session_timestamp = this.#clock.now();
     const dirPubkey = await this.#keyProvider.getPublicKey();
 
@@ -382,68 +479,121 @@ export class CelloDirectoryNode {
     const initiatorPubkey = Buffer.from(initiatorHex, "hex");
     const targetPubkey = Buffer.from(targetHex, "hex");
 
-    // Sign canonical CBOR of [session_id, initiator_pubkey, target_pubkey, session_timestamp]
-    const tbs = CBOR_ENC.encode([
+    // SESSION-004 Step 2: Compute genesis_prev_root (RFC 8032 / FIPS 180-4)
+    const genesis_prev_root = computeGenesisPrevRoot(
+      new Uint8Array(initiatorPubkey),
+      new Uint8Array(targetPubkey),
       session_id,
-      initiatorPubkey,
-      targetPubkey,
-      session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-    ]);
-    const dirSig = await this.#keyProvider.sign(tbs);
-
-    const assignment: SessionAssignment = {
-      session_id,
-      participant_a: { pubkey: new Uint8Array(initiatorPubkey), peer_id: initiatorInfo.peer_id, multiaddrs: initiatorInfo.multiaddrs },
-      participant_b: { pubkey: new Uint8Array(targetPubkey), peer_id: targetInfo.peer_id, multiaddrs: targetInfo.multiaddrs },
-      relay_endpoint: this.#relayEndpoint,
-      directory_endpoint: this.#directoryEndpoint,
       session_timestamp,
-      directory_pubkey: new Uint8Array(dirPubkey),
-      directory_signature: new Uint8Array(dirSig),
-    };
+    );
 
-    // (e) Register with relay BEFORE delivering to clients (SI-003)
-    const relayAssignment: RelaySessionAssignment = {
+    // SESSION-004 Step 3: Build TBS — single source of truth via protocol-types (HIGH-5)
+    // Fields: [session_id, pubA, pubB, genesis_prev_root, timestamp]
+    const tbs = buildSessionEstablishmentTbs(
       session_id,
-      participant_a: new Uint8Array(initiatorPubkey),
-      participant_b: new Uint8Array(targetPubkey),
+      new Uint8Array(initiatorPubkey),
+      new Uint8Array(targetPubkey),
+      genesis_prev_root,
       session_timestamp,
-      directory_signature: new Uint8Array(dirSig),
-    };
-    const recorded = this.#relay.recordAssignment(relayAssignment);
-    if (!recorded.ok) {
-      this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "relay_unavailable" }));
+    );
+
+    // SESSION-004 Step 4: Conflict detection (MEDIUM-N1 fix + IMPORTANT-N3 fix)
+    // ceremonyId is unique per session_id → two concurrent ceremonies produce different
+    // peerIdString values → conflict fires correctly.
+    // IMPORTANT-N3: conflict check and early return happen BEFORE markInFlight so
+    // clearInFlight is only called when markInFlight was actually called.
+    const epochId = `${initiatorHex}:epoch:1`;  // M2 hardcoded; M3 uses actual key epoch
+    const ceremonyId = `session-${Buffer.from(session_id).toString("hex")}`;  // unique per ceremony
+    const conflict = this.#frostHandler.checkConflict(initiatorHex, epochId, ceremonyId, ceremonyId);
+    if (conflict) {
+      console.warn(`[directory] CEREMONY_CONFLICT: agent=${initiatorHex.slice(0, 16)}`);
+      this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "ceremony_conflict" }));
       return;
     }
 
-    // Track as provisional: relay has registered it, but clients haven't yet received it.
-    // If the initiator's stream closes before both frames are sent, AC-011 cleanup fires.
-    const sessionIdHex = Buffer.from(session_id).toString("hex");
-    this.#pendingSessions.set(sessionIdHex, {
-      sessionId: session_id,
-      initiatorHex,
-      targetHex,
-      initiatorGotAssignment: false,
-      targetGotAssignment: false,
-      fullyEstablished: false,
-    });
+    // markInFlight AFTER early return — clearInFlight only called when this runs
+    this.#frostHandler.markInFlight(initiatorHex, epochId, ceremonyId, ceremonyId);
 
-    // (f) Deliver to both clients
-    const assignmentFrame: SessionAssignmentFrame = { type: "session_assignment", assignment };
-    const encoded = encodeSessionAssignment(assignmentFrame);
-    this.#sendFrame(stream, encoded);
-    const pending = this.#pendingSessions.get(sessionIdHex);
-    if (pending) pending.initiatorGotAssignment = true;
     try {
-      this.#sendFrame(targetStream, encoded);
-      if (pending) {
-        pending.targetGotAssignment = true;
-        // Both frames sent — session is fully established; finally block will just clean up.
-        pending.fullyEstablished = true;
+      // SESSION-004 Step 5: FROST ceremony (RFC 9591 §5 coordinator flow)
+      const result = await signer.participateInCeremony(ceremonyId, tbs, CONTEXT_SESSION_ESTABLISHMENT);
+      if (!result.ok) {
+        this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "directory_below_threshold" }));
+        return;
       }
-    } catch {
-      // Target stream failed mid-delivery; session is still registered on relay.
-      // Leave fullyEstablished=false so the finally block discards the relay state.
+      const frostedSig = result.signature;
+
+      // SESSION-004 Step 6: getPrimaryPubkey() — HIGH-4: method on IThresholdSigner interface
+      const initiatorPrimaryPubkey = signer.getPrimaryPubkey();
+
+      // SESSION-004 Step 7: Build SessionAssignment with signature_type: 'frost'
+      const assignment: SessionAssignment = {
+        session_id,
+        participant_a: { pubkey: new Uint8Array(initiatorPubkey), peer_id: initiatorInfo.peer_id, multiaddrs: initiatorInfo.multiaddrs },
+        participant_b: { pubkey: new Uint8Array(targetPubkey), peer_id: targetInfo.peer_id, multiaddrs: targetInfo.multiaddrs },
+        relay_endpoint: this.#relayEndpoint,
+        directory_endpoint: this.#directoryEndpoint,
+        session_timestamp,
+        directory_pubkey: new Uint8Array(dirPubkey),
+        directory_signature: new Uint8Array(frostedSig),
+        signature_type: "frost",
+        signer_pubkey: initiatorPrimaryPubkey,
+      };
+
+      // (e) Register with relay BEFORE delivering to clients (SI-003)
+      // The relay verifies Ed25519 over the M1 TBS: [session_id, participant_a, participant_b, session_timestamp].
+      // The client-facing assignment uses a FROST signature, so we compute a separate Ed25519 sig for the relay.
+      const relayTbs = CBOR_ENC.encode([
+        session_id,
+        new Uint8Array(initiatorPubkey),
+        new Uint8Array(targetPubkey),
+        session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
+      ]) as Uint8Array;
+      const relayDirSig = new Uint8Array(await this.#keyProvider.sign(relayTbs));
+      const relayAssignment: RelaySessionAssignment = {
+        session_id,
+        participant_a: new Uint8Array(initiatorPubkey),
+        participant_b: new Uint8Array(targetPubkey),
+        session_timestamp,
+        directory_signature: relayDirSig,
+      };
+      const recorded = this.#relay.recordAssignment(relayAssignment);
+      if (!recorded.ok) {
+        this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "relay_unavailable" }));
+        return;
+      }
+
+      // Track as provisional: relay has registered it, but clients haven't yet received it.
+      // If the initiator's stream closes before both frames are sent, AC-011 cleanup fires.
+      const sessionIdHex = Buffer.from(session_id).toString("hex");
+      this.#pendingSessions.set(sessionIdHex, {
+        sessionId: session_id,
+        initiatorHex,
+        targetHex,
+        initiatorGotAssignment: false,
+        targetGotAssignment: false,
+        fullyEstablished: false,
+      });
+
+      // (f) Deliver to both clients
+      const assignmentFrame: SessionAssignmentFrame = { type: "session_assignment", assignment };
+      const encoded = encodeSessionAssignment(assignmentFrame);
+      this.#sendFrame(stream, encoded);
+      const pending = this.#pendingSessions.get(sessionIdHex);
+      if (pending) pending.initiatorGotAssignment = true;
+      try {
+        this.#sendFrame(targetStream, encoded);
+        if (pending) {
+          pending.targetGotAssignment = true;
+          // Both frames sent — session is fully established; finally block will just clean up.
+          pending.fullyEstablished = true;
+        }
+      } catch {
+        // Target stream failed mid-delivery; session is still registered on relay.
+        // Leave fullyEstablished=false so the finally block discards the relay state.
+      }
+    } finally {
+      this.#frostHandler.clearInFlight(initiatorHex, epochId);
     }
   }
 

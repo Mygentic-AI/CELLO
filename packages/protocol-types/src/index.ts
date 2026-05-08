@@ -32,5 +32,5 @@ export {
   verifyStructure2Signature,
 } from "./structure2.js";
 
-export { computeGenesisPrevRoot, encodeSealPayload, decodeSealPayload } from "./session.js";
-export type { SessionAssignment, ParticipantInfo, RelayEndpointInfo, SealPayload } from "./session.js";
+export { computeGenesisPrevRoot, encodeSealPayload, decodeSealPayload, buildSessionEstablishmentTbs } from "./session.js";
+export type { SessionAssignment, SessionAssignmentFrost, SessionAssignmentSingle, ParticipantInfo, RelayEndpointInfo, SealPayload } from "./session.js";

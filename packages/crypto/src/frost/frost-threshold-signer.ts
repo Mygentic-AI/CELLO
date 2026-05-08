@@ -500,6 +500,35 @@ export class FrostThresholdSigner implements IThresholdSigner {
   }
 }
 
+// ─── Standalone FROST signature verification ─────────────────────────────────
+
+/**
+ * Verify a FROST threshold signature without a signer instance.
+ *
+ * Used by the client when it is the counterparty (participant B) and has no
+ * IThresholdSigner injected. Verifies the domain-separated FROST signature
+ * against the provided public key.
+ *
+ * @param signature - 64-byte threshold signature from the SessionAssignment
+ * @param tbs - to-be-signed bytes (from buildSessionEstablishmentTbs)
+ * @param context - domain context string (e.g. CONTEXT_SESSION_ESTABLISHMENT)
+ * @param publicKey - 32-byte Ed25519 group public key to verify against
+ * @returns true if signature verifies; false otherwise (never throws)
+ */
+export function verifyFrostSignature(
+  signature: Uint8Array,
+  tbs: Uint8Array,
+  context: string,
+  publicKey: Uint8Array,
+): boolean {
+  try {
+    const msg = frameMessage(context, tbs);
+    return ed25519_FROST.verify(signature, msg, publicKey);
+  } catch {
+    return false;
+  }
+}
+
 // ─── MockThresholdSigner ──────────────────────────────────────────────────────
 
 /**
@@ -526,6 +555,17 @@ export class MockThresholdSigner implements IThresholdSigner {
     }
     sig[63] = 0x42; // marker
     return { ok: true, signature: sig };
+  }
+
+  /**
+   * Return a deterministic 32-byte mock primary pubkey.
+   * Not a real Ed25519 point — only for interface shape testing.
+   */
+  getPrimaryPubkey(): Uint8Array {
+    const key = new Uint8Array(32);
+    key[0] = 0x02; // marker byte indicating mock
+    key[31] = 0x4d; // 'M' for Mock
+    return key;
   }
 }
 

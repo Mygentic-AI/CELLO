@@ -28,7 +28,10 @@ import {
 import type { TestScope } from "@claude-flow/testing";
 import { randomBytes } from "node:crypto";
 import { Encoder } from "cbor-x";
-import { generateKeypair } from "@cello/crypto";
+import { generateKeypair, FrostThresholdSigner, CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto";
+import { bootstrapKeyShares, clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
+import { computeGenesisPrevRoot, buildSessionEstablishmentTbs } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
 import { createRelayNode } from "@cello/relay";
 import type { DirectoryAdapter } from "@cello/relay";
@@ -72,6 +75,7 @@ interface Fixture {
   peerIdB: string;
   multiaddrsA: string[];
   multiaddrsB: string[];
+  signerA: FrostThresholdSigner;
   mcpA: Client;
   mcpB: Client;
   notificationsA: Notification[];
@@ -134,7 +138,13 @@ async function makeFixture(): Promise<Fixture> {
   dirNodeRef.directory.registerPeerInfo(pubkeyAHex, peerIdA, multiaddrsA);
   dirNodeRef.directory.registerPeerInfo(pubkeyBHex, peerIdB, multiaddrsB);
 
-  const clientA = createClient(nodeA, kpA);
+  // SESSION-004: bootstrap FROST for A so directory can issue FROST-signed assignments
+  const stubsA = createInProcessStubs(3);
+  await bootstrapKeyShares(pubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
+  const signerA = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsA }, pubkeyA);
+  dirNodeRef.directory.registerThresholdSigner(pubkeyAHex, signerA);
+
+  const clientA = createClient(nodeA, kpA, { thresholdSigner: signerA });
   const clientB = createClient(nodeB, kpB);
   await clientA.registerHandler();
   await clientB.registerHandler();
@@ -178,13 +188,14 @@ async function makeFixture(): Promise<Fixture> {
     clientA, clientB, kpA, kpB,
     pubkeyAHex, pubkeyBHex,
     peerIdA, peerIdB, multiaddrsA, multiaddrsB,
+    signerA,
     mcpA, mcpB, notificationsA, notificationsB,
     relay: relayResult.relay,
     stopAll,
   };
 }
 
-/** Issue a directory-signed session assignment and deliver it to both clients. */
+/** Issue a FROST-signed session assignment (SESSION-004) and deliver it to both clients. */
 async function setupSession(fix: Fixture): Promise<{
   sessionIdHex: string;
   sessionId: Uint8Array;
@@ -196,13 +207,21 @@ async function setupSession(fix: Fixture): Promise<{
   const pubkeyA = await fix.kpA.getPublicKey();
   const pubkeyB = await fix.kpB.getPublicKey();
 
-  const tbs = CBOR_ENC.encode([
+  // SESSION-004: FROST-sign the assignment for clients
+  const genesis_prev_root = computeGenesisPrevRoot(pubkeyA, pubkeyB, sessionId, session_timestamp);
+  const tbs = buildSessionEstablishmentTbs(sessionId, pubkeyA, pubkeyB, genesis_prev_root, session_timestamp);
+  const ceremonyId = `session-${sessionIdHex}`;
+  const sigResult = await fix.signerA.participateInCeremony(ceremonyId, tbs, CONTEXT_SESSION_ESTABLISHMENT);
+  if (!sigResult.ok) throw new Error(`FROST ceremony failed: ${sigResult.error.reason}`);
+
+  // Relay still verifies Ed25519 over M1 TBS: [session_id, participant_a, participant_b, session_timestamp]
+  const relayTbs = CBOR_ENC.encode([
     sessionId,
     pubkeyA,
     pubkeyB,
     session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
   ]) as Uint8Array;
-  const dirSig = await fix.dirKp.sign(tbs);
+  const relaySig = await fix.dirKp.sign(relayTbs);
 
   const assignment = {
     session_id: sessionId,
@@ -212,7 +231,9 @@ async function setupSession(fix: Fixture): Promise<{
     directory_endpoint: { peer_id: fix.dirPeerId, multiaddrs: fix.dirMultiaddrs },
     session_timestamp,
     directory_pubkey: fix.dirPubkey,
-    directory_signature: new Uint8Array(dirSig),
+    directory_signature: sigResult.signature,
+    signature_type: "frost" as const,
+    signer_pubkey: fix.signerA.getPrimaryPubkey(),
   };
 
   const registered = fix.relay.recordAssignment({
@@ -220,7 +241,7 @@ async function setupSession(fix: Fixture): Promise<{
     participant_a: pubkeyA,
     participant_b: pubkeyB,
     session_timestamp,
-    directory_signature: new Uint8Array(dirSig),
+    directory_signature: new Uint8Array(relaySig),
   });
   if (!registered.ok) throw new Error(`relay.recordAssignment failed: ${(registered as { reason?: string }).reason}`);
 
@@ -238,7 +259,10 @@ async function setupSession(fix: Fixture): Promise<{
 
 let scope: TestScope;
 beforeEach(() => { scope = createTestScope(); });
-afterEach(() => scope.run(async () => {}));
+afterEach(() => {
+  clearTestShares();
+  return scope.run(async () => {});
+});
 
 // ─── AC-001: cello_initiate_session polls until session appears ───────────────
 

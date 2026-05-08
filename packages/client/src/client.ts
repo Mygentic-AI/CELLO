@@ -34,8 +34,62 @@
  *
  * receiveSessionAssignment(assignment, myPubkey):
  *   SESSION-002 AC-002, AC-003, AC-004, AC-005, SI-003
+ *   SESSION-004 changes: replace M1 Ed25519 verify with FROST verify path.
+ *
+ *   SESSION-004 pseudocode (Phase P rev2):
+ *   RFC 9591 (FROST), RFC 8032 (Ed25519), FIPS 180-4 (SHA-256)
+ *
+ *   1. Check signature_type (SESSION-004 SI-003, AC-003):
+ *      if assignment.signature_type === 'single':
+ *        return { ok:false, reason:"unsupported_signature_type" }
+ *        // Hard cut — even if the single-key sig itself verifies (SI-003 is absolute)
+ *        // No session record is created (SI-003). No I/O is attempted.
+ *
+ *   2. Determine role and verification key (SESSION-004 AC-007):
+ *      isInitiator = (Buffer.from(myPubkey).equals(Buffer.from(pubA)))
+ *      if isInitiator:
+ *        // CRITICAL-1 FIX: initiator MUST have a thresholdSigner injected.
+ *        // There is NO fallback to assignment.signer_pubkey — that is frame-provided
+ *        // and attacker-controlled. Absence of a signer is a hard error.
+ *        if this.#thresholdSigner is null:
+ *          return { ok:false, reason:"frost_signer_not_configured" }
+ *        verifyKey = this.#thresholdSigner.getPrimaryPubkey()  // HIGH-4: on IThresholdSigner
+ *      else:
+ *        // Counterparty: use signer_pubkey embedded in the frame (A's primary_pubkey)
+ *        // TypeScript discriminated union guarantees signer_pubkey is present for 'frost' frames
+ *        verifyKey = assignment.signer_pubkey  // guaranteed non-undefined by type system
+ *
+ *   3. Compute genesis_prev_root (same as M1):
+ *      genesis_prev_root = computeGenesisPrevRoot(pubA, pubB, session_id, session_timestamp)
+ *
+ *   4. Build session establishment TBS (HIGH-5: uses buildSessionEstablishmentTbs from protocol-types):
+ *      tbs = buildSessionEstablishmentTbs(session_id, pubA, pubB, genesis_prev_root, session_timestamp)
+ *
+ *   5. Verify FROST signature (SESSION-004 AC-002, SI-001):
+ *      //  Use FrostThresholdSigner.verifySignature() which handles framing internally:
+ *      //    framedMsg = <context>\0<tbs>  (domain separation per CONTEXT.md)
+ *      //  OR use ed25519_FROST.verify(sig, frameMessage(context, tbs), verifyKey) directly
+ *      //  The client imports ed25519_FROST from @noble/curves/ed25519 (not from @cello/crypto)
+ *      //  to keep the verify path independent from any signer state.
+ *      framedMsg = frameMessage(CONTEXT_SESSION_ESTABLISHMENT, tbs)  // context\0tbs
+ *      isValid = ed25519_FROST.verify(assignment.directory_signature, framedMsg, verifyKey)
+ *      if !isValid:
+ *        return { ok:false, reason:"frost_signature_invalid" }
+ *        // Never accept a tampered signature (SI-001 absolute)
+ *
+ *   6-9. (same as M1: content handler, relay auth, counterparty dial, store session)
+ *
+ * IMPORTANT NOTE on CelloClientImpl constructor and createClient factory changes:
+ *   - Add optional #thresholdSigner: IThresholdSigner | null field
+ *   - createClient accepts optional thresholdSigner in opts
+ *   - No @cello/directory import — IThresholdSigner comes from @cello/crypto
+ *
+ * IMPORTANT NOTE on ReceiveAssignmentResult (IMPORTANT-9):
+ *   Add 'frost_signature_invalid' | 'unsupported_signature_type' | 'frost_signer_not_configured'
+ *   to the reason union in types.ts
+ *
  *   1. Build TBS = CBOR([session_id, participant_a.pubkey, participant_b.pubkey, session_timestamp])
- *   2. Verify Ed25519(TBS, assignment.directory_pubkey, assignment.directory_signature)
+ *   2. Verify Ed25519(TBS, assignment.directory_pubkey, assignment.directory_signature) [M1, REMOVED in M2]
  *      → { ok:false, reason:"directory_signature_invalid" } if fails
  *   3. Determine counterparty: if myPubkey == participant_a.pubkey then counterparty = B, else A
  *   4. Compute genesis_prev_root = computeGenesisPrevRoot(pubA, pubB, session_id, session_timestamp)
@@ -58,11 +112,11 @@ import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import {
   buildEnvelope, serializeEnvelope, deserializeEnvelope, validateEnvelope,
-  computeGenesisPrevRoot, encodeSealPayload,
+  computeGenesisPrevRoot, encodeSealPayload, buildSessionEstablishmentTbs,
 } from "@cello/protocol-types";
 import type { Structure2 } from "@cello/protocol-types";
-import { verify, buildMerkleTree, merkleRoot } from "@cello/crypto";
-import type { LeafInput } from "@cello/crypto";
+import { verify, buildMerkleTree, merkleRoot, verifyFrostSignature, CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto";
+import type { LeafInput, IThresholdSigner } from "@cello/crypto";
 import { CELLO_PROTOCOL_ID, CELLO_CONTENT_PROTOCOL_ID } from "@cello/transport";
 import type { KeyProvider } from "@cello/crypto";
 import type { CelloNode } from "@cello/transport";
@@ -239,18 +293,23 @@ class CelloClientImpl implements CelloClient {
   // Allows non-initiator auto-response to know when its own SEAL echo confirms the seal
   readonly #sealInitiatedSessions = new Set<string>();
 
+  // SESSION-004: optional FROST threshold signer (coordinator role for initiator)
+  readonly #thresholdSigner: IThresholdSigner | null;
+
   constructor(
     node: CelloNode,
     keyProvider: KeyProvider,
     onMessageQueued?: (senderPubkeyHex: string) => void,
     contentGraceMs = 30_000,
     reconnectTimeoutMs = DEFAULT_RECONNECT_TIMEOUT_MS,
+    thresholdSigner: IThresholdSigner | null = null,
   ) {
     this.#node = node;
     this.#keyProvider = keyProvider;
     this.#onMessageQueued = onMessageQueued;
     this.#contentGraceMs = contentGraceMs;
     this.#reconnectTimeoutMs = reconnectTimeoutMs;
+    this.#thresholdSigner = thresholdSigner;
   }
 
   addPeer(peerPubkeyHex: string, peerId: string, multiaddrs: string[]): void {
@@ -385,32 +444,51 @@ class CelloClientImpl implements CelloClient {
     assignment: SessionAssignment,
     myPubkey: Uint8Array,
   ): Promise<ReceiveAssignmentResult> {
-    // Step 1: Build TBS and verify directory signature (AC-005, SI-003)
-    // TBS = canonical CBOR([session_id, participant_a.pubkey, participant_b.pubkey, session_timestamp])
-    // Matches directory-node.ts sign path exactly.
     const { session_id, session_timestamp } = assignment;
     const pubA = assignment.participant_a.pubkey;
     const pubB = assignment.participant_b.pubkey;
 
-    const tbs = CBOR_ENC.encode([
-      session_id,
-      pubA,
-      pubB,
-      session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-    ]) as Uint8Array;
-
-    if (!verify(assignment.directory_pubkey, tbs, assignment.directory_signature)) {
-      return { ok: false, reason: "directory_signature_invalid" };
+    // SESSION-004 Step 1: Check signature_type (SI-003, AC-003)
+    // M1 'single' frames are hard-refused in M2 — even if the single-key sig verifies.
+    if (assignment.signature_type === "single") {
+      return { ok: false, reason: "unsupported_signature_type" };
     }
 
-    // Step 2: Determine counterparty
+    // SESSION-004 Step 2: Determine role and verification key (AC-007)
     const myPubkeyHex = Buffer.from(myPubkey).toString("hex");
     const pubAHex = Buffer.from(pubA).toString("hex");
-    const counterparty = myPubkeyHex === pubAHex ? assignment.participant_b : assignment.participant_a;
+    const isInitiator = myPubkeyHex === pubAHex;
 
-    // Step 3: Compute genesis prev_root (AC-002)
-    // SHA-256(min(pubA, pubB) || max(pubA, pubB) || session_id || timestamp_be8) per FIPS 180-4
-    const genesis_prev_root = computeGenesisPrevRoot(pubA, pubB, session_id, session_timestamp);
+    let verifyKey: Uint8Array;
+    if (isInitiator) {
+      // CRITICAL-1: initiator MUST have a thresholdSigner injected.
+      // Falling back to assignment.signer_pubkey (frame-provided) would be attacker-controlled.
+      if (!this.#thresholdSigner) {
+        return { ok: false, reason: "frost_signer_not_configured" };
+      }
+      verifyKey = this.#thresholdSigner.getPrimaryPubkey();
+    } else {
+      // Counterparty (B): use signer_pubkey from the frame (A's primary_pubkey).
+      // TypeScript discriminated union guarantees signer_pubkey is present for 'frost' frames.
+      verifyKey = assignment.signer_pubkey;
+    }
+
+    // SESSION-004 Step 3: Build TBS and verify FROST signature (AC-002, SI-001)
+    // TBS = canonical CBOR([session_id, pubA, pubB, genesis_prev_root, session_timestamp])
+    // buildSessionEstablishmentTbs imported from protocol-types (HIGH-5: single source of truth)
+    const genesis_prev_root_for_tbs = computeGenesisPrevRoot(pubA, pubB, session_id, session_timestamp);
+    const tbs = buildSessionEstablishmentTbs(session_id, pubA, pubB, genesis_prev_root_for_tbs, session_timestamp);
+
+    // Verify FROST signature with domain separation (context\0tbs framing)
+    if (!verifyFrostSignature(assignment.directory_signature, tbs, CONTEXT_SESSION_ESTABLISHMENT, verifyKey)) {
+      return { ok: false, reason: "frost_signature_invalid" };
+    }
+
+    // Step 4: Determine counterparty
+    const counterparty = isInitiator ? assignment.participant_b : assignment.participant_a;
+
+    // genesis_prev_root was already computed above for TBS — reuse it
+    const genesis_prev_root = genesis_prev_root_for_tbs;
 
     // Step 4: Register content protocol handler on this node (if not already registered)
     if (!this.#contentHandlerRegistered) {
@@ -1784,6 +1862,8 @@ export function createClient(
     contentGraceMs?: number;
     /** SESSION-006: ms to attempt relay reconnect before giving up. Default: 60000. */
     reconnectTimeoutMs?: number;
+    /** SESSION-004: FROST threshold signer injected for initiator role. */
+    thresholdSigner?: IThresholdSigner;
   }
 ): CelloClient & {
   sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
@@ -1796,6 +1876,7 @@ export function createClient(
     opts?.onMessageQueued,
     opts?.contentGraceMs,
     opts?.reconnectTimeoutMs,
+    opts?.thresholdSigner ?? null,
   ) as CelloClient & {
     sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
     openRawStream(peerPubkeyHex: string): Promise<Stream>;

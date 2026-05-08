@@ -84,7 +84,10 @@ export type SealRejectionReason =
 
 export type SessionRequestErrorReason =
   | "target_offline"
-  | "relay_unavailable";
+  | "relay_unavailable"
+  | "frost_signer_not_configured"  // SESSION-004: no IThresholdSigner registered for this initiator
+  | "directory_below_threshold"    // SESSION-004: FROST ceremony failed — insufficient signers
+  | "ceremony_conflict";           // SESSION-004: concurrent ceremony already in-flight for this agent
 
 export interface SessionRequestError {
   type: "session_request_error";

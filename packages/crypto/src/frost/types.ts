@@ -72,6 +72,20 @@ export interface IThresholdSigner {
     tbs: Uint8Array,
     context: FrostContext,
   ): Promise<ThresholdSignature>;
+
+  /**
+   * Return the group public key (primary_pubkey) for this threshold signer.
+   *
+   * This is commitments[0] from the FROST public package — the constant term
+   * of the dealer's Shamir polynomial commitment. It is the same 32-byte
+   * Ed25519 point used to verify threshold signatures produced by participateInCeremony.
+   *
+   * Called by the directory to embed primary_pubkey in the SessionAssignment
+   * (signer_pubkey field) so the counterparty can verify without a round-trip.
+   *
+   * Throws if not bootstrapped (no local share available).
+   */
+  getPrimaryPubkey(): Uint8Array;
 }
 
 // ─── Configuration ────────────────────────────────────────────────────────────

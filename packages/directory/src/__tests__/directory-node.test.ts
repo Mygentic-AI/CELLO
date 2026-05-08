@@ -34,6 +34,7 @@ import {
   verifyInclusion,
   msgLeafHash,
   ctrlLeafHash,
+  MockThresholdSigner,
 } from "@cello/crypto";
 import { buildStructure2, encodeStructure2 } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
@@ -200,6 +201,9 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
 
     // Register peer info so session_request can include addressing
     dirNode.directory.registerPeerInfo(pubkeyHex, clientNode.getPeerId(), clientNode.listenAddresses());
+
+    // SESSION-004: register MockThresholdSigner so session_request can run FROST flow
+    dirNode.directory.registerThresholdSigner(pubkeyHex, new MockThresholdSigner());
 
     return { stream, reader, pubkeyHex, clientNode };
   }
@@ -401,16 +405,15 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
       Buffer.from(dirPubkey).toString("hex")
     );
 
-    // Signature verifies
-    const tbs = CBOR_ENC.encode([
-      asgA.session_id,
-      asgA.participant_a.pubkey,
-      asgA.participant_b.pubkey,
-      asgA.session_timestamp > 0xffffffff ? BigInt(asgA.session_timestamp) : asgA.session_timestamp,
-    ]);
-    const { verify } = await import("@cello/crypto");
-    const sigValid = verify(asgA.directory_pubkey, tbs, asgA.directory_signature);
-    expect(sigValid).toBe(true);
+    // SESSION-004: assignment uses FROST signature (not single Ed25519)
+    expect(asgA.signature_type).toBe("frost");
+    if (asgA.signature_type === "frost") {
+      // signer_pubkey is A's FROST group public key (32 bytes)
+      expect(asgA.signer_pubkey).toBeDefined();
+      expect(asgA.signer_pubkey.length).toBe(32);
+      // directory_signature is a 64-byte FROST-signed blob
+      expect(asgA.directory_signature.length).toBe(64);
+    }
   });
 
   // ─── AC-006: relay.recordAssignment returns before session_assignment is delivered ──
@@ -458,6 +461,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
         sendFrame(s, encodeAuthResponse(pubkey, signature));
         const hex = Buffer.from(pubkey).toString("hex");
         timingDirNode.directory.registerPeerInfo(hex, cn.getPeerId(), cn.listenAddresses());
+        // SESSION-004: initiator needs a threshold signer
+        timingDirNode.directory.registerThresholdSigner(hex, new MockThresholdSigner());
         return { stream: s, reader: r, pubkeyHex: hex, clientNode: cn, key: k };
       })(),
       (async () => {
@@ -527,6 +532,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
       sendFrame(s, encodeAuthResponse(pubkey, signature));
       const hex = Buffer.from(pubkey).toString("hex");
       rejectDirNode.directory.registerPeerInfo(hex, cn.getPeerId(), cn.listenAddresses());
+      // SESSION-004: register MockThresholdSigner so FROST check passes before relay check
+      rejectDirNode.directory.registerThresholdSigner(hex, new MockThresholdSigner());
       return { stream: s, reader: r, pubkeyHex: hex };
     };
 
@@ -621,6 +628,8 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
       sendFrame(sA, encodeAuthResponse(pkA, sigA));
       const hexA = Buffer.from(pkA).toString("hex");
       dirNode.directory.registerPeerInfo(hexA, nodeA.getPeerId(), nodeA.listenAddresses());
+      // SESSION-004: register MockThresholdSigner so session_request runs FROST flow
+      dirNode.directory.registerThresholdSigner(hexA, new MockThresholdSigner());
 
       const sB = await nodeB.newStream(dirNode.node.getPeerId(), SIGNALING_PROTOCOL_ID);
       const rB = new StreamReader(sB);
@@ -993,7 +1002,10 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     if (!chBytesA || chBytesA.type !== "signaling_auth_challenge") throw new Error("no challenge A");
     const { pubkey: pkA, signature: sigA } = await signAuth(chBytesA.nonce, AUTH_DOMAIN, keyA);
     sendFrame(streamA, encodeAuthResponse(pkA, sigA));
-    dirNode.directory.registerPeerInfo(Buffer.from(pkA).toString("hex"), nodeA.getPeerId(), nodeA.listenAddresses());
+    const hexAC11 = Buffer.from(pkA).toString("hex");
+    dirNode.directory.registerPeerInfo(hexAC11, nodeA.getPeerId(), nodeA.listenAddresses());
+    // SESSION-004: register MockThresholdSigner for initiator A
+    dirNode.directory.registerThresholdSigner(hexAC11, new MockThresholdSigner());
 
     const chBytesB = decodeOutboundSignalingFrame(await readerB.readDecoded());
     if (!chBytesB || chBytesB.type !== "signaling_auth_challenge") throw new Error("no challenge B");
@@ -1093,7 +1105,10 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     if (!chA || chA.type !== "signaling_auth_challenge") throw new Error("no challenge A");
     const { pubkey: pkA, signature: sigA } = await signAuth(chA.nonce, AUTH_DOMAIN, keyA);
     sendFrame(streamA, encodeAuthResponse(pkA, sigA));
-    interceptDirNode.directory.registerPeerInfo(Buffer.from(pkA).toString("hex"), nodeA.getPeerId(), nodeA.listenAddresses());
+    const hexAInterceptC = Buffer.from(pkA).toString("hex");
+    interceptDirNode.directory.registerPeerInfo(hexAInterceptC, nodeA.getPeerId(), nodeA.listenAddresses());
+    // SESSION-004: register MockThresholdSigner for initiator A
+    interceptDirNode.directory.registerThresholdSigner(hexAInterceptC, new MockThresholdSigner());
 
     const chB = decodeOutboundSignalingFrame(await readerB.readDecoded());
     if (!chB || chB.type !== "signaling_auth_challenge") throw new Error("no challenge B");

@@ -42,10 +42,14 @@ import {
 import type { TestScope } from "@claude-flow/testing";
 import { randomBytes, createHash } from "node:crypto";
 import { Encoder } from "cbor-x";
-import { generateKeypair } from "@cello/crypto";
+import { generateKeypair, FrostThresholdSigner, CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto";
+import { bootstrapKeyShares, clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
 import {
   buildStructure2,
   encodeStructure2,
+  computeGenesisPrevRoot,
+  buildSessionEstablishmentTbs,
 } from "@cello/protocol-types";
 import type { SessionAssignment } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
@@ -71,17 +75,17 @@ async function makeDirectoryAssignment(opts: {
   relayPeerId: string;
   relayMultiaddrs: string[];
   dirKp: ReturnType<typeof generateKeypair>;
+  signerA: FrostThresholdSigner;
   sessionTimestamp?: number;
 }): Promise<SessionAssignment> {
   const session_timestamp = opts.sessionTimestamp ?? Date.now();
-  const tbs = CBOR_ENC.encode([
-    opts.sessionId,
-    opts.pubA,
-    opts.pubB,
-    session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-  ]) as Uint8Array;
   const dirPubkey = await opts.dirKp.getPublicKey();
-  const directory_signature = await opts.dirKp.sign(tbs);
+  // SESSION-004: build FROST TBS and sign with threshold signer
+  const genesis_prev_root = computeGenesisPrevRoot(opts.pubA, opts.pubB, opts.sessionId, session_timestamp);
+  const tbs = buildSessionEstablishmentTbs(opts.sessionId, opts.pubA, opts.pubB, genesis_prev_root, session_timestamp);
+  const ceremonyId = `session-${Buffer.from(opts.sessionId).toString("hex")}`;
+  const sigResult = await opts.signerA.participateInCeremony(ceremonyId, tbs, CONTEXT_SESSION_ESTABLISHMENT);
+  if (!sigResult.ok) throw new Error(`FROST ceremony failed: ${sigResult.error.reason}`);
 
   return {
     session_id: opts.sessionId,
@@ -105,7 +109,9 @@ async function makeDirectoryAssignment(opts: {
     },
     session_timestamp,
     directory_pubkey: dirPubkey,
-    directory_signature,
+    directory_signature: sigResult.signature,
+    signature_type: "frost" as const,
+    signer_pubkey: opts.signerA.getPrimaryPubkey(),
   };
 }
 
@@ -116,6 +122,7 @@ interface Fixture {
   relayPeerId: string;
   relayStop: () => Promise<void>;
   relayNode: CelloRelayNode;
+  signerA: FrostThresholdSigner;
   clientA: {
     kp: ReturnType<typeof generateKeypair>;
     pubkey: Uint8Array;
@@ -155,8 +162,13 @@ async function makeFixture(reconnectTimeoutMs = 5000): Promise<Fixture> {
   const nodeB = await createNode({ keyProvider: kpB, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
   await nodeB.start();
 
+  // SESSION-004: bootstrap FROST for A so clientA can receive FROST-signed assignments
+  const stubsA = createInProcessStubs(3);
+  await bootstrapKeyShares(pubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
+  const signerA = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsA }, pubkeyA);
+
   // Pass a short reconnect timeout for deterministic tests
-  const clientA = createClient(nodeA, kpA, { reconnectTimeoutMs });
+  const clientA = createClient(nodeA, kpA, { reconnectTimeoutMs, thresholdSigner: signerA });
   const clientB = createClient(nodeB, kpB, { reconnectTimeoutMs });
   await clientA.registerHandler();
   await clientB.registerHandler();
@@ -174,6 +186,7 @@ async function makeFixture(reconnectTimeoutMs = 5000): Promise<Fixture> {
     relayPeerId,
     relayStop,
     relayNode,
+    signerA,
     clientA: {
       kp: kpA,
       pubkey: pubkeyA,
@@ -211,14 +224,23 @@ async function setupSession(fix: Fixture): Promise<{
     relayPeerId: fix.relayPeerId,
     relayMultiaddrs: [fix.relayAddr],
     dirKp: fix.dirKp,
+    signerA: fix.signerA,
   });
 
+  // Register on relay with Ed25519 dir signature (relay verifies M1-style TBS)
+  const relayTbs = CBOR_ENC.encode([
+    sessionId,
+    fix.clientA.pubkey,
+    fix.clientB.pubkey,
+    assignment.session_timestamp > 0xffffffff ? BigInt(assignment.session_timestamp) : assignment.session_timestamp,
+  ]) as Uint8Array;
+  const relaySig = await fix.dirKp.sign(relayTbs);
   fix.relayNode.recordAssignment({
     session_id: sessionId,
     participant_a: fix.clientA.pubkey,
     participant_b: fix.clientB.pubkey,
     session_timestamp: assignment.session_timestamp,
-    directory_signature: assignment.directory_signature,
+    directory_signature: relaySig,
   });
 
   const [rA, rB] = await Promise.all([
@@ -315,7 +337,10 @@ function getClientEscapeHatch(client: CelloClient): {
 
 let scope: TestScope;
 beforeEach(() => { scope = createTestScope(); });
-afterEach(() => scope.run(async () => {}));
+afterEach(() => {
+  clearTestShares();
+  return scope.run(async () => {});
+});
 
 // ─── AC-001: relay stream closed → transport_lost, sendMessage unavailable ───
 
@@ -1014,21 +1039,27 @@ describe("M-3 (initial-connect): relay sends auth challenge but never sends rela
     const clientNode = await createNode({ keyProvider: clientKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await clientNode.start();
 
-    const client = createClient(clientNode, clientKp, { reconnectTimeoutMs: 300 });
+    const clientPubkey = await clientKp.getPublicKey();
+
+    // SESSION-004: bootstrap FROST for client (participant_a) so receiveSessionAssignment
+    // can verify the FROST-signed assignment before reaching relay auth
+    const stubsM3 = createInProcessStubs(3);
+    await bootstrapKeyShares(clientPubkey, { threshold: 2, participants: 3, directoryNodeStubs: stubsM3 });
+    const signerM3 = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsM3 }, clientPubkey);
+
+    const client = createClient(clientNode, clientKp, { reconnectTimeoutMs: 300, thresholdSigner: signerM3 });
     await client.registerHandler();
 
     const dirKp = generateKeypair();
     const dirPubkey = await dirKp.getPublicKey();
-    const clientPubkey = await clientKp.getPublicKey();
     const sessionId = new Uint8Array(randomBytes(16));
     const session_timestamp = Date.now();
-    const tbs = CBOR_ENC.encode([
-      sessionId,
-      clientPubkey,
-      clientPubkey, // both A and B are the same client for this test
-      session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-    ]) as Uint8Array;
-    const directory_signature = await dirKp.sign(tbs);
+    // SESSION-004: build FROST TBS and sign
+    const genesis_prev_root_m3 = computeGenesisPrevRoot(clientPubkey, clientPubkey, sessionId, session_timestamp);
+    const tbsM3 = buildSessionEstablishmentTbs(sessionId, clientPubkey, clientPubkey, genesis_prev_root_m3, session_timestamp);
+    const ceremonyM3 = `session-${Buffer.from(sessionId).toString("hex")}`;
+    const sigResultM3 = await signerM3.participateInCeremony(ceremonyM3, tbsM3, CONTEXT_SESSION_ESTABLISHMENT);
+    if (!sigResultM3.ok) throw new Error(`FROST ceremony failed: ${sigResultM3.error.reason}`);
 
     const assignment: SessionAssignment = {
       session_id: sessionId,
@@ -1052,7 +1083,9 @@ describe("M-3 (initial-connect): relay sends auth challenge but never sends rela
       },
       session_timestamp,
       directory_pubkey: dirPubkey,
-      directory_signature,
+      directory_signature: sigResultM3.signature,
+      signature_type: "frost" as const,
+      signer_pubkey: signerM3.getPrimaryPubkey(),
     };
 
     // receiveSessionAssignment will call #performRelayAuth which will call nextWithTimeout

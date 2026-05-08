@@ -18,3 +18,6 @@ export {
   FrostThresholdSigner,
   MockThresholdSigner,
 } from "./frost/index.js";
+
+// SESSION-004: standalone FROST verify (no signer instance needed — used by counterparty client)
+export { verifyFrostSignature } from "./frost/frost-threshold-signer.js";

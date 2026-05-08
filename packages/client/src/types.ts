@@ -59,19 +59,28 @@ export interface SessionRecord {
  * Result of receiveSessionAssignment().
  *
  * Failure reasons:
- *   directory_signature_invalid — Ed25519 verify failed; assignment discarded before any I/O.
- *   relay_auth_failed           — relay explicitly rejected the auth response (signature_invalid etc.).
- *   relay_auth_error            — could not open a stream to the relay or read the challenge.
- *   dial_counterparty_failed    — reserved for future use. Currently the counterparty dial is
- *                                 best-effort (soft failure): if the counterparty is not yet
- *                                 listening on /cello/content/1.0.0 the session is still stored
- *                                 as active and ok:true is returned. This variant will be returned
- *                                 once strict dial is required (e.g. when the session cannot
- *                                 proceed without a confirmed content channel).
+ *   directory_signature_invalid  — Ed25519/FROST verify failed; assignment discarded before I/O.
+ *   relay_auth_failed            — relay explicitly rejected the auth response.
+ *   relay_auth_error             — could not open a stream to the relay or read the challenge.
+ *   dial_counterparty_failed     — reserved for future use.
+ *   unsupported_signature_type   — SESSION-004: M1 'single' signature type refused by M2+ clients.
+ *   frost_signature_invalid      — SESSION-004: FROST threshold signature verification failed.
+ *   frost_signer_not_configured  — SESSION-004: initiator has no IThresholdSigner injected;
+ *                                  cannot derive verification key for own primary_pubkey.
  */
 export type ReceiveAssignmentResult =
   | { ok: true; sessionId: Uint8Array }
-  | { ok: false; reason: "directory_signature_invalid" | "relay_auth_failed" | "relay_auth_error" | "dial_counterparty_failed" };
+  | {
+      ok: false;
+      reason:
+        | "directory_signature_invalid"
+        | "relay_auth_failed"
+        | "relay_auth_error"
+        | "dial_counterparty_failed"
+        | "unsupported_signature_type"
+        | "frost_signature_invalid"
+        | "frost_signer_not_configured";
+    };
 
 // ─── Peer registry ───────────────────────────────────────────────────────────
 

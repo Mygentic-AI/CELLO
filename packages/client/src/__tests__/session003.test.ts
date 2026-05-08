@@ -34,7 +34,10 @@ import {
 import type { TestScope } from "@claude-flow/testing";
 import { randomBytes } from "node:crypto";
 import { Encoder } from "cbor-x";
-import { generateKeypair } from "@cello/crypto";
+import { generateKeypair, FrostThresholdSigner, CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto";
+import { bootstrapKeyShares, clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
+import { computeGenesisPrevRoot, buildSessionEstablishmentTbs } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
 import { createRelayNode, CelloRelayNode } from "@cello/relay";
 import type { DirectoryAdapter } from "@cello/relay";
@@ -100,6 +103,7 @@ interface FullFixture {
   dirMultiaddrs: string[];
   relayPeerId: string;
   relayMultiaddrs: string[];
+  signerA: FrostThresholdSigner;
   clientA: { kp: ReturnType<typeof generateKeypair>; pubkey: Uint8Array; peerId: string; multiaddrs: string[]; client: CelloClient };
   clientB: { kp: ReturnType<typeof generateKeypair>; pubkey: Uint8Array; peerId: string; multiaddrs: string[]; client: CelloClient };
   stopAll: () => Promise<void>;
@@ -179,7 +183,12 @@ async function makeFullFixture(): Promise<FullFixture> {
   const nodeB = await createNode({ keyProvider: kpB, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
   await nodeB.start();
 
-  const clientA = createClient(nodeA, kpA);
+  // SESSION-004: bootstrap FROST for A so clientA can receive FROST-signed assignments
+  const stubsA = createInProcessStubs(3);
+  await bootstrapKeyShares(pubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
+  const signerA = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsA }, pubkeyA);
+
+  const clientA = createClient(nodeA, kpA, { thresholdSigner: signerA });
   const clientB = createClient(nodeB, kpB);
   await clientA.registerHandler();
   await clientB.registerHandler();
@@ -195,6 +204,8 @@ async function makeFullFixture(): Promise<FullFixture> {
   const pubkeyBHex = Buffer.from(pubkeyB).toString("hex");
   dirNodeRef.directory.registerPeerInfo(pubkeyAHex, peerIdA, multiaddrsA);
   dirNodeRef.directory.registerPeerInfo(pubkeyBHex, peerIdB, multiaddrsB);
+  // SESSION-004: register A's threshold signer so directory can issue FROST-signed assignments
+  dirNodeRef.directory.registerThresholdSigner(pubkeyAHex, signerA);
 
   const stopAll = async () => {
     try { await nodeA.stop(); } catch {}
@@ -213,6 +224,7 @@ async function makeFullFixture(): Promise<FullFixture> {
     dirMultiaddrs,
     relayPeerId: relayPeerId2,
     relayMultiaddrs: relayMultiaddrs2,
+    signerA,
     clientA: { kp: kpA, pubkey: pubkeyA, peerId: peerIdA, multiaddrs: multiaddrsA, client: clientA },
     clientB: { kp: kpB, pubkey: pubkeyB, peerId: peerIdB, multiaddrs: multiaddrsB, client: clientB },
     stopAll,
@@ -221,17 +233,16 @@ async function makeFullFixture(): Promise<FullFixture> {
 
 /** Build a directory SessionAssignment and deliver it to both clients. */
 async function setupSessionViaDirectory(fix: FullFixture): Promise<string> {
-  // Use the real directory node to issue the session
-  // We'll simulate what the directory does: create an assignment signed with dir key
+  // SESSION-004: build a FROST-signed assignment using the real threshold signer
   const sessionId = new Uint8Array(randomBytes(16));
   const session_timestamp = Date.now();
-  const tbs = CBOR_ENC.encode([
-    sessionId,
-    fix.clientA.pubkey,
-    fix.clientB.pubkey,
-    session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-  ]) as Uint8Array;
-  const dirSig = await fix.dirKp.sign(tbs);
+  const genesis_prev_root = computeGenesisPrevRoot(fix.clientA.pubkey, fix.clientB.pubkey, sessionId, session_timestamp);
+  const tbs = buildSessionEstablishmentTbs(sessionId, fix.clientA.pubkey, fix.clientB.pubkey, genesis_prev_root, session_timestamp);
+  const ceremonyId = `session-${Buffer.from(sessionId).toString("hex")}`;
+  const sigResult = await fix.signerA.participateInCeremony(ceremonyId, tbs, CONTEXT_SESSION_ESTABLISHMENT);
+  if (!sigResult.ok) throw new Error(`FROST ceremony failed: ${sigResult.error.reason}`);
+
+  const dirPubkey = await fix.dirKp.getPublicKey();
 
   const assignment = {
     session_id: sessionId,
@@ -254,17 +265,26 @@ async function setupSessionViaDirectory(fix: FullFixture): Promise<string> {
       multiaddrs: fix.dirMultiaddrs,
     },
     session_timestamp,
-    directory_pubkey: fix.dirPubkey,
-    directory_signature: new Uint8Array(dirSig),
+    directory_pubkey: dirPubkey,
+    directory_signature: sigResult.signature,
+    signature_type: "frost" as const,
+    signer_pubkey: fix.signerA.getPrimaryPubkey(),
   };
 
-  // Register with relay (relay verifies same TBS as directory signed)
+  // Register with relay using Ed25519 dir signature (relay still verifies M1-style TBS)
+  const relayTbs = CBOR_ENC.encode([
+    sessionId,
+    fix.clientA.pubkey,
+    fix.clientB.pubkey,
+    session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
+  ]) as Uint8Array;
+  const relaySig = await fix.dirKp.sign(relayTbs);
   const registered = fix.relay.recordAssignment({
     session_id: sessionId,
     participant_a: fix.clientA.pubkey,
     participant_b: fix.clientB.pubkey,
     session_timestamp,
-    directory_signature: new Uint8Array(dirSig),
+    directory_signature: relaySig,
   });
   if (!registered.ok) throw new Error(`relay.recordAssignment failed: ${(registered as { reason: string }).reason}`);
 
@@ -283,7 +303,10 @@ async function setupSessionViaDirectory(fix: FullFixture): Promise<string> {
 
 let scope: TestScope;
 beforeEach(() => { scope = createTestScope(); });
-afterEach(() => scope.run(async () => {}));
+afterEach(() => {
+  clearTestShares();
+  return scope.run(async () => {});
+});
 
 // ─── AC-001: initiator SEAL + non-initiator auto-response ────────────────────
 
@@ -439,16 +462,21 @@ describe("AC-011 / SI-005: tampered directory_signature on session_sealed → cl
     scope.addCleanup(() => nodeB.stop());
 
     const pubkeyA = await kpA.getPublicKey();
-    const clientA = createClient(nodeA, kpA);
+    // SESSION-004: bootstrap FROST for A so clientA can accept FROST-signed assignments
+    const stubsSI005 = createInProcessStubs(3);
+    await bootstrapKeyShares(pubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsSI005 });
+    const signerSI005 = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsSI005 }, pubkeyA);
+    const clientA = createClient(nodeA, kpA, { thresholdSigner: signerSI005 });
     await clientA.registerHandler();
 
     const sid = new Uint8Array(randomBytes(16));
     const session_timestamp = Date.now();
-    const tbsAssignment = CBOR_ENC.encode([
-      sid, pubkeyA, pubkeyB,
-      session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-    ]) as Uint8Array;
-    const dirSigAssignment = await kpDir.sign(tbsAssignment);
+    // SESSION-004: build FROST-signed assignment
+    const genesis_prev_root_si005 = computeGenesisPrevRoot(pubkeyA, pubkeyB, sid, session_timestamp);
+    const tbsAssignment = buildSessionEstablishmentTbs(sid, pubkeyA, pubkeyB, genesis_prev_root_si005, session_timestamp);
+    const ceremonySI005 = `session-${Buffer.from(sid).toString("hex")}`;
+    const sigResultSI005 = await signerSI005.participateInCeremony(ceremonySI005, tbsAssignment, CONTEXT_SESSION_ESTABLISHMENT);
+    if (!sigResultSI005.ok) throw new Error(`FROST ceremony failed: ${sigResultSI005.error.reason}`);
 
     await clientA.receiveSessionAssignment({
       session_id: sid,
@@ -458,7 +486,9 @@ describe("AC-011 / SI-005: tampered directory_signature on session_sealed → cl
       directory_endpoint: { peer_id: "", multiaddrs: [] },
       session_timestamp,
       directory_pubkey: dirPubkeyReal,
-      directory_signature: new Uint8Array(dirSigAssignment),
+      directory_signature: sigResultSI005.signature,
+      signature_type: "frost",
+      signer_pubkey: signerSI005.getPrimaryPubkey(),
     }, pubkeyA);
 
     const sessionIdHex2 = Buffer.from(sid).toString("hex");

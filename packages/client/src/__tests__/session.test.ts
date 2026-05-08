@@ -30,9 +30,10 @@ import {
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
 import { randomBytes } from "node:crypto";
-import { Encoder } from "cbor-x";
-import { generateKeypair } from "@cello/crypto";
-import { computeGenesisPrevRoot } from "@cello/protocol-types";
+import { generateKeypair, FrostThresholdSigner, CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto";
+import { computeGenesisPrevRoot, buildSessionEstablishmentTbs } from "@cello/protocol-types";
+import { bootstrapKeyShares, clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
 import { createNode } from "@cello/transport";
 import type { SessionAssignment } from "@cello/directory";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "@cello/relay";
@@ -40,8 +41,6 @@ import { createClient } from "../client.js";
 import type { CelloClient } from "../types.js";
 
 setupV3Tests();
-
-const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -61,16 +60,17 @@ async function makeDirectoryAssignment(opts: {
   relayPeerId: string;
   relayMultiaddrs: string[];
   dirKp: ReturnType<typeof generateKeypair>;
+  signerA: FrostThresholdSigner;
 }): Promise<SessionAssignment> {
   const session_timestamp = Date.now();
-  const tbs = CBOR_ENC.encode([
-    opts.sessionId,
-    opts.pubA,
-    opts.pubB,
-    session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-  ]) as Uint8Array;
   const dirPubkey = await opts.dirKp.getPublicKey();
-  const directory_signature = await opts.dirKp.sign(tbs);
+
+  // SESSION-004: build FROST TBS and sign with threshold signer
+  const genesis_prev_root = computeGenesisPrevRoot(opts.pubA, opts.pubB, opts.sessionId, session_timestamp);
+  const tbs = buildSessionEstablishmentTbs(opts.sessionId, opts.pubA, opts.pubB, genesis_prev_root, session_timestamp);
+  const ceremonyId = `session-${Buffer.from(opts.sessionId).toString("hex")}`;
+  const sigResult = await opts.signerA.participateInCeremony(ceremonyId, tbs, CONTEXT_SESSION_ESTABLISHMENT);
+  if (!sigResult.ok) throw new Error(`FROST ceremony failed: ${sigResult.error.reason}`);
 
   return {
     session_id: opts.sessionId,
@@ -94,7 +94,9 @@ async function makeDirectoryAssignment(opts: {
     },
     session_timestamp,
     directory_pubkey: dirPubkey,
-    directory_signature,
+    directory_signature: sigResult.signature,
+    signature_type: "frost" as const,
+    signer_pubkey: opts.signerA.getPrimaryPubkey(),
   };
 }
 
@@ -107,6 +109,7 @@ async function makeFixture(): Promise<{
   relayAddr: string;
   relayPeerId: string;
   relayStop: () => Promise<void>;
+  signerA: FrostThresholdSigner;
   clientA: { kp: ReturnType<typeof generateKeypair>; pubkey: Uint8Array; peerId: string; multiaddrs: string[]; client: CelloClient };
   clientB: { kp: ReturnType<typeof generateKeypair>; pubkey: Uint8Array; peerId: string; multiaddrs: string[]; client: CelloClient };
   stopAll: () => Promise<void>;
@@ -131,7 +134,12 @@ async function makeFixture(): Promise<{
   const nodeB = await createNode({ keyProvider: kpB, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
   await nodeB.start();
 
-  const clientA = createClient(nodeA, kpA);
+  // SESSION-004: bootstrap FROST for pubA so clientA can verify FROST-signed assignments
+  const stubsA = createInProcessStubs(3);
+  await bootstrapKeyShares(pubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
+  const signerA = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsA }, pubkeyA);
+
+  const clientA = createClient(nodeA, kpA, { thresholdSigner: signerA });
   const clientB = createClient(nodeB, kpB);
   await clientA.registerHandler();
   await clientB.registerHandler();
@@ -148,6 +156,7 @@ async function makeFixture(): Promise<{
     relayAddr,
     relayPeerId,
     relayStop,
+    signerA,
     clientA: {
       kp: kpA,
       pubkey: pubkeyA,
@@ -170,7 +179,10 @@ async function makeFixture(): Promise<{
 
 let scope: TestScope;
 beforeEach(() => { scope = createTestScope(); });
-afterEach(() => scope.run(async () => {}));
+afterEach(() => {
+  clearTestShares();
+  return scope.run(async () => {});
+});
 
 // ─── AC-002: genesis prev_root matches computeGenesisPrevRoot ─────────────────
 
@@ -191,6 +203,7 @@ describe("AC-002: client computes byte-identical genesis prev_root", () => {
       relayPeerId: fix.relayPeerId,
       relayMultiaddrs: [fix.relayAddr],
       dirKp: fix.dirKp,
+      signerA: fix.signerA,
     });
 
     const result = await fix.clientA.client.receiveSessionAssignment(assignment, fix.clientA.pubkey);
@@ -229,6 +242,7 @@ describe("AC-003: client dials relay and completes auth with Ed25519(SHA-256(dom
       relayPeerId: fix.relayPeerId,
       relayMultiaddrs: [fix.relayAddr],
       dirKp: fix.dirKp,
+      signerA: fix.signerA,
     });
 
     const result = await fix.clientA.client.receiveSessionAssignment(assignment, fix.clientA.pubkey);
@@ -259,6 +273,7 @@ describe("AC-004: after both clients auth to relay, listSessions() shows status:
       relayPeerId: fix.relayPeerId,
       relayMultiaddrs: [fix.relayAddr],
       dirKp: fix.dirKp,
+      signerA: fix.signerA,
     });
 
     // Both receive the same assignment concurrently (as the directory would push it)
@@ -312,7 +327,7 @@ describe("AC-004: after both clients auth to relay, listSessions() shows status:
 // ─── AC-005: tampered dir signature → discard ────────────────────────────────
 
 describe("AC-005: tampered directory_signature → discard, relay NOT dialled", () => {
-  it("one bit flipped on directory_signature → result.ok:false with directory_signature_invalid", async () => {
+  it("one bit flipped on directory_signature → result.ok:false with frost_signature_invalid", async () => {
     const fix = await makeFixture();
     scope.addCleanup(fix.stopAll);
 
@@ -328,6 +343,7 @@ describe("AC-005: tampered directory_signature → discard, relay NOT dialled", 
       relayPeerId: fix.relayPeerId,
       relayMultiaddrs: [fix.relayAddr],
       dirKp: fix.dirKp,
+      signerA: fix.signerA,
     });
 
     // Flip one bit in the directory signature
@@ -341,7 +357,8 @@ describe("AC-005: tampered directory_signature → discard, relay NOT dialled", 
     const result = await fix.clientA.client.receiveSessionAssignment(tamperedAssignment, fix.clientA.pubkey);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.reason).toBe("directory_signature_invalid");
+      // SESSION-004: FROST sig tampered → frost_signature_invalid (was directory_signature_invalid in M1)
+      expect(result.reason).toBe("frost_signature_invalid");
     }
 
     // No session recorded
@@ -352,7 +369,7 @@ describe("AC-005: tampered directory_signature → discard, relay NOT dialled", 
 // ─── SI-003: no participation without verified dir signature ──────────────────
 
 describe("SI-003: client NEVER participates in a session without verifying dir signature", () => {
-  it("random bytes as directory_signature → directory_signature_invalid, zero sessions", async () => {
+  it("random bytes as directory_signature → frost_signature_invalid, zero sessions", async () => {
     const fix = await makeFixture();
     scope.addCleanup(fix.stopAll);
 
@@ -368,6 +385,7 @@ describe("SI-003: client NEVER participates in a session without verifying dir s
       relayPeerId: fix.relayPeerId,
       relayMultiaddrs: [fix.relayAddr],
       dirKp: fix.dirKp,
+      signerA: fix.signerA,
     });
 
     const forgedSig = new Uint8Array(randomBytes(64));
@@ -379,7 +397,8 @@ describe("SI-003: client NEVER participates in a session without verifying dir s
     const result = await fix.clientA.client.receiveSessionAssignment(forgedAssignment, fix.clientA.pubkey);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.reason).toBe("directory_signature_invalid");
+      // SESSION-004: FROST sig invalid → frost_signature_invalid (was directory_signature_invalid in M1)
+      expect(result.reason).toBe("frost_signature_invalid");
     }
     expect(fix.clientA.client.listSessions().length).toBe(0);
   }, 10_000);
@@ -404,18 +423,13 @@ describe("SI-003: client NEVER participates in a session without verifying dir s
     // TODO: once directory key pinning is added, update this test to assert
     //   expect(result.ok).toBe(false) and expect(result.reason).toBe("directory_signature_invalid").
 
-    const attackerKp = generateKeypair();
-    const attackerPubkey = await attackerKp.getPublicKey();
-
+    // SESSION-004: attacker creates a FROST-type assignment with their own signer_pubkey.
+    // The initiator (A) verifies against its own thresholdSigner.getPrimaryPubkey() (not signer_pubkey),
+    // so using a random attacker-controlled signer_pubkey causes frost_signature_invalid.
     const sessionId = new Uint8Array(randomBytes(16));
     const session_timestamp = Date.now();
-    const tbs = CBOR_ENC.encode([
-      sessionId,
-      fix.clientA.pubkey,
-      fix.clientB.pubkey,
-      session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-    ]) as Uint8Array;
-    const attackerSig = await attackerKp.sign(tbs);
+    const attackerSignerPubkey = new Uint8Array(32); // all-zeros — not A's real group key
+    const forgedSig = new Uint8Array(64); // invalid signature
 
     const forgedAssignment: SessionAssignment = {
       session_id: sessionId,
@@ -424,14 +438,19 @@ describe("SI-003: client NEVER participates in a session without verifying dir s
       relay_endpoint: { peer_id: fix.relayPeerId, multiaddrs: [fix.relayAddr] },
       directory_endpoint: { peer_id: "", multiaddrs: [] },
       session_timestamp,
-      directory_pubkey: attackerPubkey,   // attacker's key, not the real directory's
-      directory_signature: attackerSig,   // valid under attacker's key — self-consistent forgery
+      directory_pubkey: new Uint8Array(32),   // doesn't matter for FROST path
+      directory_signature: forgedSig,          // invalid FROST sig
+      signature_type: "frost" as const,
+      signer_pubkey: attackerSignerPubkey,     // attacker-controlled — ignored by initiator (A uses own group key)
     };
 
-    // Does NOT assert ok:true or ok:false. The current implementation accepts this
-    // assignment because no pinned directory key is available to reject it.
+    // SESSION-004: initiator (A) verifies against its own thresholdSigner.getPrimaryPubkey(),
+    // not the attacker-supplied signer_pubkey. The invalid sig causes frost_signature_invalid.
     const result = await fix.clientA.client.receiveSessionAssignment(forgedAssignment, fix.clientA.pubkey);
-    expect(typeof result.ok).toBe("boolean"); // call must complete without throwing
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("frost_signature_invalid");
+    }
   }, 10_000);
 });
 
@@ -459,6 +478,7 @@ describe("AC-008 / DB-001 / DB-002 (transport-loss recovery — SESSION-006)", (
       relayPeerId: fix.relayPeerId,
       relayMultiaddrs: [fix.relayAddr],
       dirKp: fix.dirKp,
+      signerA: fix.signerA,
     });
 
     const r = await fix.clientA.client.receiveSessionAssignment(assignment, fix.clientA.pubkey);
@@ -511,6 +531,7 @@ describe("AC-008 / DB-001 / DB-002 (transport-loss recovery — SESSION-006)", (
       relayPeerId: fix.relayPeerId,
       relayMultiaddrs: [fix.relayAddr],
       dirKp: fix.dirKp,
+      signerA: fix.signerA,
     });
 
     const r = await fix.clientA.client.receiveSessionAssignment(assignment, fix.clientA.pubkey);
@@ -562,8 +583,13 @@ describe("AC-008 / DB-001 / DB-002 (transport-loss recovery — SESSION-006)", (
     await nodeX.start();
     scope.addCleanup(async () => { try { await nodeX.stop(); } catch {} });
 
+    // SESSION-004: bootstrap FROST for pubkeyX
+    const stubsX = createInProcessStubs(3);
+    await bootstrapKeyShares(pubkeyX, { threshold: 2, participants: 3, directoryNodeStubs: stubsX });
+    const signerX = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsX }, pubkeyX);
+
     const { createClient: cc } = await import("../client.js");
-    const clientX = cc(nodeX, kpX, { reconnectTimeoutMs: 100 });
+    const clientX = cc(nodeX, kpX, { reconnectTimeoutMs: 100, thresholdSigner: signerX });
     await clientX.registerHandler();
 
     const kpY = generateKeypair();
@@ -572,15 +598,15 @@ describe("AC-008 / DB-001 / DB-002 (transport-loss recovery — SESSION-006)", (
     const sessionId = new Uint8Array(randomBytes(16));
     const sessionIdHex = Buffer.from(sessionId).toString("hex");
     const session_timestamp = Date.now();
-    const tbs = CBOR_ENC.encode([
-      sessionId,
-      pubkeyX,
-      pubkeyY,
-      session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-    ]) as Uint8Array;
-    const dirSig = await dirKp.sign(tbs);
 
-    const assignment = {
+    // SESSION-004: build FROST-signed assignment
+    const genesis_prev_root = computeGenesisPrevRoot(pubkeyX, pubkeyY, sessionId, session_timestamp);
+    const tbs = buildSessionEstablishmentTbs(sessionId, pubkeyX, pubkeyY, genesis_prev_root, session_timestamp);
+    const ceremonyIdX = `session-${Buffer.from(sessionId).toString("hex")}`;
+    const sigResultX = await signerX.participateInCeremony(ceremonyIdX, tbs, CONTEXT_SESSION_ESTABLISHMENT);
+    if (!sigResultX.ok) throw new Error("FROST ceremony failed in DB-002 test");
+
+    const assignment: SessionAssignment = {
       session_id: sessionId,
       participant_a: { pubkey: pubkeyX, peer_id: nodeX.getPeerId(), multiaddrs: nodeX.listenAddresses() },
       participant_b: { pubkey: pubkeyY, peer_id: "12D3KooWFakeY", multiaddrs: ["/ip4/127.0.0.1/tcp/0"] },
@@ -588,7 +614,9 @@ describe("AC-008 / DB-001 / DB-002 (transport-loss recovery — SESSION-006)", (
       directory_endpoint: { peer_id: "", multiaddrs: [] },
       session_timestamp,
       directory_pubkey: dirPubkey,
-      directory_signature: dirSig,
+      directory_signature: sigResultX.signature,
+      signature_type: "frost" as const,
+      signer_pubkey: signerX.getPrimaryPubkey(),
     };
 
     const rX = await clientX.receiveSessionAssignment(assignment, pubkeyX);
