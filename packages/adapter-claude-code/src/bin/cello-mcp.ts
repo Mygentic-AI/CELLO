@@ -13,6 +13,7 @@ import { pushChannelNotification } from "../notifications.js";
 
 const keyPath = process.env["CELLO_KEY_FILE"] ?? join(homedir(), ".cello", "key");
 const listenAddr = process.env["CELLO_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/tcp/0";
+const directoryMultiaddr = process.env["CELLO_DIRECTORY_MULTIADDR"];
 
 let kp: FileKeyProvider;
 try {
@@ -39,12 +40,26 @@ if (process.env.NODE_ENV === "test") {
   primaryPubkey = bootstrapResult.primaryPubkey;
 }
 
+// Parse directory endpoint from CELLO_DIRECTORY_MULTIADDR (if set)
+let directoryEndpoint: { peer_id: string; multiaddrs: string[] } | undefined = undefined;
+if (directoryMultiaddr) {
+  const parts = directoryMultiaddr.split("/");
+  const p2pIndex = parts.findIndex((p) => p === "p2p");
+  const peerId = p2pIndex !== -1 ? parts[p2pIndex + 1] : null;
+  if (peerId) {
+    directoryEndpoint = { peer_id: peerId, multiaddrs: [directoryMultiaddr] };
+  } else {
+    process.stderr.write("cello-mcp: CELLO_DIRECTORY_MULTIADDR must include /p2p/<peer-id>\n");
+  }
+}
+
 // Late-bound server reference — set after createMcpServer returns.
 // The closure captures the box; notifications fired before server is assigned are dropped.
 let mcpServer: McpServer | undefined;
 
 const client = createClient(node, kp, {
   thresholdSigner,
+  directoryEndpoint,
   onMessageQueued: (senderHex) => {
     if (mcpServer) void pushChannelNotification(mcpServer, senderHex);
   },
