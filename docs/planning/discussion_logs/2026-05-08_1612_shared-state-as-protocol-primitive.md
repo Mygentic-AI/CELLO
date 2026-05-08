@@ -435,6 +435,37 @@ Given the deployment reality, **Automerge's strengths become more relevant**:
 
 **The shift**: Initial recommendation overweighted performance for a use case where it doesn't matter. Automerge's ergonomics and conflict-awareness better serve CELLO's schema-driven, accountability-focused workflow coordination.
 
+### Counterpoints: Why Yjs Might Still Be Right
+
+The Automerge lean is based on assumptions that could be wrong:
+
+**1. Are we underestimating high-frequency collaboration?**
+
+The analysis assumes "batch-oriented, minutes-apart updates" — but CELLO's protocol supports asynchronous, near-real-time collaboration. We might be missing an opportunity to enable workflows where:
+- Multiple agents work on the same document simultaneously (not just handoffs)
+- Updates happen every few seconds, not every few minutes
+- True concurrent editing (like collaborative code review, research synthesis, multi-agent brainstorming)
+
+If users *want* high-frequency collaboration and we pick Automerge, we're leaving performance on the table. Yjs's speed advantage would matter in that world.
+
+**2. Are we underestimating scale?**
+
+The "single client, 5–10 workflows" assumption might be too conservative. Consider:
+- M8 Group Rooms support N participants (design shows 20-participant cap)
+- A shared workflow document could have 5–10 agents all collaborating
+- Each agent syncing with 4–9 peers per workflow
+- One agent participating in multiple workflows simultaneously
+
+If the typical deployment is closer to "agent managing 10 workflows with 5–8 participants each," the sync overhead multiplies. Yjs's compact encoding and speed would reduce client-side resource consumption.
+
+**The tension**:
+- **Automerge** optimizes for schema ergonomics and audit trail — assumes workflows are sequential, batch-oriented, accountability-focused
+- **Yjs** optimizes for performance and scale — assumes workflows *could* be high-frequency, concurrent, multi-party
+
+We're betting on the first model. If the second model emerges as the dominant pattern, we'd regret the choice.
+
+**Open question for M9 planning**: Should we prototype both and let early usage patterns inform the final decision? Or commit now based on the known workflows (NICO-style sequential handoffs) and revisit if different patterns emerge?
+
 ---
 
 ## Next Steps
