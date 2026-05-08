@@ -102,12 +102,12 @@ Verify `cello_status` is callable. If not, the CELLO MCP server is not connected
 2. Add the MCP server with the directory configured:
 
 ```bash
-CELLO_DIRECTORY_MULTIADDR=/ip4/127.0.0.1/tcp/4002/p2p/12D3KooW... \
+CELLO_DIRECTORY_MULTIADDR=<paste directory multiaddr here> \
 NODE_ENV=test \
 claude mcp add --transport stdio cello -- cello-mcp
 ```
 
-Replace the multiaddr with the actual directory multiaddr from the node operator.
+**Replace `<paste directory multiaddr here>` with the full directory multiaddr from the node operator's Step 3 report.** It looks like `/ip4/127.0.0.1/tcp/4002/p2p/12D3KooWDeEpSiubGw4vZa5eubCQKX4Q27URxn55tweKi2coagxF` (example).
 
 Then restart this session.
 
@@ -229,12 +229,12 @@ Verify `cello_status` is callable. If not, the CELLO MCP server is not connected
 2. Add the MCP server with the directory configured:
 
 ```bash
-CELLO_DIRECTORY_MULTIADDR=/ip4/127.0.0.1/tcp/4002/p2p/12D3KooW... \
+CELLO_DIRECTORY_MULTIADDR=<paste directory multiaddr here> \
 NODE_ENV=test \
 claude mcp add --transport stdio cello -- cello-mcp
 ```
 
-Replace the multiaddr with the actual directory multiaddr from the node operator.
+**Replace `<paste directory multiaddr here>` with the full directory multiaddr from the node operator's Step 3 report.** It looks like `/ip4/127.0.0.1/tcp/4002/p2p/12D3KooWDeEpSiubGw4vZa5eubCQKX4Q27URxn55tweKi2coagxF` (example).
 
 Then restart this session.
 
