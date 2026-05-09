@@ -220,6 +220,8 @@ export class FrostDirectoryHandler {
     this.#onFallbackCanary = opts.onFallbackCanary;
   }
 
+  get nodeId(): string { return this.#nodeId; }
+
   // ─── bootstrapKeyShares ──────────────────────────────────────────────────────
 
   /**

@@ -1381,6 +1381,49 @@ class CelloClientImpl implements CelloClient {
   }
 
   /**
+   * Handle ceremony_request from the directory.
+   * The directory sends this when a session_request requires a FROST ceremony but
+   * the directory is not the coordinator. The client runs participateInCeremony
+   * and sends back a ceremony_result with the combined signature.
+   */
+  async #handleCeremonyRequest(
+    stream: Stream,
+    frame: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.#thresholdSigner) return; // no signer configured — ceremony_result with null
+
+    const ceremonyId = frame["ceremony_id"] as string | undefined;
+    const tbsRaw = frame["tbs"];
+    const tbs = tbsRaw instanceof Uint8Array ? tbsRaw
+      : Buffer.isBuffer(tbsRaw) ? new Uint8Array(tbsRaw as Buffer) : null;
+    const context = frame["context"] as string | undefined;
+
+    if (!ceremonyId || !tbs || !context) return;
+
+    try {
+      const result = await this.#thresholdSigner.participateInCeremony(
+        ceremonyId,
+        tbs,
+        context as import("@cello/crypto/frost/types.js").FrostContext,
+      );
+
+      const sig = result.ok ? result.signature : null;
+      stream.send(lp.encode.single(CBOR_ENC.encode({
+        type: "ceremony_result",
+        ceremony_id: ceremonyId,
+        signature: sig ? new Uint8Array(sig) : null,
+      })));
+    } catch {
+      // Send failure result
+      stream.send(lp.encode.single(CBOR_ENC.encode({
+        type: "ceremony_result",
+        ceremony_id: ceremonyId,
+        signature: null,
+      })));
+    }
+  }
+
+  /**
    * SESSION-005: Handle session_frost_sealed event — deferred FROST seal completed.
    * Sent by the directory when a previously deferred seal ceremony completes.
    * Updates the session from seal_deferred/bilateral to sealed/frost.
@@ -2633,6 +2676,10 @@ class CelloClientImpl implements CelloClient {
             const sessionIdHex = Buffer.from(sessionId).toString("hex");
             this.#handleSessionFrostSealed(sessionIdHex, frame);
           }
+        } else if (frame["type"] === "ceremony_request") {
+          // Directory asks the client to coordinate a FROST ceremony.
+          // Client runs participateInCeremony and sends ceremony_result back.
+          void this.#handleCeremonyRequest(stream, frame);
         }
       }
     } catch { /* stream closed */ }

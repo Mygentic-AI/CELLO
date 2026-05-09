@@ -103,6 +103,7 @@ import { randomBytes, createHash } from "node:crypto";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner } from "@cello/crypto";
+import type { DirectoryNodeStub, StubSignParams, StubCommitment } from "@cello/crypto/frost/types.js";
 import type { KeyProvider, LeafInput, IThresholdSigner } from "@cello/crypto";
 import { encodeStructure2, computeGenesisPrevRoot, buildSessionEstablishmentTbs, buildSealTbs } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
@@ -209,6 +210,8 @@ export class CelloDirectoryNode {
 
   // SESSION-004: initiator_pubkey_hex → IThresholdSigner (registered per-agent)
   readonly #thresholdSigners = new Map<string, IThresholdSigner>();
+  // pubkeyHex → ClientDelegatedSigner for ceremony_result routing
+  readonly #delegatedSigners = new Map<string, ClientDelegatedSigner>();
 
   // pubkey_hex → { peer_id, multiaddrs } (from the Noise handshake / client info)
   readonly #peerInfo = new Map<string, { peer_id: string; multiaddrs: string[] }>();
@@ -323,6 +326,22 @@ export class CelloDirectoryNode {
           secret: frostSecret as unknown as import("@noble/curves/abstract/frost.js").FrostSecret,
           pub: frostPub as unknown as import("@noble/curves/abstract/frost.js").FrostPublic,
         });
+
+        // Register a ClientDelegatedSigner that, when the directory needs to run a FROST
+        // ceremony, sends a ceremony_request back to the client over the signaling stream.
+        // The client is the coordinator (it holds its own share in _localShares); the directory
+        // only holds K_server_X shares (via FrostHandlerStub). The client runs the ceremony and
+        // returns the combined signature via a ceremony_result frame.
+        const agentPubkeyBytes = Buffer.from(agentPubkey, "hex");
+        // primaryPubkey = commitments[0] from the shared FrostPublic (group public key)
+        const primaryPubkeyFromPub = new Uint8Array(
+          (frostPub as unknown as { commitments: Uint8Array[] }).commitments[0]
+        );
+        const delegatedSigner = new ClientDelegatedSigner(agentPubkey, primaryPubkeyFromPub);
+        delegatedSigner.setStreams(this.#streams);
+        this.#delegatedSigners.set(agentPubkey, delegatedSigner);
+        this.registerThresholdSigner(agentPubkey, delegatedSigner);
+        this.registerPrimaryPubkey(agentPubkey, primaryPubkeyFromPub);
 
         stream.send(lp.encode.single(CBOR_ENC.encode({ type: "frost_bootstrap_ok" })));
         await stream.close();
@@ -486,7 +505,22 @@ export class CelloDirectoryNode {
           continue;
         }
 
-        // Authenticated: process session_request or seal_frost_signature frames
+        // Authenticated: process session_request, seal_frost_signature, or ceremony_result frames
+        // ceremony_result: client sends combined FROST signature after running participateInCeremony
+        let rawFrame: Record<string, unknown> | null = null;
+        try { rawFrame = cborDecode(frameBytes) as Record<string, unknown>; } catch { /* ignore */ }
+        if (rawFrame?.["type"] === "ceremony_result") {
+          const ceremonyId = rawFrame["ceremony_id"] as string | undefined;
+          const sigRaw = rawFrame["signature"];
+          const sig = sigRaw instanceof Uint8Array ? sigRaw
+            : Buffer.isBuffer(sigRaw) ? new Uint8Array(sigRaw as Buffer) : null;
+          if (ceremonyId && authedPubkeyHex) {
+            const delegated = this.#delegatedSigners.get(authedPubkeyHex);
+            if (delegated) delegated.resolveFromClient(ceremonyId, sig);
+          }
+          continue;
+        }
+
         const parsed = decodeInboundSignalingFrame(frameBytes);
         if (!parsed) {
           this.#sendFrame(stream, encodeNotAuthenticated({ type: "not_authenticated" }));
@@ -1099,6 +1133,142 @@ function verifySealLeaves(
   // clients perform this verification locally (AC-001), maintaining the trust guarantee at the
   // client level. See: CELLO-SESSION-003 AC-002 step (f).
   return { ok: true };
+}
+
+// ─── FrostHandlerStub ────────────────────────────────────────────────────────
+// Adapts FrostDirectoryHandler as a DirectoryNodeStub so FrostThresholdSigner
+// can use it as a ceremony participant during live (non-test) operation.
+// Used by the frost_bootstrap handler to register a signer with the directory.
+
+class FrostHandlerStub implements DirectoryNodeStub {
+  readonly id: string;
+  readonly #handler: FrostDirectoryHandler;
+  readonly #agentPubkey: string;
+  readonly #epochId: string;
+
+  constructor(handler: FrostDirectoryHandler, agentPubkey: string, epochId: string) {
+    this.id = handler.nodeId;
+    this.#handler = handler;
+    this.#agentPubkey = agentPubkey;
+    this.#epochId = epochId;
+  }
+
+  isReachable(): boolean { return true; }
+
+  async receiveShare(
+    secret: import("@noble/curves/abstract/frost.js").FrostSecret,
+    pub: import("@noble/curves/abstract/frost.js").FrostPublic,
+  ): Promise<void> {
+    this.#handler.injectShareForTest(this.#agentPubkey, this.#epochId, { secret, pub });
+  }
+
+  async generateCommitment(): Promise<StubCommitment> {
+    const result = await this.#handler.generateCommitment(this.#agentPubkey, this.#epochId);
+    if (!result.ok) throw new Error(`FrostHandlerStub.generateCommitment failed: ${result.reason}`);
+    return {
+      nodeId: result.nodeId,
+      nonceCommitment: result.nonceCommitment,
+      nonces: null as unknown as import("@noble/curves/abstract/frost.js").Nonces,
+    };
+  }
+
+  async signRound(params: StubSignParams): Promise<Uint8Array | null> {
+    const result = await this.#handler.signRawMessage({
+      agentPubkey: this.#agentPubkey,
+      epochId: this.#epochId,
+      framedMsg: params.msg,
+      commitmentList: params.commitmentList,
+      peerIdString: "directory-self",
+      ceremonyId: params.ceremonyId,
+    });
+    if (!result.ok) return null;
+    return result.partialSignature;
+  }
+}
+
+// ─── ClientDelegatedSigner ───────────────────────────────────────────────────
+// IThresholdSigner that sends a ceremony_request frame to the client (initiator)
+// over their authenticated signaling stream and waits for a ceremony_result frame.
+// The client runs participateInCeremony locally (it holds the coordinator share)
+// and returns the combined FROST signature.
+
+import type { ThresholdSignature, FrostContext } from "@cello/crypto/frost/types.js";
+
+class ClientDelegatedSigner implements IThresholdSigner {
+  readonly #agentPubkeyHex: string;
+  readonly #primaryPubkey: Uint8Array;
+  // Pending ceremony resolvers: ceremonyId → resolve function
+  readonly #pending = new Map<string, (result: ThresholdSignature) => void>();
+
+  // Back-reference to the directory node's stream map and CBOR encoder (set after construction)
+  #streams: Map<string, import("@libp2p/interface").Stream> | null = null;
+
+  constructor(agentPubkeyHex: string, primaryPubkey: Uint8Array) {
+    this.#agentPubkeyHex = agentPubkeyHex;
+    this.#primaryPubkey = primaryPubkey;
+  }
+
+  setStreams(streams: Map<string, import("@libp2p/interface").Stream>): void {
+    this.#streams = streams;
+  }
+
+  getPrimaryPubkey(): Uint8Array { return new Uint8Array(this.#primaryPubkey); }
+
+  verifySignature(signature: Uint8Array, tbs: Uint8Array, context: FrostContext, publicKey: Uint8Array): boolean {
+    try {
+      const ctxBytes = new TextEncoder().encode(context);
+      const framed = new Uint8Array(ctxBytes.length + 1 + tbs.length);
+      framed.set(ctxBytes); framed[ctxBytes.length] = 0x00; framed.set(tbs, ctxBytes.length + 1);
+      // Re-use existing verifyFrostSignature from crypto package via dynamic import is complex;
+      // use the raw ed25519_FROST verify from @noble/curves which is already a dep of @cello/directory
+      const { ed25519_FROST } = require("@noble/curves/ed25519");
+      return ed25519_FROST.verify(signature, framed, publicKey);
+    } catch { return false; }
+  }
+
+  async participateInCeremony(
+    ceremonyId: string,
+    tbs: Uint8Array,
+    context: FrostContext,
+  ): Promise<ThresholdSignature> {
+    if (!this.#streams) return { ok: false, error: { reason: "DIRECTORY_BELOW_THRESHOLD" } };
+    const stream = this.#streams.get(this.#agentPubkeyHex);
+    if (!stream) return { ok: false, error: { reason: "DIRECTORY_BELOW_THRESHOLD" } };
+
+    // Send ceremony_request to the initiating client — the client runs participateInCeremony
+    // locally (it holds the coordinator share) and replies with ceremony_result.
+    try {
+      stream.send(lp.encode.single(CBOR_ENC.encode({
+        type: "ceremony_request",
+        ceremony_id: ceremonyId,
+        tbs: new Uint8Array(tbs),
+        context,
+      })));
+    } catch {
+      return { ok: false, error: { reason: "DIRECTORY_BELOW_THRESHOLD" } };
+    }
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.#pending.delete(ceremonyId);
+        resolve({ ok: false, error: { reason: "CEREMONY_TIMEOUT" } });
+      }, 30_000);
+      this.#pending.set(ceremonyId, (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      });
+    });
+  }
+
+  // Called by the signaling stream handler when ceremony_result arrives from the client
+  resolveFromClient(ceremonyId: string, signature: Uint8Array | null): void {
+    const resolve = this.#pending.get(ceremonyId);
+    if (!resolve) return;
+    this.#pending.delete(ceremonyId);
+    resolve(signature
+      ? { ok: true, signature }
+      : { ok: false, error: { reason: "CEREMONY_EXHAUSTED" } });
+  }
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
