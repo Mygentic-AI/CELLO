@@ -88,8 +88,7 @@ export class NetworkDirectoryNode implements DirectoryNodeStub {
     const stream = await this.#openStream();
     try {
       stream.send(lp.encode.single(frame));
-      await stream.close();
-
+      // Read the response before closing — directory sends frost_bootstrap_ok
       for await (const chunk of lp.decode(stream)) {
         const bytes = chunk instanceof Uint8Array ? chunk : (chunk as unknown as { slice(): Uint8Array }).slice();
         const resp = cborDecode(bytes) as { type: string };
@@ -158,7 +157,7 @@ export class NetworkDirectoryNode implements DirectoryNodeStub {
       epochId: this.#epochId,
       framedMsg: params.msg, // already framed (context\0tbs) by the coordinator
       commitmentList: params.commitmentList,
-      ceremonyId: `ceremony:${this.#agentPubkeyHex}`,
+      ceremonyId: params.ceremonyId,
       peerIdString: this.#node.getPeerId(),
     });
 
@@ -229,6 +228,11 @@ export async function bootstrapNetworkKeyShares(
     directoryNodes: NetworkDirectoryNode[];
   },
 ): Promise<{ signer: FrostThresholdSigner; primaryPubkey: Uint8Array }> {
+  // bootstrapKeyShares uses trustedDealer — a test-harness shortcut, not real DKG (M3+).
+  // This function inherits that constraint. The caller (cello-mcp.ts) guards with NODE_ENV=test.
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("bootstrapNetworkKeyShares uses trustedDealer which is test-only. Real DKG (M3) required in production.");
+  }
   const agentPubkeyHex = Buffer.from(agentPubkey).toString("hex");
   const epochId = `${agentPubkeyHex}:epoch:1`;
 

@@ -293,7 +293,8 @@ export class CelloDirectoryNode {
 
       if (frameType === "frost_bootstrap") {
         // Client pushes share material from trustedDealer bootstrap.
-        // Store in the share store so handleCeremonyRound can use it.
+        // CRIT-2: injectShareForTest is guarded by NODE_ENV !== 'test'. This frame is only
+        // accepted in test mode. In production, injectShareForTest throws immediately.
         const agentPubkey = req["agentPubkey"] as string;
         const epochId = req["epochId"] as string;
         const secretBytes = req["secret"] as Uint8Array;
@@ -302,11 +303,11 @@ export class CelloDirectoryNode {
         const verifyingSharesRaw = req["verifyingShares"] as Record<string, Uint8Array>;
         const signers = req["signers"] as { min: number; max: number };
 
-        // Reconstruct FrostSecret and FrostPublic from the serialized form
-        const { ed25519_FROST } = await import("@noble/curves/ed25519.js");
+        // Reconstruct FrostSecret and FrostPublic from the serialized CBOR form.
+        // Field names match @noble/curves runtime shape (verified 2026-05-09).
         const frostSecret = {
-          identifier: identifier,
-          signingShare: secretBytes,
+          identifier,
+          signingShare: secretBytes instanceof Uint8Array ? secretBytes : new Uint8Array(secretBytes as unknown as ArrayBuffer),
         };
         const verifyingShares: Record<string, Uint8Array> = {};
         for (const [k, v] of Object.entries(verifyingSharesRaw)) {
@@ -317,15 +318,13 @@ export class CelloDirectoryNode {
           commitments: commitments.map(c => c instanceof Uint8Array ? c : new Uint8Array(c as unknown as ArrayBuffer)),
           verifyingShares,
         };
-        void ed25519_FROST; // type-check only — not needed for storage
 
         this.#frostHandler.injectShareForTest(agentPubkey, epochId, {
           secret: frostSecret as unknown as import("@noble/curves/abstract/frost.js").FrostSecret,
           pub: frostPub as unknown as import("@noble/curves/abstract/frost.js").FrostPublic,
         });
 
-        const resp = CBOR_ENC.encode({ type: "frost_bootstrap_ok" });
-        stream.send(lp.encode.single(resp));
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "frost_bootstrap_ok" })));
         await stream.close();
         return;
       }
@@ -336,20 +335,11 @@ export class CelloDirectoryNode {
         const epochId = req["epochId"] as string;
 
         const result = await this.#frostHandler.generateCommitment(agentPubkey, epochId);
-        if (!result.ok) {
-          const resp = CBOR_ENC.encode({ type: "frost_commit_response", ok: false, reason: result.reason });
-          stream.send(lp.encode.single(resp));
-          await stream.close();
-          return;
-        }
-
-        const resp = CBOR_ENC.encode({
-          type: "frost_commit_response",
-          ok: true,
-          nodeId: result.nodeId,
-          nonceCommitment: result.nonceCommitment,
-        });
-        stream.send(lp.encode.single(resp));
+        stream.send(lp.encode.single(
+          result.ok
+            ? CBOR_ENC.encode({ type: "frost_commit_response", ok: true, nodeId: result.nodeId, nonceCommitment: result.nonceCommitment })
+            : CBOR_ENC.encode({ type: "frost_commit_response", ok: false, reason: result.reason })
+        ));
         await stream.close();
         return;
       }

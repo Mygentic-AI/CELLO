@@ -408,7 +408,7 @@ export class FrostThresholdSigner implements IThresholdSigner {
         let partialSig: Uint8Array | null;
         try {
           partialSig = await Promise.race([
-            stub.signRound({ pub, commitmentList, msg }),
+            stub.signRound({ pub, commitmentList, msg, ceremonyId }),
             timeoutPromise,
           ]);
         } catch {

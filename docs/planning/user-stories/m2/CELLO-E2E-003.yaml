@@ -1,0 +1,337 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-E2E-003
+domain: End-to-End
+actor: CLIENT
+priority: P0
+components:
+  - crypto
+  - directory
+  - client
+  - adapter-claude-code
+
+# ─── Process Note ───────────────────────────────────────────
+process_note: >
+  This story was written AFTER the implementation (commit 3e47c6c), not before.
+  SPARC phases S, P, and R (red-first TDD) were skipped. This is a known process
+  violation documented in the commit message. The story exists to close the gap:
+  provide accurate ACs, write tests against them, and run code review. All ACs
+  should be verifiable by automated tests in packages/directory and packages/client.
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO system,
+  I want the /cello/frost/1.0.0 libp2p protocol to carry FROST ceremony rounds
+  over real network connections, and the client to use NetworkDirectoryNode
+  (a real-network DirectoryNodeStub) when a directory multiaddr is configured,
+  so that live end-to-end sessions demonstrate that neither the agent nor the
+  directory can forge a FROST signature alone — with each party running as a
+  separate process.
+
+  **Why this story exists:**
+  The M2 stories proved the FROST protocol in-process: all ceremony participants
+  (client + directory node stubs) ran in the same Vitest process. CELLO-E2E-002
+  attempted to run two real Claude Code agents against a standalone directory binary,
+  but failed because the directory binary had no FROST bootstrap — the in-process
+  stubs only existed inside the MCP server process. A ceremony with all participants
+  in one process does not demonstrate threshold security.
+
+  This story wires the gap: the client dials the directory's /cello/frost/1.0.0
+  endpoint for each ceremony round, the directory processes those requests using
+  its own stored shares (bootstrapped by the client pushing share material at
+  startup), and the combined signature is verifiable by any observer with the
+  group public key.
+
+  **What was built:**
+
+  1. `/cello/frost/1.0.0` wire protocol in the directory (three frame types):
+     - `frost_bootstrap`: client pushes share material from trustedDealer to directory
+     - `frost_commit_request` / `frost_commit_response`: directory generates and returns a nonce commitment
+     - `frost_sign_request` / `frost_sign_response`: directory signs the pre-framed message using the cached nonce
+
+  2. `FrostDirectoryHandler` new methods:
+     - `generateCommitment(agentPubkey, epochId)`: generates nonce, caches it in `#pendingNonces`
+     - `signRawMessage(params)`: signs a pre-framed message using the cached nonce
+
+  3. `DirectoryNodeStub` interface changes (breaking for implementors):
+     - `generateCommitment()` → `Promise<StubCommitment>` (was synchronous)
+     - `receiveShare()` → `Promise<void>` (was synchronous)
+
+  4. `NetworkDirectoryNode` in `@cello/client`:
+     - Implements `DirectoryNodeStub` via real libp2p streams
+     - `receiveShare()` sends `frost_bootstrap` frame to directory
+     - `generateCommitment()` sends `frost_commit_request`, returns commitment
+     - `signRound()` sends `frost_sign_request` with pre-framed message, returns partial sig
+
+  5. `bootstrapNetworkKeyShares` in `@cello/client`:
+     - Network-aware version of `bootstrapKeyShares`
+     - Sets agent context on each NetworkDirectoryNode, calls `bootstrapKeyShares`,
+       returns a configured `FrostThresholdSigner` and `primaryPubkey`
+
+  6. `cello-mcp.ts` startup changes:
+     - When `CELLO_DIRECTORY_MULTIADDR` is set: uses `NetworkDirectoryNode` (live mode)
+     - When no directory: falls back to in-process stubs (unchanged behavior)
+     - Nodes started before FROST bootstrap so `dial()` works
+
+  **Two-step nonce protocol:**
+  The split between `frost_commit_request` (commit) and `frost_sign_request` (sign)
+  mirrors how RFC 9591 FROST rounds work: the coordinator collects all commitments
+  first (Round 1), then distributes the full commitment list for signing (Round 2).
+  The directory caches the nonce from `generateCommitment` in `#pendingNonces` and
+  consumes it on the next `signRawMessage` call for the same (agentPubkey, epochId).
+  The cached nonce is consumed exactly once — RFC 9591 requires one-time-use nonces.
+
+  **Pre-framed message in sign_request:**
+  The coordinator (client) has already framed the message as `context\0tbs` before
+  calling `stub.signRound()`. The directory signs the pre-framed bytes directly via
+  `signRawMessage()` to avoid double-framing. This matches how `InProcessDirectoryNodeStub`
+  works — the `msg` passed to `signRound` is already framed by `participateInCeremony`.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the directory receives a frost_bootstrap frame on /cello/frost/1.0.0"
+    action: >
+      The directory SHALL deserialize the share material (identifier, signingShare,
+      commitments, verifyingShares, signers) and call injectShareForTest to store the
+      share under (agentPubkey, epochId). The directory SHALL respond with
+      frost_bootstrap_ok. Subsequent frost_sign_request frames for that (agentPubkey,
+      epochId) SHALL succeed.
+
+  - trigger: "When the directory receives a frost_commit_request on /cello/frost/1.0.0"
+    action: >
+      The directory SHALL look up the share for (agentPubkey, epochId). If found,
+      it SHALL generate a fresh nonce, cache {nonce, share} in #pendingNonces keyed
+      by agentPubkey:epochId, and respond with frost_commit_response { ok: true,
+      nodeId, nonceCommitment }. If not found, it SHALL respond with
+      { ok: false, reason: 'AGENT_NOT_BOOTSTRAPPED' }.
+
+  - trigger: "When the directory receives a frost_sign_request on /cello/frost/1.0.0"
+    action: >
+      The directory SHALL retrieve and consume the cached nonce from #pendingNonces
+      for (agentPubkey, epochId). Using the cached nonce and the provided commitmentList,
+      it SHALL compute a partial FROST signature over the pre-framed message and respond
+      with frost_sign_response { ok: true, partialSignature }. If no cached nonce exists,
+      it SHALL fall back to generating a fresh nonce. If no share exists, it SHALL
+      respond with { ok: false, reason: 'AGENT_NOT_BOOTSTRAPPED' }.
+
+  - trigger: "When NetworkDirectoryNode.receiveShare() is called during bootstrap"
+    action: >
+      NetworkDirectoryNode SHALL open a /cello/frost/1.0.0 stream to the directory,
+      send a frost_bootstrap frame carrying the FrostSecret and FrostPublic, and
+      await frost_bootstrap_ok before returning.
+
+  - trigger: "When NetworkDirectoryNode.generateCommitment() is called"
+    action: >
+      NetworkDirectoryNode SHALL open a /cello/frost/1.0.0 stream, send
+      frost_commit_request, and return a StubCommitment with the nonceCommitment
+      from the directory's frost_commit_response.
+
+  - trigger: "When NetworkDirectoryNode.signRound() is called"
+    action: >
+      NetworkDirectoryNode SHALL open a /cello/frost/1.0.0 stream, send
+      frost_sign_request with the pre-framed message and commitmentList, and return
+      the partialSignature from frost_sign_response, or null on error.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  # ── FrostDirectoryHandler.generateCommitment ──────────────
+  - id: AC-001
+    given: "A share has been injected for (agentPubkey, epochId) via injectShareForTest"
+    when: "generateCommitment(agentPubkey, epochId) is called"
+    then: >
+      Returns { ok: true, nodeId: <string>, nonceCommitment: <NonceCommitments> };
+      a pending nonce is cached in #pendingNonces for (agentPubkey, epochId)
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-002
+    given: "No share has been stored for (agentPubkey, epochId)"
+    when: "generateCommitment(agentPubkey, epochId) is called"
+    then: "Returns { ok: false, reason: 'AGENT_NOT_BOOTSTRAPPED' }"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-003
+    given: "An expired epoch share exists (current epoch is 2, request is epoch:1)"
+    when: "generateCommitment(agentPubkey, epochId) is called with the expired epochId"
+    then: "Returns { ok: false, reason: 'EPOCH_EXPIRED' }"
+    test_type: unit
+    component_under_test: directory
+
+  # ── FrostDirectoryHandler.signRawMessage ──────────────────
+  - id: AC-004
+    given: "generateCommitment() was called and cached a nonce; coordinator has built the full commitmentList"
+    when: "signRawMessage({ agentPubkey, epochId, framedMsg, commitmentList, peerIdString, ceremonyId }) is called"
+    then: >
+      Returns { ok: true, partialSignature: <Uint8Array(32)> };
+      the cached nonce is consumed (removed from #pendingNonces);
+      ed25519_FROST.verifyShare confirms the partial signature is valid
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-005
+    given: "No share exists for (agentPubkey, epochId)"
+    when: "signRawMessage is called for that agent"
+    then: "Returns { ok: false, reason: 'AGENT_NOT_BOOTSTRAPPED' }"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-006
+    given: "A ceremony is in-flight for (agentPubkey, epochId) from peerIdString 'peer-A'"
+    when: "signRawMessage is called from a different peerIdString 'peer-B'"
+    then: "Returns { ok: false, reason: 'CEREMONY_CONFLICT' }"
+    test_type: unit
+    component_under_test: directory
+
+  # ── Nonce cache lifecycle ─────────────────────────────────
+  - id: AC-007
+    given: "generateCommitment() was called, caching a nonce"
+    when: "signRawMessage() is called twice for the same (agentPubkey, epochId)"
+    then: >
+      First call uses the cached nonce and succeeds; second call has no cached nonce
+      and falls back to generating a fresh one (also succeeds if share exists)
+    test_type: unit
+    component_under_test: directory
+
+  # ── Full two-step ceremony produces valid signature ────────
+  - id: AC-008
+    given: >
+      Two InProcessDirectoryNodeStubs bootstrapped via bootstrapKeyShares (threshold=2,
+      participants=2); one stub's share injected into a FrostDirectoryHandler via
+      injectShareForTest; client holds the other stub's share via bootstrapKeyShares
+    when: >
+      The coordinator calls generateCommitment() on the FrostDirectoryHandler,
+      builds the commitmentList, then calls signRawMessage() with the pre-framed msg;
+      the coordinator combines its own partial sig with the handler's partial sig
+    then: >
+      The combined FROST signature verifies against primaryPubkey using
+      ed25519_FROST.verify(signature, framedMsg, primaryPubkey) === true
+    test_type: unit
+    component_under_test: directory
+
+  # ── DirectoryNodeStub interface async ─────────────────────
+  - id: AC-009
+    given: "An InProcessDirectoryNodeStub bootstrapped with a share"
+    when: "generateCommitment() is called"
+    then: "Returns a Promise<StubCommitment>; awaiting it gives a valid StubCommitment"
+    test_type: unit
+    component_under_test: crypto
+
+  - id: AC-010
+    given: "An InProcessDirectoryNodeStub"
+    when: "receiveShare(secret, pub) is called"
+    then: "Returns a Promise<void>; awaiting it completes without error; stub can then generate commitments"
+    test_type: unit
+    component_under_test: crypto
+
+  # ── NetworkDirectoryNode over real libp2p ─────────────────
+  - id: AC-011
+    given: >
+      A real directory node running /cello/frost/1.0.0; a NetworkDirectoryNode
+      configured with the directory's peerId and multiaddrs; bootstrapKeyShares
+      run with the NetworkDirectoryNode as the stub
+    when: "receiveShare() is called during bootstrapKeyShares"
+    then: >
+      The directory stores the share (verifiable via subsequent generateCommitment
+      returning ok:true for the same agentPubkey/epochId)
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-012
+    given: >
+      A share has been pushed to a real directory node via frost_bootstrap;
+      the NetworkDirectoryNode is configured and connected
+    when: "generateCommitment() is called on the NetworkDirectoryNode"
+    then: >
+      Returns a StubCommitment with nodeId matching the directory's nodeId and
+      a non-null nonceCommitment; no error thrown
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-013
+    given: >
+      A share pushed; generateCommitment() called; full commitmentList assembled
+      by the coordinator
+    when: "signRound() is called on the NetworkDirectoryNode"
+    then: >
+      Returns a non-null Uint8Array (partial signature bytes);
+      ed25519_FROST.verifyShare confirms validity
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-014
+    given: >
+      Two NetworkDirectoryNodes bootstrapped against a real in-process directory;
+      FrostThresholdSigner configured with threshold=2, participants=1 + 1 network node
+    when: "participateInCeremony is called with a test TBS and CONTEXT_SESSION_ESTABLISHMENT"
+    then: >
+      Returns { ok: true, signature }; ed25519_FROST.verify(signature, framedMsg,
+      primaryPubkey) === true — full end-to-end ceremony over real libp2p streams
+    test_type: integration
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The frost_bootstrap frame SHALL only be accepted by the directory when
+      NODE_ENV=test. injectShareForTest throws BootstrapNotAllowedInProduction
+      outside the test environment, preventing share injection in production.
+    adversarial_condition: >
+      even when an attacker sends a frost_bootstrap frame to a production directory —
+      the handler calls injectShareForTest which throws immediately; the attacker
+      cannot plant shares
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      The cached nonce in #pendingNonces SHALL be consumed exactly once.
+      A second signRawMessage call for the same (agentPubkey, epochId) SHALL
+      NOT reuse the same nonce (RFC 9591: nonces are one-time-use).
+    adversarial_condition: >
+      even when an attacker sends two frost_sign_request frames for the same
+      ceremony — the second request generates a fresh nonce, not the cached one
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-003
+    statement: >
+      NetworkDirectoryNode SHALL NOT accept a frost_commit_response where ok=false
+      silently. A failed commit SHALL throw an error, causing participateInCeremony
+      to exclude this node and either retry or return DIRECTORY_BELOW_THRESHOLD.
+    adversarial_condition: >
+      even when the directory returns AGENT_NOT_BOOTSTRAPPED — the network node
+      throws, the coordinator excludes it, threshold check fires
+    test_type: unit
+    component_under_test: client
+
+# ─── Degraded Behaviors ─────────────────────────────────────
+degraded_behaviors:
+  - id: DB-001
+    condition: "NetworkDirectoryNode cannot dial the directory (connection refused)"
+    expected: >
+      The #openStream() dial attempt throws; NetworkDirectoryNode.isReachable() returns
+      true (optimistic) but generateCommitment() throws; participateInCeremony marks
+      the node excluded; if below threshold → DIRECTORY_BELOW_THRESHOLD
+    test_type: unit
+    component_under_test: client
+
+  - id: DB-002
+    condition: "frost_commit_response carries ok:false (AGENT_NOT_BOOTSTRAPPED)"
+    expected: >
+      NetworkDirectoryNode.generateCommitment() throws with a descriptive error message;
+      participateInCeremony treats it as a failed node and excludes it
+    test_type: unit
+    component_under_test: client
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Session, Authentication"
+  implementation_roadmap: "M2 — FROST Threshold Layer (post-ship)"
+  related_stories:
+    - "CELLO-CRYPTO-003 — IThresholdSigner + FrostThresholdSigner"
+    - "CELLO-NODE-003 — /cello/frost/1.0.0 protocol handler (skeleton)"
+    - "CELLO-SESSION-004 — FROST session establishment"
+    - "CELLO-E2E-002 — live e2e sign-off story (triggered this work)"
+  rfc_references:
+    - "RFC 9591 — Two-Round Threshold Schnorr Signatures with FROST (nonce one-time-use)"

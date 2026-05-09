@@ -187,6 +187,8 @@ export interface StubSignParams {
   pub: import("@noble/curves/abstract/frost.js").FrostPublic;
   commitmentList: import("@noble/curves/abstract/frost.js").NonceCommitments[];
   msg: Uint8Array;
+  /** Unique ID for this ceremony instance — passed through so network nodes can use it for conflict detection. */
+  ceremonyId: string;
 }
 
 export interface StubCommitment {

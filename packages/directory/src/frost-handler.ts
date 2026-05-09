@@ -76,7 +76,7 @@
  */
 
 import { ed25519_FROST } from "@noble/curves/ed25519.js";
-import type { NonceCommitments, Nonces } from "@noble/curves/abstract/frost.js";
+import type { NonceCommitments } from "@noble/curves/abstract/frost.js";
 import type { FrostContext } from "@cello/crypto/frost/types.js";
 import type { ShareStore, LocalShare } from "./share-store.js";
 import { InMemoryShareStore } from "./share-store.js";
@@ -205,9 +205,13 @@ export class FrostDirectoryHandler {
   // Used to detect expired epoch requests.
   readonly #currentEpoch = new Map<string, number>();
 
-  // Pending nonce cache for two-step network protocol: agentPubkey:epochId → { nonce, share }
-  // Populated by generateCommitment(); consumed by handleCeremonyRound() when commitmentList present.
-  readonly #pendingNonces = new Map<string, { nonce: Nonces; share: LocalShare }>();
+  // Pending nonce cache for two-step network protocol: agentPubkey:epochId → { nonce, share, expiresAt }
+  // Populated by generateCommitment(); consumed exclusively by signRawMessage().
+  // Nonces are one-time-use per RFC 9591; each entry is deleted on first consumption.
+  // Entries expire after PENDING_NONCE_TTL_MS to prevent memory leaks from incomplete ceremonies.
+  readonly #pendingNonces = new Map<string, { nonce: import("@noble/curves/abstract/frost.js").Nonces; share: LocalShare; expiresAt: number }>();
+
+  static readonly #PENDING_NONCE_TTL_MS = 60_000; // 60 seconds — enough for any realistic ceremony
 
 
   constructor(opts: FrostDirectoryHandlerOptions) {
@@ -280,19 +284,30 @@ export class FrostDirectoryHandler {
     epochId: string,
   ): Promise<
     | { ok: true; nodeId: string; nonceCommitment: NonceCommitments }
-    | { ok: false; reason: "AGENT_NOT_BOOTSTRAPPED" | "EPOCH_EXPIRED" }
+    | { ok: false; reason: "AGENT_NOT_BOOTSTRAPPED" | "EPOCH_EXPIRED" | "NONCE_ALREADY_PENDING" }
   > {
+    // Check epoch expiry before share lookup — an expired epoch should be rejected even if a
+    // share was stored (the share is from a prior epoch and should no longer be used).
+    if (this.#isExpiredEpoch(agentPubkey, epochId)) {
+      return { ok: false, reason: "EPOCH_EXPIRED" };
+    }
     const share = this.#shareStore.getShare(agentPubkey, epochId);
     if (!share) {
-      if (this.#isExpiredEpoch(agentPubkey, epochId)) {
-        return { ok: false, reason: "EPOCH_EXPIRED" };
-      }
       return { ok: false, reason: "AGENT_NOT_BOOTSTRAPPED" };
     }
-    const nonce = ed25519_FROST.commit(share.secret);
-    // Cache pending nonce keyed by (agentPubkey, epochId) — consumed by the next signRound
     const cacheKey = `${agentPubkey}:${epochId}`;
-    this.#pendingNonces.set(cacheKey, { nonce: nonce.nonces, share });
+    // Sweep expired entries on each generateCommitment call (LOW-3: prevent memory leak)
+    const now = Date.now();
+    for (const [k, entry] of this.#pendingNonces) {
+      if (now > entry.expiresAt) this.#pendingNonces.delete(k);
+    }
+    // HIGH-2: reject if a non-expired nonce is already pending — the coordinator must consume it first
+    if (this.#pendingNonces.has(cacheKey)) {
+      return { ok: false, reason: "NONCE_ALREADY_PENDING" };
+    }
+    const nonce = ed25519_FROST.commit(share.secret);
+    // Cache pending nonce keyed by (agentPubkey, epochId) — consumed exclusively by signRawMessage
+    this.#pendingNonces.set(cacheKey, { nonce: nonce.nonces, share, expiresAt: now + FrostDirectoryHandler.#PENDING_NONCE_TTL_MS });
     return { ok: true, nodeId: this.#nodeId, nonceCommitment: nonce.commitments };
   }
 
@@ -334,14 +349,8 @@ export class FrostDirectoryHandler {
       return { ok: false, reason: "CEREMONY_CONFLICT" };
     }
 
-    // Step 2: Resolve K_server_X share
-    // If a pending nonce exists (from prior generateCommitment call on the network path),
-    // use it so the commitment matches what was already sent to the coordinator.
-    const cacheKey = `${agentPubkey}:${epochId}`;
-    const pending = this.#pendingNonces.get(cacheKey);
-    this.#pendingNonces.delete(cacheKey); // consume — one-time use per RFC 9591
-
-    const share = pending?.share ?? this.#shareStore.getShare(agentPubkey, epochId);
+    // Step 2: Resolve K_server_X share (in-process path only — no pendingNonces involvement)
+    const share = this.#shareStore.getShare(agentPubkey, epochId);
     if (!share) {
       // Check if this is because the epoch is expired
       if (this.#isExpiredEpoch(agentPubkey, epochId)) {
@@ -350,8 +359,8 @@ export class FrostDirectoryHandler {
       return { ok: false, reason: "AGENT_NOT_BOOTSTRAPPED" };
     }
 
-    // Step 3: Compute partial FROST signature
-    return this.#signWithShare(share, tbs, context, commitmentList, pending?.nonce);
+    // Step 3: Compute partial FROST signature (generates its own nonce — in-process path)
+    return this.#signWithShare(share, tbs, context, commitmentList);
   }
 
   // ─── signRawMessage ───────────────────────────────────────────────────────────
@@ -388,24 +397,26 @@ export class FrostDirectoryHandler {
       return { ok: false, reason: "CEREMONY_CONFLICT" };
     }
 
-    // Retrieve cached nonce from prior generateCommitment call
+    // Retrieve and consume the cached nonce from the prior generateCommitment call.
+    // CRIT-1: a cached nonce is REQUIRED for signRawMessage — no fallback to fresh nonce.
+    // The commitment for this nonce was already sent to the coordinator and included in
+    // commitmentList. A fresh nonce would have no matching commitment in the list,
+    // violating RFC 9591 §4.6 (binding factor input must include every participant's commitment).
     const cacheKey = `${agentPubkey}:${epochId}`;
     const pending = this.#pendingNonces.get(cacheKey);
-    this.#pendingNonces.delete(cacheKey);
-
-    const share = pending?.share ?? this.#shareStore.getShare(agentPubkey, epochId);
-    if (!share) {
-      if (this.#isExpiredEpoch(agentPubkey, epochId)) {
-        return { ok: false, reason: "EPOCH_EXPIRED" };
-      }
+    if (!pending || Date.now() > pending.expiresAt) {
+      // No cached nonce or expired — the two-step commit→sign flow was not followed (or timed out).
+      // Return AGENT_NOT_BOOTSTRAPPED so the coordinator excludes this node.
+      if (pending) this.#pendingNonces.delete(cacheKey); // clean up expired entry
       return { ok: false, reason: "AGENT_NOT_BOOTSTRAPPED" };
     }
+    this.#pendingNonces.delete(cacheKey); // consume — RFC 9591: one-time use
 
-    // Sign with the pre-framed message and the committed list (which already includes this node's commitment)
-    const nonce = pending?.nonce ?? ed25519_FROST.commit(share.secret).nonces;
+    const { nonce, share } = pending;
 
     let partialSig: Uint8Array;
     try {
+      // commitmentList already includes this node's commitment (sent in frost_commit_response).
       partialSig = ed25519_FROST.signShare(
         share.secret,
         share.pub,
@@ -506,25 +517,18 @@ export class FrostDirectoryHandler {
     tbs: Uint8Array,
     context: FrostContext,
     commitmentList: NonceCommitments[],
-    cachedNonce?: Nonces,
   ): CeremonyRoundResult {
     // Message framing: context\0tbs (domain separation per CRYPTO-003)
     const msg = frameMessage(context, tbs);
 
-    // Use cached nonce if provided (network path: commitment already sent to coordinator).
-    // Otherwise generate a fresh nonce (in-process test path).
+    // Generate a fresh nonce for this round (in-process test path only).
+    // The network path uses signRawMessage which requires a pre-committed nonce from #pendingNonces.
     const nonceResult = ed25519_FROST.commit(share.secret);
-    const nonce = cachedNonce ?? nonceResult.nonces;
-    const nonceCommitments = nonceResult.commitments;
-    void nonceCommitments; // commitments only needed when not cached
 
-    // Build the full commitment list including this node's commitment
-    // (for the network path, this node's commitment is already in the list from the coordinator)
+    // Append this node's nonce commitment to the list provided by the coordinator
     const fullCommitmentList: NonceCommitments[] =
       commitmentList.length > 0
-        ? cachedNonce
-          ? commitmentList // network path: coordinator already included this node's commitment
-          : [...commitmentList, nonceResult.commitments]
+        ? [...commitmentList, nonceResult.commitments]
         : [nonceResult.commitments];
 
     // Compute partial signature
@@ -533,7 +537,7 @@ export class FrostDirectoryHandler {
       partialSig = ed25519_FROST.signShare(
         share.secret,
         share.pub,
-        nonce,
+        nonceResult.nonces,
         fullCommitmentList,
         msg
       );
