@@ -107,52 +107,18 @@ const CLIENT_NOT_INITIALIZED = jsonText({ error: { reason: "client_not_initializ
 
 // ─── createMcpServer ─────────────────────────────────────────────────────────
 
-export interface IdentityContext {
-  node: CelloNode;
-  client: CelloClient;
-  keyProvider: KeyProvider;
-}
-
-/**
- * Test helper: wrap a single identity in the multi-identity format.
- * For tests that only need one identity (typically "A").
- * Tools will require { identity: "A" } parameter.
- */
-export function createSingleIdentityServer(
+export function createMcpServer(
   node: CelloNode,
   client: CelloClient,
   keyProvider: KeyProvider,
-  identityName: string = "A"
-): McpServer {
-  return createMcpServer({ [identityName]: { node, client, keyProvider } });
-}
-
-export function createMcpServer(
-  identities: Record<string, IdentityContext>
 ): McpServer {
   const startedAt = Date.now();
 
-  // ─── Session event queues (per identity) ────────────────────────────────
-  const sessionEventQueues: Record<string, InboundSessionEvent[]> = {};
-  const sessionEventResolvers: Record<string, Array<(event: InboundSessionEvent) => void>> = {};
+  // ─── Session event queue ─────────────────────────────────────────────────
+  const sessionEventQueue: InboundSessionEvent[] = [];
+  const sessionEventResolvers: Array<(event: InboundSessionEvent) => void> = [];
 
-  // Initialize queues for each identity
-  for (const id of Object.keys(identities)) {
-    sessionEventQueues[id] = [];
-    sessionEventResolvers[id] = [];
-  }
-
-  // Helper to get identity context
-  function getIdentity(id: string): IdentityContext {
-    const ctx = identities[id];
-    if (!ctx) {
-      throw new Error(`Unknown identity: ${id}. Available: ${Object.keys(identities).join(", ")}`);
-    }
-    return ctx;
-  }
-
-  function transportStarted(identity: string): boolean {
-    const { node } = getIdentity(identity);
+  function transportStarted(): boolean {
     return node.listenAddresses().length > 0;
   }
 
@@ -161,21 +127,18 @@ export function createMcpServer(
     { capabilities: { experimental: { "claude/channel": {} } } }
   );
 
-  // ─── Register onSessionAssignment handlers (per identity) ────────────────
-  for (const [id, { client }] of Object.entries(identities)) {
-    if (client != null && typeof client.onSessionAssignment === "function") {
-      client.onSessionAssignment((event: SessionAssignmentEvent) => {
-        void pushSessionRequestNotification(server, event.counterpartyPubkeyHex, event.sessionIdHex);
+  // ─── Register onSessionAssignment handler ───────────────────────────────
+  if (client != null && typeof client.onSessionAssignment === "function") {
+    client.onSessionAssignment((event: SessionAssignmentEvent) => {
+      void pushSessionRequestNotification(server, event.counterpartyPubkeyHex, event.sessionIdHex);
 
-        const resolvers = sessionEventResolvers[id];
-        if (resolvers.length > 0) {
-          const resolve = resolvers.shift()!;
-          resolve(event);
-        } else {
-          sessionEventQueues[id].push(event);
-        }
-      });
-    }
+      if (sessionEventResolvers.length > 0) {
+        const resolve = sessionEventResolvers.shift()!;
+        resolve(event);
+      } else {
+        sessionEventQueue.push(event);
+      }
+    });
   }
 
   // ── cello_initiate_session ────────────────────────────────────────────────
@@ -185,14 +148,12 @@ export function createMcpServer(
     {
       description: "Initiate a CELLO session with a target agent identified by their public key.",
       inputSchema: {
-        identity: z.string().describe("Your identity: 'A' or 'B'"),
         target_pubkey: z.string().describe("Target agent public key hex (K_local pubkey of the peer)"),
       },
     },
-    async ({ identity, target_pubkey }) => {
-      if (!transportStarted(identity)) return TRANSPORT_NOT_STARTED;
+    async ({ target_pubkey }) => {
+      if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
-      const { client } = getIdentity(identity);
       const result = await client.initiateSession(target_pubkey);
       if (result.ok) {
         return jsonText({
@@ -213,17 +174,13 @@ export function createMcpServer(
       description:
         "Wait for an inbound session request. Returns immediately if one is already queued, or blocks until one arrives or the timeout expires.",
       inputSchema: {
-        identity: z.string().describe("Your identity: 'A' or 'B'"),
         timeout_ms: z.number().int().min(0).describe("Maximum wait time in milliseconds"),
       },
     },
-    async ({ identity, timeout_ms }) => {
-      const queue = sessionEventQueues[identity];
-      const resolvers = sessionEventResolvers[identity];
-
+    async ({ timeout_ms }) => {
       // If a queued event exists, return it immediately (FIFO)
-      if (queue.length > 0) {
-        const event = queue.shift()!;
+      if (sessionEventQueue.length > 0) {
+        const event = sessionEventQueue.shift()!;
         return jsonText({
           type: "new_session",
           session_id: event.sessionIdHex,
@@ -241,11 +198,11 @@ export function createMcpServer(
           resolve(event);
         }
 
-        resolvers.push(resolveEvent);
+        sessionEventResolvers.push(resolveEvent);
 
         timerId = setTimeout(() => {
-          const idx = resolvers.indexOf(resolveEvent);
-          if (idx !== -1) resolvers.splice(idx, 1);
+          const idx = sessionEventResolvers.indexOf(resolveEvent);
+          if (idx !== -1) sessionEventResolvers.splice(idx, 1);
           resolve(null);
         }, timeout_ms);
       });
@@ -270,15 +227,13 @@ export function createMcpServer(
     {
       description: "Send a UTF-8 message on an active CELLO session.",
       inputSchema: {
-        identity: z.string().describe("Your identity: 'A' or 'B'"),
         session_id: z.string().describe("Session ID hex (from cello_initiate_session or cello_await_session)"),
         content: z.string().describe("UTF-8 message content"),
       },
     },
-    async ({ identity, session_id, content }) => {
-      const { client } = getIdentity(identity);
+    async ({ session_id, content }) => {
       if (client == null) return CLIENT_NOT_INITIALIZED;
-      if (!transportStarted(identity)) return TRANSPORT_NOT_STARTED;
+      if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
       const contentBytes = new TextEncoder().encode(content);
       const result = await client.sendMessage(session_id, contentBytes);
@@ -298,17 +253,15 @@ export function createMcpServer(
       description:
         "Wait for a message on a specific CELLO session. Blocks until a message arrives or the timeout expires.",
       inputSchema: {
-        identity: z.string().describe("Your identity: 'A' or 'B'"),
         session_id: z
           .string()
           .describe("Session ID hex (from cello_initiate_session or cello_await_session)"),
         timeout_ms: z.number().int().min(0).describe("Maximum wait time in milliseconds"),
       },
     },
-    async ({ identity, session_id, timeout_ms }) => {
-      const { client } = getIdentity(identity);
+    async ({ session_id, timeout_ms }) => {
       if (client == null) return CLIENT_NOT_INITIALIZED;
-      if (!transportStarted(identity)) return TRANSPORT_NOT_STARTED;
+      if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
       const deadline = Date.now() + timeout_ms;
 
@@ -334,12 +287,10 @@ export function createMcpServer(
     {
       description: "Close and remove a CELLO session. Idempotent.",
       inputSchema: {
-        identity: z.string().describe("Your identity: 'A' or 'B'"),
         session_id: z.string().describe("Session ID hex to close"),
       },
     },
-    async ({ identity, session_id }) => {
-      const { client } = getIdentity(identity);
+    async ({ session_id }) => {
       if (client == null) return CLIENT_NOT_INITIALIZED;
       client.closeSession(session_id);
       return jsonText({ closed: true });
@@ -352,12 +303,9 @@ export function createMcpServer(
     "cello_list_sessions",
     {
       description: "List all current CELLO sessions and their status.",
-      inputSchema: {
-        identity: z.string().describe("Your identity: 'A' or 'B'"),
-      },
+      inputSchema: {},
     },
-    async ({ identity }) => {
-      const { client } = getIdentity(identity);
+    async () => {
       if (client == null) return CLIENT_NOT_INITIALIZED;
       const sessions = client.listSessions().map((s) => ({
         session_id: Buffer.from(s.session_id).toString("hex"),
@@ -377,7 +325,6 @@ export function createMcpServer(
       description:
         "Retrieve the FROST-signed sealed receipt for a closed session. Not yet available in M1.",
       inputSchema: {
-        identity: z.string().describe("Your identity: 'A' or 'B'"),
         session_id: z.string().describe("Session ID hex"),
       },
     },
@@ -395,7 +342,6 @@ export function createMcpServer(
       description:
         "Retrieve a Merkle inclusion proof for a specific message in a sealed session. Not yet available in M1.",
       inputSchema: {
-        identity: z.string().describe("Your identity: 'A' or 'B'"),
         session_id: z.string().describe("Session ID hex"),
         content_hash: z.string().describe("Content hash hex of the message"),
       },
@@ -412,12 +358,9 @@ export function createMcpServer(
     {
       description:
         "Return transport status, own pubkey, connection info, and M1 session summary.",
-      inputSchema: {
-        identity: z.string().describe("Your identity: 'A' or 'B'"),
-      },
+      inputSchema: {},
     },
-    async ({ identity }) => {
-      const { node, client, keyProvider } = getIdentity(identity);
+    async () => {
       const ownPubkey = Buffer.from(await keyProvider.getPublicKey()).toString("hex");
       const sessions = client.listSessions();
       const activeSessionCount = sessions.filter((s) => s.status === "active").length;
@@ -428,7 +371,7 @@ export function createMcpServer(
       );
 
       return jsonText({
-        transport_started: transportStarted(identity),
+        transport_started: transportStarted(),
         own_pubkey: ownPubkey,
         listen_addresses: node.listenAddresses(),
         connected_peer_count: node.getConnections().length,

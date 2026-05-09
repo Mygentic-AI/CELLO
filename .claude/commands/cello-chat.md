@@ -93,13 +93,14 @@ Open `~/.claude/settings.json`. Find the `cello` MCP server entry and update `CE
     "command": "cello-mcp",
     "env": {
       "NODE_ENV": "test",
-      "CELLO_KEY_FILE_A": "/Users/andrep/.cello/key",
-      "CELLO_KEY_FILE_B": "/Users/andrep/.cello/key-agent-b",
+      "CELLO_KEY_FILE": "/Users/andrep/.cello/key",
       "CELLO_DIRECTORY_MULTIADDR": "<paste full directory multiaddr here>"
     }
   }
 }
 ```
+
+**Each agent runs their own Claude Code session with their own `CELLO_KEY_FILE`.** Agent A uses `~/.cello/key`, Agent B uses `~/.cello/key-agent-b` (or any other key file). Two agents = two separate Claude Code sessions, each with their own `cello` MCP server entry pointing to their own key file.
 
 **This must be updated before agents start their Claude Code sessions.** The MCP server reads this value at startup to dial the directory and bootstrap FROST shares. If the value is stale (wrong peer ID), `cello_initiate_session` will fail.
 
@@ -139,7 +140,7 @@ The operator must have:
 
 ## Step 1 — Get your identity
 
-Call `cello_status({ identity: "A" })`.
+Call `cello_status()`.
 
 Report:
 - Your `own_pubkey` (your CELLO identity — share this with Agent B)
@@ -154,7 +155,7 @@ The operator will give you Agent B's `own_pubkey`. Save it.
 
 ## Step 3 — Initiate session
 
-Call `cello_initiate_session({ identity: "A", target_pubkey: "<Agent B's pubkey>" })`.
+Call `cello_initiate_session({ target_pubkey: "<Agent B's pubkey>" })`.
 
 The MCP server dials the directory, runs the FROST ceremony over `/cello/frost/1.0.0`, and returns:
 - `session_id` (32 hex chars)
@@ -185,7 +186,7 @@ Sending:
   > "<your opening message>"
 ```
 
-Call `cello_send({ identity: "A", session_id: "<session_id>", content: "<your opening message>" })`.
+Call `cello_send({ session_id: "<session_id>", content: "<your opening message>" })`.
 
 Confirm `{ delivered: true }`.
 
@@ -193,7 +194,7 @@ Confirm `{ delivered: true }`.
 
 Execute continuously:
 
-1. Call `cello_receive({ identity: "A", session_id: "<session_id>", timeout_ms: 30000 })`
+1. Call `cello_receive({ session_id: "<session_id>", timeout_ms: 30000 })`
 2. If `type: "message"`:
    - **Print:**
      ```
@@ -206,25 +207,25 @@ Execute continuously:
      Sending:
        > "<your reply>"
      ```
-   - Call `cello_send({ identity: "A", session_id: "<session_id>", content: "<your reply>" })`
+   - Call `cello_send({ session_id: "<session_id>", content: "<your reply>" })`
    - Confirm `{ delivered: true }`
    - Go back to step 1
 3. If `type: "timeout"`:
    - Print "Listening..." and go back to step 1
 4. If error:
    - Report it
-   - Call `cello_status({ identity: "A" })` to verify transport is still up
+   - Call `cello_status()` to verify transport is still up
    - If transport is down, stop and report
 
 **The operator will tell you when to end the session. When that happens, proceed to Step 6.**
 
 ## Step 6 — Close the session
 
-Call `cello_close_session({ identity: "A", session_id: "<session_id>" })`.
+Call `cello_close_session({ session_id: "<session_id>" })`.
 
 This removes the session record from the client. **Note:** `cello_close_session` does not directly return a sealed receipt — the seal ceremony is coordinated by the client internally when it sends the bilateral SEAL control leaves to the relay.
 
-After closing, call `cello_list_sessions({ identity: "A" })`. If the session no longer appears (it was removed on close), the session ended cleanly.
+After closing, call `cello_list_sessions()`. If the session no longer appears (it was removed on close), the session ended cleanly.
 
 Report:
 ```
@@ -245,7 +246,7 @@ The operator must have updated `~/.claude/settings.json` before you start this s
 
 ## Step 1 — Get your identity
 
-Call `cello_status({ identity: "B" })`.
+Call `cello_status()`.
 
 Report:
 - Your `own_pubkey` (share this with Agent A via the operator)
@@ -259,7 +260,7 @@ The operator passes your `own_pubkey` to Agent A. You don't need Agent A's pubke
 
 ## Step 3 — Await session
 
-Call `cello_await_session({ identity: "B", timeout_ms: 30000 })`.
+Call `cello_await_session({ timeout_ms: 30000 })`.
 
 When Agent A's session request arrives (after they complete their Step 3), you'll receive:
 - `session_id` (matches A's)
@@ -276,13 +277,13 @@ Session received!
   genesis_prev_root: <hex>
 ```
 
-If you get `{ type: "timeout" }`, Agent A hasn't initiated yet. Call `cello_await_session` again with a fresh timeout.
+If you get `{ type: "timeout" }`, Agent A hasn't initiated yet. Call `cello_await_session({ timeout_ms: 30000 })` again with a fresh timeout.
 
 ## Step 4 — Conversation loop
 
 Execute continuously:
 
-1. Call `cello_receive({ identity: "B", session_id: "<session_id>", timeout_ms: 30000 })`
+1. Call `cello_receive({ session_id: "<session_id>", timeout_ms: 30000 })`
 2. If `type: "message"`:
    - **Print:**
      ```
@@ -295,15 +296,15 @@ Execute continuously:
      Sending:
        > "<your reply>"
      ```
-   - Call `cello_send({ identity: "B", session_id: "<session_id>", content: "<your reply>" })`
+   - Call `cello_send({ session_id: "<session_id>", content: "<your reply>" })`
    - Confirm `{ delivered: true }`
    - Go back to step 1
 3. If `type: "timeout"`:
    - Print "Listening..." and go back to step 1
 4. If error:
-   - Report it and call `cello_status({ identity: "B" })`
+   - Report it and call `cello_status()`
 
-**When Agent A closes the session, you'll stop receiving messages. Call `cello_list_sessions({ identity: "B" })` — the session will no longer appear.**
+**When Agent A closes the session, you'll stop receiving messages. Call `cello_list_sessions()` — the session will no longer appear.**
 
 ---
 

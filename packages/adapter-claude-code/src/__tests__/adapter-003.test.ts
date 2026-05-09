@@ -40,7 +40,7 @@ import type { DirectoryAdapter } from "@cello/relay";
 import { createDirectoryNode, SIGNALING_PROTOCOL_ID } from "@cello/directory";
 import type { RelayAdapter, RelaySessionAssignment } from "@cello/directory";
 import { createClient } from "@cello/client";
-import { createSingleIdentityServer as createMcpServer } from "../index.js";
+import { createMcpServer } from "../index.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Notification } from "@modelcontextprotocol/sdk/types.js";
@@ -386,7 +386,7 @@ describe("AC-005 (L-001): transport not started returns transport_not_started ex
     const result = parseResult(
       await mcpClient.callTool({
         name: "cello_initiate_session",
-        arguments: { identity: "A", target_pubkey: "a".repeat(64) },
+        arguments: { target_pubkey: "a".repeat(64) },
       })
     ) as Record<string, unknown>;
 
@@ -446,7 +446,7 @@ describe("L-003: not_available_in_m1 stub is retired", () => {
     const result = parseResult(
       await mcpClient.callTool({
         name: "cello_initiate_session",
-        arguments: { identity: "A", target_pubkey: "a".repeat(64) },
+        arguments: { target_pubkey: "a".repeat(64) },
       })
     ) as Record<string, unknown>;
 
@@ -468,13 +468,13 @@ describe("SI-002: K_local private key never appears in cello_initiate_session to
     // B awaits session in parallel
     const bSessionPromise = fix.mcpB.callTool({
       name: "cello_await_session",
-      arguments: { identity: "A", timeout_ms: 15_000 },
+      arguments: { timeout_ms: 15_000 },
     });
 
     const result = parseResult(
       await fix.mcpA.callTool({
         name: "cello_initiate_session",
-        arguments: { identity: "A", target_pubkey: fix.pubkeyBHex },
+        arguments: { target_pubkey: fix.pubkeyBHex },
       })
     ) as Record<string, unknown>;
 
@@ -503,14 +503,14 @@ describe("AC-001: A and B authenticated to directory; A initiates; session estab
     // B awaits session in parallel
     const bSessionPromise = fix.mcpB.callTool({
       name: "cello_await_session",
-      arguments: { identity: "A", timeout_ms: 15_000 },
+      arguments: { timeout_ms: 15_000 },
     });
 
     // A initiates session with B via real directory signaling
     const aResult = parseResult(
       await fix.mcpA.callTool({
         name: "cello_initiate_session",
-        arguments: { identity: "A", target_pubkey: fix.pubkeyBHex },
+        arguments: { target_pubkey: fix.pubkeyBHex },
       })
     ) as Record<string, unknown>;
 
@@ -549,7 +549,7 @@ describe("AC-002: target pubkey has no authenticated stream → target_offline",
     const result = parseResult(
       await fix.mcpA.callTool({
         name: "cello_initiate_session",
-        arguments: { identity: "A", target_pubkey: offlinePubkey },
+        arguments: { target_pubkey: offlinePubkey },
       })
     ) as Record<string, unknown>;
 
@@ -592,14 +592,14 @@ describe("DB-001: signaling stream not yet open → opens inline; single retry o
     // B awaits session
     const bSessionPromise = fix.mcpB.callTool({
       name: "cello_await_session",
-      arguments: { identity: "A", timeout_ms: 15_000 },
+      arguments: { timeout_ms: 15_000 },
     });
 
     // A's first call — stream not yet open, must open inline (DB-001)
     const aResult = parseResult(
       await fix.mcpA.callTool({
         name: "cello_initiate_session",
-        arguments: { identity: "A", target_pubkey: fix.pubkeyBHex },
+        arguments: { target_pubkey: fix.pubkeyBHex },
       })
     ) as Record<string, unknown>;
 

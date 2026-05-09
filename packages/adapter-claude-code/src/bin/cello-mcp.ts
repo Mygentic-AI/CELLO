@@ -1,4 +1,17 @@
 #!/usr/bin/env node
+/**
+ * cello-mcp — single-identity CELLO MCP server
+ *
+ * One key file. One libp2p node. One client. One MCP server.
+ * Two agents = two separate processes, each running this binary with their own CELLO_KEY_FILE.
+ *
+ * Environment variables:
+ *   CELLO_KEY_FILE            Path to Ed25519 key file (default: ~/.cello/key)
+ *   CELLO_LISTEN_ADDR         libp2p listen address (default: /ip4/0.0.0.0/tcp/0)
+ *   CELLO_DIRECTORY_MULTIADDR Directory multiaddr (required for FROST sessions)
+ *   NODE_ENV=test             Enables FROST bootstrap (production will use real DKG)
+ */
+
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -11,18 +24,14 @@ import { createClient, NetworkDirectoryNode, bootstrapNetworkKeyShares } from "@
 import { createMcpServer } from "../server.js";
 import { pushChannelNotification } from "../notifications.js";
 
-const keyPathA = process.env["CELLO_KEY_FILE_A"] ?? join(homedir(), ".cello", "key");
-const keyPathB = process.env["CELLO_KEY_FILE_B"] ?? join(homedir(), ".cello", "key-agent-b");
-const listenAddrA = process.env["CELLO_LISTEN_ADDR_A"] ?? "/ip4/0.0.0.0/tcp/0";
-const listenAddrB = process.env["CELLO_LISTEN_ADDR_B"] ?? "/ip4/0.0.0.0/tcp/0";
+const keyPath = process.env["CELLO_KEY_FILE"] ?? join(homedir(), ".cello", "key");
+const listenAddr = process.env["CELLO_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/tcp/0";
 const directoryMultiaddr = process.env["CELLO_DIRECTORY_MULTIADDR"];
 
-// Load both keys
-let kpA: FileKeyProvider;
-let kpB: FileKeyProvider;
+// Load key
+let kp: FileKeyProvider;
 try {
-  kpA = await FileKeyProvider.load(keyPathA);
-  kpB = await FileKeyProvider.load(keyPathB);
+  kp = await FileKeyProvider.load(keyPath);
 } catch (err: unknown) {
   const msg = typeof err === "object" && err !== null && "message" in err
     ? (err as { message: string }).message
@@ -44,87 +53,59 @@ if (directoryMultiaddr) {
   }
 }
 
-// Create two nodes (one per identity) and start them so dial() works during bootstrap
-const nodeA = await createNode({ keyProvider: kpA, listenAddresses: [listenAddrA] });
-const nodeB = await createNode({ keyProvider: kpB, listenAddresses: [listenAddrB] });
-await nodeA.start();
-await nodeB.start();
+// Create and start single node
+const node = await createNode({ keyProvider: kp, listenAddresses: [listenAddr] });
+await node.start();
 
-// CELLO-E2E-002: Bootstrap FROST key shares (test-only)
-// In production (M3+), real DKG ceremony will replace this test-harness shortcut.
-let thresholdSignerA: FrostThresholdSigner | undefined;
-let primaryPubkeyA: Uint8Array | undefined;
-let thresholdSignerB: FrostThresholdSigner | undefined;
-let primaryPubkeyB: Uint8Array | undefined;
+// Bootstrap FROST key shares (test-only shortcut)
+// In production (M3+), real DKG ceremony replaces this.
+let thresholdSigner: FrostThresholdSigner | undefined;
+let primaryPubkey: Uint8Array | undefined;
+
 process.stderr.write(`cello-mcp: NODE_ENV=${process.env.NODE_ENV ?? "(unset)"} CELLO_DIRECTORY_MULTIADDR=${directoryMultiaddr ?? "(unset)"}\n`);
+
 if (process.env.NODE_ENV === "test") {
-  const ownPubkeyA = await kpA.getPublicKey();
-  const ownPubkeyB = await kpB.getPublicKey();
+  const ownPubkey = await kp.getPublicKey();
 
   if (directoryMultiaddr && directoryEndpoint) {
     process.stderr.write(`cello-mcp: bootstrapping FROST via network directory...\n`);
     try {
-      // Dial the directory before bootstrapping so streams can be opened
-      await nodeA.dial(directoryEndpoint.multiaddrs[0]!);
-      process.stderr.write(`cello-mcp: nodeA dialed directory OK\n`);
-      await nodeB.dial(directoryEndpoint.multiaddrs[0]!);
-      process.stderr.write(`cello-mcp: nodeB dialed directory OK\n`);
+      await node.dial(directoryEndpoint.multiaddrs[0]!);
+      process.stderr.write(`cello-mcp: node dialed directory OK\n`);
 
-      const networkNodesA = [new NetworkDirectoryNode({
+      const networkNodes = [new NetworkDirectoryNode({
         id: `cello-test-node-0000`,
-        node: nodeA,
-        directoryPeerId: directoryEndpoint.peer_id,
-        directoryMultiaddrs: directoryEndpoint.multiaddrs,
-      })];
-      const networkNodesB = [new NetworkDirectoryNode({
-        id: `cello-test-node-0000`,
-        node: nodeB,
+        node,
         directoryPeerId: directoryEndpoint.peer_id,
         directoryMultiaddrs: directoryEndpoint.multiaddrs,
       })];
 
-      const bootstrapA = await bootstrapNetworkKeyShares(ownPubkeyA, {
+      const bootstrap = await bootstrapNetworkKeyShares(ownPubkey, {
         threshold: 2,
         participants: 1,
-        directoryNodes: networkNodesA,
+        directoryNodes: networkNodes,
       });
-      thresholdSignerA = bootstrapA.signer;
-      primaryPubkeyA = bootstrapA.primaryPubkey;
-      process.stderr.write(`cello-mcp: FROST bootstrap A OK, primaryPubkey=${Buffer.from(primaryPubkeyA).toString("hex").slice(0,16)}...\n`);
-
-      const bootstrapB = await bootstrapNetworkKeyShares(ownPubkeyB, {
-        threshold: 2,
-        participants: 1,
-        directoryNodes: networkNodesB,
-      });
-      thresholdSignerB = bootstrapB.signer;
-      primaryPubkeyB = bootstrapB.primaryPubkey;
-      process.stderr.write(`cello-mcp: FROST bootstrap B OK, primaryPubkey=${Buffer.from(primaryPubkeyB).toString("hex").slice(0,16)}...\n`);
+      thresholdSigner = bootstrap.signer;
+      primaryPubkey = bootstrap.primaryPubkey;
+      process.stderr.write(`cello-mcp: FROST bootstrap OK, primaryPubkey=${Buffer.from(primaryPubkey).toString("hex").slice(0, 16)}...\n`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       process.stderr.write(`cello-mcp: FROST bootstrap FAILED: ${msg}\n`);
       process.stderr.write(`cello-mcp: falling back to in-process stubs\n`);
       // Fall back to in-process stubs so the server starts but without directory FROST
-      const stubsA = createInProcessStubs(3);
-      const bootstrapResultA = await bootstrapKeyShares(ownPubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
-      thresholdSignerA = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsA }, ownPubkeyA);
-      primaryPubkeyA = bootstrapResultA.primaryPubkey;
-      const stubsB = createInProcessStubs(3);
-      const bootstrapResultB = await bootstrapKeyShares(ownPubkeyB, { threshold: 2, participants: 3, directoryNodeStubs: stubsB });
-      thresholdSignerB = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsB }, ownPubkeyB);
-      primaryPubkeyB = bootstrapResultB.primaryPubkey;
+      const stubs = createInProcessStubs(3);
+      const ownPubkeyFresh = await kp.getPublicKey();
+      const bootstrapResult = await bootstrapKeyShares(ownPubkeyFresh, { threshold: 2, participants: 3, directoryNodeStubs: stubs });
+      thresholdSigner = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubs }, ownPubkeyFresh);
+      primaryPubkey = bootstrapResult.primaryPubkey;
     }
   } else {
     // Fallback: in-process stubs (no directory reachable)
-    const stubsA = createInProcessStubs(3);
-    const bootstrapResultA = await bootstrapKeyShares(ownPubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
-    thresholdSignerA = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsA }, ownPubkeyA);
-    primaryPubkeyA = bootstrapResultA.primaryPubkey;
-
-    const stubsB = createInProcessStubs(3);
-    const bootstrapResultB = await bootstrapKeyShares(ownPubkeyB, { threshold: 2, participants: 3, directoryNodeStubs: stubsB });
-    thresholdSignerB = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsB }, ownPubkeyB);
-    primaryPubkeyB = bootstrapResultB.primaryPubkey;
+    const stubs = createInProcessStubs(3);
+    const ownPubkeyFresh = await kp.getPublicKey();
+    const bootstrapResult = await bootstrapKeyShares(ownPubkeyFresh, { threshold: 2, participants: 3, directoryNodeStubs: stubs });
+    thresholdSigner = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubs }, ownPubkeyFresh);
+    primaryPubkey = bootstrapResult.primaryPubkey;
   }
 }
 
@@ -132,39 +113,23 @@ if (process.env.NODE_ENV === "test") {
 // The closure captures the box; notifications fired before server is assigned are dropped.
 let mcpServer: McpServer | undefined;
 
-// Create two clients (one per identity)
-const clientA = createClient(nodeA, kpA, {
-  thresholdSigner: thresholdSignerA,
+// Create single client
+const client = createClient(node, kp, {
+  thresholdSigner,
   directoryEndpoint,
   onMessageQueued: (senderHex) => {
     if (mcpServer) void pushChannelNotification(mcpServer, senderHex);
   },
 });
 
-const clientB = createClient(nodeB, kpB, {
-  thresholdSigner: thresholdSignerB,
-  directoryEndpoint,
-  onMessageQueued: (senderHex) => {
-    if (mcpServer) void pushChannelNotification(mcpServer, senderHex);
-  },
-});
-
-if (primaryPubkeyA) {
-  clientA.setPrimaryPubkey(primaryPubkeyA);
+if (primaryPubkey) {
+  client.setPrimaryPubkey(primaryPubkey);
 }
 
-if (primaryPubkeyB) {
-  clientB.setPrimaryPubkey(primaryPubkeyB);
-}
-
-// Create server with both identities
-const server = createMcpServer({
-  A: { node: nodeA, client: clientA, keyProvider: kpA },
-  B: { node: nodeB, client: clientB, keyProvider: kpB },
-});
+// Create server with single identity
+const server = createMcpServer(node, client, kp);
 mcpServer = server;
 
-// Register inbound handlers and connect stdio transport
+// Connect stdio transport and register handler
 await server.connect(new StdioServerTransport());
-await clientA.registerHandler();
-await clientB.registerHandler();
+await client.registerHandler();
