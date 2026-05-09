@@ -56,11 +56,13 @@ let thresholdSignerA: FrostThresholdSigner | undefined;
 let primaryPubkeyA: Uint8Array | undefined;
 let thresholdSignerB: FrostThresholdSigner | undefined;
 let primaryPubkeyB: Uint8Array | undefined;
+process.stderr.write(`cello-mcp: NODE_ENV=${process.env.NODE_ENV ?? "(unset)"} CELLO_DIRECTORY_MULTIADDR=${directoryMultiaddr ?? "(unset)"}\n`);
 if (process.env.NODE_ENV === "test") {
   const ownPubkeyA = await kpA.getPublicKey();
   const ownPubkeyB = await kpB.getPublicKey();
 
   if (directoryMultiaddr && directoryEndpoint) {
+    process.stderr.write(`cello-mcp: bootstrapping FROST via network directory...\n`);
     // Live mode: use real network directory nodes over /cello/frost/1.0.0
     // Nodes A and B each get their own set of NetworkDirectoryNode instances.
     const networkNodesA = [new NetworkDirectoryNode({
@@ -87,6 +89,7 @@ if (process.env.NODE_ENV === "test") {
     });
     thresholdSignerA = bootstrapA.signer;
     primaryPubkeyA = bootstrapA.primaryPubkey;
+    process.stderr.write(`cello-mcp: FROST bootstrap A OK, primaryPubkey=${Buffer.from(primaryPubkeyA).toString("hex").slice(0,16)}...\n`);
 
     const bootstrapB = await bootstrapNetworkKeyShares(ownPubkeyB, {
       threshold: 2,
@@ -95,6 +98,7 @@ if (process.env.NODE_ENV === "test") {
     });
     thresholdSignerB = bootstrapB.signer;
     primaryPubkeyB = bootstrapB.primaryPubkey;
+    process.stderr.write(`cello-mcp: FROST bootstrap B OK, primaryPubkey=${Buffer.from(primaryPubkeyB).toString("hex").slice(0,16)}...\n`);
   } else {
     // Fallback: in-process stubs (no directory reachable)
     const stubsA = createInProcessStubs(3);

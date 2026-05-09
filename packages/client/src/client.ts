@@ -2409,7 +2409,10 @@ class CelloClientImpl implements CelloClient {
       const reason = frame["reason"];
       if (reason === "target_offline") return { ok: false, reason: "target_offline" };
       if (reason === "relay_unavailable") return { ok: false, reason: "relay_unavailable" };
-      return { ok: false, reason: "target_offline" }; // fallback
+      if (reason === "frost_signer_not_configured") return { ok: false, reason: "frost_signer_not_configured" };
+      if (reason === "directory_below_threshold") return { ok: false, reason: "directory_below_threshold" };
+      if (reason === "ceremony_conflict") return { ok: false, reason: "ceremony_conflict" };
+      return { ok: false, reason: "directory_unreachable" }; // unknown error
     }
 
     if (frame["type"] === "session_assignment") {
