@@ -150,6 +150,67 @@ M1 proved sessions are notarizable. M2 proves the notarization cannot be forged 
 
 ---
 
+## CELLO-E2E-002 — Dual-Identity MCP Server and Live End-to-End Testing
+
+After M2 stories shipped, work continued to make the CELLO MCP server fully usable for live agent-to-agent conversation testing. This work was tracked under `CELLO-E2E-002`.
+
+### Problem
+
+The M2 adapter tests proved the protocol in-process. But actually running two Claude Code agents in a conversation required three separate processes: a relay node, a directory node, and one `cello-mcp` process per agent session. Several issues blocked this:
+
+1. **No standalone directory binary.** The directory only existed as an in-process test fixture. `packages/directory` had no `bin/directory.ts` equivalent to the relay's `bin/relay.ts`.
+
+2. **No directory discovery mechanism.** The MCP server had no way to know where the directory was. Agents could start a libp2p node but couldn't reach the directory to establish FROST sessions.
+
+3. **Both agents had the same identity.** Every Claude Code session loads `~/.cello/key` by default. Two sessions running `cello-mcp` produced two agents with identical `own_pubkey` — the same identity can't initiate a session with itself.
+
+4. **`directory_reachable` was a misleading signal.** The status field returned `false` before any sessions existed, which is expected — the actual connectivity check happens during `cello_initiate_session`, not at startup. The `/cello-chat` skill treated this as a failure condition and caused agents to wait indefinitely.
+
+### What Was Built
+
+**Standalone directory binary** (`packages/directory/src/bin/directory.ts`):
+- Loads key from `CELLO_DIRECTORY_KEY_FILE` (auto-generates on first run)
+- Listens on `CELLO_DIRECTORY_LISTEN_ADDR` (default `/ip4/0.0.0.0/tcp/4000`)
+- Requires `CELLO_RELAY_MULTIADDR` env var pointing to the running relay
+- `packages/directory/package.json` now has `"start": "node dist/bin/directory.js"` and a `cello-directory` bin entry
+
+**Directory discovery via `CELLO_DIRECTORY_MULTIADDR`** in `packages/adapter-claude-code/src/bin/cello-mcp.ts`:
+- MCP server reads `CELLO_DIRECTORY_MULTIADDR` env var at startup
+- Parses the `/p2p/<peer-id>` segment to extract `peer_id` and `multiaddrs`
+- Passes `directoryEndpoint` to `createClient()` so FROST session establishment works
+
+**Dual-identity MCP server** (`createMcpServer` API change):
+- Old: `createMcpServer(node, client, keyProvider): McpServer` — one identity per process
+- New: `createMcpServer(identities: Record<string, IdentityContext>): McpServer` — both identities in one process
+- Configured via `CELLO_KEY_FILE_A` (default `~/.cello/key`) and `CELLO_KEY_FILE_B` (default `~/.cello/key-agent-b`)
+- Every tool call requires an `identity` parameter: `"A"` or `"B"`
+- Both agents' FROST key shares bootstrapped independently at startup
+- Per-identity session event queues maintained internally
+
+**`createSingleIdentityServer` helper** added to `src/server.ts` and exported from `src/index.ts`:
+- Wraps old 3-arg call pattern into the new map format
+- Used by all existing tests to preserve backward compatibility
+
+**Settings configuration simplified** (`~/.claude/settings.json`):
+- One `cello` MCP server with both key files
+- No longer need to toggle between two server configs per session
+- Both Agent A and Agent B sessions connect to the same server config and select their identity via tool parameters
+
+### Key Lesson
+
+`directoryReachable()` checks whether any active session has a `directory_endpoint` — it returns `false` with zero sessions. This is the expected pre-session state. The `/cello-chat` skill was incorrectly treating `directory_reachable: false` as a connectivity failure. Fixed: the skill now notes this is expected and proceeds to session establishment.
+
+### Infrastructure for Live Testing
+
+```
+Terminal 1: NODE_ENV=test pnpm --filter @cello/relay run start
+Terminal 2: CELLO_RELAY_MULTIADDR=<relay-multiaddr> NODE_ENV=test pnpm --filter @cello/directory run start
+Claude session A: /cello-chat → "You are the initiator" → all tools use { identity: "A" }
+Claude session B: /cello-chat → "You are the target"   → all tools use { identity: "B" }
+```
+
+---
+
 ## What M3 Builds On
 
 M2 proved that session receipts are unforgeable by any single party. M3 adds connection policy — agents deciding whether to accept a session based on trust signals carried from prior interactions. The threshold signing infrastructure is complete; what changes is what agents require before they agree to enter a session.

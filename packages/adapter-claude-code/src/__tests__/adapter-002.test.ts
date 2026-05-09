@@ -149,7 +149,7 @@ describe("AC-004: cello_list_peers is not registered in M1 tool registry", () =>
     expect(tools.map((t) => t.name)).not.toContain("cello_list_peers");
 
     // Calling an unregistered tool returns an MCP error response (isError: true)
-    const result = await mcpClient.callTool({ name: "cello_list_peers", arguments: { identity: "A", identity: "A" } });
+    const result = await mcpClient.callTool({ name: "cello_list_peers", arguments: { identity: "A" } });
     expect((result as { isError?: boolean }).isError).toBe(true);
   }, 10_000);
 });
@@ -488,7 +488,7 @@ describe("SI-002: no K_local private key material in any tool response or notifi
     const expectedPubkey = Buffer.from(await kp.getPublicKey()).toString("hex");
 
     const result = parseResult(
-      await mcpClient.callTool({ name: "cello_status", arguments: { identity: "A", identity: "A" } })
+      await mcpClient.callTool({ name: "cello_status", arguments: { identity: "A" } })
     ) as Record<string, unknown>;
 
     // own_pubkey is the public key, not private

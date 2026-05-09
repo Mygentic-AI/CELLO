@@ -29,7 +29,7 @@ import { stat, rm, mkdir } from "node:fs/promises";
 import { FileKeyProvider, generateKeypair } from "@cello/crypto";
 import { createNode } from "@cello/transport";
 import { createClient } from "@cello/client";
-import { createMcpServer, pushChannelNotification } from "../index.js";
+import { createSingleIdentityServer as createMcpServer, pushChannelNotification } from "../index.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Tool, Notification } from "@modelcontextprotocol/sdk/types.js";
@@ -185,7 +185,7 @@ describe("AC-005: cello_status returns expected fields", () => {
     const expectedPubkey = Buffer.from(await kp.getPublicKey()).toString("hex");
 
     const result = parseResult(
-      await mcpClient.callTool({ name: "cello_status", arguments: { identity: "A", identity: "A" } })
+      await mcpClient.callTool({ name: "cello_status", arguments: { identity: "A" } })
     ) as Record<string, unknown>;
 
     expect(result.transport_started).toBe(true);
@@ -218,7 +218,7 @@ describe("SI-003: no K_local private key bytes in any tool response", () => {
 
     const expectedPubkey = Buffer.from(await kp.getPublicKey()).toString("hex");
     const result = parseResult(
-      await mcpClient.callTool({ name: "cello_status", arguments: { identity: "A", identity: "A" } })
+      await mcpClient.callTool({ name: "cello_status", arguments: { identity: "A" } })
     ) as Record<string, unknown>;
 
     expect(result.own_pubkey).toBe(expectedPubkey);

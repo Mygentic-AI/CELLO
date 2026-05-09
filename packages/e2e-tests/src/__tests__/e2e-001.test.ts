@@ -325,7 +325,7 @@ describe.skip("AC-007: cello_status cross-check — connected_peer_count:1; own_
 
     // AC-007: status on A
     const statusA = parseResult(
-      await mcpA.callTool({ name: "cello_status", arguments: { identity: "A", identity: "A" } })
+      await mcpA.callTool({ name: "cello_status", arguments: { identity: "A" } })
     ) as { transport_started: boolean; own_pubkey: string; connected_peer_count: number };
     expect(statusA.transport_started).toBe(true);
     expect(statusA.own_pubkey).toBe(ownPubkeyA);
@@ -333,7 +333,7 @@ describe.skip("AC-007: cello_status cross-check — connected_peer_count:1; own_
 
     // AC-007: status on B
     const statusB = parseResult(
-      await mcpB.callTool({ name: "cello_status", arguments: { identity: "A", identity: "A" } })
+      await mcpB.callTool({ name: "cello_status", arguments: { identity: "A" } })
     ) as { transport_started: boolean; own_pubkey: string; connected_peer_count: number };
     expect(statusB.transport_started).toBe(true);
     expect(statusB.own_pubkey).toBe(ownPubkeyB);

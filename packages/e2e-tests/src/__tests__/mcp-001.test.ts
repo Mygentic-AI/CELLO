@@ -194,7 +194,7 @@ describe.skip("AC-005: cello_status returns transport_started, own_pubkey, liste
     scope.addCleanup(cleanup);
 
     const result = parseResult(
-      await mcpClientA.callTool({ name: "cello_status", arguments: { identity: "A", identity: "A" } })
+      await mcpClientA.callTool({ name: "cello_status", arguments: { identity: "A" } })
     ) as {
       transport_started: boolean;
       own_pubkey: string;
@@ -281,7 +281,7 @@ describe.skip("AC-007: A sends 5 to B, B sends 3 to A, all arrive with correct a
 
     // B needs A's listen address to connect back
     const statusA = parseResult(
-      await mcpClientA.callTool({ name: "cello_status", arguments: { identity: "A", identity: "A" } })
+      await mcpClientA.callTool({ name: "cello_status", arguments: { identity: "A" } })
     ) as { listen_addresses: string[] };
     const listenAddrA = statusA.listen_addresses[0]!;
 
@@ -381,7 +381,7 @@ describe.skip("AC-008: cello_list_peers returns connected peers", () => {
     await mcpA.callTool({ name: "cello_connect_peer", arguments: { identity: "A", multiaddr: nodeC.listenAddresses()[0]! } });
 
     const result = parseResult(
-      await mcpA.callTool({ name: "cello_list_peers", arguments: { identity: "A", identity: "A" } })
+      await mcpA.callTool({ name: "cello_list_peers", arguments: { identity: "A" } })
     ) as Array<{ peer_pubkey: string; multiaddrs: string[]; connected: boolean }>;
 
     expect(result.length).toBe(2);
@@ -425,7 +425,7 @@ describe.skip("AC-009: tools return transport_not_started before transport is st
 
     // cello_status must still respond (transport_started: false, but no error)
     const statusResult = parseResult(
-      await mcpClient.callTool({ name: "cello_status", arguments: { identity: "A", identity: "A" } })
+      await mcpClient.callTool({ name: "cello_status", arguments: { identity: "A" } })
     ) as { transport_started: boolean };
     expect(statusResult.transport_started).toBe(false);
     expect((statusResult as Record<string, unknown>).error).toBeUndefined();
@@ -583,7 +583,7 @@ describe.skip("SI-001: no K_local private key material in any tool response", ()
     const expectedPublicKey = Buffer.from(await kp.getPublicKey()).toString("hex");
 
     const result = parseResult(
-      await mcpClient.callTool({ name: "cello_status", arguments: { identity: "A", identity: "A" } })
+      await mcpClient.callTool({ name: "cello_status", arguments: { identity: "A" } })
     ) as Record<string, unknown>;
 
     // own_pubkey must equal the public key exactly
