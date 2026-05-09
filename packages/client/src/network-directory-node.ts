@@ -38,6 +38,9 @@ export class NetworkDirectoryNode implements DirectoryNodeStub {
   #agentPubkeyHex: string | null = null;
   #epochId: string | null = null;
 
+  // Stored during receiveShare — used by tests to get the FrostPublic for signRound calls
+  #lastPub: Parameters<DirectoryNodeStub["receiveShare"]>[1] | null = null;
+
   constructor(opts: {
     id: string;
     node: CelloNode;
@@ -56,7 +59,13 @@ export class NetworkDirectoryNode implements DirectoryNodeStub {
     return true;
   }
 
+  /** Return the FrostPublic from the last receiveShare call. Used by tests to construct signRound params. */
+  getLastPub(): Parameters<DirectoryNodeStub["receiveShare"]>[1] | null {
+    return this.#lastPub;
+  }
+
   async receiveShare(...[secret, pub]: Parameters<DirectoryNodeStub["receiveShare"]>): Promise<void> {
+    this.#lastPub = pub;
     if (!this.#agentPubkeyHex || !this.#epochId) {
       throw new Error("NetworkDirectoryNode: setBootstrapContext must be called before receiveShare");
     }
