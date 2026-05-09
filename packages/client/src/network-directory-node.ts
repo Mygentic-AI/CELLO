@@ -167,7 +167,8 @@ export class NetworkDirectoryNode implements DirectoryNodeStub {
       framedMsg: params.msg, // already framed (context\0tbs) by the coordinator
       commitmentList: params.commitmentList,
       ceremonyId: params.ceremonyId,
-      peerIdString: this.#node.getPeerId(),
+      // Use ceremonyId as peerIdString to match directory's markInFlight registration
+      peerIdString: params.ceremonyId,
     });
 
     const stream = await this.#openStream();

@@ -527,7 +527,9 @@ export class CelloDirectoryNode {
           continue;
         }
         if (parsed.type === "session_request") {
-          await this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"));
+          // Run concurrently — ceremony_result frames must be processed by this same loop
+          // while #processSessionRequest is suspended awaiting the ceremony round-trip.
+          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"));
         } else if (parsed.type === "seal_frost_signature") {
           void this.#processSealFrostSignature(authedPubkeyHex!, parsed);
         } else {
@@ -678,10 +680,6 @@ export class CelloDirectoryNode {
       return;
     }
 
-    // markInFlight AFTER early return — clearInFlight only called when this runs.
-    // M2: ceremonyId used as peerIdString — each session generates a unique session_id,
-    // guaranteeing unique ceremony IDs. In M3, replace with the actual libp2p Peer ID of
-    // the requesting coordinator for proper retry-vs-conflict distinction.
     this.#frostHandler.markInFlight(initiatorHex, epochId, ceremonyId, ceremonyId);
 
     try {
@@ -1178,7 +1176,8 @@ class FrostHandlerStub implements DirectoryNodeStub {
       epochId: this.#epochId,
       framedMsg: params.msg,
       commitmentList: params.commitmentList,
-      peerIdString: "directory-self",
+      // Use ceremonyId as peerIdString to match markInFlight in #processSessionRequest
+      peerIdString: params.ceremonyId,
       ceremonyId: params.ceremonyId,
     });
     if (!result.ok) return null;
