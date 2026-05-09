@@ -15,3 +15,6 @@ packages/*/tsconfig.tsbuildinfo
 
 # claude-flow runtime directories
 .claude-flow/
+
+# Claude Code agent worktrees
+.claude/worktrees/
