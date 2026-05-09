@@ -1,0 +1,249 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-NODE-004
+domain: Node Operations
+actor: DIR
+priority: P0
+components:
+  - directory
+  - relay
+
+# ─── Process Note ───────────────────────────────────────────
+process_note: >
+  Retroactive M1 gap story — written 2026-05-09 after discovering that SESSION-002
+  documented the directory-to-relay session registration as "in-process (NODE-001)"
+  without ever specifying the network protocol required when directory and relay run
+  as separate processes. This story closes that debt before M3 begins.
+
+  Without this story, `cello_initiate_session` returns `relay_unavailable` every time
+  the directory and relay run as separate libp2p nodes — which is the intended
+  production topology and the only topology that demonstrates the three-party
+  architecture described in server-infrastructure.md.
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Directory Node,
+  I want a libp2p protocol `/cello/directory-relay/1.0.0` so I can register sessions
+  with, submit seal data to, and discard sessions on a relay node running as a
+  separate process,
+  so that the directory and relay can operate as genuinely separate infrastructure
+  with separate operators — as specified in server-infrastructure.md — rather than
+  requiring co-location in a single process.
+
+  **Why this story exists:**
+  SESSION-002 described the directory calling `relay.recordAssignment()` as an
+  in-process method call. Every story that followed inherited that assumption. The
+  in-process test harness made all tests pass without anyone noticing that the call
+  would fail the moment directory and relay ran as separate processes. This is the
+  story that should have been NODE-003 at M1.
+
+  **What the directory calls the relay for:**
+
+  1. `record_assignment` — at session establishment: register a new session with
+     both participant pubkeys, genesis_prev_root, and directory signature so the
+     relay can authenticate incoming hash_submit frames from those participants.
+
+  2. `discard_session` — when establishment fails mid-flight (e.g., initiator's
+     signaling stream closes before both clients receive the assignment): remove
+     provisional session state from the relay so it cannot be accessed.
+
+  3. `submit_for_seal` — when the directory receives bilateral SEAL control leaves
+     from the relay (via the relay's seal notification): retrieve the complete leaf
+     sequence from the relay for independent Merkle recomputation and verification.
+
+  4. `confirm_seal` — after the directory has verified the tree and issued
+     SealNotarization: instruct the relay to destroy per-session state.
+
+  5. `reject_seal` — when directory verification fails (signature invalid, causal
+     chain broken, root mismatch): instruct the relay to mark the session as
+     seal-rejected rather than destroyed.
+
+  **Protocol direction:**
+  The directory dials the relay on `/cello/directory-relay/1.0.0`. The relay
+  authenticates the directory by verifying its Ed25519 signature over a challenge
+  nonce — same pattern as `/cello/signaling/1.0.0` client auth. One request/response
+  per stream open (same pattern as `/cello/frost/1.0.0`).
+
+  **Relay authentication of the directory:**
+  The relay holds the directory's public key (configured at startup via
+  `CELLO_DIRECTORY_PUBKEY` env var). Any `record_assignment` or admin frame not
+  signed by that key is rejected with `auth_invalid`.
+
+  **Relay startup:**
+  The relay binary reads `CELLO_DIRECTORY_PUBKEY` at startup — same approach as
+  client pinning the directory pubkey. No dynamic registration; the keypair is stable
+  across restarts (loaded from `CELLO_DIRECTORY_KEY_FILE`).
+
+  **Directory startup:**
+  The directory binary dials the relay at startup using `CELLO_RELAY_MULTIADDR` (already
+  set) and authenticates. The authenticated connection is reused for all subsequent
+  admin calls via stream opens on `/cello/directory-relay/1.0.0`.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the directory needs to register a new session with the relay"
+    action: >
+      The directory SHALL open a stream on `/cello/directory-relay/1.0.0`, send a
+      signed `record_assignment` frame carrying session_id, participant_a pubkey,
+      participant_b pubkey, genesis_prev_root, session_timestamp, and directory_signature.
+      The relay SHALL verify the directory signature, store the session record, and
+      respond with `{ type: "assignment_ok" }`. The directory SHALL NOT deliver
+      session_assignment frames to clients until it receives `assignment_ok`. If the
+      relay returns an error, the directory SHALL return `relay_unavailable` to the
+      initiating client.
+
+  - trigger: "When the directory needs to discard a provisional session"
+    action: >
+      The directory SHALL open a stream, send a signed `discard_session` frame carrying
+      session_id and directory_signature. The relay SHALL remove all state for that
+      session_id and respond with `{ type: "discard_ok" }`.
+
+  - trigger: "When both SEAL control leaves have been submitted and the directory needs the full leaf sequence"
+    action: >
+      The relay SHALL submit the complete leaf sequence to the directory via
+      `/cello/directory-relay/1.0.0` using a `seal_submission` frame carrying
+      session_id and the full ordered leaf array. The directory SHALL respond with
+      `{ type: "seal_received" }`. Note: this is relay→directory direction — the relay
+      initiates when it detects bilateral SEAL completion.
+
+  - trigger: "When the directory has verified the leaf sequence and issued SealNotarization"
+    action: >
+      The directory SHALL open a stream, send a signed `confirm_seal` frame carrying
+      session_id. The relay SHALL destroy all per-session state and respond with
+      `{ type: "confirm_ok" }`.
+
+  - trigger: "When the directory rejects the leaf sequence (verification failure)"
+    action: >
+      The directory SHALL open a stream, send a signed `reject_seal` frame carrying
+      session_id and reason. The relay SHALL mark the session as `seal_rejected` and
+      respond with `{ type: "reject_ok" }`.
+
+  - trigger: "When a frame arrives on /cello/directory-relay/1.0.0 without a valid directory signature"
+    action: >
+      The relay SHALL respond with `{ type: "auth_invalid" }` and close the stream
+      without processing the request.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Directory and relay running as separate processes; relay configured with directory's public key"
+    when: "Directory calls record_assignment over /cello/directory-relay/1.0.0"
+    then: >
+      Relay stores the session; responds with assignment_ok; relay subsequently accepts
+      hash_submit frames from participant A and participant B on /cello/relay/1.0.0
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-002
+    given: "A session has been registered via record_assignment"
+    when: "Directory calls discard_session for that session_id"
+    then: >
+      Relay removes session state; responds with discard_ok; subsequent hash_submit
+      from either participant returns session_not_found
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-003
+    given: "Both SEAL control leaves have been submitted to the relay"
+    when: "Relay sends seal_submission to directory with the complete leaf sequence"
+    then: >
+      Directory receives the full leaf log; responds with seal_received; proceeds to
+      independent Merkle recomputation
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "Directory has verified the leaf sequence and seal is clean"
+    when: "Directory calls confirm_seal"
+    then: >
+      Relay destroys per-session state; responds with confirm_ok; subsequent
+      hash_submit for that session_id returns session_not_found (same as pre-registration)
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-005
+    given: "Directory detects a verification failure (e.g. signature invalid on a leaf)"
+    when: "Directory calls reject_seal with reason"
+    then: >
+      Relay marks session seal_rejected; responds with reject_ok; subsequent
+      hash_submit returns session_sealed_rejected
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-006
+    given: "A frame arrives on /cello/directory-relay/1.0.0 signed by an unknown key"
+    when: "Relay attempts to verify the signature"
+    then: "Relay responds with auth_invalid and closes the stream; no state is mutated"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-007
+    given: "Directory and relay both started from separate terminals with matching key configuration"
+    when: "An agent calls cello_initiate_session with a target that is online"
+    then: >
+      Session establishment completes: session_assignment delivered to both agents,
+      relay has recorded the session, both agents can send and receive messages,
+      and closing the session produces a sealed receipt — all without any in-process
+      wiring between directory and relay
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The relay SHALL only accept session registrations from the configured directory
+      pubkey. Any other party that can dial the relay on /cello/directory-relay/1.0.0
+      SHALL be rejected with auth_invalid.
+    adversarial_condition: >
+      Even when an attacker can dial the relay directly and sends a well-formed
+      record_assignment frame — if the frame is not signed by the directory's known
+      public key, it is rejected without state mutation.
+    test_type: integration
+    component_under_test: relay
+
+  - id: SI-002
+    statement: >
+      The relay SHALL NOT accept hash_submit for a session_id until record_assignment
+      for that session_id has been acknowledged — and SHALL return session_not_found
+      for session_ids that have never been registered OR have been confirmed/rejected
+      (indistinguishable responses, per SESSION-002 AC-010).
+    adversarial_condition: >
+      Even when an attacker guesses a session_id before the directory has called
+      record_assignment — the relay returns session_not_found, the same as for
+      post-seal or unknown sessions. No timing side channel leaks whether a session
+      is pending registration.
+    test_type: integration
+    component_under_test: relay
+
+# ─── Degraded Behaviors ─────────────────────────────────────
+degraded_behaviors:
+  - id: DB-001
+    condition: "Relay is unreachable when directory tries to call record_assignment"
+    fallback: >
+      Directory returns relay_unavailable to the initiating client on their signaling
+      stream. No session_id is allocated and no session_assignment is delivered to
+      either client. The initiating client surfaces relay_unavailable to the agent.
+    test_type: integration
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "Directory is unreachable when relay tries to submit seal_submission"
+    fallback: >
+      Relay queues the seal_submission and retries on reconnect (same pattern as the
+      directory's notification queue for disconnected clients). The session remains
+      in sealing state until the directory is reachable and the submission completes.
+      The bilateral seal leaves are already on the tree and remain valid for later
+      verification.
+    test_type: integration
+    component_under_test: relay
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Directory Infrastructure, Conversations"
+  end_to_end_flow: "§6.6 (seal), §5.1 (session establishment)"
+  server_infrastructure: "Component 2 (Directory Nodes), Component 3 (Relay Nodes)"
+  depends_on:
+    - "CELLO-NODE-001 — directory libp2p node"
+    - "CELLO-NODE-002 — relay libp2p node"
+    - "CELLO-SESSION-002 — session establishment (closes the in-process stub)"
+  closes_stub_in: "CELLO-SESSION-002 behavior block, line: 'synchronously call relay.recordAssignment(record) in-process (NODE-001)'"
