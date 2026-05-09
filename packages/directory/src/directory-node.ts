@@ -271,24 +271,118 @@ export class CelloDirectoryNode {
   // ─── FROST stream handler ────────────────────────────────────────────────────
 
   async #handleFrostStream(stream: Stream): Promise<void> {
-    // /cello/frost/1.0.0 stream handler — delegates to FrostDirectoryHandler
-    // Stream protocol: length-prefixed CBOR frames (same encoding as signaling)
+    // /cello/frost/1.0.0 wire protocol — one request/response per stream open.
     //
-    // Inbound frame: { agentPubkey, epochId, tbs, context, commitmentList, ceremonyId }
-    // Outbound frame: CeremonyRoundResult (ok/error)
-    //
-    // NOTE: This is the M2 skeletal registration. Full CBOR framing for the
-    // /cello/frost/1.0.0 wire protocol will be implemented in the follow-on
-    // stream protocol story once the wire format is finalized. For now, the
-    // handler is exercised in-process (via FrostDirectoryHandler directly)
-    // and the libp2p protocol is registered for discoverability.
+    // Frame types (CBOR, length-prefixed):
+    //   Request  { type: "frost_bootstrap",      agentPubkey, epochId, secret, commitments, verifyingShares, signers }
+    //   Request  { type: "frost_commit_request",  agentPubkey, epochId, peerIdString }
+    //   Response { type: "frost_commit_response", nodeId, nonceCommitment }
+    //   Request  { type: "frost_sign_request",    agentPubkey, epochId, tbs, context, commitmentList, ceremonyId, peerIdString }
+    //   Response { type: "frost_sign_response",   ok: true, partialSignature }
+    //            { type: "frost_sign_response",   ok: false, reason }
     try {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      for await (const _ of lp.decode(stream)) {
-        // TODO (M2 follow-on): decode CBOR frame and call this.#frostHandler.handleCeremonyRound
-        // For now: close stream immediately (handler is exercised in-process)
+      let requestBytes: Uint8Array | null = null;
+      for await (const chunk of lp.decode(stream)) {
+        requestBytes = chunk instanceof Uint8Array ? chunk : (chunk as unknown as { slice(): Uint8Array }).slice();
         break;
       }
+      if (!requestBytes) { stream.close().catch(() => {}); return; }
+
+      const req = cborDecode(requestBytes) as Record<string, unknown>;
+      const frameType = req["type"] as string | undefined;
+
+      if (frameType === "frost_bootstrap") {
+        // Client pushes share material from trustedDealer bootstrap.
+        // Store in the share store so handleCeremonyRound can use it.
+        const agentPubkey = req["agentPubkey"] as string;
+        const epochId = req["epochId"] as string;
+        const secretBytes = req["secret"] as Uint8Array;
+        const identifier = req["identifier"] as string;
+        const commitments = req["commitments"] as Uint8Array[];
+        const verifyingSharesRaw = req["verifyingShares"] as Record<string, Uint8Array>;
+        const signers = req["signers"] as { min: number; max: number };
+
+        // Reconstruct FrostSecret and FrostPublic from the serialized form
+        const { ed25519_FROST } = await import("@noble/curves/ed25519.js");
+        const frostSecret = {
+          identifier: identifier,
+          signingShare: secretBytes,
+        };
+        const verifyingShares: Record<string, Uint8Array> = {};
+        for (const [k, v] of Object.entries(verifyingSharesRaw)) {
+          verifyingShares[k] = v instanceof Uint8Array ? v : new Uint8Array(v as unknown as ArrayBuffer);
+        }
+        const frostPub = {
+          signers,
+          commitments: commitments.map(c => c instanceof Uint8Array ? c : new Uint8Array(c as unknown as ArrayBuffer)),
+          verifyingShares,
+        };
+        void ed25519_FROST; // type-check only — not needed for storage
+
+        this.#frostHandler.injectShareForTest(agentPubkey, epochId, {
+          secret: frostSecret as unknown as import("@noble/curves/abstract/frost.js").FrostSecret,
+          pub: frostPub as unknown as import("@noble/curves/abstract/frost.js").FrostPublic,
+        });
+
+        const resp = CBOR_ENC.encode({ type: "frost_bootstrap_ok" });
+        stream.send(lp.encode.single(resp));
+        await stream.close();
+        return;
+      }
+
+      if (frameType === "frost_commit_request") {
+        // Client asks this node to generate a nonce commitment for an upcoming round.
+        const agentPubkey = req["agentPubkey"] as string;
+        const epochId = req["epochId"] as string;
+
+        const result = await this.#frostHandler.generateCommitment(agentPubkey, epochId);
+        if (!result.ok) {
+          const resp = CBOR_ENC.encode({ type: "frost_commit_response", ok: false, reason: result.reason });
+          stream.send(lp.encode.single(resp));
+          await stream.close();
+          return;
+        }
+
+        const resp = CBOR_ENC.encode({
+          type: "frost_commit_response",
+          ok: true,
+          nodeId: result.nodeId,
+          nonceCommitment: result.nonceCommitment,
+        });
+        stream.send(lp.encode.single(resp));
+        await stream.close();
+        return;
+      }
+
+      if (frameType === "frost_sign_request") {
+        // Client sends the pre-framed message (context\0tbs) and commitment list.
+        // The directory signs the pre-framed message directly using signRawMessage.
+        const agentPubkey = req["agentPubkey"] as string;
+        const epochId = req["epochId"] as string;
+        const framedMsg = req["framedMsg"] as Uint8Array;
+        const commitmentList = req["commitmentList"] as import("@noble/curves/abstract/frost.js").NonceCommitments[];
+        const ceremonyId = req["ceremonyId"] as string;
+        const peerIdString = req["peerIdString"] as string;
+
+        const result = await this.#frostHandler.signRawMessage({
+          agentPubkey,
+          epochId,
+          framedMsg: framedMsg instanceof Uint8Array ? framedMsg : new Uint8Array(framedMsg as unknown as ArrayBuffer),
+          commitmentList,
+          peerIdString,
+          ceremonyId,
+        });
+
+        const resp = result.ok
+          ? CBOR_ENC.encode({ type: "frost_sign_response", ok: true, partialSignature: result.partialSignature })
+          : CBOR_ENC.encode({ type: "frost_sign_response", ok: false, reason: result.reason });
+        stream.send(lp.encode.single(resp));
+        await stream.close();
+        return;
+      }
+
+      // Unknown frame type — close without response
+      stream.abort(new Error("unknown_frost_frame_type"));
     } catch {
       // stream closed or reset
     } finally {

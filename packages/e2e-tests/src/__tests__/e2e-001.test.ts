@@ -29,7 +29,7 @@ import type { TestScope } from "@claude-flow/testing";
 import { generateKeypair } from "@cello/crypto";
 import { createNode } from "@cello/transport";
 import { createClient } from "@cello/client";
-import { createMcpServer, pushChannelNotification } from "@cello/adapter-claude-code";
+import { createSingleIdentityServer as createMcpServer, pushChannelNotification } from "@cello/adapter-claude-code";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Notification } from "@modelcontextprotocol/sdk/types.js";

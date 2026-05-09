@@ -1,4 +1,5 @@
 export { createClient } from "./client.js";
+export { NetworkDirectoryNode, bootstrapNetworkKeyShares } from "./network-directory-node.js";
 export { createMcpSessionServer } from "./mcp-server.js";
 export type {
   CelloClient,

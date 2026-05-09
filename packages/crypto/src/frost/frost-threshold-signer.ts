@@ -212,7 +212,7 @@ export async function bootstrapKeyShares(
     if (!stubShare) {
       throw new Error(`No share generated for stub ${stub.id}`);
     }
-    stub.receiveShare(stubShare, deal.public);
+    await stub.receiveShare(stubShare, deal.public);
   }
 
   // Store client's local share
@@ -379,7 +379,7 @@ export class FrostThresholdSigner implements IThresholdSigner {
 
       // Round 1: generate fresh nonces + commitment list
       const localNonce = ed25519_FROST.commit(localShare.secret);
-      const stubCommits = selected.map((s) => s.generateCommitment());
+      const stubCommits = await Promise.all(selected.map((s) => s.generateCommitment()));
       const commitmentList = [
         localNonce.commitments,
         ...stubCommits.map((c) => c.nonceCommitment),

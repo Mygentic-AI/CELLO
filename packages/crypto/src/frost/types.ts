@@ -168,17 +168,19 @@ export interface DirectoryNodeStub {
   /**
    * Generate nonce commitment for a round.
    * Called by the coordinator before collecting partial signatures.
+   * Returns a Promise to support both in-process stubs and network nodes.
    */
-  generateCommitment(): StubCommitment;
+  generateCommitment(): Promise<StubCommitment>;
 
   /**
    * Receive a FROST signing share from the bootstrap ceremony.
    * Called by bootstrapKeyShares during setup.
+   * Returns a Promise to support both in-process stubs and network nodes.
    */
   receiveShare(
     secret: import("@noble/curves/abstract/frost.js").FrostSecret,
     pub: import("@noble/curves/abstract/frost.js").FrostPublic,
-  ): void;
+  ): Promise<void>;
 }
 
 export interface StubSignParams {

@@ -53,7 +53,7 @@ export class InProcessDirectoryNodeStub implements DirectoryNodeStub {
    * Receive a FROST signing share from the bootstrap ceremony.
    * Called by bootstrapKeyShares during setup.
    */
-  receiveShare(secret: FrostSecret, pub: FrostPublic): void {
+  async receiveShare(secret: FrostSecret, pub: FrostPublic): Promise<void> {
     this.#key = { secret, pub };
   }
 
@@ -114,7 +114,7 @@ export class InProcessDirectoryNodeStub implements DirectoryNodeStub {
    * Called by the coordinator before collecting partial signatures.
    * Caches the nonce scalars for use in signRound().
    */
-  generateCommitment(): StubCommitment {
+  async generateCommitment(): Promise<StubCommitment> {
     if (!this.#key) {
       throw new Error(`Stub ${this.id} has no key share (not bootstrapped)`);
     }

@@ -7,7 +7,7 @@ import { FileKeyProvider, FrostThresholdSigner } from "@cello/crypto";
 import { bootstrapKeyShares } from "@cello/crypto/frost/frost-threshold-signer.js";
 import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
 import { createNode } from "@cello/transport";
-import { createClient } from "@cello/client";
+import { createClient, NetworkDirectoryNode, bootstrapNetworkKeyShares } from "@cello/client";
 import { createMcpServer } from "../server.js";
 import { pushChannelNotification } from "../notifications.js";
 
@@ -31,30 +31,6 @@ try {
   process.exit(1);
 }
 
-// Create two nodes (one per identity)
-const nodeA = await createNode({ keyProvider: kpA, listenAddresses: [listenAddrA] });
-const nodeB = await createNode({ keyProvider: kpB, listenAddresses: [listenAddrB] });
-
-// CELLO-E2E-002: Bootstrap FROST key shares (test-only)
-// In production (M3+), real DKG ceremony will replace this test-harness shortcut.
-let thresholdSignerA: FrostThresholdSigner | undefined;
-let primaryPubkeyA: Uint8Array | undefined;
-let thresholdSignerB: FrostThresholdSigner | undefined;
-let primaryPubkeyB: Uint8Array | undefined;
-if (process.env.NODE_ENV === "test") {
-  const ownPubkeyA = await kpA.getPublicKey();
-  const stubsA = createInProcessStubs(3);
-  const bootstrapResultA = await bootstrapKeyShares(ownPubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
-  thresholdSignerA = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsA }, ownPubkeyA);
-  primaryPubkeyA = bootstrapResultA.primaryPubkey;
-
-  const ownPubkeyB = await kpB.getPublicKey();
-  const stubsB = createInProcessStubs(3);
-  const bootstrapResultB = await bootstrapKeyShares(ownPubkeyB, { threshold: 2, participants: 3, directoryNodeStubs: stubsB });
-  thresholdSignerB = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsB }, ownPubkeyB);
-  primaryPubkeyB = bootstrapResultB.primaryPubkey;
-}
-
 // Parse directory endpoint from CELLO_DIRECTORY_MULTIADDR (if set)
 let directoryEndpoint: { peer_id: string; multiaddrs: string[] } | undefined = undefined;
 if (directoryMultiaddr) {
@@ -65,6 +41,71 @@ if (directoryMultiaddr) {
     directoryEndpoint = { peer_id: peerId, multiaddrs: [directoryMultiaddr] };
   } else {
     process.stderr.write("cello-mcp: CELLO_DIRECTORY_MULTIADDR must include /p2p/<peer-id>\n");
+  }
+}
+
+// Create two nodes (one per identity) and start them so dial() works during bootstrap
+const nodeA = await createNode({ keyProvider: kpA, listenAddresses: [listenAddrA] });
+const nodeB = await createNode({ keyProvider: kpB, listenAddresses: [listenAddrB] });
+await nodeA.start();
+await nodeB.start();
+
+// CELLO-E2E-002: Bootstrap FROST key shares (test-only)
+// In production (M3+), real DKG ceremony will replace this test-harness shortcut.
+let thresholdSignerA: FrostThresholdSigner | undefined;
+let primaryPubkeyA: Uint8Array | undefined;
+let thresholdSignerB: FrostThresholdSigner | undefined;
+let primaryPubkeyB: Uint8Array | undefined;
+if (process.env.NODE_ENV === "test") {
+  const ownPubkeyA = await kpA.getPublicKey();
+  const ownPubkeyB = await kpB.getPublicKey();
+
+  if (directoryMultiaddr && directoryEndpoint) {
+    // Live mode: use real network directory nodes over /cello/frost/1.0.0
+    // Nodes A and B each get their own set of NetworkDirectoryNode instances.
+    const networkNodesA = [new NetworkDirectoryNode({
+      id: `cello-test-node-0000`,
+      node: nodeA,
+      directoryPeerId: directoryEndpoint.peer_id,
+      directoryMultiaddrs: directoryEndpoint.multiaddrs,
+    })];
+    const networkNodesB = [new NetworkDirectoryNode({
+      id: `cello-test-node-0000`,
+      node: nodeB,
+      directoryPeerId: directoryEndpoint.peer_id,
+      directoryMultiaddrs: directoryEndpoint.multiaddrs,
+    })];
+
+    // Dial the directory before bootstrapping so streams can be opened
+    await nodeA.dial(directoryEndpoint.multiaddrs[0]!);
+    await nodeB.dial(directoryEndpoint.multiaddrs[0]!);
+
+    const bootstrapA = await bootstrapNetworkKeyShares(ownPubkeyA, {
+      threshold: 2,
+      participants: 1,
+      directoryNodes: networkNodesA,
+    });
+    thresholdSignerA = bootstrapA.signer;
+    primaryPubkeyA = bootstrapA.primaryPubkey;
+
+    const bootstrapB = await bootstrapNetworkKeyShares(ownPubkeyB, {
+      threshold: 2,
+      participants: 1,
+      directoryNodes: networkNodesB,
+    });
+    thresholdSignerB = bootstrapB.signer;
+    primaryPubkeyB = bootstrapB.primaryPubkey;
+  } else {
+    // Fallback: in-process stubs (no directory reachable)
+    const stubsA = createInProcessStubs(3);
+    const bootstrapResultA = await bootstrapKeyShares(ownPubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
+    thresholdSignerA = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsA }, ownPubkeyA);
+    primaryPubkeyA = bootstrapResultA.primaryPubkey;
+
+    const stubsB = createInProcessStubs(3);
+    const bootstrapResultB = await bootstrapKeyShares(ownPubkeyB, { threshold: 2, participants: 3, directoryNodeStubs: stubsB });
+    thresholdSignerB = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsB }, ownPubkeyB);
+    primaryPubkeyB = bootstrapResultB.primaryPubkey;
   }
 }
 
@@ -104,9 +145,7 @@ const server = createMcpServer({
 });
 mcpServer = server;
 
-// Transport must be live before inbound connections are accepted (node.start()).
+// Register inbound handlers and connect stdio transport
 await server.connect(new StdioServerTransport());
 await clientA.registerHandler();
 await clientB.registerHandler();
-await nodeA.start();
-await nodeB.start();

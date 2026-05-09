@@ -552,7 +552,7 @@ describe("CELLO-NODE-003: Directory FROST Handler", () => {
       handler.injectShareForTest(agentPubkeyHex, epochId, stub0Share!);
 
       // Coordinator (stubs[1]) generates its commitment for Round 1
-      const coordinatorCommitment = stubs[1].generateCommitment();
+      const coordinatorCommitment = await stubs[1].generateCommitment();
 
       const tbs = new Uint8Array(randomBytes(32));
 
@@ -732,7 +732,7 @@ describe("CELLO-NODE-003: Directory FROST Handler", () => {
       handler.injectShareForTest(agentPubkeyHex, epochId, stub0Share!);
 
       // Coordinator (stubs[1]) provides its commitment
-      const coordinatorCommitment = stubs[1].generateCommitment();
+      const coordinatorCommitment = await stubs[1].generateCommitment();
       const tbs = new Uint8Array(randomBytes(32));
 
       const result = await handler.handleCeremonyRound({
