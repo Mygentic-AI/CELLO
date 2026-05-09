@@ -12,6 +12,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./network-relay-adapter.js": {
+      "import": "./dist/network-relay-adapter.js",
+      "types": "./dist/network-relay-adapter.d.ts"
     }
   },
   "scripts": {
@@ -23,7 +27,10 @@
     "cello-directory": "./dist/bin/directory.js"
   },
   "devDependencies": {
-    "@claude-flow/testing": "*"
+    "@cello/client": "workspace:*",
+    "@cello/relay": "workspace:*",
+    "@claude-flow/testing": "*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "dependencies": {
     "@cello/crypto": "workspace:*",

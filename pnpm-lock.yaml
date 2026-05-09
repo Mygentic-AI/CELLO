@@ -146,9 +146,18 @@ importers:
         specifier: ^9.1.0
         version: 9.1.1
     devDependencies:
+      '@cello/client':
+        specifier: workspace:*
+        version: link:../client
+      '@cello/relay':
+        specifier: workspace:*
+        version: link:../relay
       '@claude-flow/testing':
         specifier: '*'
         version: 3.0.0-alpha.1(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.0)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.0))
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.4.2)
 
   packages/e2e-tests:
     dependencies:

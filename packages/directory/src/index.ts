@@ -43,6 +43,9 @@ export type { InboundSignalingFrame, OutboundSignalingFrame } from "./directory-
 export type { RelayAdapter, DirectoryNodeOptions, CreateDirectoryNodeOptions } from "./directory-node.js";
 export { CelloDirectoryNode, createDirectoryNode, SIGNALING_PROTOCOL_ID } from "./directory-node.js";
 
+export { NetworkRelayAdapter } from "./network-relay-adapter.js";
+export type { NetworkRelayAdapterOptions } from "./network-relay-adapter.js";
+
 export type { ShareStore, LocalShare } from "./share-store.js";
 export { InMemoryShareStore } from "./share-store.js";
 

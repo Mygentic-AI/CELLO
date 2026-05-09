@@ -1,4 +1,4 @@
-export { CelloRelayNode, createRelayNode, RELAY_PROTOCOL_ID } from "./relay-node.js";
+export { CelloRelayNode, createRelayNode, RELAY_PROTOCOL_ID, DIRECTORY_RELAY_PROTOCOL_ID } from "./relay-node.js";
 export type { RelayNodeOptions, CreateRelayNodeOptions, DirectoryAdapter } from "./relay-node.js";
 
 import { createLibp2p } from "libp2p";

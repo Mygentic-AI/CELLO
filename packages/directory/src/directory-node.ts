@@ -163,15 +163,18 @@ interface NonceEntry {
 // ─── RelayAdapter: in-process relay interface ─────────────────────────────────
 
 /**
- * The directory calls these relay methods in-process.
+ * The directory calls these relay methods — either in-process or over the network.
  * Uses structural typing so the directory package need not import @cello/relay directly.
+ *
+ * CELLO-NODE-004: Methods are now async to support both in-process and network implementations.
+ * In-process implementations may return sync values; callers use await to handle both cases.
  */
 export interface RelayAdapter {
-  recordAssignment(assignment: RelaySessionAssignment): { ok: true } | { ok: false; reason: string };
-  discardSession(sessionId: Uint8Array): void;
-  submitForSeal(sessionId: Uint8Array): { ok: true; data: RelaySealData } | { ok: false; reason: string };
-  confirmSeal(sessionId: Uint8Array): void;
-  rejectSeal(sessionId: Uint8Array, reason: string): void;
+  recordAssignment(assignment: RelaySessionAssignment): Promise<{ ok: true } | { ok: false; reason: string }> | { ok: true } | { ok: false; reason: string };
+  discardSession(sessionId: Uint8Array): Promise<void> | void;
+  submitForSeal(sessionId: Uint8Array): Promise<{ ok: true; data: RelaySealData } | { ok: false; reason: string }> | { ok: true; data: RelaySealData } | { ok: false; reason: string };
+  confirmSeal(sessionId: Uint8Array): Promise<void> | void;
+  rejectSeal(sessionId: Uint8Array, reason: string): Promise<void> | void;
 }
 
 // ─── CelloDirectoryNode ────────────────────────────────────────────────────────
@@ -550,7 +553,7 @@ export class CelloDirectoryNode {
           if (pending.initiatorHex === authedPubkeyHex || pending.targetHex === authedPubkeyHex) {
             this.#pendingSessions.delete(sessionIdHex);
             if (pending.fullyEstablished) continue; // session is live — no relay action needed
-            this.#relay.discardSession(pending.sessionId);
+            void this.#relay.discardSession(pending.sessionId);
             // Notify the counterparty if they already received the assignment frame.
             // Which party received the frame depends on which side is disconnecting.
             const counterpartyHex = pending.initiatorHex === authedPubkeyHex
@@ -725,7 +728,7 @@ export class CelloDirectoryNode {
         session_timestamp,
         directory_signature: relayDirSig,
       };
-      const recorded = this.#relay.recordAssignment(relayAssignment);
+      const recorded = await this.#relay.recordAssignment(relayAssignment);
       if (!recorded.ok) {
         this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "relay_unavailable" }));
         return;
@@ -990,7 +993,7 @@ export class CelloDirectoryNode {
       };
       this.#deliverOrEnqueue(pending.participantAHex, rejectedEvent);
       if (pending.participantBHex) this.#deliverOrEnqueue(pending.participantBHex, rejectedEvent);
-      this.#relay.rejectSeal(frame.session_id, "seal_signature_invalid");
+      void this.#relay.rejectSeal(frame.session_id, "seal_signature_invalid");
       return;
     }
 
@@ -1008,7 +1011,7 @@ export class CelloDirectoryNode {
     this.#store.recordNotarization(notarization);
 
     // Confirm relay (destroys relay per-session state — AC-008)
-    this.#relay.confirmSeal(frame.session_id);
+    void this.#relay.confirmSeal(frame.session_id);
 
     // Notify both clients with session_sealed (frost variant; includes leaf_count for H-003)
     const sealedEvent: SessionSealed = {

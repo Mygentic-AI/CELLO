@@ -1,11 +1,17 @@
 /**
- * CELLO Relay Node — CelloRelayNode (NODE-002)
+ * CELLO Relay Node — CelloRelayNode (NODE-002 + NODE-004)
  *
  * Implements the /cello/relay/1.0.0 libp2p protocol:
  *   - Ed25519 challenge-response auth (domain: "CELLO-RELAY-AUTH-v1")
  *   - hash_submit processing: Structure 1 validation, sequence assignment, Structure 2 construction
  *   - leaf_deliver to counterparty (queued if disconnected, DB-001)
  *   - in-process calls: recordAssignment, submitForSeal, confirmSeal, rejectSeal
+ *
+ * CELLO-NODE-004: Also implements /cello/directory-relay/1.0.0 (inbound directory admin frames):
+ *   - record_assignment: register session from directory
+ *   - discard_session: remove provisional session
+ *   - confirm_seal: destroy session after directory verifies
+ *   - reject_seal: mark session seal_rejected after directory rejects
  *
  * Auth signature over: SHA-256("CELLO-RELAY-AUTH-v1" || nonce || pubkey)
  *   per RFC 8032 (Ed25519) and FIPS 180-4 (SHA-256)
@@ -14,6 +20,54 @@
  *   per MERKLE-002 and RFC 8949 §4.2.1
  * Structure 2 construction: per MERKLE-002 (buildStructure2, encodeStructure2)
  * Leaf hash: SHA-256(leaf_kind || structure2_cbor) per MERKLE-001
+ *
+ * ─── Phase P: CELLO-NODE-004 Pseudocode ──────────────────────────────────────
+ *
+ * DIRECTORY_RELAY_PROTOCOL_ID = "/cello/directory-relay/1.0.0"
+ *
+ * #handleDirectoryRelayStream(stream):
+ *   // Read one request frame from the directory
+ *   requestBytes = await readOneFrame(stream)
+ *   if requestBytes is null: stream.close(); return
+ *
+ *   req = cborDecode(requestBytes)
+ *   frameType = req.type
+ *
+ *   // Extract directory_signature from the frame; verify over CBOR of frame body
+ *   directory_signature = req.directory_signature
+ *   body = { ...req }; delete body.directory_signature  // body without signature
+ *   bodyBytes = cborEncode(body)
+ *   if !verify(this.#directoryPubkey, bodyBytes, directory_signature):
+ *     stream.send(encode({ type: "auth_invalid" }))
+ *     stream.close(); return
+ *
+ *   // Process the authenticated frame
+ *   if frameType === "record_assignment":
+ *     // Re-verify the standard relay assignment TBS (same as in-process recordAssignment)
+ *     result = this.recordAssignment({ session_id, participant_a, participant_b, session_timestamp, directory_signature })
+ *     if result.ok: stream.send(encode({ type: "assignment_ok" }))
+ *     else: stream.send(encode({ type: "auth_invalid" }))  // signature invalid per recordAssignment
+ *
+ *   if frameType === "discard_session":
+ *     this.discardSession(session_id)
+ *     stream.send(encode({ type: "discard_ok" }))
+ *
+ *   if frameType === "confirm_seal":
+ *     this.confirmSeal(session_id)
+ *     stream.send(encode({ type: "confirm_ok" }))
+ *
+ *   if frameType === "reject_seal":
+ *     this.rejectSeal(session_id, reason)
+ *     stream.send(encode({ type: "reject_ok" }))
+ *
+ *   stream.close()
+ *
+ * start():
+ *   // Register both protocol handlers
+ *   node.handle(RELAY_PROTOCOL_ID, #handleRelayStream)
+ *   node.handle(DIRECTORY_RELAY_PROTOCOL_ID, #handleDirectoryRelayStream)
+ *
+ * ─── End Phase P Pseudocode ───────────────────────────────────────────────────
  */
 
 import { randomBytes, createHash } from "node:crypto";
@@ -44,6 +98,7 @@ import {
 } from "./relay-frames.js";
 
 export const RELAY_PROTOCOL_ID = "/cello/relay/1.0.0";
+export const DIRECTORY_RELAY_PROTOCOL_ID = "/cello/directory-relay/1.0.0";
 const AUTH_DOMAIN = "CELLO-RELAY-AUTH-v1";
 const NONCE_TTL_MS = 30_000;
 
@@ -142,6 +197,141 @@ export class CelloRelayNode {
     await this.#node.handle(RELAY_PROTOCOL_ID, (stream) => {
       void this.#handleRelayStream(stream);
     });
+    await this.#node.handle(DIRECTORY_RELAY_PROTOCOL_ID, (stream) => {
+      void this.#handleDirectoryRelayStream(stream);
+    });
+  }
+
+  // ─── /cello/directory-relay/1.0.0 handler (CELLO-NODE-004) ─────────────────
+
+  /**
+   * Handle inbound admin frames from the directory over /cello/directory-relay/1.0.0.
+   * One request/response per stream (same pattern as /cello/frost/1.0.0).
+   *
+   * Auth: verify Ed25519 signature over CBOR of frame body (all fields except directory_signature).
+   * The directory_signature covers the full CBOR-encoded frame body (excluding itself).
+   */
+  async #handleDirectoryRelayStream(stream: Stream): Promise<void> {
+    try {
+      // Read one request frame
+      let requestBytes: Uint8Array | null = null;
+      for await (const chunk of lp.decode(stream)) {
+        requestBytes = chunk instanceof Uint8Array ? chunk : (chunk as unknown as { slice(): Uint8Array }).slice();
+        break;
+      }
+      if (!requestBytes) { stream.close().catch(() => {}); return; }
+
+      const req = decode(requestBytes) as Record<string, unknown>;
+      const frameType = req["type"] as string | undefined;
+
+      // Extract and verify directory_signature
+      const directory_signature = req["directory_signature"] as Uint8Array | undefined;
+      if (!directory_signature || !(directory_signature instanceof Uint8Array) || directory_signature.length !== 64) {
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "auth_invalid" })));
+        await stream.close();
+        return;
+      }
+
+      // Build the signed body: frame CBOR without directory_signature field
+      const bodyObj: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(req)) {
+        if (k !== "directory_signature") bodyObj[k] = v;
+      }
+      const bodyBytes = CBOR_ENC.encode(bodyObj) as Uint8Array;
+
+      if (!verify(this.#directoryPubkey, bodyBytes, directory_signature)) {
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "auth_invalid" })));
+        await stream.close();
+        return;
+      }
+
+      // Authenticated — process the frame
+      if (frameType === "record_assignment") {
+        const session_id = req["session_id"] as Uint8Array;
+        const participant_a = req["participant_a"] as Uint8Array;
+        const participant_b = req["participant_b"] as Uint8Array;
+        const session_timestamp_raw = req["session_timestamp"] as number | bigint;
+        const session_timestamp = typeof session_timestamp_raw === "bigint"
+          ? Number(session_timestamp_raw)
+          : session_timestamp_raw;
+
+        // recordAssignment verifies the standard relay assignment TBS
+        // (CBOR of [session_id, participant_a, participant_b, session_timestamp])
+        // The directory_signature on this frame body is the directory-relay auth sig.
+        // The assignment's directory_signature (for relay assignment auth) must be recomputed.
+        // Per the protocol: the record_assignment frame uses the same directory_signature
+        // as the standard relay assignment TBS — the relay verifies BOTH:
+        //   1. The frame body signature (directory-relay auth) — done above
+        //   2. The assignment TBS signature — done by recordAssignment()
+        // Since we've already verified the frame body (which includes session_id, participant_a,
+        // participant_b, session_timestamp), and the frame's directory_signature IS the
+        // assignment TBS signature (same key, same content structurally), we pass it through.
+        //
+        // Note: The TBS for relay assignment auth is CBOR([session_id, pubA, pubB, timestamp]).
+        // The TBS for directory-relay frame auth is CBOR({type, session_id, pubA, pubB, timestamp}).
+        // These are DIFFERENT — so the directory must sign BOTH, or we derive one from the other.
+        //
+        // Implementation choice: The directory sends a separate assignment_signature field
+        // for the relay's internal recordAssignment verification, alongside directory_signature
+        // for the directory-relay auth. We check for assignment_signature first; if absent,
+        // we use directory_signature (for backward compatibility in test scenarios).
+        const assignment_signature = req["assignment_signature"] as Uint8Array | undefined;
+        const relay_assignment_dir_sig = assignment_signature ?? directory_signature;
+
+        const result = this.recordAssignment({
+          session_id: session_id instanceof Uint8Array ? session_id : new Uint8Array(session_id as unknown as ArrayBuffer),
+          participant_a: participant_a instanceof Uint8Array ? participant_a : new Uint8Array(participant_a as unknown as ArrayBuffer),
+          participant_b: participant_b instanceof Uint8Array ? participant_b : new Uint8Array(participant_b as unknown as ArrayBuffer),
+          session_timestamp,
+          directory_signature: relay_assignment_dir_sig instanceof Uint8Array ? relay_assignment_dir_sig : new Uint8Array(relay_assignment_dir_sig as unknown as ArrayBuffer),
+        });
+
+        if (result.ok) {
+          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "assignment_ok" })));
+        } else {
+          // directory_signature_invalid from recordAssignment means the assignment TBS
+          // signature is wrong — this is an auth issue
+          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "auth_invalid" })));
+        }
+        await stream.close();
+        return;
+      }
+
+      if (frameType === "discard_session") {
+        const session_id = req["session_id"] as Uint8Array;
+        this.discardSession(session_id instanceof Uint8Array ? session_id : new Uint8Array(session_id as unknown as ArrayBuffer));
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "discard_ok" })));
+        await stream.close();
+        return;
+      }
+
+      if (frameType === "confirm_seal") {
+        const session_id = req["session_id"] as Uint8Array;
+        this.confirmSeal(session_id instanceof Uint8Array ? session_id : new Uint8Array(session_id as unknown as ArrayBuffer));
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "confirm_ok" })));
+        await stream.close();
+        return;
+      }
+
+      if (frameType === "reject_seal") {
+        const session_id = req["session_id"] as Uint8Array;
+        const reason = (req["reason"] as string) ?? "unknown";
+        this.rejectSeal(
+          session_id instanceof Uint8Array ? session_id : new Uint8Array(session_id as unknown as ArrayBuffer),
+          reason
+        );
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "reject_ok" })));
+        await stream.close();
+        return;
+      }
+
+      // Unknown frame type — close without state mutation
+      stream.abort(new Error("unknown_directory_relay_frame_type"));
+    } catch {
+      // stream closed or reset — normal disconnect
+    } finally {
+      stream.close().catch(() => {});
+    }
   }
 
   // ─── In-process directory calls ─────────────────────────────────────────────
