@@ -225,3 +225,10 @@ Not an attack class — these are the structural properties the scanner must exh
 This document covers the attack surface as of 2026-05-03. The primary sources (L1B3RT4S and P4RS3LT0NGV3) are actively maintained; TOKEN80M8 is a file within L1B3RT4S and tracks with that repo's maintenance cadence. When these repos receive significant new technique additions, this document should be updated and a new CELLO version that updates the Layer 1 pattern corpus should be released.
 
 The subtle manipulation edge case (§2 "Indirect / Multi-Step Injection" — innocuous-looking inputs that through reasoning chains cause flaggable output) is a known classifier limitation. It is tracked in design-problems.md Problem 12 and is explicitly out of scope for SCAN-002's acceptance criteria.
+
+---
+
+## Related Documents
+
+- [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — the six-layer architecture that this corpus informs; each §section here maps to a specific defense layer
+- [[2026-05-09_1100_dashclaw-m4-competitive-review|DashClaw Competitive Review]] — DashClaw's production pattern lists (`promptInjection.js` ~30 regex patterns, `security.js` 12 secret formats) are a baseline reference for CELLO-SCAN-003 and CELLO-REDACT-004 acceptance criteria

@@ -376,6 +376,7 @@ The 80/20 applies to sequencing, not to skipping. Each of these four must be pre
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — maps the six defense layers to the MCP tool surface: Layers 1, 3–6 fire automatically; Layer 2 is exposed as `cello_scan` for explicit agent invocation
 - [[agent-client|CELLO Agent Client Requirements]] — the client is the runtime host for all six defense layers; Part 5 specifies the client's implementation responsibilities for each layer including DeBERTa delivery, audit logging, and continuous verification
 - [[2026-04-24_1530_inference-billing-protocol|Inference Billing Protocol]] — per-session inference cost caps are enforced as a Layer 5 runtime governance check on every response leaf
+- [[2026-05-09_1100_dashclaw-m4-competitive-review|DashClaw Competitive Review]] — maps DashClaw's shipped security/governance patterns against CELLO's six layers; identifies production pattern lists applicable to SCAN-003 and REDACT-004, and two M4 design gaps (Layer 3 block notifications, per-peer defense policy overrides)
 
 ---
 
