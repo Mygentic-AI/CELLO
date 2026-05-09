@@ -63,42 +63,57 @@ if (process.env.NODE_ENV === "test") {
 
   if (directoryMultiaddr && directoryEndpoint) {
     process.stderr.write(`cello-mcp: bootstrapping FROST via network directory...\n`);
-    // Live mode: use real network directory nodes over /cello/frost/1.0.0
-    // Nodes A and B each get their own set of NetworkDirectoryNode instances.
-    const networkNodesA = [new NetworkDirectoryNode({
-      id: `cello-test-node-0000`,
-      node: nodeA,
-      directoryPeerId: directoryEndpoint.peer_id,
-      directoryMultiaddrs: directoryEndpoint.multiaddrs,
-    })];
-    const networkNodesB = [new NetworkDirectoryNode({
-      id: `cello-test-node-0000`,
-      node: nodeB,
-      directoryPeerId: directoryEndpoint.peer_id,
-      directoryMultiaddrs: directoryEndpoint.multiaddrs,
-    })];
+    try {
+      // Dial the directory before bootstrapping so streams can be opened
+      await nodeA.dial(directoryEndpoint.multiaddrs[0]!);
+      process.stderr.write(`cello-mcp: nodeA dialed directory OK\n`);
+      await nodeB.dial(directoryEndpoint.multiaddrs[0]!);
+      process.stderr.write(`cello-mcp: nodeB dialed directory OK\n`);
 
-    // Dial the directory before bootstrapping so streams can be opened
-    await nodeA.dial(directoryEndpoint.multiaddrs[0]!);
-    await nodeB.dial(directoryEndpoint.multiaddrs[0]!);
+      const networkNodesA = [new NetworkDirectoryNode({
+        id: `cello-test-node-0000`,
+        node: nodeA,
+        directoryPeerId: directoryEndpoint.peer_id,
+        directoryMultiaddrs: directoryEndpoint.multiaddrs,
+      })];
+      const networkNodesB = [new NetworkDirectoryNode({
+        id: `cello-test-node-0000`,
+        node: nodeB,
+        directoryPeerId: directoryEndpoint.peer_id,
+        directoryMultiaddrs: directoryEndpoint.multiaddrs,
+      })];
 
-    const bootstrapA = await bootstrapNetworkKeyShares(ownPubkeyA, {
-      threshold: 2,
-      participants: 1,
-      directoryNodes: networkNodesA,
-    });
-    thresholdSignerA = bootstrapA.signer;
-    primaryPubkeyA = bootstrapA.primaryPubkey;
-    process.stderr.write(`cello-mcp: FROST bootstrap A OK, primaryPubkey=${Buffer.from(primaryPubkeyA).toString("hex").slice(0,16)}...\n`);
+      const bootstrapA = await bootstrapNetworkKeyShares(ownPubkeyA, {
+        threshold: 2,
+        participants: 1,
+        directoryNodes: networkNodesA,
+      });
+      thresholdSignerA = bootstrapA.signer;
+      primaryPubkeyA = bootstrapA.primaryPubkey;
+      process.stderr.write(`cello-mcp: FROST bootstrap A OK, primaryPubkey=${Buffer.from(primaryPubkeyA).toString("hex").slice(0,16)}...\n`);
 
-    const bootstrapB = await bootstrapNetworkKeyShares(ownPubkeyB, {
-      threshold: 2,
-      participants: 1,
-      directoryNodes: networkNodesB,
-    });
-    thresholdSignerB = bootstrapB.signer;
-    primaryPubkeyB = bootstrapB.primaryPubkey;
-    process.stderr.write(`cello-mcp: FROST bootstrap B OK, primaryPubkey=${Buffer.from(primaryPubkeyB).toString("hex").slice(0,16)}...\n`);
+      const bootstrapB = await bootstrapNetworkKeyShares(ownPubkeyB, {
+        threshold: 2,
+        participants: 1,
+        directoryNodes: networkNodesB,
+      });
+      thresholdSignerB = bootstrapB.signer;
+      primaryPubkeyB = bootstrapB.primaryPubkey;
+      process.stderr.write(`cello-mcp: FROST bootstrap B OK, primaryPubkey=${Buffer.from(primaryPubkeyB).toString("hex").slice(0,16)}...\n`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      process.stderr.write(`cello-mcp: FROST bootstrap FAILED: ${msg}\n`);
+      process.stderr.write(`cello-mcp: falling back to in-process stubs\n`);
+      // Fall back to in-process stubs so the server starts but without directory FROST
+      const stubsA = createInProcessStubs(3);
+      const bootstrapResultA = await bootstrapKeyShares(ownPubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
+      thresholdSignerA = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsA }, ownPubkeyA);
+      primaryPubkeyA = bootstrapResultA.primaryPubkey;
+      const stubsB = createInProcessStubs(3);
+      const bootstrapResultB = await bootstrapKeyShares(ownPubkeyB, { threshold: 2, participants: 3, directoryNodeStubs: stubsB });
+      thresholdSignerB = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsB }, ownPubkeyB);
+      primaryPubkeyB = bootstrapResultB.primaryPubkey;
+    }
   } else {
     // Fallback: in-process stubs (no directory reachable)
     const stubsA = createInProcessStubs(3);
