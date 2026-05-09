@@ -2513,41 +2513,45 @@ class CelloClientImpl implements CelloClient {
   }
 
   async #doOpenPersistentSignalingStream(directoryPeerId?: string, directoryMultiaddr?: string): Promise<boolean> {
-    if (!this.#directoryEndpoint && !directoryPeerId) return false;
+    if (!this.#directoryEndpoint && !directoryPeerId) { process.stderr.write("[sigstream] FAIL: no directoryEndpoint and no directoryPeerId\n"); return false; }
     if (this.#persistentSignalingStream) return true;
 
     const dirPeerId = directoryPeerId ?? this.#directoryEndpoint!.peer_id;
     const dirMultiaddr = directoryMultiaddr ?? this.#directoryEndpoint?.multiaddrs[0];
+    process.stderr.write(`[sigstream] opening: peerId=${dirPeerId?.slice(0, 16)}... multiaddr=${dirMultiaddr ?? "(none)"}\n`);
 
     try {
       if (dirMultiaddr) {
-        try { await this.#node.dial(dirMultiaddr); } catch { /* already connected */ }
+        try { await this.#node.dial(dirMultiaddr); } catch (e) { process.stderr.write(`[sigstream] dial threw (non-fatal): ${e instanceof Error ? e.message : String(e)}\n`); }
       }
 
       let sigStream: Stream;
       try {
         sigStream = await this.#node.newStream(dirPeerId, SIGNALING_PROTOCOL_ID);
-      } catch {
+      } catch (e) {
+        process.stderr.write(`[sigstream] FAIL at newStream: ${e instanceof Error ? e.message : String(e)}\n`);
         return false;
       }
+      process.stderr.write("[sigstream] newStream opened, awaiting auth challenge...\n");
 
       // Auth challenge-response (same pattern as #connectDirectorySignalingStream)
       const iter = (lp.decode(sigStream) as AsyncIterable<unknown>)[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
 
       const { value: challengeRaw, done } = await nextWithTimeout(iter, RELAY_AUTH_TIMEOUT_MS);
-      if (done || challengeRaw === undefined) { sigStream.abort(new Error("dir_auth_error")); return false; }
+      if (done || challengeRaw === undefined) { process.stderr.write("[sigstream] FAIL: challenge read returned done/undefined\n"); sigStream.abort(new Error("dir_auth_error")); return false; }
 
       let challengeFrame: Record<string, unknown>;
       try {
         challengeFrame = decode(toU8(challengeRaw)) as Record<string, unknown>;
-      } catch { sigStream.abort(new Error("dir_auth_error")); return false; }
+      } catch (e) { process.stderr.write(`[sigstream] FAIL: challenge CBOR decode: ${e instanceof Error ? e.message : String(e)}\n`); sigStream.abort(new Error("dir_auth_error")); return false; }
 
       if (challengeFrame["type"] !== "signaling_auth_challenge") {
+        process.stderr.write(`[sigstream] FAIL: unexpected challenge type: ${String(challengeFrame["type"])}\n`);
         sigStream.abort(new Error("dir_auth_error")); return false;
       }
 
       const nonce = toU8(challengeFrame["nonce"]);
-      if (nonce.length !== 32) { sigStream.abort(new Error("dir_auth_error")); return false; }
+      if (nonce.length !== 32) { process.stderr.write(`[sigstream] FAIL: nonce length=${nonce.length}, expected 32\n`); sigStream.abort(new Error("dir_auth_error")); return false; }
 
       // Ensure myPubkeyHex is set
       if (!this.#myPubkeyHex) {
@@ -2567,27 +2571,31 @@ class CelloClientImpl implements CelloClient {
         signature: sig,
       }) as Uint8Array;
       sigStream.send(lp.encode.single(authResponseFrame));
+      process.stderr.write("[sigstream] auth response sent, awaiting signaling_auth_ok...\n");
 
       // Read signaling_auth_ok — the directory sends this after registering the client's
       // stream in its #streams map. Awaiting it ensures the directory has processed the auth
       // before the caller sends session_request frames (ADAPTER-003 sync guarantee).
       const { value: ackRaw, done: ackDone } = await nextWithTimeout(iter, RELAY_AUTH_TIMEOUT_MS);
-      if (ackDone || ackRaw === undefined) { sigStream.abort(new Error("dir_auth_error")); return false; }
+      if (ackDone || ackRaw === undefined) { process.stderr.write("[sigstream] FAIL: auth_ok read returned done/undefined\n"); sigStream.abort(new Error("dir_auth_error")); return false; }
       let ackFrame: Record<string, unknown>;
       try {
         ackFrame = decode(toU8(ackRaw)) as Record<string, unknown>;
-      } catch { sigStream.abort(new Error("dir_auth_error")); return false; }
+      } catch (e) { process.stderr.write(`[sigstream] FAIL: auth_ok CBOR decode: ${e instanceof Error ? e.message : String(e)}\n`); sigStream.abort(new Error("dir_auth_error")); return false; }
       if (ackFrame["type"] !== "signaling_auth_ok") {
+        process.stderr.write(`[sigstream] FAIL: expected signaling_auth_ok, got: ${String(ackFrame["type"])}\n`);
         sigStream.abort(new Error("dir_auth_error")); return false;
       }
 
       // Store stream and start reader
       this.#persistentSignalingStream = sigStream;
       this.#persistentSignalingIter = iter;
+      process.stderr.write("[sigstream] SUCCESS: persistent signaling stream authenticated\n");
 
       void this.#runPersistentSignalingReader(sigStream, iter);
       return true;
-    } catch {
+    } catch (e) {
+      process.stderr.write(`[sigstream] FAIL (outer catch): ${e instanceof Error ? e.message : String(e)}\n`);
       return false;
     }
   }
