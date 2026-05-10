@@ -1,0 +1,264 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-TESTFIX-001
+domain: Test Infrastructure
+actor: DEVELOPER
+priority: P0
+components:
+  - test-fixtures
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a CELLO developer,
+  I want a shared `@cello/test-fixtures` package that centralises all test-only
+  infrastructure for M3 and beyond
+  so that CONNPOL-001, CONNREQ-002, and MCP-003 can import deterministic fakes,
+  validated-package factories, policy constants, and TrustStore helpers from a
+  single, well-tested source rather than duplicating them across test files.
+
+  **Package location:** `packages/test-fixtures/` — promotes the currently
+  untracked `packages/test/` directory. The stray file
+  `packages/test/vectors/connection-package-canonical.json` is a duplicate of
+  `packages/protocol-types/test/vectors/connection-package-canonical.json` and
+  must be deleted (not moved) as part of this story's completion gate.
+
+  **Package name:** `@cello/test-fixtures`
+  **Scope:** `devDependency` only. This package MUST NOT appear in the
+  `dependencies` or `peerDependencies` of any production package
+  (`@cello/protocol-types`, `@cello/crypto`, `@cello/transport`, `@cello/client`,
+  `@cello/adapter-*`, `@cello/directory`, `@cello/relay`).
+
+  **Exports:**
+
+  1. **`FakeMlDsaKeyProvider` and `FakeMultiVerifier`** — extracted verbatim
+     from `packages/protocol-types/src/__tests__/connection-package.test.ts`.
+     These are the deterministic HMAC-SHA256-based fake ML-DSA primitives used
+     for structural tests. Moving them here removes the need for every downstream
+     test file to reimplement or copy them.
+
+  2. **`PackageValidationResult` factory functions** — build
+     `PackageValidationResult` objects (the type produced by
+     `validateConnectionPackage` from CONNREQ-001) for use in CONNPOL-001 and
+     other tests that exercise the policy engine. The engine receives validated
+     packages, not raw connection packages.
+
+     - `buildValidatedPackage(opts?)` — `{ endorsements?, attestationType?,
+       pseudonymLabel?, createdAt? }` — returns `PackageValidationResult` with
+       `valid: true`, all endorsements with `validation_status: 'valid'`.
+     - `buildPackageWithExpiredEndorsement()` — one endorsement with
+       `validation_status: 'expired'`.
+     - `buildPackageWithTargetMismatch()` — one endorsement with
+       `validation_status: 'target_mismatch'`.
+     - `buildInvalidPackage()` — returns `PackageValidationResult` with
+       `valid: false, reason: 'pseudonym_binding_invalid'`.
+
+  3. **`DirectoryContext`** — the directory-appended fields passed alongside a
+     validated package to the policy engine. Not part of the connection package
+     wire type itself.
+
+     ```typescript
+     interface DirectoryContext {
+       registered_at: number      // Unix ms
+       is_provisional: boolean
+       conversation_count: number
+       clean_close_rate: number   // 0.0–1.0
+     }
+     function makeDirectoryContext(opts?: {
+       registered_days_ago?: number
+       is_provisional?: boolean
+     }): DirectoryContext
+     ```
+
+  4. **Named policy constants** — deterministic `ConnectionPolicy` objects for
+     use in CONNPOL-001 and MCP-003 tests without repeating literal objects:
+
+     - `OPEN_POLICY` — `{ mode: 'open', review_mode: 'deterministic', requirements: [] }`
+     - `CLOSED_POLICY` — `{ mode: 'closed', review_mode: 'deterministic', requirements: [] }`
+     - `REQUIRES_1_ENDORSEMENT` — selective, `min_count: 1`, deterministic
+     - `REQUIRES_PSEUDONYM_7_DAYS` — selective, `min_age_days: 7` for
+       `pseudonym_age` requirement, deterministic
+     - `INFERENCE_OPEN_POLICY` — `{ mode: 'open', review_mode: 'inference', requirements: [] }`
+
+  5. **`TrustStore` schema and helpers** — used by CONNPOL-001 and MCP-003 to
+     set up and verify on-disk trust stores in tests.
+
+     ```typescript
+     interface TrustStore {
+       endorsements_received: Endorsement[]
+       attestations_received: Attestation[]
+       endorsements_issued: Endorsement[]
+     }
+     async function writeTrustStore(path: string, store: TrustStore): Promise<void>
+     async function readTrustStore(path: string): Promise<TrustStore>
+     // readTrustStore returns an empty store (all arrays []) if the file is absent
+     ```
+
+     `Endorsement` and `Attestation` are imported from `@cello/protocol-types`.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When a test imports FakeMlDsaKeyProvider from @cello/test-fixtures"
+    action: >
+      the package shall export a class whose `sign(msg)` returns
+      HMAC-SHA256(seed, msg) padded to 2420 bytes and whose `getPublicKey()`
+      returns SHA-256(seed) padded to 1312 bytes — identical behaviour to the
+      harness currently defined in connection-package.test.ts.
+  - trigger: "When a test calls buildValidatedPackage(opts)"
+    action: >
+      the package shall return a PackageValidationResult with `valid: true`,
+      `endorsements` of length `opts.endorsements ?? 1` all carrying
+      `validation_status: 'valid'`, a pseudonym binding with
+      `pseudonym_label === opts.pseudonymLabel ?? 'test-agent'`, and
+      `created_at === opts.createdAt ?? 1_746_057_600_000`.
+  - trigger: "When a test calls buildInvalidPackage()"
+    action: >
+      the package shall return a PackageValidationResult with
+      `valid: false, reason: 'pseudonym_binding_invalid'`.
+  - trigger: "When a test calls makeDirectoryContext({ registered_days_ago: N })"
+    action: >
+      the package shall return a DirectoryContext with
+      `registered_at = Date.now() - N * 86_400_000`, `is_provisional: false`,
+      `conversation_count: 10`, `clean_close_rate: 0.9` (unless overridden).
+  - trigger: "When a test calls readTrustStore(path) and the file does not exist"
+    action: >
+      the helper shall return an empty TrustStore
+      `{ endorsements_received: [], attestations_received: [], endorsements_issued: [] }`
+      without throwing.
+  - trigger: "When a production package's package.json is inspected by the CI buildspec"
+    action: >
+      the buildspec shall fail the build if `@cello/test-fixtures` appears in
+      `dependencies` or `peerDependencies` — it is permitted only in
+      `devDependencies`.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The @cello/test-fixtures package"
+    when: "A test imports FakeMlDsaKeyProvider and constructs two instances with the same 32-byte seed"
+    then: >
+      Both instances produce identical values from getPublicKey() and from sign(msg)
+      for the same message; the public key is 1312 bytes; the signature is 2420 bytes
+    test_type: unit
+    component_under_test: test-fixtures
+
+  - id: AC-002
+    given: "FakeMlDsaKeyProvider and FakeMultiVerifier exported from @cello/test-fixtures"
+    when: "A FakeMlDsaKeyProvider is registered with FakeMultiVerifier and its verifier is called with a matching pubkey, message, and signature"
+    then: "The verifier returns true; with a different seed's pubkey it returns false"
+    test_type: unit
+    component_under_test: test-fixtures
+
+  - id: AC-003
+    given: "The @cello/test-fixtures package"
+    when: "buildValidatedPackage({ endorsements: 3, pseudonymLabel: 'alice', attestationType: 'capability' }) is called"
+    then: >
+      The result has valid: true; endorsements.length === 3; every endorsement has
+      validation_status: 'valid'; pseudonym_binding.pseudonym_label === 'alice'
+    test_type: unit
+    component_under_test: test-fixtures
+
+  - id: AC-004
+    given: "The @cello/test-fixtures package"
+    when: "buildPackageWithExpiredEndorsement() is called"
+    then: >
+      The result has valid: true; endorsements.length === 1;
+      endorsements[0].validation_status === 'expired'
+    test_type: unit
+    component_under_test: test-fixtures
+
+  - id: AC-005
+    given: "The @cello/test-fixtures package"
+    when: "buildPackageWithTargetMismatch() is called"
+    then: >
+      The result has valid: true; endorsements.length === 1;
+      endorsements[0].validation_status === 'target_mismatch'
+    test_type: unit
+    component_under_test: test-fixtures
+
+  - id: AC-006
+    given: "The @cello/test-fixtures package"
+    when: "buildInvalidPackage() is called"
+    then: "The result has valid: false and reason: 'pseudonym_binding_invalid'"
+    test_type: unit
+    component_under_test: test-fixtures
+
+  - id: AC-007
+    given: "The @cello/test-fixtures package"
+    when: "makeDirectoryContext({ registered_days_ago: 30, is_provisional: false }) is called"
+    then: >
+      The returned DirectoryContext has registered_at approximately
+      Date.now() - 30 * 86_400_000 (within 5 seconds of call time);
+      is_provisional === false
+    test_type: unit
+    component_under_test: test-fixtures
+
+  - id: AC-008
+    given: "The @cello/test-fixtures package"
+    when: "writeTrustStore(path, store) is called and then readTrustStore(path) is called"
+    then: >
+      The returned store structurally matches what was written; Endorsement and
+      Attestation objects round-trip without data loss
+    test_type: unit
+    component_under_test: test-fixtures
+
+  - id: AC-009
+    given: "The @cello/test-fixtures package"
+    when: "readTrustStore(path) is called with a path that does not exist on disk"
+    then: >
+      The function returns { endorsements_received: [], attestations_received: [],
+      endorsements_issued: [] } without throwing
+    test_type: unit
+    component_under_test: test-fixtures
+
+  - id: AC-010
+    given: "The named policy constants exported from @cello/test-fixtures"
+    when: "OPEN_POLICY, CLOSED_POLICY, REQUIRES_1_ENDORSEMENT, REQUIRES_PSEUDONYM_7_DAYS, and INFERENCE_OPEN_POLICY are imported"
+    then: >
+      Each constant satisfies the ConnectionPolicy type from @cello/protocol-types;
+      OPEN_POLICY.mode === 'open'; CLOSED_POLICY.mode === 'closed';
+      INFERENCE_OPEN_POLICY.review_mode === 'inference';
+      REQUIRES_1_ENDORSEMENT has exactly one requirement with min_count: 1;
+      REQUIRES_PSEUDONYM_7_DAYS has exactly one requirement with min_age_days: 7
+    test_type: unit
+    component_under_test: test-fixtures
+
+  - id: AC-011
+    given: "The completion gate for this story"
+    when: "The story is marked done"
+    then: >
+      packages/test/vectors/connection-package-canonical.json no longer exists
+      (the duplicate has been deleted); packages/test-fixtures/ is tracked by git;
+      no production package's package.json lists @cello/test-fixtures in
+      dependencies or peerDependencies
+    test_type: unit
+    component_under_test: test-fixtures
+
+# ─── Security Invariants ───────────────────────────────────
+# None — this package is test-only infrastructure with no security surface.
+
+# ─── Dependencies ──────────────────────────────────────────
+depends_on:
+  - CELLO-CONNREQ-001  # PackageValidationResult type and its constituent wire types
+
+# ─── Notes ─────────────────────────────────────────────────
+notes: >
+  This package MUST be implemented before CONNPOL-001, CONNREQ-002, or MCP-003.
+  All three stories import from @cello/test-fixtures; without it their tests
+  cannot compile.
+
+  The stray `packages/test/vectors/connection-package-canonical.json` (untracked,
+  duplicate of packages/protocol-types/test/vectors/connection-package-canonical.json)
+  must be deleted as part of this story's completion gate — not moved.
+
+  The CI buildspec for every production package must reject a build if
+  @cello/test-fixtures appears in that package's `dependencies` or
+  `peerDependencies` fields. A grep or jq check in the buildspec is sufficient.
+
+  FakeMlDsaKeyProvider and FakeMultiVerifier are extracted verbatim from
+  packages/protocol-types/src/__tests__/connection-package.test.ts. Once
+  TESTFIX-001 ships, CONNREQ-001 tests should import them from
+  @cello/test-fixtures and the local copies should be deleted from that test file.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Test Infrastructure"
+  discussion_logs: []

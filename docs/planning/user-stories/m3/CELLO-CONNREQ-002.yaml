@@ -11,72 +11,148 @@ components:
 story: >
   As the CELLO Client,
   I want to send a connection request (carrying my connection package) to a target agent
-  via the directory, have the receiver evaluate it against their policy, and receive an
-  accept/decline/insufficient response — establishing a persistent connection record on
-  both sides and the directory
+  via the directory, have the receiver evaluate it against their policy — either
+  automatically or with agent review — and receive a final accept/reject/insufficient
+  response, establishing a persistent connection record on both sides and the directory
   so that two agents can transition from "registered strangers" to "connected peers" with
   cryptographically verified trust signals, and subsequent session establishment (SESSION-006)
   is gated on this accepted connection.
 
   This is the M3 centerpiece — the protocol interaction that wires together registration
   (REG-001), connection packages (CONNREQ-001), and policy evaluation (CONNPOL-001) into
-  a network flow. The directory relays the connection package but cannot modify it (items
-  are ML-DSA signed by the originator). The directory stores the connection state once
+  a network flow. The directory relays connection packages but cannot modify them (items
+  are ML-DSA signed by the originator). The directory stores connection state once
   accepted.
 
-  **Connection request flow (one-round with optional retry):**
+  **ROUND 1 (always happens):**
 
-  1. Agent A calls `cello_request_connection({ target_pubkey, package_items })`.
-  2. The client constructs a ConnectionPackage per CONNREQ-001 (pseudonym binding +
-     selected endorsements/attestations), signs the pseudonym binding.
+  1. Agent A calls `cello_request_connection({ target_pubkey, include_endorsements?,
+     include_attestations? })`. The call blocks for up to 30 seconds total (spanning
+     both rounds if Round 2 occurs).
+  2. The client constructs a ConnectionPackage (CONNREQ-001): pseudonym binding +
+     selected endorsements/attestations.
   3. The client sends `connection_request { target_pubkey, package_cbor }` on its
      authenticated signaling stream to the directory.
-  4. The directory verifies: (a) sender is registered, (b) target is registered and has
-     an active profile, (c) no existing accepted connection between sender and target
-     exists. If any check fails, the directory responds to the sender immediately without
-     bothering the target. Rejection reasons: `not_registered`, `target_not_found`,
-     `already_connected`.
-  5. The directory relays the request to the target's signaling stream as
-     `connection_request_inbound { from_pubkey, package_cbor }`.
-  6. The target client validates the package (CONNREQ-001): pseudonym binding, all item
-     signatures, expiry checks, target_pubkey matches. Then evaluates against the
-     target's `SignalRequirementPolicy` (CONNPOL-001).
-  7. Based on the policy verdict:
-     - `accept` → target client sends `connection_response { from_pubkey, verdict: 'accept' }`
-       to directory. Directory creates connection records on both sides. Both clients
-       receive `connection_established { counterparty_pubkey, connection_id }`.
-     - `insufficient` → target client sends `connection_response { from_pubkey,
-       verdict: 'insufficient', unmet_requirements }` to directory. Directory relays to
-       sender as `connection_insufficient { target_pubkey, unmet_requirements }`. Sender
-       can construct a new package with more items and retry (same flow from step 1).
-     - `reject` (policy_closed or pseudonym_binding_invalid) → target client sends
-       `connection_response { from_pubkey, verdict: 'reject', reason }` to directory.
-       Directory relays to sender as `connection_rejected { target_pubkey, reason }`.
+  4. The directory pre-checks: (a) sender is registered, (b) target is registered,
+     (c) no existing active connection between the two. Failure reasons:
+     `not_registered` | `target_not_found` | `already_connected`. On failure the
+     directory responds to the sender immediately and does not contact the target.
+  5. The directory fetches the target's `registered_at` and `is_provisional` from its
+     store, then relays to the target's signaling stream as
+     `connection_request_inbound { from_pubkey, package_cbor, sender_registered_at,
+     sender_is_provisional }`.
+  6. The target client validates the package (CONNREQ-001: pseudonym binding,
+     signatures, expiry, target_pubkey match) and builds
+     `DirectoryContext { registered_at: sender_registered_at, is_provisional:
+     sender_is_provisional, conversation_count: 0, clean_close_rate: 1.0 }`, then
+     calls `evaluateConnectionPackage()` (CONNPOL-001).
+  7. Based on `ConnectionReport.verdict`:
+
+     - `auto_accept` (deterministic mode, requirements met or open policy): target
+       client sends `connection_response { verdict: 'accept' }` to directory; directory
+       creates connection records; pushes `connection_established { counterparty_pubkey,
+       connection_id }` to BOTH clients; target fires `onConnectionResult` event.
+     - `auto_reject` (closed policy, `pseudonym_binding_invalid`, or `is_provisional`):
+       target client sends `connection_response { verdict: 'reject', reason }` to
+       directory; directory relays `connection_rejected { target_pubkey, reason }` to
+       sender; target fires `onConnectionResult` event.
+     - `auto_insufficient` (deterministic mode, requirements not met): target client
+       sends `connection_response { verdict: 'insufficient', unmet_requirements }` to
+       directory; directory relays `connection_insufficient { target_pubkey,
+       unmet_requirements }` to sender; `cello_request_connection` returns
+       `{ result: 'insufficient', unmet_requirements }`. The sender can construct a
+       new package with more items and retry from Step 1 (fresh request, no state).
+     - `pending_agent_review` (inference mode): target client queues the
+       ConnectionReport for the agent; fires `onConnectionPendingReview` event; the
+       blocking `cello_await_connection_request` call returns the report to the target
+       agent.
+
+     **Whitelist fast path:** before calling `evaluateConnectionPackage()`, the target
+     client checks its local whitelist. If the sender's pubkey is whitelisted, the
+     client immediately sends `connection_response { verdict: 'accept' }` without
+     calling the policy engine or notifying the agent. Directory creates connection
+     records normally.
+
+  **Agent actions after `pending_agent_review`:**
+
+  - `cello_accept_connection({ connection_request_id })` — target client sends
+    `connection_response { verdict: 'accept' }`; directory creates connection records
+    and pushes `connection_established` to both; `cello_request_connection` on the
+    sender returns `{ result: 'accepted', connection_id }`.
+  - `cello_reject_connection({ connection_request_id, reason? })` — target client
+    sends `connection_response { verdict: 'reject', reason: 'agent_declined' }`;
+    `cello_request_connection` returns `{ result: 'rejected' }`.
+  - `cello_request_more_disclosure({ connection_request_id, requested_items[] })` —
+    initiates Round 2 (see below).
+
+  **ROUND 2 (only when inference mode + agent chose request_more):**
+
+  8. Target client sends `disclosure_request { connection_request_id, requested_items[]
+     }` to directory. `requested_items[]` enumerates everything wanted in ONE message
+     (e.g. `[{ type: 'endorsement', min_count: 2 }, { type: 'attestation',
+     attestation_type: 'linkedin_profile' }]`). No further rounds after this.
+  9. Directory relays to sender's signaling stream as
+     `disclosure_request_inbound { from_pubkey, connection_request_id, requested_items[]
+     }`.
+  10. The sender's `cello_request_connection` is still blocking (within its 30-second
+      total timeout). The client receives `disclosure_request_inbound` and fires
+      `onDisclosureRequested`. `cello_request_connection` returns
+      `{ result: 'disclosure_requested', connection_request_id, requested_items[] }`,
+      unblocking the sender. The sender must now call
+      `cello_respond_to_disclosure_request`.
+  11. Sender agent calls `cello_respond_to_disclosure_request({ connection_request_id,
+      include_endorsements?, include_attestations? })`. May include any subset of the
+      requested items, or nothing (declining to disclose further). Client constructs
+      `package_v2` and sends `disclosure_response { connection_request_id, package_cbor
+      }` to directory.
+  12. Directory relays to target's signaling stream as
+      `disclosure_response_inbound { connection_request_id, package_cbor }`.
+  13. Target client validates `package_v2` and re-runs `evaluateConnectionPackage()`.
+      The new ConnectionReport is queued for the agent.
+      `cello_await_connection_request` returns the updated report.
+  14. Agent calls `cello_accept_connection` OR `cello_reject_connection`. No further
+      `cello_request_more_disclosure` — Round 2 is the hard stop. If the agent attempts
+      `cello_request_more_disclosure` on a Round 2 report, the client returns
+      `{ error: 'max_rounds_reached' }` immediately.
 
   **Connection state on the directory:**
   `{ connection_id, participants: [A_pubkey, B_pubkey], established_at, status: 'active' }`
-  Indexed by both participants' pubkeys. Used by SESSION-006 to gate session establishment.
-  Connection IDs are 16-byte CSPRNG (same as session_ids).
+  Indexed by both participants' pubkeys. Used by SESSION-006 to gate session
+  establishment. Connection IDs are 16-byte CSPRNG (same as session_ids).
 
   **Connection state on the client:**
   `{ connection_id, counterparty_pubkey, counterparty_primary_pubkey,
   counterparty_ml_dsa_pubkey, established_at, status: 'active' }`
-  The client caches the counterparty's cryptographic keys from the connection exchange so
-  future session establishments can verify FROST signatures without re-querying the
+  The client caches the counterparty's cryptographic keys from the connection exchange
+  so future session establishments can verify FROST signatures without re-querying the
   directory.
 
-  **Auto-evaluation (M3 default):** in M3 the receiver's client automatically evaluates
-  inbound connection requests against the configured policy and responds without agent/owner
-  intervention. The agent is notified after the fact via a channel notification
-  (ADAPTER-003). M5+ may introduce an "approval required" mode where the owner must
-  confirm, but M3 is fully automatic to keep the protocol testable without human-in-the-loop.
-
-  **Retry semantics:** a sender who receives `insufficient` can retry with a new package
-  containing more items. There is no state between retries — each connection request is
-  independent. The directory does not track retry counts in M3 (rate limiting is M5+).
+  **30-second timeout:** `cello_request_connection` blocks for up to 30 seconds total,
+  spanning both rounds. If no `connection_established` or final `connection_rejected`
+  arrives within 30 seconds of the original call, it returns `{ result: 'timeout' }`.
 
   **Mutual connections:** connections are symmetric. If A connects to B, B is also
   connected to A. There is no directed/asymmetric connection concept.
+
+  **Wire frames introduced by this story (added to `@cello/protocol-types`):**
+  - `connection_request` (sender → directory)
+  - `connection_request_inbound` (directory → target)
+  - `connection_response` (target → directory)
+  - `connection_established` (directory → both)
+  - `connection_rejected` (directory → sender)
+  - `connection_insufficient` (directory → sender)
+  - `disclosure_request` (target → directory)
+  - `disclosure_request_inbound` (directory → sender)
+  - `disclosure_response` (sender → directory)
+  - `disclosure_response_inbound` (directory → target)
+
+  **CelloClient event additions (integration points for ADAPTER-003):**
+  - `onConnectionResult(result: ConnectionEstablishedEvent | ConnectionRejectedEvent)` —
+    fires on auto-accept, auto-reject, agent-accept, agent-reject.
+  - `onConnectionPendingReview(report: ConnectionReport)` — fires when inference mode
+    queues a report for agent review.
+  - `onDisclosureRequested(request: DisclosureRequestEvent)` — fires when a Round 2
+    disclosure request arrives at the sender.
 
 # ─── Behavior (EARS) ───────────────────────────────────────
 behavior:
@@ -84,137 +160,163 @@ behavior:
     action: >
       the directory shall (a) verify sender is registered (`not_registered` if not),
       (b) verify target has an active profile (`target_not_found` if not), (c) verify no
-      existing active connection between the two (`already_connected` if yes), (d) relay
-      the request to the target's signaling stream as `connection_request_inbound`.
-  - trigger: "When the target client receives `connection_request_inbound { from_pubkey, package_cbor }`"
+      existing active connection between the two (`already_connected` if yes), (d) fetch
+      the target's `registered_at` and `is_provisional` from its store, (e) relay the
+      request to the target's signaling stream as `connection_request_inbound
+      { from_pubkey, package_cbor, sender_registered_at, sender_is_provisional }`.
+  - trigger: "When the target client receives `connection_request_inbound`"
     action: >
-      the target client shall (a) validate the connection package per CONNREQ-001,
-      (b) retrieve the sender's profile from the directory to cross-check `ml_dsa_pubkey`,
-      (c) evaluate the validated package against the local `SignalRequirementPolicy` via
-      CONNPOL-001, (d) send `connection_response { from_pubkey, verdict, ... }` to the
-      directory based on the policy verdict.
+      the target client shall (a) check the whitelist — if sender is whitelisted,
+      immediately send `connection_response { verdict: 'accept' }` without calling the
+      policy engine; (b) otherwise validate the connection package per CONNREQ-001,
+      (c) build DirectoryContext from `sender_registered_at` and `sender_is_provisional`,
+      (d) call `evaluateConnectionPackage()` (CONNPOL-001), (e) act on the
+      ConnectionReport verdict: send `connection_response` for auto_accept / auto_reject
+      / auto_insufficient, or queue the report and fire `onConnectionPendingReview` for
+      pending_agent_review.
   - trigger: "When the directory receives `connection_response { verdict: 'accept' }`"
     action: >
       the directory shall (a) generate a 16-byte CSPRNG connection_id, (b) create
-      connection records for both participants in `DirectoryStore`, (c) push
+      connection records for both participants in DirectoryStore, (c) push
       `connection_established { counterparty_pubkey, connection_id }` to both clients'
       signaling streams.
   - trigger: "When the directory receives `connection_response { verdict: 'insufficient', unmet_requirements }`"
     action: >
       the directory shall relay `connection_insufficient { target_pubkey,
       unmet_requirements }` to the sender's signaling stream. No connection record is
-      created. The sender may retry with a richer package.
+      created. The sender may retry with a richer package (fresh Round 1 request).
   - trigger: "When the directory receives `connection_response { verdict: 'reject', reason }`"
     action: >
       the directory shall relay `connection_rejected { target_pubkey, reason }` to the
       sender's signaling stream. No connection record is created.
-  - trigger: "When the target's signaling stream is disconnected when a connection request arrives"
+  - trigger: "When the target agent calls `cello_request_more_disclosure({ connection_request_id, requested_items[] })`"
     action: >
-      the directory shall queue the inbound request (up to 32 per target, M3 bound).
-      On the target's next authenticated signaling stream, queued requests are delivered
-      in arrival order. If the queue bound is exceeded, the oldest request is dropped and
-      the sender receives `target_unavailable`.
-  - trigger: "When the target does not respond within 30 seconds of receiving `connection_request_inbound`"
+      the target client shall (a) verify this is a Round 1 report (not already Round 2),
+      returning `{ error: 'max_rounds_reached' }` if not, (b) send `disclosure_request
+      { connection_request_id, requested_items[] }` to the directory. The directory
+      relays it to the sender's signaling stream as `disclosure_request_inbound
+      { from_pubkey, connection_request_id, requested_items[] }`.
+  - trigger: "When the sender client receives `disclosure_request_inbound`"
     action: >
-      the directory shall push `connection_timeout { target_pubkey }` to the sender's
-      signaling stream. No connection record is created. The sender may retry. The
-      target's pending evaluation (if it arrives late) is discarded by the directory.
-  - trigger: "When a `connection_established` or `connection_insufficient` or `connection_rejected` or `connection_timeout` event is delivered to a client"
+      the client shall fire `onDisclosureRequested`, and `cello_request_connection`
+      shall return `{ result: 'disclosure_requested', connection_request_id,
+      requested_items[] }`, unblocking the sender agent.
+  - trigger: "When the sender agent calls `cello_respond_to_disclosure_request({ connection_request_id, include_endorsements?, include_attestations? })`"
     action: >
-      the client shall invoke the `CelloClient.onConnectionResult` callback with
-      `{ type: 'accepted' | 'insufficient' | 'rejected' | 'timeout', counterparty_pubkey,
-      connection_id?: hex, unmet_requirements?: [...], reason?: string }`. This callback
-      is the integration point for adapters (ADAPTER-003) to populate their event queues
-      and push channel notifications.
-  - trigger: "When a client queries its connections"
+      the client shall construct a new ConnectionPackage (package_v2) with the
+      specified items, send `disclosure_response { connection_request_id, package_cbor }`
+      to the directory. The directory relays it to the target's signaling stream as
+      `disclosure_response_inbound { connection_request_id, package_cbor }`.
+  - trigger: "When the target client receives `disclosure_response_inbound`"
     action: >
-      the client shall return the list of active connections with `{ connection_id,
-      counterparty_pubkey, counterparty_primary_pubkey, established_at, status }`.
+      the target client shall validate package_v2 per CONNREQ-001, re-run
+      `evaluateConnectionPackage()`, queue the new ConnectionReport, and return it via
+      `cello_await_connection_request`. The agent then calls `cello_accept_connection`
+      or `cello_reject_connection`; no further `cello_request_more_disclosure` is
+      permitted.
+  - trigger: "When 30 seconds elapse from the original `cello_request_connection` call without a `connection_established` or final `connection_rejected` arriving at the sender"
+    action: >
+      the client shall return `{ result: 'timeout' }` from `cello_request_connection`.
+      No connection record is created.
+  - trigger: "When a `connection_established`, `connection_rejected`, or `connection_insufficient` event is delivered to a client"
+    action: >
+      the client shall invoke the appropriate CelloClient event callback
+      (`onConnectionResult` for established/rejected; the caller of
+      `cello_request_connection` receives the structured result). These callbacks are
+      the integration points for adapters (ADAPTER-003) to populate their event queues.
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "Two registered agents A and B; B has an `open` policy; no existing connection"
-    when: "A sends a connection request to B with a valid package (pseudonym binding only)"
+    given: "Two registered agents A and B (separate processes, real libp2p + real directory); B has an `open` policy; no existing connection"
+    when: "A calls `cello_request_connection({ target_pubkey: B })` with a valid package (pseudonym binding only)"
     then: >
-      The directory relays to B; B's client auto-evaluates (open → accept); B sends
+      The directory relays to B; B's client evaluates (open → auto_accept); B sends
       `connection_response { verdict: 'accept' }`; the directory creates connection
-      records; both A and B receive `connection_established` with matching connection_id;
-      both clients' connection lists show the counterparty
-    test_type: integration
-    component_under_test: client
+      records; both A and B receive `connection_established` with a matching
+      connection_id; both clients' connection lists show the counterparty;
+      `cello_request_connection` returns `{ result: 'accepted', connection_id }`
+    test_type: e2e
+    component_under_test: client, directory
 
   - id: AC-002
-    given: "Two registered agents A and B; B requires `min_count: 2` endorsements; A's package has 1 endorsement"
-    when: "A sends a connection request to B"
+    given: "Two registered agents A and B (separate processes); B has a `closed` policy"
+    when: "A calls `cello_request_connection({ target_pubkey: B })`"
     then: >
-      B's client evaluates → insufficient; B sends `connection_response { verdict:
-      'insufficient', unmet_requirements }`; A receives `connection_insufficient` with
-      the unmet requirement detail; no connection is created
-    test_type: integration
-    component_under_test: client
+      B's client evaluates → auto_reject (policy_closed); B sends `connection_response
+      { verdict: 'reject', reason: 'policy_closed' }`; the directory relays
+      `connection_rejected` to A; `cello_request_connection` returns `{ result:
+      'rejected' }`; no connection record is created
+    test_type: e2e
+    component_under_test: client, directory
 
   - id: AC-003
-    given: "Agent A receives `connection_insufficient` with `{ min_count: 2, provided: 1 }`"
-    when: "A retries with a new package containing 3 endorsements"
+    given: "Two registered agents A and B (separate processes); B has inference mode policy; B's agent calls `cello_request_more_disclosure` requesting 2 endorsements; A responds with 2 valid endorsements"
+    when: "B re-evaluates the disclosure response and calls `cello_accept_connection`"
     then: >
-      B's client evaluates → accept; connection is established; the retry is a fresh
-      independent request with no state carried from the first attempt
-    test_type: integration
-    component_under_test: client
+      The directory creates connection records; `connection_established` is pushed to
+      both clients; `cello_request_connection` returns `{ result: 'accepted',
+      connection_id }`; B's `cello_await_connection_request` returns the updated
+      ConnectionReport before the accept call
+    test_type: e2e
+    component_under_test: client, directory
 
   - id: AC-004
-    given: "Two registered agents A and B; B has a `closed` policy"
-    when: "A sends a connection request to B"
+    given: "Two registered agents A and B (separate processes); B has inference mode policy; B calls `cello_request_more_disclosure`; A responds with 0 additional endorsements"
+    when: "B re-evaluates and calls `cello_reject_connection`"
     then: >
-      B's client evaluates → reject (policy_closed); A receives `connection_rejected
-      { reason: 'policy_closed' }`; no connection is created
-    test_type: integration
-    component_under_test: client
+      The directory relays `connection_rejected` to A; `cello_request_connection`
+      returns `{ result: 'rejected' }`; no connection record is created
+    test_type: e2e
+    component_under_test: client, directory
 
   - id: AC-005
-    given: "Agent A and B already have an active connection"
-    when: "A sends another connection request to B"
-    then: "The directory rejects immediately with `already_connected`; B is not notified"
-    test_type: integration
+    given: "Agent A is registered; target pubkey K_X has no profile on the directory"
+    when: "A calls `cello_request_connection({ target_pubkey: K_X })`"
+    then: "The directory rejects immediately with `target_not_found`; B is not contacted"
+    test_type: e2e
     component_under_test: directory
 
   - id: AC-006
-    given: "Agent A is registered; target pubkey K_X has no profile on the directory"
-    when: "A sends a connection request to K_X"
-    then: "The directory rejects immediately with `target_not_found`"
-    test_type: integration
+    given: "Agent A and B already have an active connection"
+    when: "A calls `cello_request_connection({ target_pubkey: B })` again"
+    then: "The directory rejects immediately with `already_connected`; B is not notified; no duplicate connection record is created"
+    test_type: e2e
     component_under_test: directory
 
   - id: AC-007
     given: "An unregistered client authenticated to the directory"
-    when: "The client attempts to send a connection request"
-    then: "The directory rejects with `not_registered`"
-    test_type: integration
+    when: "The client attempts to send `connection_request`"
+    then: "The directory rejects with `not_registered`; the target is not contacted"
+    test_type: e2e
     component_under_test: directory
 
   - id: AC-008
-    given: "Agent A sends a connection request to B; B's signaling stream is disconnected"
-    when: "B reconnects and authenticates within the queue bound"
-    then: "B receives the queued `connection_request_inbound` on its fresh stream; B evaluates and responds; the flow completes normally"
-    test_type: integration
-    component_under_test: directory
+    given: "Agent B has A's pubkey in its local whitelist"
+    when: "A sends a connection request to B"
+    then: >
+      B's client detects the whitelist match before calling the policy engine;
+      `connection_response { verdict: 'accept' }` is sent without any agent notification
+      or `evaluateConnectionPackage()` call; `connection_established` is pushed to both
+      clients
+    test_type: e2e
+    component_under_test: client, directory
 
   - id: AC-009
-    given: "Agent A sends a connection request to B; B is online but the test harness suppresses B's connection_response (simulating a hung evaluation)"
-    when: "30 seconds elapse without B's response reaching the directory"
-    then: "The directory pushes `connection_timeout { target_pubkey: B_pubkey }` to A's signaling stream; no connection record is created; B's late response (if it arrives) is discarded"
-    test_type: integration
-    component_under_test: directory
+    given: "A sends a connection request to B; B is online but the test harness suppresses B's `connection_response` (simulating a hung evaluation)"
+    when: "30 seconds elapse from the original `cello_request_connection` call without a final response"
+    then: >
+      `cello_request_connection` returns `{ result: 'timeout' }`; no connection record
+      is created; any late-arriving `connection_response` from B is discarded by the
+      directory
+    test_type: e2e
+    component_under_test: client, directory
 
   - id: AC-010
-    given: "An established connection between A and B"
-    when: "Both clients query their connection list"
-    then: >
-      A sees `{ connection_id, counterparty_pubkey: B_pubkey, status: 'active' }`;
-      B sees `{ connection_id, counterparty_pubkey: A_pubkey, status: 'active' }`;
-      both connection_ids are identical
-    test_type: integration
+    given: "B has inference mode policy; B's agent has already called `cello_request_more_disclosure` (Round 2 in progress); B's agent attempts to call `cello_request_more_disclosure` again on the same request"
+    when: "The client processes the second `cello_request_more_disclosure` call"
+    then: "The client returns `{ error: 'max_rounds_reached' }` immediately; no `disclosure_request` is sent to the directory"
+    test_type: unit
     component_under_test: client
 
   - id: AC-011
@@ -222,109 +324,154 @@ acceptance_criteria:
     when: "B's client validates the package"
     then: >
       CONNREQ-001 validation marks it `pseudonym_binding_invalid`; CONNPOL-001 returns
-      `reject`; B sends `connection_response { verdict: 'reject', reason:
-      'pseudonym_binding_invalid' }`; A receives `connection_rejected`
-    test_type: integration
+      `{ result: 'reject', reason: 'pseudonym_binding_invalid' }`; B sends
+      `connection_response { verdict: 'reject', reason: 'pseudonym_binding_invalid' }`;
+      `cello_request_connection` returns `{ result: 'rejected' }`
+    test_type: e2e
     component_under_test: client
 
   - id: AC-012
-    given: "A connection request where A's package endorsement has `target_pubkey` set to a different agent's pubkey"
-    when: "B's client validates the package"
-    then: "The endorsement is marked `target_mismatch` and does not count; if B's policy requires endorsements, the verdict may be `insufficient`"
-    test_type: integration
+    given: "An established connection between A and B"
+    when: "Both clients query their connection list"
+    then: >
+      A sees `{ connection_id, counterparty_pubkey: B_pubkey, status: 'active' }`;
+      B sees `{ connection_id, counterparty_pubkey: A_pubkey, status: 'active' }`;
+      both connection_ids are identical
+    test_type: e2e
     component_under_test: client
 
   - id: AC-013
-    given: "256 connection requests from distinct agents to agent B in rapid succession"
-    when: "All are processed"
-    then: "All 256 connection_ids are unique; each is 16 bytes; no collisions among the established connections"
-    test_type: integration
+    given: "B has inference mode policy; A calls `cello_request_connection`; B calls `cello_request_more_disclosure`; `cello_request_connection` returns `{ result: 'disclosure_requested', ... }` unblocking A"
+    when: "A calls `cello_respond_to_disclosure_request({ connection_request_id, include_endorsements: [...] })`"
+    then: >
+      The client constructs package_v2 and sends `disclosure_response` to the directory;
+      the directory relays `disclosure_response_inbound` to B's signaling stream;
+      B's client validates package_v2 and re-runs `evaluateConnectionPackage()`
+    test_type: e2e
+    component_under_test: client, directory
+
+  - id: AC-014
+    given: "A sends `disclosure_response` with an empty item set (declining to disclose further)"
+    when: "B's client receives and evaluates the empty package_v2"
+    then: >
+      `evaluateConnectionPackage()` is called with only the pseudonym binding; the
+      resulting ConnectionReport is queued for B's agent; B's agent can still call
+      `cello_accept_connection` or `cello_reject_connection`
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-015
+    given: "The directory receives a `connection_response { verdict: 'accept' }` from B"
+    when: "The directory creates the connection record"
+    then: >
+      The connection_id is exactly 16 bytes from a CSPRNG; querying the directory
+      confirms `{ connection_id, participants: [A_pubkey, B_pubkey], status: 'active' }`
+      indexed by both pubkeys
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-016
+    given: "256 simultaneous connection requests from distinct agents to agent B in rapid succession, all accepted"
+    when: "All 256 connection records are created"
+    then: "All 256 connection_ids are unique; each is exactly 16 bytes; no collisions"
+    test_type: e2e
     component_under_test: directory
 
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
     statement: >
-      The directory shall never modify the contents of a `connection_request` package
-      during relay. The package is opaque to the directory — items are ML-DSA signed by
-      the originator and verifiable only by the receiver.
+      The directory shall never modify the contents of a connection package during relay.
+      Packages are opaque to the directory — every item is ML-DSA signed by the
+      originator and independently verifiable by the receiver.
     adversarial_condition: >
       even when the directory could insert, remove, or reorder items — the receiver
-      verifies each item's ML-DSA signature independently; any modification is detected
-      as a signature failure.
-    test_type: integration
+      verifies each item's ML-DSA signature independently; any modification produces a
+      signature failure.
+    test_type: e2e
     component_under_test: directory
 
   - id: SI-002
     statement: >
       The directory shall never create a connection record without receiving an explicit
-      `connection_response { verdict: 'accept' }` from the target client.
+      `connection_response { verdict: 'accept' }` from the target client (or the
+      whitelist fast-path producing the same frame). The directory does not evaluate
+      policy itself.
     adversarial_condition: >
-      even when a sender's request appears valid and the target's profile has an `open`
-      policy — the directory does not evaluate policy itself; it waits for the target
-      client's verdict. The policy evaluation is client-side and the directory trusts the
-      client's response.
-    test_type: integration
+      even when the sender's request appears valid and the target's profile has an `open`
+      policy — policy evaluation is client-side; the directory waits for the target
+      client's verdict.
+    test_type: e2e
     component_under_test: directory
 
   - id: SI-003
     statement: >
-      The directory shall never relay a `connection_request_inbound` to the target when
-      the sender is not registered. The sender's registration status is verified before
-      any relay occurs.
+      The directory shall never relay `connection_request_inbound` to a target when the
+      sender is not registered. Authentication (K_local challenge-response) alone is
+      insufficient — registration (DKG completion) is also required.
     adversarial_condition: >
-      even when the sender is authenticated (K_local challenge-response passed) but has
-      not completed registration — authentication proves key possession; registration
-      proves identity establishment with DKG. Both are required.
-    test_type: integration
+      even when the sender is authenticated but has not completed registration — both
+      conditions are verified before any relay occurs.
+    test_type: e2e
     component_under_test: directory
 
   - id: SI-004
     statement: >
-      Connection IDs shall be 16 bytes from a CSPRNG and shall not collide with existing
-      active connections.
+      Connection IDs shall be 16 bytes from a CSPRNG and shall not collide with any
+      existing active connection.
     adversarial_condition: >
-      even when 256+ connections are created in rapid succession — 128 bits of entropy
+      even under high-volume concurrent connection creation — 128 bits of entropy
       prevents guessing or collision.
-    test_type: integration
+    test_type: unit
     component_under_test: directory
+
+  - id: SI-005
+    statement: >
+      The target client shall never permit a third `cello_request_more_disclosure` call
+      on the same connection_request_id. Round 2 is the final round.
+    adversarial_condition: >
+      even when the agent calls `cello_request_more_disclosure` after already being in
+      Round 2 — the client returns `{ error: 'max_rounds_reached' }` and sends nothing
+      to the directory.
+    test_type: unit
+    component_under_test: client
 
 # ─── Degraded Behavior ─────────────────────────────────────
 degraded_behavior:
   - id: DB-001
     condition: "While the target's signaling stream is disconnected when a connection request arrives"
     fallback: >
-      the directory queues the request (up to 32 per target). On reconnect the target
-      receives all queued requests. If the queue overflows, the oldest request is dropped
-      and the sender receives `target_unavailable`. No connection is created.
-    test_type: integration
+      The directory queues the request (up to 32 per target). On reconnect the target
+      receives all queued requests in arrival order. If the queue bound is exceeded, the
+      oldest request is dropped and the sender receives `target_unavailable`. No
+      connection is created.
+    test_type: e2e
     component_under_test: directory
 
   - id: DB-002
     condition: "While the sender's signaling stream disconnects after sending `connection_request` but before receiving the response"
     fallback: >
-      the directory processes the request normally (relays to target, receives response).
+      The directory processes the request normally (relays to target, receives response).
       If the verdict is `accept`, the connection record is created — connection
       establishment is not conditioned on the sender being online for the response.
-      The `connection_established` event is queued for delivery on the sender's next
-      authenticated signaling stream (up to 32 pending events per client, same bound as
-      DB-001's inbound queue; if exceeded, oldest is dropped — the connection record
-      still exists and `cello_list_connections` will show it on next query).
-    test_type: integration
+      `connection_established` is queued for delivery on the sender's next authenticated
+      signaling stream (up to 32 pending events per client; if exceeded, oldest is
+      dropped — the connection record still exists and `cello_list_connections` will
+      show it on next query).
+    test_type: e2e
     component_under_test: directory
 
   - id: DB-003
     condition: "While the directory is unreachable when the target client attempts to cross-check the sender's `ml_dsa_pubkey` against the directory profile during inbound request validation"
     fallback: >
-      the target client shall accept the pseudonym binding's embedded `ml_dsa_pubkey` as
-      the verification key for this request without the cross-check. The connection is
+      The target client accepts the pseudonym binding's embedded `ml_dsa_pubkey` as the
+      verification key for this request without the cross-check. The connection is
       established with a `profile_unchecked: true` flag in the local record. On the next
       directory interaction the client performs the deferred cross-check; if the pubkey
       does not match the directory profile, the connection is flagged but not
       retroactively revoked (the ML-DSA signature on the pseudonym binding was valid at
-      acceptance time). This is acceptable because ML-DSA key compromise is a M7 concern
-      and the pseudonym binding signature itself proves the sender held the secret key.
-    test_type: integration
+      acceptance time).
+    test_type: e2e
     component_under_test: client
 
 # ─── References ─────────────────────────────────────────────

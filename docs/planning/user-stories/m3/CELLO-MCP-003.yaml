@@ -9,65 +9,127 @@ components:
 # ─── Intent ─────────────────────────────────────────────────
 story: >
   As an AI Agent,
-  I want MCP tools to register on the directory, request connections with other agents,
-  respond to inbound connection requests, list my connections, set my connection policy,
-  and have `cello_initiate_session` enforce the connection gate
-  so that I can discover and connect with other agents, control who reaches me, and
-  transition from "registered" to "connected" to "conversing" through a single tool surface.
+  I want MCP tools to register on the directory, request connections with other agents
+  using a two-round negotiation flow, review and decide on inbound connection requests
+  when in inference mode, list my connections, configure my connection policy (including
+  review mode), and have `cello_initiate_session` enforce the connection gate
+  so that I can discover and connect with other agents through a report-card-to-agent
+  design where policy evaluation surfaces structured trust summaries for agent review
+  rather than silently auto-accepting or auto-rejecting in all cases.
 
   **M3 tool set (complete list — additions and modifications to MCP-002):**
 
-  - `cello_register({ phone_stub })` — NEW. Triggers REG-001 registration flow. Returns
-    `{ registered: true, agent_id: hex, primary_pubkey: hex, ml_dsa_pubkey: hex }` on
-    success, or `{ error: { reason } }` on failure. Rejection-on-duplicate: calling on
-    an already-registered agent returns `{ error: { reason: 'already_registered' } }`
-    (not idempotent — a fresh success response is not replayed).
+  - `cello_register({ phone_stub })` — NEW. Triggers REG-001 DKG registration flow.
+    Not idempotent — calling on an already-registered agent returns
+    `{ error: { reason: 'already_registered' } }`. On success returns
+    `{ registered: true, agent_id: hex, primary_pubkey: hex, ml_dsa_pubkey: hex }`.
+    Errors: `{ error: { reason: 'already_registered' | 'dkg_failed' | 'directory_unavailable' } }`.
 
   - `cello_request_connection({ target_pubkey, include_endorsements?: hex[],
-    include_attestations?: hex[] })` — NEW. Constructs a connection package with the
-    agent's pseudonym binding plus the specified optional items (identified by their
-    content hashes — the agent selects which pre-stored items to disclose). Sends the
-    request via CONNREQ-002. Blocks until the counterparty responds or a 30-second
-    timeout fires. Returns one of:
-    - `{ result: 'accepted', connection_id: hex, counterparty_pubkey: hex }`
-    - `{ result: 'insufficient', unmet_requirements: [...] }`
-    - `{ result: 'rejected', reason: string }`
-    - `{ result: 'timeout' }` — counterparty did not respond within 30 seconds
-    - `{ error: { reason: 'target_not_found' | 'already_connected' | 'not_registered' } }`
+    include_attestations?: hex[] })` — NEW. Constructs a ConnectionPackage per
+    CONNREQ-001 (pseudonym binding + selected items) and sends a Round 1 connection
+    request via CONNREQ-002. Blocks up to 30 seconds total spanning both rounds.
+    Returns one of:
+    - `{ result: 'accepted', connection_id: hex, counterparty_pubkey: hex }` — target
+      policy accepted the package (deterministic mode) or target agent accepted
+      (inference mode).
+    - `{ result: 'rejected', reason: string }` — target rejected the request.
+    - `{ result: 'insufficient', unmet_requirements: UnmetRequirement[] }` — target
+      policy rejected due to unmet requirements (deterministic mode).
+    - `{ result: 'disclosure_requested', connection_request_id: hex,
+      requested_items: RequestedItem[] }` — target agent (inference mode) requested
+      additional disclosure. Caller must call `cello_respond_to_disclosure_request` to
+      proceed to Round 2.
+    - `{ result: 'timeout' }` — counterparty did not respond within 30 seconds.
+    - `{ error: { reason: 'target_not_found' | 'already_connected' | 'not_registered' } }`.
 
-    **M3 scope note on `include_endorsements` / `include_attestations`:** In M3 agents
-    use pseudonym-binding-only packages. Trust data management tools
-    (`cello_store_endorsement`, `cello_store_attestation`) are deferred to M6 when the
-    social trust machinery exists. The `include_*` parameters are defined now so the
-    schema is stable — in M3 they are always empty arrays or omitted.
+    **M3 scope note on `include_endorsements` / `include_attestations`:** In M3 the trust
+    store is empty — agents use pseudonym-binding-only packages. These parameters are
+    defined now for schema stability; in M3 they are always empty arrays or omitted.
 
-  - `cello_await_connection_request({ timeout_ms })` — NEW. Blocks until an inbound
-    connection request arrives and is auto-evaluated by the client's policy engine.
-    Returns:
-    - `{ type: 'connection_accepted', connection_id, counterparty_pubkey }` — the policy
-      accepted the request automatically.
-    - `{ type: 'connection_rejected', counterparty_pubkey, reason }` — the policy
-      rejected; reported for awareness.
-    - `{ type: 'timeout' }` — no requests within timeout.
+  - `cello_respond_to_disclosure_request({ connection_request_id: hex,
+    include_endorsements?: hex[], include_attestations?: hex[] })` — NEW. Sends a Round 2
+    disclosure response after the target requested more items in Round 1. Only callable
+    after `cello_request_connection` returned `{ result: 'disclosure_requested' }`.
+    Blocks until the target accepts, rejects, or times out.
+    Returns: `{ result: 'accepted', connection_id: hex }` | `{ result: 'rejected' }` |
+    `{ result: 'timeout' }`.
+    Errors: `{ error: { reason: 'no_pending_disclosure_request' | 'already_responded' } }`.
 
-  - `cello_list_connections()` — NEW. Returns array of `{ connection_id: hex,
-    counterparty_pubkey: hex, counterparty_primary_pubkey: hex, established_at: int,
-    status: 'active' }`.
+  - `cello_await_connection_request({ timeout_ms?: number })` — UPDATED. Replaces the
+    old auto-evaluated version. Blocks until an inbound connection request needs agent
+    review (inference mode only — requests evaluated deterministically do not surface
+    here; the agent receives a channel notification only). Returns:
+    - `{ type: 'pending_review', connection_request_id: hex, from_pubkey: hex,
+      report: ConnectionReport }` — the agent must call `cello_accept_connection`,
+      `cello_reject_connection`, or `cello_request_more_disclosure` to act on it.
+    - `{ type: 'timeout' }` — no reviewable requests within timeout.
 
-  - `cello_set_policy({ mode, requirements? })` — NEW. Configures the local
-    `SignalRequirementPolicy`. Returns `{ policy_set: true, mode, requirement_count }`.
-    The policy persists for the process lifetime (M3 does not persist policy across
-    restarts; persistence is an adapter concern for later milestones).
+    **ConnectionReport** shape (no raw crypto blobs):
+    ```
+    {
+      policy_summary: {
+        mode: string,
+        review_mode: 'inference',
+        requirements_met: SignalRequirement[],
+        requirements_unmet: UnmetRequirement[]
+      },
+      package_summary: {
+        pseudonym_label: string,
+        endorsement_count: number,
+        attestation_types: string[],
+        pseudonym_age_days: number,
+        registration_age_days: number,
+        is_provisional: boolean
+      },
+      is_round_2: boolean
+    }
+    ```
 
-  - `cello_get_policy()` — NEW. Returns the current policy: `{ mode, requirements }`.
+  - `cello_accept_connection({ connection_request_id: hex })` — NEW. Agent accepts a
+    pending inbound connection request. Only valid after `cello_await_connection_request`
+    returns a `pending_review` event for that `connection_request_id`.
+    Returns: `{ accepted: true, connection_id: hex }`.
+    Errors: `{ error: { reason: 'no_pending_request' | 'already_decided' } }`.
+
+  - `cello_reject_connection({ connection_request_id: hex, reason?: string })` — NEW.
+    Agent rejects a pending inbound connection request.
+    Returns: `{ rejected: true }`.
+    Errors: `{ error: { reason: 'no_pending_request' | 'already_decided' } }`.
+
+  - `cello_request_more_disclosure({ connection_request_id: hex,
+    requested_items: RequestedItem[] })` — NEW. Agent requests additional disclosure
+    from the sender in inference mode (Round 1 only). Triggers a Round 2 exchange.
+    `requested_items` is an array of `{ type: 'endorsement' | 'attestation',
+    attestation_type?: string, min_count?: number }`.
+    Returns: `{ request_sent: true }`.
+    Errors: `{ error: { reason: 'no_pending_request' | 'already_decided' |
+    'max_rounds_reached' } }` — `max_rounds_reached` is returned if this is a Round 2
+    request (only one disclosure round per connection negotiation).
+
+  - `cello_list_connections()` — NEW. Returns all active connections from the client's
+    local connection store.
+    Returns: `{ connections: Array<{ connection_id: hex, counterparty_pubkey: hex,
+    counterparty_primary_pubkey: hex, established_at: number, status: 'active' }> }`.
+
+  - `cello_set_policy({ mode, review_mode, requirements? })` — UPDATED. Gains
+    `review_mode` field: `'deterministic' | 'inference'`. Default: `'inference'`. In
+    deterministic mode the policy engine evaluates incoming requests against requirements
+    and accepts/rejects without agent involvement. In inference mode satisfactory requests
+    (requirements met) are still surfaced to the agent via `cello_await_connection_request`
+    for a final review decision.
+    Returns: `{ policy_set: true, mode, review_mode, requirement_count }`.
+
+  - `cello_get_policy()` — NEW. Returns the current policy: `{ mode, review_mode,
+    requirements }`.
 
   - `cello_initiate_session({ target_pubkey })` — MODIFIED. Now requires an active
     connection with the target (SESSION-006). Returns
     `{ error: { reason: 'no_connection' } }` if no connection exists. All other behavior
     unchanged from MCP-002.
 
-  - `cello_status()` — EXTENDED. Response gains `registered: bool`, `agent_id: hex | null`,
-    `connection_count: int`, `policy_mode: string`.
+  - `cello_status()` — EXTENDED. Response gains: `registered: bool`, `agent_id: hex | null`,
+    `connection_count: number`, `policy_mode: string`, `policy_review_mode: string`.
 
   All other M1/M2 tools (`cello_send`, `cello_receive`, `cello_close_session`,
   `cello_await_session`, `cello_list_sessions`, `cello_get_sealed_receipt`,
@@ -85,43 +147,65 @@ behavior:
     action: >
       the MCP server shall trigger REG-001's registration flow (generate ML-DSA keypair,
       send register_request, run DKG, receive register_success). Returns the registration
-      confirmation on success or a structured error on failure.
+      confirmation on success or a structured error on failure. Calling a second time on
+      an already-registered instance returns `{ error: { reason: 'already_registered' } }`
+      without re-running DKG.
   - trigger: "When the agent calls `cello_request_connection({ target_pubkey, ... })`"
     action: >
       the MCP server shall construct a ConnectionPackage per CONNREQ-001 (pseudonym
       binding + selected items), send the connection request per CONNREQ-002, and block
-      until the response arrives (accept/insufficient/reject) or a timeout (30 seconds
-      default). Returns the verdict to the agent.
+      until the response arrives or a 30-second timeout fires. If the target's policy is
+      deterministic, the result (accepted/insufficient/rejected) arrives without agent
+      involvement on the target side. If the target's policy is inference and the target
+      agent requests more disclosure, the tool returns `{ result: 'disclosure_requested',
+      connection_request_id, requested_items }` so the caller can proceed to Round 2 via
+      `cello_respond_to_disclosure_request`.
+  - trigger: "When the agent calls `cello_respond_to_disclosure_request({ connection_request_id, ... })`"
+    action: >
+      the MCP server shall send a Round 2 connection package update with the additionally
+      specified items and block until the target accepts, rejects, or the combined timeout
+      expires. Returns the final verdict.
   - trigger: "When the agent calls `cello_await_connection_request({ timeout_ms })`"
     action: >
-      the MCP server shall block until an inbound connection request is processed by
-      the auto-evaluation engine, returning the outcome (accepted or rejected). Multiple
-      requests processed during the wait are returned in order on successive calls.
+      the MCP server shall block until an inbound connection request requires agent review
+      (inference mode only). The returned ConnectionReport contains a human-readable
+      policy summary and package summary — no raw signatures, keys, or cryptographic blobs.
+      Requests processed deterministically (accepted or rejected by policy without agent
+      involvement) do not surface here; the agent receives only a channel notification
+      for those.
+  - trigger: "When the agent calls `cello_accept_connection({ connection_request_id })`"
+    action: >
+      the MCP server shall record the connection, notify the sender that the request was
+      accepted, and return the new connection_id. Only valid for a request in
+      `pending_review` state; calling with an unknown or already-decided id returns an
+      error.
+  - trigger: "When the agent calls `cello_reject_connection({ connection_request_id, reason })`"
+    action: >
+      the MCP server shall notify the sender that the request was rejected and discard the
+      pending request. Returns `{ rejected: true }`.
+  - trigger: "When the agent calls `cello_request_more_disclosure({ connection_request_id, requested_items })` on a Round 1 request"
+    action: >
+      the MCP server shall send a disclosure request to the originating agent, transition
+      the pending request to awaiting-round-2 state, and return `{ request_sent: true }`.
+  - trigger: "When the agent calls `cello_request_more_disclosure` on a Round 2 request (max_rounds_reached)"
+    action: >
+      the MCP server shall return `{ error: { reason: 'max_rounds_reached' } }` without
+      contacting the sender. Only one disclosure round per connection negotiation is
+      permitted.
   - trigger: "When the agent calls `cello_list_connections()`"
     action: >
       the MCP server shall return all active connections from the client's local
       connection store.
-  - trigger: "When the agent calls `cello_set_policy({ mode, requirements })`"
+  - trigger: "When the agent calls `cello_set_policy({ mode, review_mode, requirements })`"
     action: >
       the MCP server shall validate the policy structure (mode is one of open/selective/
-      guarded/closed; requirements match the SignalRequirement schema), configure the
-      local policy engine, and return confirmation.
+      guarded/closed; review_mode is 'deterministic' or 'inference'; requirements match
+      the SignalRequirement schema), configure the local policy engine, and return
+      confirmation including the requirement_count.
   - trigger: "When the agent calls `cello_initiate_session({ target_pubkey })` without an active connection to the target"
     action: >
-      the MCP server shall return `{ error: { reason: 'no_connection', target_pubkey } }`
-      without contacting the directory.
-  - trigger: "When the agent calls any M3 tool before registration"
-    action: >
-      tools that require registration (`cello_request_connection`,
-      `cello_initiate_session`, `cello_set_policy`, `cello_close_session`,
-      `cello_send`, `cello_await_session`) shall return
-      `{ error: { reason: 'not_registered' } }`. Tools that work without registration
-      (`cello_status`, `cello_register`) continue to function. Read tools that return
-      empty results without registration: `cello_list_connections` returns `[]`,
-      `cello_list_sessions` returns `[]`, `cello_get_policy` returns the default policy
-      (`{ mode: 'open', requirements: [] }`), `cello_await_connection_request` blocks
-      normally and returns `{ type: 'timeout' }` (no events will arrive without
-      registration, but the tool does not error).
+      the MCP server shall return `{ error: { reason: 'no_connection' } }` without
+      contacting the directory.
   - trigger: "When the MCP server factory is invoked with a transport argument"
     action: >
       the factory shall register the full M3 tool set identically under stdio and
@@ -129,104 +213,142 @@ behavior:
 
 # ─── Notes ─────────────────────────────────────────────────
 notes: |
-  All ACs with `test_type: e2e` require A and B to be separate OS processes,
-  each running their own cello-mcp binary with distinct key files, communicating
-  via relay and directory over real network connections.
+  All ACs with `test_type: e2e` require A and B to be separate OS processes, each running
+  their own cello-mcp binary with distinct key files, communicating via relay and directory
+  over real network connections.
+
+  **Environment variables added in M3:**
+  - `CELLO_ML_DSA_KEY_FILE` — ML-DSA key file path (alongside existing `CELLO_KEY_FILE`).
+  - `CELLO_TRUST_STORE` — trust signal store JSON path. Schema:
+    `{ endorsements_received: [], attestations_received: [], endorsements_issued: [] }`.
+    All arrays are empty in M3; the store is defined now for schema stability.
+
+  **Multi-agent test naming pattern:**
+  Use `CELLO_KEY_FILE_A` / `CELLO_KEY_FILE_B`, `CELLO_ML_DSA_KEY_FILE_A` /
+  `CELLO_ML_DSA_KEY_FILE_B`, and `CELLO_TRUST_STORE_A` / `CELLO_TRUST_STORE_B` when
+  running two agents in the same test process (unit/integration). E2E tests use separate
+  processes with distinct env vars per process.
+
+  Use `@cello/test-fixtures` (CELLO-TESTFIX-001) for all key generation and fixture data.
+  `test_type: unit` ACs run in-process with InMemoryTransport.
+  `test_type: e2e` ACs run as separate OS processes over real network connections.
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
     given: "An unregistered MCP server instance"
     when: "Agent calls `cello_register({ phone_stub: '+1234567890' })`"
-    then: "Returns `{ registered: true, agent_id: hex, primary_pubkey: hex, ml_dsa_pubkey: hex }`; subsequent `cello_status` shows `registered: true`"
+    then: "Returns `{ registered: true, agent_id: hex, primary_pubkey: hex, ml_dsa_pubkey: hex }`; subsequent `cello_status` shows `registered: true` and `agent_id` matching the returned hex"
     test_type: e2e
     component_under_test: client
 
   - id: AC-002
-    given: "Two registered MCP server instances A and B; B has open policy"
-    when: "A calls `cello_request_connection({ target_pubkey: B_pubkey })`"
-    then: "Returns `{ result: 'accepted', connection_id: hex, counterparty_pubkey: B_pubkey }`; A's `cello_list_connections()` includes B"
-    test_type: e2e
+    given: "An already-registered MCP server instance"
+    when: "Agent calls `cello_register({ phone_stub: '+1234567890' })` a second time"
+    then: "Returns `{ error: { reason: 'already_registered' } }`; no DKG ceremony is attempted"
+    test_type: unit
     component_under_test: client
 
   - id: AC-003
-    given: "Two registered MCP servers A and B; B requires 2 endorsements; A has 0"
+    given: "Two registered MCP server instances A and B; B has deterministic open policy"
     when: "A calls `cello_request_connection({ target_pubkey: B_pubkey })`"
-    then: "Returns `{ result: 'insufficient', unmet_requirements: [{...}] }`; no connection is created"
+    then: "Returns `{ result: 'accepted', connection_id: hex, counterparty_pubkey: B_pubkey }`; A's `cello_list_connections()` includes an entry for B"
     test_type: e2e
     component_under_test: client
 
   - id: AC-004
-    given: "Two registered connected agents A and B"
+    given: "Two registered MCP servers A and B; B has inference policy; B calls `cello_request_more_disclosure` on the inbound Round 1 request"
+    when: "A calls `cello_request_connection({ target_pubkey: B_pubkey })`"
+    then: "A's call returns `{ result: 'disclosure_requested', connection_request_id: hex, requested_items: [...] }` before the 30-second timeout"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-005
+    given: "A pending disclosure_requested state from AC-004; A calls `cello_respond_to_disclosure_request` with valid connection_request_id; B then calls `cello_accept_connection`"
+    when: "`cello_respond_to_disclosure_request({ connection_request_id, include_endorsements: [], include_attestations: [] })` is called"
+    then: "Returns `{ result: 'accepted', connection_id: hex }`"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-006
+    given: "Two registered MCP servers A and B; B has inference policy; an inbound connection request from A is pending"
+    when: "B calls `cello_await_connection_request({ timeout_ms: 5000 })`"
+    then: "Returns `{ type: 'pending_review', connection_request_id: hex, from_pubkey: A_pubkey, report: ConnectionReport }` where report contains policy_summary with review_mode 'inference' and package_summary with pseudonym_label, endorsement_count, attestation_types, pseudonym_age_days, registration_age_days, is_provisional, and is_round_2 false"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-007
+    given: "A pending_review connection request for connection_request_id on B's MCP server"
+    when: "B calls `cello_accept_connection({ connection_request_id })`"
+    then: "Returns `{ accepted: true, connection_id: hex }`; B's `cello_list_connections()` includes the new connection"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-008
+    given: "A pending_review connection request for connection_request_id on B's MCP server"
+    when: "B calls `cello_reject_connection({ connection_request_id, reason: 'not trusted' })`"
+    then: "Returns `{ rejected: true }`; no connection is created; a second call with the same id returns `{ error: { reason: 'already_decided' } }`"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-009
+    given: "A pending_review Round 1 connection request on B's MCP server (inference mode)"
+    when: "B calls `cello_request_more_disclosure({ connection_request_id, requested_items: [{ type: 'endorsement', min_count: 1 }] })`"
+    then: "Returns `{ request_sent: true }`; a second call on the same Round 1 request (now in awaiting-round-2 state) returns `{ error: { reason: 'already_decided' } }`"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-010
+    given: "A pending_review Round 2 connection request on B's MCP server (is_round_2: true in ConnectionReport)"
+    when: "B calls `cello_request_more_disclosure({ connection_request_id, requested_items: [...] })`"
+    then: "Returns `{ error: { reason: 'max_rounds_reached' } }`; the Round 2 request remains pending"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-011
+    given: "A registered MCP server with default policy (open, inference)"
+    when: "Agent calls `cello_set_policy({ mode: 'selective', review_mode: 'deterministic', requirements: [{ signal_type: 'endorsement', condition: { type: 'min_count', count: 2 } }] })`"
+    then: "Returns `{ policy_set: true, mode: 'selective', review_mode: 'deterministic', requirement_count: 1 }`; subsequent `cello_get_policy()` returns `{ mode: 'selective', review_mode: 'deterministic', requirements: [...] }`"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-012
+    given: "No pending connection events"
+    when: "Agent calls `cello_await_connection_request({ timeout_ms: 200 })`"
+    then: "Returns `{ type: 'timeout' }` after approximately 200 ms"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-013
+    given: "Two registered connected agents A and B (connection established)"
     when: "A calls `cello_initiate_session({ target_pubkey: B_pubkey })`"
     then: "Session establishment proceeds (FROST ceremony, SessionAssignment); returns session_id; the connection gate passes"
     test_type: e2e
     component_under_test: client
 
-  - id: AC-005
+  - id: AC-014
     given: "Two registered agents A and B with NO connection"
     when: "A calls `cello_initiate_session({ target_pubkey: B_pubkey })`"
-    then: "Returns `{ error: { reason: 'no_connection' } }` immediately"
+    then: "Returns `{ error: { reason: 'no_connection' } }` immediately without contacting the directory"
     test_type: unit
     component_under_test: client
 
-  - id: AC-006
-    given: "An unregistered MCP server"
-    when: "Agent calls `cello_request_connection({ target_pubkey: ... })`"
-    then: "Returns `{ error: { reason: 'not_registered' } }`"
+  - id: AC-015
+    given: "A registered MCP server with one active connection"
+    when: "Agent calls `cello_status()`"
+    then: "Response includes `registered: true`, `agent_id: hex`, `connection_count: 1`, `policy_mode: 'open'`, `policy_review_mode: 'inference'` alongside all existing M2 fields"
     test_type: unit
     component_under_test: client
 
-  - id: AC-007
-    given: "A registered MCP server with default policy (open)"
-    when: "Agent calls `cello_set_policy({ mode: 'selective', requirements: [{ signal_type: 'endorsement', condition: { type: 'min_count', count: 2 } }] })`"
-    then: "Returns `{ policy_set: true, mode: 'selective', requirement_count: 1 }`; subsequent `cello_get_policy()` returns the configured policy"
-    test_type: unit
-    component_under_test: client
-
-  - id: AC-008
-    given: "Agent B has an active connection request auto-accepted in the last second"
-    when: "Agent B calls `cello_await_connection_request({ timeout_ms: 5000 })`"
-    then: "Returns `{ type: 'connection_accepted', connection_id, counterparty_pubkey }` immediately (event was buffered)"
-    test_type: e2e
-    component_under_test: client
-
-  - id: AC-009
-    given: "No pending connection events"
-    when: "Agent calls `cello_await_connection_request({ timeout_ms: 200 })`"
-    then: "Returns `{ type: 'timeout' }` after approximately 200ms"
-    test_type: unit
-    component_under_test: client
-
-  - id: AC-010
-    given: "Two registered MCP servers A and B; B's signaling stream is disconnected (simulating offline)"
-    when: "A calls `cello_request_connection({ target_pubkey: B_pubkey })` and 30 seconds elapse without B responding"
-    then: "Returns `{ result: 'timeout' }`; no connection is created; A can retry"
-    test_type: integration
-    component_under_test: client
-
-  - id: AC-011
+  - id: AC-016
     given: "The MCP server factory"
     when: "Invoked with InMemoryTransport and with stdio transport"
     then: >
       Both register the full M3 tool set (all M1/M2 tools plus: cello_register,
-      cello_request_connection, cello_await_connection_request, cello_list_connections,
-      cello_set_policy, cello_get_policy) with identical schemas; structural equality
-      passes
-    test_type: unit
-    component_under_test: client
-
-  - id: AC-012
-    given: "A registered MCP server"
-    when: "Agent calls `cello_status()`"
-    then: "Response includes `registered: true`, `agent_id: hex`, `connection_count: int`, `policy_mode: 'open'` (default) alongside all existing M2 fields"
-    test_type: unit
-    component_under_test: client
-
-  - id: AC-013
-    given: "An unregistered MCP server"
-    when: "Agent calls `cello_list_connections()`"
-    then: "Returns `[]` (empty array, not an error)"
+      cello_request_connection, cello_respond_to_disclosure_request,
+      cello_await_connection_request, cello_accept_connection, cello_reject_connection,
+      cello_request_more_disclosure, cello_list_connections, cello_set_policy,
+      cello_get_policy) with identical schemas; structural equality passes
     test_type: unit
     component_under_test: client
 
@@ -234,19 +356,30 @@ acceptance_criteria:
 security_invariants:
   - id: SI-001
     statement: "The MCP server shall never expose ML-DSA secret key material through any tool response"
-    adversarial_condition: "even when `cello_register`, `cello_status`, or error responses include diagnostic information"
+    adversarial_condition: "even when `cello_register`, `cello_status`, `cello_get_policy`, or error responses include diagnostic information"
     test_type: unit
     component_under_test: client
 
   - id: SI-002
     statement: >
       `cello_initiate_session` shall never send a session_request to the directory without
-      first verifying a local connection record exists for the target. The client-side
-      check is defense in depth — the directory also enforces, but the client must not
-      waste a FROST ceremony attempt on an obviously-doomed request.
+      first verifying a local connection record exists for the target. The client-side check
+      is defense in depth — the directory also enforces, but the client must not waste a
+      FROST ceremony attempt on an obviously-doomed request.
     adversarial_condition: >
       even when the agent passes a target_pubkey that looks like a valid hex pubkey —
       without a connection record the request is blocked locally.
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-003
+    statement: >
+      The ConnectionReport returned by `cello_await_connection_request` shall contain no
+      raw cryptographic material — no private keys, no raw signatures, no full public key
+      blobs. The report is a human-readable summary only.
+    adversarial_condition: >
+      even when the underlying connection package contains ML-DSA signatures (2420 bytes
+      each) — none of that material appears in the report.
     test_type: unit
     component_under_test: client
 
@@ -260,5 +393,7 @@ references:
   related_stories:
     - "CELLO-MCP-002 — M1/M2 tools this story extends"
     - "CELLO-REG-001 — registration triggered by cello_register"
+    - "CELLO-CONNREQ-001 — ConnectionPackage wire types constructed by cello_request_connection"
     - "CELLO-CONNREQ-002 — connection flow triggered by cello_request_connection"
     - "CELLO-SESSION-006 — connection gate enforced by cello_initiate_session"
+    - "CELLO-TESTFIX-001 — test fixtures used by all ACs"
