@@ -219,6 +219,34 @@ export type PackageValidationResult =
       reason: "pseudonym_binding_invalid" | "pseudonym_label_too_long";
     };
 
+// ─── Connection policy ────────────────────────────────────────────────────────
+
+/** A single signal requirement that must be satisfied by an incoming package. */
+export type SignalRequirement =
+  | { signal: "endorsement_count"; min_count: number }
+  | { signal: "attestation_type"; type: string }
+  | { signal: "pseudonym_age"; min_age_days: number }
+  | { signal: "registration_age"; min_age_days: number };
+
+/**
+ * Policy governing how the agent evaluates incoming connection requests.
+ *
+ * mode:
+ *   'open'     — accept all packages that pass structural validation (requirements ignored)
+ *   'closed'   — reject all packages
+ *   'selective' — accept only packages that satisfy all requirements
+ *
+ * review_mode:
+ *   'deterministic' — engine evaluates automatically; no agent involvement
+ *   'inference'     — engine produces a ConnectionReport; agent makes the final decision
+ */
+export interface ConnectionPolicy {
+  mode: "open" | "closed" | "selective";
+  review_mode: "deterministic" | "inference";
+  requirements: SignalRequirement[];
+  whitelist?: string[]; // pseudonym_label fast-path — auto-accept before engine runs
+}
+
 // ─── Build-time error ─────────────────────────────────────────────────────────
 
 export type BuildPseudonymBindingResult =

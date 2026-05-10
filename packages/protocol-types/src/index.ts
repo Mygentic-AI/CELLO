@@ -48,6 +48,8 @@ export type {
   ValidatedAttestation,
   PackageValidationResult,
   BuildPseudonymBindingResult,
+  SignalRequirement,
+  ConnectionPolicy,
 } from "./connection-package.js";
 
 export {

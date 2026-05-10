@@ -259,6 +259,16 @@ importers:
         specifier: '*'
         version: 3.0.0-alpha.1(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.0)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.0))
 
+  packages/test-fixtures:
+    dependencies:
+      '@cello/protocol-types':
+        specifier: workspace:*
+        version: link:../protocol-types
+    devDependencies:
+      '@claude-flow/testing':
+        specifier: '*'
+        version: 3.0.0-alpha.1(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.0)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.0))
+
   packages/transport:
     dependencies:
       '@cello/crypto':

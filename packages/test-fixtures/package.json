@@ -1,0 +1,27 @@
+{
+  "name": "@cello/test-fixtures",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cello/protocol-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@claude-flow/testing": "*"
+  }
+}
