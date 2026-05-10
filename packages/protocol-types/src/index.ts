@@ -34,3 +34,31 @@ export {
 
 export { computeGenesisPrevRoot, encodeSealPayload, decodeSealPayload, buildSessionEstablishmentTbs, buildSealTbs } from "./session.js";
 export type { SessionAssignment, SessionAssignmentFrost, SessionAssignmentSingle, ParticipantInfo, RelayEndpointInfo, SealPayload } from "./session.js";
+
+export type {
+  MlDsaKeyProvider,
+  MlDsaVerifier,
+  PseudonymBinding,
+  Endorsement,
+  Attestation,
+  ConnectionPackage,
+  EndorsementValidationStatus,
+  AttestationValidationStatus,
+  ValidatedEndorsement,
+  ValidatedAttestation,
+  PackageValidationResult,
+  BuildPseudonymBindingResult,
+} from "./connection-package.js";
+
+export {
+  MAX_PSEUDONYM_LABEL_BYTES,
+  ML_DSA_PUBKEY_BYTES,
+  ML_DSA_SIGNATURE_BYTES,
+  buildPseudonymBinding,
+  verifyPseudonymBinding,
+  verifyEndorsement,
+  verifyAttestation,
+  validateConnectionPackage,
+  encodeConnectionPackage,
+  decodeConnectionPackage,
+} from "./connection-package.js";
