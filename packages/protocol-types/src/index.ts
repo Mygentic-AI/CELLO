@@ -48,8 +48,10 @@ export type {
   ValidatedAttestation,
   PackageValidationResult,
   BuildPseudonymBindingResult,
+  SignalCondition,
   SignalRequirement,
   ConnectionPolicy,
+  DirectoryContext,
 } from "./connection-package.js";
 
 export {
@@ -64,3 +66,21 @@ export {
   encodeConnectionPackage,
   decodeConnectionPackage,
 } from "./connection-package.js";
+
+export type { ConnectionReport, UnmetRequirement } from "./connection-policy-engine.js";
+export {
+  evaluateConnectionPackage,
+  OPEN_POLICY,
+  CLOSED_POLICY,
+  SELECTIVE_DEFAULT,
+} from "./connection-policy-engine.js";
+
+export type {
+  RegisterRequest,
+  DkgComplete,
+  RegisterSuccess,
+  RegisterError,
+  RegisterErrorReason,
+  AgentProfile,
+  RegistrationState,
+} from "./registration.js";

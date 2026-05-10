@@ -21,5 +21,9 @@
   "dependencies": {
     "@cello/crypto": "workspace:*",
     "cbor-x": "^1.6.4"
+  },
+  "devDependencies": {
+    "@cello/test-fixtures": "workspace:*",
+    "@claude-flow/testing": "*"
   }
 }
