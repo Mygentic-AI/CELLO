@@ -1196,21 +1196,10 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
 
   it("SESSION-002 AC-011: target offline → recordAssignment never called → discardSession never called", async () => {
     // Verify that target_offline path leaves relay state untouched.
+    // NODE-001 AC-014: peer_info_announce must be sent before session_request.
     const keyA = generateKeypair();
-    const nodeA = await createNode({ keyProvider: keyA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-    await nodeA.start();
-    scope.addCleanup(() => nodeA.stop());
-    await nodeA.dial(dirNode.node.listenAddresses()[0]);
-
-    const streamA = await nodeA.newStream(dirNode.node.getPeerId(), SIGNALING_PROTOCOL_ID);
-    const readerA = new StreamReader(streamA);
-    const ch = decodeOutboundSignalingFrame(await readerA.readDecoded());
-    if (!ch || ch.type !== "signaling_auth_challenge") throw new Error("no challenge");
-    const { pubkey: pk, signature: sig } = await signAuth(ch.nonce, AUTH_DOMAIN, keyA);
-    sendFrame(streamA, encodeAuthResponse(pk, sig));
-    // ADAPTER-003: consume signaling_auth_ok
-    const ackOffline = decodeOutboundSignalingFrame(await readerA.readDecoded());
-    if (ackOffline?.type !== "signaling_auth_ok") throw new Error("expected signaling_auth_ok");
+    const { stream: streamA, reader: readerA, pubkeyHex: hexA, clientNode: nodeA } =
+      await connectAndAuth(keyA);
 
     const discardedBefore = relay.discarded.length;
     sendFrame(streamA, CBOR_ENC.encode({ type: "session_request", target_pubkey: new Uint8Array(randomBytes(32)) }));
@@ -1219,6 +1208,9 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     if (errFrame?.type === "session_request_error") expect(errFrame.reason).toBe("target_offline");
 
     expect(relay.discarded.length).toBe(discardedBefore);
+
+    // Suppress unused variable warnings from connectAndAuth
+    void hexA;
     await nodeA.stop();
   }, 10_000);
 

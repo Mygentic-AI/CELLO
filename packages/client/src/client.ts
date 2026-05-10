@@ -2610,6 +2610,17 @@ class CelloClientImpl implements CelloClient {
         sigStream.abort(new Error("dir_auth_error")); return false;
       }
 
+      // NODE-001 AC-014/AC-015: send peer_info_announce so the directory can populate
+      // participant peer_id and multiaddrs in SessionAssignments.
+      // Fire-and-forget — no ack expected per protocol design.
+      const peerInfoFrame = CBOR_ENC.encode({
+        type: "peer_info_announce",
+        peer_id: this.#node.getPeerId(),
+        multiaddrs: this.#node.listenAddresses(),
+      }) as Uint8Array;
+      sigStream.send(lp.encode.single(peerInfoFrame));
+      process.stderr.write("[sigstream] peer_info_announce sent\n");
+
       // Store stream and start reader
       this.#persistentSignalingStream = sigStream;
       this.#persistentSignalingIter = iter;

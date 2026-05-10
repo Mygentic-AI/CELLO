@@ -24,6 +24,7 @@ import type {
   SealVerified,
   SealFrostSignature,
   SessionFrostSealed,
+  PeerInfoAnnounce,
 } from "./directory-types.js";
 
 const ENC = new Encoder({ tagUint8Array: false });
@@ -150,7 +151,7 @@ export function encodeNotAuthenticated(frame: NotAuthenticated): Uint8Array {
 
 // ─── Decode (client → directory) ─────────────────────────────────────────────
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature;
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -195,6 +196,14 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     if (!session_id || session_id.length !== 16) return null;
     if (!frost_signature || frost_signature.length !== 64) return null;
     return { type: "seal_frost_signature", session_id, frost_signature };
+  }
+
+  if (o["type"] === "peer_info_announce") {
+    const peer_id = typeof o["peer_id"] === "string" ? o["peer_id"] : null;
+    const multiaddrs = toStringArray(o["multiaddrs"]);
+    if (!peer_id) return null;
+    if (!multiaddrs) return null;
+    return { type: "peer_info_announce", peer_id, multiaddrs };
   }
 
   return null;
@@ -400,7 +409,8 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       reason !== "relay_unavailable" &&
       reason !== "frost_signer_not_configured" &&
       reason !== "directory_below_threshold" &&
-      reason !== "ceremony_conflict"
+      reason !== "ceremony_conflict" &&
+      reason !== "peer_not_registered"
     ) return null;
     return { type: "session_request_error", reason };
   }

@@ -37,6 +37,20 @@ export interface SignalingAuthOk {
   type: "signaling_auth_ok";
 }
 
+// ─── Peer info announce (client → directory, after signaling_auth_ok) ─────────
+
+/**
+ * Sent by the client immediately after receiving `signaling_auth_ok`.
+ * Registers the agent's dialable libp2p Peer ID and listen multiaddrs with the directory.
+ * The directory requires this before processing any `session_request` from this client.
+ * AC-014/AC-015: NODE-001.
+ */
+export interface PeerInfoAnnounce {
+  type: "peer_info_announce";
+  peer_id: string;       // libp2p Peer ID string
+  multiaddrs: string[];  // listen multiaddrs
+}
+
 // ─── Session request / assignment frame types ──────────────────────────────────
 
 export interface SessionRequest {
@@ -155,7 +169,8 @@ export type SessionRequestErrorReason =
   | "relay_unavailable"
   | "frost_signer_not_configured"  // SESSION-004: no IThresholdSigner registered for this initiator
   | "directory_below_threshold"    // SESSION-004: FROST ceremony failed — insufficient signers
-  | "ceremony_conflict";           // SESSION-004: concurrent ceremony already in-flight for this agent
+  | "ceremony_conflict"            // SESSION-004: concurrent ceremony already in-flight for this agent
+  | "peer_not_registered";         // NODE-001 AC-014: client has not sent peer_info_announce yet
 
 export interface SessionRequestError {
   type: "session_request_error";

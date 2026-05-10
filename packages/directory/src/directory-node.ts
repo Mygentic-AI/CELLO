@@ -219,6 +219,12 @@ export class CelloDirectoryNode {
   // pubkey_hex → { peer_id, multiaddrs } (from the Noise handshake / client info)
   readonly #peerInfo = new Map<string, { peer_id: string; multiaddrs: string[] }>();
 
+  // pubkey_hex set: tracks which authenticated agents have registered peer info.
+  // Set either by the wire peer_info_announce path or by a direct registerPeerInfo() call
+  // (test harness OOB path). Both paths allow subsequent session_request to proceed.
+  // AC-014/AC-015 (NODE-001).
+  readonly #peerInfoAnnounced = new Set<string>();
+
   // pubkey_hex → primary_pubkey (32-byte FROST group public key) — SESSION-005
   // Populated by registerPrimaryPubkey (called by test harness or SESSION-004 establishment flow).
   readonly #primaryPubkeys = new Map<string, Uint8Array>();
@@ -529,7 +535,19 @@ export class CelloDirectoryNode {
           this.#sendFrame(stream, encodeNotAuthenticated({ type: "not_authenticated" }));
           continue;
         }
+        if (parsed.type === "peer_info_announce") {
+          // AC-014/AC-015 (NODE-001): client announces its libp2p Peer ID and listen addresses.
+          // registerPeerInfo also marks the pubkey in #peerInfoAnnounced.
+          this.registerPeerInfo(authedPubkeyHex!, parsed.peer_id, parsed.multiaddrs);
+          continue;
+        }
         if (parsed.type === "session_request") {
+          // AC-014 (NODE-001): refuse session_request if peer_info has not been registered
+          // (neither via wire peer_info_announce nor via direct registerPeerInfo call).
+          if (!this.#peerInfoAnnounced.has(authedPubkeyHex!)) {
+            this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "peer_not_registered" }));
+            continue;
+          }
           // Run concurrently — ceremony_result frames must be processed by this same loop
           // while #processSessionRequest is suspended awaiting the ceremony round-trip.
           void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"));
@@ -590,11 +608,14 @@ export class CelloDirectoryNode {
 
   /**
    * Register transport peer info for an authenticated K_local pubkey.
-   * Called by the test harness (or a future connection management layer) to
-   * associate the Noise-layer Peer ID and listen multiaddrs with a K_local identity.
+   * Called either by the wire peer_info_announce path (via #handleSignalingStream)
+   * or directly by the test harness (OOB path). Both paths mark the agent as having
+   * announced its peer info, allowing subsequent session_request to proceed.
+   * AC-014/AC-015 (NODE-001).
    */
   registerPeerInfo(pubkeyHex: string, peer_id: string, multiaddrs: string[]): void {
     this.#peerInfo.set(pubkeyHex, { peer_id, multiaddrs });
+    this.#peerInfoAnnounced.add(pubkeyHex);
   }
 
   /**
