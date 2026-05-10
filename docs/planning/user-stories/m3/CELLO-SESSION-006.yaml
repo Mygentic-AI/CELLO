@@ -80,6 +80,12 @@ behavior:
       the directory shall reject with `connection_id_required`. M3 is a hard cut for
       session establishment — the connection gate is not optional.
 
+# ─── Notes ─────────────────────────────────────────────────
+notes: |
+  All ACs with `test_type: e2e` require A and B to be separate OS processes,
+  each running their own cello-mcp binary with distinct key files, communicating
+  via relay and directory over real network connections.
+
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
@@ -138,7 +144,7 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-008
-    given: "The full M3 strangers-to-conversation flow: A and B register (REG-001), A requests connection with B (CONNREQ-002), B accepts (open policy), A initiates session (this story), A sends a message, B receives it"
+    given: "The full M3 strangers-to-conversation flow: A and B register (REG-001), A requests connection with B (CONNREQ-002), B accepts (open policy), A initiates session (this story), A sends a message, B receives it; A and B are separate OS processes with distinct key files; relay and directory are separate OS processes"
     when: "The complete flow executes"
     then: >
       Every step succeeds; the message B receives has a valid signature, matching
