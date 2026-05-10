@@ -1,5 +1,14 @@
 export type { KeyProvider, PublicKey, Signature, KeyFileCorruptError } from "./types.js";
 export { InMemoryKeyProvider, FileKeyProvider, generateKeypair, verify } from "./ed25519.js";
+export type { MlDsaPublicKey, MlDsaSignature, MlDsaKeyPair, MlDsaKeyProvider } from "./ml-dsa.js";
+export {
+  InMemoryMlDsaKeyProvider,
+  FileMlDsaKeyProvider,
+  mlDsaKeygen,
+  mlDsaSign,
+  mlDsaVerify,
+  mlDsaEnsureLoaded,
+} from "./ml-dsa.js";
 export { hash, msgLeafHash, nodeHash, ctrlLeafHash } from "./hashing.js";
 export type { MerkleTree, LeafInput } from "./merkle.js";
 export { buildMerkleTree, merkleRoot, inclusionProof, verifyInclusion } from "./merkle.js";

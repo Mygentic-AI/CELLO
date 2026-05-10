@@ -121,6 +121,9 @@ importers:
       '@noble/hashes':
         specifier: 2.2.0
         version: 2.2.0
+      '@oqs/liboqs-js':
+        specifier: ^0.15.1
+        version: 0.15.1
 
   packages/directory:
     dependencies:
@@ -867,6 +870,11 @@ packages:
   '@opentelemetry/semantic-conventions@1.40.0':
     resolution: {integrity: sha512-cifvXDhcqMwwTlTK04GBNeIe7yyo28Mfby85QXFe1Yk8nmi36Ab/5UQwptOx84SsoGNRg+EVSjwzfSZMy6pmlw==}
     engines: {node: '>=14'}
+
+  '@oqs/liboqs-js@0.15.1':
+    resolution: {integrity: sha512-nt1M2CuI4JC1FGoLeD0771C/BcisCuJqh8o/54dcUY0nU88Bf7Qv8vF05SA+wLAVf8UTuZD/l6FlS2LI8NjGbg==}
+    engines: {node: '>=22.0.0'}
+    hasBin: true
 
   '@phc/format@1.0.0':
     resolution: {integrity: sha512-m7X9U6BG2+J+R1lSOdCiITLLrxm+cWlNI3HUFA92oLO77ObGNzaKdh8pMLqdZcshtkKuV84olNNXDfMc4FezBQ==}
@@ -3769,6 +3777,8 @@ snapshots:
 
   '@opentelemetry/semantic-conventions@1.40.0':
     optional: true
+
+  '@oqs/liboqs-js@0.15.1': {}
 
   '@phc/format@1.0.0':
     optional: true
