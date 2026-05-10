@@ -52,8 +52,11 @@ Read the full process: `docs/planning/day-0-agent-driven-development-plan.md`
 
 ## The Five Phases — In Order, Always
 
-### Phase S — Specification (already done for M0)
+### Phase S — Specification
+
 User stories exist in `docs/planning/user-stories/`. Read the full YAML before writing a single line of code or test. Every AC maps 1:1 to a test case.
+
+**Stories must describe production behavior, not test-harness behavior.** If a story says "runs in-process" or "uses stubs," the implementation will work in tests and fail in production. Every AC must be satisfiable by separate processes communicating over real network connections. When writing or reviewing a story, ask: "Would this AC pass if the participants were in different processes on different machines?" If not, the story is underspecified.
 
 ### Phase P — Pseudocode (MANDATORY before coding)
 Before writing any implementation:
@@ -107,17 +110,7 @@ Step 6 — Commit:            Story ID in commit message
 
 ### Milestone Close Gate: Live Smoke Test
 
-**No milestone is closed until a live multi-process smoke test passes.**
-
-In-process Vitest tests prove protocol correctness. They do NOT prove that separate processes can actually communicate — different peer IDs, different key files, real TCP connections, real Noise handshakes, real CBOR over the wire.
-
-For any milestone that introduces or modifies inter-process communication (M1+):
-1. Start relay and directory as separate OS processes
-2. Start two agent sessions (separate MCP server processes, separate key files)
-3. Execute the milestone's claimed capability end-to-end (e.g., "two agents exchange a FROST-signed message")
-4. The capability must succeed without manual intervention beyond initial setup
-
-If the live test fails, the milestone is not done — regardless of how many Vitest tests pass. This gate exists because M2 shipped with 492 passing tests and was completely non-functional in production due to bugs that only manifest across process boundaries (missing protocol steps, unstable peer IDs, unconfigured pubkeys).
+**No milestone is closed until a live multi-process smoke test passes.** Start relay, directory, and two agent sessions as separate OS processes. Execute the milestone's claimed capability. If it fails, the milestone is not done — regardless of how many Vitest tests pass.
 
 **Step 5 — Code Review is mandatory.** After each phase (P pseudocode, A architecture, R implementation) dispatch a `feature-dev:code-reviewer` agent against what was just produced. Do not skip this for "simple" changes. The review agent must check:
 - Implementation matches the ACs exactly (no extra, no missing)
