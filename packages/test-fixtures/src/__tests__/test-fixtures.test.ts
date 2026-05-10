@@ -242,12 +242,18 @@ describe("AC-010: named policy constants satisfy ConnectionPolicy type", () => {
   it("REQUIRES_1_ENDORSEMENT has exactly one requirement with min_count: 1", () => {
     const p: ConnectionPolicy = REQUIRES_1_ENDORSEMENT;
     expect(p.requirements).toHaveLength(1);
-    expect(p.requirements[0]).toMatchObject({ signal: "endorsement_count", min_count: 1 });
+    expect(p.requirements[0]).toMatchObject({
+      signal_type: "endorsement",
+      condition: { type: "min_count", count: 1 },
+    });
   });
 
   it("REQUIRES_PSEUDONYM_7_DAYS has exactly one requirement with min_age_days: 7", () => {
     const p: ConnectionPolicy = REQUIRES_PSEUDONYM_7_DAYS;
     expect(p.requirements).toHaveLength(1);
-    expect(p.requirements[0]).toMatchObject({ signal: "pseudonym_age", min_age_days: 7 });
+    expect(p.requirements[0]).toMatchObject({
+      signal_type: "pseudonym_age",
+      condition: { type: "min_age_days", days: 7 },
+    });
   });
 });

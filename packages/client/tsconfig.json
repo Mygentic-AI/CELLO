@@ -8,6 +8,7 @@
   "references": [
     { "path": "../crypto" },
     { "path": "../protocol-types" },
+    { "path": "../test-fixtures" },
     { "path": "../transport" },
     { "path": "../directory" },
     { "path": "../relay" }

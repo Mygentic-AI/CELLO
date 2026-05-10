@@ -32,6 +32,7 @@
   "devDependencies": {
     "@claude-flow/testing": "*",
     "@cello/directory": "workspace:*",
-    "@cello/relay": "workspace:*"
+    "@cello/relay": "workspace:*",
+    "@cello/test-fixtures": "workspace:*"
   }
 }

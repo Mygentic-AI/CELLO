@@ -149,9 +149,23 @@ export function encodeNotAuthenticated(frame: NotAuthenticated): Uint8Array {
   return ENC.encode({ type: frame.type });
 }
 
+// ─── REG-001: Registration frame encoders ────────────────────────────────────
+
+import type { RegisterSuccess, RegisterError } from "@cello/protocol-types";
+
+export function encodeRegisterSuccess(frame: RegisterSuccess): Uint8Array {
+  return ENC.encode({ type: frame.type, agent_id: frame.agent_id, primary_pubkey: frame.primary_pubkey });
+}
+
+export function encodeRegisterError(frame: RegisterError): Uint8Array {
+  return ENC.encode({ type: frame.type, reason: frame.reason });
+}
+
 // ─── Decode (client → directory) ─────────────────────────────────────────────
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce;
+import type { RegisterRequest, DkgComplete } from "@cello/protocol-types";
+
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -206,6 +220,20 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     return { type: "peer_info_announce", peer_id, multiaddrs };
   }
 
+  if (o["type"] === "register_request") {
+    const phone_stub = typeof o["phone_stub"] === "string" ? o["phone_stub"] : null;
+    const k_local_pubkey = typeof o["k_local_pubkey"] === "string" ? o["k_local_pubkey"] : null;
+    const ml_dsa_pubkey = typeof o["ml_dsa_pubkey"] === "string" ? o["ml_dsa_pubkey"] : null;
+    if (phone_stub === null || k_local_pubkey === null || ml_dsa_pubkey === null) return null;
+    return { type: "register_request", phone_stub, k_local_pubkey, ml_dsa_pubkey };
+  }
+
+  if (o["type"] === "dkg_complete") {
+    const primary_pubkey = typeof o["primary_pubkey"] === "string" ? o["primary_pubkey"] : null;
+    if (primary_pubkey === null) return null;
+    return { type: "dkg_complete", primary_pubkey };
+  }
+
   return null;
 }
 
@@ -222,7 +250,9 @@ export type OutboundSignalingFrame =
   | SessionRequestError
   | NotAuthenticated
   | SealVerified
-  | SessionFrostSealed;
+  | SessionFrostSealed
+  | RegisterSuccess
+  | RegisterError;
 
 /** Decode a frame sent by the directory (used in tests to inspect what was sent). */
 export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignalingFrame | null {
@@ -410,13 +440,34 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       reason !== "frost_signer_not_configured" &&
       reason !== "directory_below_threshold" &&
       reason !== "ceremony_conflict" &&
-      reason !== "peer_not_registered"
+      reason !== "peer_not_registered" &&
+      reason !== "not_registered"
     ) return null;
     return { type: "session_request_error", reason };
   }
 
   if (o["type"] === "not_authenticated") {
     return { type: "not_authenticated" };
+  }
+
+  if (o["type"] === "register_success") {
+    const agent_id = typeof o["agent_id"] === "string" ? o["agent_id"] : null;
+    const primary_pubkey = typeof o["primary_pubkey"] === "string" ? o["primary_pubkey"] : null;
+    if (!agent_id || !primary_pubkey) return null;
+    return { type: "register_success" as const, agent_id, primary_pubkey };
+  }
+
+  if (o["type"] === "register_error") {
+    const reason = o["reason"];
+    if (
+      reason !== "already_registered" &&
+      reason !== "phone_already_claimed" &&
+      reason !== "invalid_verification" &&
+      reason !== "dkg_failed" &&
+      reason !== "not_authenticated" &&
+      reason !== "dkg_verification_failed"
+    ) return null;
+    return { type: "register_error" as const, reason };
   }
 
   return null;

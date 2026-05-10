@@ -16,3 +16,16 @@ export type {
   SessionAssignmentEvent,
   InitiateSessionResult,
 } from "./types.js";
+export {
+  evaluateConnectionPackage,
+  OPEN_POLICY,
+  SELECTIVE_DEFAULT,
+  CLOSED_POLICY,
+} from "./connection-policy.js";
+export type {
+  DirectoryContext,
+  SignalRequirement,
+  SignalRequirementPolicy,
+  UnmetRequirement,
+  ConnectionReport,
+} from "./connection-policy.js";

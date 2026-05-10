@@ -373,6 +373,7 @@ describe("AC-005 (L-001): transport not started returns transport_not_started ex
       closeSession() {},
       onSessionAssignment() {},
       async initiateSession() { return { ok: false as const, reason: "directory_unreachable" as const }; },
+      async register() { return { error: "not_implemented" }; },
     };
 
     const server = createMcpServer(node, clientStub as Parameters<typeof createMcpServer>[1], kp);
@@ -433,6 +434,7 @@ describe("L-003: not_available_in_m1 stub is retired", () => {
       onSessionAssignment() {},
       // This is the real initiateSession — returns directory_unreachable, NOT not_available_in_m1
       async initiateSession() { return { ok: false as const, reason: "directory_unreachable" as const }; },
+      async register() { return { error: "not_implemented" }; },
     };
 
     const server = createMcpServer(node, client as Parameters<typeof createMcpServer>[1], kp);

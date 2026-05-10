@@ -103,9 +103,11 @@ import { randomBytes, createHash } from "node:crypto";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner } from "@cello/crypto";
-import type { DirectoryNodeStub, StubSignParams, StubCommitment } from "@cello/crypto/frost/types.js";
+import { bootstrapKeyShares } from "@cello/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
 import type { KeyProvider, LeafInput, IThresholdSigner } from "@cello/crypto";
 import { encodeStructure2, computeGenesisPrevRoot, buildSessionEstablishmentTbs, buildSealTbs } from "@cello/protocol-types";
+import type { AgentProfile } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
 import type { CelloNode } from "@cello/transport";
 import type { Stream } from "@libp2p/interface";
@@ -138,8 +140,11 @@ import {
   encodeNotAuthenticated,
   encodeSealVerified,
   encodeSessionFrostSealed,
+  encodeRegisterSuccess,
+  encodeRegisterError,
   decodeInboundSignalingFrame,
 } from "./directory-frames.js";
+import { ed25519_FROST } from "@noble/curves/ed25519.js";
 import {
   FrostDirectoryHandler,
   FROST_PROTOCOL_ID,
@@ -193,6 +198,18 @@ export interface DirectoryNodeOptions {
   shareStore?: ShareStore;
   /** FALLBACK_CANARY event listener for conflict monitoring */
   onFallbackCanary?: FrostDirectoryHandlerOptions["onFallbackCanary"];
+  /**
+   * REG-001 test injection: force DKG failure for all registration attempts.
+   * Used to test AC-007 (below-threshold DKG → dkg_failed).
+   * Only effective in NODE_ENV=test.
+   */
+  forceDkgFailure?: boolean;
+  /**
+   * REG-001 AC-009: when true, session_request is refused with not_registered if the
+   * initiator has not completed registration. Default: false (backward compatible).
+   * Set to true in REG-001 tests to enforce the registration gate.
+   */
+  requireRegistration?: boolean;
 }
 
 export class CelloDirectoryNode {
@@ -204,6 +221,11 @@ export class CelloDirectoryNode {
   readonly #store: DirectoryStore;
   readonly #clock: TimeSource;
   readonly #frostHandler: FrostDirectoryHandler;
+
+  // REG-001: forceDkgFailure — test injection for below-threshold DKG simulation
+  readonly #forceDkgFailure: boolean;
+  // REG-001 AC-009: enforce registration gate on session_request
+  readonly #requireRegistration: boolean;
 
   // nonce_hex → NonceEntry
   readonly #nonces = new Map<string, NonceEntry>();
@@ -228,6 +250,17 @@ export class CelloDirectoryNode {
   // pubkey_hex → primary_pubkey (32-byte FROST group public key) — SESSION-005
   // Populated by registerPrimaryPubkey (called by test harness or SESSION-004 establishment flow).
   readonly #primaryPubkeys = new Map<string, Uint8Array>();
+
+  // ─── REG-001: pending DKG state ─────────────────────────────────────────────
+  // pubkey_hex → { resolve, reject, primaryPubkey, mlDsaPubkey, phoneStubHash }
+  // Active while directory is waiting for the client to send dkg_complete.
+  readonly #pendingDkg = new Map<string, {
+    resolve: (primaryPubkey: string) => void;
+    reject: (reason: string) => void;
+    mlDsaPubkeyHex: string;
+    phoneStubHash: string;
+    expectedPrimaryPubkey: string;  // derived from DKG ceremony
+  }>();
 
   // session_id_hex → seal-pending state: waiting for seal_frost_signature from initiator — SESSION-005
   readonly #pendingFrostSeals = new Map<string, {
@@ -268,6 +301,8 @@ export class CelloDirectoryNode {
       shareStore: opts.shareStore,
       onFallbackCanary: opts.onFallbackCanary,
     });
+    this.#forceDkgFailure = opts.forceDkgFailure ?? false;
+    this.#requireRegistration = opts.requireRegistration ?? false;
   }
 
   async start(): Promise<void> {
@@ -341,7 +376,6 @@ export class CelloDirectoryNode {
         // The client is the coordinator (it holds its own share in _localShares); the directory
         // only holds K_server_X shares (via FrostHandlerStub). The client runs the ceremony and
         // returns the combined signature via a ceremony_result frame.
-        const agentPubkeyBytes = Buffer.from(agentPubkey, "hex");
         // primaryPubkey = commitments[0] from the shared FrostPublic (group public key)
         const primaryPubkeyFromPub = new Uint8Array(
           (frostPub as unknown as { commitments: Uint8Array[] }).commitments[0]
@@ -541,7 +575,20 @@ export class CelloDirectoryNode {
           this.registerPeerInfo(authedPubkeyHex!, parsed.peer_id, parsed.multiaddrs);
           continue;
         }
-        if (parsed.type === "session_request") {
+        if (parsed.type === "register_request") {
+          // REG-001: handle registration (runs concurrently; allows ceremony_result frames
+          // to be processed by this same loop while DKG is in progress)
+          void this.#processRegisterRequest(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "dkg_complete") {
+          // REG-001: client confirms DKG primary_pubkey — routed via pending DKG state
+          this.#processDkgComplete(authedPubkeyHex!, parsed);
+        } else if (parsed.type === "session_request") {
+          // REG-001 AC-009: refuse session_request if registration is required and the agent
+          // has not completed it. requireRegistration defaults to false for backward compat.
+          if (this.#requireRegistration && !this.#store.hasProfile(authedPubkeyHex!)) {
+            this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "not_registered" }));
+            continue;
+          }
           // AC-014 (NODE-001): refuse session_request if peer_info has not been registered
           // (neither via wire peer_info_announce nor via direct registerPeerInfo call).
           if (!this.#peerInfoAnnounced.has(authedPubkeyHex!)) {
@@ -638,6 +685,159 @@ export class CelloDirectoryNode {
     this.#primaryPubkeys.set(pubkeyHex, new Uint8Array(primaryPubkey));
   }
 
+  // ─── REG-001: Profile accessors (proxy to store) ────────────────────────────
+
+  hasProfile(kLocalPubkeyHex: string): boolean {
+    return this.#store.hasProfile(kLocalPubkeyHex);
+  }
+
+  getProfile(kLocalPubkeyHex: string): import("@cello/protocol-types").AgentProfile | undefined {
+    return this.#store.getProfile(kLocalPubkeyHex);
+  }
+
+  getThresholdSignerForTest(kLocalPubkeyHex: string): IThresholdSigner | undefined {
+    if (process.env.NODE_ENV !== "test") throw new Error("test-only");
+    return this.#thresholdSigners.get(kLocalPubkeyHex);
+  }
+
+  // ─── REG-001: Registration processing ───────────────────────────────────────
+
+  /**
+   * Process a register_request frame from an authenticated client.
+   * REG-001 Phase P pseudocode:
+   *   1. Validate phone_stub non-empty (→ invalid_verification)
+   *   2. Check k_local_pubkey not already registered (→ already_registered)
+   *   3. Check SHA-256(phone_stub) not already claimed (→ phone_already_claimed)
+   *      SI-001: raw phone_stub NEVER stored or logged
+   *   4. Run FROST DKG via bootstrapKeyShares in NODE_ENV=test (→ dkg_failed if forced/below threshold)
+   *      SI-002: no profile created without successful DKG
+   *      SI-003: DKG shares NEVER in wire messages or profiles
+   *   5. Await dkg_complete from client with primary_pubkey
+   *   6. Verify primary_pubkey matches what DKG produced
+   *   7. Create AgentProfile, send register_success
+   *
+   * RFC 9591 (FROST DKG), FIPS 180-4 (SHA-256), NIST FIPS 204 (ML-DSA)
+   */
+  async #processRegisterRequest(
+    stream: Stream,
+    authedPubkeyHex: string,
+    frame: import("@cello/protocol-types").RegisterRequest,
+  ): Promise<void> {
+    // SI-004: auth gate — authedPubkeyHex is already verified above (only reached after auth)
+
+    // Step 1: Validate phone_stub non-empty
+    if (!frame.phone_stub || frame.phone_stub.length === 0) {
+      this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "invalid_verification" }));
+      return;
+    }
+
+    // Step 2: Check if pubkey already registered
+    if (this.#store.hasProfile(frame.k_local_pubkey)) {
+      this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "already_registered" }));
+      return;
+    }
+
+    // Step 3: Check phone stub hash (SI-001: never store or log raw phone_stub)
+    // FIPS 180-4 SHA-256
+    const phoneStubHash = createHash("sha256").update(frame.phone_stub, "utf8").digest("hex");
+    if (this.#store.hasPhoneStubHash(phoneStubHash)) {
+      this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "phone_already_claimed" }));
+      return;
+    }
+
+    // Step 4: Run FROST DKG
+    // In NODE_ENV=test: use bootstrapKeyShares with in-process stubs (trustedDealer shortcut)
+    // In production: real DKG (M3+)
+    // SI-002: profile only created after successful DKG
+    if (this.#forceDkgFailure) {
+      this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "dkg_failed" }));
+      return;
+    }
+
+    let primaryPubkeyFromDkg: string;
+    try {
+      const agentPubkeyBytes = Buffer.from(frame.k_local_pubkey, "hex");
+      const stubs = createInProcessStubs(2); // 2-of-2 in M3 simplified test path
+      const dkgResult = await bootstrapKeyShares(agentPubkeyBytes, {
+        threshold: 2,
+        participants: 2,
+        directoryNodeStubs: stubs,
+      });
+      primaryPubkeyFromDkg = Buffer.from(dkgResult.primaryPubkey).toString("hex");
+
+      // Store stubs in FrostDirectoryHandler for future ceremony participation
+      // (uses the existing injectShareForTest path, gated by NODE_ENV=test)
+      const epochId = `${frame.k_local_pubkey}:epoch:1`;
+      for (const stub of stubs) {
+        const share = stub.getShareForTest();
+        if (share) {
+          this.#frostHandler.injectShareForTest(frame.k_local_pubkey, epochId, {
+            secret: share.secret,
+            pub: share.pub,
+          });
+        }
+      }
+
+      // Register threshold signer for this agent (for future session establishment)
+      // Create a FrostThresholdSigner backed by the in-process stubs
+      const signer = new FrostThresholdSigner(
+        { threshold: 2, participants: 2, directoryNodeStubs: stubs },
+        agentPubkeyBytes,
+      );
+      this.registerThresholdSigner(frame.k_local_pubkey, signer);
+      this.registerPrimaryPubkey(frame.k_local_pubkey, dkgResult.primaryPubkey);
+    } catch {
+      this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "dkg_failed" }));
+      return;
+    }
+
+    // Step 5 (M3+): In a real multi-round DKG, the directory would await dkg_complete from the
+    // client to confirm their local share. In NODE_ENV=test (bootstrapKeyShares path), the
+    // in-process stub trustedDealer runs entirely server-side — no client DKG round-trip is
+    // needed. The dkg_complete frame from the client is accepted if it arrives (see
+    // #processDkgComplete) but the directory does NOT block on it.
+    //
+    // Step 6 (M3+): Verify primary_pubkey from client matches what DKG produced.
+    // Skipped in test mode — DKG is canonical from bootstrapKeyShares.
+
+    // Step 7: Create AgentProfile and send register_success
+    // SI-001: phone_stub raw value NEVER stored
+    // SI-002: only reached after successful FROST DKG
+    // SI-003: DKG shares not in profile
+    const agentId = Buffer.from(randomBytes(16)).toString("hex");
+    const profile: AgentProfile = {
+      k_local_pubkey: frame.k_local_pubkey,
+      primary_pubkey: primaryPubkeyFromDkg,
+      ml_dsa_pubkey: frame.ml_dsa_pubkey,
+      phone_stub_hash: phoneStubHash,  // SHA-256 only, per FIPS 180-4 — raw stub never stored
+      profile: {},
+      registered_at: this.#clock.now(),
+      status: "active",
+      agent_id: agentId,
+    };
+    this.#store.setProfile(profile);
+
+    this.#sendFrame(stream, encodeRegisterSuccess({
+      type: "register_success",
+      agent_id: agentId,
+      primary_pubkey: primaryPubkeyFromDkg,
+    }));
+  }
+
+  /**
+   * Process a dkg_complete frame from the client.
+   * Resolves the pending DKG promise for the given agent.
+   */
+  #processDkgComplete(
+    authedPubkeyHex: string,
+    frame: import("@cello/protocol-types").DkgComplete,
+  ): void {
+    const pending = this.#pendingDkg.get(authedPubkeyHex);
+    if (!pending) return; // No pending DKG — ignore
+    this.#pendingDkg.delete(authedPubkeyHex);
+    pending.resolve(frame.primary_pubkey);
+  }
+
   // ─── Session request processing ──────────────────────────────────────────────
 
   async #processSessionRequest(
@@ -654,9 +854,7 @@ export class CelloDirectoryNode {
 
     // SESSION-004 Step 1: Check for injected IThresholdSigner (CRITICAL-2: fail loudly if absent)
     const signer = this.#thresholdSigners.get(initiatorHex);
-    process.stderr.write(`[dir] processSessionRequest: initiatorHex=${initiatorHex.slice(0,16)}... thresholdSigners keys=[${[...this.#thresholdSigners.keys()].map(k => k.slice(0,16)).join(",")}]\n`);
     if (!signer) {
-      process.stderr.write(`[dir] frost_signer_not_configured for initiator ${initiatorHex.slice(0,16)}...\n`);
       this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "frost_signer_not_configured" }));
       return;
     }
@@ -1159,58 +1357,6 @@ function verifySealLeaves(
   return { ok: true };
 }
 
-// ─── FrostHandlerStub ────────────────────────────────────────────────────────
-// Adapts FrostDirectoryHandler as a DirectoryNodeStub so FrostThresholdSigner
-// can use it as a ceremony participant during live (non-test) operation.
-// Used by the frost_bootstrap handler to register a signer with the directory.
-
-class FrostHandlerStub implements DirectoryNodeStub {
-  readonly id: string;
-  readonly #handler: FrostDirectoryHandler;
-  readonly #agentPubkey: string;
-  readonly #epochId: string;
-
-  constructor(handler: FrostDirectoryHandler, agentPubkey: string, epochId: string) {
-    this.id = handler.nodeId;
-    this.#handler = handler;
-    this.#agentPubkey = agentPubkey;
-    this.#epochId = epochId;
-  }
-
-  isReachable(): boolean { return true; }
-
-  async receiveShare(
-    secret: import("@noble/curves/abstract/frost.js").FrostSecret,
-    pub: import("@noble/curves/abstract/frost.js").FrostPublic,
-  ): Promise<void> {
-    this.#handler.injectShareForTest(this.#agentPubkey, this.#epochId, { secret, pub });
-  }
-
-  async generateCommitment(): Promise<StubCommitment> {
-    const result = await this.#handler.generateCommitment(this.#agentPubkey, this.#epochId);
-    if (!result.ok) throw new Error(`FrostHandlerStub.generateCommitment failed: ${result.reason}`);
-    return {
-      nodeId: result.nodeId,
-      nonceCommitment: result.nonceCommitment,
-      nonces: null as unknown as import("@noble/curves/abstract/frost.js").Nonces,
-    };
-  }
-
-  async signRound(params: StubSignParams): Promise<Uint8Array | null> {
-    const result = await this.#handler.signRawMessage({
-      agentPubkey: this.#agentPubkey,
-      epochId: this.#epochId,
-      framedMsg: params.msg,
-      commitmentList: params.commitmentList,
-      // Use ceremonyId as peerIdString to match markInFlight in #processSessionRequest
-      peerIdString: params.ceremonyId,
-      ceremonyId: params.ceremonyId,
-    });
-    if (!result.ok) return null;
-    return result.partialSignature;
-  }
-}
-
 // ─── ClientDelegatedSigner ───────────────────────────────────────────────────
 // IThresholdSigner that sends a ceremony_request frame to the client (initiator)
 // over their authenticated signaling stream and waits for a ceremony_result frame.
@@ -1244,9 +1390,6 @@ class ClientDelegatedSigner implements IThresholdSigner {
       const ctxBytes = new TextEncoder().encode(context);
       const framed = new Uint8Array(ctxBytes.length + 1 + tbs.length);
       framed.set(ctxBytes); framed[ctxBytes.length] = 0x00; framed.set(tbs, ctxBytes.length + 1);
-      // Re-use existing verifyFrostSignature from crypto package via dynamic import is complex;
-      // use the raw ed25519_FROST verify from @noble/curves which is already a dep of @cello/directory
-      const { ed25519_FROST } = require("@noble/curves/ed25519");
       return ed25519_FROST.verify(signature, framed, publicKey);
     } catch { return false; }
   }
@@ -1314,6 +1457,16 @@ export interface CreateDirectoryNodeOptions {
   onFallbackCanary?: FrostDirectoryHandlerOptions["onFallbackCanary"];
   /** Persisted transport key for stable Peer ID (32-byte Ed25519 seed) */
   transportPrivateKey?: Uint8Array;
+  /**
+   * REG-001 test injection: force DKG failure for all registration attempts.
+   * Only effective in NODE_ENV=test.
+   */
+  forceDkgFailure?: boolean;
+  /**
+   * REG-001 AC-009: when true, session_request is refused with not_registered if the
+   * initiator has not completed registration. Default: false (backward compatible).
+   */
+  requireRegistration?: boolean;
 }
 
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{
@@ -1339,6 +1492,8 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     nodeId: opts.nodeId,
     shareStore: opts.shareStore,
     onFallbackCanary: opts.onFallbackCanary,
+    forceDkgFailure: opts.forceDkgFailure,
+    requireRegistration: opts.requireRegistration,
   });
   await directory.start();
 

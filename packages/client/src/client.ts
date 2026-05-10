@@ -115,13 +115,13 @@ import {
   computeGenesisPrevRoot, encodeSealPayload, buildSessionEstablishmentTbs, buildSealTbs,
 } from "@cello/protocol-types";
 import type { Structure2 } from "@cello/protocol-types";
-import { verify, buildMerkleTree, merkleRoot, verifyFrostSignature, CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto";
+import { verify, buildMerkleTree, merkleRoot, verifyFrostSignature, CONTEXT_SESSION_ESTABLISHMENT, mlDsaKeygen, FileMlDsaKeyProvider } from "@cello/crypto";
 import type { LeafInput, IThresholdSigner } from "@cello/crypto";
 import { CELLO_PROTOCOL_ID, CELLO_CONTENT_PROTOCOL_ID } from "@cello/transport";
 import type { KeyProvider } from "@cello/crypto";
 import type { CelloNode } from "@cello/transport";
 import type { Stream } from "@libp2p/interface";
-import type { SessionAssignment } from "@cello/protocol-types";
+import type { SessionAssignment, RegistrationState } from "@cello/protocol-types";
 import type {
   CelloClient, PeerEntry, ReceivedEnvelope, SendResult, SessionRecord,
   ReceiveAssignmentResult, ReceivedMessage, SendMessageResult, SessionAssignmentEvent,
@@ -338,6 +338,17 @@ class CelloClientImpl implements CelloClient {
   // SESSION-005: track the primary_pubkey for this client (set after bootstrapKeyShares)
   #myPrimaryPubkey: Uint8Array | null = null;
 
+  // ─── REG-001: Registration state ────────────────────────────────────────────
+
+  /** Cached registration state — set after a successful register() call. */
+  #registrationState: RegistrationState | null = null;
+
+  /** Pending resolver for register_success / register_error from directory. */
+  #pendingRegisterResolve: ((frame: Record<string, unknown>) => void) | null = null;
+
+  /** Optional path for persisting the ML-DSA keypair (FileMlDsaKeyProvider). REG-001 AC-010. */
+  readonly #mlDsaKeyFile: string | undefined;
+
   constructor(
     node: CelloNode,
     keyProvider: KeyProvider,
@@ -347,6 +358,7 @@ class CelloClientImpl implements CelloClient {
     thresholdSigner?: IThresholdSigner,
     sealFrostTimeoutMs = DEFAULT_SEAL_FROST_TIMEOUT_MS,
     directoryEndpoint: { peer_id: string; multiaddrs: string[] } | null = null,
+    mlDsaKeyFile?: string,
   ) {
     this.#node = node;
     this.#keyProvider = keyProvider;
@@ -356,6 +368,7 @@ class CelloClientImpl implements CelloClient {
     this.#thresholdSigner = thresholdSigner;
     this.#sealFrostTimeoutMs = sealFrostTimeoutMs;
     this.#directoryEndpoint = directoryEndpoint;
+    this.#mlDsaKeyFile = mlDsaKeyFile;
   }
 
   /**
@@ -2253,6 +2266,97 @@ class CelloClientImpl implements CelloClient {
     }
   }
 
+  // ─── REG-001: Agent registration ─────────────────────────────────────────────
+
+  /**
+   * Register this agent with the directory.
+   *
+   * REG-001 Phase P pseudocode:
+   *   1. If already registered, return { error: 'already_registered' }
+   *   2. Generate (or load) ML-DSA-44 keypair (NIST FIPS 204)
+   *      - If #mlDsaKeyFile is set: FileMlDsaKeyProvider.load(path) — persists with 0o600
+   *      - Otherwise: mlDsaKeygen() → InMemoryMlDsaKeyProvider
+   *   3. Open (or reuse) persistent signaling stream (auth handled inside)
+   *   4. Get myPubkeyHex (Ed25519 K_local)
+   *   5. Send register_request { phone_stub, k_local_pubkey, ml_dsa_pubkey } on signaling stream
+   *   6. Await register_success or register_error (routed by #runPersistentSignalingReader)
+   *      - register_error → return { error: reason }
+   *      - register_success → build RegistrationState and cache it
+   *   7. Return RegistrationState
+   *
+   * Crypto refs: NIST FIPS 204 (ML-DSA-44), RFC 9591 (FROST), FIPS 180-4 (SHA-256)
+   */
+  async register(phoneStub: string): Promise<RegistrationState | { error: string }> {
+    // Step 1: already registered — return error
+    if (this.#registrationState) {
+      return { error: "already_registered" };
+    }
+
+    // Step 2: generate or load ML-DSA-44 keypair (NIST FIPS 204)
+    const mlDsaProvider = this.#mlDsaKeyFile
+      ? await FileMlDsaKeyProvider.load(this.#mlDsaKeyFile)
+      : await mlDsaKeygen();
+    const mlDsaPubkey = await mlDsaProvider.getPublicKey();
+    const mlDsaPubkeyHex = Buffer.from(mlDsaPubkey).toString("hex");
+
+    // Step 3: open persistent signaling stream (handles auth including auth_ok wait)
+    const opened = await this.#openPersistentSignalingStream();
+    if (!opened || !this.#persistentSignalingStream) {
+      return { error: "directory_unreachable" };
+    }
+
+    // Step 4: get K_local pubkey hex
+    if (!this.#myPubkeyHex) {
+      const pubkey = await this.#keyProvider.getPublicKey();
+      this.#myPubkeyHex = Buffer.from(pubkey).toString("hex");
+    }
+    const kLocalPubkeyHex = this.#myPubkeyHex;
+
+    // Step 5: send register_request
+    const regRequestFrame = CBOR_ENC.encode({
+      type: "register_request",
+      phone_stub: phoneStub,
+      k_local_pubkey: kLocalPubkeyHex,
+      ml_dsa_pubkey: mlDsaPubkeyHex,
+    }) as Uint8Array;
+    this.#persistentSignalingStream.send(lp.encode.single(regRequestFrame));
+
+    // Step 6: await register_success or register_error (routed by #runPersistentSignalingReader)
+    const REGISTER_TIMEOUT_MS = 15_000;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const responseWithTimeout = await Promise.race<Record<string, unknown>>([
+      new Promise<Record<string, unknown>>((resolve) => {
+        this.#pendingRegisterResolve = resolve;
+      }),
+      new Promise<Record<string, unknown>>((resolve) => {
+        timeoutHandle = setTimeout(() => {
+          this.#pendingRegisterResolve = null;
+          resolve({ type: "register_error", reason: "timeout" });
+        }, REGISTER_TIMEOUT_MS);
+      }),
+    ]);
+    clearTimeout(timeoutHandle);
+
+    if (responseWithTimeout["type"] !== "register_success") {
+      const reason = (responseWithTimeout["reason"] as string | undefined) ?? "unknown";
+      return { error: reason };
+    }
+
+    // Step 7: build RegistrationState and cache
+    const agentId = responseWithTimeout["agent_id"] as string;
+    const primaryPubkey = responseWithTimeout["primary_pubkey"] as string;
+
+    const state: RegistrationState = {
+      agent_id: agentId,
+      primary_pubkey: primaryPubkey,
+      ml_dsa_pubkey: mlDsaPubkeyHex,
+      registered_at: Date.now(),
+      status: "active",
+    };
+    this.#registrationState = state;
+    return state;
+  }
+
   async #handleInbound(stream: Stream): Promise<void> {
     // Read one LP frame, with a 5s wall-clock timeout as a safety net.
     // DecoderOptions has no signal field — timeout is enforced by racing the
@@ -2722,6 +2826,13 @@ class CelloClientImpl implements CelloClient {
           // Directory asks the client to coordinate a FROST ceremony.
           // Client runs participateInCeremony and sends ceremony_result back.
           void this.#handleCeremonyRequest(stream, frame);
+        } else if (frame["type"] === "register_success" || frame["type"] === "register_error") {
+          // REG-001: route registration response to pending register() caller.
+          const resolve = this.#pendingRegisterResolve;
+          if (resolve) {
+            this.#pendingRegisterResolve = null;
+            resolve(frame);
+          }
         }
       }
     } catch { /* stream closed */ }
@@ -2730,6 +2841,13 @@ class CelloClientImpl implements CelloClient {
     if (this.#persistentSignalingStream === stream) {
       this.#persistentSignalingStream = null;
       this.#persistentSignalingIter = null;
+    }
+
+    // If a register() call is pending, unblock it with a synthetic error
+    const regResolve = this.#pendingRegisterResolve;
+    if (regResolve) {
+      this.#pendingRegisterResolve = null;
+      regResolve({ type: "register_error", reason: "stream_closed" });
     }
 
     // If a session_request is pending, unblock it with a synthetic error
@@ -2867,6 +2985,8 @@ export function createClient(
     sealFrostTimeoutMs?: number;
     /** ADAPTER-003: directory endpoint for initiateSession. */
     directoryEndpoint?: { peer_id: string; multiaddrs: string[] };
+    /** REG-001: path for persisting ML-DSA-44 keypair. If set, FileMlDsaKeyProvider.load() is used. */
+    mlDsaKeyFile?: string;
   }
 ): CelloClient & {
   sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
@@ -2889,6 +3009,7 @@ export function createClient(
     opts?.thresholdSigner,
     opts?.sealFrostTimeoutMs,
     opts?.directoryEndpoint ?? null,
+    opts?.mlDsaKeyFile,
   ) as CelloClient & {
     sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
     openRawStream(peerPubkeyHex: string): Promise<Stream>;

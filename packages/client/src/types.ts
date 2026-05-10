@@ -184,6 +184,18 @@ export type InitiateSessionResult =
 
 export interface CelloClient {
   /**
+   * Register this agent with the directory.
+   * Generates (or loads) ML-DSA-44 keypair, opens signaling stream, and completes
+   * the REG-001 registration ceremony (register_request → register_success).
+   *
+   * Returns RegistrationState on success, or { error: reason } on failure.
+   * Idempotent: second call returns { error: 'already_registered' } if already done.
+   *
+   * REG-001 AC-001, AC-002, AC-008, AC-010.
+   */
+  register(phoneStub: string): Promise<import("@cello/protocol-types").RegistrationState | { error: string }>;
+
+  /**
    * Register a peer in the local registry.
    * Called by MCP-001 cello_connect_peer after dialing succeeds.
    */

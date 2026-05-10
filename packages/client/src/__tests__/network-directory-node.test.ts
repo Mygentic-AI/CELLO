@@ -130,7 +130,7 @@ describe("AC-011: NetworkDirectoryNode.receiveShare pushes share to directory", 
 
 describe("AC-012: NetworkDirectoryNode.generateCommitment returns valid commitment over wire", () => {
   it("AC-012: after bootstrap, generateCommitment returns nodeId and nonceCommitment", async () => {
-    const { agentPubkey, agentPubkeyHex, agentNode, networkNode, dirNode } = await makeHarness();
+    const { agentPubkey, agentNode, networkNode, dirNode } = await makeHarness();
     await agentNode.dial(dirNode.node.listenAddresses()[0]!);
 
     // Bootstrap via network

@@ -24,6 +24,7 @@
   },
   "devDependencies": {
     "@cello/test-fixtures": "workspace:*",
-    "@claude-flow/testing": "*"
+    "@claude-flow/testing": "*",
+    "@types/node": "^25.6.2"
   }
 }

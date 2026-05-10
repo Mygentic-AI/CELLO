@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/crypto" },
     { "path": "packages/protocol-types" },
+    { "path": "packages/test-fixtures" },
     { "path": "packages/transport" },
     { "path": "packages/client" },
     { "path": "packages/adapter-claude-code" },

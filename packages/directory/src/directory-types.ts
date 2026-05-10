@@ -170,7 +170,8 @@ export type SessionRequestErrorReason =
   | "frost_signer_not_configured"  // SESSION-004: no IThresholdSigner registered for this initiator
   | "directory_below_threshold"    // SESSION-004: FROST ceremony failed — insufficient signers
   | "ceremony_conflict"            // SESSION-004: concurrent ceremony already in-flight for this agent
-  | "peer_not_registered";         // NODE-001 AC-014: client has not sent peer_info_announce yet
+  | "peer_not_registered"          // NODE-001 AC-014: client has not sent peer_info_announce yet
+  | "not_registered";              // REG-001 AC-009: agent has not completed registration
 
 export interface SessionRequestError {
   type: "session_request_error";
@@ -180,6 +181,10 @@ export interface SessionRequestError {
 export interface NotAuthenticated {
   type: "not_authenticated";
 }
+
+// ─── REG-001: Registration frame types ────────────────────────────────────────
+
+export type { RegisterRequest, DkgComplete, RegisterSuccess, RegisterError, RegisterErrorReason } from "@cello/protocol-types";
 
 // ─── Internal directory session state ─────────────────────────────────────────
 

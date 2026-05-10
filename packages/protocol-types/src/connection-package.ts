@@ -221,30 +221,62 @@ export type PackageValidationResult =
 
 // ─── Connection policy ────────────────────────────────────────────────────────
 
+/**
+ * Condition that can be applied to a signal requirement.
+ *
+ * - min_count: the signal must meet or exceed this count
+ * - min_age_days: the signal's age must be >= this many days (boundary-inclusive)
+ * - attestation_type: all listed types must have at least one valid attestation
+ * - from_shared_contact: M6 only — unsatisfiable in M3
+ */
+export type SignalCondition =
+  | { type: "min_count"; count: number }
+  | { type: "min_age_days"; days: number }
+  | { type: "attestation_type"; required: string[] }
+  | { type: "from_shared_contact"; min: number };
+
 /** A single signal requirement that must be satisfied by an incoming package. */
 export type SignalRequirement =
-  | { signal: "endorsement_count"; min_count: number }
-  | { signal: "attestation_type"; type: string }
-  | { signal: "pseudonym_age"; min_age_days: number }
-  | { signal: "registration_age"; min_age_days: number };
+  | { signal_type: "endorsement"; condition: SignalCondition }
+  | { signal_type: "attestation"; condition: SignalCondition }
+  | { signal_type: "pseudonym_age"; condition: SignalCondition }
+  | { signal_type: "registration_age"; condition: SignalCondition };
 
 /**
  * Policy governing how the agent evaluates incoming connection requests.
  *
  * mode:
- *   'open'     — accept all packages that pass structural validation (requirements ignored)
- *   'closed'   — reject all packages
+ *   'open'      — accept all packages that pass structural validation (requirements ignored)
+ *   'closed'    — reject all packages
  *   'selective' — accept only packages that satisfy all requirements
+ *   'guarded'   — identical to 'selective' in M3; M6 adds endorsement-from-shared-contact default
  *
  * review_mode:
  *   'deterministic' — engine evaluates automatically; no agent involvement
  *   'inference'     — engine produces a ConnectionReport; agent makes the final decision
  */
 export interface ConnectionPolicy {
-  mode: "open" | "closed" | "selective";
+  mode: "open" | "closed" | "selective" | "guarded";
   review_mode: "deterministic" | "inference";
   requirements: SignalRequirement[];
   whitelist?: string[]; // pseudonym_label fast-path — auto-accept before engine runs
+}
+
+/**
+ * Context about the connection requester from the directory.
+ *
+ * Appended by the connection request flow (CONNREQ-001).
+ * In M3: conversation_count always 0, clean_close_rate always 1.0.
+ */
+export interface DirectoryContext {
+  /** Unix ms timestamp when the agent registered with the directory. */
+  registered_at: number;
+  /** If true, the agent is provisional and cannot receive connections. */
+  is_provisional: boolean;
+  /** Number of completed conversations (always 0 in M3). */
+  conversation_count: number;
+  /** Rate of clean closes (always 1.0 in M3). */
+  clean_close_rate: number;
 }
 
 // ─── Build-time error ─────────────────────────────────────────────────────────

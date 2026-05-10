@@ -18,6 +18,7 @@ import type {
   ValidatedAttestation,
   PackageValidationResult,
   ConnectionPolicy,
+  DirectoryContext,
 } from "@cello/protocol-types";
 import {
   ML_DSA_PUBKEY_BYTES,
@@ -196,12 +197,9 @@ export function buildInvalidPackage(): Extract<PackageValidationResult, { valid:
 
 // ─── DirectoryContext ─────────────────────────────────────────────────────────
 
-export interface DirectoryContext {
-  registered_at: number;
-  is_provisional: boolean;
-  conversation_count: number;
-  clean_close_rate: number;
-}
+// Re-export DirectoryContext from @cello/protocol-types — it is defined there
+// and test-fixtures simply provides a factory function.
+export type { DirectoryContext } from "@cello/protocol-types";
 
 export function makeDirectoryContext(opts: {
   registered_days_ago?: number;
@@ -280,13 +278,13 @@ export const CLOSED_POLICY: ConnectionPolicy = {
 export const REQUIRES_1_ENDORSEMENT: ConnectionPolicy = {
   mode: "selective",
   review_mode: "deterministic",
-  requirements: [{ signal: "endorsement_count", min_count: 1 }],
+  requirements: [{ signal_type: "endorsement", condition: { type: "min_count", count: 1 } }],
 };
 
 export const REQUIRES_PSEUDONYM_7_DAYS: ConnectionPolicy = {
   mode: "selective",
   review_mode: "deterministic",
-  requirements: [{ signal: "pseudonym_age", min_age_days: 7 }],
+  requirements: [{ signal_type: "pseudonym_age", condition: { type: "min_age_days", days: 7 } }],
 };
 
 export const INFERENCE_OPEN_POLICY: ConnectionPolicy = {
