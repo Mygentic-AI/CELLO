@@ -102,6 +102,14 @@ behavior:
       records the rejection reason, confirms `seal_rejected` to the relay (which retains
       state per NODE-002), and pushes `session_seal_rejected {session_id, reason}` to both
       clients.
+  - trigger: "When the directory sends `signaling_auth_ok` to a client"
+    action: >
+      the directory shall expect a `peer_info_announce { peer_id: string, multiaddrs: string[] }`
+      frame from that client before processing any `session_request` from it. On receipt of a
+      valid `peer_info_announce`, the directory shall call `registerPeerInfo(pubkeyHex, { peer_id,
+      multiaddrs })` to store the agent's dialable network location. If the client sends a
+      `session_request` before sending `peer_info_announce`, the directory shall return
+      `peer_not_registered` on the initiator's stream and shall not allocate a session_id.
   - trigger: "When a client disconnects from its signaling stream"
     action: >
       the directory shall remove the stream from its authenticated-connection registry. If
@@ -149,14 +157,15 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-005
-    given: "Two authenticated clients A and B on signaling streams"
+    given: "Two authenticated clients A and B on signaling streams, both having sent `peer_info_announce`"
     when: "A sends `session_request { target_pubkey: B_pubkey }`"
     then: >
       The directory returns a `session_assignment` frame on A's stream AND pushes a
       `session_assignment` frame to B's stream; both frames contain the same signed
       SessionAssignment record with matching session_id, relay_endpoint, and
       session_timestamp; the signature on the record verifies against the pinned
-      directory-identity pubkey
+      directory-identity pubkey; both participant entries have non-empty `peer_id` strings
+      and at least one entry in `multiaddrs`
     test_type: integration
     component_under_test: directory
 
@@ -234,6 +243,29 @@ acceptance_criteria:
     when: "A client attempts to open a stream on `/cello/relay/1.0.0` or `/cello/content/1.0.0` against the directory's Peer ID"
     then: "The stream open fails with `protocol_not_supported` — the directory does not register handlers for those protocols"
     test_type: integration
+    component_under_test: directory
+
+  - id: AC-014
+    given: "An authenticated client that has NOT yet sent a `peer_info_announce` frame"
+    when: "The client sends `session_request { target_pubkey: any_pubkey }`"
+    then: >
+      The directory returns `peer_not_registered` on the initiator's stream; no session_id
+      is allocated; the relay receives no assignment
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-015
+    given: >
+      Two clients A and B complete the full signaling handshake: auth challenge → auth response →
+      signaling_auth_ok → peer_info_announce (with real libp2p peer IDs and listen addresses),
+      running as real libp2p nodes (no in-process fakes for this AC)
+    when: "A sends `session_request { target_pubkey: B_pubkey }`"
+    then: >
+      The returned SessionAssignment contains participant entries where A's peer_id equals
+      A's actual libp2p PeerId string, B's peer_id equals B's actual libp2p PeerId string,
+      and both multiaddrs arrays are non-empty; parseParticipantInfo succeeds on both entries
+      without returning null
+    test_type: e2e
     component_under_test: directory
 
 # ─── Security Invariants ───────────────────────────────────
