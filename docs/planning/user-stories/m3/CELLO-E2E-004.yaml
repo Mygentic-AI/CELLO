@@ -1,0 +1,146 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-E2E-004
+domain: End-to-End
+actor: AGENT
+priority: P0
+components:
+  - adapter-claude-code
+  - client
+  - directory
+  - relay
+  - crypto
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a milestone sign-off,
+  I want two real Claude Code agents — starting as complete strangers — to register
+  with the directory, establish a connection, initiate a FROST-signed session,
+  exchange messages through the relay, and seal the session — all as separate OS
+  processes communicating over real network connections —
+  so that M3 is provably done: the full connection-gated session flow works
+  end-to-end with no shared memory shortcuts.
+
+  This story is the M3 finish line. All M3 stories (REG-001, CONNPOL-001,
+  CONNREQ-001, CONNREQ-002, SESSION-006, MCP-003, ADAPTER-003, CRYPTO-004)
+  are prerequisites. M3 is not closed until this story's acceptance criteria
+  are manually verified and signed off.
+
+  **What's different from E2E-002 (M2):**
+  - M2: Agents were pre-known to the directory; session establishment was the entry point
+  - M3: Agents start unregistered; they must register (DKG), request and accept a
+    connection, then initiate a session — the connection gate is the new boundary
+
+  **Setup (all separate OS processes):**
+  - Process 1: Relay node (`pnpm --filter @cello/relay run start`)
+  - Process 2: Directory node (`pnpm --filter @cello/directory run start`)
+  - Process 3: Agent A — Claude Code session with M3-aware `cello-mcp` binary
+  - Process 4: Agent B — same setup, independent Claude Code session, distinct key file
+  - Agents configured with `CELLO_DIRECTORY_MULTIADDR` pointing to Process 2
+  - Relay configured with `CELLO_DIRECTORY_PUBKEY` pointing to directory's signing key
+
+  **Flow being verified:**
+
+  ```
+  Agent A registers → DKG over /cello/frost/1.0.0 → primary_pubkey assigned
+  Agent B registers → DKG over /cello/frost/1.0.0 → primary_pubkey assigned
+  A requests connection with B → directory routes to B's signaling stream
+  B accepts (open policy) → connection established
+  A initiates session → FROST ceremony → session_id assigned
+  B awaits session → receives SessionAssignment
+  A sends message → relay notarizes → B receives
+  B sends reply → relay notarizes → A receives
+  A closes session → bilateral seal → FROST-signed sealed root
+  ```
+
+# ─── Dependencies ──────────────────────────────────────────
+dependencies:
+  - CELLO-REG-001
+  - CELLO-CONNPOL-001
+  - CELLO-CONNREQ-001
+  - CELLO-CONNREQ-002
+  - CELLO-SESSION-006
+  - CELLO-MCP-003
+  - CELLO-ADAPTER-003
+  - CELLO-CRYPTO-004
+
+# ─── Notes ─────────────────────────────────────────────────
+notes: |
+  This is the M3 milestone close gate. It is a manual verification story —
+  not a Vitest suite. The test is run by a human operator starting 4 processes
+  and observing the full flow. It passes or fails based on whether the complete
+  strangers-to-sealed-conversation path works over real network connections.
+
+  Every AC below requires all participants to be separate OS processes with
+  distinct key files, communicating over TCP via libp2p.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Relay and directory running as separate OS processes; Agent A and Agent B as separate Claude Code sessions with distinct key files; neither agent has previously registered"
+    when: "Agent A calls `cello_register({ phone_stub: '+1...' })`"
+    then: "Returns `{ registered: true, agent_id, primary_pubkey, ml_dsa_pubkey }`; the DKG was performed over real `/cello/frost/1.0.0` libp2p streams between the client process and directory process"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-002
+    given: "Agent B has also registered successfully (AC-001 repeated for B)"
+    when: "Agent A calls `cello_request_connection({ target_pubkey: B_pubkey })`"
+    then: "The directory routes the request to B's signaling stream; B's policy evaluates to accept; returns `{ result: 'accepted', connection_id }`"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-003
+    given: "A and B have an established connection (AC-002)"
+    when: "Agent A calls `cello_initiate_session({ target_pubkey: B_pubkey })`"
+    then: "FROST ceremony executes between A's process and directory process; returns `{ session_id, genesis_prev_root }`; Agent B receives SessionAssignment via `cello_await_session`"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-004
+    given: "Session established (AC-003)"
+    when: "Agent A sends a message and Agent B receives it; Agent B sends a reply and Agent A receives it"
+    then: "Both messages have valid Ed25519 signatures, correct sequence numbers, matching content hashes; relay Merkle notarization is present"
+    test_type: e2e
+    component_under_test: relay
+
+  - id: AC-005
+    given: "Messages exchanged (AC-004)"
+    when: "Agent A calls `cello_close_session({ session_id })`"
+    then: "Bilateral seal completes; FROST-signed sealed root is produced; the session no longer appears in `cello_list_sessions()` for either agent"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-006
+    given: "The entire flow AC-001 through AC-005"
+    when: "Inspected end-to-end"
+    then: "No step used shared memory between participants; all communication traversed TCP libp2p streams; the directory never saw message content (only hashes via relay)"
+    test_type: e2e
+    component_under_test: system
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The relay never observes plaintext message content — only content_hash values"
+    adversarial_condition: "even when messages are exchanged between A and B through the relay"
+    test_type: e2e
+    component_under_test: relay
+
+  - id: SI-002
+    statement: "Neither agent can forge a session without the directory's FROST participation"
+    adversarial_condition: "even if one agent has the other's pubkey and connection_id"
+    test_type: e2e
+    component_under_test: crypto
+
+  - id: SI-003
+    statement: "The connection gate blocks session initiation for unconnected agents"
+    adversarial_condition: "even when both agents are registered and the target_pubkey is valid"
+    test_type: e2e
+    component_under_test: directory
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "End-to-End, Registration, Connection Requests, Connection Policies, Session Layer, FROST"
+  end_to_end_flow: "§1–§8 (full flow)"
+  related_stories:
+    - CELLO-E2E-001 (M0 close gate)
+    - CELLO-E2E-002 (M2 close gate)
