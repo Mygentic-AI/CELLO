@@ -105,6 +105,20 @@ Step 5 — Code Review:       Agent({ subagent_type: "feature-dev:code-reviewer"
 Step 6 — Commit:            Story ID in commit message
 ```
 
+### Milestone Close Gate: Live Smoke Test
+
+**No milestone is closed until a live multi-process smoke test passes.**
+
+In-process Vitest tests prove protocol correctness. They do NOT prove that separate processes can actually communicate — different peer IDs, different key files, real TCP connections, real Noise handshakes, real CBOR over the wire.
+
+For any milestone that introduces or modifies inter-process communication (M1+):
+1. Start relay and directory as separate OS processes
+2. Start two agent sessions (separate MCP server processes, separate key files)
+3. Execute the milestone's claimed capability end-to-end (e.g., "two agents exchange a FROST-signed message")
+4. The capability must succeed without manual intervention beyond initial setup
+
+If the live test fails, the milestone is not done — regardless of how many Vitest tests pass. This gate exists because M2 shipped with 492 passing tests and was completely non-functional in production due to bugs that only manifest across process boundaries (missing protocol steps, unstable peer IDs, unconfigured pubkeys).
+
 **Step 5 — Code Review is mandatory.** After each phase (P pseudocode, A architecture, R implementation) dispatch a `feature-dev:code-reviewer` agent against what was just produced. Do not skip this for "simple" changes. The review agent must check:
 - Implementation matches the ACs exactly (no extra, no missing)
 - Security invariants enforced (no private key leakage paths, no silent failures)

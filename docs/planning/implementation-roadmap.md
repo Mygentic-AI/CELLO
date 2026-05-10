@@ -102,6 +102,22 @@ M4 is the most parallelizable with other milestones — the scanning pipeline is
 
 Every milestone's tests continue running in subsequent milestones. The harness only grows — nothing is replaced.
 
+### Live Multi-Process Smoke Test (Milestone Close Gate)
+
+**In-process tests are necessary but not sufficient.** Every milestone that introduces or modifies inter-process communication (M1+) must pass a live smoke test before close:
+
+1. Relay and directory running as separate OS processes (real TCP, real Noise, real CBOR)
+2. Two agent Claude Code sessions with separate key files and separate MCP server processes
+3. The milestone's core claimed capability executed end-to-end (e.g., M1: "two agents exchange a notarized message"; M2: "two agents exchange a FROST-signed message")
+
+This gate exists because the in-process harness shares memory, doesn't require peer ID announcement, doesn't need stable peer IDs, and doesn't verify relay/directory authentication. M2 shipped with 492 passing unit/integration tests and was completely non-functional across process boundaries. Three latent bugs — missing `peer_info_announce` protocol step, unstable peer IDs, unconfigured relay pubkey — were invisible to the in-process harness because co-located participants bypass the exact mechanisms that real deployments depend on.
+
+**Rule:** If the live smoke test cannot pass, the milestone is not done.
+
+The first E2E story in each milestone must describe the live test conditions that would fail if the milestone's claim were false. See [[user-story-format]] §Milestone Story Ordering.
+
+### Cross-Machine Integration Test
+
 In addition to the in-process Vitest harness, a cross-machine integration test runs at least after every milestone boundary: two client machines on different networks (home ISP, corporate VPN, mobile tether) dial through DCuTR and fall back to circuit relay on symmetric NAT. This exists to catch the class of libp2p issue that localhost loopback cannot surface. Cross-machine tests do not gate CI; they are a separate nightly job whose failures feed back into the test harness.
 
 ---
