@@ -257,33 +257,21 @@ export class CelloRelayNode {
 
         // recordAssignment verifies the standard relay assignment TBS
         // (CBOR of [session_id, participant_a, participant_b, session_timestamp])
-        // The directory_signature on this frame body is the directory-relay auth sig.
-        // The assignment's directory_signature (for relay assignment auth) must be recomputed.
-        // Per the protocol: the record_assignment frame uses the same directory_signature
-        // as the standard relay assignment TBS — the relay verifies BOTH:
-        //   1. The frame body signature (directory-relay auth) — done above
-        //   2. The assignment TBS signature — done by recordAssignment()
-        // Since we've already verified the frame body (which includes session_id, participant_a,
-        // participant_b, session_timestamp), and the frame's directory_signature IS the
-        // assignment TBS signature (same key, same content structurally), we pass it through.
-        //
-        // Note: The TBS for relay assignment auth is CBOR([session_id, pubA, pubB, timestamp]).
-        // The TBS for directory-relay frame auth is CBOR({type, session_id, pubA, pubB, timestamp}).
-        // These are DIFFERENT — so the directory must sign BOTH, or we derive one from the other.
-        //
-        // Implementation choice: The directory sends a separate assignment_signature field
-        // for the relay's internal recordAssignment verification, alongside directory_signature
-        // for the directory-relay auth. We check for assignment_signature first; if absent,
-        // we use directory_signature (for backward compatibility in test scenarios).
+        // assignment_signature signs CBOR([session_id, participant_a, participant_b, session_timestamp])
+        // — the relay's internal TBS for recordAssignment. Required field; reject if absent.
         const assignment_signature = req["assignment_signature"] as Uint8Array | undefined;
-        const relay_assignment_dir_sig = assignment_signature ?? directory_signature;
+        if (!assignment_signature || !(assignment_signature instanceof Uint8Array) || assignment_signature.length !== 64) {
+          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "auth_invalid" })));
+          await stream.close();
+          return;
+        }
 
         const result = this.recordAssignment({
           session_id: session_id instanceof Uint8Array ? session_id : new Uint8Array(session_id as unknown as ArrayBuffer),
           participant_a: participant_a instanceof Uint8Array ? participant_a : new Uint8Array(participant_a as unknown as ArrayBuffer),
           participant_b: participant_b instanceof Uint8Array ? participant_b : new Uint8Array(participant_b as unknown as ArrayBuffer),
           session_timestamp,
-          directory_signature: relay_assignment_dir_sig instanceof Uint8Array ? relay_assignment_dir_sig : new Uint8Array(relay_assignment_dir_sig as unknown as ArrayBuffer),
+          directory_signature: assignment_signature,
         });
 
         if (result.ok) {

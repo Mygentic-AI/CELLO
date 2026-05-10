@@ -24,6 +24,7 @@ export interface RecordAssignmentFrame {
   participant_a: Uint8Array;      // 32-byte K_local pubkey
   participant_b: Uint8Array;      // 32-byte K_local pubkey
   session_timestamp: number | bigint;  // Unix ms (bigint if > 0xffffffff)
+  assignment_signature: Uint8Array; // 64-byte Ed25519 over CBOR([session_id, participant_a, participant_b, session_timestamp])
   directory_signature: Uint8Array; // 64-byte Ed25519 over CBOR of body without this field
 }
 

@@ -617,6 +617,79 @@ describe("AC-006 / SI-001: invalid directory signature → auth_invalid, no stat
   }, 20_000);
 });
 
+// ─── SI-NEW: record_assignment without assignment_signature → auth_invalid ────
+
+describe("SI-NEW: record_assignment missing assignment_signature → auth_invalid, no state mutation", () => {
+  let scope = createTestScope();
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  it("record_assignment without assignment_signature field → auth_invalid", async () => {
+    const fix = await makeFixture();
+    scope.addCleanup(fix.relayStop);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    const clientKpA = generateKeypair();
+    const clientKpB = generateKeypair();
+    const pubA = await clientKpA.getPublicKey();
+    const pubB = await clientKpB.getPublicKey();
+    const sessionTimestamp = Date.now();
+    const tsEncoded = sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp;
+
+    const dirNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await dirNode.start();
+    scope.addCleanup(async () => { await dirNode.stop(); });
+
+    const { stream: dirStream, reader: dirReader } = await openDirRelayStream(
+      dirNode, fix.relayPeerId, fix.relayAddrs
+    );
+    scope.addCleanup(async () => { dirStream.close().catch(() => {}); });
+
+    // Build frame body without assignment_signature, sign only directory_signature
+    const body: Record<string, unknown> = {
+      type: "record_assignment",
+      session_id: sessionId,
+      participant_a: pubA,
+      participant_b: pubB,
+      session_timestamp: tsEncoded,
+      // assignment_signature intentionally omitted
+    };
+    const directory_signature = await signFrameBody(fix.dirKp, body);
+    const frame = CBOR_ENC.encode({ ...body, directory_signature }) as Uint8Array;
+
+    sendFrame(dirStream, frame);
+
+    const response = await dirReader.readDecoded();
+    expect(response["type"]).toBe("auth_invalid");
+
+    // Verify: session was NOT registered
+    const clientNodeA = await createNode({ keyProvider: clientKpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await clientNodeA.start();
+    scope.addCleanup(async () => { await clientNodeA.stop(); });
+    await clientNodeA.dial(fix.relayAddr);
+
+    const streamA = await clientNodeA.newStream(fix.relayPeerId, RELAY_PROTOCOL_ID);
+    const readerA = new StreamReader(streamA);
+    await performRelayAuth(readerA, streamA, clientKpA);
+
+    const contentHash = new Uint8Array(randomBytes(32));
+    const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, contentHash, clientKpA, 0);
+    sendFrame(streamA, CBOR_ENC.encode({
+      type: "hash_submit",
+      session_id: sessionId,
+      leaf_kind: 0x00,
+      structure1_cbor,
+      sender_signature,
+    }));
+
+    const err = await readerA.readDecoded();
+    expect(err["type"]).toBe("hash_submit_error");
+    expect(err["reason"]).toBe("session_not_found");
+
+    streamA.close().catch(() => {});
+  }, 20_000);
+});
+
 // ─── SI-002: hash_submit before record_assignment → session_not_found ────────
 
 describe("SI-002: hash_submit before record_assignment → session_not_found (no timing side channel)", () => {
