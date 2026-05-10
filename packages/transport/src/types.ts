@@ -29,6 +29,13 @@ export interface CreateNodeOptions {
    * libp2p listen multiaddrs. Use '/ip4/127.0.0.1/tcp/0' for ephemeral port.
    */
   listenAddresses: string[];
+  /**
+   * Optional pre-generated transport private key (raw Ed25519 seed, 32 bytes).
+   * When provided, the node uses this key for its libp2p Peer ID instead of
+   * generating a fresh one. Use this for services (directory, relay) that need
+   * a stable Peer ID across restarts.
+   */
+  transportPrivateKey?: Uint8Array;
 }
 
 // ─── StreamHandler ──────────────────────────────────────────────────────────

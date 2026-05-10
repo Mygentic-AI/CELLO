@@ -724,6 +724,8 @@ export interface CreateRelayNodeOptions {
   directory?: DirectoryAdapter;
   keyProvider?: KeyProvider;
   store?: RelayStore;
+  /** Persisted transport key for stable Peer ID (32-byte Ed25519 seed) */
+  transportPrivateKey?: Uint8Array;
 }
 
 export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
@@ -735,6 +737,7 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
   const node = await createNode({
     keyProvider,
     listenAddresses: opts.listenAddresses ?? ["/ip4/127.0.0.1/tcp/0"],
+    transportPrivateKey: opts.transportPrivateKey,
   });
   await node.start();
 

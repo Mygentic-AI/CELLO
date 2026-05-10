@@ -3,14 +3,17 @@
  * CELLO Directory binary (CELLO-NODE-004)
  *
  * Environment variables:
- *   CELLO_DIRECTORY_KEY_FILE    — path to persisted directory signing keypair (default: ~/.cello/directory-key)
- *   CELLO_DIRECTORY_LISTEN_ADDR — libp2p listen address (default: /ip4/0.0.0.0/tcp/4000)
- *   CELLO_RELAY_MULTIADDR       — relay multiaddr (required)
- *                                  Format: /ip4/<host>/tcp/<port>/p2p/<peer-id>
- *                                  The directory connects to the relay at startup using NetworkRelayAdapter.
+ *   CELLO_DIRECTORY_KEY_FILE           — path to persisted directory signing keypair (default: ~/.cello/directory-key)
+ *   CELLO_DIRECTORY_TRANSPORT_KEY_FILE — path to persisted libp2p transport key (default: ~/.cello/directory-transport-key)
+ *   CELLO_DIRECTORY_LISTEN_ADDR        — libp2p listen address (default: /ip4/0.0.0.0/tcp/4000)
+ *   CELLO_RELAY_MULTIADDR              — relay multiaddr (required)
+ *                                         Format: /ip4/<host>/tcp/<port>/p2p/<peer-id>
+ *                                         The directory connects to the relay at startup using NetworkRelayAdapter.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { FileKeyProvider } from "@cello/crypto";
 import { createDirectoryNode } from "../directory-node.js";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
@@ -18,6 +21,7 @@ import { InMemoryDirectoryStore } from "../directory-store.js";
 import { InMemoryShareStore } from "../share-store.js";
 
 const keyPath = process.env["CELLO_DIRECTORY_KEY_FILE"] ?? join(homedir(), ".cello", "directory-key");
+const transportKeyPath = process.env["CELLO_DIRECTORY_TRANSPORT_KEY_FILE"] ?? join(homedir(), ".cello", "directory-transport-key");
 const listenAddr = process.env["CELLO_DIRECTORY_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/tcp/4000";
 const relayAddr = process.env["CELLO_RELAY_MULTIADDR"];
 
@@ -34,6 +38,17 @@ try {
   const msg = err instanceof Error ? err.message : String(err);
   process.stderr.write(`cello-directory: key file error: ${msg}\n`);
   process.exit(1);
+}
+
+// Load or generate persisted transport key (ensures stable Peer ID across restarts)
+let transportPrivateKey: Uint8Array;
+try {
+  transportPrivateKey = readFileSync(transportKeyPath);
+} catch {
+  transportPrivateKey = randomBytes(32);
+  mkdirSync(join(homedir(), ".cello"), { recursive: true });
+  writeFileSync(transportKeyPath, transportPrivateKey, { mode: 0o600 });
+  process.stdout.write(`cello-directory: generated new transport key at ${transportKeyPath}\n`);
 }
 
 const store = new InMemoryDirectoryStore();
@@ -69,6 +84,7 @@ try {
     relayEndpoint: { peer_id: relayPeerId, multiaddrs: [relayAddr] },
     store,
     shareStore,
+    transportPrivateKey,
   });
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);

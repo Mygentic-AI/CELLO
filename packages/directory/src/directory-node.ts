@@ -1312,6 +1312,8 @@ export interface CreateDirectoryNodeOptions {
   shareStore?: ShareStore;
   /** FALLBACK_CANARY event listener */
   onFallbackCanary?: FrostDirectoryHandlerOptions["onFallbackCanary"];
+  /** Persisted transport key for stable Peer ID (32-byte Ed25519 seed) */
+  transportPrivateKey?: Uint8Array;
 }
 
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{
@@ -1322,6 +1324,7 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
   const node = await createNode({
     keyProvider: opts.keyProvider,
     listenAddresses: opts.listenAddresses ?? ["/ip4/127.0.0.1/tcp/0"],
+    transportPrivateKey: opts.transportPrivateKey,
   });
   await node.start();
 

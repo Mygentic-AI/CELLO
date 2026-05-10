@@ -3,19 +3,23 @@
  * CELLO Relay binary (CELLO-NODE-004)
  *
  * Environment variables:
- *   CELLO_RELAY_KEY_FILE         — path to persisted relay signing keypair (default: ~/.cello/relay-key)
- *                                   Uses the same FileKeyProvider format as the directory.
- *   CELLO_RELAY_LISTEN_ADDR      — libp2p listen address (default: /ip4/0.0.0.0/tcp/4001)
- *   CELLO_DIRECTORY_PUBKEY       — hex-encoded Ed25519 directory public key (required)
- *                                   The relay authenticates directory admin frames against this key.
- *                                   In NODE_ENV=test, a random ephemeral key is used if absent.
+ *   CELLO_RELAY_KEY_FILE              — path to persisted relay signing keypair (default: ~/.cello/relay-key)
+ *                                        Uses the same FileKeyProvider format as the directory.
+ *   CELLO_RELAY_TRANSPORT_KEY_FILE    — path to persisted libp2p transport key (default: ~/.cello/relay-transport-key)
+ *   CELLO_RELAY_LISTEN_ADDR           — libp2p listen address (default: /ip4/0.0.0.0/tcp/4001)
+ *   CELLO_DIRECTORY_PUBKEY            — hex-encoded Ed25519 directory public key (required)
+ *                                        The relay authenticates directory admin frames against this key.
+ *                                        In NODE_ENV=test, a random ephemeral key is used if absent.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { FileKeyProvider, generateKeypair } from "@cello/crypto";
 import { createRelayNode } from "../index.js";
 
 const keyPath = process.env["CELLO_RELAY_KEY_FILE"] ?? join(homedir(), ".cello", "relay-key");
+const transportKeyPath = process.env["CELLO_RELAY_TRANSPORT_KEY_FILE"] ?? join(homedir(), ".cello", "relay-transport-key");
 const listenAddr = process.env["CELLO_RELAY_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/tcp/4001";
 const dirPubkeyHex = process.env["CELLO_DIRECTORY_PUBKEY"];
 
@@ -54,12 +58,24 @@ try {
 const relayPubkey = await kp.getPublicKey();
 process.stdout.write(`cello-relay pubkey: ${Buffer.from(relayPubkey).toString("hex")}\n`);
 
+// Load or generate persisted transport key (ensures stable Peer ID across restarts)
+let transportPrivateKey: Uint8Array;
+try {
+  transportPrivateKey = readFileSync(transportKeyPath);
+} catch {
+  transportPrivateKey = randomBytes(32);
+  mkdirSync(join(homedir(), ".cello"), { recursive: true });
+  writeFileSync(transportKeyPath, transportPrivateKey, { mode: 0o600 });
+  process.stdout.write(`cello-relay: generated new transport key at ${transportKeyPath}\n`);
+}
+
 let relayResult: Awaited<ReturnType<typeof createRelayNode>>;
 try {
   relayResult = await createRelayNode({
     listenAddresses: [listenAddr],
     directoryPubkey: dirPubkey,
     keyProvider: kp,
+    transportPrivateKey,
   });
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
