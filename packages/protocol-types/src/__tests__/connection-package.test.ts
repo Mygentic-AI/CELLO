@@ -551,7 +551,7 @@ describe("AC-008: pseudonym_label 65 UTF-8 bytes → rejects with pseudonym_labe
 
 describe("AC-009: fixture test vector — CBOR bytes match pinned fixture hex", () => {
   it("AC-009: encode from fixture values → bytes match expected_cbor_hex in fixture", async () => {
-    const fixturePath = join(__dirname, "../../../test/vectors/connection-package-canonical.json");
+    const fixturePath = join(__dirname, "../../test/vectors/connection-package-canonical.json");
     const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as {
       seed_hex: string;
       expected_cbor_hex: string;

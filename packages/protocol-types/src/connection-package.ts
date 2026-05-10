@@ -65,7 +65,7 @@ import { Encoder } from "cbor-x";
 import { decode as cborDecode } from "cbor-x";
 
 /**
- * ML-DSA-87 key provider interface.
+ * ML-DSA-44 key provider interface.
  *
  * Defined here (not imported from @cello/crypto) because protocol-types is a leaf
  * package that @cello/crypto will import from, not the reverse.
@@ -73,14 +73,14 @@ import { decode as cborDecode } from "cbor-x";
  * The crypto package's InMemoryMlDsaKeyProvider and FileMlDsaKeyProvider will
  * implement this interface.
  *
- * Key sizes for ML-DSA-87 (NIST FIPS 204):
+ * Key sizes for ML-DSA-44 (NIST FIPS 204):
  *   - Public key:  1312 bytes
  *   - Signature:   2420 bytes
  */
 export interface MlDsaKeyProvider {
-  /** Returns the 1312-byte ML-DSA-87 public key. */
+  /** Returns the 1312-byte ML-DSA-44 public key. */
   getPublicKey(): Promise<Uint8Array>;
-  /** Signs the message; returns a 2420-byte ML-DSA-87 signature. */
+  /** Signs the message; returns a 2420-byte ML-DSA-44 signature. */
   sign(message: Uint8Array): Promise<Uint8Array>;
 }
 
@@ -93,7 +93,7 @@ export interface MlDsaKeyProvider {
  *   [pseudonym_label, k_local_pubkey, primary_pubkey, ml_dsa_pubkey, created_at]
  * (positional array, same pattern as existing TBS arrays in this package)
  *
- * NIST FIPS 204 — ML-DSA-87
+ * NIST FIPS 204 — ML-DSA-44
  */
 export interface PseudonymBinding {
   /** Stable human-readable identity label; max 64 UTF-8 bytes. */
@@ -102,12 +102,12 @@ export interface PseudonymBinding {
   k_local_pubkey: Uint8Array;
   /** FROST group public key of the agent (primary_pubkey from CONTEXT.md). */
   primary_pubkey: Uint8Array;
-  /** 1312-byte ML-DSA-87 public key. */
+  /** 1312-byte ML-DSA-44 public key. */
   ml_dsa_pubkey: Uint8Array;
   /** Unix milliseconds when the binding was created. */
   created_at: number;
   /**
-   * 2420-byte ML-DSA-87 signature over canonical CBOR of:
+   * 2420-byte ML-DSA-44 signature over canonical CBOR of:
    * [pseudonym_label, k_local_pubkey, primary_pubkey, ml_dsa_pubkey, created_at]
    */
   ml_dsa_signature: Uint8Array;
@@ -118,12 +118,12 @@ export interface PseudonymBinding {
  *
  * ML-DSA signature is over canonical CBOR of all fields except endorser_ml_dsa_signature.
  *
- * NIST FIPS 204 — ML-DSA-87
+ * NIST FIPS 204 — ML-DSA-44
  */
 export interface Endorsement {
   /** 32-byte Ed25519 public key of the endorser. */
   endorser_pubkey: Uint8Array;
-  /** 1312-byte ML-DSA-87 public key of the endorser. */
+  /** 1312-byte ML-DSA-44 public key of the endorser. */
   endorser_ml_dsa_pubkey: Uint8Array;
   /**
    * 32-byte Ed25519 public key this endorsement targets.
@@ -137,7 +137,7 @@ export interface Endorsement {
   /** Unix milliseconds when endorsement expires. */
   expires_at: number;
   /**
-   * 2420-byte ML-DSA-87 signature over canonical CBOR of:
+   * 2420-byte ML-DSA-44 signature over canonical CBOR of:
    * [endorser_pubkey, endorser_ml_dsa_pubkey, target_pubkey, endorsement_type, created_at, expires_at]
    */
   endorser_ml_dsa_signature: Uint8Array;
@@ -148,12 +148,12 @@ export interface Endorsement {
  *
  * ML-DSA signature is over canonical CBOR of all fields except attester_ml_dsa_signature.
  *
- * NIST FIPS 204 — ML-DSA-87
+ * NIST FIPS 204 — ML-DSA-44
  */
 export interface Attestation {
   /** 32-byte Ed25519 public key of the attester. */
   attester_pubkey: Uint8Array;
-  /** 1312-byte ML-DSA-87 public key of the attester. */
+  /** 1312-byte ML-DSA-44 public key of the attester. */
   attester_ml_dsa_pubkey: Uint8Array;
   /** Attestation type string (e.g. "capability", "audit_log"). */
   attestation_type: string;
@@ -164,7 +164,7 @@ export interface Attestation {
   /** Unix milliseconds when attestation expires. */
   expires_at: number;
   /**
-   * 2420-byte ML-DSA-87 signature over canonical CBOR of:
+   * 2420-byte ML-DSA-44 signature over canonical CBOR of:
    * [attester_pubkey, attester_ml_dsa_pubkey, attestation_type, attestation_data, created_at, expires_at]
    */
   attester_ml_dsa_signature: Uint8Array;
@@ -236,10 +236,10 @@ const CBOR_ENC = new Encoder({ tagUint8Array: false });
 /** Maximum pseudonym_label size in UTF-8 bytes (AC-007, AC-008). */
 export const MAX_PSEUDONYM_LABEL_BYTES = 64;
 
-/** Expected ML-DSA-87 public key size in bytes (NIST FIPS 204). */
+/** Expected ML-DSA-44 public key size in bytes (NIST FIPS 204). */
 export const ML_DSA_PUBKEY_BYTES = 1312;
 
-/** Expected ML-DSA-87 signature size in bytes (NIST FIPS 204). */
+/** Expected ML-DSA-44 signature size in bytes (NIST FIPS 204). */
 export const ML_DSA_SIGNATURE_BYTES = 2420;
 
 // ─── TBS (to-be-signed) encoders ─────────────────────────────────────────────
@@ -314,7 +314,7 @@ function buildAttestationTbs(a: Omit<Attestation, "attester_ml_dsa_signature">):
 // ─── ML-DSA verify helper ─────────────────────────────────────────────────────
 
 /**
- * Verify an ML-DSA-87 signature.
+ * Verify an ML-DSA-44 signature.
  *
  * This function is a thin wrapper that enables real ML-DSA verification once
  * a native binding is available. Currently delegates to the provided verifier
