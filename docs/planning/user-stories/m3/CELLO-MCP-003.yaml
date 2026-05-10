@@ -127,6 +127,12 @@ behavior:
       the factory shall register the full M3 tool set identically under stdio and
       InMemoryTransport — structural equality assertion extends to all new tools.
 
+# ─── Notes ─────────────────────────────────────────────────
+notes: |
+  All ACs with `test_type: e2e` require A and B to be separate OS processes,
+  each running their own cello-mcp binary with distinct key files, communicating
+  via relay and directory over real network connections.
+
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
