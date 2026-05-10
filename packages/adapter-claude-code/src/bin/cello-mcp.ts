@@ -98,7 +98,7 @@ if (process.env.NODE_ENV === "test") {
       primaryPubkey = bootstrap.primaryPubkey;
       process.stderr.write(`cello-mcp: FROST bootstrap OK, primaryPubkey=${Buffer.from(primaryPubkey).toString("hex").slice(0, 16)}...\n`);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      const msg = err instanceof Error ? `${err.name}: ${err.message}\n${err.stack}` : JSON.stringify(err);
       process.stderr.write(`cello-mcp: FROST bootstrap FAILED: ${msg}\n`);
       process.stderr.write(`cello-mcp: falling back to in-process stubs\n`);
       // Fall back to in-process stubs so the server starts but without directory FROST

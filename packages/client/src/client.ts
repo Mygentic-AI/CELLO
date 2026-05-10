@@ -2545,14 +2545,14 @@ class CelloClientImpl implements CelloClient {
 
     try {
       if (dirMultiaddr) {
-        try { await this.#node.dial(dirMultiaddr); } catch (e) { process.stderr.write(`[sigstream] dial threw (non-fatal): ${e instanceof Error ? e.message : String(e)}\n`); }
+        try { await this.#node.dial(dirMultiaddr); } catch (e) { process.stderr.write(`[sigstream] dial threw (non-fatal): ${e instanceof Error ? e.stack ?? e.message : JSON.stringify(e)}\n`); }
       }
 
       let sigStream: Stream;
       try {
         sigStream = await this.#node.newStream(dirPeerId, SIGNALING_PROTOCOL_ID);
       } catch (e) {
-        process.stderr.write(`[sigstream] FAIL at newStream: ${e instanceof Error ? e.message : String(e)}\n`);
+        process.stderr.write(`[sigstream] FAIL at newStream: ${e instanceof Error ? e.stack ?? e.message : JSON.stringify(e)}\n`);
         return false;
       }
       process.stderr.write("[sigstream] newStream opened, awaiting auth challenge...\n");

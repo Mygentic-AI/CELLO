@@ -654,7 +654,9 @@ export class CelloDirectoryNode {
 
     // SESSION-004 Step 1: Check for injected IThresholdSigner (CRITICAL-2: fail loudly if absent)
     const signer = this.#thresholdSigners.get(initiatorHex);
+    process.stderr.write(`[dir] processSessionRequest: initiatorHex=${initiatorHex.slice(0,16)}... thresholdSigners keys=[${[...this.#thresholdSigners.keys()].map(k => k.slice(0,16)).join(",")}]\n`);
     if (!signer) {
+      process.stderr.write(`[dir] frost_signer_not_configured for initiator ${initiatorHex.slice(0,16)}...\n`);
       this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "frost_signer_not_configured" }));
       return;
     }
