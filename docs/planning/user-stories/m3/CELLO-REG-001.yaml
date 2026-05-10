@@ -148,7 +148,7 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-006
-    given: "A `FrostThresholdSigner` configured 2-of-3 with 3 in-process directory nodes; the DKG is triggered by registration"
+    given: "A `FrostThresholdSigner` configured 2-of-3 with 3 directory nodes communicating DKG rounds over real `/cello/frost/1.0.0` libp2p streams (separate libp2p instances, not shared memory)"
     when: "The interactive DKG ceremony completes"
     then: >
       All 3 nodes hold K_server_X shares for the new agent; the client holds its local
