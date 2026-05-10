@@ -2398,14 +2398,19 @@ class CelloClientImpl implements CelloClient {
 
     // Open persistent signaling stream if not already open (DB-001)
     if (!this.#persistentSignalingStream) {
+      process.stderr.write("[initSession] no persistent stream, opening...\n");
       const opened = await this.#openPersistentSignalingStream(opts?.directoryPeerId, opts?.directoryMultiaddr);
       if (!opened) {
+        process.stderr.write("[initSession] first open failed, retrying...\n");
         // Single retry per DB-001
         const retried = await this.#openPersistentSignalingStream(opts?.directoryPeerId, opts?.directoryMultiaddr);
         if (!retried) {
+          process.stderr.write("[initSession] FAIL: could not open signaling stream after retry\n");
           return { ok: false, reason: "directory_unreachable" };
         }
       }
+    } else {
+      process.stderr.write(`[initSession] stream already exists, status=${(this.#persistentSignalingStream as unknown as { status?: string }).status ?? "unknown"}\n`);
     }
 
     // SI-001: session_request frame contains ONLY { type, target_pubkey }
@@ -2426,7 +2431,9 @@ class CelloClientImpl implements CelloClient {
     // Send session_request frame
     try {
       this.#persistentSignalingStream!.send(lp.encode.single(sessionRequestFrame));
-    } catch {
+      process.stderr.write("[initSession] session_request frame sent OK\n");
+    } catch (e) {
+      process.stderr.write(`[initSession] FAIL: send threw: ${e instanceof Error ? e.message : String(e)}\n`);
       this.#pendingSessionRequestResolve = null;
       return { ok: false, reason: "directory_unreachable" };
     }
@@ -2442,11 +2449,13 @@ class CelloClientImpl implements CelloClient {
     ]);
 
     if (timedOut) {
+      process.stderr.write(`[initSession] FAIL: timeout after ${timeoutMs}ms waiting for directory response\n`);
       this.#pendingSessionRequestResolve = null;
       return { ok: false, reason: "timeout" };
     }
 
     const frame = responseFrame!;
+    process.stderr.write(`[initSession] got response frame type=${String(frame["type"])} reason=${String(frame["reason"] ?? "")}\n`);
 
     if (frame["type"] === "session_request_error") {
       const reason = frame["reason"];
@@ -2455,26 +2464,39 @@ class CelloClientImpl implements CelloClient {
       if (reason === "frost_signer_not_configured") return { ok: false, reason: "frost_signer_not_configured" };
       if (reason === "directory_below_threshold") return { ok: false, reason: "directory_below_threshold" };
       if (reason === "ceremony_conflict") return { ok: false, reason: "ceremony_conflict" };
+      process.stderr.write(`[initSession] FAIL: unknown session_request_error reason: ${String(reason)}\n`);
       return { ok: false, reason: "directory_unreachable" }; // unknown error
     }
 
     if (frame["type"] === "session_assignment") {
       // Decode the assignment from the frame
       const rawAssignment = frame["assignment"] as Record<string, unknown> | undefined;
-      if (!rawAssignment) return { ok: false, reason: "directory_unreachable" };
+      if (!rawAssignment) { process.stderr.write("[initSession] FAIL: session_assignment missing assignment field\n"); return { ok: false, reason: "directory_unreachable" }; }
 
+      process.stderr.write(`[initSession] rawAssignment keys: ${Object.keys(rawAssignment).join(", ")}\n`);
+      process.stderr.write(`[initSession] session_id length: ${toU8Safe(rawAssignment["session_id"])?.length ?? "null"}\n`);
+      process.stderr.write(`[initSession] directory_pubkey length: ${toU8Safe(rawAssignment["directory_pubkey"])?.length ?? "null"}\n`);
+      process.stderr.write(`[initSession] directory_signature length: ${toU8Safe(rawAssignment["directory_signature"])?.length ?? "null"}\n`);
+      process.stderr.write(`[initSession] session_timestamp: ${String(rawAssignment["session_timestamp"])} (type: ${typeof rawAssignment["session_timestamp"]})\n`);
+      process.stderr.write(`[initSession] participant_a: ${rawAssignment["participant_a"] ? Object.keys(rawAssignment["participant_a"] as object).join(",") : "null"}\n`);
+      process.stderr.write(`[initSession] participant_b: ${rawAssignment["participant_b"] ? Object.keys(rawAssignment["participant_b"] as object).join(",") : "null"}\n`);
+      process.stderr.write(`[initSession] relay_endpoint: ${rawAssignment["relay_endpoint"] ? Object.keys(rawAssignment["relay_endpoint"] as object).join(",") : "null"}\n`);
+      process.stderr.write(`[initSession] directory_endpoint: ${rawAssignment["directory_endpoint"] ? Object.keys(rawAssignment["directory_endpoint"] as object).join(",") : "null"}\n`);
+      process.stderr.write(`[initSession] signature_type: ${String(rawAssignment["signature_type"])} (type: ${typeof rawAssignment["signature_type"]})\n`);
+      process.stderr.write(`[initSession] signer_pubkey length: ${toU8Safe(rawAssignment["signer_pubkey"])?.length ?? "null"}\n`);
       const assignment = parseSessionAssignment(rawAssignment);
-      if (!assignment) return { ok: false, reason: "directory_unreachable" };
+      if (!assignment) { process.stderr.write("[initSession] FAIL: parseSessionAssignment returned null\n"); return { ok: false, reason: "directory_unreachable" }; }
 
       const result = await this.receiveSessionAssignment(assignment, myPubkey);
       if (!result.ok) {
+        process.stderr.write(`[initSession] FAIL: receiveSessionAssignment failed\n`);
         return { ok: false, reason: "directory_unreachable" };
       }
 
       // Compute genesis_prev_root — already stored on the session record
       const sessionIdHex = Buffer.from(result.sessionId).toString("hex");
       const record = this.#sessions.get(sessionIdHex);
-      if (!record) return { ok: false, reason: "directory_unreachable" };
+      if (!record) { process.stderr.write("[initSession] FAIL: session record not found after assignment\n"); return { ok: false, reason: "directory_unreachable" }; }
 
       return {
         ok: true,
@@ -2484,6 +2506,7 @@ class CelloClientImpl implements CelloClient {
     }
 
     // Unknown frame type
+    process.stderr.write(`[initSession] FAIL: unknown frame type: ${String(frame["type"])}\n`);
     return { ok: false, reason: "directory_unreachable" };
   }
 

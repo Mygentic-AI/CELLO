@@ -13,6 +13,15 @@
  */
 
 import { homedir } from "node:os";
+import { createWriteStream } from "node:fs";
+
+// Tee stderr to a log file for diagnostics (especially [sigstream] instrumentation)
+const stderrLog = createWriteStream("/tmp/cello-mcp-stderr.log", { flags: "a" });
+const origWrite = process.stderr.write.bind(process.stderr);
+process.stderr.write = (chunk: string | Uint8Array, ...args: unknown[]): boolean => {
+  stderrLog.write(chunk);
+  return (origWrite as (...a: unknown[]) => boolean)(chunk, ...args);
+};
 import { join } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
