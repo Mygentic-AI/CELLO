@@ -139,6 +139,18 @@ M1 proved that sessions are notarizable. M2 adds trust signal exchange within se
 
 ---
 
+## Addendum: Infrastructure bugs discovered in M2
+
+Three latent defects in M1 infrastructure code were discovered during M2 live E2E smoke testing:
+
+1. **Missing `peer_info_announce` step** — directory never learned agents' libp2p peer IDs
+2. **Unstable Peer IDs** — relay and directory generated fresh transport keys on every restart
+3. **Relay pubkey not configured** — relay rejected directory admin frames without `CELLO_DIRECTORY_PUBKEY`
+
+These were M1 code defects that passed unit tests but failed under real multi-process conditions. Full details, root cause analysis, and the resulting process changes (E2E-first story ordering, milestone close gate) are documented in [[M2-frost-threshold-layer]].
+
+---
+
 ## Related Documents
 - [[CELLO-MCP-002]] — session-aware MCP surface story
 - [[CELLO-SESSION-003]] — bilateral seal story
@@ -146,3 +158,4 @@ M1 proved that sessions are notarizable. M2 adds trust signal exchange within se
 - [[CONTEXT]] — canonical glossary
 - [[implementation-roadmap]] — full milestone map
 - [[M0-peer-to-peer-walking-skeleton]] — M0 write-up
+- [[M2-frost-threshold-layer]] — M2 write-up (includes M1 infra bug details)

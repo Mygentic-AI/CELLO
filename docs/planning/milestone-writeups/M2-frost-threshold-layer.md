@@ -9,7 +9,7 @@ description: Post-completion write-up for M2. What was built, what was proved, w
 
 # M2 — FROST Threshold Layer
 
-**Completed:** 2026-05-09  
+**Completed:** 2026-05-10 (live smoke test passed)  
 **Stories:** CELLO-CRYPTO-003, CELLO-NODE-003, CELLO-RELAY-001, CELLO-SESSION-004, CELLO-SESSION-005, CELLO-SESSION-006, CELLO-ADAPTER-003, CELLO-E2E-002 (manual, partial), CELLO-E2E-003 (backfill)
 
 ---
@@ -203,17 +203,55 @@ If the E2E story doesn't describe conditions that would fail if the milestone cl
 
 ---
 
+## Infrastructure Bugs Fixed During Live Smoke Test (2026-05-10)
+
+Three latent M1-era defects surfaced when running the first real multi-process E2E test:
+
+### 1. Missing `peer_info_announce` protocol step
+
+**Symptom:** `directory_unreachable` on every `cello_initiate_session` call.  
+**Root cause:** The client never told the directory its libp2p peer ID. The directory stored `peer_id: ""` in its peer registry. When `parseParticipantInfo` ran during session assignment delivery, it rejected the empty string.  
+**Fix:** After `signaling_auth_ok`, the client now sends a `peer_info_announce` frame containing its peer ID and listen addresses. The directory gates `session_request` processing behind receiving this announcement.  
+**Commits:** `a30e4bd`, `1593602`
+
+### 2. Unstable Peer IDs across restarts
+
+**Symptom:** `Payload identity key X does not match expected remote identity key Y` — Noise handshake rejection.  
+**Root cause:** `createNode()` generated a fresh random Ed25519 keypair for libp2p transport identity on every call (per ADR-0001). This was correct for ephemeral agents but wrong for infrastructure nodes (relay, directory) whose Peer IDs appear in configuration. Any restart produced a new Peer ID, invalidating all existing config.  
+**Fix:** Added optional `transportPrivateKey` parameter to `CreateNodeOptions`. Both binaries now persist a 32-byte Ed25519 seed to `~/.cello/relay-transport-key` and `~/.cello/directory-transport-key`. First run generates the key; subsequent runs reuse it.  
+**Commits:** `a98b748`, `4b4f368`
+
+### 3. Relay rejected directory admin frames
+
+**Symptom:** `relay_unavailable` from the directory's `recordAssignment` call.  
+**Root cause:** The relay was started without `CELLO_DIRECTORY_PUBKEY`. In test mode it generated a random ephemeral key and verified incoming directory signatures against it — always rejecting the real directory's signatures.  
+**Fix:** Operator must pass `CELLO_DIRECTORY_PUBKEY=<hex>` to the relay. The directory prints its pubkey at startup.  
+**Process change committed:** E2E-first story ordering, milestone close gate (`d5be255`).
+
+### Why these weren't caught earlier
+
+All M1/M2 unit and integration tests ran every participant in a single Vitest process. In-process participants don't need:
+- Peer ID announcement (they share memory)
+- Stable Peer IDs (they don't dial each other by address)
+- Relay directory-pubkey configuration (the `MockRelayAdapter` doesn't verify signatures)
+
+The test harness was perfectly hermetic — and perfectly blind to real-world setup requirements.
+
+---
+
 ## Infrastructure for Live Testing
 
 ```
-Terminal 1: NODE_ENV=test pnpm --filter @cello/relay run start
-Terminal 2: CELLO_RELAY_MULTIADDR=<relay-multiaddr> NODE_ENV=test pnpm --filter @cello/directory run start
-~/.claude/settings.json: cello MCP server with CELLO_DIRECTORY_MULTIADDR set
-Claude session A: /cello-chat → "You are the initiator" → all tools use { identity: "A" }
-Claude session B: /cello-chat → "You are the target"   → all tools use { identity: "B" }
+Terminal 1: CELLO_DIRECTORY_PUBKEY=<directory-pubkey-hex> NODE_ENV=test pnpm --filter @cello/relay run start
+Terminal 2: CELLO_RELAY_MULTIADDR=<relay-multiaddr> CELLO_DIRECTORY_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4002 NODE_ENV=test pnpm --filter @cello/directory run start
+~/.claude/settings.json: cello MCP server with CELLO_DIRECTORY_MULTIADDR=<directory-multiaddr>
+Agent A terminal: export CELLO_DIRECTORY_MULTIADDR=<directory-multiaddr>
+Agent B terminal: export CELLO_DIRECTORY_MULTIADDR=<directory-multiaddr>
 ```
 
-Both agents load from separate key files (`CELLO_KEY_FILE_A`, `CELLO_KEY_FILE_B`). At startup, `cello-mcp` dials the directory, pushes FROST shares for both identities via `frost_bootstrap` frames, and registers both `FrostThresholdSigner` instances. Session establishment now involves real network ceremony rounds between the MCP server process and the directory process — separate parties, separate key shares.
+Peer IDs are stable across restarts (persisted transport keys). The directory pubkey is `2357394bbe85dd03adfdc8232ae5b8c8bfa8785d36914982ec26357107793ff1`.
+
+Both agents load from separate key files (`CELLO_KEY_FILE` in settings.json, `CELLO_KEY_FILE` env override for Agent B). At startup, `cello-mcp` dials the directory, pushes FROST shares via `frost_bootstrap` frames, and registers a `FrostThresholdSigner` instance. Session establishment involves real network ceremony rounds between the MCP server process and the directory process — separate parties, separate key shares.
 
 ---
 
@@ -235,6 +273,7 @@ For M3's E2E story to avoid the gap that M2 encountered, it must describe demons
 - [[CELLO-ADAPTER-003]] — Real session initiation via directory signaling
 - [[CELLO-E2E-002]] — Live e2e manual sign-off story
 - [[CELLO-E2E-003]] — /cello/frost/1.0.0 wire protocol (backfill story)
+- [[agent-conversation-accountability-and-permanence-m2-2026-05-10]] — first successful M2 agent conversation transcript
 - [[CONTEXT]] — canonical glossary
 - [[implementation-roadmap]] — full milestone map
 - [[M1-session-layer]] — M1 write-up
