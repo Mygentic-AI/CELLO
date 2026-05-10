@@ -71,7 +71,7 @@ import { yamux } from "@chainsafe/libp2p-yamux";
 import { circuitRelayServer, circuitRelayTransport } from "@libp2p/circuit-relay-v2";
 import { dcutr } from "@libp2p/dcutr";
 import { identify } from "@libp2p/identify";
-import { generateKeyPair, privateKeyFromRaw } from "@libp2p/crypto/keys";
+import { generateKeyPair, generateKeyPairFromSeed } from "@libp2p/crypto/keys";
 import { multiaddr } from "@multiformats/multiaddr";
 import { peerIdFromString } from "@libp2p/peer-id";
 import type { Libp2p, Stream, Connection, StreamHandler } from "@libp2p/interface";
@@ -259,7 +259,7 @@ export async function createNode(opts: CreateNodeOptions): Promise<CelloNode> {
   // ADR-0001: generate a fresh keypair for libp2p transport identity.
   // keyProvider is intentionally NOT touched here — see SI-002.
   const transportKey = opts.transportPrivateKey
-    ? privateKeyFromRaw(opts.transportPrivateKey)
+    ? await generateKeyPairFromSeed("Ed25519", opts.transportPrivateKey)
     : await generateKeyPair("Ed25519");
 
   const libp2p = await createLibp2p({
