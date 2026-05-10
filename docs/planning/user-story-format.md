@@ -146,6 +146,32 @@ references:
 
 ---
 
+## Milestone Story Ordering
+
+**E2E stories are written first. Component stories are derived from them.**
+
+This ordering is mandatory. It prevents spec gaps where a component story describes the output shape of a data structure without specifying the protocol step that populates it.
+
+### The Rule
+
+1. **Write the E2E story first.** For each milestone, the first story written describes the full scenario from the outside: two real agents, real nodes, real network. It traces the complete protocol flow and identifies every data dependency.
+
+2. **Derive component stories from the E2E story.** For each step in the E2E story that requires implementation, write a component story. A component story is not ready to write until its E2E parent exists.
+
+3. **A component story must be exercised by at least one E2E story.** If you cannot point to an E2E story whose scenario requires the component story's behavior, the component story is either premature or the E2E story is incomplete.
+
+4. **Data fields in component stories must trace to a protocol step.** If a component story says "the assignment shall contain `peer_id`", the E2E story must contain an AC that names the step that populates it. "The directory learns the agent's peer ID when..." must appear somewhere.
+
+### What this prevents
+
+The class of bug where:
+- A component produces a data structure with the right *shape*
+- A test pre-populates the data to satisfy the shape
+- No test verifies that the *protocol flow* produces the data
+- The field is empty in production
+
+---
+
 ## Definition of Ready / Definition of Done
 
 These checklists prevent AI coders from pulling incomplete stories or declaring premature completion.
@@ -159,6 +185,8 @@ A story is ready to pull when:
 - [ ] Degraded behaviors specify both the fallback and what normal behavior it replaces
 - [ ] References to end-to-end-flow and discussion logs are verified (sections exist and are current)
 - [ ] Dependencies on other stories are identified (e.g., "requires CELLO-AUTH-001 to be implemented first")
+- [ ] **For component stories:** at least one E2E story exists that exercises this component's output end-to-end
+- [ ] **For component stories with data fields:** every field has a named protocol step that populates it (no "something will call this later")
 
 ### Definition of Done (before marking complete)
 
@@ -169,6 +197,17 @@ A story is done when:
 - [ ] All tests pass in CI
 - [ ] No security invariant from other stories in the same domain is broken by the implementation
 - [ ] Code compiles/type-checks cleanly (no new warnings)
+- [ ] **For `test_type: e2e` ACs:** the test runs against real nodes (relay + directory running as processes), not mocks. A test that spins up in-process fakes does not satisfy an e2e AC.
+
+### Milestone Close Gate
+
+A milestone is closed only when:
+- [ ] All stories in the milestone are done per the above checklist
+- [ ] The milestone's E2E story scenario has been run live: real relay, real directory, real MCP server processes, real agent tool calls
+- [ ] The live run produced the expected observable outcomes (session established, messages exchanged, etc.)
+- [ ] Any failures discovered in the live run became new stories and were resolved before close
+
+Committing code does not close a milestone. The live run closes it.
 
 ---
 
