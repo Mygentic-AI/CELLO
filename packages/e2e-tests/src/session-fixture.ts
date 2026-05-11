@@ -34,9 +34,10 @@ import {
 import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
 import { createNode } from "@cello/transport";
 import { createDirectoryNode, InMemoryDirectoryStore } from "@cello/directory";
+import { NetworkRelayAdapter } from "@cello/directory/network-relay-adapter.js";
 import type { CelloDirectoryNode } from "@cello/directory";
 import { createRelayNode } from "@cello/relay";
-import type { CelloRelayNode } from "@cello/relay";
+import type { CelloRelayNode, DirectoryAdapter } from "@cello/relay";
 import { createClient, createMcpSessionServer } from "@cello/client";
 import type { SignalRequirementPolicy } from "@cello/client";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -100,6 +101,12 @@ export interface SessionFixtureOpts {
   whitelist?: string[];
   /** Connection timeout for both clients (ms). Default: 15_000 */
   connectionTimeoutMs?: number;
+  /**
+   * Wire directory and relay via NetworkRelayAdapter (/cello/directory-relay/1.0.0)
+   * instead of in-process. Used by NODE-004 to verify the wire protocol between
+   * directory and relay. Default: false (in-process wiring).
+   */
+  networkRelay?: boolean;
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -114,21 +121,58 @@ export async function createSessionFixture(
   const dirKeyProvider = generateKeypair();
   const dirPubkey = new Uint8Array(await dirKeyProvider.getPublicKey());
 
+  // When networkRelay is true, directory calls relay via /cello/directory-relay/1.0.0
+  // wire protocol. The relay needs a DirectoryAdapter shim that forwards processSeal.
+  let dirNodeRefForNetworkRelay: Awaited<ReturnType<typeof createDirectoryNode>> | null = null;
+  const directoryAdapterShim: DirectoryAdapter | undefined = opts.networkRelay
+    ? {
+        async processSeal(sessionId, sealData) {
+          if (!dirNodeRefForNetworkRelay) return { ok: false, reason: "directory_not_ready" };
+          return dirNodeRefForNetworkRelay.directory.processSeal(sessionId, sealData);
+        },
+      }
+    : undefined;
+
   const { relay: relayInstance, node: relayNode, stop: relayStop } = await createRelayNode({
     directoryPubkey: dirPubkey,
+    ...(directoryAdapterShim ? { directory: directoryAdapterShim } : {}),
   });
   const relayPeerId = relayNode.getPeerId();
-  const relayAddr = relayNode.listenAddresses()[0]!;
+  const relayMultiaddrs = relayNode.listenAddresses();
+  const relayAddr = relayMultiaddrs[0]!;
 
   // ── Directory ──────────────────────────────────────────────────────────────
-  const { directory: directoryNode, node: dirNode, stop: stopDir } = await createDirectoryNode({
+  let relayForDirectory: import("@cello/relay").CelloRelayNode | NetworkRelayAdapter;
+  let stopNetworkAdapter: (() => Promise<void>) | undefined;
+
+  if (opts.networkRelay) {
+    const networkAdapter = new NetworkRelayAdapter({
+      keyProvider: dirKeyProvider,
+      relayPeerId,
+      relayMultiaddrs,
+    });
+    relayForDirectory = networkAdapter;
+    // connect() is called after dirNode starts (below)
+    stopNetworkAdapter = async () => { /* NetworkRelayAdapter has no stop; node stops handle cleanup */ };
+  } else {
+    relayForDirectory = relayInstance;
+  }
+
+  const dirResult = await createDirectoryNode({
     keyProvider: dirKeyProvider,
-    relay: relayInstance,
+    relay: relayForDirectory as Parameters<typeof createDirectoryNode>[0]["relay"],
     relayEndpoint: { peer_id: relayPeerId, multiaddrs: [relayAddr] },
     requireRegistration: opts.requireRegistration ?? false,
     requireConnectionGate: opts.requireConnectionGate ?? false,
     store: dirStore,
   });
+
+  if (opts.networkRelay) {
+    dirNodeRefForNetworkRelay = dirResult;
+    await (relayForDirectory as NetworkRelayAdapter).connect(dirResult.node);
+  }
+
+  const { directory: directoryNode, node: dirNode, stop: stopDir } = dirResult;
 
   const dirPeerId = dirNode.getPeerId();
   const dirMultiaddrs = dirNode.listenAddresses();
@@ -143,7 +187,7 @@ export async function createSessionFixture(
   await nodeA.start();
 
   const stubsA = createInProcessStubs(3);
-  await bootstrapKeyShares(pubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
+  const bootstrapResultA = await bootstrapKeyShares(pubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
   const signerA = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsA }, pubkeyA);
 
   const clientA = createClient(nodeA, kpA, {
@@ -180,6 +224,11 @@ export async function createSessionFixture(
 
   await clientA.registerHandler();
   await clientB.registerHandler();
+
+  // Register A's primary pubkey so the directory can verify FROST-signed seals.
+  // Needed whenever the session seal path is exercised (e.g. NODE-004).
+  clientA.setPrimaryPubkey(bootstrapResultA.primaryPubkey);
+  directoryNode.registerPrimaryPubkey(pubkeyAHex, bootstrapResultA.primaryPubkey);
 
   // ── Optional MCP wiring ────────────────────────────────────────────────────
   let mcpA: Client | undefined;
@@ -236,6 +285,7 @@ export async function createSessionFixture(
     try { await nodeA.stop(); } catch {}
     try { await nodeB.stop(); } catch {}
     try { await stopDir(); } catch {}
+    if (stopNetworkAdapter) await stopNetworkAdapter();
     try { await relayStop(); } catch {}
     clearTestShares();
   };
@@ -247,7 +297,7 @@ export async function createSessionFixture(
     dirMultiaddrs,
     relay: relayInstance,
     relayPeerId,
-    relayMultiaddrs: relayNode.listenAddresses(),
+    relayMultiaddrs,
     agentA: {
       kp: kpA, pubkey: pubkeyA, pubkeyHex: pubkeyAHex,
       client: clientA, primaryPubkey: primaryPubkeyA,
