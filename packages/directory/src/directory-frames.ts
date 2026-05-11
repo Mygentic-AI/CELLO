@@ -163,9 +163,9 @@ export function encodeRegisterError(frame: RegisterError): Uint8Array {
 
 // ─── Decode (client → directory) ─────────────────────────────────────────────
 
-import type { RegisterRequest, DkgComplete } from "@cello/protocol-types";
+import type { RegisterRequest } from "@cello/protocol-types";
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete;
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -226,12 +226,6 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const ml_dsa_pubkey = typeof o["ml_dsa_pubkey"] === "string" ? o["ml_dsa_pubkey"] : null;
     if (phone_stub === null || k_local_pubkey === null || ml_dsa_pubkey === null) return null;
     return { type: "register_request", phone_stub, k_local_pubkey, ml_dsa_pubkey };
-  }
-
-  if (o["type"] === "dkg_complete") {
-    const primary_pubkey = typeof o["primary_pubkey"] === "string" ? o["primary_pubkey"] : null;
-    if (primary_pubkey === null) return null;
-    return { type: "dkg_complete", primary_pubkey };
   }
 
   return null;

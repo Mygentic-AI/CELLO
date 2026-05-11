@@ -251,17 +251,6 @@ export class CelloDirectoryNode {
   // Populated by registerPrimaryPubkey (called by test harness or SESSION-004 establishment flow).
   readonly #primaryPubkeys = new Map<string, Uint8Array>();
 
-  // ─── REG-001: pending DKG state ─────────────────────────────────────────────
-  // pubkey_hex → { resolve, reject, primaryPubkey, mlDsaPubkey, phoneStubHash }
-  // Active while directory is waiting for the client to send dkg_complete.
-  readonly #pendingDkg = new Map<string, {
-    resolve: (primaryPubkey: string) => void;
-    reject: (reason: string) => void;
-    mlDsaPubkeyHex: string;
-    phoneStubHash: string;
-    expectedPrimaryPubkey: string;  // derived from DKG ceremony
-  }>();
-
   // session_id_hex → seal-pending state: waiting for seal_frost_signature from initiator — SESSION-005
   readonly #pendingFrostSeals = new Map<string, {
     initiatorHex: string;
@@ -579,9 +568,6 @@ export class CelloDirectoryNode {
           // REG-001: handle registration (runs concurrently; allows ceremony_result frames
           // to be processed by this same loop while DKG is in progress)
           void this.#processRegisterRequest(stream, authedPubkeyHex!, parsed);
-        } else if (parsed.type === "dkg_complete") {
-          // REG-001: client confirms DKG primary_pubkey — routed via pending DKG state
-          this.#processDkgComplete(authedPubkeyHex!, parsed);
         } else if (parsed.type === "session_request") {
           // REG-001 AC-009: refuse session_request if registration is required and the agent
           // has not completed it. requireRegistration defaults to false for backward compat.
@@ -791,16 +777,11 @@ export class CelloDirectoryNode {
       return;
     }
 
-    // Step 5 (M3+): In a real multi-round DKG, the directory would await dkg_complete from the
-    // client to confirm their local share. In NODE_ENV=test (bootstrapKeyShares path), the
-    // in-process stub trustedDealer runs entirely server-side — no client DKG round-trip is
-    // needed. The dkg_complete frame from the client is accepted if it arrives (see
-    // #processDkgComplete) but the directory does NOT block on it.
-    //
-    // Step 6 (M3+): Verify primary_pubkey from client matches what DKG produced.
-    // Skipped in test mode — DKG is canonical from bootstrapKeyShares.
+    // Step 5 (M3+): In a real multi-round DKG, the directory would await a client confirmation.
+    // In NODE_ENV=test (bootstrapKeyShares path), the in-process trustedDealer runs entirely
+    // server-side — no client round-trip is needed.
 
-    // Step 7: Create AgentProfile and send register_success
+    // Step 6: Create AgentProfile and send register_success
     // SI-001: phone_stub raw value NEVER stored
     // SI-002: only reached after successful FROST DKG
     // SI-003: DKG shares not in profile
@@ -822,20 +803,6 @@ export class CelloDirectoryNode {
       agent_id: agentId,
       primary_pubkey: primaryPubkeyFromDkg,
     }));
-  }
-
-  /**
-   * Process a dkg_complete frame from the client.
-   * Resolves the pending DKG promise for the given agent.
-   */
-  #processDkgComplete(
-    authedPubkeyHex: string,
-    frame: import("@cello/protocol-types").DkgComplete,
-  ): void {
-    const pending = this.#pendingDkg.get(authedPubkeyHex);
-    if (!pending) return; // No pending DKG — ignore
-    this.#pendingDkg.delete(authedPubkeyHex);
-    pending.resolve(frame.primary_pubkey);
   }
 
   // ─── Session request processing ──────────────────────────────────────────────

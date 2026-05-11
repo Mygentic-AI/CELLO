@@ -17,8 +17,8 @@
  *   SI-003: FROST DKG shares never appear in wire messages or profiles
  *   SI-004: register_request before auth → not_authenticated
  *
- * NOTE: AC-006 (DKG over real libp2p streams, separate libp2p instances) is in a separate
- * test file: e2e-reg-001-dkg-network.test.ts
+ * NOTE: AC-006 (DKG over real libp2p streams, separate libp2p instances) is in:
+ *   packages/client/src/__tests__/e2e-reg-001-dkg-network.test.ts
  * NOTE: AC-008, AC-010 are in the client-side registration tests.
  *
  * In NODE_ENV=test, createInProcessStubs is used for DKG (bootstrapKeyShares path).
@@ -647,13 +647,8 @@ describe("REG-001: Directory registration", () => {
       ml_dsa_pubkey: Buffer.from(await mlDsa.getPublicKey()).toString("hex"),
     }));
 
-    // Should get not_authenticated (the directory expects signaling_auth_response first)
+    // Directory sends not_authenticated then aborts stream — per protocol spec
     const frame = await reader.readFrameWithTimeout(5000);
-    // The directory aborts the stream when it sees an unexpected frame type before auth
-    // This results in either not_authenticated or a stream abort
-    expect(
-      frame["type"] === "not_authenticated" ||
-      frame["type"] === "register_error" && frame["reason"] === "not_authenticated"
-    ).toBe(true);
+    expect(frame["type"]).toBe("not_authenticated");
   });
 });
