@@ -12,6 +12,7 @@
  *   CONNREQ-002 AC-001: open policy e2e — both sides get connection_established with same id
  *   CONNREQ-002 AC-003: Round 2 flow — B requests more disclosure; A provides; connection established
  *   CONNREQ-002 AC-004: Round 2 missing required item — still unmet after disclosure → insufficient
+ *   CONNREQ-002 AC-013: disclosure_response round-trip — A sends disclosure_response → directory relays → B re-evaluates
  *   CONNREQ-002 AC-014: disclosure_response_inbound → B re-evaluates → connection_established
  *   CONNREQ-002 SI-005: A sends second connection_request to B (already connected) → already_connected
  *   SESSION-006 AC-007: two sessions on one connection — both sessions work independently
@@ -613,4 +614,66 @@ describe("E2E SESSION-006-AC-008: strangers-to-conversation — full end-to-end 
     expect(aSessionFinal.local_tree_leaves.length).toBe(2);
     expect(bSessionFinal.local_tree_leaves.length).toBe(2);
   }, 120_000);
+});
+
+// ─── CONNREQ-002 AC-013: disclosure_response round-trip via directory ─────────
+
+describe("E2E CONNREQ-002-AC-013: disclosure_response relay — A sends, directory relays to B, B re-evaluates", () => {
+  it("AC-013: A calls cello_respond_to_disclosure_request; directory relays disclosure_response_inbound to B; B validates package_v2 and re-runs evaluateConnectionPackage", async () => {
+    // B requires pseudonym_age >= 1 day. Round 1 package has created_at=now → insufficient.
+    // B sends disclosure_request. A responds with package_v2 (2 days old). Directory relays it.
+    // B receives disclosure_response_inbound, validates, and sends accept.
+    const selectivePolicy: SignalRequirementPolicy = {
+      mode: "selective",
+      review_mode: "deterministic",
+      requirements: [{ signal_type: "pseudonym_age", condition: { type: "min_age_days", days: 1 } }],
+    };
+
+    const fix = await makeE2EFixture({
+      policyB: selectivePolicy,
+      round2TimeoutMs: 10_000,
+      trackEvaluateCount: true,
+    });
+    scope.addCleanup(fix.stopAll);
+
+    let disclosureRequestId: string | null = null;
+    fix.clientA.onDisclosureRequested((event) => {
+      disclosureRequestId = event.connection_request_id;
+    });
+
+    const requestPromise = fix.clientA.cello_request_connection({
+      target_pubkey: fix.pubkeyBHex,
+      package_cbor: fix.packageCborA,
+    });
+
+    // Wait for B to send disclosure_request (relayed to A via directory)
+    await waitFor(() => disclosureRequestId !== null, { timeout: 15_000, interval: 100 });
+
+    const intermediateResult = await requestPromise;
+    expect(intermediateResult.result).toBe("disclosure_requested");
+
+    // Transport-path observable: B called evaluateConnectionPackage once for Round 1
+    const escapedB = fix.clientB as unknown as { _evaluateCallCount: number };
+    expect(escapedB._evaluateCallCount).toBe(1);
+
+    // A sends disclosure_response with package_v2 (satisfies pseudonym_age >= 1 day)
+    const mlDsaV2 = await mlDsaKeygen();
+    const twoDaysAgo = Date.now() - 2 * 86_400_000;
+    const packageV2 = await buildMinimalPackageCbor(fix.kpA, mlDsaV2, fix.primaryPubkeyA, twoDaysAgo);
+
+    const respondResult = await fix.clientA.cello_respond_to_disclosure_request({
+      connection_request_id: disclosureRequestId!,
+      package_cbor: packageV2,
+    });
+
+    // Transport-path: connection established after directory relayed disclosure_response_inbound
+    expect(respondResult.result).toBe("established");
+
+    // Transport-path observable: B called evaluateConnectionPackage a second time for Round 2
+    expect(escapedB._evaluateCallCount).toBe(2);
+
+    // Transport-path: directory store has connection record
+    const dirConn = fix.dirStore.hasConnection(fix.pubkeyAHex, fix.pubkeyBHex);
+    expect(dirConn).not.toBeNull();
+  }, 60_000);
 });

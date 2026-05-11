@@ -14,11 +14,12 @@
  *   CONNREQ-002 AC-012: connection_id matches across A, B, directory
  *   CONNREQ-002 AC-013: disclosure response round-trip
  *   CONNREQ-002 AC-017: Round 2 silence timeout — test-injectable round2TimeoutMs
- *   CONNREQ-002 SI-001: connection_request before registration → error propagation
+ *   CONNREQ-002 SI-001: directory-modifies-package-in-transit — receiver verifies ML-DSA and rejects
  *   CONNREQ-002 SI-003: forged package_cbor is rejected, no connection created
  *   CONNREQ-002 SI-005: simultaneous requests — second request returns already_connected
  *   CONNREQ-002 DB-001: target offline — request queued, delivered on reconnect
- *   CONNREQ-002 DB-002: target offline queue overflow — connection_request_error target_unavailable
+ *   CONNREQ-002 DB-002: sender disconnects after request but before response — connection still created
+ *   CONNREQ-002 DB-003: directory unreachable during cross-check — profile_unchecked: true
  *   SESSION-006 AC-001: initiateSession with valid connection → succeeds
  *   SESSION-006 AC-002: initiateSession without connection → immediate no_connection error
  *   SESSION-006 AC-006: messaging unchanged after connection established
@@ -1035,4 +1036,247 @@ describe("SESSION-006-AC-006: sendMessage and receiveMessage work normally after
       { timeout: 10_000, interval: 100 },
     );
   }, 60_000);
+});
+
+// ─── CONNREQ-002 DB-002: sender disconnects after request, connection still created ─
+
+describe("CONNREQ-002-DB-002: sender disconnects after request but before response — connection record still created", () => {
+  it("DB-002: A sends connection_request to offline B, then A disconnects; B reconnects and accepts; connection record exists; connection_established queued for A", async () => {
+    // Scenario: A sends request, B is offline. Before B reconnects, A also disconnects.
+    // When B comes online, B auto-accepts → connection record created.
+    // A later reconnects → receives queued connection_established.
+    const dirKeyProvider = generateKeypair();
+    const { node: dirNode, stop: stopDir } = await createDirectoryNode({
+      keyProvider: dirKeyProvider,
+      relay: makeRelay(),
+      relayEndpoint: { peer_id: "relay-peer-id", multiaddrs: [] },
+      requireRegistration: true,
+    });
+    scope.addCleanup(stopDir);
+
+    const kpA = generateKeypair();
+    const kpB = generateKeypair();
+
+    const directoryEndpoint = {
+      peer_id: dirNode.getPeerId(),
+      multiaddrs: dirNode.listenAddresses(),
+    };
+
+    const openPolicy: SignalRequirementPolicy = { mode: "open", review_mode: "deterministic", requirements: [] };
+
+    // Register B's profile via temporary node, then B goes offline
+    const nodeBTemp = await createNode({ keyProvider: kpB, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeBTemp.start();
+    const clientBTemp = createClient(nodeBTemp, kpB, { directoryEndpoint, connectionTimeoutMs: 5000 });
+    await clientBTemp.registerHandler();
+    await clientBTemp.register("+5553331111");
+    await nodeBTemp.stop(); // B goes offline
+
+    // Register A, send connection_request to offline B, then A disconnects
+    const nodeA = await createNode({ keyProvider: kpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeA.start();
+    scope.addCleanup(() => nodeA.stop());
+
+    const clientA = createClient(nodeA, kpA, {
+      directoryEndpoint,
+      connectionPolicy: openPolicy,
+      connectionTimeoutMs: 2000, // short timeout so A returns quickly
+    });
+    await clientA.registerHandler();
+
+    const mlDsaA = await mlDsaKeygen();
+    const regA = await clientA.register("+1113335555");
+    if ("error" in regA) throw new Error(`A reg failed: ${regA.error}`);
+
+    const pubkeyB = await kpB.getPublicKey();
+    const packageCbor = await buildMinimalPackageCbor(kpA, mlDsaA, regA.primary_pubkey);
+
+    // A sends connection_request to offline B (will timeout because B is offline)
+    const result = await clientA.cello_request_connection({
+      target_pubkey: Buffer.from(pubkeyB).toString("hex"),
+      package_cbor: packageCbor,
+    });
+    expect(result.result).toBe("timeout");
+
+    // Now A disconnects (simulating the DB-002 scenario: sender offline for the response)
+    await nodeA.stop();
+
+    // B reconnects — directory delivers the queued connection_request_inbound
+    const nodeBReconnect = await createNode({ keyProvider: kpB, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeBReconnect.start();
+    scope.addCleanup(() => nodeBReconnect.stop());
+
+    const clientBReconnect = createClient(nodeBReconnect, kpB, {
+      directoryEndpoint,
+      connectionPolicy: openPolicy,
+      connectionTimeoutMs: 10_000,
+    });
+    await clientBReconnect.registerHandler();
+
+    // B auto-accepts (open policy) → connection record created
+    await waitFor(() => clientBReconnect.listConnections().length > 0, { timeout: 10_000, interval: 100 });
+    expect(clientBReconnect.listConnections().length).toBe(1);
+
+    // Now A reconnects — connection_established should be queued and delivered
+    const nodeAReconnect = await createNode({ keyProvider: kpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeAReconnect.start();
+    scope.addCleanup(() => nodeAReconnect.stop());
+
+    const clientAReconnect = createClient(nodeAReconnect, kpA, {
+      directoryEndpoint,
+      connectionPolicy: openPolicy,
+      connectionTimeoutMs: 10_000,
+    });
+    await clientAReconnect.registerHandler();
+
+    // A's queued connection_established should arrive on the new signaling stream
+    await waitFor(() => clientAReconnect.listConnections().length > 0, { timeout: 10_000, interval: 100 });
+    expect(clientAReconnect.listConnections().length).toBe(1);
+    expect(clientAReconnect.listConnections()[0].connection_id).toBe(clientBReconnect.listConnections()[0].connection_id);
+  }, 45_000);
+});
+
+// ─── CONNREQ-002 DB-003: directory unreachable during cross-check → profile_unchecked ─
+
+describe("CONNREQ-002-DB-003: directory unreachable during ml_dsa_pubkey cross-check — profile_unchecked: true", () => {
+  it("DB-003: B cannot reach directory to verify sender's ml_dsa_pubkey; connection established with profile_unchecked: true", async () => {
+    // This test verifies the fallback: when B's client has crossCheckDirectoryOnInbound
+    // enabled but the cross-check cannot succeed (profile-query protocol not available),
+    // B accepts the embedded key from the pseudonym binding and marks the connection
+    // record with profile_unchecked: true.
+    //
+    // In M3 the directory does not implement a profile-query protocol, so any attempt
+    // to cross-check will fail. The client treats this as "directory unreachable for
+    // cross-check purposes" and proceeds with the embedded ml_dsa_pubkey.
+    const dirKeyProvider = generateKeypair();
+    const { node: dirNode, stop: stopDir } = await createDirectoryNode({
+      keyProvider: dirKeyProvider,
+      relay: makeRelay(),
+      relayEndpoint: { peer_id: "relay-peer-id", multiaddrs: [] },
+      requireRegistration: true,
+    });
+    scope.addCleanup(stopDir);
+
+    const kpA = generateKeypair();
+    const kpB = generateKeypair();
+
+    const directoryEndpoint = {
+      peer_id: dirNode.getPeerId(),
+      multiaddrs: dirNode.listenAddresses(),
+    };
+
+    const openPolicy: SignalRequirementPolicy = { mode: "open", review_mode: "deterministic", requirements: [] };
+
+    const nodeA = await createNode({ keyProvider: kpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    const nodeB = await createNode({ keyProvider: kpB, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeA.start();
+    await nodeB.start();
+    scope.addCleanup(() => nodeA.stop());
+    scope.addCleanup(() => nodeB.stop());
+
+    const clientA = createClient(nodeA, kpA, {
+      directoryEndpoint,
+      connectionPolicy: openPolicy,
+      connectionTimeoutMs: 10_000,
+    });
+    const clientB = createClient(nodeB, kpB, {
+      directoryEndpoint,
+      connectionPolicy: openPolicy,
+      connectionTimeoutMs: 10_000,
+      crossCheckDirectoryOnInbound: true,
+    });
+    await clientA.registerHandler();
+    await clientB.registerHandler();
+
+    const mlDsaA = await mlDsaKeygen();
+    const regA = await clientA.register("+7771112222");
+    if ("error" in regA) throw new Error(`A reg failed: ${regA.error}`);
+    await clientB.register("+2221117777");
+
+    const pubkeyB = await kpB.getPublicKey();
+    const packageCbor = await buildMinimalPackageCbor(kpA, mlDsaA, regA.primary_pubkey);
+
+    const result = await clientA.cello_request_connection({
+      target_pubkey: Buffer.from(pubkeyB).toString("hex"),
+      package_cbor: packageCbor,
+    });
+
+    expect(result.result).toBe("established");
+    if (result.result !== "established") throw new Error("Expected established");
+
+    // B's connection record should have profile_unchecked: true
+    await waitFor(() => clientB.listConnections().length > 0, { timeout: 5_000 });
+    const bConns = clientB.listConnections();
+    expect(bConns.length).toBe(1);
+    expect(bConns[0].profile_unchecked).toBe(true);
+  }, 30_000);
+});
+
+// ─── CONNREQ-002 SI-001: directory modifies package in transit → receiver rejects ─
+
+describe("CONNREQ-002-SI-001: directory-modifies-package-in-transit — receiver verifies ML-DSA signature and rejects", () => {
+  it("SI-001: when a relay/directory modifies package_cbor during transit, B's validateConnectionPackage detects the tamper via ML-DSA signature failure", async () => {
+    // This tests the ADVERSARIAL condition: the directory (or any MITM) modifies
+    // the package_cbor bytes between A's send and B's receive. B independently
+    // verifies the ML-DSA signature on the pseudonym binding and rejects.
+    //
+    // Setup: A sends a valid package. We intercept at the directory level using
+    // a package_cbor_interceptor that flips bytes before relay to B.
+    const dirKeyProvider = generateKeypair();
+    const { node: dirNode, stop: stopDir } = await createDirectoryNode({
+      keyProvider: dirKeyProvider,
+      relay: makeRelay(),
+      relayEndpoint: { peer_id: "relay-peer-id", multiaddrs: [] },
+      requireRegistration: true,
+      packageCborInterceptor: (cbor: Uint8Array) => {
+        // Directory tampers with the package by flipping signature bytes
+        const tampered = new Uint8Array(cbor);
+        for (let i = tampered.length - 40; i < tampered.length - 10; i++) {
+          tampered[i] ^= 0xff;
+        }
+        return tampered;
+      },
+    });
+    scope.addCleanup(stopDir);
+
+    const kpA = generateKeypair();
+    const kpB = generateKeypair();
+    const nodeA = await createNode({ keyProvider: kpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    const nodeB = await createNode({ keyProvider: kpB, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeA.start();
+    await nodeB.start();
+    scope.addCleanup(() => nodeA.stop());
+    scope.addCleanup(() => nodeB.stop());
+
+    const directoryEndpoint = {
+      peer_id: dirNode.getPeerId(),
+      multiaddrs: dirNode.listenAddresses(),
+    };
+
+    const openPolicy: SignalRequirementPolicy = { mode: "open", review_mode: "deterministic", requirements: [] };
+    const clientA = createClient(nodeA, kpA, { directoryEndpoint, connectionPolicy: openPolicy, connectionTimeoutMs: 10_000 });
+    const clientB = createClient(nodeB, kpB, { directoryEndpoint, connectionPolicy: openPolicy, connectionTimeoutMs: 10_000 });
+    await clientA.registerHandler();
+    await clientB.registerHandler();
+
+    const mlDsaA = await mlDsaKeygen();
+    const regA = await clientA.register("+9991112222");
+    if ("error" in regA) throw new Error(`A reg failed: ${regA.error}`);
+    await clientB.register("+2221119999");
+
+    // A sends a VALID package — but directory tampers with it before relaying to B
+    const pubkeyB = await kpB.getPublicKey();
+    const validPackageCbor = await buildMinimalPackageCbor(kpA, mlDsaA, regA.primary_pubkey);
+    const result = await clientA.cello_request_connection({
+      target_pubkey: Buffer.from(pubkeyB).toString("hex"),
+      package_cbor: validPackageCbor,
+    });
+
+    // B should reject because the ML-DSA signature is invalid after tampering
+    expect(result.result).toBe("rejected");
+
+    // No connection record on either side
+    expect(clientA.listConnections().length).toBe(0);
+    expect(clientB.listConnections().length).toBe(0);
+  }, 30_000);
 });

@@ -14,10 +14,10 @@
  */
 
 import type { SealNotarization, SessionAbandoned, SessionSealed, SessionSealRejected, SealVerified } from "./directory-types.js";
-import type { AgentProfile } from "@cello/protocol-types";
+import type { AgentProfile, ConnectionEstablished } from "@cello/protocol-types";
 import type { ConnectionRecord, PendingConnectionRequest } from "@cello/protocol-types";
 
-export type DirectoryNotification = SessionAbandoned | SessionSealed | SessionSealRejected | SealVerified;
+export type DirectoryNotification = SessionAbandoned | SessionSealed | SessionSealRejected | SealVerified | ConnectionEstablished;
 
 export interface DirectoryStore {
   /** Store a completed SealNotarization. */

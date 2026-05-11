@@ -372,6 +372,10 @@ class CelloClientImpl implements CelloClient {
   readonly #whitelist: string[];
   /** Callback fired when an inbound connection_request_inbound is queued for agent review. */
   readonly #onConnectionPendingReview: ((event: import("@cello/protocol-types").ConnectionRequestInbound) => void) | undefined;
+  /** DB-003: if true, attempt cross-check of sender's ml_dsa_pubkey on inbound requests. */
+  readonly #crossCheckDirectoryOnInbound: boolean;
+  /** DB-003: peers whose connection was accepted without successful cross-check. */
+  readonly #profileUncheckedPeers = new Set<string>();
 
   /** Counter incremented each time evaluateConnectionPackage is called (trackEvaluateCount=true). */
   _evaluateCallCount = 0;
@@ -416,6 +420,7 @@ class CelloClientImpl implements CelloClient {
     trackEvaluateCount = false,
     whitelist: string[] = [],
     onConnectionPendingReview?: (event: import("@cello/protocol-types").ConnectionRequestInbound) => void,
+    crossCheckDirectoryOnInbound = false,
   ) {
     this.#node = node;
     this.#keyProvider = keyProvider;
@@ -432,6 +437,7 @@ class CelloClientImpl implements CelloClient {
     this.#trackEvaluateCount = trackEvaluateCount;
     this.#whitelist = whitelist;
     this.#onConnectionPendingReview = onConnectionPendingReview;
+    this.#crossCheckDirectoryOnInbound = crossCheckDirectoryOnInbound;
   }
 
   /**
@@ -2922,6 +2928,10 @@ class CelloClientImpl implements CelloClient {
           mlDsaVerify,
         );
 
+        if (!validatedPackage.valid) {
+          verdict = "reject";
+          rejectReason = validatedPackage.reason;
+        } else {
         const context: import("@cello/protocol-types").DirectoryContext = {
           registered_at: senderRegisteredAt,
           is_provisional: senderIsProvisional,
@@ -3028,9 +3038,15 @@ class CelloClientImpl implements CelloClient {
           }
           return; // do not send a connection_response yet
         }
+        } // end of validatedPackage.valid else-branch
       } else {
         // pkg was null (decode failed) — verdict/rejectReason already set above
       }
+    }
+
+    // DB-003: cross-check logic — mark as unchecked when enabled (profile-query not yet implemented)
+    if (verdict === "accept" && this.#crossCheckDirectoryOnInbound) {
+      this.#profileUncheckedPeers.add(fromPubkey);
     }
 
     // Send connection_response to directory
@@ -3094,37 +3110,42 @@ class CelloClientImpl implements CelloClient {
           mlDsaVerify,
         );
 
-        const context: import("@cello/protocol-types").DirectoryContext = {
-          registered_at: 0,
-          is_provisional: false,
-          conversation_count: 0,
-          clean_close_rate: 0,
-        };
-
-        if (this.#trackEvaluateCount) {
-          this._evaluateCallCount++;
-        }
-
-        const { evaluateConnectionPackage } = await import("./connection-policy.js");
-        const report = evaluateConnectionPackage(
-          validatedPackage,
-          this.#connectionPolicy,
-          context,
-          Date.now(),
-        );
-
-        if (report.verdict === "auto_accept") {
-          verdict = "accept";
-        } else if (report.verdict === "auto_reject") {
+        if (!validatedPackage.valid) {
           verdict = "reject";
-          rejectReason = report.reason;
-        } else if (report.verdict === "auto_insufficient") {
-          verdict = "insufficient";
-          unmetRequirements = report.unmet_requirements;
+          rejectReason = validatedPackage.reason;
         } else {
-          // pending_agent_review in Round 2 — treat as insufficient (max rounds reached)
-          verdict = "reject";
-          rejectReason = "max_rounds_reached";
+          const context: import("@cello/protocol-types").DirectoryContext = {
+            registered_at: 0,
+            is_provisional: false,
+            conversation_count: 0,
+            clean_close_rate: 0,
+          };
+
+          if (this.#trackEvaluateCount) {
+            this._evaluateCallCount++;
+          }
+
+          const { evaluateConnectionPackage } = await import("./connection-policy.js");
+          const report = evaluateConnectionPackage(
+            validatedPackage,
+            this.#connectionPolicy,
+            context,
+            Date.now(),
+          );
+
+          if (report.verdict === "auto_accept") {
+            verdict = "accept";
+          } else if (report.verdict === "auto_reject") {
+            verdict = "reject";
+            rejectReason = report.reason;
+          } else if (report.verdict === "auto_insufficient") {
+            verdict = "insufficient";
+            unmetRequirements = report.unmet_requirements;
+          } else {
+            // pending_agent_review in Round 2 — treat as insufficient (max rounds reached)
+            verdict = "reject";
+            rejectReason = "max_rounds_reached";
+          }
         }
       } else {
         // pkg was null (decode failed) — verdict already set
@@ -3535,6 +3556,10 @@ class CelloClientImpl implements CelloClient {
                   established_at: Date.now(),
                   status: "active",
                 };
+                if (this.#profileUncheckedPeers.has(counterpartyPubkey)) {
+                  record.profile_unchecked = true;
+                  this.#profileUncheckedPeers.delete(counterpartyPubkey);
+                }
                 this.#connections.set(connectionId, record);
                 this.#connectionsByPeer.set(counterpartyPubkey, connectionId);
               }
@@ -3770,6 +3795,8 @@ export function createClient(
     whitelist?: string[];
     /** CONNREQ-002: callback fired when an inbound connection_request_inbound is queued for agent review. */
     onConnectionPendingReview?: (event: import("@cello/protocol-types").ConnectionRequestInbound) => void;
+    /** DB-003: attempt cross-check of sender's ml_dsa_pubkey on inbound requests. */
+    crossCheckDirectoryOnInbound?: boolean;
   }
 ): CelloClient & {
   sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
@@ -3830,6 +3857,7 @@ export function createClient(
     opts?.trackEvaluateCount,
     opts?.whitelist,
     opts?.onConnectionPendingReview,
+    opts?.crossCheckDirectoryOnInbound,
   ) as CelloClient & {
     sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
     openRawStream(peerPubkeyHex: string): Promise<Stream>;

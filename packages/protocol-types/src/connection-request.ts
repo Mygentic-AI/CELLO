@@ -283,6 +283,8 @@ export interface ClientConnectionRecord {
   /** Unix ms timestamp when established */
   established_at: number;
   status: "active";
+  /** True when directory was unreachable during ml_dsa_pubkey cross-check */
+  profile_unchecked?: boolean;
 }
 
 // ─── SESSION-006: updated session_request ────────────────────────────────────

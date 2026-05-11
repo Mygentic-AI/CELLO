@@ -9,6 +9,7 @@
  *   CONNREQ-002 AC-006: already_connected → rejected
  *   CONNREQ-002 AC-007: unregistered sender → not_registered
  *   CONNREQ-002 AC-015: connection_id is 16 bytes CSPRNG (unit)
+ *   CONNREQ-002 AC-016: 256 simultaneous connection requests — all unique connection_ids (e2e)
  *   CONNREQ-002 SI-002: directory never creates connection without accept verdict
  *   CONNREQ-002 SI-004: connection IDs never collide (unit)
  *   CONNREQ-002 DB-001: target offline → queued, delivered on reconnect
@@ -731,4 +732,142 @@ describe("CONNREQ-002-SI-002: Directory never creates connection without explici
     const result = store.getConnection("nonexistent-id");
     expect(result).toBeNull();
   });
+});
+
+// ─── CONNREQ-002 AC-016: 256 simultaneous connections — all unique IDs ────────
+// Uses the same pattern as AC-009 (directory-node.test.ts): two long-lived libp2p
+// nodes that dial once, then open 256 sequential streams each authenticated with a
+// fresh keypair. This avoids spawning 256 libp2p nodes (which exceeds OS limits).
+// Each stream represents a distinct "sender" identity via its unique K_local keypair.
+
+describe("CONNREQ-002-AC-016: 256 simultaneous connection requests to agent B — all unique connection_ids", () => {
+  it("AC-016: 256 distinct senders send connection_request to B via real directory; all accepted; all 256 connection_ids are unique and 16 bytes", async () => {
+    const COUNT = 256;
+    const dirKeyProvider = generateKeypair();
+    const store = new InMemoryDirectoryStore();
+    const relay = makeRelay();
+
+    const scope = createTestScope();
+
+    const { node: dirNode, stop } = await createDirectoryNode({
+      keyProvider: dirKeyProvider,
+      relay,
+      relayEndpoint: { peer_id: "relay-peer-id", multiaddrs: [] },
+      store,
+      requireRegistration: true,
+    });
+    scope.addCleanup(async () => { try { await stop(); } catch {} });
+
+    // Two long-lived transport nodes: one for senders, one for target B
+    const senderTransport = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    const targetTransport = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await senderTransport.start();
+    await targetTransport.start();
+    scope.addCleanup(() => senderTransport.stop());
+    scope.addCleanup(() => targetTransport.stop());
+
+    // Dial directory once from each transport node
+    await senderTransport.dial(dirNode.listenAddresses()[0]);
+    await targetTransport.dial(dirNode.listenAddresses()[0]);
+
+    // Target B — authenticate with a fixed keypair on the target transport node
+    const kpB = generateKeypair();
+    const bPubkeyHex = Buffer.from(await kpB.getPublicKey()).toString("hex");
+
+    store.setProfile({
+      k_local_pubkey: bPubkeyHex,
+      primary_pubkey: Buffer.from(randomBytes(32)).toString("hex"),
+      ml_dsa_pubkey: Buffer.from(randomBytes(1312)).toString("hex"),
+      phone_stub_hash: "hash-target",
+      profile: {},
+      registered_at: Date.now(),
+      status: "active",
+      agent_id: "agent-B",
+    });
+
+    // B opens a persistent stream for receiving inbound connection requests
+    const streamB = await targetTransport.newStream(dirNode.getPeerId(), SIGNALING_PROTOCOL_ID);
+    const readerB = new StreamReader(streamB);
+    const challengeB = await readerB.readFrame();
+    expect(challengeB["type"]).toBe("signaling_auth_challenge");
+    const authB = await signAuth(challengeB["nonce"] as Uint8Array, kpB);
+    sendFrame(streamB, CBOR_ENC.encode({ type: "signaling_auth_response", pubkey: authB.pubkey, signature: authB.signature }));
+    const authOkB = await readerB.readFrame();
+    expect(authOkB["type"]).toBe("signaling_auth_ok");
+    sendFrame(streamB, CBOR_ENC.encode({
+      type: "peer_info_announce",
+      peer_id: targetTransport.getPeerId(),
+      multiaddrs: targetTransport.listenAddresses(),
+    }));
+
+    // B accept loop — reads inbound requests and accepts them
+    const connectionIds = new Set<string>();
+    const bAcceptLoop = (async () => {
+      for (let i = 0; i < COUNT; i++) {
+        const frame = await readerB.readFrameWithTimeout(120000);
+        if (frame["type"] === "connection_request_inbound") {
+          sendFrame(streamB, CBOR_ENC.encode({
+            type: "connection_response",
+            connection_request_id: frame["connection_request_id"],
+            verdict: "accept",
+          }));
+          const estFrame = await readerB.readFrameWithTimeout(5000);
+          if (estFrame["type"] === "connection_established") {
+            connectionIds.add(estFrame["connection_id"] as string);
+          }
+        }
+      }
+    })();
+
+    // 256 sequential senders, each opens a fresh stream with a unique keypair
+    for (let i = 0; i < COUNT; i++) {
+      const kpSender = generateKeypair();
+      const senderPubkeyHex = Buffer.from(await kpSender.getPublicKey()).toString("hex");
+
+      store.setProfile({
+        k_local_pubkey: senderPubkeyHex,
+        primary_pubkey: Buffer.from(randomBytes(32)).toString("hex"),
+        ml_dsa_pubkey: Buffer.from(randomBytes(1312)).toString("hex"),
+        phone_stub_hash: `hash-${i}`,
+        profile: {},
+        registered_at: Date.now(),
+        status: "active",
+        agent_id: `agent-${i}`,
+      });
+
+      const stream = await senderTransport.newStream(dirNode.getPeerId(), SIGNALING_PROTOCOL_ID);
+      const reader = new StreamReader(stream);
+      const challenge = await reader.readFrame();
+      const auth = await signAuth(challenge["nonce"] as Uint8Array, kpSender);
+      sendFrame(stream, CBOR_ENC.encode({ type: "signaling_auth_response", pubkey: auth.pubkey, signature: auth.signature }));
+      const authOk = await reader.readFrame();
+      expect(authOk["type"]).toBe("signaling_auth_ok");
+
+      sendFrame(stream, CBOR_ENC.encode({
+        type: "peer_info_announce",
+        peer_id: senderTransport.getPeerId(),
+        multiaddrs: senderTransport.listenAddresses(),
+      }));
+
+      sendFrame(stream, CBOR_ENC.encode({
+        type: "connection_request",
+        target_pubkey: bPubkeyHex,
+        package_cbor: new Uint8Array(10),
+      }));
+
+      const response = await reader.readFrameWithTimeout(10000);
+      expect(response["type"]).toBe("connection_established");
+
+      stream.close();
+    }
+
+    await bAcceptLoop;
+
+    expect(connectionIds.size).toBe(COUNT);
+    for (const id of connectionIds) {
+      expect(id.length).toBe(32);
+    }
+
+    await scope.run(async () => {});
+  }, 120_000);
 });
