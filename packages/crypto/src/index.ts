@@ -30,3 +30,6 @@ export {
 
 // SESSION-004: standalone FROST verify (no signer instance needed — used by counterparty client)
 export { verifyFrostSignature } from "./frost/frost-threshold-signer.js";
+
+// REG-001: re-export ed25519_FROST for DKG coordinator in @cello/client
+export { ed25519_FROST } from "@noble/curves/ed25519.js";

@@ -182,6 +182,7 @@ describe("REG-001: Client registration", () => {
 
     const tbs = new Uint8Array([1, 2, 3, 4, 5]); // arbitrary test payload
     const sigResult = await signer!.participateInCeremony("ac008-test-ceremony", tbs, "cello-frost-seal-v1");
+    if (!sigResult.ok) process.stderr.write(`[AC-008] participateInCeremony failed: ${JSON.stringify(sigResult.error)}\n`);
     expect(sigResult.ok).toBe(true);
     if (!sigResult.ok) throw new Error("participateInCeremony failed unexpectedly");
 

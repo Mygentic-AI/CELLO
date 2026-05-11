@@ -129,6 +129,24 @@ export function clearTestShares(): void {
   _localShares.clear();
 }
 
+/**
+ * Store the client's local DKG key share after a real DKG ceremony completes.
+ *
+ * Production path: called after runNetworkDkg completes successfully.
+ * No NODE_ENV guard — this is the production key storage path (unlike bootstrapKeyShares).
+ *
+ * SECURITY: validates the secret against the public before storing.
+ * The FrostSecret is stored in the module-level map keyed by agentPubkeyHex.
+ */
+export function storeDkgResult(
+  agentPubkeyHex: string,
+  secret: FrostSecret,
+  pub: FrostPublic,
+): void {
+  ed25519_FROST.validateSecret(secret, pub);
+  _localShares.set(agentPubkeyHex, { secret, pub });
+}
+
 // ─── Message framing for domain separation ────────────────────────────────────
 
 /**

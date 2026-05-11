@@ -118,6 +118,7 @@ import type { Structure2 } from "@cello/protocol-types";
 import { verify, buildMerkleTree, merkleRoot, verifyFrostSignature, CONTEXT_SESSION_ESTABLISHMENT, mlDsaKeygen, FileMlDsaKeyProvider } from "@cello/crypto";
 import type { LeafInput, IThresholdSigner } from "@cello/crypto";
 import { CELLO_PROTOCOL_ID, CELLO_CONTENT_PROTOCOL_ID } from "@cello/transport";
+import { NetworkDirectoryNode, runNetworkDkg } from "./network-directory-node.js";
 import type { KeyProvider } from "@cello/crypto";
 import type { CelloNode } from "@cello/transport";
 import type { Stream } from "@libp2p/interface";
@@ -231,7 +232,7 @@ class CelloClientImpl implements CelloClient {
   /** SESSION-006: max ms to attempt relay reconnect before giving up. */
   readonly #reconnectTimeoutMs: number;
   /** SESSION-005: optional FROST threshold signer for seal ceremony coordination. */
-  readonly #thresholdSigner: IThresholdSigner | undefined;
+  #thresholdSigner: IThresholdSigner | undefined;
   /** SESSION-005: seal-frost-timeout in ms (default 15s). */
   readonly #sealFrostTimeoutMs: number;
   #myPubkeyHex: string | null = null;
@@ -345,6 +346,8 @@ class CelloClientImpl implements CelloClient {
 
   /** Pending resolver for register_success / register_error from directory. */
   #pendingRegisterResolve: ((frame: Record<string, unknown>) => void) | null = null;
+  /** Pending resolver for dkg_ready from directory (part of register flow). */
+  #pendingDkgReadyResolve: ((frame: Record<string, unknown>) => void) | null = null;
 
   /** Optional path for persisting the ML-DSA keypair (FileMlDsaKeyProvider). REG-001 AC-010. */
   readonly #mlDsaKeyFile: string | undefined;
@@ -1403,6 +1406,7 @@ class CelloClientImpl implements CelloClient {
     stream: Stream,
     frame: Record<string, unknown>,
   ): Promise<void> {
+    process.stderr.write(`[ceremony] #handleCeremonyRequest: thresholdSigner=${this.#thresholdSigner ? 'set' : 'null'}\n`);
     if (!this.#thresholdSigner) return; // no signer configured — ceremony_result with null
 
     const ceremonyId = frame["ceremony_id"] as string | undefined;
@@ -1426,8 +1430,9 @@ class CelloClientImpl implements CelloClient {
         ceremony_id: ceremonyId,
         signature: sig ? new Uint8Array(sig) : null,
       })));
-    } catch {
+    } catch (err) {
       // Send failure result
+      process.stderr.write(`[ceremony] #handleCeremonyRequest failed: ${err instanceof Error ? err.message : String(err)}\n`);
       stream.send(lp.encode.single(CBOR_ENC.encode({
         type: "ceremony_result",
         ceremony_id: ceremonyId,
@@ -2279,6 +2284,12 @@ class CelloClientImpl implements CelloClient {
    *   3. Open (or reuse) persistent signaling stream (auth handled inside)
    *   4. Get myPubkeyHex (Ed25519 K_local)
    *   5. Send register_request { phone_stub, k_local_pubkey, ml_dsa_pubkey } on signaling stream
+   *   5a. Await dkg_ready { epochId, participants, threshold } (routed by signaling reader)
+   *   5b. Run real FROST DKG ceremony over /cello/frost/1.0.0 streams (RFC 9591)
+   *       - Create NetworkDirectoryNode for each directory peer
+   *       - runNetworkDkg(agentPubkey, { threshold, participants, directoryNodes })
+   *       - Stores client share via storeDkgResult in frost-threshold-signer
+   *   5c. Send dkg_complete { primary_pubkey } on signaling stream
    *   6. Await register_success or register_error (routed by #runPersistentSignalingReader)
    *      - register_error → return { error: reason }
    *      - register_success → build RegistrationState and cache it
@@ -2320,6 +2331,65 @@ class CelloClientImpl implements CelloClient {
       ml_dsa_pubkey: mlDsaPubkeyHex,
     }) as Uint8Array;
     this.#persistentSignalingStream.send(lp.encode.single(regRequestFrame));
+
+    // Step 5a: await dkg_ready from directory (routed by #runPersistentSignalingReader)
+    const DKG_READY_TIMEOUT_MS = 15_000;
+    let dkgReadyTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const dkgReadyFrame = await Promise.race<Record<string, unknown>>([
+      new Promise<Record<string, unknown>>((resolve) => {
+        this.#pendingDkgReadyResolve = resolve;
+      }),
+      new Promise<Record<string, unknown>>((resolve) => {
+        dkgReadyTimeoutHandle = setTimeout(() => {
+          this.#pendingDkgReadyResolve = null;
+          resolve({ type: "register_error", reason: "timeout" });
+        }, DKG_READY_TIMEOUT_MS);
+      }),
+    ]);
+    clearTimeout(dkgReadyTimeoutHandle);
+
+    if (dkgReadyFrame["type"] !== "dkg_ready") {
+      const reason = (dkgReadyFrame["reason"] as string | undefined) ?? "unknown";
+      return { error: reason };
+    }
+
+    // Step 5b: run real FROST DKG over /cello/frost/1.0.0 (RFC 9591)
+    const epochId = dkgReadyFrame["epochId"] as string;
+    const participants = dkgReadyFrame["participants"] as number;
+    const threshold = dkgReadyFrame["threshold"] as number;
+    if (!this.#directoryEndpoint) {
+      return { error: "directory_unreachable" };
+    }
+    const dirNode = new NetworkDirectoryNode({
+      id: this.#directoryEndpoint.peer_id,
+      node: this.#node,
+      directoryPeerId: this.#directoryEndpoint.peer_id,
+      directoryMultiaddrs: this.#directoryEndpoint.multiaddrs,
+    });
+    // epochId is noted here for tracing; runNetworkDkg derives its own epochId internally
+    void epochId;
+    const kLocalPubkeyBytes = Buffer.from(kLocalPubkeyHex, "hex");
+    let dkgPrimaryPubkeyHex: string;
+    try {
+      const dkgResult = await runNetworkDkg(kLocalPubkeyBytes, {
+        threshold,
+        participants,
+        directoryNodes: [dirNode],
+      });
+      dkgPrimaryPubkeyHex = Buffer.from(dkgResult.primaryPubkey).toString("hex");
+      // Store the threshold signer so ceremony_request frames can be handled.
+      // The signer holds the client's local FROST share and the directory as a stub.
+      this.#thresholdSigner = dkgResult.signer;
+    } catch {
+      return { error: "dkg_failed" };
+    }
+
+    // Step 5c: send dkg_complete with the agreed primary_pubkey
+    const dkgCompleteFrame = CBOR_ENC.encode({
+      type: "dkg_complete",
+      primary_pubkey: dkgPrimaryPubkeyHex,
+    }) as Uint8Array;
+    this.#persistentSignalingStream.send(lp.encode.single(dkgCompleteFrame));
 
     // Step 6: await register_success or register_error (routed by #runPersistentSignalingReader)
     const REGISTER_TIMEOUT_MS = 15_000;
@@ -2826,6 +2896,13 @@ class CelloClientImpl implements CelloClient {
           // Directory asks the client to coordinate a FROST ceremony.
           // Client runs participateInCeremony and sends ceremony_result back.
           void this.#handleCeremonyRequest(stream, frame);
+        } else if (frame["type"] === "dkg_ready") {
+          // REG-001: directory is ready for DKG. Route to pending register() caller.
+          const resolve = this.#pendingDkgReadyResolve;
+          if (resolve) {
+            this.#pendingDkgReadyResolve = null;
+            resolve(frame);
+          }
         } else if (frame["type"] === "register_success" || frame["type"] === "register_error") {
           // REG-001: route registration response to pending register() caller.
           const resolve = this.#pendingRegisterResolve;
@@ -2843,7 +2920,14 @@ class CelloClientImpl implements CelloClient {
       this.#persistentSignalingIter = null;
     }
 
-    // If a register() call is pending, unblock it with a synthetic error
+    // If a register() call is pending (dkg_ready phase), unblock it with a synthetic error
+    const dkgReadyResolve = this.#pendingDkgReadyResolve;
+    if (dkgReadyResolve) {
+      this.#pendingDkgReadyResolve = null;
+      dkgReadyResolve({ type: "register_error", reason: "stream_closed" });
+    }
+
+    // If a register() call is pending (register_success phase), unblock it with a synthetic error
     const regResolve = this.#pendingRegisterResolve;
     if (regResolve) {
       this.#pendingRegisterResolve = null;
