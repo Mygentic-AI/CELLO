@@ -125,7 +125,11 @@ export class InMemoryMlDsaKeyProvider implements MlDsaKeyProvider {
 
   async sign(message: Uint8Array): Promise<MlDsaSignature> {
     const wasm = await _getWasm();
-    return wasm.sign(message, this.#secretKey);
+    // liboqs-js validates `message.constructor.name === 'Uint8Array'`, which fails for
+    // cross-realm Uint8Arrays (bytes from a compiled dep resolved in a different V8 context).
+    // new Uint8Array(message) copies the bytes into a fresh instance in the current realm.
+    const msg = new Uint8Array(message);
+    return wasm.sign(msg, this.#secretKey);
   }
 
   // SI-001: redacted representations — secret key must never appear in any of these
