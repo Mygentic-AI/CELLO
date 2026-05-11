@@ -132,6 +132,16 @@ function makeStubClient(opts: StubClientOptions = {}): CelloClient {
     },
     initiateSession: async () => ({ ok: false, reason: "directory_unreachable" as const }),
     register: async () => ({ error: "not_implemented" }),
+    // ─── MCP-003 additions ─────────────────────────────────────────────────
+    getRegistrationState: () => null,
+    setPolicy: () => {},
+    getPolicy: () => ({ mode: "open" as const, review_mode: "deterministic" as const, requirements: [] }),
+    hasConnection: () => null,
+    listConnections: () => [],
+    acceptConnection: async () => ({ error: { reason: "no_pending_request" as const } }),
+    rejectConnection: async () => ({ error: { reason: "no_pending_request" as const } }),
+    requestMoreDisclosure: async () => ({ error: { reason: "no_pending_request" as const } }),
+    awaitConnectionRequest: async () => ({ type: "timeout" as const }),
   };
   return stub;
 }
@@ -363,15 +373,26 @@ describe("AC-009: createMcpSessionServer registers identical M1 tool set under b
     const toolsA = sortByName((await mcpA.listTools()).tools);
     const toolsB = sortByName((await mcpB.listTools()).tools);
 
+    // MCP-003: 9 original tools + 10 new tools = 19 total
     const expectedTools = [
+      "cello_accept_connection",
+      "cello_await_connection_request",
       "cello_await_session",
       "cello_close_session",
       "cello_get_inclusion_proof",
+      "cello_get_policy",
       "cello_get_sealed_receipt",
       "cello_initiate_session",
+      "cello_list_connections",
       "cello_list_sessions",
       "cello_receive",
+      "cello_register",
+      "cello_reject_connection",
+      "cello_request_connection",
+      "cello_request_more_disclosure",
+      "cello_respond_to_disclosure_request",
       "cello_send",
+      "cello_set_policy",
       "cello_status",
     ];
 
@@ -460,12 +481,18 @@ describe("SI-002: no K_local private key material in any tool response", () => {
     expect(keys).not.toContain("private_key");
     expect(keys).not.toContain("secret");
     expect(keys).not.toContain("seed");
+    // MCP-003 extends cello_status with registration/connection/policy fields
     expect(keys).toEqual([
       "active_session_count",
+      "agent_id",
       "connected_peer_count",
+      "connection_count",
       "directory_reachable",
       "listen_addresses",
       "own_pubkey",
+      "policy_mode",
+      "policy_review_mode",
+      "registered",
       "transport_started",
       "uptime_seconds",
     ]);

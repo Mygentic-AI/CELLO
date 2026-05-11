@@ -353,6 +353,9 @@ class CelloClientImpl implements CelloClient {
   /** Optional path for persisting the ML-DSA keypair (FileMlDsaKeyProvider). REG-001 AC-010. */
   readonly #mlDsaKeyFile: string | undefined;
 
+  /** ML-DSA key provider stored after successful register() call. Used to sign ConnectionPackages. CELLO-MCP-003. */
+  #mlDsaProvider: import("@cello/crypto").MlDsaKeyProvider | null = null;
+
   // ─── CONNREQ-002: Connection state ────────────────────────────────────────────
 
   /** connection_id → ClientConnectionRecord */
@@ -360,8 +363,8 @@ class CelloClientImpl implements CelloClient {
   /** counterparty_pubkey_hex → connection_id (for fast lookup by peer) */
   readonly #connectionsByPeer = new Map<string, string>();
 
-  /** Connection policy for evaluating inbound connection_request_inbound frames. */
-  readonly #connectionPolicy: import("./connection-policy.js").SignalRequirementPolicy | undefined;
+  /** Connection policy for evaluating inbound connection_request_inbound frames. Mutable via setPolicy(). */
+  #connectionPolicy: import("./connection-policy.js").SignalRequirementPolicy | undefined;
   /** Overall connection timeout in ms (default 300s). Injected for tests. */
   readonly #connectionTimeoutMs: number;
   /** Round 2 silence timeout in ms (default 120s). Injected for tests. */
@@ -403,6 +406,26 @@ class CelloClientImpl implements CelloClient {
     package_cbor: Uint8Array;
     round: number; // 1 = Round 1; 2 = Round 2 in-flight
   }>();
+
+  /**
+   * FIFO queue of inbound connection requests that need agent review.
+   * Populated by #handleInboundConnectionRequest when verdict is pending_agent_review.
+   * Drained by awaitConnectionRequest(). CELLO-MCP-003.
+   */
+  readonly #pendingReviewQueue: Array<{
+    connection_request_id: string;
+    from_pubkey: string;
+    report: Extract<import("./connection-policy.js").ConnectionReport, { verdict: "pending_agent_review" }>;
+    package_cbor: Uint8Array;
+    sender_registered_at: number;
+    sender_is_provisional: boolean;
+  }> = [];
+
+  /**
+   * Tracks which connection_request_ids have been decided (accepted, rejected, or requested disclosure).
+   * Used to prevent double-decisions. CELLO-MCP-003.
+   */
+  readonly #decidedRequests = new Set<string>();
 
   constructor(
     node: CelloNode,
@@ -2493,6 +2516,8 @@ class CelloClientImpl implements CelloClient {
       status: "active",
     };
     this.#registrationState = state;
+    // Store the ML-DSA key provider so MCP tools can build ConnectionPackages (CELLO-MCP-003).
+    this.#mlDsaProvider = mlDsaProvider;
     return state;
   }
 
@@ -2604,6 +2629,227 @@ class CelloClientImpl implements CelloClient {
    */
   listConnections(): import("@cello/protocol-types").ClientConnectionRecord[] {
     return [...this.#connections.values()];
+  }
+
+  /**
+   * Return the cached registration state, or null if not yet registered.
+   * CELLO-MCP-003.
+   */
+  getRegistrationState(): import("@cello/protocol-types").RegistrationState | null {
+    return this.#registrationState;
+  }
+
+  /**
+   * Return the ML-DSA key provider stored after successful register(), or null.
+   * Used by the MCP server to build ConnectionPackages. CELLO-MCP-003.
+   * SI-001: This returns the key PROVIDER (sign/getPublicKey), not raw secret bytes.
+   */
+  getMlDsaProvider(): import("@cello/crypto").MlDsaKeyProvider | null {
+    return this.#mlDsaProvider;
+  }
+
+  /**
+   * Set the connection policy. Replaces any previously configured policy.
+   * CELLO-MCP-003.
+   */
+  setPolicy(policy: import("./connection-policy.js").SignalRequirementPolicy): void {
+    this.#connectionPolicy = policy;
+  }
+
+  /**
+   * Return the current connection policy. Returns default open/deterministic if none configured.
+   * CELLO-MCP-003.
+   */
+  getPolicy(): import("./connection-policy.js").SignalRequirementPolicy {
+    return this.#connectionPolicy ?? { mode: "open", review_mode: "deterministic", requirements: [] };
+  }
+
+  /**
+   * Check if a connection exists with the given counterparty pubkey.
+   * Returns the connection_id if found, null otherwise.
+   * CELLO-MCP-003.
+   */
+  hasConnection(counterpartyPubkeyHex: string): string | null {
+    return this.#connectionsByPeer.get(counterpartyPubkeyHex) ?? null;
+  }
+
+  /**
+   * Accept a pending inbound connection request (inference review mode).
+   * Sends connection_response { verdict: 'accept' } to the directory.
+   * The directory then pushes connection_established to both parties.
+   * CELLO-MCP-003.
+   */
+  async acceptConnection(connectionRequestId: string): Promise<
+    | { accepted: true; connection_id: string }
+    | { error: { reason: "no_pending_request" | "already_decided" } }
+  > {
+    const pending = this.#pendingInboundRequests.get(connectionRequestId);
+    if (!pending) {
+      if (this.#decidedRequests.has(connectionRequestId)) {
+        return { error: { reason: "already_decided" } };
+      }
+      return { error: { reason: "no_pending_request" } };
+    }
+    if (this.#decidedRequests.has(connectionRequestId)) {
+      return { error: { reason: "already_decided" } };
+    }
+
+    // Mark as decided before sending to prevent races
+    this.#decidedRequests.add(connectionRequestId);
+    this.#pendingInboundRequests.delete(connectionRequestId);
+
+    if (!this.#persistentSignalingStream) {
+      // Stream gone — still mark as decided
+      return { error: { reason: "no_pending_request" } };
+    }
+
+    const responseFrame = CBOR_ENC.encode({
+      type: "connection_response",
+      connection_request_id: connectionRequestId,
+      verdict: "accept",
+    }) as Uint8Array;
+
+    try {
+      this.#persistentSignalingStream.send(lp.encode.single(responseFrame));
+    } catch {
+      return { error: { reason: "no_pending_request" } };
+    }
+
+    // Wait for connection_established to arrive via the signaling reader loop.
+    // The signaling reader will store the connection record and fire onConnectionEstablished.
+    // Poll #connections until the connection appears (or timeout).
+    const deadline = Date.now() + this.#connectionTimeoutMs;
+    while (Date.now() < deadline) {
+      const connectionId = this.#connectionsByPeer.get(pending.from_pubkey);
+      if (connectionId) {
+        return { accepted: true, connection_id: connectionId };
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(20, remaining)));
+    }
+
+    return { error: { reason: "no_pending_request" } };
+  }
+
+  /**
+   * Reject a pending inbound connection request (inference review mode).
+   * Sends connection_response { verdict: 'reject' } to the directory.
+   * CELLO-MCP-003.
+   */
+  async rejectConnection(connectionRequestId: string, reason?: string): Promise<
+    | { rejected: true }
+    | { error: { reason: "no_pending_request" | "already_decided" } }
+  > {
+    const pending = this.#pendingInboundRequests.get(connectionRequestId);
+    if (!pending) {
+      if (this.#decidedRequests.has(connectionRequestId)) {
+        return { error: { reason: "already_decided" } };
+      }
+      return { error: { reason: "no_pending_request" } };
+    }
+    if (this.#decidedRequests.has(connectionRequestId)) {
+      return { error: { reason: "already_decided" } };
+    }
+
+    // Mark as decided
+    this.#decidedRequests.add(connectionRequestId);
+    this.#pendingInboundRequests.delete(connectionRequestId);
+
+    if (!this.#persistentSignalingStream) {
+      return { rejected: true };
+    }
+
+    const payload: Record<string, unknown> = {
+      type: "connection_response",
+      connection_request_id: connectionRequestId,
+      verdict: "reject",
+    };
+    if (reason !== undefined) payload["reason"] = reason;
+
+    const responseFrame = CBOR_ENC.encode(payload) as Uint8Array;
+    try {
+      this.#persistentSignalingStream.send(lp.encode.single(responseFrame));
+    } catch { /* stream closed */ }
+
+    return { rejected: true };
+  }
+
+  /**
+   * Request more disclosure from sender (Round 2 initiation by target).
+   * Only valid when in Round 1 pending state.
+   * CELLO-MCP-003.
+   */
+  async requestMoreDisclosure(connectionRequestId: string, requestedItems: unknown[]): Promise<
+    | { request_sent: true }
+    | { error: { reason: "no_pending_request" | "already_decided" | "max_rounds_reached" } }
+  > {
+    const pending = this.#pendingInboundRequests.get(connectionRequestId);
+    if (!pending) {
+      if (this.#decidedRequests.has(connectionRequestId)) {
+        return { error: { reason: "already_decided" } };
+      }
+      return { error: { reason: "no_pending_request" } };
+    }
+    if (this.#decidedRequests.has(connectionRequestId)) {
+      return { error: { reason: "already_decided" } };
+    }
+    if (pending.round >= 2) {
+      return { error: { reason: "max_rounds_reached" } };
+    }
+
+    // Advance to Round 2
+    pending.round = 2;
+
+    if (!this.#persistentSignalingStream) {
+      return { error: { reason: "no_pending_request" } };
+    }
+
+    const disclosureFrame = CBOR_ENC.encode({
+      type: "disclosure_request",
+      connection_request_id: connectionRequestId,
+      requested_items: requestedItems,
+    }) as Uint8Array;
+
+    try {
+      this.#persistentSignalingStream.send(lp.encode.single(disclosureFrame));
+    } catch {
+      return { error: { reason: "no_pending_request" } };
+    }
+
+    return { request_sent: true };
+  }
+
+  /**
+   * Block until an inbound connection request arrives for agent review,
+   * or until timeoutMs elapses.
+   * Drains from #pendingReviewQueue (FIFO). CELLO-MCP-003.
+   */
+  async awaitConnectionRequest(timeoutMs = 30_000): Promise<
+    | {
+        type: "pending_review";
+        connection_request_id: string;
+        from_pubkey: string;
+        report: Extract<import("./connection-policy.js").ConnectionReport, { verdict: "pending_agent_review" }>;
+      }
+    | { type: "timeout" }
+  > {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (this.#pendingReviewQueue.length > 0) {
+        const item = this.#pendingReviewQueue.shift()!;
+        return {
+          type: "pending_review",
+          connection_request_id: item.connection_request_id,
+          from_pubkey: item.from_pubkey,
+          report: item.report,
+        };
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(20, remaining)));
+    }
+    return { type: "timeout" };
   }
 
   /**
@@ -3005,6 +3251,15 @@ class CelloClientImpl implements CelloClient {
             package_cbor: packageCbor,
             round: 1,
           });
+          // Push to awaitConnectionRequest() queue (CELLO-MCP-003)
+          this.#pendingReviewQueue.push({
+            connection_request_id: connectionRequestId,
+            from_pubkey: fromPubkey,
+            report,
+            package_cbor: packageCbor,
+            sender_registered_at: senderRegisteredAt,
+            sender_is_provisional: senderIsProvisional,
+          });
           if (this.#onConnectionPendingReview) {
             this.#onConnectionPendingReview({
               type: "connection_request_inbound",
@@ -3142,9 +3397,25 @@ class CelloClientImpl implements CelloClient {
             verdict = "insufficient";
             unmetRequirements = report.unmet_requirements;
           } else {
-            // pending_agent_review in Round 2 — treat as insufficient (max rounds reached)
-            verdict = "reject";
-            rejectReason = "max_rounds_reached";
+            // pending_agent_review in Round 2 (inference mode) — surface for agent review with is_round_2: true.
+            // Build a Round 2 report by cloning the Round 1 report shape with is_round_2: true.
+            const round2Report = { ...report, is_round_2: true };
+            this.#pendingInboundRequests.set(connectionRequestId, {
+              connection_request_id: connectionRequestId,
+              from_pubkey: fromPubkey,
+              package_cbor: packageCbor,
+              round: 2,
+            });
+            this.#pendingReviewQueue.push({
+              connection_request_id: connectionRequestId,
+              from_pubkey: fromPubkey,
+              report: round2Report,
+              package_cbor: packageCbor,
+              sender_registered_at: 0,
+              sender_is_provisional: false,
+            });
+            // No response yet — wait for agent to call accept/reject.
+            return;
           }
         }
       } else {
@@ -3858,7 +4129,7 @@ export function createClient(
     opts?.whitelist,
     opts?.onConnectionPendingReview,
     opts?.crossCheckDirectoryOnInbound,
-  ) as CelloClient & {
+  ) as unknown as CelloClient & {
     sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
     openRawStream(peerPubkeyHex: string): Promise<Stream>;
     openContentStreamByPeerId(peerId: string): Promise<Stream>;

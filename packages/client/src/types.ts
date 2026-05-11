@@ -196,6 +196,86 @@ export interface CelloClient {
   register(phoneStub: string): Promise<import("@cello/protocol-types").RegistrationState | { error: string }>;
 
   /**
+   * Return the cached registration state, or null if not yet registered.
+   * CELLO-MCP-003.
+   */
+  getRegistrationState(): import("@cello/protocol-types").RegistrationState | null;
+
+  /**
+   * Set the connection policy for evaluating inbound connection requests.
+   * Replaces any previously configured policy.
+   * CELLO-MCP-003.
+   */
+  setPolicy(policy: import("./connection-policy.js").SignalRequirementPolicy): void;
+
+  /**
+   * Return the current connection policy.
+   * CELLO-MCP-003.
+   */
+  getPolicy(): import("./connection-policy.js").SignalRequirementPolicy;
+
+  /**
+   * Check if a connection exists with the given counterparty pubkey.
+   * Returns the connection_id if found, null otherwise.
+   * CELLO-MCP-003.
+   */
+  hasConnection(counterpartyPubkeyHex: string): string | null;
+
+  /**
+   * Accept a pending inbound connection request (inference review mode).
+   * Sends connection_response { verdict: 'accept' } to the directory.
+   * Returns { accepted: true, connection_id } on success, or { error: { reason } }.
+   * CELLO-MCP-003.
+   */
+  acceptConnection(connectionRequestId: string): Promise<
+    | { accepted: true; connection_id: string }
+    | { error: { reason: "no_pending_request" | "already_decided" } }
+  >;
+
+  /**
+   * Reject a pending inbound connection request (inference review mode).
+   * Sends connection_response { verdict: 'reject' } to the directory.
+   * Returns { rejected: true } on success, or { error: { reason } }.
+   * CELLO-MCP-003.
+   */
+  rejectConnection(connectionRequestId: string, reason?: string): Promise<
+    | { rejected: true }
+    | { error: { reason: "no_pending_request" | "already_decided" } }
+  >;
+
+  /**
+   * Ask for more disclosure from sender (Round 2 initiation by target).
+   * Returns { request_sent: true } on success, or { error: { reason } }.
+   * CELLO-MCP-003.
+   */
+  requestMoreDisclosure(connectionRequestId: string, requestedItems: unknown[]): Promise<
+    | { request_sent: true }
+    | { error: { reason: "no_pending_request" | "already_decided" | "max_rounds_reached" } }
+  >;
+
+  /**
+   * Block until an inbound connection request arrives for agent review,
+   * or until timeoutMs elapses.
+   * Returns pending_review with ConnectionReport, or { type: 'timeout' }.
+   * CELLO-MCP-003.
+   */
+  awaitConnectionRequest(timeoutMs?: number): Promise<
+    | {
+        type: "pending_review";
+        connection_request_id: string;
+        from_pubkey: string;
+        report: Extract<import("./connection-policy.js").ConnectionReport, { verdict: "pending_agent_review" }>;
+      }
+    | { type: "timeout" }
+  >;
+
+  /**
+   * List all active connection records.
+   * CELLO-MCP-003.
+   */
+  listConnections(): import("@cello/protocol-types").ClientConnectionRecord[];
+
+  /**
    * Register a peer in the local registry.
    * Called by MCP-001 cello_connect_peer after dialing succeeds.
    */

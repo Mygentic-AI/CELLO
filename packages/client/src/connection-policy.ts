@@ -133,6 +133,8 @@ export type ConnectionReport =
         registration_age_days: number;
         is_provisional: boolean;
       };
+      /** True when this is a Round 2 (disclosure_response_inbound) review. CELLO-MCP-003. */
+      is_round_2: boolean;
     };
 
 // ─── Default policies ─────────────────────────────────────────────────────────
@@ -211,6 +213,7 @@ export function evaluateConnectionPackage(
         requirements_unmet: [],
       },
       package_summary: buildPackageSummary(pkg, context, current_timestamp_ms),
+      is_round_2: false,
     };
   }
 
@@ -244,6 +247,7 @@ export function evaluateConnectionPackage(
       requirements_unmet: unmetRequirements,
     },
     package_summary: buildPackageSummary(pkg, context, current_timestamp_ms),
+    is_round_2: false,
   };
 }
 

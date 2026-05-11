@@ -1,10 +1,87 @@
 /**
- * CELLO MCP Session Server — mcp-server.ts (CELLO-MCP-002)
+ * CELLO MCP Session Server — mcp-server.ts (CELLO-MCP-003)
  *
  * createMcpSessionServer(node, client, keyProvider): McpServer
- *   Registers the M1 session-aware tool set (9 tools) against a CelloClient.
+ *   Registers the M3 tool set (19 tools) against a CelloClient.
  *   Transport-agnostic: identical tool names, schemas, and wiring under
- *   InMemoryTransport (tests) and stdio (production). AC-009.
+ *   InMemoryTransport (tests) and stdio (production). AC-016.
+ *
+ * MCP-003 additions (10 new tools):
+ *   cello_register               — REG-001 DKG registration
+ *   cello_request_connection     — CONNREQ-002 Round 1 sender
+ *   cello_respond_to_disclosure_request — CONNREQ-002 Round 2 sender
+ *   cello_await_connection_request — waits for agent-review inbound request
+ *   cello_accept_connection      — inference-mode accept
+ *   cello_reject_connection      — inference-mode reject
+ *   cello_request_more_disclosure — inference-mode ask for more
+ *   cello_list_connections       — list active connections
+ *   cello_set_policy             — configure policy engine
+ *   cello_get_policy             — read current policy
+ *
+ * MCP-002 modifications:
+ *   cello_initiate_session: checks hasConnection() first
+ *   cello_status: gains registered, agent_id, connection_count, policy_mode, policy_review_mode
+ *
+ * PSEUDOCODE (Phase P — MCP-003):
+ *
+ * cello_register({ phone_stub }):
+ *   1. result = await client.register(phone_stub)
+ *   2. if 'error' in result: return { error: { reason: result.error } }
+ *   3. return { registered: true, agent_id, primary_pubkey, ml_dsa_pubkey }
+ *      SI-001: never include ml_dsa secret
+ *
+ * cello_request_connection({ target_pubkey, include_endorsements?, include_attestations? }):
+ *   1. Build a minimal ConnectionPackage (empty endorsements/attestations unless requested)
+ *   2. result = await client.cello_request_connection({ target_pubkey, package_cbor })
+ *   3. Map result to MCP response shape
+ *
+ * cello_respond_to_disclosure_request({ connection_request_id, ... }):
+ *   1. result = await client.cello_respond_to_disclosure_request({ connection_request_id, package_cbor })
+ *   2. Map result
+ *
+ * cello_await_connection_request({ timeout_ms? }):
+ *   1. result = await client.awaitConnectionRequest(timeout_ms ?? 30_000)
+ *   2. if timeout: return { type: 'timeout' }
+ *   3. Return { type: 'pending_review', connection_request_id, from_pubkey, report }
+ *      SI-003: report is ConnectionReport — no raw signatures, no full pubkeys
+ *
+ * cello_accept_connection({ connection_request_id }):
+ *   1. result = await client.acceptConnection(connection_request_id)
+ *   2. Map to { accepted: true, connection_id } or { error: { reason } }
+ *
+ * cello_reject_connection({ connection_request_id, reason? }):
+ *   1. result = await client.rejectConnection(connection_request_id, reason)
+ *   2. Map to { rejected: true } or { error: { reason } }
+ *
+ * cello_request_more_disclosure({ connection_request_id, requested_items }):
+ *   1. result = await client.requestMoreDisclosure(connection_request_id, requested_items)
+ *   2. Map to { request_sent: true } or { error: { reason } }
+ *
+ * cello_list_connections():
+ *   1. connections = client.listConnections()
+ *   2. Map each record to { connection_id, counterparty_pubkey, counterparty_primary_pubkey,
+ *      established_at, status: 'active' }
+ *
+ * cello_set_policy({ mode, review_mode, requirements? }):
+ *   1. policy = { mode, review_mode, requirements: requirements ?? [] }
+ *   2. client.setPolicy(policy)
+ *   3. return { policy_set: true, mode, review_mode, requirement_count }
+ *
+ * cello_get_policy():
+ *   1. policy = client.getPolicy()
+ *   2. return { mode, review_mode, requirements }
+ *
+ * Modified: cello_initiate_session({ target_pubkey }):
+ *   1. NEW: check client.hasConnection(target_pubkey)
+ *      if !connection → return { ok: false, reason: 'no_connection' }
+ *      (existing transport guard + directory signaling unchanged)
+ *
+ * Modified: cello_status():
+ *   + registered: bool
+ *   + agent_id: hex | null
+ *   + connection_count: number
+ *   + policy_mode: string
+ *   + policy_review_mode: string
  *
  * PSEUDOCODE (Phase P):
  *
@@ -179,10 +256,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { buildMerkleTree, merkleRoot, inclusionProof } from "@cello/crypto";
-import type { LeafInput } from "@cello/crypto";
+import type { LeafInput, MlDsaKeyProvider } from "@cello/crypto";
 import type { CelloClient, SessionAssignmentEvent } from "./types.js";
 import type { CelloNode } from "@cello/transport";
 import type { KeyProvider } from "@cello/crypto";
+import type { SignalRequirement } from "./connection-policy.js";
+import { buildPseudonymBinding, encodeConnectionPackage } from "@cello/protocol-types";
+import type { ConnectionPackage } from "@cello/protocol-types";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -261,7 +341,7 @@ export function createMcpSessionServer(
   server.registerTool(
     "cello_initiate_session",
     {
-      description: "Initiate a session with a target agent by their K_local public key.",
+      description: "Initiate a session with a target agent by their K_local public key. Requires an existing connection (M3+).",
       inputSchema: {
         target_pubkey: z.string().describe("Target agent K_local pubkey as lowercase hex (64 chars)"),
         timeout_ms: z.number().int().min(0).optional().describe("Optional timeout in milliseconds"),
@@ -269,6 +349,16 @@ export function createMcpSessionServer(
     },
     async ({ target_pubkey, timeout_ms }) => {
       if (!transportStarted()) return TRANSPORT_NOT_STARTED;
+
+      // MCP-003 AC-014 / SESSION-006: check connection gate before signaling stream.
+      // hasConnection() is defined on the extended client (CelloClientImpl); if not
+      // available (older stub), fall through to initiateSession which does the same check.
+      const hasConn = typeof (client as unknown as { hasConnection?: (k: string) => string | null }).hasConnection === "function"
+        ? (client as unknown as { hasConnection: (k: string) => string | null }).hasConnection(target_pubkey)
+        : true; // no gate in M2 mode
+      if (!hasConn) {
+        return jsonText({ ok: false, reason: "no_connection" });
+      }
 
       const result = await client.initiateSession(target_pubkey, { timeoutMs: timeout_ms });
 
@@ -534,7 +624,7 @@ export function createMcpSessionServer(
   server.registerTool(
     "cello_status",
     {
-      description: "Return transport status, own pubkey, session count, and connection info.",
+      description: "Return transport status, own pubkey, session count, registration state, connection count, and policy info.",
       inputSchema: {},
     },
     async () => {
@@ -542,6 +632,25 @@ export function createMcpSessionServer(
       const ownPubkey = toHex(await keyProvider.getPublicKey());
       const allSessions = client.listSessions();
       const activeSessions = allSessions.filter((s) => s.status === "active");
+
+      // MCP-003 AC-015: registration state
+      const regState = typeof (client as unknown as { getRegistrationState?: () => unknown }).getRegistrationState === "function"
+        ? (client as unknown as { getRegistrationState: () => { agent_id: string } | null }).getRegistrationState()
+        : null;
+      const registered = regState !== null;
+      const agentId = registered ? regState!.agent_id : null;
+
+      // MCP-003 AC-015: connection count
+      const connections = typeof client.listConnections === "function"
+        ? client.listConnections()
+        : [];
+      const connectionCount = connections.length;
+
+      // MCP-003 AC-015: policy info
+      const policy = typeof (client as unknown as { getPolicy?: () => { mode: string; review_mode: string } }).getPolicy === "function"
+        ? (client as unknown as { getPolicy: () => { mode: string; review_mode: string } }).getPolicy()
+        : { mode: "open", review_mode: "deterministic" };
+
       return jsonText({
         transport_started: transportStarted(),
         own_pubkey: ownPubkey,
@@ -550,6 +659,12 @@ export function createMcpSessionServer(
         uptime_seconds: Math.floor((Date.now() - startedAt) / 1000),
         active_session_count: activeSessions.length,
         directory_reachable: directoryReachable(),
+        // MCP-003 additions
+        registered,
+        agent_id: agentId,
+        connection_count: connectionCount,
+        policy_mode: policy.mode,
+        policy_review_mode: policy.review_mode,
       });
     },
   );
@@ -692,6 +807,389 @@ export function createMcpSessionServer(
         tree_size: treeSize,
         proof: proof.map(toHex),
         sealed_root: localRootHex,
+      });
+    },
+  );
+
+  // ── cello_register ────────────────────────────────────────────────────────
+  //
+  // REG-001: DKG registration. Idempotent — second call returns already_registered.
+  // SI-001: never emits ML-DSA secret key material.
+
+  server.registerTool(
+    "cello_register",
+    {
+      description: "Register this agent with the CELLO directory. Runs the REG-001 DKG ceremony. Idempotent — returns already_registered if already done.",
+      inputSchema: {
+        phone_stub: z.string().describe("Phone stub for identity binding (format: +E.164 or hex stub)"),
+      },
+    },
+    async ({ phone_stub }) => {
+      const result = await client.register(phone_stub);
+      if ("error" in result) {
+        return jsonText({ error: { reason: result.error } });
+      }
+      // SI-001: return only public fields — never the ML-DSA secret
+      return jsonText({
+        registered: true,
+        agent_id: result.agent_id,
+        primary_pubkey: result.primary_pubkey,
+        ml_dsa_pubkey: result.ml_dsa_pubkey,
+      });
+    },
+  );
+
+  // ── cello_request_connection ───────────────────────────────────────────────
+  //
+  // CONNREQ-002: Send Round 1 connection_request to target B.
+  // Blocks up to 5 min (directory default). Returns accepted/rejected/etc.
+
+  server.registerTool(
+    "cello_request_connection",
+    {
+      description: "Send a connection request to a target agent. Blocks until the target responds (up to 5 minutes).",
+      inputSchema: {
+        target_pubkey: z.string().describe("Target agent K_local pubkey as lowercase hex (64 chars)"),
+        include_endorsements: z.boolean().optional().describe("Include endorsements in the connection package"),
+        include_attestations: z.boolean().optional().describe("Include attestations in the connection package"),
+      },
+    },
+    async ({ target_pubkey }) => {
+      const extendedClient = client as unknown as {
+        cello_request_connection: (opts: { target_pubkey: string; package_cbor: Uint8Array }) => Promise<
+          | { result: "established"; connection_id: string }
+          | { result: "rejected"; reason: string }
+          | { result: "insufficient"; unmet_requirements: unknown[] }
+          | { result: "disclosure_requested"; connection_request_id: string; requested_items: unknown[] }
+          | { result: "timeout" }
+          | { result: "error"; reason: string }
+        >;
+        getRegistrationState?: () => import("@cello/protocol-types").RegistrationState | null;
+        getMlDsaProvider?: () => MlDsaKeyProvider | null;
+      };
+
+      if (typeof extendedClient.cello_request_connection !== "function") {
+        return jsonText({ error: { reason: "not_registered" } });
+      }
+
+      // Build a real ConnectionPackage (pseudonym binding) from registration state.
+      // Falls back to an empty package if the agent is not yet registered.
+      let packageCbor: Uint8Array = new Uint8Array(0);
+      const regState = typeof extendedClient.getRegistrationState === "function"
+        ? extendedClient.getRegistrationState()
+        : null;
+      const mlDsaProvider = typeof extendedClient.getMlDsaProvider === "function"
+        ? extendedClient.getMlDsaProvider()
+        : null;
+
+      if (regState && mlDsaProvider) {
+        const kLocalPubkey = await keyProvider.getPublicKey();
+        const mlDsaPubkey = await mlDsaProvider.getPublicKey();
+        const bindingResult = await buildPseudonymBinding(
+          {
+            pseudonym_label: regState.agent_id,
+            k_local_pubkey: new Uint8Array(kLocalPubkey),
+            primary_pubkey: Buffer.from(regState.primary_pubkey, "hex"),
+            ml_dsa_pubkey: new Uint8Array(mlDsaPubkey),
+            created_at: regState.registered_at ?? Date.now(),
+          },
+          mlDsaProvider,
+        );
+        if (bindingResult.ok) {
+          const pkg: ConnectionPackage = {
+            pseudonym_binding: bindingResult.binding,
+            endorsements: [],
+            attestations: [],
+          };
+          packageCbor = encodeConnectionPackage(pkg);
+        }
+      }
+
+      const result = await extendedClient.cello_request_connection({
+        target_pubkey,
+        package_cbor: packageCbor,
+      });
+
+      if (result.result === "established") {
+        return jsonText({ result: "accepted", connection_id: result.connection_id });
+      }
+      if (result.result === "rejected") {
+        return jsonText({ result: "rejected", reason: result.reason });
+      }
+      if (result.result === "insufficient") {
+        return jsonText({ result: "insufficient", unmet_requirements: result.unmet_requirements });
+      }
+      if (result.result === "disclosure_requested") {
+        return jsonText({
+          result: "disclosure_requested",
+          connection_request_id: result.connection_request_id,
+          requested_items: result.requested_items,
+        });
+      }
+      if (result.result === "timeout") {
+        return jsonText({ result: "timeout" });
+      }
+      return jsonText({ error: { reason: result.reason } });
+    },
+  );
+
+  // ── cello_respond_to_disclosure_request ───────────────────────────────────
+  //
+  // CONNREQ-002 Round 2 sender side. Responds to disclosure_requested with updated package.
+
+  server.registerTool(
+    "cello_respond_to_disclosure_request",
+    {
+      description: "Respond to a disclosure request (Round 2 sender side). Sends updated disclosure to target and awaits final decision.",
+      inputSchema: {
+        connection_request_id: z.string().describe("Connection request ID from the disclosure_requested response"),
+        include_endorsements: z.boolean().optional().describe("Include endorsements in the updated package"),
+        include_attestations: z.boolean().optional().describe("Include attestations in the updated package"),
+      },
+    },
+    async ({ connection_request_id }) => {
+      const extendedClient = client as unknown as {
+        cello_respond_to_disclosure_request: (opts: { connection_request_id: string; package_cbor: Uint8Array }) => Promise<
+          | { result: "established"; connection_id: string }
+          | { result: "rejected"; reason: string }
+          | { result: "insufficient"; unmet_requirements: unknown[] }
+          | { result: "timeout" }
+          | { result: "error"; reason: string }
+        >;
+        getRegistrationState?: () => import("@cello/protocol-types").RegistrationState | null;
+        getMlDsaProvider?: () => MlDsaKeyProvider | null;
+      };
+
+      if (typeof extendedClient.cello_respond_to_disclosure_request !== "function") {
+        return jsonText({ error: { reason: "no_pending_disclosure_request" } });
+      }
+
+      // Build a real package for Round 2 (same structure as Round 1).
+      let packageCbor: Uint8Array = new Uint8Array(0);
+      const regState = typeof extendedClient.getRegistrationState === "function"
+        ? extendedClient.getRegistrationState()
+        : null;
+      const mlDsaProvider = typeof extendedClient.getMlDsaProvider === "function"
+        ? extendedClient.getMlDsaProvider()
+        : null;
+
+      if (regState && mlDsaProvider) {
+        const kLocalPubkey = await keyProvider.getPublicKey();
+        const mlDsaPubkey = await mlDsaProvider.getPublicKey();
+        const bindingResult = await buildPseudonymBinding(
+          {
+            pseudonym_label: regState.agent_id,
+            k_local_pubkey: new Uint8Array(kLocalPubkey),
+            primary_pubkey: Buffer.from(regState.primary_pubkey, "hex"),
+            ml_dsa_pubkey: new Uint8Array(mlDsaPubkey),
+            created_at: regState.registered_at ?? Date.now(),
+          },
+          mlDsaProvider,
+        );
+        if (bindingResult.ok) {
+          const pkg: ConnectionPackage = {
+            pseudonym_binding: bindingResult.binding,
+            endorsements: [],
+            attestations: [],
+          };
+          packageCbor = encodeConnectionPackage(pkg);
+        }
+      }
+
+      const result = await extendedClient.cello_respond_to_disclosure_request({
+        connection_request_id,
+        package_cbor: packageCbor,
+      });
+
+      if (result.result === "established") {
+        return jsonText({ result: "accepted", connection_id: result.connection_id });
+      }
+      if (result.result === "rejected") {
+        return jsonText({ result: "rejected", reason: result.reason });
+      }
+      if (result.result === "timeout") {
+        return jsonText({ result: "timeout" });
+      }
+      return jsonText({ error: { reason: "already_responded" } });
+    },
+  );
+
+  // ── cello_await_connection_request ────────────────────────────────────────
+  //
+  // MCP-003: blocks until an inference-mode inbound request needs review,
+  // or timeout expires.
+  // SI-003: ConnectionReport must not contain raw signatures or full pubkeys.
+
+  server.registerTool(
+    "cello_await_connection_request",
+    {
+      description: "Wait for an inbound connection request that requires agent review (inference mode), or timeout.",
+      inputSchema: {
+        timeout_ms: z.number().int().min(0).optional().describe("Maximum wait time in ms. Default: 30000"),
+      },
+    },
+    async ({ timeout_ms }) => {
+      const result = await client.awaitConnectionRequest(timeout_ms ?? 30_000);
+      if (result.type === "timeout") {
+        return jsonText({ type: "timeout" });
+      }
+      // SI-003: ConnectionReport is already human-readable (no raw signatures).
+      return jsonText({
+        type: "pending_review",
+        connection_request_id: result.connection_request_id,
+        from_pubkey: result.from_pubkey,
+        report: result.report,
+      });
+    },
+  );
+
+  // ── cello_accept_connection ────────────────────────────────────────────────
+  //
+  // Accepts a pending inbound connection request in inference review mode.
+
+  server.registerTool(
+    "cello_accept_connection",
+    {
+      description: "Accept a pending inbound connection request (inference review mode). Returns { accepted: true, connection_id }.",
+      inputSchema: {
+        connection_request_id: z.string().describe("Connection request ID from cello_await_connection_request"),
+      },
+    },
+    async ({ connection_request_id }) => {
+      const result = await client.acceptConnection(connection_request_id);
+      if ("error" in result) {
+        return jsonText({ error: result.error });
+      }
+      return jsonText({ accepted: true, connection_id: result.connection_id });
+    },
+  );
+
+  // ── cello_reject_connection ────────────────────────────────────────────────
+  //
+  // Rejects a pending inbound connection request in inference review mode.
+
+  server.registerTool(
+    "cello_reject_connection",
+    {
+      description: "Reject a pending inbound connection request (inference review mode). Returns { rejected: true }.",
+      inputSchema: {
+        connection_request_id: z.string().describe("Connection request ID from cello_await_connection_request"),
+        reason: z.string().optional().describe("Optional rejection reason"),
+      },
+    },
+    async ({ connection_request_id, reason }) => {
+      const result = await client.rejectConnection(connection_request_id, reason);
+      if ("error" in result) {
+        return jsonText({ error: result.error });
+      }
+      return jsonText({ rejected: true });
+    },
+  );
+
+  // ── cello_request_more_disclosure ─────────────────────────────────────────
+  //
+  // Target-side: asks sender for additional disclosure items (Round 2 initiation).
+  // Only valid in Round 1. Returns max_rounds_reached if already in Round 2.
+
+  server.registerTool(
+    "cello_request_more_disclosure",
+    {
+      description: "Ask the connection requester for additional disclosure (Round 2). Only valid once per request.",
+      inputSchema: {
+        connection_request_id: z.string().describe("Connection request ID from cello_await_connection_request"),
+        requested_items: z.array(z.record(z.string(), z.unknown())).describe("List of disclosure items to request"),
+      },
+    },
+    async ({ connection_request_id, requested_items }) => {
+      const result = await client.requestMoreDisclosure(connection_request_id, requested_items);
+      if ("error" in result) {
+        return jsonText({ error: result.error });
+      }
+      return jsonText({ request_sent: true });
+    },
+  );
+
+  // ── cello_list_connections ─────────────────────────────────────────────────
+  //
+  // Returns all active connection records (no raw crypto).
+
+  server.registerTool(
+    "cello_list_connections",
+    {
+      description: "List all active connections for this agent.",
+      inputSchema: {},
+    },
+    async () => {
+      const records = client.listConnections();
+      const connections = records.map((c) => ({
+        connection_id: c.connection_id,
+        counterparty_pubkey: c.counterparty_pubkey,
+        counterparty_primary_pubkey: c.counterparty_primary_pubkey,
+        established_at: c.established_at,
+        status: c.status,
+      }));
+      return jsonText({ connections });
+    },
+  );
+
+  // ── cello_set_policy ──────────────────────────────────────────────────────
+  //
+  // Configure the connection policy engine (mode + review_mode + requirements).
+
+  server.registerTool(
+    "cello_set_policy",
+    {
+      description: "Configure the connection policy for evaluating inbound connection requests.",
+      inputSchema: {
+        mode: z.enum(["open", "selective", "guarded", "closed"]).describe("Policy mode"),
+        review_mode: z.enum(["deterministic", "inference"]).describe("Review mode"),
+        requirements: z.array(z.object({
+          signal_type: z.enum(["endorsement", "attestation", "pseudonym_age", "registration_age"]),
+          condition: z.record(z.string(), z.unknown()),
+        })).optional().describe("Signal requirements (optional)"),
+      },
+    },
+    async ({ mode, review_mode, requirements }) => {
+      const policy = {
+        mode,
+        review_mode,
+        requirements: (requirements ?? []) as SignalRequirement[],
+      };
+
+      const setFn = (client as unknown as { setPolicy?: (p: typeof policy) => void }).setPolicy;
+      if (typeof setFn === "function") {
+        setFn.call(client, policy);
+      }
+
+      return jsonText({
+        policy_set: true,
+        mode,
+        review_mode,
+        requirement_count: policy.requirements.length,
+      });
+    },
+  );
+
+  // ── cello_get_policy ──────────────────────────────────────────────────────
+  //
+  // Returns the current connection policy.
+
+  server.registerTool(
+    "cello_get_policy",
+    {
+      description: "Return the current connection policy configuration.",
+      inputSchema: {},
+    },
+    async () => {
+      const getFn = (client as unknown as { getPolicy?: () => { mode: string; review_mode: string; requirements: unknown[] } }).getPolicy;
+      const policy = typeof getFn === "function"
+        ? getFn.call(client)
+        : { mode: "open", review_mode: "deterministic", requirements: [] };
+
+      return jsonText({
+        mode: policy.mode,
+        review_mode: policy.review_mode,
+        requirements: policy.requirements,
       });
     },
   );

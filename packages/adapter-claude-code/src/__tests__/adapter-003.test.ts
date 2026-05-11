@@ -374,6 +374,15 @@ describe("AC-005 (L-001): transport not started returns transport_not_started ex
       onSessionAssignment() {},
       async initiateSession() { return { ok: false as const, reason: "directory_unreachable" as const }; },
       async register() { return { error: "not_implemented" }; },
+      getRegistrationState() { return null; },
+      setPolicy() {},
+      getPolicy() { return { mode: "open" as const, review_mode: "deterministic" as const, requirements: [] }; },
+      hasConnection() { return null; },
+      listConnections() { return []; },
+      async acceptConnection() { return { error: { reason: "no_pending_request" as const } }; },
+      async rejectConnection() { return { error: { reason: "no_pending_request" as const } }; },
+      async requestMoreDisclosure() { return { error: { reason: "no_pending_request" as const } }; },
+      async awaitConnectionRequest() { return { type: "timeout" as const }; },
     };
 
     const server = createMcpServer(node, clientStub as Parameters<typeof createMcpServer>[1], kp);
@@ -435,6 +444,15 @@ describe("L-003: not_available_in_m1 stub is retired", () => {
       // This is the real initiateSession — returns directory_unreachable, NOT not_available_in_m1
       async initiateSession() { return { ok: false as const, reason: "directory_unreachable" as const }; },
       async register() { return { error: "not_implemented" }; },
+      getRegistrationState() { return null; },
+      setPolicy() {},
+      getPolicy() { return { mode: "open" as const, review_mode: "deterministic" as const, requirements: [] }; },
+      hasConnection() { return null; },
+      listConnections() { return []; },
+      async acceptConnection() { return { error: { reason: "no_pending_request" as const } }; },
+      async rejectConnection() { return { error: { reason: "no_pending_request" as const } }; },
+      async requestMoreDisclosure() { return { error: { reason: "no_pending_request" as const } }; },
+      async awaitConnectionRequest() { return { type: "timeout" as const }; },
     };
 
     const server = createMcpServer(node, client as Parameters<typeof createMcpServer>[1], kp);
