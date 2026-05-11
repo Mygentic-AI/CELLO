@@ -102,12 +102,6 @@ export interface SessionFixtureOpts {
   connectionTimeoutMs?: number;
 }
 
-const OPEN_POLICY: SignalRequirementPolicy = {
-  mode: "open",
-  review_mode: "deterministic",
-  requirements: [],
-};
-
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
 export async function createSessionFixture(
@@ -154,7 +148,7 @@ export async function createSessionFixture(
 
   const clientA = createClient(nodeA, kpA, {
     directoryEndpoint,
-    connectionPolicy: opts.policyA ?? OPEN_POLICY,
+    connectionPolicy: opts.policyA,
     connectionTimeoutMs,
     thresholdSigner: signerA,
   });
@@ -176,7 +170,7 @@ export async function createSessionFixture(
 
   const clientB = createClient(nodeB, kpB, {
     directoryEndpoint,
-    connectionPolicy: opts.policyB ?? OPEN_POLICY,
+    connectionPolicy: opts.policyB,
     connectionTimeoutMs,
     thresholdSigner: signerB,
     round2TimeoutMs: opts.round2TimeoutMs,
