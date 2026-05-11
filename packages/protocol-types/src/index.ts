@@ -67,20 +67,27 @@ export {
   decodeConnectionPackage,
 } from "./connection-package.js";
 
-export type { ConnectionReport, UnmetRequirement } from "./connection-policy-engine.js";
-export {
-  evaluateConnectionPackage,
-  OPEN_POLICY,
-  CLOSED_POLICY,
-  SELECTIVE_DEFAULT,
-} from "./connection-policy-engine.js";
 
 export type {
   RegisterRequest,
   DkgComplete,
+  DkgReady,
   RegisterSuccess,
   RegisterError,
   RegisterErrorReason,
   AgentProfile,
   RegistrationState,
 } from "./registration.js";
+
+export type {
+  DkgRound1Broadcast,
+  DkgRound2Share,
+  FrostDkgRound1Request,
+  FrostDkgRound1Response,
+  FrostDkgRound2Request,
+  FrostDkgRound2Response,
+  FrostDkgRound3Request,
+  FrostDkgRound3Response,
+  FrostDkgRequest,
+  FrostDkgResponse,
+} from "./frost-dkg.js";

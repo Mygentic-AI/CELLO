@@ -82,6 +82,22 @@ export interface DkgComplete {
 // ─── Direction: directory → client ───────────────────────────────────────────
 
 /**
+ * Directory authorizes the client to open DKG streams.
+ * Sent on the signaling stream after register_request is validated (steps 1–3 pass).
+ * Client opens /cello/frost/1.0.0 streams to each directory node and runs the DKG rounds.
+ * RFC 9591 §5 (FROST DKG), sent before client opens DKG streams.
+ */
+export interface DkgReady {
+  type: "dkg_ready";
+  /** Epoch ID for this DKG instance: "${k_local_pubkey}:epoch:1" */
+  epochId: string;
+  /** Total number of participants in this DKG instance */
+  participants: number;
+  /** Minimum threshold for signing */
+  threshold: number;
+}
+
+/**
  * Directory confirms successful registration.
  * primary_pubkey here is the canonical value stored in the AgentProfile.
  */
