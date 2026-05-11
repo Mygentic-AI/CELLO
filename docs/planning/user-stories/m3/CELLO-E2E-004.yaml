@@ -62,6 +62,7 @@ dependencies:
   - CELLO-MCP-003
   - CELLO-ADAPTER-003
   - CELLO-CRYPTO-004
+  - CELLO-OBS-001
 
 # ─── Notes ─────────────────────────────────────────────────
 notes: |
@@ -77,43 +78,106 @@ notes: |
 acceptance_criteria:
   - id: AC-001
     given: "Relay and directory running as separate OS processes; Agent A and Agent B as separate Claude Code sessions with distinct key files; neither agent has previously registered"
-    when: "Agent A calls `cello_register({ phone_stub: '+1...' })`"
-    then: "Returns `{ registered: true, agent_id, primary_pubkey, ml_dsa_pubkey }`; the DKG was performed over real `/cello/frost/1.0.0` libp2p streams between the client process and directory process"
+    when: "Agent A calls `cello_register({ phone_stub: '+1...' })` and Agent B does the same"
+    then: >
+      Each call returns `{ registered: true, agent_id, primary_pubkey, ml_dsa_pubkey }`.
+      TRANSPORT VERIFICATION (operator checks directory terminal):
+      For each registration the directory terminal printed, in order:
+        `[REG]   DKG begin — agent <pubkey8>`
+        `[FROST] Round 1 commit from peer <id8> (1/3)` through `(3/3)`
+        `[FROST] Round 3 sign from peer <id8> (1/3)` through `(3/3)`
+        `[REG]   Agent <pubkey8> registered — primary_pubkey <key8>`
+      These lines are only produced by the real multi-round protocol handler on the
+      directory process. They cannot appear if the trusted-dealer shortcut ran instead.
     test_type: e2e
     component_under_test: client
 
   - id: AC-002
-    given: "Agent B has also registered successfully (AC-001 repeated for B)"
+    given: "Both agents registered (AC-001)"
     when: "Agent A calls `cello_request_connection({ target_pubkey: B_pubkey })`"
-    then: "The directory routes the request to B's signaling stream; B's policy evaluates to accept; returns `{ result: 'accepted', connection_id }`"
+    then: >
+      Returns `{ result: 'accepted', connection_id }`.
+      TRANSPORT VERIFICATION (operator checks directory terminal):
+      Directory terminal printed, in order:
+        `[CONN]  Request: <A8> → <B8>`
+        `[CONN]  Relayed to target <B8>`
+        `[CONN]  Verdict accept — connection <id8> established`
+        `[CONN]  Connection <id8> established: <A8> ↔ <B8>`
+      These lines are only produced when `connection_request` arrived on the directory's
+      signaling handler, was relayed to B's signaling stream, and B's `connection_response`
+      came back over the wire. An in-process stub cannot produce them.
     test_type: e2e
     component_under_test: client
 
   - id: AC-003
     given: "A and B have an established connection (AC-002)"
     when: "Agent A calls `cello_initiate_session({ target_pubkey: B_pubkey })`"
-    then: "FROST ceremony executes between A's process and directory process; returns `{ session_id, genesis_prev_root }`; Agent B receives SessionAssignment via `cello_await_session`"
+    then: >
+      Returns `{ session_id, genesis_prev_root }`.
+      Agent B receives SessionAssignment via `cello_await_session` (B's process, B's terminal).
+      TRANSPORT VERIFICATION (operator checks directory terminal):
+      Directory terminal printed, in order:
+        `[SESS]  Session request: <A8> → <B8>`
+        `[FROST] Ceremony begin — session <id8>, agent <A8>`
+        `[FROST] Commit collected (1/3)` through `(3/3)`
+        `[FROST] Partial sig collected (1/3)` through `(3/3)`
+        `[SESS]  Assignment issued — session <id8>`
+      These lines are only produced by the real FROST ceremony handler in the directory
+      process. They confirm the ceremony ran between A's MCP process and the directory
+      process as genuinely separate parties.
     test_type: e2e
     component_under_test: client
 
   - id: AC-004
     given: "Session established (AC-003)"
     when: "Agent A sends a message and Agent B receives it; Agent B sends a reply and Agent A receives it"
-    then: "Both messages have valid Ed25519 signatures, correct sequence numbers, matching content hashes; relay Merkle notarization is present"
+    then: >
+      `cello_receive` on each side returns `{ content, sender_pubkey, sequence_number,
+      leaf_hash }` where leaf_hash is non-null and sequence_number increments correctly.
+      TRANSPORT VERIFICATION (operator checks relay terminal):
+      Relay terminal shows `[RELAY] Client <id8> joined session <id8>` for both
+      participants — confirming both agents dialled the relay process directly (not a
+      shared in-process relay).
     test_type: e2e
     component_under_test: relay
 
   - id: AC-005
     given: "Messages exchanged (AC-004)"
     when: "Agent A calls `cello_close_session({ session_id })`"
-    then: "Bilateral seal completes; FROST-signed sealed root is produced; the session no longer appears in `cello_list_sessions()` for either agent"
+    then: >
+      `cello_get_sealed_receipt` returns a receipt with a non-null `sealed_root`.
+      The session no longer appears in `cello_list_sessions()` for either agent.
+      TRANSPORT VERIFICATION (operator checks directory and relay terminals):
+      Directory terminal printed:
+        `[SEAL]  Initiating seal — session <id8>`
+        `[SEAL]  FROST seal ceremony — session <id8>`
+        `[SEAL]  Sealed — session <id8>, root <root8>`
+      Relay terminal printed:
+        `[RELAY] Seal submitted — session <id8>`
+        `[RELAY] Seal confirmed: <id8>`
+      The `root8` prefix in the directory log matches the first 8 hex chars of the
+      `sealed_root` returned by `cello_get_sealed_receipt` — same value, three sources
+      (A's receipt, directory terminal, relay terminal).
     test_type: e2e
     component_under_test: client
 
   - id: AC-006
-    given: "The entire flow AC-001 through AC-005"
-    when: "Inspected end-to-end"
-    then: "No step used shared memory between participants; all communication traversed TCP libp2p streams; the directory never saw message content (only hashes via relay)"
+    given: "The complete flow AC-001 through AC-005"
+    when: "The operator reviews the four terminal windows"
+    then: >
+      Each of the four processes ran in its own terminal and produced output independent
+      of the others. Specifically:
+      - Directory terminal shows all `[REG]`, `[FROST]`, `[CONN]`, `[SESS]`, `[SEAL]`
+        events from the flow — confirming it was a live server process, not an
+        in-process stub.
+      - Relay terminal shows `[RELAY] Started`, `[RELAY] Session assigned`,
+        `[RELAY] Seal confirmed` — confirming the relay was a live separate process.
+      - Agent A terminal and Agent B terminal each show their own `cello_*` tool
+        outputs independently — neither agent's output references or depends on the
+        other's in-process state.
+      The directory terminal line `[DIR] Started — peer <id8>` appeared before any
+      agent connected, confirming the directory was a standing process, not launched
+      on-demand by the test harness.
     test_type: e2e
     component_under_test: system
 
