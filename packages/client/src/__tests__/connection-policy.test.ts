@@ -6,7 +6,8 @@
  * Run RED before implementation exists, then GREEN after.
  */
 
-import { describe, it, expect } from "vitest";
+import { setupV3Tests, describe, it, expect } from "@claude-flow/testing";
+setupV3Tests();
 import {
   buildValidatedPackage,
   buildInvalidPackage,

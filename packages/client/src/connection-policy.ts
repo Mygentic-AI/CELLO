@@ -139,7 +139,7 @@ export type ConnectionReport =
 
 export const OPEN_POLICY: SignalRequirementPolicy = {
   mode: "open",
-  review_mode: "deterministic",
+  review_mode: "inference",
   requirements: [],
 };
 
