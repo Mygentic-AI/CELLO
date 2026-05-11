@@ -1,0 +1,376 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-OBS-001
+domain: Observability
+actor: OPERATOR
+priority: P1
+components:
+  - relay
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As an operator running a relay and directory node in a terminal,
+  I want every significant protocol event to print a timestamped, prefixed line to stdout
+  so that I can watch a live demo and see exactly what is happening at each step —
+  registration, FROST ceremony rounds, connection negotiation, session boundaries,
+  and seal confirmations — without reading source code or attaching a debugger.
+
+  This story covers events that were invisible in M1 and M2 smoke tests. The relay and
+  directory produced no output while FROST ceremonies, session establishments, and seals
+  were occurring. For the build-in-public initiative, operators and observers need to see
+  the protocol unfolding in real time.
+
+  **Always-on.** No log level flag. These are meaningful server events, not debug noise.
+  Every listed event MUST print to stdout on the corresponding protocol action, in every
+  environment including production. A future story may add structured JSON logging as an
+  alternative output mode, but this story is stdout text only.
+
+  **Format:** `[TIMESTAMP] [PREFIX] message`
+  - Timestamp: ISO 8601 local time, millisecond precision: `2026-05-11T14:23:01.042`
+  - Prefix: 4–6 chars, uppercase, in brackets: `[REG]`, `[SESS]`, `[FROST]`, etc.
+  - Peer IDs are truncated to first 8 chars of the base58 multibase representation
+    (enough to distinguish participants, not enough to overwhelm the line)
+  - Pubkeys in log lines are 8 hex chars (first 4 bytes)
+  - Session IDs and connection IDs are 8 hex chars (first 4 bytes)
+
+  Example output during a full M3 E2E smoke test:
+
+  ```
+  2026-05-11T14:23:00.001  [DIR]   Started — peer 12D3Koo, signaling /ip4/0.0.0.0/tcp/4002
+  2026-05-11T14:23:01.042  [AUTH]  Peer 12D3Koo authenticated (signaling)
+  2026-05-11T14:23:01.055  [AUTH]  Peer 12D3Koo announced peer_id + listen addrs
+  2026-05-11T14:23:01.060  [REG]   DKG begin — agent ab12cd34, 3 directory nodes, threshold 2
+  2026-05-11T14:23:01.071  [FROST] Round 1 commit from peer 12D3Koo (1/3)
+  2026-05-11T14:23:01.083  [FROST] Round 1 commit from peer 12D3Koo (2/3)
+  2026-05-11T14:23:01.094  [FROST] Round 1 commit from peer 12D3Koo (3/3)
+  2026-05-11T14:23:01.105  [FROST] Round 3 sign from peer 12D3Koo (1/3)
+  2026-05-11T14:23:01.116  [FROST] Round 3 sign from peer 12D3Koo (2/3)
+  2026-05-11T14:23:01.127  [FROST] Round 3 sign from peer 12D3Koo (3/3)
+  2026-05-11T14:23:01.138  [REG]   Agent ab12cd34 registered — primary_pubkey ef56gh78
+  2026-05-11T14:23:02.001  [CONN]  Request: ab12cd34 → ef56gh78
+  2026-05-11T14:23:02.045  [CONN]  Relayed to target ef56gh78
+  2026-05-11T14:23:02.089  [CONN]  Verdict accept — connection 9a3b... established
+  2026-05-11T14:23:03.010  [SESS]  Session request: ab12cd34 → ef56gh78
+  2026-05-11T14:23:03.021  [FROST] Ceremony begin — session 9a3b..., agent ab12cd34
+  2026-05-11T14:23:03.032  [FROST] Commit collected (1/3)
+  2026-05-11T14:23:03.043  [FROST] Commit collected (2/3)
+  2026-05-11T14:23:03.054  [FROST] Commit collected (3/3)
+  2026-05-11T14:23:03.065  [FROST] Partial sig collected (1/3)
+  2026-05-11T14:23:03.076  [FROST] Partial sig collected (2/3)
+  2026-05-11T14:23:03.087  [FROST] Partial sig collected (3/3)
+  2026-05-11T14:23:03.098  [SESS]  Assignment issued — session 9a3b...
+  2026-05-11T14:23:05.001  [SEAL]  Initiating seal — session 9a3b... (14 leaves)
+  2026-05-11T14:23:05.050  [SEAL]  FROST seal ceremony — session 9a3b...
+  2026-05-11T14:23:05.098  [SEAL]  Sealed — session 9a3b..., root 77fa...
+  2026-05-11T14:23:06.001  [RELAY] Session assigned: 9a3b... → slot 4
+  2026-05-11T14:23:08.001  [RELAY] Seal confirmed: 9a3b... (14 leaves)
+  ```
+
+  **Directory event inventory (all mandatory):**
+
+  Startup:
+  - `[DIR]   Started — peer <id8>, signaling <multiaddr>`
+
+  Authentication:
+  - `[AUTH]  Peer <id8> authenticated (signaling)`
+  - `[AUTH]  Peer <id8> announced peer_id + listen addrs`
+  - `[AUTH]  Relay <id8> authenticated`
+
+  Registration (REG-001 — DKG ceremony):
+  - `[REG]   DKG begin — agent <pubkey8>, <n> directory nodes, threshold <t>`
+  - `[FROST] Round 1 commit from peer <id8> (<k>/<n>)`  — once per node per round
+  - `[FROST] Round 3 sign from peer <id8> (<k>/<n>)`    — once per node per round
+  - `[REG]   Agent <pubkey8> registered — primary_pubkey <key8>`
+  - `[REG]   DKG failed — agent <pubkey8>, reason: <reason>`
+
+  Connection negotiation (CONNREQ-002):
+  - `[CONN]  Request: <from8> → <to8>`
+  - `[CONN]  Pre-check failed: <reason> (sender: <from8>)`  — not_registered / target_not_found / already_connected
+  - `[CONN]  Relayed to target <to8>`
+  - `[CONN]  Disclosure request forwarded (Round 2): <from8> → <to8>`
+  - `[CONN]  Disclosure response forwarded: <from8> → <to8>`
+  - `[CONN]  Verdict <accept|reject|insufficient> — <connection_id8 or reason>`
+  - `[CONN]  Connection <connection_id8> established: <a8> ↔ <b8>`
+
+  Session establishment (SESSION-004):
+  - `[SESS]  Session request: <initiator8> → <target8>`
+  - `[FROST] Ceremony begin — session <id8>, agent <pubkey8>`
+  - `[FROST] Commit collected (<k>/<n>)`
+  - `[FROST] Partial sig collected (<k>/<n>)`
+  - `[SESS]  Assignment issued — session <id8>`
+  - `[SESS]  Request failed — agent <pubkey8>, reason: <reason>`
+
+  Seal (SESSION-005):
+  - `[SEAL]  Initiating seal — session <id8> (<n> leaves)`
+  - `[SEAL]  FROST seal ceremony — session <id8>`
+  - `[SEAL]  Sealed — session <id8>, root <root8>`
+  - `[SEAL]  Bilateral fallback — session <id8> (directory unreachable)`
+  - `[SEAL]  Deferred FROST seal received — session <id8>`
+
+  **Relay event inventory (all mandatory):**
+
+  Startup:
+  - `[RELAY] Started — peer <id8>, relay /ip4/<addr>/tcp/<port>`
+
+  Authentication:
+  - `[RELAY] Client <id8> authenticated`
+  - `[RELAY] Directory admin authenticated (pubkey <key8>)`
+
+  Session lifecycle:
+  - `[RELAY] Session assigned: <id8> → slot <n>`
+  - `[RELAY] Client <id8> joined session <id8>`
+  - `[RELAY] Client <id8> reconnected to session <id8>`
+  - `[RELAY] Seal submitted — session <id8> (<n> leaves)`
+  - `[RELAY] Seal confirmed: <id8>`
+  - `[RELAY] Seal rejected: <id8>, reason: <reason>`
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the directory node process starts and its signaling listener is ready"
+    action: >
+      the directory shall print one `[DIR] Started` line to stdout containing its own
+      truncated peer ID and the signaling multiaddr it is listening on.
+  - trigger: "When the relay node process starts and its listener is ready"
+    action: >
+      the relay shall print one `[RELAY] Started` line to stdout containing its own
+      truncated peer ID and the listen multiaddr.
+  - trigger: "When any peer successfully completes the signaling challenge-response auth"
+    action: >
+      the directory shall print one `[AUTH] Peer <id8> authenticated (signaling)` line.
+  - trigger: "When a client sends `peer_info_announce` with its peer ID and listen addrs"
+    action: >
+      the directory shall print one `[AUTH] Peer <id8> announced peer_id + listen addrs` line.
+  - trigger: "When the directory receives the first `frost_bootstrap` or `frost_commit_request` for a new agent (DKG begin)"
+    action: >
+      the directory shall print one `[REG] DKG begin` line naming the agent pubkey,
+      node count, and threshold.
+  - trigger: "When a directory node receives a `frost_commit_request` (DKG Round 1)"
+    action: >
+      the directory shall print one `[FROST] Round 1 commit from peer <id8> (<k>/<n>)` line.
+  - trigger: "When a directory node receives a `frost_sign_request` (DKG Round 3)"
+    action: >
+      the directory shall print one `[FROST] Round 3 sign from peer <id8> (<k>/<n>)` line.
+  - trigger: "When registration completes and an agent profile is stored"
+    action: >
+      the directory shall print one `[REG] Agent <pubkey8> registered` line naming the
+      primary_pubkey.
+  - trigger: "When DKG fails for any reason"
+    action: >
+      the directory shall print one `[REG] DKG failed` line naming the agent pubkey and
+      the reason.
+  - trigger: "When the directory receives `connection_request` from a sender"
+    action: >
+      the directory shall print one `[CONN] Request: <from8> → <to8>` line. If the
+      pre-check fails (not_registered, target_not_found, already_connected), it shall
+      also print one `[CONN] Pre-check failed` line before responding to the sender.
+  - trigger: "When the directory relays `connection_request_inbound` to the target"
+    action: >
+      the directory shall print one `[CONN] Relayed to target <to8>` line.
+  - trigger: "When the directory receives and relays a `disclosure_request` (Round 2)"
+    action: >
+      the directory shall print one `[CONN] Disclosure request forwarded (Round 2)` line.
+  - trigger: "When the directory receives and relays a `disclosure_response`"
+    action: >
+      the directory shall print one `[CONN] Disclosure response forwarded` line.
+  - trigger: "When the directory receives `connection_response` from the target"
+    action: >
+      the directory shall print one `[CONN] Verdict <verdict>` line. If the verdict is
+      `accept`, it shall also print one `[CONN] Connection <id8> established` line.
+  - trigger: "When the directory receives `session_request` from an initiator"
+    action: >
+      the directory shall print one `[SESS] Session request` line naming initiator and target.
+  - trigger: "When the directory begins a FROST session establishment ceremony"
+    action: >
+      the directory shall print one `[FROST] Ceremony begin` line naming the session ID
+      and agent pubkey.
+  - trigger: "When a FROST commitment is collected from a signer node during a ceremony"
+    action: >
+      the directory shall print one `[FROST] Commit collected (<k>/<n>)` line.
+  - trigger: "When a FROST partial signature is collected from a signer node"
+    action: >
+      the directory shall print one `[FROST] Partial sig collected (<k>/<n>)` line.
+  - trigger: "When the directory issues a `SessionAssignment` to both clients"
+    action: >
+      the directory shall print one `[SESS] Assignment issued` line naming the session ID.
+  - trigger: "When the directory receives both SEAL frames from the relay and begins the seal FROST ceremony"
+    action: >
+      the directory shall print one `[SEAL] Initiating seal` line naming the session ID
+      and leaf count, then one `[SEAL] FROST seal ceremony` line.
+  - trigger: "When the directory issues a signed `SealNotarization`"
+    action: >
+      the directory shall print one `[SEAL] Sealed` line naming the session ID and the
+      first 8 hex chars of the sealed Merkle root.
+  - trigger: "When the relay receives a `recordAssignment` admin call"
+    action: >
+      the relay shall print one `[RELAY] Session assigned` line.
+  - trigger: "When a relay client completes auth and joins an assigned session"
+    action: >
+      the relay shall print one `[RELAY] Client <id8> joined session <id8>` line.
+  - trigger: "When the relay receives `submitForSeal`"
+    action: >
+      the relay shall print one `[RELAY] Seal submitted` line naming the session ID and
+      leaf count.
+  - trigger: "When the relay receives `confirmSeal`"
+    action: >
+      the relay shall print one `[RELAY] Seal confirmed` line.
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A relay process starts with a valid listen address"
+    when: "The listener is ready"
+    then: >
+      Exactly one line matching `[RELAY] Started — peer <id8>` appears on stdout before
+      any client connects; the line contains a valid multiaddr
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-002
+    given: "A directory process starts with a valid signaling listen address"
+    when: "The signaling listener is ready"
+    then: >
+      Exactly one line matching `[DIR] Started — peer <id8>` appears on stdout before
+      any client connects; the line contains the signaling multiaddr
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A client successfully completes the signaling challenge-response"
+    when: "The directory sends `signaling_auth_ok`"
+    then: >
+      A `[AUTH] Peer <id8> authenticated (signaling)` line appears on stdout for that
+      peer ID; it appears before any session or registration processing for that peer
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "A real 3-round DKG ceremony runs (REG-001 path, separate libp2p instances)"
+    when: "The ceremony progresses from begin through all rounds to registered"
+    then: >
+      stdout contains in order: `[REG] DKG begin`, then 3× `[FROST] Round 1 commit`,
+      then 3× `[FROST] Round 3 sign`, then `[REG] Agent ... registered`;
+      line counts are exactly 3 for each round type (one per directory node)
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A connection request flows through the directory with an auto_accept verdict (open policy)"
+    when: "The directory relays the request and receives the response"
+    then: >
+      stdout contains in order: `[CONN] Request:`, `[CONN] Relayed to target`,
+      `[CONN] Verdict accept`, `[CONN] Connection ... established`
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "A connection request fails the directory pre-check (target_not_found)"
+    when: "The directory rejects without relaying"
+    then: >
+      stdout contains `[CONN] Request:` followed immediately by
+      `[CONN] Pre-check failed: target_not_found`; no `[CONN] Relayed` line appears
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "A Round 2 disclosure request is initiated (inference mode)"
+    when: "The directory forwards disclosure_request and disclosure_response"
+    then: >
+      stdout contains `[CONN] Disclosure request forwarded (Round 2)` followed later by
+      `[CONN] Disclosure response forwarded`
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "A FROST session establishment ceremony runs"
+    when: "The directory collects commits and partial sigs and issues an assignment"
+    then: >
+      stdout contains in order: `[SESS] Session request`, `[FROST] Ceremony begin`,
+      3× `[FROST] Commit collected`, 3× `[FROST] Partial sig collected`,
+      `[SESS] Assignment issued`; commit and partial-sig counts match the signer count
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-009
+    given: "A FROST-notarized session seal completes"
+    when: "The directory issues a SealNotarization"
+    then: >
+      stdout contains in order: `[SEAL] Initiating seal`, `[SEAL] FROST seal ceremony`,
+      `[SEAL] Sealed — session <id8>, root <root8>`; root8 matches the first 8 hex chars
+      of the actual sealed Merkle root
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010
+    given: "The relay receives a session assignment, both clients join, and the session seals"
+    when: "The full relay session lifecycle completes"
+    then: >
+      stdout contains in order: `[RELAY] Session assigned`, `[RELAY] Client ... joined`,
+      `[RELAY] Seal submitted`, `[RELAY] Seal confirmed`
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-011
+    given: "The directory and relay are running and the M3 E2E smoke test is executed as separate OS processes"
+    when: "The full flow — register A, register B, A connects to B, establish session, exchange messages, seal — completes"
+    then: >
+      The combined stdout of the directory process, read by the smoke test runner,
+      contains all of: `[REG] Agent ... registered` (×2), `[CONN] Connection ...
+      established` (×1), `[SESS] Assignment issued` (×1), `[SEAL] Sealed` (×1);
+      the relay stdout contains `[RELAY] Seal confirmed` (×1);
+      the output is human-readable and distinguishable in a terminal with no colors required
+    test_type: e2e
+    component_under_test: directory, relay
+
+  - id: AC-012
+    given: "Any log line is produced"
+    when: "It is printed"
+    then: >
+      The line matches the format `YYYY-MM-DDTHH:MM:SS.sss  [PREFIX] message`;
+      timestamp is current local time to millisecond precision; prefix is one of the
+      defined prefix tokens; no ANSI color codes are present
+    test_type: unit
+    component_under_test: directory, relay
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      No log line shall contain private key material, FROST share bytes, nonce values,
+      session content, or any data that should not leave the process boundary.
+    adversarial_condition: >
+      even when a DKG ceremony or signing ceremony is in progress — commitments,
+      partial signatures, and final combined signatures are cryptographic outputs
+      that reveal nothing about private key material and may appear in log lines;
+      but raw share bytes (K_server_X), nonce scalars, and session message content
+      must never appear.
+    test_type: unit
+    component_under_test: directory, relay
+
+  - id: SI-002
+    statement: >
+      Log output shall never include the full 32-byte pubkey, peer ID, session ID,
+      connection ID, or Merkle root of any participant. Only 8-character truncations
+      are permitted in stdout.
+    adversarial_condition: >
+      even though truncated IDs are not secret — the constraint prevents log lines from
+      becoming a side-channel for enumerating participant pubkeys or session state at
+      a glance.
+    test_type: unit
+    component_under_test: directory, relay
+
+# ─── References ─────────────────────────────────────────────
+references:
+  depends_on:
+    - CELLO-REG-001       # DKG ceremony events require real multi-round DKG
+    - CELLO-CONNREQ-002   # Connection negotiation events
+  protocol_map: "Observability"
+  milestone_writeups:
+    - "M1-session-layer"
+    - "M2-frost-threshold-layer"
+  notes: >
+    This story has no dependency on CONNPOL-001, SESSION-006, MCP-003, or ADAPTER-003.
+    It touches only the relay and directory node internals.
+    Implementation order: directory startup + auth events first (smallest diff),
+    then FROST events (requires real DKG from REG-001 to be observable), then
+    connection events (requires CONNREQ-002), then relay lifecycle events.
+    AC-011 depends on REG-001 and CONNREQ-002 being implemented and passing.
