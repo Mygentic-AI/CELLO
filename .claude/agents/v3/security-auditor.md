@@ -18,74 +18,9 @@ capabilities:
 priority: critical
 hooks:
   pre: |
-    echo "Security Auditor initiating scan: $TASK"
-
-    # 1. Learn from past security audits (ReasoningBank)
-    SIMILAR_VULNS=$(npx claude-flow@v3alpha memory search-patterns "$TASK" --k=10 --min-reward=0.8 --namespace=security)
-    if [ -n "$SIMILAR_VULNS" ]; then
-      echo "Found similar vulnerability patterns from past audits"
-      npx claude-flow@v3alpha memory get-pattern-stats "$TASK" --k=10 --namespace=security
-    fi
-
-    # 2. Search for known CVEs using HNSW-indexed database
-    CVE_MATCHES=$(npx claude-flow@v3alpha security cve --search "$TASK" --hnsw-enabled)
-    if [ -n "$CVE_MATCHES" ]; then
-      echo "Found potentially related CVEs in database"
-    fi
-
-    # 3. Load OWASP Top 10 patterns
-    npx claude-flow@v3alpha memory retrieve --key "owasp_top_10_2024" --namespace=security-patterns
-
-    # 4. Initialize audit session
-    npx claude-flow@v3alpha hooks session-start --session-id "audit-$(date +%s)"
-
-    # 5. Store audit start in memory
-    npx claude-flow@v3alpha memory store-pattern \
-      --session-id "audit-$(date +%s)" \
-      --task "$TASK" \
-      --status "started" \
-      --namespace "security"
-
+    echo "🔍 Security Auditor initiating scan: $TASK"
   post: |
-    echo "Security audit complete"
-
-    # 1. Calculate security metrics
-    VULNS_FOUND=$(grep -c "VULNERABILITY\|CVE-\|SECURITY" /tmp/audit_results 2>/dev/null || echo "0")
-    CRITICAL_VULNS=$(grep -c "CRITICAL\|HIGH" /tmp/audit_results 2>/dev/null || echo "0")
-
-    # Calculate reward based on detection accuracy
-    if [ "$VULNS_FOUND" -gt 0 ]; then
-      REWARD="0.9"
-      SUCCESS="true"
-    else
-      REWARD="0.7"
-      SUCCESS="true"
-    fi
-
-    # 2. Store learning pattern for future improvement
-    npx claude-flow@v3alpha memory store-pattern \
-      --session-id "audit-$(date +%s)" \
-      --task "$TASK" \
-      --output "Vulnerabilities found: $VULNS_FOUND, Critical: $CRITICAL_VULNS" \
-      --reward "$REWARD" \
-      --success "$SUCCESS" \
-      --critique "Detection accuracy and coverage assessment" \
-      --namespace "security"
-
-    # 3. Train neural patterns on successful high-accuracy audits
-    if [ "$SUCCESS" = "true" ] && [ "$VULNS_FOUND" -gt 0 ]; then
-      echo "Training neural pattern from successful audit"
-      npx claude-flow@v3alpha neural train \
-        --pattern-type "prediction" \
-        --training-data "security-audit" \
-        --epochs 50
-    fi
-
-    # 4. Generate security report
-    npx claude-flow@v3alpha security report --format detailed --output /tmp/security_report_$(date +%s).json
-
-    # 5. End audit session with metrics
-    npx claude-flow@v3alpha hooks session-end --export-metrics true
+    echo "✅ Security audit complete"
 ---
 
 # Security Auditor Agent (V3)
