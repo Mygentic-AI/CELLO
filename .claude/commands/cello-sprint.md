@@ -63,6 +63,7 @@ One paragraph per milestone. What was proved. What infrastructure exists.
 - `test_type: e2e` means separate OS processes over real networks — not in-process instances
 - No milestone closes without the live multi-process smoke test passing
 - Phase C gate sequence: tests → lint → typecheck → build → code review → commit
+- **Test fixture discipline:** never write a new `makeFixture()` from scratch. Import `SessionFixture` from `packages/test-fixtures/src/session-fixture.ts`. If the story needs a new capability, add an `opts` parameter to the shared fixture. This is enforced by `cello-review` — a from-scratch fixture is a blocking finding.
 
 ### Ready to pick up
 Which story (or stories, if parallelizable) should be implemented next, based on dependency order and what's already done.

@@ -95,6 +95,23 @@ Isolation: use `createTestScope()` for cleanup, not manual teardown.
 
 **No mocks for cryptographic operations.** Real keys, real signing, real verification. Always.
 
+### Test Fixture Discipline (MANDATORY)
+
+**Never write a new `makeFixture()` function from scratch.** Every story that needs infrastructure (directory, relay, libp2p nodes, FROST) must use and extend the shared session fixture.
+
+The canonical fixture lives at: `packages/test-fixtures/src/session-fixture.ts`
+
+**Before writing any test infrastructure:**
+1. Read `packages/test-fixtures/src/session-fixture.ts`
+2. If the story needs something the fixture doesn't support: add an `opts` parameter to the fixture, with a default that doesn't break existing tests
+3. Import `SessionFixture` in the new test file — never copy-paste fixture code
+
+**What belongs in the shared fixture:** Directory node, relay node, libp2p node creation, FROST ceremony bootstrap, cleanup coordination.
+
+**What belongs in the test file:** Story-specific `waitFor` helpers, local assertion logic, anything used by only one test.
+
+**Why:** Every milestone used to rewrite 300-400 lines of fixture code from scratch. By M3 we had 6 near-identical `makeFixture()` functions. Adding a protocol feature now requires editing 6 files instead of 1. The fixture grows forward; it does not get rewritten.
+
 ### Phase C — Completion: Gate Sequence (ALL MANDATORY, IN ORDER)
 
 After all tests are green, run this exact sequence before committing:

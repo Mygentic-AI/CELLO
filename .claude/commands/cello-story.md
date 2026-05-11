@@ -90,6 +90,7 @@ For each story, run through the Definition of Ready checklist from `user-story-f
 - [ ] `test_type: e2e` ACs specify "real nodes, no mocks"
 - [ ] Every `test_type: integration` or `test_type: e2e` AC that describes a multi-party protocol asserts the transport path (stream opens, handler invocations, frame counts) — not only the final return value
 - [ ] No AC would pass if `NODE_ENV=test` routed through a stub shortcut instead of the real protocol
+- [ ] The story does NOT require implementing a new `makeFixture()` — test infrastructure comes from `packages/test-fixtures/src/session-fixture.ts`; if a new capability is needed, the fixture is extended with a new opt, not replaced
 
 ## File naming
 

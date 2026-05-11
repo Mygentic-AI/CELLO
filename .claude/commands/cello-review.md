@@ -70,6 +70,12 @@ For every SI (Security Invariant) in the story:
 - Does `@cello/test-fixtures` appear in `dependencies` or `peerDependencies` of any production package? That is always blocking.
 - Does any production package import from a `__tests__` directory or a test-only file?
 
+## Step 4b — Test fixture discipline check
+
+- Does the test file define its own `makeFixture()`, `makeE2EFixture()`, `makeFullFixture()`, or any equivalent from-scratch fixture function? If yes: **blocking**. The story must use `SessionFixture` from `packages/test-fixtures/src/session-fixture.ts`.
+- Exception: if `packages/test-fixtures/src/session-fixture.ts` does not yet exist (pre-extraction), flag it as [high] and note that the fixture extraction story must be completed before this pattern recurs.
+- Exception: lightweight helpers local to the test file (e.g. `waitForStatus`, `buildMinimalPackageCbor`) that are genuinely test-specific are acceptable. The rule targets infrastructure duplication (directory, relay, libp2p node setup), not local assertion helpers.
+
 ---
 
 ## Step 5 — YAGNI and scope check
