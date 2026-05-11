@@ -35,6 +35,18 @@ For every AC in the story:
    - If yes: **blocking**. The test asserts result, not behavior. It must also assert the transport path was used — stream open count, protocol handler invocation, frame count, or equivalent.
    - This is the M2/M3 failure mode. Tests that pass in a single Vitest process tell you nothing about whether the protocol works between separate OS processes.
 
+4. **When you find a test that is close but insufficient — decide: modify or add?**
+
+   Use this decision rule:
+
+   - **Modify the existing test** when: the existing test is the named test for this AC (its name references the AC ID) but exercises the wrong path. Leaving it alongside a new test creates two tests for the same AC — the hollow one still signals false confidence. Replace the bypass call with the real protocol call.
+
+   - **Add a new test** when: the existing test correctly covers a *different*, narrower AC (unit scope), and the integration AC genuinely has no coverage. Both tests are needed; they cover distinct things.
+
+   - **The invariant to preserve:** one authoritative test per AC, and it must exercise what the AC actually claims. If a test is named for AC-006 but routes through a stub, it is not a valid AC-006 test — it must be corrected, not supplemented. A suite with both a hollow "AC-006: passes via stub" and a real "AC-006: network ceremony" has conflicting signals about what done means.
+
+   - **Never leave a hollow test in place alongside a real one** — delete the hollow test when you add the real replacement. Two tests for the same AC with different depth is worse than one correct test.
+
 ---
 
 ## Step 3 — SI coverage check
