@@ -230,6 +230,12 @@ export interface DirectoryNodeOptions {
    * Default: false (backward compatible).
    */
   requireConnectionGate?: boolean;
+  /**
+   * SI-001 test injection: intercepts package_cbor before relaying to target.
+   * Simulates a malicious directory modifying the package in transit.
+   * Only effective in NODE_ENV=test.
+   */
+  packageCborInterceptor?: (cbor: Uint8Array) => Uint8Array;
 }
 
 export class CelloDirectoryNode {
@@ -248,6 +254,8 @@ export class CelloDirectoryNode {
   readonly #requireRegistration: boolean;
   // SESSION-006: enforce connection gate on session_request
   readonly #requireConnectionGate: boolean;
+  // SI-001 test injection: tamper with package_cbor before relay
+  readonly #packageCborInterceptor: ((cbor: Uint8Array) => Uint8Array) | undefined;
   // CONNREQ-002: pending connection requests indexed by connection_request_id
   // connection_request_id → { senderHex, targetHex, packageCbor, requestId, disclosureRound }
   readonly #pendingConnectionRequests = new Map<string, {
@@ -334,6 +342,7 @@ export class CelloDirectoryNode {
     this.#forceDkgFailure = opts.forceDkgFailure ?? false;
     this.#requireRegistration = opts.requireRegistration ?? false;
     this.#requireConnectionGate = opts.requireConnectionGate ?? false;
+    this.#packageCborInterceptor = opts.packageCborInterceptor;
   }
 
   async start(): Promise<void> {
@@ -640,6 +649,7 @@ export class CelloDirectoryNode {
 
           // Flush any queued notifications
           const queued = this.#store.drainNotifications(authedPubkeyHex);
+
           for (const evt of queued) {
             try {
               if (evt.type === "session_abandoned") {
@@ -648,6 +658,8 @@ export class CelloDirectoryNode {
                 this.#sendFrame(stream, encodeSessionSealed(evt));
               } else if (evt.type === "seal_verified") {
                 this.#sendFrame(stream, encodeSealVerified(evt));
+              } else if (evt.type === "connection_established") {
+                this.#sendFrame(stream, encodeConnectionEstablished(evt));
               } else {
                 this.#sendFrame(stream, encodeSessionSealRejected(evt));
               }
@@ -1022,11 +1034,15 @@ export class CelloDirectoryNode {
     const senderRegisteredAt = senderProfile?.registered_at ?? this.#clock.now();
     const senderIsProvisional = senderProfile?.status !== "active";
 
+    const relayedPackageCbor = this.#packageCborInterceptor
+      ? this.#packageCborInterceptor(frame.package_cbor)
+      : frame.package_cbor;
+
     const inboundFrame: import("@cello/protocol-types").ConnectionRequestInbound = {
       type: "connection_request_inbound",
       from_pubkey: senderHex,
       connection_request_id: connectionRequestId,
-      package_cbor: frame.package_cbor,
+      package_cbor: relayedPackageCbor,
       sender_registered_at: senderRegisteredAt,
       sender_is_provisional: senderIsProvisional,
     };
@@ -1085,7 +1101,7 @@ export class CelloDirectoryNode {
     frame: import("@cello/protocol-types").ConnectionResponse,
   ): Promise<void> {
     const pending = this.#pendingConnectionRequests.get(frame.connection_request_id);
-    if (!pending) return; // stale response — ignore
+    if (!pending) return;
     if (pending.targetHex !== responderHex) return; // wrong responder
 
     this.#pendingConnectionRequests.delete(frame.connection_request_id);
@@ -1108,6 +1124,9 @@ export class CelloDirectoryNode {
         counterparty_pubkey: pending.senderHex,
         connection_id: connectionId,
       };
+      // Queue for sender (delivered on next auth). Client deduplicates via connection_id.
+      this.#store.enqueueNotification(pending.senderHex, toSender);
+      // Also attempt immediate delivery if stream appears live.
       if (senderStream) {
         try { this.#sendFrame(senderStream, encodeConnectionEstablished(toSender)); } catch {}
       }
@@ -1841,6 +1860,11 @@ export interface CreateDirectoryNodeOptions {
    * Default: false (backward compatible).
    */
   requireConnectionGate?: boolean;
+  /**
+   * SI-001 test injection: intercepts package_cbor before relaying to target.
+   * Only effective in NODE_ENV=test.
+   */
+  packageCborInterceptor?: (cbor: Uint8Array) => Uint8Array;
 }
 
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{
@@ -1869,6 +1893,7 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     forceDkgFailure: opts.forceDkgFailure,
     requireRegistration: opts.requireRegistration,
     requireConnectionGate: opts.requireConnectionGate,
+    packageCborInterceptor: opts.packageCborInterceptor,
   });
   await directory.start();
 
