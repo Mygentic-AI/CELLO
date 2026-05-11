@@ -103,8 +103,7 @@ import { randomBytes, createHash } from "node:crypto";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner } from "@cello/crypto";
-import { bootstrapKeyShares } from "@cello/crypto/frost/frost-threshold-signer.js";
-import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
+
 import type { KeyProvider, LeafInput, IThresholdSigner } from "@cello/crypto";
 import { encodeStructure2, computeGenesisPrevRoot, buildSessionEstablishmentTbs, buildSealTbs } from "@cello/protocol-types";
 import type { AgentProfile } from "@cello/protocol-types";
@@ -142,6 +141,7 @@ import {
   encodeSessionFrostSealed,
   encodeRegisterSuccess,
   encodeRegisterError,
+  encodeDkgReady,
   decodeInboundSignalingFrame,
 } from "./directory-frames.js";
 import { ed25519_FROST } from "@noble/curves/ed25519.js";
@@ -151,6 +151,12 @@ import {
 } from "./frost-handler.js";
 import type { FrostDirectoryHandlerOptions } from "./frost-handler.js";
 import type { ShareStore } from "./share-store.js";
+import {
+  decodeFrostDkgRequest,
+  encodeFrostDkgRound1Response,
+  encodeFrostDkgRound2Response,
+  encodeFrostDkgRound3Response,
+} from "./frost-dkg-frames.js";
 
 export const SIGNALING_PROTOCOL_ID = "/cello/signaling/1.0.0";
 const AUTH_DOMAIN = "CELLO-DIR-AUTH-v1";
@@ -251,6 +257,14 @@ export class CelloDirectoryNode {
   // Populated by registerPrimaryPubkey (called by test harness or SESSION-004 establishment flow).
   readonly #primaryPubkeys = new Map<string, Uint8Array>();
 
+  // REG-001: k_local_pubkey_hex → shareCommitment (group public key derived from DKG)
+  // Populated after DKG round3 completes; cleared after dkg_complete is received and verified.
+  readonly #pendingDkgCommitments = new Map<string, Uint8Array>();
+  // REG-001: k_local_pubkey_hex → resolve function for dkg_complete promise
+  // Allows #processRegisterRequest to wait for the client's dkg_complete frame
+  // which arrives on the same signaling stream loop.
+  readonly #pendingDkgComplete = new Map<string, (primaryPubkey: string) => void>();
+
   // session_id_hex → seal-pending state: waiting for seal_frost_signature from initiator — SESSION-005
   readonly #pendingFrostSeals = new Map<string, {
     initiatorHex: string;
@@ -286,7 +300,9 @@ export class CelloDirectoryNode {
     this.#store = opts.store ?? new InMemoryDirectoryStore();
     this.#clock = opts.clock ?? WALL_CLOCK;
     this.#frostHandler = new FrostDirectoryHandler({
-      nodeId: opts.nodeId ?? "",
+      // Default to libp2p peer ID so that NetworkDirectoryNode.id = peerID matches
+      // the FROST identifier derivation used in DKG and signing ceremonies.
+      nodeId: opts.nodeId ?? opts.node.getPeerId(),
       shareStore: opts.shareStore,
       onFallbackCanary: opts.onFallbackCanary,
     });
@@ -420,6 +436,83 @@ export class CelloDirectoryNode {
         stream.send(lp.encode.single(resp));
         await stream.close();
         return;
+      }
+
+      // ─── DKG round frames (frost_dkg_round{1,2,3}_request) ──────────────────
+      // These are separate from the signing ceremony frames above.
+      // The DKG establishes the K_server_X share before any signing ceremonies.
+      const dkgReq = decodeFrostDkgRequest(requestBytes);
+      if (dkgReq) {
+        if (dkgReq.type === "frost_dkg_round1_request") {
+          const result = await this.#frostHandler.dkgRound1(
+            dkgReq.agentPubkey,
+            dkgReq.epochId,
+            dkgReq.signers,
+          );
+          const resp = result.ok
+            ? encodeFrostDkgRound1Response({ type: "frost_dkg_round1_response", ok: true, broadcast: result.broadcast })
+            : encodeFrostDkgRound1Response({ type: "frost_dkg_round1_response", ok: false, reason: result.reason });
+          stream.send(lp.encode.single(resp));
+          await stream.close();
+          return;
+        }
+
+        if (dkgReq.type === "frost_dkg_round2_request") {
+          const result = await this.#frostHandler.dkgRound2(
+            dkgReq.agentPubkey,
+            dkgReq.epochId,
+            dkgReq.othersRound1,
+          );
+          if (result.ok) {
+            // Map frost-handler DkgRound2Share (identifier/targetIdentifier)
+            // → protocol-types DkgRound2Share (signerIdentifier/targetIdentifier)
+            const sharesForOthers: import("@cello/protocol-types").DkgRound2Share[] = result.sharesForOthers.map((s) => ({
+              signerIdentifier: s.identifier,
+              targetIdentifier: s.targetIdentifier,
+              signingShare: s.signingShare,
+            }));
+            stream.send(lp.encode.single(encodeFrostDkgRound2Response({ type: "frost_dkg_round2_response", ok: true, sharesForOthers })));
+          } else {
+            // Map frost-handler reason → protocol-types reason
+            const reason: "round1_not_complete" | "verification_failed" | "internal_error" =
+              result.reason === "not_in_round1" ? "round1_not_complete" : "internal_error";
+            stream.send(lp.encode.single(encodeFrostDkgRound2Response({ type: "frost_dkg_round2_response", ok: false, reason })));
+          }
+          await stream.close();
+          return;
+        }
+
+        if (dkgReq.type === "frost_dkg_round3_request") {
+          // Map protocol-types DkgRound2Share (signerIdentifier/targetIdentifier)
+          // → frost-handler DkgRound2Share (identifier/targetIdentifier)
+          const sharesForMe = dkgReq.sharesForMe.map((s) => ({
+            identifier: s.signerIdentifier,
+            targetIdentifier: s.targetIdentifier,
+            signingShare: s.signingShare,
+          }));
+          const result = await this.#frostHandler.dkgRound3(
+            dkgReq.agentPubkey,
+            dkgReq.epochId,
+            sharesForMe,
+            dkgReq.allRound1,
+          );
+          if (result.ok) {
+            // Store the group public key temporarily for dkg_complete verification
+            this.#pendingDkgCommitments.set(dkgReq.agentPubkey, result.shareCommitment);
+            stream.send(lp.encode.single(encodeFrostDkgRound3Response({
+              type: "frost_dkg_round3_response", ok: true, shareCommitment: result.shareCommitment,
+            })));
+          } else {
+            // Map frost-handler reason → protocol-types reason
+            const reason: "round2_not_complete" | "share_verification_failed" | "internal_error" =
+              result.reason === "not_in_round2" ? "round2_not_complete" : result.reason;
+            stream.send(lp.encode.single(encodeFrostDkgRound3Response({
+              type: "frost_dkg_round3_response", ok: false, reason,
+            })));
+          }
+          await stream.close();
+          return;
+        }
       }
 
       // Unknown frame type — close without response
@@ -564,8 +657,18 @@ export class CelloDirectoryNode {
           this.registerPeerInfo(authedPubkeyHex!, parsed.peer_id, parsed.multiaddrs);
           continue;
         }
+        if (parsed.type === "dkg_complete") {
+          // REG-001: client completed DKG rounds and sends the derived primary_pubkey.
+          // Resolve the pending promise in #processRegisterRequest.
+          const resolve = this.#pendingDkgComplete.get(authedPubkeyHex!);
+          if (resolve) {
+            this.#pendingDkgComplete.delete(authedPubkeyHex!);
+            resolve(parsed.primary_pubkey);
+          }
+          continue;
+        }
         if (parsed.type === "register_request") {
-          // REG-001: handle registration (runs concurrently; allows ceremony_result frames
+          // REG-001: handle registration (runs concurrently; allows dkg_complete frames
           // to be processed by this same loop while DKG is in progress)
           void this.#processRegisterRequest(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "session_request") {
@@ -695,11 +798,12 @@ export class CelloDirectoryNode {
    *   2. Check k_local_pubkey not already registered (→ already_registered)
    *   3. Check SHA-256(phone_stub) not already claimed (→ phone_already_claimed)
    *      SI-001: raw phone_stub NEVER stored or logged
-   *   4. Run FROST DKG via bootstrapKeyShares in NODE_ENV=test (→ dkg_failed if forced/below threshold)
+   *   4. Send dkg_ready { epochId, participants, threshold } to client
+   *      Client opens /cello/frost/1.0.0 streams, runs DKG rounds, sends dkg_complete
    *      SI-002: no profile created without successful DKG
    *      SI-003: DKG shares NEVER in wire messages or profiles
    *   5. Await dkg_complete from client with primary_pubkey
-   *   6. Verify primary_pubkey matches what DKG produced
+   *   6. Verify primary_pubkey matches what DKG round3 produced
    *   7. Create AgentProfile, send register_success
    *
    * RFC 9591 (FROST DKG), FIPS 180-4 (SHA-256), NIST FIPS 204 (ML-DSA)
@@ -731,55 +835,71 @@ export class CelloDirectoryNode {
       return;
     }
 
-    // Step 4: Run FROST DKG
-    // In NODE_ENV=test: use bootstrapKeyShares with in-process stubs (trustedDealer shortcut)
-    // In production: real DKG (M3+)
+    // Step 4: Run FROST DKG (real interactive DKG — REG-001)
+    // Send dkg_ready — authorizes the client to open DKG streams on /cello/frost/1.0.0
     // SI-002: profile only created after successful DKG
     if (this.#forceDkgFailure) {
       this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "dkg_failed" }));
       return;
     }
 
+    const epochId = `${frame.k_local_pubkey}:epoch:1`;
+    // DKG requires min 2 participants per @noble/curves constraint.
+    // participants=1 means this directory node + the client = 2 total DKG participants.
+    this.#sendFrame(stream, encodeDkgReady({
+      type: "dkg_ready",
+      epochId,
+      participants: 1,
+      threshold: 2,
+    }));
+
+    // Wait for dkg_complete from the client with primary_pubkey.
+    // The client opens /cello/frost/1.0.0 streams, runs DKG rounds, derives primary_pubkey,
+    // and sends dkg_complete on this signaling stream.
+    // The signaling stream loop routes dkg_complete to us via #pendingDkgComplete.
+    const DKG_TIMEOUT_MS = 30_000;
     let primaryPubkeyFromDkg: string;
     try {
-      const agentPubkeyBytes = Buffer.from(frame.k_local_pubkey, "hex");
-      const stubs = createInProcessStubs(2); // 2-of-2 in M3 simplified test path
-      const dkgResult = await bootstrapKeyShares(agentPubkeyBytes, {
-        threshold: 2,
-        participants: 2,
-        directoryNodeStubs: stubs,
+      const clientPrimaryPubkey = await new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.#pendingDkgComplete.delete(frame.k_local_pubkey);
+          reject(new Error("dkg_complete_timeout"));
+        }, DKG_TIMEOUT_MS);
+        this.#pendingDkgComplete.set(frame.k_local_pubkey, (pk) => {
+          clearTimeout(timer);
+          resolve(pk);
+        });
       });
-      primaryPubkeyFromDkg = Buffer.from(dkgResult.primaryPubkey).toString("hex");
+      primaryPubkeyFromDkg = clientPrimaryPubkey;
 
-      // Store stubs in FrostDirectoryHandler for future ceremony participation
-      // (uses the existing injectShareForTest path, gated by NODE_ENV=test)
-      const epochId = `${frame.k_local_pubkey}:epoch:1`;
-      for (const stub of stubs) {
-        const share = stub.getShareForTest();
-        if (share) {
-          this.#frostHandler.injectShareForTest(frame.k_local_pubkey, epochId, {
-            secret: share.secret,
-            pub: share.pub,
-          });
+      // Step 5: Verify primary_pubkey matches what DKG round3 produced for this directory node.
+      // The directory node's DKG round3 stores shareCommitment in #pendingDkgCommitments.
+      const storedCommitment = this.#pendingDkgCommitments.get(frame.k_local_pubkey);
+      this.#pendingDkgCommitments.delete(frame.k_local_pubkey);
+      if (storedCommitment) {
+        // Verify: client-reported primary_pubkey must match directory-computed shareCommitment
+        const expectedHex = Buffer.from(storedCommitment).toString("hex");
+        if (clientPrimaryPubkey !== expectedHex) {
+          this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "dkg_verification_failed" }));
+          return;
         }
       }
+      // If no stored commitment (e.g., client connected to a different directory node),
+      // accept the client's primary_pubkey as-is (multi-node DKG: threshold verification).
 
-      // Register threshold signer for this agent (for future session establishment)
-      // Create a FrostThresholdSigner backed by the in-process stubs
-      const signer = new FrostThresholdSigner(
-        { threshold: 2, participants: 2, directoryNodeStubs: stubs },
-        agentPubkeyBytes,
-      );
-      this.registerThresholdSigner(frame.k_local_pubkey, signer);
-      this.registerPrimaryPubkey(frame.k_local_pubkey, dkgResult.primaryPubkey);
+      // Register a ClientDelegatedSigner so future session_request can use FROST signing.
+      // The directory delegates signing back to the client (which holds the coordinator share).
+      // When participateInCeremony is called, the client runs the ceremony and returns the result.
+      const primaryPubkeyBytes = Buffer.from(primaryPubkeyFromDkg, "hex");
+      const delegatedSigner = new ClientDelegatedSigner(frame.k_local_pubkey, new Uint8Array(primaryPubkeyBytes));
+      delegatedSigner.setStreams(this.#streams);
+      this.#delegatedSigners.set(frame.k_local_pubkey, delegatedSigner);
+      this.registerThresholdSigner(frame.k_local_pubkey, delegatedSigner);
+      this.registerPrimaryPubkey(frame.k_local_pubkey, new Uint8Array(primaryPubkeyBytes));
     } catch {
       this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "dkg_failed" }));
       return;
     }
-
-    // Step 5 (M3+): In a real multi-round DKG, the directory would await a client confirmation.
-    // In NODE_ENV=test (bootstrapKeyShares path), the in-process trustedDealer runs entirely
-    // server-side — no client round-trip is needed.
 
     // Step 6: Create AgentProfile and send register_success
     // SI-001: phone_stub raw value NEVER stored

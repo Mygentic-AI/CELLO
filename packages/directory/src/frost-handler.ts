@@ -102,6 +102,98 @@ export class BootstrapNotAllowedInProduction extends Error {
   }
 }
 
+// ─── DKG wire types ───────────────────────────────────────────────────────────
+
+/**
+ * Round 1 public broadcast — sent from directory node to client coordinator.
+ * Contains the node's public polynomial commitment and proof-of-knowledge.
+ * RFC 9591 §5.1.
+ */
+export interface DkgRound1Broadcast {
+  /** Hex-encoded FROST participant identifier */
+  readonly identifier: string;
+  /** Polynomial commitment — array of 32-byte Ed25519 points */
+  readonly commitment: Uint8Array[];
+  /** Proof-of-knowledge — 64 bytes */
+  readonly proofOfKnowledge: Uint8Array;
+}
+
+/**
+ * Round 2 share — from one participant, addressed to another.
+ * Contains the signing share polynomial evaluated at the target's identifier.
+ * RFC 9591 §5.2.
+ *
+ * IMPORTANT identifier semantics:
+ *   - `identifier` = SENDER's identifier (used by round3 to verify against round1 package)
+ *   - `targetIdentifier` = RECIPIENT's identifier (used by coordinator for routing)
+ */
+export interface DkgRound2Share {
+  /** Hex-encoded SENDER participant identifier (used by round3 for round1 matching) */
+  readonly identifier: string;
+  /** Hex-encoded RECIPIENT participant identifier (used by coordinator for routing) */
+  readonly targetIdentifier: string;
+  /** 32-byte signing share polynomial evaluation */
+  readonly signingShare: Uint8Array;
+}
+
+// ─── DKG result types ─────────────────────────────────────────────────────────
+
+export type DkgRound1Ok = {
+  readonly ok: true;
+  readonly broadcast: DkgRound1Broadcast;
+};
+
+export type DkgRound1Error = {
+  readonly ok: false;
+  readonly reason: "already_in_progress";
+};
+
+export type DkgRound1Result = DkgRound1Ok | DkgRound1Error;
+
+export type DkgRound2Ok = {
+  readonly ok: true;
+  /** Shares addressed to each of the other participants */
+  readonly sharesForOthers: DkgRound2Share[];
+};
+
+export type DkgRound2Error = {
+  readonly ok: false;
+  readonly reason: "not_in_round1";
+};
+
+export type DkgRound2Result = DkgRound2Ok | DkgRound2Error;
+
+export type DkgRound3Ok = {
+  readonly ok: true;
+  /**
+   * The FROST group public key (32-byte Ed25519 point).
+   * This is commitments[0] from the finalized FrostPublic.
+   * SECURITY: this is the ONLY key material that leaves dkgRound3.
+   * The FrostSecret (polynomial coefficients) is stored internally.
+   */
+  readonly shareCommitment: Uint8Array;
+};
+
+export type DkgRound3Error = {
+  readonly ok: false;
+  readonly reason: "not_in_round2" | "share_verification_failed";
+};
+
+export type DkgRound3Result = DkgRound3Ok | DkgRound3Error;
+
+// ─── DKG state ────────────────────────────────────────────────────────────────
+
+type DkgStep = "round1_complete" | "round2_complete";
+
+interface DkgState {
+  // Mutable DKG_Secret from round1 (consumed/modified by round2 and round3)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  secret: any;
+  // The node's own round1 public broadcast (needed for round3 validation)
+  round1Public: DkgRound1Broadcast;
+  step: DkgStep;
+}
+
 // ─── Result types ──────────────────────────────────────────────────────────────
 
 export type CeremonyRoundOk = {
@@ -204,6 +296,11 @@ export class FrostDirectoryHandler {
   // Current epoch number per agent: agentPubkey → latest epoch N
   // Used to detect expired epoch requests.
   readonly #currentEpoch = new Map<string, number>();
+
+  // DKG state per (agentPubkey, epochId): agentPubkey:epochId → DkgState
+  // Holds the mutable DKG_Secret between rounds.
+  // State machine: idle → round1_complete → round2_complete → finalized (entry removed)
+  readonly #dkgStates = new Map<string, DkgState>();
 
   // Pending nonce cache for two-step network protocol: agentPubkey:epochId → { nonce, share, expiresAt }
   // Populated by generateCommitment(); consumed exclusively by signRawMessage().
@@ -510,6 +607,185 @@ export class FrostDirectoryHandler {
     }
     this.#shareStore.storeShare(agentPubkey, epochId, share);
     this.#currentEpoch.set(agentPubkey, parseEpochN(epochId) ?? 1);
+  }
+
+  // ─── DKG rounds ───────────────────────────────────────────────────────────────
+  //
+  // Implements the 3-round interactive FROST DKG per RFC 9591.
+  // Each directory node maintains its own DKG_Secret between rounds.
+  // State machine per (agentPubkey, epochId): idle → round1_complete → round2_complete → finalized
+  //
+  // SECURITY: dkgSecret (polynomial coefficients) NEVER appears in any return value,
+  // error message, or log output. Only shareCommitment (group public key) is returned
+  // from round3. ed25519_FROST.DKG.clean(secret) is called after round3 or on error.
+
+  /**
+   * Round 1: generate secret polynomial, store DKG secret, return public broadcast.
+   *
+   * FROST DKG §5.1 (RFC 9591): each participant generates a secret polynomial and
+   * publishes a commitment and proof-of-knowledge.
+   *
+   * @param agentPubkey - hex-encoded K_local public key of the registering agent
+   * @param epochId - epoch identifier: "${agentPubkey}:epoch:1"
+   * @param signers - threshold parameters { min, max }
+   */
+  async dkgRound1(
+    agentPubkey: string,
+    epochId: string,
+    signers: { min: number; max: number },
+  ): Promise<DkgRound1Result> {
+    const stateKey = `${agentPubkey}:${epochId}`;
+    if (this.#dkgStates.has(stateKey)) {
+      return { ok: false, reason: "already_in_progress" };
+    }
+
+    // Derive a stable FROST participant identifier from this node's ID.
+    // RFC 9591 §4.2: identifiers must be unique among participants.
+    const participantId = ed25519_FROST.Identifier.derive(this.#nodeId);
+
+    // Generate secret polynomial and public commitment (RFC 9591 §5.1).
+    // round1() returns { public: DKG_Round1, secret: DKG_Secret }
+    // SECURITY: secret contains polynomial coefficients — never returned or logged.
+    const r1 = ed25519_FROST.DKG.round1(participantId, signers);
+
+    const broadcast: DkgRound1Broadcast = {
+      identifier: r1.public.identifier,
+      commitment: r1.public.commitment.map((c: Uint8Array) => new Uint8Array(c)),
+      proofOfKnowledge: new Uint8Array(r1.public.proofOfKnowledge),
+    };
+
+    this.#dkgStates.set(stateKey, {
+      secret: r1.secret,
+      round1Public: broadcast,
+      step: "round1_complete",
+    });
+
+    return { ok: true, broadcast };
+    // SECURITY: r1.secret is stored in #dkgStates and never returned.
+  }
+
+  /**
+   * Round 2: receive other participants' round1 broadcasts, compute round2 shares.
+   *
+   * FROST DKG §5.2 (RFC 9591): each participant evaluates its polynomial at each
+   * other participant's identifier and sends the result as a signing share.
+   *
+   * @param agentPubkey - hex-encoded K_local public key
+   * @param epochId - epoch identifier
+   * @param othersRound1 - round1 broadcasts from ALL other participants (not including self)
+   */
+  async dkgRound2(
+    agentPubkey: string,
+    epochId: string,
+    othersRound1: DkgRound1Broadcast[],
+  ): Promise<DkgRound2Result> {
+    const stateKey = `${agentPubkey}:${epochId}`;
+    const state = this.#dkgStates.get(stateKey);
+    if (!state || state.step !== "round1_complete") {
+      return { ok: false, reason: "not_in_round1" };
+    }
+
+    // Convert DkgRound1Broadcast → @noble/curves DKG_Round1 shape
+    const othersPublic = othersRound1.map((b) => ({
+      identifier: b.identifier,
+      commitment: b.commitment.map((c) => new Uint8Array(c)),
+      proofOfKnowledge: new Uint8Array(b.proofOfKnowledge),
+    }));
+
+    // round2() returns Record<identifier, { identifier, signingShare }>
+    // SECURITY: secret is mutated in-place by round2 (step advances to 2 internally).
+    const shares = ed25519_FROST.DKG.round2(state.secret, othersPublic);
+
+    // Convert to DkgRound2Share array.
+    // The Record from round2() is keyed by TARGET identifier.
+    // The value's `identifier` field is the SENDER's identifier (this node).
+    //
+    // DkgRound2Share.identifier = SENDER's identifier, because:
+    //   - round3() matches round2 shares against round1 packages by identifier
+    //   - The round1 package is identified by its sender (who submitted the broadcast)
+    //   - So the round2 share must carry the sender's (this node's) identifier
+    //
+    // The coordinator routes shares to recipients using the targetIdentifier field.
+    const sharesForOthers: DkgRound2Share[] = Object.entries(shares).map(([targetId, share]) => {
+      const s = share as { identifier: string; signingShare: Uint8Array };
+      return {
+        identifier: s.identifier,   // SENDER's identifier (for round3 verification)
+        targetIdentifier: targetId, // RECIPIENT's identifier (for coordinator routing)
+        signingShare: new Uint8Array(s.signingShare),
+      };
+    });
+
+    state.step = "round2_complete";
+
+    return { ok: true, sharesForOthers };
+  }
+
+  /**
+   * Round 3: receive round2 shares addressed to this node, finalize key, store FrostSecret.
+   *
+   * FROST DKG §5.3 (RFC 9591): each participant aggregates the received shares,
+   * verifies them against the commitments, and derives the group public key.
+   *
+   * After round3, the FrostSecret is stored in the ShareStore for future signing ceremonies.
+   *
+   * @param agentPubkey - hex-encoded K_local public key
+   * @param epochId - epoch identifier
+   * @param sharesForMe - round2 shares addressed to this node (from all other participants)
+   * @param allOthersRound1 - round1 broadcasts from all OTHER participants (same as round2 input)
+   */
+  async dkgRound3(
+    agentPubkey: string,
+    epochId: string,
+    sharesForMe: DkgRound2Share[],
+    allOthersRound1: DkgRound1Broadcast[],
+  ): Promise<DkgRound3Result> {
+    const stateKey = `${agentPubkey}:${epochId}`;
+    const state = this.#dkgStates.get(stateKey);
+    if (!state || state.step !== "round2_complete") {
+      return { ok: false, reason: "not_in_round2" };
+    }
+
+    // Convert to @noble/curves expected shapes
+    const round1Packages = allOthersRound1.map((b) => ({
+      identifier: b.identifier,
+      commitment: b.commitment.map((c) => new Uint8Array(c)),
+      proofOfKnowledge: new Uint8Array(b.proofOfKnowledge),
+    }));
+    const round2Packages = sharesForMe.map((s) => ({
+      identifier: s.identifier,
+      signingShare: new Uint8Array(s.signingShare),
+    }));
+
+    let key: { public: import("@noble/curves/abstract/frost.js").FrostPublic; secret: import("@noble/curves/abstract/frost.js").FrostSecret };
+    try {
+      // round3(secret, othersRound1, sharesForMe) — RFC 9591 §5.3
+      // Verifies each share against the corresponding commitment before aggregating.
+      // Throws if any share fails verification.
+      key = ed25519_FROST.DKG.round3(state.secret, round1Packages, round2Packages);
+    } catch (err) {
+      // Clean up secret material on error (RFC 9591: forward secrecy of polynomial)
+      try { ed25519_FROST.DKG.clean(state.secret); } catch { /* ignore */ }
+      this.#dkgStates.delete(stateKey);
+      // SECURITY: do NOT include error message or state in return value
+      console.error("[frost-handler] DKG round3 failed:", err instanceof Error ? err.message : "unknown");
+      return { ok: false, reason: "share_verification_failed" };
+    }
+
+    // Store the finalized FrostSecret in the share store (same path as bootstrapKeyShares).
+    // This makes the node ready for signing ceremonies.
+    const share: LocalShare = { secret: key.secret, pub: key.public };
+    this.#shareStore.storeShare(agentPubkey, epochId, share);
+    this.#currentEpoch.set(agentPubkey, parseEpochN(epochId) ?? 1);
+
+    // Clean up DKG state — the DKG_Secret (polynomial) is no longer needed.
+    // The FrostSecret (signing share) is now in the share store.
+    try { ed25519_FROST.DKG.clean(state.secret); } catch { /* ignore */ }
+    this.#dkgStates.delete(stateKey);
+
+    // Return ONLY the group public key (commitments[0] = 32-byte Ed25519 point).
+    // SECURITY: key.secret (the signing share) is stored in shareStore, never returned.
+    const shareCommitment = new Uint8Array(key.public.commitments[0]);
+    return { ok: true, shareCommitment };
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────────

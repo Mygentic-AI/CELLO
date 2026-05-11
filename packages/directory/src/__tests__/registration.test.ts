@@ -49,6 +49,7 @@ import {
 } from "../directory-node.js";
 import type { RelayAdapter } from "../directory-node.js";
 import type { RelaySessionAssignment } from "../directory-types.js";
+import { NetworkDirectoryNode, runNetworkDkg } from "@cello/client";
 
 setupV3Tests();
 
@@ -141,6 +142,64 @@ async function doAuth(
   return { stream, reader };
 }
 
+// ─── Registration helper: handles DKG flow ────────────────────────────────────
+
+/**
+ * Complete the full registration flow:
+ *   1. Send register_request on an already-auth'd stream
+ *   2. Read dkg_ready from the directory
+ *   3. Run the real FROST DKG (3 rounds) over /cello/frost/1.0.0 streams
+ *   4. Send dkg_complete with the agreed primary_pubkey
+ *   5. Return the register_success or register_error frame
+ */
+async function doRegister(
+  stream: Stream,
+  reader: StreamReader,
+  clientNode: Awaited<ReturnType<typeof createNode>>,
+  dirPeerId: string,
+  dirMultiaddrs: string[],
+  clientPubkeyHex: string,
+  mlDsaPubkeyHex: string,
+  phoneStub: string,
+): Promise<Record<string, unknown>> {
+  sendFrame(stream, CBOR_ENC.encode({
+    type: "register_request",
+    phone_stub: phoneStub,
+    k_local_pubkey: clientPubkeyHex,
+    ml_dsa_pubkey: mlDsaPubkeyHex,
+  }));
+
+  // Read dkg_ready from directory
+  const dkgReadyFrame = await reader.readFrameWithTimeout(10000);
+  if (dkgReadyFrame["type"] !== "dkg_ready") {
+    return dkgReadyFrame; // register_error or unexpected frame
+  }
+
+  // Run FROST DKG over /cello/frost/1.0.0 streams
+  const dirNode = new NetworkDirectoryNode({
+    id: dirPeerId,
+    node: clientNode,
+    directoryPeerId: dirPeerId,
+    directoryMultiaddrs: dirMultiaddrs,
+  });
+  const clientPubkeyBytes = Buffer.from(clientPubkeyHex, "hex");
+  const dkgResult = await runNetworkDkg(clientPubkeyBytes, {
+    threshold: dkgReadyFrame["threshold"] as number,
+    participants: dkgReadyFrame["participants"] as number,
+    directoryNodes: [dirNode],
+  });
+  const primaryPubkeyHex = Buffer.from(dkgResult.primaryPubkey).toString("hex");
+
+  // Send dkg_complete
+  sendFrame(stream, CBOR_ENC.encode({
+    type: "dkg_complete",
+    primary_pubkey: primaryPubkeyHex,
+  }));
+
+  // Return register_success or register_error
+  return reader.readFrameWithTimeout(10000);
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("REG-001: Directory registration", () => {
@@ -178,16 +237,14 @@ describe("REG-001: Directory registration", () => {
     const mlDsaPubkey = await mlDsaProvider.getPublicKey();
     const clientPubkey = await clientKey.getPublicKey();
 
-    // Send register_request
-    sendFrame(stream, CBOR_ENC.encode({
-      type: "register_request",
-      phone_stub: "+1234567890",
-      k_local_pubkey: Buffer.from(clientPubkey).toString("hex"),
-      ml_dsa_pubkey: Buffer.from(mlDsaPubkey).toString("hex"),
-    }));
+    const clientPubkeyHex = Buffer.from(clientPubkey).toString("hex");
+    const mlDsaPubkeyHex = Buffer.from(mlDsaPubkey).toString("hex");
 
-    // Directory should run DKG internally and send register_success
-    const successFrame = await reader.readFrameWithTimeout(10000);
+    // Full registration flow: register_request → dkg_ready → DKG rounds → dkg_complete → register_success
+    const successFrame = await doRegister(
+      stream, reader, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
+      clientPubkeyHex, mlDsaPubkeyHex, "+1234567890",
+    );
     expect(successFrame["type"]).toBe("register_success");
     expect(typeof successFrame["agent_id"]).toBe("string");
     expect((successFrame["agent_id"] as string).length).toBe(32); // 16 bytes hex
@@ -195,12 +252,12 @@ describe("REG-001: Directory registration", () => {
     expect((successFrame["primary_pubkey"] as string).length).toBe(64); // 32 bytes hex
 
     // Verify profile was stored
-    const profileKey = Buffer.from(clientPubkey).toString("hex");
+    const profileKey = clientPubkeyHex;
     expect(directory.hasProfile(profileKey)).toBe(true);
     const profile = directory.getProfile(profileKey);
     expect(profile).toBeDefined();
     expect(profile!.status).toBe("active");
-    expect(profile!.ml_dsa_pubkey).toBe(Buffer.from(mlDsaPubkey).toString("hex"));
+    expect(profile!.ml_dsa_pubkey).toBe(mlDsaPubkeyHex);
   });
 
   it("AC-002: same pubkey registers again → already_registered; DKG not initiated; existing profile unchanged", async () => {
@@ -224,15 +281,13 @@ describe("REG-001: Directory registration", () => {
     const mlDsaProvider = await mlDsaKeygen();
     const mlDsaPubkey = await mlDsaProvider.getPublicKey();
     const clientPubkey = await clientKey.getPublicKey();
+    const clientPubkeyHex = Buffer.from(clientPubkey).toString("hex");
+    const mlDsaPubkeyHex = Buffer.from(mlDsaPubkey).toString("hex");
 
-    sendFrame(stream1, CBOR_ENC.encode({
-      type: "register_request",
-      phone_stub: "+1111111111",
-      k_local_pubkey: Buffer.from(clientPubkey).toString("hex"),
-      ml_dsa_pubkey: Buffer.from(mlDsaPubkey).toString("hex"),
-    }));
-
-    const successFrame = await reader1.readFrameWithTimeout(10000);
+    const successFrame = await doRegister(
+      stream1, reader1, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
+      clientPubkeyHex, mlDsaPubkeyHex, "+1111111111",
+    );
     expect(successFrame["type"]).toBe("register_success");
     const originalAgentId = successFrame["agent_id"];
 
@@ -252,7 +307,7 @@ describe("REG-001: Directory registration", () => {
     expect(errorFrame["reason"]).toBe("already_registered");
 
     // Original profile unchanged
-    const profile = directory.getProfile(Buffer.from(clientPubkey).toString("hex"));
+    const profile = directory.getProfile(clientPubkeyHex);
     expect(profile!.agent_id).toBe(originalAgentId);
   });
 
@@ -283,15 +338,13 @@ describe("REG-001: Directory registration", () => {
     const { stream: streamA, reader: readerA } = await doAuth(clientNodeA, dirNode.getPeerId(), keyA);
     const mlDsaA = await mlDsaKeygen();
     const pubA = await keyA.getPublicKey();
+    const pubAHex = Buffer.from(pubA).toString("hex");
+    const mlDsaAHex = Buffer.from(await mlDsaA.getPublicKey()).toString("hex");
 
-    sendFrame(streamA, CBOR_ENC.encode({
-      type: "register_request",
-      phone_stub: "+5555555555",
-      k_local_pubkey: Buffer.from(pubA).toString("hex"),
-      ml_dsa_pubkey: Buffer.from(await mlDsaA.getPublicKey()).toString("hex"),
-    }));
-
-    const frameA = await readerA.readFrameWithTimeout(10000);
+    const frameA = await doRegister(
+      streamA, readerA, clientNodeA, dirNode.getPeerId(), dirNode.listenAddresses(),
+      pubAHex, mlDsaAHex, "+5555555555",
+    );
     expect(frameA["type"]).toBe("register_success");
 
     // Agent B tries same phone stub
@@ -363,19 +416,17 @@ describe("REG-001: Directory registration", () => {
     const mlDsaProvider = await mlDsaKeygen();
     const mlDsaPubkey = await mlDsaProvider.getPublicKey();
     const clientPubkey = await clientKey.getPublicKey();
+    const clientPubkeyHex = Buffer.from(clientPubkey).toString("hex");
+    const mlDsaPubkeyHex = Buffer.from(mlDsaPubkey).toString("hex");
     const PHONE = "+1234567890";
 
-    sendFrame(stream, CBOR_ENC.encode({
-      type: "register_request",
-      phone_stub: PHONE,
-      k_local_pubkey: Buffer.from(clientPubkey).toString("hex"),
-      ml_dsa_pubkey: Buffer.from(mlDsaPubkey).toString("hex"),
-    }));
-
-    const successFrame = await reader.readFrameWithTimeout(10000);
+    const successFrame = await doRegister(
+      stream, reader, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
+      clientPubkeyHex, mlDsaPubkeyHex, PHONE,
+    );
     expect(successFrame["type"]).toBe("register_success");
 
-    const profileKey = Buffer.from(clientPubkey).toString("hex");
+    const profileKey = clientPubkeyHex;
     const profile = directory.getProfile(profileKey)!;
 
     // phone_stub_hash must be hex-encoded 32-byte SHA-256 (SI-001: raw phone never stored)
@@ -388,7 +439,7 @@ describe("REG-001: Directory registration", () => {
     expect(Buffer.from(profile.ml_dsa_pubkey, "hex").length).toBe(1312);
 
     // Other required fields
-    expect(profile.k_local_pubkey).toBe(profileKey);
+    expect(profile.k_local_pubkey).toBe(clientPubkeyHex);
     expect(typeof profile.primary_pubkey).toBe("string");
     expect(Buffer.from(profile.primary_pubkey, "hex").length).toBe(32);
     expect(profile.status).toBe("active");
@@ -497,20 +548,17 @@ describe("REG-001: Directory registration", () => {
     const { stream, reader } = await doAuth(clientNode, dirNode.getPeerId(), clientKey);
     const mlDsa = await mlDsaKeygen();
     const pub = await clientKey.getPublicKey();
+    const pubHex = Buffer.from(pub).toString("hex");
+    const mlDsaHex = Buffer.from(await mlDsa.getPublicKey()).toString("hex");
     const PHONE = "+8001234567";
 
-    sendFrame(stream, CBOR_ENC.encode({
-      type: "register_request",
-      phone_stub: PHONE,
-      k_local_pubkey: Buffer.from(pub).toString("hex"),
-      ml_dsa_pubkey: Buffer.from(await mlDsa.getPublicKey()).toString("hex"),
-    }));
-
-    const frame = await reader.readFrameWithTimeout(10000);
+    const frame = await doRegister(
+      stream, reader, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
+      pubHex, mlDsaHex, PHONE,
+    );
     expect(frame["type"]).toBe("register_success");
 
     // Dump all profiles and ensure raw phone is not present anywhere
-    const pubHex = Buffer.from(pub).toString("hex");
     const profile = directory.getProfile(pubHex)!;
 
     // Direct check: phone_stub_hash must be a hex SHA-256, not the raw phone
@@ -585,15 +633,13 @@ describe("REG-001: Directory registration", () => {
     const { stream, reader } = await doAuth(clientNode, dirNode.getPeerId(), clientKey);
     const mlDsa = await mlDsaKeygen();
     const pub = await clientKey.getPublicKey();
+    const pubHex = Buffer.from(pub).toString("hex");
+    const mlDsaHex = Buffer.from(await mlDsa.getPublicKey()).toString("hex");
 
-    sendFrame(stream, CBOR_ENC.encode({
-      type: "register_request",
-      phone_stub: "+9001001001",
-      k_local_pubkey: Buffer.from(pub).toString("hex"),
-      ml_dsa_pubkey: Buffer.from(await mlDsa.getPublicKey()).toString("hex"),
-    }));
-
-    const successFrame = await reader.readFrameWithTimeout(10000);
+    const successFrame = await doRegister(
+      stream, reader, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
+      pubHex, mlDsaHex, "+9001001001",
+    );
     expect(successFrame["type"]).toBe("register_success");
 
     // The register_success frame must only contain agent_id and primary_pubkey
@@ -606,7 +652,6 @@ describe("REG-001: Directory registration", () => {
     expect(frameKeys).not.toContain("k_server");
 
     // Profile must not contain FROST share material
-    const pubHex = Buffer.from(pub).toString("hex");
     const profile = directory.getProfile(pubHex)!;
     const profileStr = JSON.stringify(profile);
     expect(profileStr).not.toContain("signingShare");

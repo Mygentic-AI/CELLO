@@ -151,7 +151,7 @@ export function encodeNotAuthenticated(frame: NotAuthenticated): Uint8Array {
 
 // ─── REG-001: Registration frame encoders ────────────────────────────────────
 
-import type { RegisterSuccess, RegisterError } from "@cello/protocol-types";
+import type { RegisterSuccess, RegisterError, DkgReady } from "@cello/protocol-types";
 
 export function encodeRegisterSuccess(frame: RegisterSuccess): Uint8Array {
   return ENC.encode({ type: frame.type, agent_id: frame.agent_id, primary_pubkey: frame.primary_pubkey });
@@ -161,11 +161,15 @@ export function encodeRegisterError(frame: RegisterError): Uint8Array {
   return ENC.encode({ type: frame.type, reason: frame.reason });
 }
 
+export function encodeDkgReady(frame: DkgReady): Uint8Array {
+  return ENC.encode({ type: frame.type, epochId: frame.epochId, participants: frame.participants, threshold: frame.threshold });
+}
+
 // ─── Decode (client → directory) ─────────────────────────────────────────────
 
-import type { RegisterRequest } from "@cello/protocol-types";
+import type { RegisterRequest, DkgComplete } from "@cello/protocol-types";
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest;
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -228,6 +232,12 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     return { type: "register_request", phone_stub, k_local_pubkey, ml_dsa_pubkey };
   }
 
+  if (o["type"] === "dkg_complete") {
+    const primary_pubkey = typeof o["primary_pubkey"] === "string" ? o["primary_pubkey"] : null;
+    if (primary_pubkey === null) return null;
+    return { type: "dkg_complete" as const, primary_pubkey };
+  }
+
   return null;
 }
 
@@ -246,7 +256,8 @@ export type OutboundSignalingFrame =
   | SealVerified
   | SessionFrostSealed
   | RegisterSuccess
-  | RegisterError;
+  | RegisterError
+  | DkgReady;
 
 /** Decode a frame sent by the directory (used in tests to inspect what was sent). */
 export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignalingFrame | null {
@@ -462,6 +473,14 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       reason !== "dkg_verification_failed"
     ) return null;
     return { type: "register_error" as const, reason };
+  }
+
+  if (o["type"] === "dkg_ready") {
+    const epochId = typeof o["epochId"] === "string" ? o["epochId"] : null;
+    const participants = typeof o["participants"] === "number" ? o["participants"] : null;
+    const threshold = typeof o["threshold"] === "number" ? o["threshold"] : null;
+    if (!epochId || participants === null || threshold === null) return null;
+    return { type: "dkg_ready" as const, epochId, participants, threshold };
   }
 
   return null;
