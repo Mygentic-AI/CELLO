@@ -27,7 +27,7 @@ story: >
   **ROUND 1 (always happens):**
 
   1. Agent A calls `cello_request_connection({ target_pubkey, include_endorsements?,
-     include_attestations? })`. The call blocks for up to 30 seconds total (spanning
+     include_attestations? })`. The call blocks for up to 5 minutes total (spanning
      both rounds if Round 2 occurs).
   2. The client constructs a ConnectionPackage (CONNREQ-001): pseudonym binding +
      selected endorsements/attestations.
@@ -94,7 +94,7 @@ story: >
   9. Directory relays to sender's signaling stream as
      `disclosure_request_inbound { from_pubkey, connection_request_id, requested_items[]
      }`.
-  10. The sender's `cello_request_connection` is still blocking (within its 30-second
+  10. The sender's `cello_request_connection` is still blocking (within its 5-minute
       total timeout). The client receives `disclosure_request_inbound` and fires
       `onDisclosureRequested`. `cello_request_connection` returns
       `{ result: 'disclosure_requested', connection_request_id, requested_items[] }`,
@@ -127,9 +127,21 @@ story: >
   so future session establishments can verify FROST signatures without re-querying the
   directory.
 
-  **30-second timeout:** `cello_request_connection` blocks for up to 30 seconds total,
+  **5-minute timeout:** `cello_request_connection` blocks for up to 5 minutes total,
   spanning both rounds. If no `connection_established` or final `connection_rejected`
-  arrives within 30 seconds of the original call, it returns `{ result: 'timeout' }`.
+  arrives within 5 minutes of the original call, it returns `{ result: 'timeout' }`.
+  The inference path requires an AI agent to read the ConnectionReport scorecard and
+  decide — 30 seconds is not sufficient for that decision loop.
+
+  **Round 2 sender-silence timeout:** Once the target client sends `disclosure_request`
+  (initiating Round 2), if no `disclosure_response` arrives from the sender within
+  2 minutes, the target client sends `connection_response { verdict: 'reject',
+  reason: 'disclosure_timeout' }` to the directory and fires `onConnectionResult` with
+  `{ result: 'rejected', reason: 'disclosure_timeout' }`. This is a separate timer from
+  the overall 5-minute sender timeout — the sender's `cello_request_connection` may still
+  be blocking when the target side times out and rejects; the directory will relay
+  `connection_rejected` back to the sender, causing `cello_request_connection` to return
+  `{ result: 'rejected' }` before the 5-minute overall timeout fires.
 
   **Mutual connections:** connections are symmetric. If A connects to B, B is also
   connected to A. There is no directed/asymmetric connection concept.
@@ -214,10 +226,18 @@ behavior:
       `cello_await_connection_request`. The agent then calls `cello_accept_connection`
       or `cello_reject_connection`; no further `cello_request_more_disclosure` is
       permitted.
-  - trigger: "When 30 seconds elapse from the original `cello_request_connection` call without a `connection_established` or final `connection_rejected` arriving at the sender"
+  - trigger: "When 5 minutes elapse from the original `cello_request_connection` call without a `connection_established` or final `connection_rejected` arriving at the sender"
     action: >
       the client shall return `{ result: 'timeout' }` from `cello_request_connection`.
       No connection record is created.
+  - trigger: "When 2 minutes elapse from the target client sending `disclosure_request` (Round 2) without receiving `disclosure_response` from the sender"
+    action: >
+      the target client shall send `connection_response { verdict: 'reject', reason:
+      'disclosure_timeout' }` to the directory. The directory relays
+      `connection_rejected { target_pubkey, reason: 'disclosure_timeout' }` to the
+      sender's signaling stream. `cello_request_connection` on the sender returns
+      `{ result: 'rejected', reason: 'disclosure_timeout' }`. No connection record is
+      created. The target fires `onConnectionResult` with the rejection.
   - trigger: "When a `connection_established`, `connection_rejected`, or `connection_insufficient` event is delivered to a client"
     action: >
       the client shall invoke the appropriate CelloClient event callback
@@ -304,7 +324,7 @@ acceptance_criteria:
 
   - id: AC-009
     given: "A sends a connection request to B; B is online but the test harness suppresses B's `connection_response` (simulating a hung evaluation)"
-    when: "30 seconds elapse from the original `cello_request_connection` call without a final response"
+    when: "5 minutes elapse from the original `cello_request_connection` call without a final response"
     then: >
       `cello_request_connection` returns `{ result: 'timeout' }`; no connection record
       is created; any late-arriving `connection_response` from B is discarded by the
@@ -376,6 +396,18 @@ acceptance_criteria:
     then: "All 256 connection_ids are unique; each is exactly 16 bytes; no collisions"
     test_type: e2e
     component_under_test: directory
+
+  - id: AC-017
+    given: "B has inference mode policy; B's agent calls `cello_request_more_disclosure` (Round 2 begins); A's `cello_request_connection` has returned `{ result: 'disclosure_requested' }` but A's agent never calls `cello_respond_to_disclosure_request`"
+    when: "2 minutes elapse from the moment B sent `disclosure_request` to the directory"
+    then: >
+      B's client sends `connection_response { verdict: 'reject', reason: 'disclosure_timeout' }`
+      to the directory; the directory relays `connection_rejected { reason: 'disclosure_timeout' }`
+      to A's signaling stream; no connection record is created; B fires `onConnectionResult`
+      with the rejection; if A subsequently calls `cello_respond_to_disclosure_request`,
+      the client returns an error (the request is no longer pending)
+    test_type: e2e
+    component_under_test: client, directory
 
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
