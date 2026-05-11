@@ -7,6 +7,28 @@ description: Write new CELLO user stories following E2E-first ordering. Always w
 
 Use this command to write new CELLO user stories. It enforces E2E-first ordering — the process failure that led to the M1 peer info gap.
 
+## The foundational rule — read this before writing a single AC
+
+**Stories must describe production behavior, not test-harness behavior.**
+
+This is the failure mode that surfaced in M2 and M3: implementation code routes through a `NODE_ENV=test` shortcut (e.g. `bootstrapKeyShares`, `MockRelayAdapter`, in-process stubs) and all ACs pass green — but the real multi-party protocol was never exercised. The live smoke test then fails because the production path was never implemented.
+
+**For every AC with `test_type: integration` or `test_type: e2e`:**
+
+1. Ask: *"Would this AC pass if `NODE_ENV=test` routed around the real protocol?"* If yes, the AC is underspecified — it tests result, not behavior.
+2. Ask: *"Would this AC pass if the two participants were in different OS processes on different machines with no shared memory?"* If no, the AC is underspecified.
+3. For ACs describing a multi-party protocol (DKG ceremony, FROST rounds, stream handshake, libp2p dial): **the AC must assert the transport path was used** — not just that the final return value is correct. Assert that the protocol handler was invoked, the stream was opened, or the round-trip frame count is correct. A test that only checks the return value cannot satisfy an AC claiming real network ceremony.
+
+**When in doubt, add a `then` clause like:**
+> "...AND the `/cello/frost/1.0.0` stream handler on the directory was invoked at least once during this call"
+
+or:
+> "...AND no `bootstrapKeyShares` shortcut was used (verified by running with `NODE_ENV=production` or by asserting the `/cello/frost/1.0.0` stream open count > 0)"
+
+This rule exists because: the test harness is hermetic and perfectly blind to real-world setup requirements. Unit/integration tests that pass in a single process tell you nothing about whether the protocol works between separate processes.
+
+---
+
 ## Before writing any story
 
 1. Read `docs/planning/user-story-format.md` — the canonical template and field reference.
@@ -46,6 +68,8 @@ For each story, run through the Definition of Ready checklist from `user-story-f
 - [ ] At least one E2E story exercises this component's output
 - [ ] No AC says "something will call registerX later" — the caller is named
 - [ ] `test_type: e2e` ACs specify "real nodes, no mocks"
+- [ ] Every `test_type: integration` or `test_type: e2e` AC that describes a multi-party protocol asserts the transport path (stream opens, handler invocations, frame counts) — not only the final return value
+- [ ] No AC would pass if `NODE_ENV=test` routed through a stub shortcut instead of the real protocol
 
 ## File naming
 
