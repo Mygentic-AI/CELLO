@@ -123,19 +123,29 @@ export async function createSessionFixture(
 
   // When networkRelay is true, directory calls relay via /cello/directory-relay/1.0.0
   // wire protocol. The relay needs a DirectoryAdapter shim that forwards processSeal.
+  //
+  // When networkRelay is false (default), the relay still needs a DirectoryAdapter shim
+  // so that bilateral SEAL ctrl leaves trigger processSeal on the directory. The shim
+  // is a late-binding closure that captures dirResult after the directory is created.
   let dirNodeRefForNetworkRelay: Awaited<ReturnType<typeof createDirectoryNode>> | null = null;
-  const directoryAdapterShim: DirectoryAdapter | undefined = opts.networkRelay
+  let dirResultRef: Awaited<ReturnType<typeof createDirectoryNode>> | null = null;
+  const directoryAdapterShim: DirectoryAdapter = opts.networkRelay
     ? {
         async processSeal(sessionId, sealData) {
           if (!dirNodeRefForNetworkRelay) return { ok: false, reason: "directory_not_ready" };
           return dirNodeRefForNetworkRelay.directory.processSeal(sessionId, sealData);
         },
       }
-    : undefined;
+    : {
+        async processSeal(sessionId, sealData) {
+          if (!dirResultRef) return { ok: false, reason: "directory_not_ready" };
+          return dirResultRef.directory.processSeal(sessionId, sealData);
+        },
+      };
 
   const { relay: relayInstance, node: relayNode, stop: relayStop } = await createRelayNode({
     directoryPubkey: dirPubkey,
-    ...(directoryAdapterShim ? { directory: directoryAdapterShim } : {}),
+    directory: directoryAdapterShim,
   });
   const relayPeerId = relayNode.getPeerId();
   const relayMultiaddrs = relayNode.listenAddresses();
@@ -170,6 +180,9 @@ export async function createSessionFixture(
   if (opts.networkRelay) {
     dirNodeRefForNetworkRelay = dirResult;
     await (relayForDirectory as NetworkRelayAdapter).connect(dirResult.node);
+  } else {
+    // Wire the late-binding shim so the relay can call processSeal on the directory.
+    dirResultRef = dirResult;
   }
 
   const { directory: directoryNode, node: dirNode, stop: stopDir } = dirResult;
