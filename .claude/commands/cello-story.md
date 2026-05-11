@@ -19,11 +19,31 @@ This is the failure mode that surfaced in M2 and M3: implementation code routes 
 2. Ask: *"Would this AC pass if the two participants were in different OS processes on different machines with no shared memory?"* If no, the AC is underspecified.
 3. For ACs describing a multi-party protocol (DKG ceremony, FROST rounds, stream handshake, libp2p dial): **the AC must assert the transport path was used** — not just that the final return value is correct. Assert that the protocol handler was invoked, the stream was opened, or the round-trip frame count is correct. A test that only checks the return value cannot satisfy an AC claiming real network ceremony.
 
-**When in doubt, add a `then` clause like:**
-> "...AND the `/cello/frost/1.0.0` stream handler on the directory was invoked at least once during this call"
+**How to write a stub-resistant `then` clause:**
 
-or:
-> "...AND no `bootstrapKeyShares` shortcut was used (verified by running with `NODE_ENV=production` or by asserting the `/cello/frost/1.0.0` stream open count > 0)"
+The `then` clause determines whether a hollow test can satisfy the AC. Apply this rule when composing it:
+
+> **Name an observable that is only reachable via the real protocol path.**
+
+The two observable categories that work:
+- **Transport evidence** — a stream was opened, a protocol handler was invoked, a frame was sent over the wire. These cannot be faked by an in-process stub because the stub never touches the network stack.
+- **Cross-process state** — a value held by participant B (directory, relay, counterparty) that it could only have received via the protocol. If B is a separate libp2p instance, the only way it holds the value is if the wire protocol ran.
+
+Examples of `then` clauses that are stub-resistant:
+> "...AND each of the 3 directory node instances received at least one `/cello/frost/1.0.0` stream open from the agent node (not from shared memory)"
+
+> "...AND the directory's `AgentProfile` for this agent is queryable from a *different* `DirectoryNode` instance than the one that processed the registration (proving it was persisted, not held in-process)"
+
+> "...AND `bootstrapKeyShares` was NOT the code path taken — verified by the test running with `NODE_ENV` unset or by asserting stream open count > 0 on each directory node"
+
+Examples of `then` clauses that are NOT stub-resistant (these allow hollow tests):
+> "Returns `{ registered: true, primary_pubkey }`" — any stub can return this shape.
+
+> "The DKG ceremony completes and primary_pubkey is 32 bytes" — `trustedDealer` produces this in-process.
+
+> "A subsequent FROST signature verifies against primary_pubkey" — also satisfiable in-process via `bootstrapKeyShares`.
+
+**The test that verifies a result-only `then` clause will always pass via a stub.** If you cannot name a transport-level or cross-instance observable in the `then` clause, the AC is not specifying integration behavior — it is specifying unit behavior with an inflated `test_type` label.
 
 This rule exists because: the test harness is hermetic and perfectly blind to real-world setup requirements. Unit/integration tests that pass in a single process tell you nothing about whether the protocol works between separate processes.
 
