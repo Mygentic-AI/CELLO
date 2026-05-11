@@ -96,6 +96,7 @@ import {
   encodeLeafDeliver,
   decodeInboundFrame,
 } from "./relay-frames.js";
+import { protocolLog, truncId, truncHex } from "./protocol-log.js";
 
 export const RELAY_PROTOCOL_ID = "/cello/relay/1.0.0";
 export const DIRECTORY_RELAY_PROTOCOL_ID = "/cello/directory-relay/1.0.0";
@@ -200,6 +201,11 @@ export class CelloRelayNode {
     await this.#node.handle(DIRECTORY_RELAY_PROTOCOL_ID, (stream) => {
       void this.#handleDirectoryRelayStream(stream);
     });
+    // OBS-001 AC-001: relay startup log
+    const peerId = truncId(this.#node.getPeerId());
+    const addrs = this.#node.listenAddresses();
+    const addr = addrs.length > 0 ? addrs[0] : "(none)";
+    protocolLog("RELAY", `Started — peer ${peerId}, relay ${addr}`);
   }
 
   // ─── /cello/directory-relay/1.0.0 handler (CELLO-NODE-004) ─────────────────
@@ -244,6 +250,9 @@ export class CelloRelayNode {
         await stream.close();
         return;
       }
+
+      // OBS-001: directory admin authenticated
+      protocolLog("RELAY", `Directory admin authenticated (pubkey ${truncHex(Buffer.from(this.#directoryPubkey).toString("hex"))})`);
 
       // Authenticated — process the frame
       if (frameType === "record_assignment") {
@@ -346,6 +355,9 @@ export class CelloRelayNode {
     );
     const recorded = this.#store.recordSession(assignment, genesisRoot);
     if (!recorded) return { ok: false, reason: "session_already_exists" };
+    // OBS-001 AC-010: session assigned
+    const sessionHex = truncHex(Buffer.from(assignment.session_id).toString("hex"));
+    protocolLog("RELAY", `Session assigned: ${sessionHex} → slot 1`);
     return { ok: true };
   }
 
@@ -370,6 +382,9 @@ export class CelloRelayNode {
 
     this.#store.setSession(key, { ...state, status: "sealing" });
 
+    // OBS-001 AC-010: seal submitted
+    protocolLog("RELAY", `Seal submitted — session ${truncHex(key)} (${leaves.length} leaves)`);
+
     return {
       ok: true,
       data: {
@@ -384,6 +399,8 @@ export class CelloRelayNode {
     const key = Buffer.from(sessionId).toString("hex");
     this.#store.destroySession(key);
     this.#sessionLocks.delete(key);
+    // OBS-001 AC-010: seal confirmed
+    protocolLog("RELAY", `Seal confirmed: ${truncHex(key)}`);
   }
 
   rejectSeal(sessionId: Uint8Array, _reason: string): void {
@@ -462,14 +479,25 @@ export class CelloRelayNode {
           }
 
           authedPubkeyHex = Buffer.from(resp.pubkey).toString("hex");
+          const isReconnect = this.#streams.has(authedPubkeyHex);
           this.#streams.set(authedPubkeyHex, stream);
           authed = true;
+
+          // OBS-001 AC-010: client authenticated
+          protocolLog("RELAY", `Client ${truncHex(authedPubkeyHex)} authenticated`);
 
           // Confirm auth success to client — eliminates the client's 200ms race window
           await this.#sendFrame(stream, encodeAuthOk({ type: "relay_auth_ok" }));
 
           // Flush any queued deliveries; re-enqueue any not sent before a send failure.
           const queued = this.#store.drainDeliveries(authedPubkeyHex);
+          // OBS-001 AC-010: log reconnect for each session in the queued deliveries
+          if (isReconnect && queued.length > 0) {
+            const sessionIds = new Set(queued.map((d) => truncHex(Buffer.from(d.session_id).toString("hex"))));
+            for (const sid of sessionIds) {
+              protocolLog("RELAY", `Client ${truncHex(authedPubkeyHex!)} reconnected to session ${sid}`);
+            }
+          }
           let sentCount = 0;
           for (const d of queued) {
             try {
@@ -541,6 +569,14 @@ export class CelloRelayNode {
     const bHex = Buffer.from(state.assignment.participant_b).toString("hex");
     if (senderPubkeyHex !== aHex && senderPubkeyHex !== bHex) {
       await reply("not_a_participant"); return;
+    }
+
+    // OBS-001 AC-010: log client joining session on their first submission to this session
+    const alreadySent = state.leaf_log.some(
+      (l) => Buffer.from(l.s2.sender_pubkey).toString("hex") === senderPubkeyHex,
+    );
+    if (!alreadySent) {
+      protocolLog("RELAY", `Client ${truncHex(senderPubkeyHex)} joined session ${truncHex(sessionKey)}`);
     }
 
     if (frame.leaf_kind !== 0x00 && frame.leaf_kind !== 0x02) {

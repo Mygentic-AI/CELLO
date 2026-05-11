@@ -164,6 +164,7 @@ import {
   encodeFrostDkgRound2Response,
   encodeFrostDkgRound3Response,
 } from "./frost-dkg-frames.js";
+import { protocolLog, truncId, truncHex } from "./protocol-log.js";
 
 export const SIGNALING_PROTOCOL_ID = "/cello/signaling/1.0.0";
 const AUTH_DOMAIN = "CELLO-DIR-AUTH-v1";
@@ -353,6 +354,12 @@ export class CelloDirectoryNode {
     await this.#node.handle(FROST_PROTOCOL_ID, (stream) => {
       void this.#handleFrostStream(stream);
     }, { maxInboundStreams: 256 });
+
+    // OBS-001 AC-002: directory startup log
+    const peerId = truncId(this.#node.getPeerId());
+    const addrs = this.#node.listenAddresses();
+    const addr = addrs.length > 0 ? addrs[0] : "(none)";
+    protocolLog("DIR", `Started — peer ${peerId}, signaling ${addr}`);
   }
 
   // ─── FROST stream handler ────────────────────────────────────────────────────
@@ -484,6 +491,8 @@ export class CelloDirectoryNode {
             dkgReq.epochId,
             dkgReq.signers,
           );
+          // OBS-001 AC-004: FROST Round 1 commit log
+          protocolLog("FROST", `Round 1 commit from peer ${truncHex(dkgReq.agentPubkey)} (1/1)`);
           const resp = result.ok
             ? encodeFrostDkgRound1Response({ type: "frost_dkg_round1_response", ok: true, broadcast: result.broadcast })
             : encodeFrostDkgRound1Response({ type: "frost_dkg_round1_response", ok: false, reason: result.reason });
@@ -531,6 +540,8 @@ export class CelloDirectoryNode {
             sharesForMe,
             dkgReq.allRound1,
           );
+          // OBS-001 AC-004: FROST Round 3 sign log
+          protocolLog("FROST", `Round 3 sign from peer ${truncHex(dkgReq.agentPubkey)} (1/1)`);
           if (result.ok) {
             // Store the group public key temporarily for dkg_complete verification
             this.#pendingDkgCommitments.set(dkgReq.agentPubkey, result.shareCommitment);
@@ -632,6 +643,9 @@ export class CelloDirectoryNode {
           authedPubkeyHex = Buffer.from(resp.pubkey).toString("hex");
           this.#streams.set(authedPubkeyHex, stream);
 
+          // OBS-001 AC-003: peer authenticated on signaling
+          protocolLog("AUTH", `Peer ${truncHex(authedPubkeyHex)} authenticated (signaling)`);
+
           // ADAPTER-003: send auth ack so client can synchronize on auth completion.
           // This allows clients to know the directory has registered their stream
           // before sending session_request frames.
@@ -709,6 +723,8 @@ export class CelloDirectoryNode {
           // AC-014/AC-015 (NODE-001): client announces its libp2p Peer ID and listen addresses.
           // registerPeerInfo also marks the pubkey in #peerInfoAnnounced.
           this.registerPeerInfo(authedPubkeyHex!, parsed.peer_id, parsed.multiaddrs);
+          // OBS-001 AC-003: peer announced peer_id + listen addrs
+          protocolLog("AUTH", `Peer ${truncHex(authedPubkeyHex!)} announced peer_id + listen addrs`);
           continue;
         }
         if (parsed.type === "dkg_complete") {
@@ -905,11 +921,16 @@ export class CelloDirectoryNode {
     // Send dkg_ready — authorizes the client to open DKG streams on /cello/frost/1.0.0
     // SI-002: profile only created after successful DKG
     if (this.#forceDkgFailure) {
+      // OBS-001: DKG failed log
+      protocolLog("REG", `DKG failed — agent ${truncHex(frame.k_local_pubkey)}, reason: forced_failure`);
       this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "dkg_failed" }));
       return;
     }
 
     const epochId = `${frame.k_local_pubkey}:epoch:1`;
+    // OBS-001 AC-004: DKG begin log
+    // 1 directory node + 1 client = 2 total DKG participants, threshold 2
+    protocolLog("REG", `DKG begin — agent ${truncHex(frame.k_local_pubkey)}, 1 directory nodes, threshold 2`);
     // DKG requires min 2 participants per @noble/curves constraint.
     // participants=1 means this directory node + the client = 2 total DKG participants.
     this.#sendFrame(stream, encodeDkgReady({
@@ -984,6 +1005,9 @@ export class CelloDirectoryNode {
     };
     this.#store.setProfile(profile);
 
+    // OBS-001 AC-004: agent registered log
+    protocolLog("REG", `Agent ${truncHex(frame.k_local_pubkey)} registered — primary_pubkey ${truncHex(primaryPubkeyFromDkg)}`);
+
     this.#sendFrame(stream, encodeRegisterSuccess({
       type: "register_success",
       agent_id: agentId,
@@ -1008,14 +1032,19 @@ export class CelloDirectoryNode {
   ): Promise<void> {
     const targetHex = frame.target_pubkey;
 
+    // OBS-001 AC-005/AC-006: connection request log
+    protocolLog("CONN", `Request: ${truncHex(senderHex)} → ${truncHex(targetHex)}`);
+
     // Gate 1: sender must be registered if requireRegistration is set
     if (this.#requireRegistration && !this.#store.hasProfile(senderHex)) {
+      protocolLog("CONN", `Pre-check failed: not_registered (sender: ${truncHex(senderHex)})`);
       this.#sendFrame(stream, encodeConnectionRequestError({ type: "connection_request_error", reason: "not_registered" }));
       return;
     }
 
     // Gate 2: target must have a profile
     if (!this.#store.hasProfile(targetHex)) {
+      protocolLog("CONN", `Pre-check failed: target_not_found (sender: ${truncHex(senderHex)})`);
       this.#sendFrame(stream, encodeConnectionRequestError({ type: "connection_request_error", reason: "target_not_found" }));
       return;
     }
@@ -1058,6 +1087,8 @@ export class CelloDirectoryNode {
         requestId: connectionRequestId,
         disclosureRound: 1,
       });
+      // OBS-001 AC-005: relayed to target
+      protocolLog("CONN", `Relayed to target ${truncHex(targetHex)}`);
       try {
         this.#sendFrame(targetStream, encodeConnectionRequestInbound(inboundFrame));
       } catch {
@@ -1113,6 +1144,10 @@ export class CelloDirectoryNode {
       const connectionId = Buffer.from(randomBytes(16)).toString("hex");
       this.#store.createConnection(connectionId, pending.senderHex, pending.targetHex, this.#clock.now());
 
+      // OBS-001 AC-005: verdict accept + connection established
+      protocolLog("CONN", `Verdict accept — ${truncHex(connectionId)}`);
+      protocolLog("CONN", `Connection ${truncHex(connectionId)} established: ${truncHex(pending.senderHex)} ↔ ${truncHex(pending.targetHex)}`);
+
       // Notify both clients
       const toSender: import("@cello/protocol-types").ConnectionEstablished = {
         type: "connection_established",
@@ -1135,6 +1170,8 @@ export class CelloDirectoryNode {
         try { this.#sendFrame(targetStream, encodeConnectionEstablished(toTarget)); } catch {}
       }
     } else if (frame.verdict === "reject") {
+      // OBS-001: verdict reject
+      protocolLog("CONN", `Verdict reject — ${frame.reason ?? "rejected"}`);
       if (senderStream) {
         try {
           this.#sendFrame(senderStream, encodeConnectionRejected({
@@ -1145,6 +1182,8 @@ export class CelloDirectoryNode {
         } catch {}
       }
     } else if (frame.verdict === "insufficient") {
+      // OBS-001: verdict insufficient
+      protocolLog("CONN", `Verdict insufficient — unmet_requirements`);
       if (senderStream) {
         try {
           this.#sendFrame(senderStream, encodeConnectionInsufficient({
@@ -1173,6 +1212,9 @@ export class CelloDirectoryNode {
     // Advance to Round 2
     pending.disclosureRound = 2;
 
+    // OBS-001 AC-007: disclosure request forwarded (Round 2)
+    protocolLog("CONN", `Disclosure request forwarded (Round 2): ${truncHex(requesterHex)} → ${truncHex(pending.senderHex)}`);
+
     const senderStream = this.#streams.get(pending.senderHex);
     if (senderStream) {
       try {
@@ -1199,6 +1241,9 @@ export class CelloDirectoryNode {
     if (!pending) return;
     if (pending.senderHex !== senderHex) return;
 
+    // OBS-001 AC-007: disclosure response forwarded
+    protocolLog("CONN", `Disclosure response forwarded: ${truncHex(senderHex)} → ${truncHex(pending.targetHex)}`);
+
     const targetStream = this.#streams.get(pending.targetHex);
     if (targetStream) {
       try {
@@ -1219,6 +1264,9 @@ export class CelloDirectoryNode {
     targetHex: string,
     connectionId?: string,
   ): Promise<void> {
+    // OBS-001 AC-008: session request log
+    protocolLog("SESS", `Session request: ${truncHex(initiatorHex)} → ${truncHex(targetHex)}`);
+
     // SESSION-006: enforce connection gate if configured
     if (this.#requireConnectionGate) {
       if (!connectionId) {
@@ -1296,6 +1344,9 @@ export class CelloDirectoryNode {
 
     try {
       // SESSION-004 Step 5: FROST ceremony (RFC 9591 §5 coordinator flow)
+      // OBS-001 AC-008: FROST ceremony begin
+      const sessionIdHex8 = truncHex(Buffer.from(session_id).toString("hex"));
+      protocolLog("FROST", `Ceremony begin — session ${sessionIdHex8}, agent ${truncHex(initiatorHex)}`);
       const result = await signer.participateInCeremony(ceremonyId, tbs, CONTEXT_SESSION_ESTABLISHMENT);
       if (!result.ok) {
         this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "directory_below_threshold" }));
@@ -1355,6 +1406,9 @@ export class CelloDirectoryNode {
         fullyEstablished: false,
       });
 
+      // OBS-001 AC-008: assignment issued
+      protocolLog("SESS", `Assignment issued — session ${truncHex(sessionIdHex)}`);
+
       // (f) Deliver to both clients
       const assignmentFrame: SessionAssignmentFrame = { type: "session_assignment", assignment };
       const encoded = encodeSessionAssignment(assignmentFrame);
@@ -1388,6 +1442,9 @@ export class CelloDirectoryNode {
     const sessionIdHex = Buffer.from(sessionId).toString("hex");
     const leaves = sealData.leaves;
     const relayRoot = sealData.merkle_root;
+
+    // OBS-001 AC-009: initiating seal log
+    protocolLog("SEAL", `Initiating seal — session ${truncHex(sessionIdHex)} (${leaves.length} leaves)`);
 
     // (a) Rebuild Merkle tree from scratch (SI-004)
     const leafInputs: LeafInput[] = leaves.map((l) => ({
@@ -1512,6 +1569,8 @@ export class CelloDirectoryNode {
         frost_signature: notarizationSig,
       };
       this.#store.recordNotarization(notarization);
+      // OBS-001 AC-009: sealed (single-key path)
+      protocolLog("SEAL", `Sealed — session ${truncHex(sessionIdHex)}, root ${truncHex(Buffer.from(recomputedRoot).toString("hex"))}`);
       const sealedEvent: SessionSealed = {
         type: "session_sealed",
         signature_type: "single",
@@ -1544,6 +1603,9 @@ export class CelloDirectoryNode {
       timestamp: close_timestamp,
       tbs,
     });
+
+    // OBS-001 AC-009: FROST seal ceremony log
+    protocolLog("SEAL", `FROST seal ceremony — session ${truncHex(sessionIdHex)}`);
 
     // Deliver seal_verified to initiator or enqueue for deferred delivery.
     const initiatorStream = this.#streams.get(initiatorHex);
@@ -1621,6 +1683,9 @@ export class CelloDirectoryNode {
 
     // Confirm relay (destroys relay per-session state — AC-008)
     void this.#relay.confirmSeal(frame.session_id);
+
+    // OBS-001 AC-009: sealed log
+    protocolLog("SEAL", `Sealed — session ${truncHex(sessionIdHex)}, root ${truncHex(Buffer.from(pending.sealedRoot).toString("hex"))}`);
 
     // Notify both clients with session_sealed (frost variant; includes leaf_count for H-003)
     const sealedEvent: SessionSealed = {
