@@ -72,9 +72,21 @@ For every SI (Security Invariant) in the story:
 
 ## Step 4b — Test fixture discipline check
 
-- Does the test file define its own `makeFixture()`, `makeE2EFixture()`, `makeFullFixture()`, or any equivalent from-scratch fixture function? If yes: **blocking**. The story must use `SessionFixture` from `packages/test-fixtures/src/session-fixture.ts`.
-- Exception: if `packages/test-fixtures/src/session-fixture.ts` does not yet exist (pre-extraction), flag it as [high] and note that the fixture extraction story must be completed before this pattern recurs.
-- Exception: lightweight helpers local to the test file (e.g. `waitForStatus`, `buildMinimalPackageCbor`) that are genuinely test-specific are acceptable. The rule targets infrastructure duplication (directory, relay, libp2p node setup), not local assertion helpers.
+- Does the test file define its own `makeFixture()`, `makeE2EFixture()`, `makeFullFixture()`, or any equivalent from-scratch fixture function that sets up relay/directory/libp2p nodes? If yes: **blocking**. The test must import `createSessionFixture` from `packages/e2e-tests/src/session-fixture.ts`.
+- Exception: lightweight helpers local to the test file (e.g. `waitForStatus`, `buildMinimalPackageCbor`) that are genuinely test-specific are acceptable. The rule targets infrastructure duplication (relay, directory, libp2p node setup), not local assertion utilities.
+- Exception: relay-only tests (no directory, no agent nodes) may define a small local relay setup if the story genuinely does not need the full stack.
+
+**What a correct import looks like:**
+```typescript
+// from packages/e2e-tests/src/__tests__/
+import { createSessionFixture } from "../session-fixture.js";
+
+const fix = await createSessionFixture({ withMcp: true });
+fix.directory.registerThresholdSigner(fix.agentA.pubkeyHex, fix.signerA);
+scope.addCleanup(fix.stopAll);
+```
+
+**If the story needs infrastructure the fixture doesn't support:** the implementer must have added a new `opts` field to `session-fixture.ts` with a default that doesn't break existing tests. Verify the fixture file was extended, not copied.
 
 ---
 

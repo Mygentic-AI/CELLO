@@ -90,7 +90,27 @@ For each story, run through the Definition of Ready checklist from `user-story-f
 - [ ] `test_type: e2e` ACs specify "real nodes, no mocks"
 - [ ] Every `test_type: integration` or `test_type: e2e` AC that describes a multi-party protocol asserts the transport path (stream opens, handler invocations, frame counts) — not only the final return value
 - [ ] No AC would pass if `NODE_ENV=test` routed through a stub shortcut instead of the real protocol
-- [ ] The story does NOT require implementing a new `makeFixture()` — test infrastructure comes from `packages/test-fixtures/src/session-fixture.ts`; if a new capability is needed, the fixture is extended with a new opt, not replaced
+- [ ] The story does NOT require implementing a new `makeFixture()` — test infrastructure comes from `packages/e2e-tests/src/session-fixture.ts`; if a new capability is needed, the fixture is extended with a new `opts` field (with a non-breaking default), not replaced or duplicated
+
+## What the shared fixture already covers
+
+Before writing test infrastructure into a story's ACs or notes, check whether `packages/e2e-tests/src/session-fixture.ts` already covers it. Current capabilities (as of M3):
+
+| Capability | How to request |
+|---|---|
+| Relay + directory + 2 agents + FROST for A | `createSessionFixture()` (default) |
+| MCP server+client pair for each agent | `opts.withMcp: true` |
+| FROST bootstrapped for B (B can initiate) | `opts.bootstrapB: true` |
+| Real DKG registration for both agents | `opts.register: true` |
+| Connection policy on A or B | `opts.policyA` / `opts.policyB` |
+| Directory connection gate (SESSION-006) | `opts.requireConnectionGate: true` |
+| Registration required on directory | `opts.requireRegistration: true` |
+| Round-2 disclosure timeout for B | `opts.round2TimeoutMs: N` |
+| B's evaluate call count (transport evidence) | `opts.trackEvaluateCount: true` |
+| B accepts a pubkey without policy eval | `opts.whitelist: [pubkeyHex]` |
+| Directory↔relay via /cello/directory-relay/1.0.0 (NODE-004) | `opts.networkRelay: true` |
+
+If a story needs infrastructure beyond this list, the implementer must extend the fixture with a new `opts` field — not write a new fixture function.
 
 ## File naming
 

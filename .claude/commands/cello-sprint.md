@@ -63,7 +63,66 @@ One paragraph per milestone. What was proved. What infrastructure exists.
 - `test_type: e2e` means separate OS processes over real networks — not in-process instances
 - No milestone closes without the live multi-process smoke test passing
 - Phase C gate sequence: tests → lint → typecheck → build → code review → commit
-- **Test fixture discipline:** never write a new `makeFixture()` from scratch. Import `SessionFixture` from `packages/test-fixtures/src/session-fixture.ts`. If the story needs a new capability, add an `opts` parameter to the shared fixture. This is enforced by `cello-review` — a from-scratch fixture is a blocking finding.
+- **Test fixture discipline:** never write a new `makeFixture()` from scratch. Import `createSessionFixture` from `packages/e2e-tests/src/session-fixture.ts`. If the story needs a new capability, add an `opts` parameter to the shared fixture. This is enforced by `cello-review` — a from-scratch fixture is a blocking finding.
+
+### Using the shared fixture
+
+**Canonical import** (from `packages/e2e-tests/src/__tests__/`):
+```typescript
+import { createSessionFixture } from "../session-fixture.js";
+```
+
+**Opts — pick the combination that matches the story:**
+
+| Scenario | Opts |
+|---|---|
+| Basic session initiation (M1) | `createSessionFixture()` |
+| Session + MCP tool surface | `{ withMcp: true }` |
+| B also initiates sessions | `{ bootstrapB: true }` |
+| Network-wire relay protocol (NODE-004) | `{ networkRelay: true }` |
+| Connection request flow (M3) | `{ register: true, policyA?, policyB? }` |
+| Connection gate (SESSION-006) | `{ register: true, requireConnectionGate: true }` |
+| Require registration on directory | `{ requireRegistration: true }` |
+| Round-2 disclosure timeout | `{ register: true, round2TimeoutMs: N }` |
+| Track B's evaluate call count | `{ register: true, trackEvaluateCount: true }` |
+| B accepts a pubkey without policy | `{ register: true, whitelist: [pubkeyHex] }` |
+
+**Result shape:**
+```typescript
+fix.directory          // CelloDirectoryNode — call registerThresholdSigner, registerPeerInfo, etc.
+fix.dirStore           // InMemoryDirectoryStore — inspect hasConnection, getConnection
+fix.dirPeerId / fix.dirMultiaddrs
+fix.relay              // CelloRelayNode — call recordAssignment directly if needed
+fix.relayPeerId / fix.relayMultiaddrs
+fix.agentA.client      // CelloClient
+fix.agentA.kp          // keypair
+fix.agentA.pubkey      // Uint8Array
+fix.agentA.pubkeyHex   // hex string
+fix.agentA.primaryPubkey  // set when opts.register: true
+fix.agentA.mcp         // MCP Client — set when opts.withMcp: true
+fix.agentA.notifications  // Notification[] — set when opts.withMcp: true
+fix.agentB             // same shape as agentA
+fix.signerA            // FrostThresholdSigner (always present)
+fix.signerB            // set when opts.bootstrapB: true
+fix.stopAll()          // call in scope.addCleanup
+```
+
+**Standard test scaffold:**
+```typescript
+afterEach(() => {
+  clearTestShares();          // always — FROST shares are process-global
+  return scope.run(async () => {});
+});
+
+it("...", async () => {
+  const fix = await createSessionFixture({ withMcp: true });
+  fix.directory.registerThresholdSigner(fix.agentA.pubkeyHex, fix.signerA);
+  scope.addCleanup(fix.stopAll);
+  // ... test body
+});
+```
+
+**Extending the fixture:** if a story needs something the fixture doesn't cover, add an `opts` field with a default that doesn't break existing tests. Do not copy-paste the fixture code into the test file.
 
 ### Ready to pick up
 Which story (or stories, if parallelizable) should be implemented next, based on dependency order and what's already done.
