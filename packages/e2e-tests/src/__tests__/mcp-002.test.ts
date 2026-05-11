@@ -26,26 +26,12 @@ import {
   waitFor,
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
-import { randomBytes } from "node:crypto";
-import { Encoder } from "cbor-x";
-import { generateKeypair, FrostThresholdSigner, CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto";
-import { bootstrapKeyShares, clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
-import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
-import { computeGenesisPrevRoot, buildSessionEstablishmentTbs } from "@cello/protocol-types";
-import { createNode } from "@cello/transport";
-import { createRelayNode } from "@cello/relay";
-import type { DirectoryAdapter } from "@cello/relay";
-import { createDirectoryNode } from "@cello/directory";
-import type { RelayAdapter } from "@cello/directory";
-import type { RelaySessionAssignment } from "@cello/directory";
-import { createClient, createMcpSessionServer } from "@cello/client";
+import { clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { Notification } from "@modelcontextprotocol/sdk/types.js";
+import { createSessionFixture } from "../session-fixture.js";
+import type { SessionFixtureResult } from "../session-fixture.js";
 
 setupV3Tests();
-
-const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -56,203 +42,25 @@ function parseResult(result: Awaited<ReturnType<Client["callTool"]>>): unknown {
   return JSON.parse(text);
 }
 
-// ─── Full fixture: directory + relay + two clients + two MCP servers ──────────
-
-interface Fixture {
-  dirKp: ReturnType<typeof generateKeypair>;
-  dirPubkey: Uint8Array;
-  dirPeerId: string;
-  dirMultiaddrs: string[];
-  relayPeerId: string;
-  relayMultiaddrs: string[];
-  clientA: ReturnType<typeof createClient>;
-  clientB: ReturnType<typeof createClient>;
-  kpA: ReturnType<typeof generateKeypair>;
-  kpB: ReturnType<typeof generateKeypair>;
-  pubkeyAHex: string;
-  pubkeyBHex: string;
-  peerIdA: string;
-  peerIdB: string;
-  multiaddrsA: string[];
-  multiaddrsB: string[];
-  signerA: FrostThresholdSigner;
-  mcpA: Client;
-  mcpB: Client;
-  notificationsA: Notification[];
-  notificationsB: Notification[];
-  relay: Awaited<ReturnType<typeof createRelayNode>>["relay"];
-  stopAll: () => Promise<void>;
-}
-
-async function makeFixture(): Promise<Fixture> {
-  const dirKp = generateKeypair();
-  const dirPubkey = await dirKp.getPublicKey();
-
-  // Relay with directory adapter wired in
-  let dirNodeRef: Awaited<ReturnType<typeof createDirectoryNode>> | null = null;
-  const directoryAdapter: DirectoryAdapter = {
-    async processSeal(sessionId, sealData) {
-      if (!dirNodeRef) return { ok: false, reason: "directory_not_ready" };
-      return dirNodeRef.directory.processSeal(sessionId, sealData);
-    },
-  };
-  const relayResult = await createRelayNode({ directoryPubkey: dirPubkey, directory: directoryAdapter });
-  const relayPeerId = relayResult.node.getPeerId();
-  const relayMultiaddrs = relayResult.node.listenAddresses();
-
-  const relayAdapterForDir: RelayAdapter = {
-    recordAssignment(a: RelaySessionAssignment) {
-      return relayResult.relay.recordAssignment(a);
-    },
-    discardSession(id: Uint8Array) { relayResult.relay.discardSession(id); },
-    submitForSeal(id: Uint8Array) { return relayResult.relay.submitForSeal(id); },
-    confirmSeal(id: Uint8Array) { relayResult.relay.confirmSeal(id); },
-    rejectSeal(id: Uint8Array, reason: string) { relayResult.relay.rejectSeal(id, reason); },
-  };
-
-  dirNodeRef = await createDirectoryNode({
-    keyProvider: dirKp,
-    relay: relayAdapterForDir,
-    relayEndpoint: { peer_id: relayPeerId, multiaddrs: relayMultiaddrs },
-  });
-
-  const dirPeerId = dirNodeRef.node.getPeerId();
-  const dirMultiaddrs = dirNodeRef.node.listenAddresses();
-
-  const kpA = generateKeypair();
-  const kpB = generateKeypair();
-  const nodeA = await createNode({ keyProvider: kpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-  const nodeB = await createNode({ keyProvider: kpB, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-  await nodeA.start();
-  await nodeB.start();
-
-  const pubkeyA = await kpA.getPublicKey();
-  const pubkeyB = await kpB.getPublicKey();
-  const pubkeyAHex = Buffer.from(pubkeyA).toString("hex");
-  const pubkeyBHex = Buffer.from(pubkeyB).toString("hex");
-  const peerIdA = nodeA.getPeerId();
-  const peerIdB = nodeB.getPeerId();
-  const multiaddrsA = nodeA.listenAddresses();
-  const multiaddrsB = nodeB.listenAddresses();
-
-  dirNodeRef.directory.registerPeerInfo(pubkeyAHex, peerIdA, multiaddrsA);
-  dirNodeRef.directory.registerPeerInfo(pubkeyBHex, peerIdB, multiaddrsB);
-
-  // SESSION-004: bootstrap FROST for A so directory can issue FROST-signed assignments
-  const stubsA = createInProcessStubs(3);
-  await bootstrapKeyShares(pubkeyA, { threshold: 2, participants: 3, directoryNodeStubs: stubsA });
-  const signerA = new FrostThresholdSigner({ threshold: 2, participants: 3, directoryNodeStubs: stubsA }, pubkeyA);
-  dirNodeRef.directory.registerThresholdSigner(pubkeyAHex, signerA);
-
-  const directoryEndpoint = { peer_id: dirPeerId, multiaddrs: dirMultiaddrs };
-  const clientA = createClient(nodeA, kpA, { thresholdSigner: signerA, directoryEndpoint });
-  const clientB = createClient(nodeB, kpB, { directoryEndpoint });
-  await clientA.registerHandler();
-  await clientB.registerHandler();
-
-  const notificationsA: Notification[] = [];
-  const notificationsB: Notification[] = [];
-
-  const serverA = createMcpSessionServer(nodeA, clientA, kpA);
-  const serverB = createMcpSessionServer(nodeB, clientB, kpB);
-
-  const [stA, ctA] = InMemoryTransport.createLinkedPair();
-  const [stB, ctB] = InMemoryTransport.createLinkedPair();
-  await serverA.connect(stA);
-  await serverB.connect(stB);
-
-  const mcpA = new Client({ name: "agent-a", version: "0.0.1" });
-  const mcpB = new Client({ name: "agent-b", version: "0.0.1" });
-
-  (mcpA as unknown as { fallbackNotificationHandler: (n: Notification) => void })
-    .fallbackNotificationHandler = (n) => { notificationsA.push(n); };
-  (mcpB as unknown as { fallbackNotificationHandler: (n: Notification) => void })
-    .fallbackNotificationHandler = (n) => { notificationsB.push(n); };
-
-  await mcpA.connect(ctA);
-  await mcpB.connect(ctB);
-
-  const stopAll = async () => {
-    try { await mcpA.close(); } catch {}
-    try { await mcpB.close(); } catch {}
-    try { await serverA.close(); } catch {}
-    try { await serverB.close(); } catch {}
-    try { await nodeA.stop(); } catch {}
-    try { await nodeB.stop(); } catch {}
-    try { await dirNodeRef?.stop(); } catch {}
-    try { await relayResult.stop(); } catch {}
-  };
-
-  return {
-    dirKp, dirPubkey, dirPeerId, dirMultiaddrs,
-    relayPeerId, relayMultiaddrs,
-    clientA, clientB, kpA, kpB,
-    pubkeyAHex, pubkeyBHex,
-    peerIdA, peerIdB, multiaddrsA, multiaddrsB,
-    signerA,
-    mcpA, mcpB, notificationsA, notificationsB,
-    relay: relayResult.relay,
-    stopAll,
-  };
-}
-
-/** Issue a FROST-signed session assignment (SESSION-004) and deliver it to both clients. */
-async function setupSession(fix: Fixture): Promise<{
+/**
+ * Issue a real FROST-signed session assignment via the directory signaling protocol.
+ *
+ * Requires fix.directory.registerThresholdSigner(fix.agentA.pubkeyHex, fix.signerA) called first.
+ */
+async function setupSession(fix: SessionFixtureResult): Promise<{
   sessionIdHex: string;
   sessionId: Uint8Array;
 }> {
-  const sessionId = new Uint8Array(randomBytes(16));
-  const sessionIdHex = Buffer.from(sessionId).toString("hex");
-  const session_timestamp = Date.now();
-
-  const pubkeyA = await fix.kpA.getPublicKey();
-  const pubkeyB = await fix.kpB.getPublicKey();
-
-  // SESSION-004: FROST-sign the assignment for clients
-  const genesis_prev_root = computeGenesisPrevRoot(pubkeyA, pubkeyB, sessionId, session_timestamp);
-  const tbs = buildSessionEstablishmentTbs(sessionId, pubkeyA, pubkeyB, genesis_prev_root, session_timestamp);
-  const ceremonyId = `session-${sessionIdHex}`;
-  const sigResult = await fix.signerA.participateInCeremony(ceremonyId, tbs, CONTEXT_SESSION_ESTABLISHMENT);
-  if (!sigResult.ok) throw new Error(`FROST ceremony failed: ${sigResult.error.reason}`);
-
-  // Relay still verifies Ed25519 over M1 TBS: [session_id, participant_a, participant_b, session_timestamp]
-  const relayTbs = CBOR_ENC.encode([
-    sessionId,
-    pubkeyA,
-    pubkeyB,
-    session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-  ]) as Uint8Array;
-  const relaySig = await fix.dirKp.sign(relayTbs);
-
-  const assignment = {
-    session_id: sessionId,
-    participant_a: { pubkey: pubkeyA, peer_id: fix.peerIdA, multiaddrs: fix.multiaddrsA },
-    participant_b: { pubkey: pubkeyB, peer_id: fix.peerIdB, multiaddrs: fix.multiaddrsB },
-    relay_endpoint: { peer_id: fix.relayPeerId, multiaddrs: fix.relayMultiaddrs },
-    directory_endpoint: { peer_id: fix.dirPeerId, multiaddrs: fix.dirMultiaddrs },
-    session_timestamp,
-    directory_pubkey: fix.dirPubkey,
-    directory_signature: sigResult.signature,
-    signature_type: "frost" as const,
-    signer_pubkey: fix.signerA.getPrimaryPubkey(),
-  };
-
-  const registered = fix.relay.recordAssignment({
-    session_id: sessionId,
-    participant_a: pubkeyA,
-    participant_b: pubkeyB,
-    session_timestamp,
-    directory_signature: new Uint8Array(relaySig),
+  const result = await fix.agentA.client.initiateSession(fix.agentB.pubkeyHex, {
+    timeoutMs: 15_000,
   });
-  if (!registered.ok) throw new Error(`relay.recordAssignment failed: ${(registered as { reason?: string }).reason}`);
+  if (!result.ok) throw new Error(`initiateSession failed: ${result.reason}`);
 
-  const [rA, rB] = await Promise.all([
-    fix.clientA.receiveSessionAssignment(assignment, pubkeyA),
-    fix.clientB.receiveSessionAssignment(assignment, pubkeyB),
-  ]);
-  if (!rA.ok) throw new Error(`clientA.receiveSessionAssignment: ${(rA as { reason?: string }).reason}`);
-  if (!rB.ok) throw new Error(`clientB.receiveSessionAssignment: ${(rB as { reason?: string }).reason}`);
+  // Wait for B to also receive and process the session assignment
+  await waitFor(() => fix.agentB.client.listSessions().length > 0, { timeout: 5_000 });
 
+  const sessionId = result.sessionId;
+  const sessionIdHex = Buffer.from(sessionId).toString("hex");
   return { sessionIdHex, sessionId };
 }
 
@@ -269,20 +77,22 @@ afterEach(() => {
 
 describe("AC-001: cello_initiate_session returns session_id when assignment arrives", () => {
   it("AC-001: A polls for session with B's pubkey; directory issues assignment; session_id returned as 32-char hex", async () => {
-    const fix = await makeFixture();
+    const fix = await createSessionFixture({ withMcp: true });
+    fix.directory.registerThresholdSigner(fix.agentA.pubkeyHex, fix.signerA);
+
     scope.addCleanup(fix.stopAll);
 
     // B awaits session assignment via real directory signaling
-    const bSessionPromise = fix.mcpB.callTool({
+    const bSessionPromise = fix.agentB.mcp!.callTool({
       name: "cello_await_session",
       arguments: { timeout_ms: 15_000 },
     });
 
     // A initiates via real directory signaling protocol (ADAPTER-003)
     const result = parseResult(
-      await fix.mcpA.callTool({
+      await fix.agentA.mcp!.callTool({
         name: "cello_initiate_session",
-        arguments: { target_pubkey: fix.pubkeyBHex },
+        arguments: { target_pubkey: fix.agentB.pubkeyHex },
       })
     ) as Record<string, unknown>;
 
@@ -306,7 +116,9 @@ describe("AC-001: cello_initiate_session returns session_id when assignment arri
 
 describe("AC-002: cello_await_session on B returns new_session with session details", () => {
   it("AC-002: B calls cello_await_session; assignment fires; returns {type:new_session,session_id,counterparty_pubkey}", async () => {
-    const fix = await makeFixture();
+    const fix = await createSessionFixture({ withMcp: true });
+    fix.directory.registerThresholdSigner(fix.agentA.pubkeyHex, fix.signerA);
+
     scope.addCleanup(fix.stopAll);
 
     // Fire assignment after a short delay so await_session is already blocked when it arrives
@@ -315,7 +127,7 @@ describe("AC-002: cello_await_session on B returns new_session with session deta
     }, 100);
 
     const result = parseResult(
-      await fix.mcpB.callTool({
+      await fix.agentB.mcp!.callTool({
         name: "cello_await_session",
         arguments: { timeout_ms: 10_000 },
       })
@@ -323,7 +135,7 @@ describe("AC-002: cello_await_session on B returns new_session with session deta
 
     expect(result.type).toBe("new_session");
     expect(result.session_id).toMatch(/^[0-9a-f]{32}$/);
-    expect(result.counterparty_pubkey).toBe(fix.pubkeyAHex);
+    expect(result.counterparty_pubkey).toBe(fix.agentA.pubkeyHex);
     expect(result.genesis_prev_root).toMatch(/^[0-9a-f]+$/);
   }, 15_000);
 });
@@ -332,14 +144,16 @@ describe("AC-002: cello_await_session on B returns new_session with session deta
 
 describe("AC-003 + AC-004: cello_send delivers; cello_receive returns message with correct content", () => {
   it("AC-003+004: A sends 'hello'; B's cello_receive returns {type:message, content:'hello', sender_pubkey:A's pubkey}", async () => {
-    const fix = await makeFixture();
+    const fix = await createSessionFixture({ withMcp: true });
+    fix.directory.registerThresholdSigner(fix.agentA.pubkeyHex, fix.signerA);
+
     scope.addCleanup(fix.stopAll);
 
     const { sessionIdHex } = await setupSession(fix);
 
     // AC-003: A sends via session-keyed cello_send
     const sendResult = parseResult(
-      await fix.mcpA.callTool({
+      await fix.agentA.mcp!.callTool({
         name: "cello_send",
         arguments: { session_id: sessionIdHex, content: "hello" },
       })
@@ -350,7 +164,7 @@ describe("AC-003 + AC-004: cello_send delivers; cello_receive returns message wi
 
     // AC-004: B receives via session-keyed cello_receive
     const recvResult = parseResult(
-      await fix.mcpB.callTool({
+      await fix.agentB.mcp!.callTool({
         name: "cello_receive",
         arguments: { session_id: sessionIdHex, timeout_ms: 10_000 },
       })
@@ -358,7 +172,7 @@ describe("AC-003 + AC-004: cello_send delivers; cello_receive returns message wi
 
     expect(recvResult.type).toBe("message");
     expect(recvResult.content).toBe("hello");
-    expect(recvResult.sender_pubkey).toBe(fix.pubkeyAHex);
+    expect(recvResult.sender_pubkey).toBe(fix.agentA.pubkeyHex);
     expect(recvResult.leaf_hash).toMatch(/^[0-9a-f]{64}$/);
   }, 20_000);
 });
@@ -367,43 +181,45 @@ describe("AC-003 + AC-004: cello_send delivers; cello_receive returns message wi
 
 describe("AC-005: cello_list_sessions shows active session on both A and B", () => {
   it("AC-005: after send+receive, both A and B list sessions with status:active and leaf_count>0", async () => {
-    const fix = await makeFixture();
+    const fix = await createSessionFixture({ withMcp: true });
+    fix.directory.registerThresholdSigner(fix.agentA.pubkeyHex, fix.signerA);
+
     scope.addCleanup(fix.stopAll);
 
     const { sessionIdHex } = await setupSession(fix);
 
     // Send a message so leaf_count > 0 on both sides
-    await fix.mcpA.callTool({
+    await fix.agentA.mcp!.callTool({
       name: "cello_send",
       arguments: { session_id: sessionIdHex, content: "leaf-for-count" },
     });
 
     // Wait for B to receive and confirm the leaf landed
     await waitFor(
-      () => fix.clientB.receiveMessage(sessionIdHex) !== null,
+      () => fix.agentB.client.receiveMessage(sessionIdHex) !== null,
       { timeout: 10_000 }
     );
 
     // A's session list
     const listA = parseResult(
-      await fix.mcpA.callTool({ name: "cello_list_sessions", arguments: {} })
+      await fix.agentA.mcp!.callTool({ name: "cello_list_sessions", arguments: {} })
     ) as Array<{ session_id: string; status: string; counterparty_pubkey: string; leaf_count: number }>;
 
     expect(listA).toHaveLength(1);
     expect(listA[0].session_id).toBe(sessionIdHex);
     expect(listA[0].status).toBe("active");
-    expect(listA[0].counterparty_pubkey).toBe(fix.pubkeyBHex);
+    expect(listA[0].counterparty_pubkey).toBe(fix.agentB.pubkeyHex);
     expect(listA[0].leaf_count).toBeGreaterThan(0);
 
     // B's session list
     const listB = parseResult(
-      await fix.mcpB.callTool({ name: "cello_list_sessions", arguments: {} })
+      await fix.agentB.mcp!.callTool({ name: "cello_list_sessions", arguments: {} })
     ) as Array<{ session_id: string; status: string; counterparty_pubkey: string; leaf_count: number }>;
 
     expect(listB).toHaveLength(1);
     expect(listB[0].session_id).toBe(sessionIdHex);
     expect(listB[0].status).toBe("active");
-    expect(listB[0].counterparty_pubkey).toBe(fix.pubkeyAHex);
+    expect(listB[0].counterparty_pubkey).toBe(fix.agentA.pubkeyHex);
     expect(listB[0].leaf_count).toBeGreaterThan(0);
   }, 25_000);
 });
@@ -412,14 +228,16 @@ describe("AC-005: cello_list_sessions shows active session on both A and B", () 
 
 describe("AC-006 (SESSION-004): Post-FROST session message exchange is identical to M1", () => {
   it("after FROST-established session, A sends message to B via dual-path; B receives with correct seq", async () => {
-    const fix = await makeFixture();
+    const fix = await createSessionFixture({ withMcp: true });
+    fix.directory.registerThresholdSigner(fix.agentA.pubkeyHex, fix.signerA);
+
     scope.addCleanup(fix.stopAll);
 
     const { sessionIdHex } = await setupSession(fix);
 
     // A sends a message on the FROST-established session
     const sendResult = parseResult(
-      await fix.mcpA.callTool({
+      await fix.agentA.mcp!.callTool({
         name: "cello_send",
         arguments: { session_id: sessionIdHex, content: "frost-session-message" },
       })
@@ -430,7 +248,7 @@ describe("AC-006 (SESSION-004): Post-FROST session message exchange is identical
 
     // B receives the message — identical behavior to M1 dual-path
     const recvResult = parseResult(
-      await fix.mcpB.callTool({
+      await fix.agentB.mcp!.callTool({
         name: "cello_receive",
         arguments: { session_id: sessionIdHex, timeout_ms: 10_000 },
       })
@@ -438,7 +256,7 @@ describe("AC-006 (SESSION-004): Post-FROST session message exchange is identical
 
     expect(recvResult.type).toBe("message");
     expect(recvResult.content).toBe("frost-session-message");
-    expect(recvResult.sender_pubkey).toBe(fix.pubkeyAHex);
+    expect(recvResult.sender_pubkey).toBe(fix.agentA.pubkeyHex);
     // sequence_number must be >= 1 (relay-assigned, monotone)
     expect(recvResult.sequence_number).toBeGreaterThanOrEqual(1);
     expect(recvResult.leaf_hash).toMatch(/^[0-9a-f]{64}$/);
@@ -452,7 +270,9 @@ describe("AC-006 (SESSION-004): Post-FROST session message exchange is identical
 
 describe("AC-002 notification: cello_session_request channel notification fires on B when assignment arrives", () => {
   it("AC-002-notif: notifications/claude/channel fires with {type:cello_session_request, from:A_pubkey, session_id}", async () => {
-    const fix = await makeFixture();
+    const fix = await createSessionFixture({ withMcp: true });
+    fix.directory.registerThresholdSigner(fix.agentA.pubkeyHex, fix.signerA);
+
     scope.addCleanup(fix.stopAll);
 
     // Fire assignment while B is live
@@ -460,15 +280,15 @@ describe("AC-002 notification: cello_session_request channel notification fires 
 
     // Wait for B's notification
     await waitFor(
-      () => fix.notificationsB.some((n) => n.method === "notifications/claude/channel"),
+      () => fix.agentB.notifications!.some((n) => n.method === "notifications/claude/channel"),
       { timeout: 5000 }
     );
 
-    const notif = fix.notificationsB.find((n) => n.method === "notifications/claude/channel")!;
+    const notif = fix.agentB.notifications!.find((n) => n.method === "notifications/claude/channel")!;
     const params = notif.params as Record<string, unknown>;
 
     expect(params.type).toBe("cello_session_request");
-    expect(params.from).toBe(fix.pubkeyAHex);
+    expect(params.from).toBe(fix.agentA.pubkeyHex);
     expect(typeof params.session_id).toBe("string");
     // SI-001: exactly these three keys — no genesis_prev_root, no multiaddrs, no content
     expect(Object.keys(params).sort()).toEqual(["from", "session_id", "type"]);
