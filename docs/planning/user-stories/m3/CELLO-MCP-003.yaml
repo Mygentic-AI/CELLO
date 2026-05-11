@@ -28,7 +28,7 @@ story: >
   - `cello_request_connection({ target_pubkey, include_endorsements?: hex[],
     include_attestations?: hex[] })` — NEW. Constructs a ConnectionPackage per
     CONNREQ-001 (pseudonym binding + selected items) and sends a Round 1 connection
-    request via CONNREQ-002. Blocks up to 30 seconds total spanning both rounds.
+    request via CONNREQ-002. Blocks up to 5 minutes total spanning both rounds.
     Returns one of:
     - `{ result: 'accepted', connection_id: hex, counterparty_pubkey: hex }` — target
       policy accepted the package (deterministic mode) or target agent accepted
@@ -40,7 +40,7 @@ story: >
       requested_items: RequestedItem[] }` — target agent (inference mode) requested
       additional disclosure. Caller must call `cello_respond_to_disclosure_request` to
       proceed to Round 2.
-    - `{ result: 'timeout' }` — counterparty did not respond within 30 seconds.
+    - `{ result: 'timeout' }` — counterparty did not respond within 5 minutes.
     - `{ error: { reason: 'target_not_found' | 'already_connected' | 'not_registered' } }`.
 
     **M3 scope note on `include_endorsements` / `include_attestations`:** In M3 the trust
@@ -154,7 +154,7 @@ behavior:
     action: >
       the MCP server shall construct a ConnectionPackage per CONNREQ-001 (pseudonym
       binding + selected items), send the connection request per CONNREQ-002, and block
-      until the response arrives or a 30-second timeout fires. If the target's policy is
+      until the response arrives or a 5-minute timeout fires. If the target's policy is
       deterministic, the result (accepted/insufficient/rejected) arrives without agent
       involvement on the target side. If the target's policy is inference and the target
       agent requests more disclosure, the tool returns `{ result: 'disclosure_requested',
@@ -259,7 +259,7 @@ acceptance_criteria:
   - id: AC-004
     given: "Two registered MCP servers A and B; B has inference policy; B calls `cello_request_more_disclosure` on the inbound Round 1 request"
     when: "A calls `cello_request_connection({ target_pubkey: B_pubkey })`"
-    then: "A's call returns `{ result: 'disclosure_requested', connection_request_id: hex, requested_items: [...] }` before the 30-second timeout"
+    then: "A's call returns `{ result: 'disclosure_requested', connection_request_id: hex, requested_items: [...] }` before the 5-minute timeout"
     test_type: e2e
     component_under_test: client
 

@@ -251,11 +251,13 @@ acceptance_criteria:
     given: "Two registered agents A and B (separate processes, real libp2p + real directory); B has an `open` policy; no existing connection"
     when: "A calls `cello_request_connection({ target_pubkey: B })` with a valid package (pseudonym binding only)"
     then: >
-      The directory relays to B; B's client evaluates (open → auto_accept); B sends
-      `connection_response { verdict: 'accept' }`; the directory creates connection
-      records; both A and B receive `connection_established` with a matching
-      connection_id; both clients' connection lists show the counterparty;
-      `cello_request_connection` returns `{ result: 'accepted', connection_id }`
+      `cello_request_connection` returns `{ result: 'accepted', connection_id }`;
+      AND querying B's client connection list (from B's process, not A's) returns an
+      entry with the identical connection_id — proving `connection_established` was
+      delivered to B's signaling stream, not injected in-process;
+      AND the directory's connection record shows both A_pubkey and B_pubkey as
+      participants with status 'active' — queryable from the directory process independently
+      of what either client reports
     test_type: e2e
     component_under_test: client, directory
 
@@ -263,10 +265,13 @@ acceptance_criteria:
     given: "Two registered agents A and B (separate processes); B has a `closed` policy"
     when: "A calls `cello_request_connection({ target_pubkey: B })`"
     then: >
-      B's client evaluates → auto_reject (policy_closed); B sends `connection_response
-      { verdict: 'reject', reason: 'policy_closed' }`; the directory relays
-      `connection_rejected` to A; `cello_request_connection` returns `{ result:
-      'rejected' }`; no connection record is created
+      `cello_request_connection` returns `{ result: 'rejected' }`;
+      AND the directory's connection store has no record for the A–B pair (queryable
+      from the directory process);
+      AND B's signaling handler received a `connection_request_inbound` frame and sent
+      `connection_response { verdict: 'reject' }` back — proven by the directory having
+      received and relayed that verdict (the directory only sends `connection_rejected`
+      to A after receiving the target's explicit `connection_response`, never on its own)
     test_type: e2e
     component_under_test: client, directory
 
@@ -274,10 +279,14 @@ acceptance_criteria:
     given: "Two registered agents A and B (separate processes); B has inference mode policy; B's agent calls `cello_request_more_disclosure` requesting 2 endorsements; A responds with 2 valid endorsements"
     when: "B re-evaluates the disclosure response and calls `cello_accept_connection`"
     then: >
-      The directory creates connection records; `connection_established` is pushed to
-      both clients; `cello_request_connection` returns `{ result: 'accepted',
-      connection_id }`; B's `cello_await_connection_request` returns the updated
-      ConnectionReport before the accept call
+      `cello_request_connection` returns `{ result: 'accepted', connection_id }`;
+      AND B's `cello_await_connection_request` (running in B's process) returned the
+      updated Round 2 ConnectionReport with `is_round_2: true` before the accept call —
+      proving `disclosure_response_inbound` was delivered to B's signaling stream;
+      AND the directory's connection store shows the A–B connection as 'active' with a
+      connection_id matching what both clients hold — cross-process state that could only
+      exist if all three wire frames (disclosure_request → disclosure_response →
+      connection_established) traversed the directory's signaling handlers
     test_type: e2e
     component_under_test: client, directory
 
@@ -285,8 +294,12 @@ acceptance_criteria:
     given: "Two registered agents A and B (separate processes); B has inference mode policy; B calls `cello_request_more_disclosure`; A responds with 0 additional endorsements"
     when: "B re-evaluates and calls `cello_reject_connection`"
     then: >
-      The directory relays `connection_rejected` to A; `cello_request_connection`
-      returns `{ result: 'rejected' }`; no connection record is created
+      `cello_request_connection` returns `{ result: 'rejected' }`;
+      AND the directory's connection store has no record for the A–B pair;
+      AND B's process received `disclosure_response_inbound` on its signaling stream
+      (the empty package_v2 arrived over the wire) — proven by B's client having
+      called `evaluateConnectionPackage()` a second time (the updated ConnectionReport
+      with `is_round_2: true` was available to B's agent before the reject call)
     test_type: e2e
     component_under_test: client, directory
 
@@ -315,10 +328,12 @@ acceptance_criteria:
     given: "Agent B has A's pubkey in its local whitelist"
     when: "A sends a connection request to B"
     then: >
-      B's client detects the whitelist match before calling the policy engine;
-      `connection_response { verdict: 'accept' }` is sent without any agent notification
-      or `evaluateConnectionPackage()` call; `connection_established` is pushed to both
-      clients
+      `connection_established` is pushed to both clients; `cello_request_connection`
+      returns `{ result: 'accepted', connection_id }`;
+      AND no `onConnectionPendingReview` event fires on B's process (the policy engine
+      was bypassed — proven by B's agent never receiving a `pending_review` notification);
+      AND `evaluateConnectionPackage()` call count on B's process is zero for this
+      request (assert via a test-injectable counter, not a result-shape check)
     test_type: e2e
     component_under_test: client, directory
 
@@ -340,23 +355,29 @@ acceptance_criteria:
     component_under_test: client
 
   - id: AC-011
-    given: "A connection request whose package has a tampered pseudonym binding (ML-DSA signature invalid)"
-    when: "B's client validates the package"
+    given: "A connection request whose package has a tampered pseudonym binding (ML-DSA signature invalid); A and B are separate processes"
+    when: "B's client receives and validates the package"
     then: >
-      CONNREQ-001 validation marks it `pseudonym_binding_invalid`; CONNPOL-001 returns
-      `{ result: 'reject', reason: 'pseudonym_binding_invalid' }`; B sends
-      `connection_response { verdict: 'reject', reason: 'pseudonym_binding_invalid' }`;
-      `cello_request_connection` returns `{ result: 'rejected' }`
+      `cello_request_connection` returns `{ result: 'rejected' }`;
+      AND the directory's connection store has no record for the A–B pair;
+      AND the directory received `connection_response { verdict: 'reject', reason:
+      'pseudonym_binding_invalid' }` from B's signaling stream — proven by the directory
+      having sent `connection_rejected` to A (the directory only sends this after
+      receiving an explicit verdict frame from the target; it cannot generate this on its own)
     test_type: e2e
     component_under_test: client
 
   - id: AC-012
-    given: "An established connection between A and B"
-    when: "Both clients query their connection list"
+    given: "An established connection between A and B (separate processes)"
+    when: "Both clients query their connection list AND the directory is queried independently"
     then: >
       A sees `{ connection_id, counterparty_pubkey: B_pubkey, status: 'active' }`;
       B sees `{ connection_id, counterparty_pubkey: A_pubkey, status: 'active' }`;
-      both connection_ids are identical
+      both connection_ids are identical;
+      AND the directory's connection record for this connection_id names both pubkeys —
+      three independent sources (A's process, B's process, directory process) hold the
+      same connection_id, which is only possible if `connection_established` was delivered
+      via the directory's signaling streams to both clients
     test_type: e2e
     component_under_test: client
 
