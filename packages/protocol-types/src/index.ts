@@ -80,6 +80,28 @@ export type {
 } from "./registration.js";
 
 export type {
+  ConnectionRequest,
+  ConnectionRequestInbound,
+  ConnectionResponse,
+  ConnectionResponseVerdict,
+  ConnectionEstablished,
+  ConnectionRejected,
+  ConnectionInsufficient,
+  ConnectionRequestError,
+  ConnectionRequestErrorReason,
+  DisclosureRequest,
+  DisclosureRequestItem,
+  DisclosureRequestInbound,
+  DisclosureResponse,
+  DisclosureResponseInbound,
+  ConnectionRecord,
+  PendingConnectionRequest,
+  ClientConnectionRecord,
+  SessionRequestM3,
+  SessionRequestM3ErrorReason,
+} from "./connection-request.js";
+
+export type {
   DkgRound1Broadcast,
   DkgRound2Share,
   FrostDkgRound1Request,

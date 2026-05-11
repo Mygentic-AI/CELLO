@@ -142,6 +142,13 @@ import {
   encodeRegisterSuccess,
   encodeRegisterError,
   encodeDkgReady,
+  encodeConnectionRequestError,
+  encodeConnectionRequestInbound,
+  encodeConnectionEstablished,
+  encodeConnectionRejected,
+  encodeConnectionInsufficient,
+  encodeDisclosureRequestInbound,
+  encodeDisclosureResponseInbound,
   decodeInboundSignalingFrame,
 } from "./directory-frames.js";
 import { ed25519_FROST } from "@noble/curves/ed25519.js";
@@ -216,6 +223,13 @@ export interface DirectoryNodeOptions {
    * Set to true in REG-001 tests to enforce the registration gate.
    */
   requireRegistration?: boolean;
+  /**
+   * SESSION-006: when true, session_request is refused with connection_id_required if
+   * no connection_id is present, or no_connection if the connection_id does not match
+   * an active connection between initiator and target.
+   * Default: false (backward compatible).
+   */
+  requireConnectionGate?: boolean;
 }
 
 export class CelloDirectoryNode {
@@ -232,6 +246,17 @@ export class CelloDirectoryNode {
   readonly #forceDkgFailure: boolean;
   // REG-001 AC-009: enforce registration gate on session_request
   readonly #requireRegistration: boolean;
+  // SESSION-006: enforce connection gate on session_request
+  readonly #requireConnectionGate: boolean;
+  // CONNREQ-002: pending connection requests indexed by connection_request_id
+  // connection_request_id → { senderHex, targetHex, packageCbor, requestId, disclosureRound }
+  readonly #pendingConnectionRequests = new Map<string, {
+    senderHex: string;
+    targetHex: string;
+    packageCbor: Uint8Array;
+    requestId: string;
+    disclosureRound: number; // 1 = Round 1 pending; 2 = Round 2 (disclosure requested)
+  }>();
 
   // nonce_hex → NonceEntry
   readonly #nonces = new Map<string, NonceEntry>();
@@ -308,6 +333,7 @@ export class CelloDirectoryNode {
     });
     this.#forceDkgFailure = opts.forceDkgFailure ?? false;
     this.#requireRegistration = opts.requireRegistration ?? false;
+    this.#requireConnectionGate = opts.requireConnectionGate ?? false;
   }
 
   async start(): Promise<void> {
@@ -627,6 +653,22 @@ export class CelloDirectoryNode {
               }
             } catch { break; }
           }
+
+          // CONNREQ-002 DB-001: deliver queued pending connection requests (target reconnected)
+          const pendingConnRequests = this.#store.dequeuePendingConnectionRequests(authedPubkeyHex);
+          for (const pending of pendingConnRequests) {
+            try {
+              this.#sendFrame(stream, encodeConnectionRequestInbound(pending.frame));
+              // Re-register in #pendingConnectionRequests so we can route the response
+              this.#pendingConnectionRequests.set(pending.connection_request_id, {
+                senderHex: pending.sender_pubkey,
+                targetHex: authedPubkeyHex,
+                packageCbor: pending.frame.package_cbor,
+                requestId: pending.connection_request_id,
+                disclosureRound: 1,
+              });
+            } catch { break; }
+          }
           continue;
         }
 
@@ -686,9 +728,21 @@ export class CelloDirectoryNode {
           }
           // Run concurrently — ceremony_result frames must be processed by this same loop
           // while #processSessionRequest is suspended awaiting the ceremony round-trip.
-          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"));
+          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), (parsed as { connection_id?: string }).connection_id);
         } else if (parsed.type === "seal_frost_signature") {
           void this.#processSealFrostSignature(authedPubkeyHex!, parsed);
+        } else if (parsed.type === "connection_request") {
+          // CONNREQ-002: process the connection request (runs concurrently)
+          void this.#processConnectionRequest(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "connection_response") {
+          // CONNREQ-002: target responds to a connection request
+          void this.#processConnectionResponse(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "disclosure_request") {
+          // CONNREQ-002 Round 2: target requests more disclosure from sender
+          void this.#processDisclosureRequest(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "disclosure_response") {
+          // CONNREQ-002 Round 2: sender responds to disclosure request
+          void this.#processDisclosureResponse(stream, authedPubkeyHex!, parsed);
         } else {
           // Unknown frame type for authenticated state — ignore
         }
@@ -925,13 +979,241 @@ export class CelloDirectoryNode {
     }));
   }
 
+  // ─── CONNREQ-002: Connection request processing ──────────────────────────────
+
+  /**
+   * Process a connection_request frame from sender A directed at target B.
+   * CONNREQ-002 Phase P:
+   *   1. requireRegistration gate: sender must be registered
+   *   2. target must be registered (profile exists)
+   *   3. no existing active connection between A and B
+   *   4. relay to target's stream as connection_request_inbound (or queue if offline)
+   */
+  async #processConnectionRequest(
+    stream: Stream,
+    senderHex: string,
+    frame: import("@cello/protocol-types").ConnectionRequest,
+  ): Promise<void> {
+    const targetHex = frame.target_pubkey;
+
+    // Gate 1: sender must be registered if requireRegistration is set
+    if (this.#requireRegistration && !this.#store.hasProfile(senderHex)) {
+      this.#sendFrame(stream, encodeConnectionRequestError({ type: "connection_request_error", reason: "not_registered" }));
+      return;
+    }
+
+    // Gate 2: target must have a profile
+    if (!this.#store.hasProfile(targetHex)) {
+      this.#sendFrame(stream, encodeConnectionRequestError({ type: "connection_request_error", reason: "target_not_found" }));
+      return;
+    }
+
+    // Gate 3: no existing active connection
+    if (this.#store.hasConnection(senderHex, targetHex)) {
+      this.#sendFrame(stream, encodeConnectionRequestError({ type: "connection_request_error", reason: "already_connected" }));
+      return;
+    }
+
+    // Assign a connection_request_id for Round 2 correlation
+    const connectionRequestId = Buffer.from(randomBytes(16)).toString("hex");
+
+    // Get sender context from profile
+    const senderProfile = this.#store.getProfile(senderHex);
+    const senderRegisteredAt = senderProfile?.registered_at ?? this.#clock.now();
+    const senderIsProvisional = senderProfile?.status !== "active";
+
+    const inboundFrame: import("@cello/protocol-types").ConnectionRequestInbound = {
+      type: "connection_request_inbound",
+      from_pubkey: senderHex,
+      connection_request_id: connectionRequestId,
+      package_cbor: frame.package_cbor,
+      sender_registered_at: senderRegisteredAt,
+      sender_is_provisional: senderIsProvisional,
+    };
+
+    // Try to deliver to target's stream
+    const targetStream = this.#streams.get(targetHex);
+    if (targetStream) {
+      // Store pending request state for routing the response back to sender
+      this.#pendingConnectionRequests.set(connectionRequestId, {
+        senderHex,
+        targetHex,
+        packageCbor: frame.package_cbor,
+        requestId: connectionRequestId,
+        disclosureRound: 1,
+      });
+      try {
+        this.#sendFrame(targetStream, encodeConnectionRequestInbound(inboundFrame));
+      } catch {
+        // Target stream failed — queue the request
+        this.#pendingConnectionRequests.delete(connectionRequestId);
+        const queued = this.#store.queuePendingConnectionRequest(targetHex, {
+          connection_request_id: connectionRequestId,
+          sender_pubkey: senderHex,
+          frame: inboundFrame,
+          queued_at: this.#clock.now(),
+        });
+        if (!queued) {
+          // Queue was full — drop oldest occurred; notify sender
+          this.#sendFrame(stream, encodeConnectionRequestError({ type: "connection_request_error", reason: "target_unavailable" }));
+        }
+        // Otherwise leave A waiting (timeout will fire on client side)
+      }
+    } else {
+      // Target offline — queue the request
+      const queued = this.#store.queuePendingConnectionRequest(targetHex, {
+        connection_request_id: connectionRequestId,
+        sender_pubkey: senderHex,
+        frame: inboundFrame,
+        queued_at: this.#clock.now(),
+      });
+      if (!queued) {
+        // Queue was full
+        this.#sendFrame(stream, encodeConnectionRequestError({ type: "connection_request_error", reason: "target_unavailable" }));
+      }
+      // Else: A waits with no immediate response — timeout fires on client side
+    }
+  }
+
+  /**
+   * Process a connection_response from target B.
+   * Verdicts: accept → create connection + notify both; reject → notify sender; insufficient → notify sender.
+   */
+  async #processConnectionResponse(
+    _stream: Stream,
+    responderHex: string,
+    frame: import("@cello/protocol-types").ConnectionResponse,
+  ): Promise<void> {
+    const pending = this.#pendingConnectionRequests.get(frame.connection_request_id);
+    if (!pending) return; // stale response — ignore
+    if (pending.targetHex !== responderHex) return; // wrong responder
+
+    this.#pendingConnectionRequests.delete(frame.connection_request_id);
+
+    const senderStream = this.#streams.get(pending.senderHex);
+
+    if (frame.verdict === "accept") {
+      // Generate connection_id (16-byte CSPRNG per FIPS 180-4)
+      const connectionId = Buffer.from(randomBytes(16)).toString("hex");
+      this.#store.createConnection(connectionId, pending.senderHex, pending.targetHex, this.#clock.now());
+
+      // Notify both clients
+      const toSender: import("@cello/protocol-types").ConnectionEstablished = {
+        type: "connection_established",
+        counterparty_pubkey: pending.targetHex,
+        connection_id: connectionId,
+      };
+      const toTarget: import("@cello/protocol-types").ConnectionEstablished = {
+        type: "connection_established",
+        counterparty_pubkey: pending.senderHex,
+        connection_id: connectionId,
+      };
+      if (senderStream) {
+        try { this.#sendFrame(senderStream, encodeConnectionEstablished(toSender)); } catch {}
+      }
+      const targetStream = this.#streams.get(pending.targetHex);
+      if (targetStream) {
+        try { this.#sendFrame(targetStream, encodeConnectionEstablished(toTarget)); } catch {}
+      }
+    } else if (frame.verdict === "reject") {
+      if (senderStream) {
+        try {
+          this.#sendFrame(senderStream, encodeConnectionRejected({
+            type: "connection_rejected",
+            target_pubkey: pending.targetHex,
+            reason: frame.reason ?? "rejected",
+          }));
+        } catch {}
+      }
+    } else if (frame.verdict === "insufficient") {
+      if (senderStream) {
+        try {
+          this.#sendFrame(senderStream, encodeConnectionInsufficient({
+            type: "connection_insufficient",
+            target_pubkey: pending.targetHex,
+            unmet_requirements: frame.unmet_requirements ?? [],
+          }));
+        } catch {}
+      }
+    }
+  }
+
+  /**
+   * Process a disclosure_request from target B (Round 2 initiation).
+   * Relays as disclosure_request_inbound to sender A.
+   */
+  async #processDisclosureRequest(
+    _stream: Stream,
+    requesterHex: string,
+    frame: import("@cello/protocol-types").DisclosureRequest,
+  ): Promise<void> {
+    const pending = this.#pendingConnectionRequests.get(frame.connection_request_id);
+    if (!pending) return;
+    if (pending.targetHex !== requesterHex) return;
+
+    // Advance to Round 2
+    pending.disclosureRound = 2;
+
+    const senderStream = this.#streams.get(pending.senderHex);
+    if (senderStream) {
+      try {
+        this.#sendFrame(senderStream, encodeDisclosureRequestInbound({
+          type: "disclosure_request_inbound",
+          from_pubkey: requesterHex,
+          connection_request_id: frame.connection_request_id,
+          requested_items: frame.requested_items,
+        }));
+      } catch {}
+    }
+  }
+
+  /**
+   * Process a disclosure_response from sender A (Round 2 response).
+   * Relays as disclosure_response_inbound to target B.
+   */
+  async #processDisclosureResponse(
+    _stream: Stream,
+    senderHex: string,
+    frame: import("@cello/protocol-types").DisclosureResponse,
+  ): Promise<void> {
+    const pending = this.#pendingConnectionRequests.get(frame.connection_request_id);
+    if (!pending) return;
+    if (pending.senderHex !== senderHex) return;
+
+    const targetStream = this.#streams.get(pending.targetHex);
+    if (targetStream) {
+      try {
+        this.#sendFrame(targetStream, encodeDisclosureResponseInbound({
+          type: "disclosure_response_inbound",
+          connection_request_id: frame.connection_request_id,
+          package_cbor: frame.package_cbor,
+        }));
+      } catch {}
+    }
+  }
+
   // ─── Session request processing ──────────────────────────────────────────────
 
   async #processSessionRequest(
     stream: Stream,
     initiatorHex: string,
-    targetHex: string
+    targetHex: string,
+    connectionId?: string,
   ): Promise<void> {
+    // SESSION-006: enforce connection gate if configured
+    if (this.#requireConnectionGate) {
+      if (!connectionId) {
+        this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "connection_id_required" }));
+        return;
+      }
+      // Verify active connection exists between initiator and target with this connection_id
+      const conn = this.#store.hasConnection(initiatorHex, targetHex);
+      if (!conn || conn.connection_id !== connectionId) {
+        this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "no_connection" }));
+        return;
+      }
+    }
+
     // (a) Verify target is currently authenticated
     const targetStream = this.#streams.get(targetHex);
     if (!targetStream) {
@@ -1554,6 +1836,11 @@ export interface CreateDirectoryNodeOptions {
    * initiator has not completed registration. Default: false (backward compatible).
    */
   requireRegistration?: boolean;
+  /**
+   * SESSION-006: when true, session_request requires a valid connection_id.
+   * Default: false (backward compatible).
+   */
+  requireConnectionGate?: boolean;
 }
 
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{
@@ -1581,6 +1868,7 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     onFallbackCanary: opts.onFallbackCanary,
     forceDkgFailure: opts.forceDkgFailure,
     requireRegistration: opts.requireRegistration,
+    requireConnectionGate: opts.requireConnectionGate,
   });
   await directory.start();
 

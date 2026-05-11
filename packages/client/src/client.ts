@@ -113,9 +113,10 @@ import * as lp from "it-length-prefixed";
 import {
   buildEnvelope, serializeEnvelope, deserializeEnvelope, validateEnvelope,
   computeGenesisPrevRoot, encodeSealPayload, buildSessionEstablishmentTbs, buildSealTbs,
+  decodeConnectionPackage, validateConnectionPackage,
 } from "@cello/protocol-types";
 import type { Structure2 } from "@cello/protocol-types";
-import { verify, buildMerkleTree, merkleRoot, verifyFrostSignature, CONTEXT_SESSION_ESTABLISHMENT, mlDsaKeygen, FileMlDsaKeyProvider } from "@cello/crypto";
+import { verify, buildMerkleTree, merkleRoot, verifyFrostSignature, CONTEXT_SESSION_ESTABLISHMENT, mlDsaKeygen, mlDsaVerify, FileMlDsaKeyProvider } from "@cello/crypto";
 import type { LeafInput, IThresholdSigner } from "@cello/crypto";
 import { CELLO_PROTOCOL_ID, CELLO_CONTENT_PROTOCOL_ID } from "@cello/transport";
 import { NetworkDirectoryNode, runNetworkDkg } from "./network-directory-node.js";
@@ -352,6 +353,53 @@ class CelloClientImpl implements CelloClient {
   /** Optional path for persisting the ML-DSA keypair (FileMlDsaKeyProvider). REG-001 AC-010. */
   readonly #mlDsaKeyFile: string | undefined;
 
+  // ─── CONNREQ-002: Connection state ────────────────────────────────────────────
+
+  /** connection_id → ClientConnectionRecord */
+  readonly #connections = new Map<string, import("@cello/protocol-types").ClientConnectionRecord>();
+  /** counterparty_pubkey_hex → connection_id (for fast lookup by peer) */
+  readonly #connectionsByPeer = new Map<string, string>();
+
+  /** Connection policy for evaluating inbound connection_request_inbound frames. */
+  readonly #connectionPolicy: import("./connection-policy.js").SignalRequirementPolicy | undefined;
+  /** Overall connection timeout in ms (default 300s). Injected for tests. */
+  readonly #connectionTimeoutMs: number;
+  /** Round 2 silence timeout in ms (default 120s). Injected for tests. */
+  readonly #round2TimeoutMs: number;
+  /** If true, expose _evaluateCallCount on the instance for test assertions. */
+  readonly #trackEvaluateCount: boolean;
+  /** Whitelist: sender pubkeys that bypass evaluateConnectionPackage. */
+  readonly #whitelist: string[];
+  /** Callback fired when an inbound connection_request_inbound is queued for agent review. */
+  readonly #onConnectionPendingReview: ((event: import("@cello/protocol-types").ConnectionRequestInbound) => void) | undefined;
+
+  /** Counter incremented each time evaluateConnectionPackage is called (trackEvaluateCount=true). */
+  _evaluateCallCount = 0;
+
+  /** Callback fired when a connection_established event arrives. */
+  #onConnectionEstablishedHandler: ((event: import("@cello/protocol-types").ConnectionEstablished) => void) | undefined;
+  /** Callback fired when a disclosure_request_inbound arrives. */
+  #onDisclosureRequestedHandler: ((event: import("@cello/protocol-types").DisclosureRequestInbound) => void) | undefined;
+
+  /** Single pending resolver for the in-flight cello_request_connection call.
+   * Resolves when connection_established, connection_rejected, connection_insufficient,
+   * connection_request_error, or disclosure_request_inbound arrives. */
+  #pendingConnectionRequestResolve: ((frame: Record<string, unknown>) => void) | null = null;
+
+  /** Pending disclosure_response → resolver (connection_request_id → resolve for cello_respond_to_disclosure_request) */
+  readonly #pendingDisclosureResolvers = new Map<string, (result: Record<string, unknown>) => void>();
+
+  /**
+   * In-process pending connection requests (for B's side).
+   * connection_request_id → state tracking for responding/requesting disclosure.
+   */
+  readonly #pendingInboundRequests = new Map<string, {
+    connection_request_id: string;
+    from_pubkey: string;
+    package_cbor: Uint8Array;
+    round: number; // 1 = Round 1; 2 = Round 2 in-flight
+  }>();
+
   constructor(
     node: CelloNode,
     keyProvider: KeyProvider,
@@ -362,6 +410,12 @@ class CelloClientImpl implements CelloClient {
     sealFrostTimeoutMs = DEFAULT_SEAL_FROST_TIMEOUT_MS,
     directoryEndpoint: { peer_id: string; multiaddrs: string[] } | null = null,
     mlDsaKeyFile?: string,
+    connectionPolicy?: import("./connection-policy.js").SignalRequirementPolicy,
+    connectionTimeoutMs = 300_000,
+    round2TimeoutMs = 120_000,
+    trackEvaluateCount = false,
+    whitelist: string[] = [],
+    onConnectionPendingReview?: (event: import("@cello/protocol-types").ConnectionRequestInbound) => void,
   ) {
     this.#node = node;
     this.#keyProvider = keyProvider;
@@ -372,6 +426,12 @@ class CelloClientImpl implements CelloClient {
     this.#sealFrostTimeoutMs = sealFrostTimeoutMs;
     this.#directoryEndpoint = directoryEndpoint;
     this.#mlDsaKeyFile = mlDsaKeyFile;
+    this.#connectionPolicy = connectionPolicy;
+    this.#connectionTimeoutMs = connectionTimeoutMs;
+    this.#round2TimeoutMs = round2TimeoutMs;
+    this.#trackEvaluateCount = trackEvaluateCount;
+    this.#whitelist = whitelist;
+    this.#onConnectionPendingReview = onConnectionPendingReview;
   }
 
   /**
@@ -1406,8 +1466,7 @@ class CelloClientImpl implements CelloClient {
     stream: Stream,
     frame: Record<string, unknown>,
   ): Promise<void> {
-    process.stderr.write(`[ceremony] #handleCeremonyRequest: thresholdSigner=${this.#thresholdSigner ? 'set' : 'null'}\n`);
-    if (!this.#thresholdSigner) return; // no signer configured — ceremony_result with null
+    if (!this.#thresholdSigner) return;
 
     const ceremonyId = frame["ceremony_id"] as string | undefined;
     const tbsRaw = frame["tbs"];
@@ -1430,9 +1489,7 @@ class CelloClientImpl implements CelloClient {
         ceremony_id: ceremonyId,
         signature: sig ? new Uint8Array(sig) : null,
       })));
-    } catch (err) {
-      // Send failure result
-      process.stderr.write(`[ceremony] #handleCeremonyRequest failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    } catch {
       stream.send(lp.encode.single(CBOR_ENC.encode({
         type: "ceremony_result",
         ceremony_id: ceremonyId,
@@ -1584,7 +1641,13 @@ class CelloClientImpl implements CelloClient {
             resolve({ ok: false, reason: String(frame["reason"] ?? "unknown") });
           }
         } else if (frame["type"] === "leaf_deliver") {
-          this.#handleInboundLeafDeliver(sessionIdHex, frame, myPubkeyHex);
+          const deliverSessionIdRaw = frame["session_id"];
+          const deliverSessionId = deliverSessionIdRaw instanceof Uint8Array ? deliverSessionIdRaw
+            : Buffer.isBuffer(deliverSessionIdRaw) ? new Uint8Array(deliverSessionIdRaw as Buffer) : null;
+          const targetSessionHex = deliverSessionId
+            ? Buffer.from(deliverSessionId).toString("hex")
+            : sessionIdHex;
+          this.#handleInboundLeafDeliver(targetSessionHex, frame, myPubkeyHex);
         }
       }
     } catch {
@@ -2511,6 +2574,577 @@ class CelloClientImpl implements CelloClient {
     this.#onSessionAssignmentHandler = handler;
   }
 
+  // ─── CONNREQ-002: Connection methods ──────────────────────────────────────────
+
+  /**
+   * Register a handler for connection_established events.
+   * CONNREQ-002: fires on both the sender and the target when a connection is created.
+   */
+  onConnectionEstablished(handler: (event: import("@cello/protocol-types").ConnectionEstablished) => void): void {
+    this.#onConnectionEstablishedHandler = handler;
+  }
+
+  /**
+   * Register a handler for disclosure_request_inbound events (Round 2 notification for sender).
+   * CONNREQ-002: fires on the sender when the target requests more disclosure.
+   */
+  onDisclosureRequested(handler: (event: import("@cello/protocol-types").DisclosureRequestInbound) => void): void {
+    this.#onDisclosureRequestedHandler = handler;
+  }
+
+  /**
+   * Return all active connection records for this client.
+   * CONNREQ-002: used by the MCP tool layer and tests.
+   */
+  listConnections(): import("@cello/protocol-types").ClientConnectionRecord[] {
+    return [...this.#connections.values()];
+  }
+
+  /**
+   * Send a connection_request to target B and wait for a final outcome.
+   * Returns:
+   *   { result: 'established', connection_id } — connection created
+   *   { result: 'rejected', reason } — target rejected
+   *   { result: 'insufficient', unmet_requirements } — target found requirements unmet
+   *   { result: 'disclosure_requested', connection_request_id, requested_items } — Round 2 request (unblocks sender)
+   *   { result: 'timeout' } — no response within connectionTimeoutMs
+   *   { result: 'error', reason } — directory-level error (not_registered, target_not_found, etc.)
+   */
+  async cello_request_connection(opts: {
+    target_pubkey: string;
+    package_cbor: Uint8Array;
+  }): Promise<
+    | { result: "established"; connection_id: string }
+    | { result: "rejected"; reason: string }
+    | { result: "insufficient"; unmet_requirements: unknown[] }
+    | { result: "disclosure_requested"; connection_request_id: string; requested_items: unknown[] }
+    | { result: "timeout" }
+    | { result: "error"; reason: string }
+  > {
+    // Ensure the persistent signaling stream is open
+    if (!this.#persistentSignalingStream) {
+      const opened = await this.#openPersistentSignalingStream();
+      if (!opened) {
+        return { result: "error", reason: "directory_unreachable" };
+      }
+    }
+
+    // Build the frame
+    const frameBytes = CBOR_ENC.encode({
+      type: "connection_request",
+      target_pubkey: opts.target_pubkey,
+      package_cbor: opts.package_cbor,
+    }) as Uint8Array;
+
+    // Set up Promise that resolves when the directory sends us a connection outcome.
+    // Uses a single slot — only one cello_request_connection in flight at a time.
+    let resolveOutcome!: (result: Record<string, unknown>) => void;
+    const outcomePromise = new Promise<Record<string, unknown>>((resolve) => {
+      resolveOutcome = resolve;
+    });
+    this.#pendingConnectionRequestResolve = resolveOutcome;
+
+    try {
+      this.#persistentSignalingStream!.send(lp.encode.single(frameBytes));
+    } catch {
+      this.#pendingConnectionRequestResolve = null;
+      return { result: "error", reason: "directory_unreachable" };
+    }
+
+    // Race: outcome vs connectionTimeoutMs
+    let frame: Record<string, unknown> | null = null;
+    let timedOut = false;
+    await Promise.race([
+      outcomePromise.then((f) => { frame = f; }),
+      new Promise<void>((resolve) => setTimeout(() => { timedOut = true; resolve(); }, this.#connectionTimeoutMs)),
+    ]);
+
+    if (this.#pendingConnectionRequestResolve === resolveOutcome) {
+      this.#pendingConnectionRequestResolve = null;
+    }
+
+    if (timedOut || !frame) {
+      return { result: "timeout" };
+    }
+
+    const type = frame["type"] as string;
+
+    if (type === "connection_established") {
+      const connectionId = frame["connection_id"] as string;
+      const counterpartyPubkey = frame["counterparty_pubkey"] as string;
+      // Store connection record locally
+      const record: import("@cello/protocol-types").ClientConnectionRecord = {
+        connection_id: connectionId,
+        counterparty_pubkey: counterpartyPubkey,
+        counterparty_primary_pubkey: "",
+        counterparty_ml_dsa_pubkey: "",
+        established_at: Date.now(),
+        status: "active",
+      };
+      this.#connections.set(connectionId, record);
+      this.#connectionsByPeer.set(counterpartyPubkey, connectionId);
+      return { result: "established", connection_id: connectionId };
+    }
+
+    if (type === "connection_rejected") {
+      return { result: "rejected", reason: (frame["reason"] as string) ?? "rejected" };
+    }
+
+    if (type === "connection_insufficient") {
+      return { result: "insufficient", unmet_requirements: (frame["unmet_requirements"] as unknown[]) ?? [] };
+    }
+
+    if (type === "connection_request_error") {
+      return { result: "error", reason: (frame["reason"] as string) ?? "unknown" };
+    }
+
+    if (type === "disclosure_request_inbound") {
+      return {
+        result: "disclosure_requested",
+        connection_request_id: frame["connection_request_id"] as string,
+        requested_items: (frame["requested_items"] as unknown[]) ?? [],
+      };
+    }
+
+    return { result: "error", reason: "unknown" };
+  }
+
+  /**
+   * Respond to a disclosure request from the target (Round 2 sender side).
+   * Called after cello_request_connection returns { result: 'disclosure_requested' }.
+   * Sends disclosure_response and waits for the final connection outcome.
+   */
+  async cello_respond_to_disclosure_request(opts: {
+    connection_request_id: string;
+    package_cbor: Uint8Array;
+  }): Promise<
+    | { result: "established"; connection_id: string }
+    | { result: "rejected"; reason: string }
+    | { result: "insufficient"; unmet_requirements: unknown[] }
+    | { result: "timeout" }
+    | { result: "error"; reason: string }
+  > {
+    if (!this.#persistentSignalingStream) {
+      return { result: "error", reason: "directory_unreachable" };
+    }
+
+    const frameBytes = CBOR_ENC.encode({
+      type: "disclosure_response",
+      connection_request_id: opts.connection_request_id,
+      package_cbor: opts.package_cbor,
+    }) as Uint8Array;
+
+    let resolveOutcome!: (result: Record<string, unknown>) => void;
+    const outcomePromise = new Promise<Record<string, unknown>>((resolve) => {
+      resolveOutcome = resolve;
+    });
+    this.#pendingDisclosureResolvers.set(opts.connection_request_id, resolveOutcome);
+
+    try {
+      this.#persistentSignalingStream!.send(lp.encode.single(frameBytes));
+    } catch {
+      this.#pendingDisclosureResolvers.delete(opts.connection_request_id);
+      return { result: "error", reason: "directory_unreachable" };
+    }
+
+    let frame: Record<string, unknown> | null = null;
+    let timedOut = false;
+    await Promise.race([
+      outcomePromise.then((f) => { frame = f; }),
+      new Promise<void>((resolve) => setTimeout(() => { timedOut = true; resolve(); }, this.#connectionTimeoutMs)),
+    ]);
+
+    this.#pendingDisclosureResolvers.delete(opts.connection_request_id);
+
+    if (timedOut || !frame) {
+      return { result: "timeout" };
+    }
+
+    const type = frame["type"] as string;
+
+    if (type === "connection_established") {
+      const connectionId = frame["connection_id"] as string;
+      const counterpartyPubkey = frame["counterparty_pubkey"] as string;
+      const record: import("@cello/protocol-types").ClientConnectionRecord = {
+        connection_id: connectionId,
+        counterparty_pubkey: counterpartyPubkey,
+        counterparty_primary_pubkey: "",
+        counterparty_ml_dsa_pubkey: "",
+        established_at: Date.now(),
+        status: "active",
+      };
+      this.#connections.set(connectionId, record);
+      this.#connectionsByPeer.set(counterpartyPubkey, connectionId);
+      return { result: "established", connection_id: connectionId };
+    }
+
+    if (type === "connection_rejected") {
+      return { result: "rejected", reason: (frame["reason"] as string) ?? "rejected" };
+    }
+
+    if (type === "connection_insufficient") {
+      return { result: "insufficient", unmet_requirements: (frame["unmet_requirements"] as unknown[]) ?? [] };
+    }
+
+    return { result: "error", reason: "unknown" };
+  }
+
+  /**
+   * Request more disclosure from the sender (Round 2, target side).
+   * Returns { error: 'max_rounds_reached' } if Round 2 is already in flight.
+   */
+  async cello_request_more_disclosure(opts: {
+    connection_request_id: string;
+    requested_items: unknown[];
+  }): Promise<{ error: "max_rounds_reached" } | { ok: true }> {
+    const pending = this.#pendingInboundRequests.get(opts.connection_request_id);
+    if (!pending) {
+      return { error: "max_rounds_reached" }; // no such request or already completed
+    }
+    if (pending.round >= 2) {
+      return { error: "max_rounds_reached" };
+    }
+
+    // Advance to Round 2 state
+    pending.round = 2;
+
+    if (!this.#persistentSignalingStream) {
+      return { error: "max_rounds_reached" }; // stream gone
+    }
+
+    const frameBytes = CBOR_ENC.encode({
+      type: "disclosure_request",
+      connection_request_id: opts.connection_request_id,
+      requested_items: opts.requested_items,
+    }) as Uint8Array;
+
+    try {
+      this.#persistentSignalingStream.send(lp.encode.single(frameBytes));
+    } catch {
+      return { error: "max_rounds_reached" };
+    }
+
+    return { ok: true };
+  }
+
+  /**
+   * Reconnect the persistent directory signaling stream and re-authenticate.
+   * Called after a client reconnects and wants the directory to deliver queued
+   * connection requests (CONNREQ-002 DB-001).
+   */
+  async reconnectDirectory(): Promise<boolean> {
+    // Clear existing stream state to force a re-open
+    if (this.#persistentSignalingStream) {
+      try { this.#persistentSignalingStream.abort(new Error("reconnect")); } catch {}
+      this.#persistentSignalingStream = null;
+      this.#persistentSignalingIter = null;
+    }
+    const opened = await this.#openPersistentSignalingStream();
+    return opened;
+  }
+
+  /**
+   * TEST-ONLY escape hatch: inject a pending inbound connection request into state.
+   * Used by AC-010 to test max_rounds_reached without going through the full flow.
+   */
+  _injectPendingConnectionRequest(opts: {
+    connection_request_id: string;
+    from_pubkey: string;
+    package_cbor: Uint8Array;
+    round: number;
+  }): void {
+    this.#pendingInboundRequests.set(opts.connection_request_id, {
+      connection_request_id: opts.connection_request_id,
+      from_pubkey: opts.from_pubkey,
+      package_cbor: opts.package_cbor,
+      round: opts.round,
+    });
+  }
+
+  // ─── CONNREQ-002: B-side inbound request handler ─────────────────────────────
+
+  /**
+   * Handle an inbound connection_request_inbound frame (B's side).
+   * CONNREQ-002 pseudocode (connection-request.ts story):
+   *   1. Check whitelist — if sender whitelisted, accept without policy evaluation
+   *   2. Decode + validate the ConnectionPackage (decodeConnectionPackage + validateConnectionPackage)
+   *   3. Build DirectoryContext from the frame-provided sender_registered_at / sender_is_provisional
+   *   4. Call evaluateConnectionPackage (increment _evaluateCallCount if trackEvaluateCount)
+   *   5a. auto_accept → send connection_response { verdict: 'accept' }
+   *   5b. auto_reject → send connection_response { verdict: 'reject', reason }
+   *   5c. auto_insufficient → send connection_response { verdict: 'insufficient', unmet_requirements }
+   *   5d. pending_agent_review → fire onConnectionPendingReview handler; store in #pendingInboundRequests;
+   *       optionally start round2TimeoutMs timer that auto-rejects on expiry
+   */
+  async #handleInboundConnectionRequest(frame: Record<string, unknown>): Promise<void> {
+    if (!this.#persistentSignalingStream) return;
+
+    const connectionRequestId = frame["connection_request_id"] as string;
+    const fromPubkey = frame["from_pubkey"] as string;
+    const packageCborRaw = frame["package_cbor"];
+    const packageCbor = packageCborRaw instanceof Uint8Array ? packageCborRaw
+      : Buffer.isBuffer(packageCborRaw) ? new Uint8Array(packageCborRaw as Buffer) : null;
+
+    if (!connectionRequestId || !fromPubkey || !packageCbor) return;
+
+    const senderRegisteredAt = typeof frame["sender_registered_at"] === "number"
+      ? frame["sender_registered_at"] : 0;
+    const senderIsProvisional = frame["sender_is_provisional"] === true;
+
+    let verdict: "accept" | "reject" | "insufficient" = "reject";
+    let rejectReason: string | undefined;
+    let unmetRequirements: unknown[] | undefined;
+
+    const isWhitelisted = this.#whitelist.includes(fromPubkey);
+
+    if (isWhitelisted) {
+      verdict = "accept";
+    } else if (!this.#connectionPolicy) {
+      // No policy configured — default to accept
+      verdict = "accept";
+    } else {
+      // Decode and validate the package
+      let pkg;
+      try {
+        pkg = decodeConnectionPackage(packageCbor);
+      } catch {
+        verdict = "reject";
+        rejectReason = "package_decode_failed";
+        pkg = null;
+      }
+
+      if (pkg !== null) {
+        const fromPubkeyBytes = Buffer.from(fromPubkey, "hex");
+        const validatedPackage = validateConnectionPackage(
+          pkg,
+          fromPubkeyBytes,
+          Date.now(),
+          mlDsaVerify,
+        );
+
+        const context: import("@cello/protocol-types").DirectoryContext = {
+          registered_at: senderRegisteredAt,
+          is_provisional: senderIsProvisional,
+          conversation_count: 0,
+          clean_close_rate: 0,
+        };
+
+        if (this.#trackEvaluateCount) {
+          this._evaluateCallCount++;
+        }
+
+        const { evaluateConnectionPackage } = await import("./connection-policy.js");
+        const report = evaluateConnectionPackage(
+          validatedPackage,
+          this.#connectionPolicy,
+          context,
+          Date.now(),
+        );
+
+        if (report.verdict === "auto_accept") {
+          verdict = "accept";
+        } else if (report.verdict === "auto_reject") {
+          verdict = "reject";
+          rejectReason = report.reason;
+        } else if (report.verdict === "auto_insufficient") {
+          if (this.#round2TimeoutMs > 0) {
+            // Round 2 enabled: send disclosure_request to ask for more
+            this.#pendingInboundRequests.set(connectionRequestId, {
+              connection_request_id: connectionRequestId,
+              from_pubkey: fromPubkey,
+              package_cbor: packageCbor,
+              round: 1,
+            });
+            const disclosureFrame = CBOR_ENC.encode({
+              type: "disclosure_request",
+              connection_request_id: connectionRequestId,
+              requested_items: report.unmet_requirements.map((u) => ({
+                type: u.signal_type,
+                condition: u.condition,
+              })),
+            }) as Uint8Array;
+            try {
+              this.#persistentSignalingStream!.send(lp.encode.single(disclosureFrame));
+            } catch { /* stream closed */ }
+            setTimeout(() => {
+              const stillPending = this.#pendingInboundRequests.get(connectionRequestId);
+              if (stillPending) {
+                this.#pendingInboundRequests.delete(connectionRequestId);
+                if (this.#persistentSignalingStream) {
+                  const timeoutFrame = CBOR_ENC.encode({
+                    type: "connection_response",
+                    connection_request_id: connectionRequestId,
+                    verdict: "reject",
+                    reason: "disclosure_timeout",
+                  }) as Uint8Array;
+                  try {
+                    this.#persistentSignalingStream.send(lp.encode.single(timeoutFrame));
+                  } catch { /* stream closed */ }
+                }
+              }
+            }, this.#round2TimeoutMs);
+            return;
+          }
+          verdict = "insufficient";
+          unmetRequirements = report.unmet_requirements;
+        } else {
+          // pending_agent_review: store for agent review and fire callback
+          this.#pendingInboundRequests.set(connectionRequestId, {
+            connection_request_id: connectionRequestId,
+            from_pubkey: fromPubkey,
+            package_cbor: packageCbor,
+            round: 1,
+          });
+          if (this.#onConnectionPendingReview) {
+            this.#onConnectionPendingReview({
+              type: "connection_request_inbound",
+              from_pubkey: fromPubkey,
+              connection_request_id: connectionRequestId,
+              package_cbor: packageCbor,
+              sender_registered_at: senderRegisteredAt,
+              sender_is_provisional: senderIsProvisional,
+            });
+          }
+
+          // Start round2TimeoutMs auto-reject timer
+          if (this.#round2TimeoutMs > 0) {
+            setTimeout(() => {
+              const stillPending = this.#pendingInboundRequests.get(connectionRequestId);
+              if (stillPending) {
+                this.#pendingInboundRequests.delete(connectionRequestId);
+                if (this.#persistentSignalingStream) {
+                  const responseFrame = CBOR_ENC.encode({
+                    type: "connection_response",
+                    connection_request_id: connectionRequestId,
+                    verdict: "reject",
+                    reason: "disclosure_timeout",
+                  }) as Uint8Array;
+                  try {
+                    this.#persistentSignalingStream.send(lp.encode.single(responseFrame));
+                  } catch { /* stream closed */ }
+                }
+              }
+            }, this.#round2TimeoutMs);
+          }
+          return; // do not send a connection_response yet
+        }
+      } else {
+        // pkg was null (decode failed) — verdict/rejectReason already set above
+      }
+    }
+
+    // Send connection_response to directory
+    const responsePayload: Record<string, unknown> = {
+      type: "connection_response",
+      connection_request_id: connectionRequestId,
+      verdict,
+    };
+    if (rejectReason !== undefined) responsePayload["reason"] = rejectReason;
+    if (unmetRequirements !== undefined) responsePayload["unmet_requirements"] = unmetRequirements;
+
+    const responseFrame = CBOR_ENC.encode(responsePayload) as Uint8Array;
+    try {
+      this.#persistentSignalingStream.send(lp.encode.single(responseFrame));
+    } catch { /* stream closed — response lost */ }
+  }
+
+  /**
+   * Handle a disclosure_response_inbound frame (B's side, Round 2).
+   * Re-evaluates the updated package and sends final connection_response.
+   */
+  async #handleDisclosureResponse(frame: Record<string, unknown>): Promise<void> {
+    if (!this.#persistentSignalingStream) return;
+
+    const connectionRequestId = frame["connection_request_id"] as string;
+    const packageCborRaw = frame["package_cbor"];
+    const packageCbor = packageCborRaw instanceof Uint8Array ? packageCborRaw
+      : Buffer.isBuffer(packageCborRaw) ? new Uint8Array(packageCborRaw as Buffer) : null;
+
+    if (!connectionRequestId || !packageCbor) return;
+
+    const pending = this.#pendingInboundRequests.get(connectionRequestId);
+    if (!pending) return; // stale — already handled or timed out
+
+    this.#pendingInboundRequests.delete(connectionRequestId);
+
+    const fromPubkey = pending.from_pubkey;
+
+    let verdict: "accept" | "reject" | "insufficient" = "reject";
+    let rejectReason: string | undefined;
+    let unmetRequirements: unknown[] | undefined;
+
+    if (!this.#connectionPolicy) {
+      verdict = "accept";
+    } else {
+      let pkg;
+      try {
+        pkg = decodeConnectionPackage(packageCbor);
+      } catch {
+        verdict = "reject";
+        rejectReason = "package_decode_failed";
+        pkg = null;
+      }
+
+      if (pkg !== null) {
+        const fromPubkeyBytes = Buffer.from(fromPubkey, "hex");
+        const validatedPackage = validateConnectionPackage(
+          pkg,
+          fromPubkeyBytes,
+          Date.now(),
+          mlDsaVerify,
+        );
+
+        const context: import("@cello/protocol-types").DirectoryContext = {
+          registered_at: 0,
+          is_provisional: false,
+          conversation_count: 0,
+          clean_close_rate: 0,
+        };
+
+        if (this.#trackEvaluateCount) {
+          this._evaluateCallCount++;
+        }
+
+        const { evaluateConnectionPackage } = await import("./connection-policy.js");
+        const report = evaluateConnectionPackage(
+          validatedPackage,
+          this.#connectionPolicy,
+          context,
+          Date.now(),
+        );
+
+        if (report.verdict === "auto_accept") {
+          verdict = "accept";
+        } else if (report.verdict === "auto_reject") {
+          verdict = "reject";
+          rejectReason = report.reason;
+        } else if (report.verdict === "auto_insufficient") {
+          verdict = "insufficient";
+          unmetRequirements = report.unmet_requirements;
+        } else {
+          // pending_agent_review in Round 2 — treat as insufficient (max rounds reached)
+          verdict = "reject";
+          rejectReason = "max_rounds_reached";
+        }
+      } else {
+        // pkg was null (decode failed) — verdict already set
+      }
+    }
+
+    const responsePayload: Record<string, unknown> = {
+      type: "connection_response",
+      connection_request_id: connectionRequestId,
+      verdict,
+    };
+    if (rejectReason !== undefined) responsePayload["reason"] = rejectReason;
+    if (unmetRequirements !== undefined) responsePayload["unmet_requirements"] = unmetRequirements;
+
+    const responseFrame = CBOR_ENC.encode(responsePayload) as Uint8Array;
+    try {
+      this.#persistentSignalingStream.send(lp.encode.single(responseFrame));
+    } catch { /* stream closed */ }
+  }
+
   // ─── ADAPTER-003: initiateSession ──────────────────────────────────────────
 
   /**
@@ -2559,6 +3193,14 @@ class CelloClientImpl implements CelloClient {
   ): Promise<InitiateSessionResult> {
     const timeoutMs = opts?.timeoutMs ?? DEFAULT_INITIATE_TIMEOUT_MS;
 
+    // SESSION-006: check local connections map before touching the signaling stream.
+    // If we have a connection policy configured (M3 mode), require a connection.
+    // If no connection policy (M2 mode), skip the gate.
+    const connectionId = this.#connectionsByPeer.get(targetPubkeyHex);
+    if (this.#connectionPolicy !== undefined && !connectionId) {
+      return { ok: false, reason: "no_connection" } as InitiateSessionResult;
+    }
+
     if (!this.#directoryEndpoint && !opts?.directoryPeerId) {
       return { ok: false, reason: "directory_unreachable" };
     }
@@ -2572,28 +3214,26 @@ class CelloClientImpl implements CelloClient {
 
     // Open persistent signaling stream if not already open (DB-001)
     if (!this.#persistentSignalingStream) {
-      process.stderr.write("[initSession] no persistent stream, opening...\n");
       const opened = await this.#openPersistentSignalingStream(opts?.directoryPeerId, opts?.directoryMultiaddr);
       if (!opened) {
-        process.stderr.write("[initSession] first open failed, retrying...\n");
-        // Single retry per DB-001
         const retried = await this.#openPersistentSignalingStream(opts?.directoryPeerId, opts?.directoryMultiaddr);
         if (!retried) {
-          process.stderr.write("[initSession] FAIL: could not open signaling stream after retry\n");
           return { ok: false, reason: "directory_unreachable" };
         }
       }
-    } else {
-      process.stderr.write(`[initSession] stream already exists, status=${(this.#persistentSignalingStream as unknown as { status?: string }).status ?? "unknown"}\n`);
     }
 
-    // SI-001: session_request frame contains ONLY { type, target_pubkey }
+    // SESSION-006: session_request frame includes connection_id if we have one
     // Encoded inline with raw CBOR — no import from @cello/directory
     const targetPubkeyBytes = Buffer.from(targetPubkeyHex, "hex");
-    const sessionRequestFrame = CBOR_ENC.encode({
+    const sessionRequestPayload: Record<string, unknown> = {
       type: "session_request",
       target_pubkey: new Uint8Array(targetPubkeyBytes),
-    }) as Uint8Array;
+    };
+    if (connectionId) {
+      sessionRequestPayload["connection_id"] = connectionId;
+    }
+    const sessionRequestFrame = CBOR_ENC.encode(sessionRequestPayload) as Uint8Array;
 
     // Set up Promise that resolves when the directory responds
     let responseResolve!: (frame: Record<string, unknown>) => void;
@@ -2602,12 +3242,9 @@ class CelloClientImpl implements CelloClient {
     });
     this.#pendingSessionRequestResolve = responseResolve;
 
-    // Send session_request frame
     try {
       this.#persistentSignalingStream!.send(lp.encode.single(sessionRequestFrame));
-      process.stderr.write("[initSession] session_request frame sent OK\n");
-    } catch (e) {
-      process.stderr.write(`[initSession] FAIL: send threw: ${e instanceof Error ? e.message : String(e)}\n`);
+    } catch {
       this.#pendingSessionRequestResolve = null;
       return { ok: false, reason: "directory_unreachable" };
     }
@@ -2623,13 +3260,11 @@ class CelloClientImpl implements CelloClient {
     ]);
 
     if (timedOut) {
-      process.stderr.write(`[initSession] FAIL: timeout after ${timeoutMs}ms waiting for directory response\n`);
       this.#pendingSessionRequestResolve = null;
       return { ok: false, reason: "timeout" };
     }
 
     const frame = responseFrame!;
-    process.stderr.write(`[initSession] got response frame type=${String(frame["type"])} reason=${String(frame["reason"] ?? "")}\n`);
 
     if (frame["type"] === "session_request_error") {
       const reason = frame["reason"];
@@ -2638,39 +3273,26 @@ class CelloClientImpl implements CelloClient {
       if (reason === "frost_signer_not_configured") return { ok: false, reason: "frost_signer_not_configured" };
       if (reason === "directory_below_threshold") return { ok: false, reason: "directory_below_threshold" };
       if (reason === "ceremony_conflict") return { ok: false, reason: "ceremony_conflict" };
-      process.stderr.write(`[initSession] FAIL: unknown session_request_error reason: ${String(reason)}\n`);
-      return { ok: false, reason: "directory_unreachable" }; // unknown error
+      if (reason === "no_connection") return { ok: false, reason: "no_connection" };
+      if (reason === "connection_id_required") return { ok: false, reason: "no_connection" };
+      return { ok: false, reason: "directory_unreachable" };
     }
 
     if (frame["type"] === "session_assignment") {
-      // Decode the assignment from the frame
       const rawAssignment = frame["assignment"] as Record<string, unknown> | undefined;
-      if (!rawAssignment) { process.stderr.write("[initSession] FAIL: session_assignment missing assignment field\n"); return { ok: false, reason: "directory_unreachable" }; }
+      if (!rawAssignment) return { ok: false, reason: "directory_unreachable" };
 
-      process.stderr.write(`[initSession] rawAssignment keys: ${Object.keys(rawAssignment).join(", ")}\n`);
-      process.stderr.write(`[initSession] session_id length: ${toU8Safe(rawAssignment["session_id"])?.length ?? "null"}\n`);
-      process.stderr.write(`[initSession] directory_pubkey length: ${toU8Safe(rawAssignment["directory_pubkey"])?.length ?? "null"}\n`);
-      process.stderr.write(`[initSession] directory_signature length: ${toU8Safe(rawAssignment["directory_signature"])?.length ?? "null"}\n`);
-      process.stderr.write(`[initSession] session_timestamp: ${String(rawAssignment["session_timestamp"])} (type: ${typeof rawAssignment["session_timestamp"]})\n`);
-      process.stderr.write(`[initSession] participant_a: ${rawAssignment["participant_a"] ? Object.keys(rawAssignment["participant_a"] as object).join(",") : "null"}\n`);
-      process.stderr.write(`[initSession] participant_b: ${rawAssignment["participant_b"] ? Object.keys(rawAssignment["participant_b"] as object).join(",") : "null"}\n`);
-      process.stderr.write(`[initSession] relay_endpoint: ${rawAssignment["relay_endpoint"] ? Object.keys(rawAssignment["relay_endpoint"] as object).join(",") : "null"}\n`);
-      process.stderr.write(`[initSession] directory_endpoint: ${rawAssignment["directory_endpoint"] ? Object.keys(rawAssignment["directory_endpoint"] as object).join(",") : "null"}\n`);
-      process.stderr.write(`[initSession] signature_type: ${String(rawAssignment["signature_type"])} (type: ${typeof rawAssignment["signature_type"]})\n`);
-      process.stderr.write(`[initSession] signer_pubkey length: ${toU8Safe(rawAssignment["signer_pubkey"])?.length ?? "null"}\n`);
       const assignment = parseSessionAssignment(rawAssignment);
-      if (!assignment) { process.stderr.write("[initSession] FAIL: parseSessionAssignment returned null\n"); return { ok: false, reason: "directory_unreachable" }; }
+      if (!assignment) return { ok: false, reason: "directory_unreachable" };
 
       const result = await this.receiveSessionAssignment(assignment, myPubkey);
       if (!result.ok) {
-        process.stderr.write(`[initSession] FAIL: receiveSessionAssignment failed\n`);
         return { ok: false, reason: "directory_unreachable" };
       }
 
-      // Compute genesis_prev_root — already stored on the session record
       const sessionIdHex = Buffer.from(result.sessionId).toString("hex");
       const record = this.#sessions.get(sessionIdHex);
-      if (!record) { process.stderr.write("[initSession] FAIL: session record not found after assignment\n"); return { ok: false, reason: "directory_unreachable" }; }
+      if (!record) return { ok: false, reason: "directory_unreachable" };
 
       return {
         ok: true,
@@ -2679,8 +3301,6 @@ class CelloClientImpl implements CelloClient {
       };
     }
 
-    // Unknown frame type
-    process.stderr.write(`[initSession] FAIL: unknown frame type: ${String(frame["type"])}\n`);
     return { ok: false, reason: "directory_unreachable" };
   }
 
@@ -2710,47 +3330,41 @@ class CelloClientImpl implements CelloClient {
   }
 
   async #doOpenPersistentSignalingStream(directoryPeerId?: string, directoryMultiaddr?: string): Promise<boolean> {
-    if (!this.#directoryEndpoint && !directoryPeerId) { process.stderr.write("[sigstream] FAIL: no directoryEndpoint and no directoryPeerId\n"); return false; }
+    if (!this.#directoryEndpoint && !directoryPeerId) return false;
     if (this.#persistentSignalingStream) return true;
 
     const dirPeerId = directoryPeerId ?? this.#directoryEndpoint!.peer_id;
     const dirMultiaddr = directoryMultiaddr ?? this.#directoryEndpoint?.multiaddrs[0];
-    process.stderr.write(`[sigstream] opening: peerId=${dirPeerId?.slice(0, 16)}... multiaddr=${dirMultiaddr ?? "(none)"}\n`);
 
     try {
       if (dirMultiaddr) {
-        try { await this.#node.dial(dirMultiaddr); } catch (e) { process.stderr.write(`[sigstream] dial threw (non-fatal): ${e instanceof Error ? e.stack ?? e.message : JSON.stringify(e)}\n`); }
+        try { await this.#node.dial(dirMultiaddr); } catch { /* non-fatal */ }
       }
 
       let sigStream: Stream;
       try {
         sigStream = await this.#node.newStream(dirPeerId, SIGNALING_PROTOCOL_ID);
-      } catch (e) {
-        process.stderr.write(`[sigstream] FAIL at newStream: ${e instanceof Error ? e.stack ?? e.message : JSON.stringify(e)}\n`);
+      } catch {
         return false;
       }
-      process.stderr.write("[sigstream] newStream opened, awaiting auth challenge...\n");
 
-      // Auth challenge-response (same pattern as #connectDirectorySignalingStream)
       const iter = (lp.decode(sigStream) as AsyncIterable<unknown>)[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
 
       const { value: challengeRaw, done } = await nextWithTimeout(iter, RELAY_AUTH_TIMEOUT_MS);
-      if (done || challengeRaw === undefined) { process.stderr.write("[sigstream] FAIL: challenge read returned done/undefined\n"); sigStream.abort(new Error("dir_auth_error")); return false; }
+      if (done || challengeRaw === undefined) { sigStream.abort(new Error("dir_auth_error")); return false; }
 
       let challengeFrame: Record<string, unknown>;
       try {
         challengeFrame = decode(toU8(challengeRaw)) as Record<string, unknown>;
-      } catch (e) { process.stderr.write(`[sigstream] FAIL: challenge CBOR decode: ${e instanceof Error ? e.message : String(e)}\n`); sigStream.abort(new Error("dir_auth_error")); return false; }
+      } catch { sigStream.abort(new Error("dir_auth_error")); return false; }
 
       if (challengeFrame["type"] !== "signaling_auth_challenge") {
-        process.stderr.write(`[sigstream] FAIL: unexpected challenge type: ${String(challengeFrame["type"])}\n`);
         sigStream.abort(new Error("dir_auth_error")); return false;
       }
 
       const nonce = toU8(challengeFrame["nonce"]);
-      if (nonce.length !== 32) { process.stderr.write(`[sigstream] FAIL: nonce length=${nonce.length}, expected 32\n`); sigStream.abort(new Error("dir_auth_error")); return false; }
+      if (nonce.length !== 32) { sigStream.abort(new Error("dir_auth_error")); return false; }
 
-      // Ensure myPubkeyHex is set
       if (!this.#myPubkeyHex) {
         const pubkey = await this.#keyProvider.getPublicKey();
         this.#myPubkeyHex = Buffer.from(pubkey).toString("hex");
@@ -2768,42 +3382,30 @@ class CelloClientImpl implements CelloClient {
         signature: sig,
       }) as Uint8Array;
       sigStream.send(lp.encode.single(authResponseFrame));
-      process.stderr.write("[sigstream] auth response sent, awaiting signaling_auth_ok...\n");
 
-      // Read signaling_auth_ok — the directory sends this after registering the client's
-      // stream in its #streams map. Awaiting it ensures the directory has processed the auth
-      // before the caller sends session_request frames (ADAPTER-003 sync guarantee).
       const { value: ackRaw, done: ackDone } = await nextWithTimeout(iter, RELAY_AUTH_TIMEOUT_MS);
-      if (ackDone || ackRaw === undefined) { process.stderr.write("[sigstream] FAIL: auth_ok read returned done/undefined\n"); sigStream.abort(new Error("dir_auth_error")); return false; }
+      if (ackDone || ackRaw === undefined) { sigStream.abort(new Error("dir_auth_error")); return false; }
       let ackFrame: Record<string, unknown>;
       try {
         ackFrame = decode(toU8(ackRaw)) as Record<string, unknown>;
-      } catch (e) { process.stderr.write(`[sigstream] FAIL: auth_ok CBOR decode: ${e instanceof Error ? e.message : String(e)}\n`); sigStream.abort(new Error("dir_auth_error")); return false; }
+      } catch { sigStream.abort(new Error("dir_auth_error")); return false; }
       if (ackFrame["type"] !== "signaling_auth_ok") {
-        process.stderr.write(`[sigstream] FAIL: expected signaling_auth_ok, got: ${String(ackFrame["type"])}\n`);
         sigStream.abort(new Error("dir_auth_error")); return false;
       }
 
-      // NODE-001 AC-014/AC-015: send peer_info_announce so the directory can populate
-      // participant peer_id and multiaddrs in SessionAssignments.
-      // Fire-and-forget — no ack expected per protocol design.
       const peerInfoFrame = CBOR_ENC.encode({
         type: "peer_info_announce",
         peer_id: this.#node.getPeerId(),
         multiaddrs: this.#node.listenAddresses(),
       }) as Uint8Array;
       sigStream.send(lp.encode.single(peerInfoFrame));
-      process.stderr.write("[sigstream] peer_info_announce sent\n");
 
-      // Store stream and start reader
       this.#persistentSignalingStream = sigStream;
       this.#persistentSignalingIter = iter;
-      process.stderr.write("[sigstream] SUCCESS: persistent signaling stream authenticated\n");
 
       void this.#runPersistentSignalingReader(sigStream, iter);
       return true;
-    } catch (e) {
-      process.stderr.write(`[sigstream] FAIL (outer catch): ${e instanceof Error ? e.message : String(e)}\n`);
+    } catch {
       return false;
     }
   }
@@ -2910,6 +3512,91 @@ class CelloClientImpl implements CelloClient {
             this.#pendingRegisterResolve = null;
             resolve(frame);
           }
+        } else if (
+          frame["type"] === "connection_established" ||
+          frame["type"] === "connection_rejected" ||
+          frame["type"] === "connection_insufficient" ||
+          frame["type"] === "connection_request_error" ||
+          frame["type"] === "disclosure_request_inbound"
+        ) {
+          // CONNREQ-002: route connection outcome frames.
+
+          if (frame["type"] === "connection_established") {
+            // Store connection record locally (applies to both sender A and target B)
+            const connectionId = frame["connection_id"] as string;
+            const counterpartyPubkey = frame["counterparty_pubkey"] as string;
+            if (connectionId && counterpartyPubkey) {
+              if (!this.#connections.has(connectionId)) {
+                const record: import("@cello/protocol-types").ClientConnectionRecord = {
+                  connection_id: connectionId,
+                  counterparty_pubkey: counterpartyPubkey,
+                  counterparty_primary_pubkey: "",
+                  counterparty_ml_dsa_pubkey: "",
+                  established_at: Date.now(),
+                  status: "active",
+                };
+                this.#connections.set(connectionId, record);
+                this.#connectionsByPeer.set(counterpartyPubkey, connectionId);
+              }
+              // Fire onConnectionEstablished handler (both A and B)
+              const handler = this.#onConnectionEstablishedHandler;
+              if (handler) {
+                handler({ type: "connection_established", counterparty_pubkey: counterpartyPubkey, connection_id: connectionId });
+              }
+            }
+            // Route to pending cello_request_connection resolver (A's side)
+            const resolve = this.#pendingConnectionRequestResolve;
+            if (resolve) {
+              this.#pendingConnectionRequestResolve = null;
+              resolve(frame);
+            } else {
+              // Round 2: route to disclosure resolver if pending
+              for (const [id, disclosureResolve] of this.#pendingDisclosureResolvers) {
+                this.#pendingDisclosureResolvers.delete(id);
+                disclosureResolve(frame);
+                break;
+              }
+            }
+          } else if (frame["type"] === "disclosure_request_inbound") {
+            // CONNREQ-002 Round 2: target requests more disclosure → fire onDisclosureRequested
+            const disclosureHandler = this.#onDisclosureRequestedHandler;
+            if (disclosureHandler) {
+              disclosureHandler({
+                type: "disclosure_request_inbound",
+                from_pubkey: frame["from_pubkey"] as string,
+                connection_request_id: frame["connection_request_id"] as string,
+                requested_items: (frame["requested_items"] as import("@cello/protocol-types").DisclosureRequestItem[]) ?? [],
+              });
+            }
+            // Unblock cello_request_connection on sender's side with disclosure_requested
+            const resolve = this.#pendingConnectionRequestResolve;
+            if (resolve) {
+              this.#pendingConnectionRequestResolve = null;
+              resolve(frame);
+            }
+          } else {
+            // connection_rejected, connection_insufficient, connection_request_error
+            // Route to pending cello_request_connection resolver
+            const resolve = this.#pendingConnectionRequestResolve;
+            if (resolve) {
+              this.#pendingConnectionRequestResolve = null;
+              resolve(frame);
+            } else {
+              // Round 2: route to disclosure resolver if pending
+              for (const [id, disclosureResolve] of this.#pendingDisclosureResolvers) {
+                this.#pendingDisclosureResolvers.delete(id);
+                disclosureResolve(frame);
+                break;
+              }
+            }
+          }
+        } else if (frame["type"] === "connection_request_inbound") {
+          // CONNREQ-002: inbound connection request for this client (B's side).
+          // Evaluate the package using connectionPolicy and send connection_response.
+          void this.#handleInboundConnectionRequest(frame);
+        } else if (frame["type"] === "disclosure_response_inbound") {
+          // CONNREQ-002 Round 2: A provided updated package → re-evaluate and send response.
+          void this.#handleDisclosureResponse(frame);
         }
       }
     } catch { /* stream closed */ }
@@ -3071,6 +3758,18 @@ export function createClient(
     directoryEndpoint?: { peer_id: string; multiaddrs: string[] };
     /** REG-001: path for persisting ML-DSA-44 keypair. If set, FileMlDsaKeyProvider.load() is used. */
     mlDsaKeyFile?: string;
+    /** CONNREQ-002: connection policy for evaluating inbound connection_request_inbound frames. */
+    connectionPolicy?: import("./connection-policy.js").SignalRequirementPolicy;
+    /** CONNREQ-002: overall connection timeout in ms. Default: 300000. */
+    connectionTimeoutMs?: number;
+    /** CONNREQ-002: Round 2 silence timeout in ms. Default: 120000. */
+    round2TimeoutMs?: number;
+    /** CONNREQ-002: if true, expose _evaluateCallCount on the instance for test assertions. */
+    trackEvaluateCount?: boolean;
+    /** CONNREQ-002: sender pubkeys that bypass evaluateConnectionPackage. */
+    whitelist?: string[];
+    /** CONNREQ-002: callback fired when an inbound connection_request_inbound is queued for agent review. */
+    onConnectionPendingReview?: (event: import("@cello/protocol-types").ConnectionRequestInbound) => void;
   }
 ): CelloClient & {
   sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
@@ -3083,6 +3782,37 @@ export function createClient(
   injectRelayDisconnect(sessionIdHex: string): void;
   /** TEST-ONLY: register a minimal session record without a real relay connection. */
   injectTestSession(sessionIdHex: string, sessionId: Uint8Array, myPubkeyHex: string, directoryPubkey: Uint8Array, status?: SessionRecord["status"], opts?: { isInitiator?: boolean }): void;
+  /** CONNREQ-002: list active connection records. */
+  listConnections(): import("@cello/protocol-types").ClientConnectionRecord[];
+  /** CONNREQ-002: send connection_request to target B and await final outcome. */
+  cello_request_connection(opts: { target_pubkey: string; package_cbor: Uint8Array }): Promise<
+    | { result: "established"; connection_id: string }
+    | { result: "rejected"; reason: string }
+    | { result: "insufficient"; unmet_requirements: unknown[] }
+    | { result: "disclosure_requested"; connection_request_id: string; requested_items: unknown[] }
+    | { result: "timeout" }
+    | { result: "error"; reason: string }
+  >;
+  /** CONNREQ-002: respond to disclosure_request (Round 2 sender side). */
+  cello_respond_to_disclosure_request(opts: { connection_request_id: string; package_cbor: Uint8Array }): Promise<
+    | { result: "established"; connection_id: string }
+    | { result: "rejected"; reason: string }
+    | { result: "insufficient"; unmet_requirements: unknown[] }
+    | { result: "timeout" }
+    | { result: "error"; reason: string }
+  >;
+  /** CONNREQ-002: request more disclosure from sender (Round 2, target side). */
+  cello_request_more_disclosure(opts: { connection_request_id: string; requested_items: unknown[] }): Promise<{ error: "max_rounds_reached" } | { ok: true }>;
+  /** CONNREQ-002: register connection_established event handler. */
+  onConnectionEstablished(handler: (event: import("@cello/protocol-types").ConnectionEstablished) => void): void;
+  /** CONNREQ-002: register disclosure_request_inbound event handler (sender side). */
+  onDisclosureRequested(handler: (event: import("@cello/protocol-types").DisclosureRequestInbound) => void): void;
+  /** CONNREQ-002: reconnect the persistent directory signaling stream. */
+  reconnectDirectory(): Promise<boolean>;
+  /** TEST-ONLY: inject a pending inbound connection request into state. */
+  _injectPendingConnectionRequest(opts: { connection_request_id: string; from_pubkey: string; package_cbor: Uint8Array; round: number }): void;
+  /** TEST-ONLY: evaluate call counter (only incremented when trackEvaluateCount=true). */
+  _evaluateCallCount: number;
 } {
   return new CelloClientImpl(
     node,
@@ -3094,6 +3824,12 @@ export function createClient(
     opts?.sealFrostTimeoutMs,
     opts?.directoryEndpoint ?? null,
     opts?.mlDsaKeyFile,
+    opts?.connectionPolicy,
+    opts?.connectionTimeoutMs,
+    opts?.round2TimeoutMs,
+    opts?.trackEvaluateCount,
+    opts?.whitelist,
+    opts?.onConnectionPendingReview,
   ) as CelloClient & {
     sendRaw(peerPubkeyHex: string, bytes: Uint8Array): Promise<SendResult>;
     openRawStream(peerPubkeyHex: string): Promise<Stream>;
@@ -3103,6 +3839,28 @@ export function createClient(
     injectLeafDeliver(sessionIdHex: string, frame: Record<string, unknown>): void;
     injectRelayDisconnect(sessionIdHex: string): void;
     injectTestSession(sessionIdHex: string, sessionId: Uint8Array, myPubkeyHex: string, directoryPubkey: Uint8Array, status?: SessionRecord["status"], opts?: { isInitiator?: boolean }): void;
+    listConnections(): import("@cello/protocol-types").ClientConnectionRecord[];
+    cello_request_connection(opts: { target_pubkey: string; package_cbor: Uint8Array }): Promise<
+      | { result: "established"; connection_id: string }
+      | { result: "rejected"; reason: string }
+      | { result: "insufficient"; unmet_requirements: unknown[] }
+      | { result: "disclosure_requested"; connection_request_id: string; requested_items: unknown[] }
+      | { result: "timeout" }
+      | { result: "error"; reason: string }
+    >;
+    cello_respond_to_disclosure_request(opts: { connection_request_id: string; package_cbor: Uint8Array }): Promise<
+      | { result: "established"; connection_id: string }
+      | { result: "rejected"; reason: string }
+      | { result: "insufficient"; unmet_requirements: unknown[] }
+      | { result: "timeout" }
+      | { result: "error"; reason: string }
+    >;
+    cello_request_more_disclosure(opts: { connection_request_id: string; requested_items: unknown[] }): Promise<{ error: "max_rounds_reached" } | { ok: true }>;
+    onConnectionEstablished(handler: (event: import("@cello/protocol-types").ConnectionEstablished) => void): void;
+    onDisclosureRequested(handler: (event: import("@cello/protocol-types").DisclosureRequestInbound) => void): void;
+    reconnectDirectory(): Promise<boolean>;
+    _injectPendingConnectionRequest(opts: { connection_request_id: string; from_pubkey: string; package_cbor: Uint8Array; round: number }): void;
+    _evaluateCallCount: number;
   };
 }
 

@@ -320,13 +320,13 @@ function buildPseudonymBindingTbs(
   created_at: number
 ): Uint8Array {
   const tsEncoded = created_at > 0xffffffff ? BigInt(created_at) : created_at;
-  return CBOR_ENC.encode([
+  return new Uint8Array(CBOR_ENC.encode([
     pseudonym_label,
     k_local_pubkey,
     primary_pubkey,
     ml_dsa_pubkey,
     tsEncoded,
-  ]);
+  ]));
 }
 
 /**
@@ -340,14 +340,14 @@ function buildPseudonymBindingTbs(
 function buildEndorsementTbs(e: Omit<Endorsement, "endorser_ml_dsa_signature">): Uint8Array {
   const createdEncoded = e.created_at > 0xffffffff ? BigInt(e.created_at) : e.created_at;
   const expiresEncoded = e.expires_at > 0xffffffff ? BigInt(e.expires_at) : e.expires_at;
-  return CBOR_ENC.encode([
+  return new Uint8Array(CBOR_ENC.encode([
     e.endorser_pubkey,
     e.endorser_ml_dsa_pubkey,
     e.target_pubkey,
     e.endorsement_type,
     createdEncoded,
     expiresEncoded,
-  ]);
+  ]));
 }
 
 /**
@@ -361,14 +361,14 @@ function buildEndorsementTbs(e: Omit<Endorsement, "endorser_ml_dsa_signature">):
 function buildAttestationTbs(a: Omit<Attestation, "attester_ml_dsa_signature">): Uint8Array {
   const createdEncoded = a.created_at > 0xffffffff ? BigInt(a.created_at) : a.created_at;
   const expiresEncoded = a.expires_at > 0xffffffff ? BigInt(a.expires_at) : a.expires_at;
-  return CBOR_ENC.encode([
+  return new Uint8Array(CBOR_ENC.encode([
     a.attester_pubkey,
     a.attester_ml_dsa_pubkey,
     a.attestation_type,
     a.attestation_data,
     createdEncoded,
     expiresEncoded,
-  ]);
+  ]));
 }
 
 // ─── ML-DSA verify helper ─────────────────────────────────────────────────────

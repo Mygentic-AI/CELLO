@@ -165,11 +165,67 @@ export function encodeDkgReady(frame: DkgReady): Uint8Array {
   return ENC.encode({ type: frame.type, epochId: frame.epochId, participants: frame.participants, threshold: frame.threshold });
 }
 
+// ─── CONNREQ-002: Connection frame encoders (directory → client) ──────────────
+
+import type {
+  ConnectionEstablished,
+  ConnectionRejected,
+  ConnectionInsufficient,
+  ConnectionRequestError,
+  ConnectionRequestInbound,
+  DisclosureRequestInbound,
+  DisclosureResponseInbound,
+} from "@cello/protocol-types";
+
+export function encodeConnectionRequestError(frame: ConnectionRequestError): Uint8Array {
+  return ENC.encode({ type: frame.type, reason: frame.reason });
+}
+
+export function encodeConnectionRequestInbound(frame: ConnectionRequestInbound): Uint8Array {
+  return ENC.encode({
+    type: frame.type,
+    from_pubkey: frame.from_pubkey,
+    connection_request_id: frame.connection_request_id,
+    package_cbor: frame.package_cbor,
+    sender_registered_at: frame.sender_registered_at,
+    sender_is_provisional: frame.sender_is_provisional,
+  });
+}
+
+export function encodeConnectionEstablished(frame: ConnectionEstablished): Uint8Array {
+  return ENC.encode({ type: frame.type, counterparty_pubkey: frame.counterparty_pubkey, connection_id: frame.connection_id });
+}
+
+export function encodeConnectionRejected(frame: ConnectionRejected): Uint8Array {
+  return ENC.encode({ type: frame.type, target_pubkey: frame.target_pubkey, reason: frame.reason });
+}
+
+export function encodeConnectionInsufficient(frame: ConnectionInsufficient): Uint8Array {
+  return ENC.encode({ type: frame.type, target_pubkey: frame.target_pubkey, unmet_requirements: frame.unmet_requirements });
+}
+
+export function encodeDisclosureRequestInbound(frame: DisclosureRequestInbound): Uint8Array {
+  return ENC.encode({
+    type: frame.type,
+    from_pubkey: frame.from_pubkey,
+    connection_request_id: frame.connection_request_id,
+    requested_items: frame.requested_items,
+  });
+}
+
+export function encodeDisclosureResponseInbound(frame: DisclosureResponseInbound): Uint8Array {
+  return ENC.encode({
+    type: frame.type,
+    connection_request_id: frame.connection_request_id,
+    package_cbor: frame.package_cbor,
+  });
+}
+
 // ─── Decode (client → directory) ─────────────────────────────────────────────
 
-import type { RegisterRequest, DkgComplete } from "@cello/protocol-types";
+import type { RegisterRequest, DkgComplete, ConnectionRequest, ConnectionResponse, DisclosureRequest, DisclosureResponse } from "@cello/protocol-types";
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete;
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -205,7 +261,42 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
   if (o["type"] === "session_request") {
     const target_pubkey = toUint8Array(o["target_pubkey"]);
     if (!target_pubkey || target_pubkey.length !== 32) return null;
-    return { type: "session_request", target_pubkey };
+    // CONNREQ-002/SESSION-006: optional connection_id field (M3 adds it; M2 omits it)
+    const connection_id = typeof o["connection_id"] === "string" ? o["connection_id"] : undefined;
+    return { type: "session_request", target_pubkey, ...(connection_id !== undefined ? { connection_id } : {}) };
+  }
+
+  if (o["type"] === "connection_request") {
+    const target_pubkey = typeof o["target_pubkey"] === "string" ? o["target_pubkey"] : null;
+    const package_cbor = toUint8Array(o["package_cbor"]);
+    if (!target_pubkey) return null;
+    if (!package_cbor) return null;
+    return { type: "connection_request", target_pubkey, package_cbor };
+  }
+
+  if (o["type"] === "connection_response") {
+    const connection_request_id = typeof o["connection_request_id"] === "string" ? o["connection_request_id"] : null;
+    const verdict = o["verdict"];
+    if (!connection_request_id) return null;
+    if (verdict !== "accept" && verdict !== "reject" && verdict !== "insufficient") return null;
+    const reason = typeof o["reason"] === "string" ? o["reason"] : undefined;
+    const unmet_requirements = Array.isArray(o["unmet_requirements"]) ? o["unmet_requirements"] : undefined;
+    return { type: "connection_response", connection_request_id, verdict, reason, unmet_requirements };
+  }
+
+  if (o["type"] === "disclosure_request") {
+    const connection_request_id = typeof o["connection_request_id"] === "string" ? o["connection_request_id"] : null;
+    if (!connection_request_id) return null;
+    const requested_items = Array.isArray(o["requested_items"]) ? o["requested_items"] : [];
+    return { type: "disclosure_request", connection_request_id, requested_items };
+  }
+
+  if (o["type"] === "disclosure_response") {
+    const connection_request_id = typeof o["connection_request_id"] === "string" ? o["connection_request_id"] : null;
+    const package_cbor = toUint8Array(o["package_cbor"]);
+    if (!connection_request_id) return null;
+    if (!package_cbor) return null;
+    return { type: "disclosure_response", connection_request_id, package_cbor };
   }
 
   if (o["type"] === "seal_frost_signature") {
@@ -257,7 +348,14 @@ export type OutboundSignalingFrame =
   | SessionFrostSealed
   | RegisterSuccess
   | RegisterError
-  | DkgReady;
+  | DkgReady
+  | ConnectionEstablished
+  | ConnectionRejected
+  | ConnectionInsufficient
+  | ConnectionRequestError
+  | ConnectionRequestInbound
+  | DisclosureRequestInbound
+  | DisclosureResponseInbound;
 
 /** Decode a frame sent by the directory (used in tests to inspect what was sent). */
 export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignalingFrame | null {
@@ -446,9 +544,70 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
       reason !== "directory_below_threshold" &&
       reason !== "ceremony_conflict" &&
       reason !== "peer_not_registered" &&
-      reason !== "not_registered"
+      reason !== "not_registered" &&
+      reason !== "connection_id_required" &&
+      reason !== "no_connection"
     ) return null;
     return { type: "session_request_error", reason };
+  }
+
+  if (o["type"] === "connection_established") {
+    const counterparty_pubkey = typeof o["counterparty_pubkey"] === "string" ? o["counterparty_pubkey"] : null;
+    const connection_id = typeof o["connection_id"] === "string" ? o["connection_id"] : null;
+    if (!counterparty_pubkey || !connection_id) return null;
+    return { type: "connection_established", counterparty_pubkey, connection_id };
+  }
+
+  if (o["type"] === "connection_rejected") {
+    const target_pubkey = typeof o["target_pubkey"] === "string" ? o["target_pubkey"] : null;
+    const reason = typeof o["reason"] === "string" ? o["reason"] : null;
+    if (!target_pubkey || !reason) return null;
+    return { type: "connection_rejected", target_pubkey, reason };
+  }
+
+  if (o["type"] === "connection_insufficient") {
+    const target_pubkey = typeof o["target_pubkey"] === "string" ? o["target_pubkey"] : null;
+    const unmet_requirements = Array.isArray(o["unmet_requirements"]) ? o["unmet_requirements"] : null;
+    if (!target_pubkey || !unmet_requirements) return null;
+    return { type: "connection_insufficient", target_pubkey, unmet_requirements };
+  }
+
+  if (o["type"] === "connection_request_error") {
+    const reason = o["reason"];
+    if (
+      reason !== "not_registered" &&
+      reason !== "target_not_found" &&
+      reason !== "already_connected" &&
+      reason !== "target_unavailable"
+    ) return null;
+    return { type: "connection_request_error", reason };
+  }
+
+  if (o["type"] === "connection_request_inbound") {
+    const from_pubkey = typeof o["from_pubkey"] === "string" ? o["from_pubkey"] : null;
+    const connection_request_id = typeof o["connection_request_id"] === "string" ? o["connection_request_id"] : null;
+    const package_cbor = toUint8Array(o["package_cbor"]);
+    const sender_registered_at_raw = o["sender_registered_at"];
+    const sender_registered_at = typeof sender_registered_at_raw === "number" ? sender_registered_at_raw
+      : typeof sender_registered_at_raw === "bigint" ? Number(sender_registered_at_raw) : null;
+    const sender_is_provisional = typeof o["sender_is_provisional"] === "boolean" ? o["sender_is_provisional"] : false;
+    if (!from_pubkey || !connection_request_id || !package_cbor || sender_registered_at === null) return null;
+    return { type: "connection_request_inbound", from_pubkey, connection_request_id, package_cbor, sender_registered_at, sender_is_provisional };
+  }
+
+  if (o["type"] === "disclosure_request_inbound") {
+    const from_pubkey = typeof o["from_pubkey"] === "string" ? o["from_pubkey"] : null;
+    const connection_request_id = typeof o["connection_request_id"] === "string" ? o["connection_request_id"] : null;
+    const requested_items = Array.isArray(o["requested_items"]) ? o["requested_items"] : [];
+    if (!from_pubkey || !connection_request_id) return null;
+    return { type: "disclosure_request_inbound", from_pubkey, connection_request_id, requested_items };
+  }
+
+  if (o["type"] === "disclosure_response_inbound") {
+    const connection_request_id = typeof o["connection_request_id"] === "string" ? o["connection_request_id"] : null;
+    const package_cbor = toUint8Array(o["package_cbor"]);
+    if (!connection_request_id || !package_cbor) return null;
+    return { type: "disclosure_response_inbound", connection_request_id, package_cbor };
   }
 
   if (o["type"] === "not_authenticated") {

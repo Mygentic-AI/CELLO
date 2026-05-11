@@ -56,6 +56,8 @@ export interface PeerInfoAnnounce {
 export interface SessionRequest {
   type: "session_request";
   target_pubkey: Uint8Array; // 32-byte K_local pubkey of the desired counterparty
+  /** SESSION-006 / CONNREQ-002: required in M3; absent in M2 legacy frames */
+  connection_id?: string;
 }
 
 // SessionAssignment and participant/relay types live in @cello/protocol-types (MSG-004 boundary fix).
@@ -171,7 +173,9 @@ export type SessionRequestErrorReason =
   | "directory_below_threshold"    // SESSION-004: FROST ceremony failed — insufficient signers
   | "ceremony_conflict"            // SESSION-004: concurrent ceremony already in-flight for this agent
   | "peer_not_registered"          // NODE-001 AC-014: client has not sent peer_info_announce yet
-  | "not_registered";              // REG-001 AC-009: agent has not completed registration
+  | "not_registered"               // REG-001 AC-009: agent has not completed registration
+  | "no_connection"                // SESSION-006/CONNREQ-002: no active connection between initiator+target
+  | "connection_id_required";      // SESSION-006: session_request missing connection_id field
 
 export interface SessionRequestError {
   type: "session_request_error";
@@ -185,6 +189,24 @@ export interface NotAuthenticated {
 // ─── REG-001: Registration frame types ────────────────────────────────────────
 
 export type { RegisterRequest, DkgComplete, RegisterSuccess, RegisterError, RegisterErrorReason } from "@cello/protocol-types";
+
+// ─── CONNREQ-002: Connection request frame types (re-exported from protocol-types) ───
+
+export type {
+  ConnectionRequest,
+  ConnectionRequestInbound,
+  ConnectionResponse,
+  ConnectionEstablished,
+  ConnectionRejected,
+  ConnectionInsufficient,
+  ConnectionRequestError,
+  ConnectionRequestErrorReason,
+  DisclosureRequest,
+  DisclosureRequestItem,
+  DisclosureRequestInbound,
+  DisclosureResponse,
+  DisclosureResponseInbound,
+} from "@cello/protocol-types";
 
 // ─── Internal directory session state ─────────────────────────────────────────
 
