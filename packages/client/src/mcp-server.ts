@@ -350,13 +350,7 @@ export function createMcpSessionServer(
     async ({ target_pubkey, timeout_ms }) => {
       if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
-      // MCP-003 AC-014 / SESSION-006: check connection gate before signaling stream.
-      // hasConnection() is defined on the extended client (CelloClientImpl); if not
-      // available (older stub), fall through to initiateSession which does the same check.
-      const hasConn = typeof (client as unknown as { hasConnection?: (k: string) => string | null }).hasConnection === "function"
-        ? (client as unknown as { hasConnection: (k: string) => string | null }).hasConnection(target_pubkey)
-        : true; // no gate in M2 mode
-      if (!hasConn) {
+      if (!client.hasConnection(target_pubkey)) {
         return jsonText({ ok: false, reason: "no_connection" });
       }
 
