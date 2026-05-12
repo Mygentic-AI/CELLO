@@ -409,6 +409,7 @@ export class CelloRelayNode {
     if (state) {
       this.#store.setSession(key, { ...state, status: "seal_rejected" });
     }
+    protocolLog("RELAY", `Seal rejected: ${truncHex(key)}, reason: ${_reason}`);
   }
 
   // ─── Stream handler ─────────────────────────────────────────────────────────

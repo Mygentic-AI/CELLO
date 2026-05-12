@@ -438,10 +438,40 @@ describe("AC-008: FROST session ceremony lines appear during session establishme
     expect(sessReqLine).toBeDefined();
     assertLogLine(sessReqLine!);
 
+    // [FROST] Ceremony begin
+    const ceremonyLine = lines.find((l) => l.includes("[FROST]") && l.includes("Ceremony begin"));
+    expect(ceremonyLine).toBeDefined();
+    assertLogLine(ceremonyLine!);
+
+    // [FROST] Commit collected — at least threshold count (2-of-3 fixture: threshold=2, participants=3 → 3 total)
+    const commitLines = lines.filter((l) => l.includes("[FROST]") && l.includes("Commit collected"));
+    expect(commitLines.length).toBeGreaterThanOrEqual(1);
+    for (const line of commitLines) assertLogLine(line);
+    // Verify k/n format in at least one commit line
+    expect(commitLines.some((l) => /Commit collected \(\d+\/\d+\)/.test(l))).toBe(true);
+
+    // [FROST] Partial sig collected — at least threshold count
+    const partialSigLines = lines.filter((l) => l.includes("[FROST]") && l.includes("Partial sig collected"));
+    expect(partialSigLines.length).toBeGreaterThanOrEqual(1);
+    for (const line of partialSigLines) assertLogLine(line);
+    // Verify k/n format in at least one partial sig line
+    expect(partialSigLines.some((l) => /Partial sig collected \(\d+\/\d+\)/.test(l))).toBe(true);
+
     // [SESS] Assignment issued
     const assignLine = lines.find((l) => l.includes("[SESS]") && l.includes("Assignment issued"));
     expect(assignLine).toBeDefined();
     assertLogLine(assignLine!);
+
+    // Verify order: Session request < Ceremony begin < first Commit < first Partial sig < Assignment issued
+    const sessReqIdx = lines.indexOf(sessReqLine!);
+    const ceremonyIdx = lines.indexOf(ceremonyLine!);
+    const firstCommitIdx = lines.indexOf(commitLines[0]!);
+    const firstPartialIdx = lines.indexOf(partialSigLines[0]!);
+    const assignIdx = lines.indexOf(assignLine!);
+    expect(sessReqIdx).toBeLessThan(ceremonyIdx);
+    expect(ceremonyIdx).toBeLessThan(firstCommitIdx);
+    expect(firstCommitIdx).toBeLessThan(firstPartialIdx);
+    expect(firstPartialIdx).toBeLessThan(assignIdx);
   }, 30_000);
 });
 

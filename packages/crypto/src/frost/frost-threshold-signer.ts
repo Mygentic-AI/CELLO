@@ -323,6 +323,7 @@ export class FrostThresholdSigner implements IThresholdSigner {
     ceremonyId: string,
     tbs: Uint8Array,
     context: FrostContext,
+    onProgress?: import("./types.js").CeremonyProgressCallback,
   ): Promise<ThresholdSignature> {
     const localShare = _localShares.get(toHex(this.#agentPubkey));
     if (!localShare) {
@@ -402,10 +403,16 @@ export class FrostThresholdSigner implements IThresholdSigner {
         localNonce.commitments,
         ...stubCommits.map((c) => c.nonceCommitment),
       ];
+      // total = selected stubs + 1 client
+      const totalParticipants = selected.length + 1;
+      for (let ci = 0; ci < totalParticipants; ci++) {
+        onProgress?.({ type: "commit_collected", index: ci + 1, total: totalParticipants });
+      }
 
       // Round 2: collect partial signatures with per-node timeout
       const sigShares: Record<string, Uint8Array> = {};
       let anyFailedThisRound = false;
+      let partialSigCount = 0;
 
       for (let i = 0; i < selected.length; i++) {
         const stub = selected[i];
@@ -464,6 +471,8 @@ export class FrostThresholdSigner implements IThresholdSigner {
         // String() here documents the conversion rather than relying on implicit
         // JS coercion, and must match how aggregate() looks up shares.
         sigShares[String(stubId)] = partialSig;
+        partialSigCount++;
+        onProgress?.({ type: "partial_sig_collected", index: partialSigCount, total: totalParticipants });
       }
 
       // If any stub failed, this round's commitment list is inconsistent —
@@ -484,6 +493,8 @@ export class FrostThresholdSigner implements IThresholdSigner {
           msg,
         );
         sigShares[String(clientId)] = clientSig;
+        partialSigCount++;
+        onProgress?.({ type: "partial_sig_collected", index: partialSigCount, total: totalParticipants });
       } catch {
         continue;
       }
@@ -564,6 +575,7 @@ export class MockThresholdSigner implements IThresholdSigner {
     _ceremonyId: string,
     tbs: Uint8Array,
     _context: FrostContext,
+    _onProgress?: import("./types.js").CeremonyProgressCallback,
   ): Promise<ThresholdSignature> {
     // Return a 64-byte mock signature derived from the TBS
     // Not cryptographically valid — only for interface shape testing

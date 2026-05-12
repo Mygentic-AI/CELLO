@@ -45,6 +45,14 @@ export type ThresholdSignatureError = {
 
 export type ThresholdSignature = ThresholdSignatureOk | ThresholdSignatureError;
 
+// ─── Ceremony progress callback ──────────────────────────────────────────────
+
+export type CeremonyProgressEvent =
+  | { type: "commit_collected"; index: number; total: number }
+  | { type: "partial_sig_collected"; index: number; total: number };
+
+export type CeremonyProgressCallback = (event: CeremonyProgressEvent) => void;
+
 // ─── Core abstraction ─────────────────────────────────────────────────────────
 
 /**
@@ -71,6 +79,7 @@ export interface IThresholdSigner {
     ceremonyId: string,
     tbs: Uint8Array,
     context: FrostContext,
+    onProgress?: CeremonyProgressCallback,
   ): Promise<ThresholdSignature>;
 
   /**

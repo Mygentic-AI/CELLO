@@ -255,6 +255,8 @@ export class CelloDirectoryNode {
   readonly #requireRegistration: boolean;
   // SESSION-006: enforce connection gate on session_request
   readonly #requireConnectionGate: boolean;
+  // OBS-001: log relay auth once on first successful recordAssignment
+  #relayAuthenticated = false;
   // SI-001 test injection: tamper with package_cbor before relay
   readonly #packageCborInterceptor: ((cbor: Uint8Array) => Uint8Array) | undefined;
   // CONNREQ-002: pending connection requests indexed by connection_request_id
@@ -1051,6 +1053,7 @@ export class CelloDirectoryNode {
 
     // Gate 3: no existing active connection
     if (this.#store.hasConnection(senderHex, targetHex)) {
+      protocolLog("CONN", `Pre-check failed: already_connected (sender: ${truncHex(senderHex)})`);
       this.#sendFrame(stream, encodeConnectionRequestError({ type: "connection_request_error", reason: "already_connected" }));
       return;
     }
@@ -1270,12 +1273,14 @@ export class CelloDirectoryNode {
     // SESSION-006: enforce connection gate if configured
     if (this.#requireConnectionGate) {
       if (!connectionId) {
+        protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: connection_id_required`);
         this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "connection_id_required" }));
         return;
       }
       // Verify active connection exists between initiator and target with this connection_id
       const conn = this.#store.hasConnection(initiatorHex, targetHex);
       if (!conn || conn.connection_id !== connectionId) {
+        protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: no_connection`);
         this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "no_connection" }));
         return;
       }
@@ -1284,6 +1289,7 @@ export class CelloDirectoryNode {
     // (a) Verify target is currently authenticated
     const targetStream = this.#streams.get(targetHex);
     if (!targetStream) {
+      protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: target_offline`);
       this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "target_offline" }));
       return;
     }
@@ -1291,6 +1297,7 @@ export class CelloDirectoryNode {
     // SESSION-004 Step 1: Check for injected IThresholdSigner (CRITICAL-2: fail loudly if absent)
     const signer = this.#thresholdSigners.get(initiatorHex);
     if (!signer) {
+      protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: frost_signer_not_configured`);
       this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "frost_signer_not_configured" }));
       return;
     }
@@ -1347,8 +1354,15 @@ export class CelloDirectoryNode {
       // OBS-001 AC-008: FROST ceremony begin
       const sessionIdHex8 = truncHex(Buffer.from(session_id).toString("hex"));
       protocolLog("FROST", `Ceremony begin — session ${sessionIdHex8}, agent ${truncHex(initiatorHex)}`);
-      const result = await signer.participateInCeremony(ceremonyId, tbs, CONTEXT_SESSION_ESTABLISHMENT);
+      const result = await signer.participateInCeremony(ceremonyId, tbs, CONTEXT_SESSION_ESTABLISHMENT, (ev) => {
+        if (ev.type === "commit_collected") {
+          protocolLog("FROST", `Commit collected (${ev.index}/${ev.total})`);
+        } else if (ev.type === "partial_sig_collected") {
+          protocolLog("FROST", `Partial sig collected (${ev.index}/${ev.total})`);
+        }
+      });
       if (!result.ok) {
+        protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: directory_below_threshold`);
         this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "directory_below_threshold" }));
         return;
       }
@@ -1389,7 +1403,12 @@ export class CelloDirectoryNode {
         directory_signature: relayDirSig,
       };
       const recorded = await this.#relay.recordAssignment(relayAssignment);
+      if (recorded.ok && !this.#relayAuthenticated) {
+        this.#relayAuthenticated = true;
+        protocolLog("AUTH", `Relay ${truncHex(this.#relayEndpoint.peer_id)} authenticated`);
+      }
       if (!recorded.ok) {
+        protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: relay_unavailable`);
         this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "relay_unavailable" }));
         return;
       }
