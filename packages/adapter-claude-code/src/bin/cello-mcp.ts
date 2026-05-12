@@ -29,8 +29,7 @@ import { FileKeyProvider, FrostThresholdSigner } from "@cello/crypto";
 import { bootstrapKeyShares } from "@cello/crypto/frost/frost-threshold-signer.js";
 import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
 import { createNode } from "@cello/transport";
-import { createClient, NetworkDirectoryNode, bootstrapNetworkKeyShares } from "@cello/client";
-import { createMcpServer } from "../server.js";
+import { createClient, createMcpSessionServer, NetworkDirectoryNode, bootstrapNetworkKeyShares } from "@cello/client";
 import { pushChannelNotification } from "../notifications.js";
 
 const keyPath = process.env["CELLO_KEY_FILE"] ?? join(homedir(), ".cello", "key");
@@ -136,7 +135,7 @@ if (primaryPubkey) {
 }
 
 // Create server with single identity
-const server = createMcpServer(node, client, kp);
+const server = createMcpSessionServer(node, client, kp);
 mcpServer = server;
 
 // Connect stdio transport and register handler

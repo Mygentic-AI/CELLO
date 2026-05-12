@@ -357,11 +357,62 @@ export class CelloDirectoryNode {
       void this.#handleFrostStream(stream);
     }, { maxInboundStreams: 256 });
 
+    // Relay → directory: seal_submission frames over /cello/directory-relay/1.0.0
+    await this.#node.handle("/cello/directory-relay/1.0.0", (stream) => {
+      void this.#handleRelayAdminStream(stream);
+    }, { maxInboundStreams: 64 });
+
     // OBS-001 AC-002: directory startup log
     const peerId = truncId(this.#node.getPeerId());
     const addrs = this.#node.listenAddresses();
     const addr = addrs.length > 0 ? addrs[0] : "(none)";
     protocolLog("DIR", `Started — peer ${peerId}, signaling ${addr}`);
+  }
+
+  // ─── Relay admin stream handler (/cello/directory-relay/1.0.0) ───────────────
+
+  async #handleRelayAdminStream(stream: Stream): Promise<void> {
+    try {
+      let requestBytes: Uint8Array | null = null;
+      for await (const chunk of lp.decode(stream)) {
+        requestBytes = chunk instanceof Uint8Array ? chunk : (chunk as unknown as { slice(): Uint8Array }).slice();
+        break;
+      }
+      if (!requestBytes) { stream.close().catch(() => {}); return; }
+
+      const req = cborDecode(requestBytes) as Record<string, unknown>;
+      if (req["type"] !== "seal_submission") {
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "error", reason: "unknown_frame_type" })));
+        await stream.close();
+        return;
+      }
+
+      const sessionId = req["session_id"] as Uint8Array;
+      const leaves = req["leaves"] as import("./directory-types.js").RelaySealData["leaves"];
+      const merkle_root = req["merkle_root"] as Uint8Array;
+      const seq_count = req["seq_count"] as number;
+
+      if (!sessionId || !leaves || !merkle_root) {
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "error", reason: "missing_fields" })));
+        await stream.close();
+        return;
+      }
+
+      const result = await this.processSeal(sessionId instanceof Uint8Array ? sessionId : new Uint8Array(sessionId as unknown as ArrayBuffer), {
+        leaves,
+        merkle_root: merkle_root instanceof Uint8Array ? merkle_root : new Uint8Array(merkle_root as unknown as ArrayBuffer),
+        seq_count,
+      });
+
+      if (result.ok) {
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "seal_received" })));
+      } else {
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "error", reason: result.reason })));
+      }
+      await stream.close();
+    } catch {
+      stream.close().catch(() => {});
+    }
   }
 
   // ─── FROST stream handler ────────────────────────────────────────────────────

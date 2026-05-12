@@ -10,6 +10,9 @@
  *   CELLO_DIRECTORY_PUBKEY            — hex-encoded Ed25519 directory public key (required)
  *                                        The relay authenticates directory admin frames against this key.
  *                                        In NODE_ENV=test, a random ephemeral key is used if absent.
+ *   CELLO_DIRECTORY_MULTIADDR         — directory multiaddr for seal_submission callbacks (optional)
+ *                                        Format: /ip4/<host>/tcp/<port>/p2p/<peer-id>
+ *                                        If set, relay dials directory when bilateral SEAL is detected.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -17,8 +20,10 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { FileKeyProvider, generateKeypair } from "@cello/crypto";
 import { createRelayNode } from "../index.js";
+import { NetworkDirectoryAdapter } from "../network-directory-adapter.js";
 
 const keyPath = process.env["CELLO_RELAY_KEY_FILE"] ?? join(homedir(), ".cello", "relay-key");
+const directoryMultiaddr = process.env["CELLO_DIRECTORY_MULTIADDR"];
 const transportKeyPath = process.env["CELLO_RELAY_TRANSPORT_KEY_FILE"] ?? join(homedir(), ".cello", "relay-transport-key");
 const listenAddr = process.env["CELLO_RELAY_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/tcp/4001";
 const dirPubkeyHex = process.env["CELLO_DIRECTORY_PUBKEY"];
@@ -69,6 +74,23 @@ try {
   process.stdout.write(`cello-relay: generated new transport key at ${transportKeyPath}\n`);
 }
 
+// Wire NetworkDirectoryAdapter if CELLO_DIRECTORY_MULTIADDR is set
+let directoryAdapter: NetworkDirectoryAdapter | undefined;
+if (directoryMultiaddr) {
+  const parts = directoryMultiaddr.split("/");
+  const p2pIndex = parts.findIndex((p) => p === "p2p");
+  const dirPeerId = p2pIndex !== -1 ? parts[p2pIndex + 1] : null;
+  if (!dirPeerId) {
+    process.stderr.write("cello-relay: CELLO_DIRECTORY_MULTIADDR must include /p2p/<peer-id>\n");
+    process.exit(1);
+  }
+  directoryAdapter = new NetworkDirectoryAdapter({
+    directoryPeerId: dirPeerId,
+    directoryMultiaddrs: [directoryMultiaddr],
+  });
+  process.stderr.write(`cello-relay: directory seal callbacks → ${directoryMultiaddr}\n`);
+}
+
 let relayResult: Awaited<ReturnType<typeof createRelayNode>>;
 try {
   relayResult = await createRelayNode({
@@ -76,11 +98,17 @@ try {
     directoryPubkey: dirPubkey,
     keyProvider: kp,
     transportPrivateKey,
+    directory: directoryAdapter,
   });
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
   process.stderr.write(`cello-relay: startup error: ${msg}\n`);
   process.exit(1);
+}
+
+// Wire node into adapter after relay starts
+if (directoryAdapter) {
+  directoryAdapter.connect(relayResult.node);
 }
 
 for (const addr of relayResult.node.listenAddresses()) {
