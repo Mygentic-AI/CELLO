@@ -7,6 +7,8 @@
  *
  * AC-007: session establishes, both agents communicate, session seals — all without
  *         any in-process wiring between directory and relay.
+ *
+ * M3: connection must be established before session initiation (SESSION-006 gate).
  */
 
 import {
@@ -17,6 +19,7 @@ import {
   expect,
   beforeEach,
   afterEach,
+  waitFor,
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
 import { clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
@@ -45,17 +48,36 @@ describe("CELLO-NODE-004: AC-007 — full session flow over /cello/directory-rel
   });
 
   it("session establishes, agents communicate, session seals — directory and relay communicate only via network protocol", async () => {
-    const fix = await createSessionFixture({ networkRelay: true, withMcp: true });
-    fix.directory.registerThresholdSigner(fix.agentA.pubkeyHex, fix.signerA);
+    const fix = await createSessionFixture({
+      networkRelay: true,
+      withMcp: true,
+      register: true,
+      policyB: { mode: "open", review_mode: "deterministic", requirements: [] },
+    });
     scope.addCleanup(fix.stopAll);
 
-    // B awaits a session in the background
+    // ── Step 1: Establish a connection A→B (M3 gate requirement) ──────────────
+    const connResult = parseResult(
+      await fix.agentA.mcp!.callTool({
+        name: "cello_request_connection",
+        arguments: { target_pubkey: fix.agentB.pubkeyHex },
+      }),
+    ) as Record<string, unknown>;
+    expect(connResult.result).toBe("accepted");
+
+    // Wait for B to register the connection locally before A initiates the session
+    await waitFor(
+      () => fix.agentB.client.listConnections().length > 0,
+      { timeout: 5_000, interval: 50 },
+    );
+
+    // ── Step 2: B awaits a session in the background ───────────────────────────
     const bSessionPromise = fix.agentB.mcp!.callTool({
       name: "cello_await_session",
       arguments: { timeout_ms: 20_000 },
     });
 
-    // A initiates session with B
+    // ── Step 3: A initiates session with B ────────────────────────────────────
     // This triggers: directory calls NetworkRelayAdapter.recordAssignment → relay stores session
     const initiateResult = await fix.agentA.mcp!.callTool({
       name: "cello_initiate_session",

@@ -328,6 +328,12 @@ class CelloClientImpl implements CelloClient {
   // Allows non-initiator auto-response to know when its own SEAL echo confirms the seal
   readonly #sealInitiatedSessions = new Set<string>();
 
+  // session_id_hex: set when THIS client received seal_verified and ran the FROST ceremony.
+  // Guards #handleFrostSealed to use #myPrimaryPubkey for verification (anti-substitution).
+  // Distinct from #sealInitiatedSessions: a concurrent-close counterparty can call
+  // initiateSessionSeal but is NOT the FROST ceremony participant.
+  readonly #frostCeremonyParticipant = new Set<string>();
+
   // SESSION-005: session_id_hex → resolve fn for seal-frost-timeout Promise
   // The Promise resolves when session_sealed arrives; if it times out first, seal_type = 'bilateral'.
   readonly #sealFrostResolvers = new Map<string, () => void>();
@@ -555,9 +561,11 @@ class CelloClientImpl implements CelloClient {
     if (!this.#myPubkeyHex) {
       this.#myPubkeyHex = myPubkeyHex;
     }
-    // M-001: mark as seal-initiated so #handleFrostSealed uses own primary_pubkey for verification
+    // M-001: mark as seal-initiated and FROST ceremony participant so #handleFrostSealed
+    // uses own primary_pubkey for verification.
     if (opts?.isInitiator) {
       this.#sealInitiatedSessions.add(sessionIdHex);
+      this.#frostCeremonyParticipant.add(sessionIdHex);
     }
   }
 
@@ -1377,11 +1385,14 @@ class CelloClientImpl implements CelloClient {
 
     const tbs = buildSealTbs(sessionId, sealedRoot, leafCount, resolvedCloseTimestamp);
 
-    // Determine verification key: use own primary_pubkey if we are the initiator,
-    // otherwise use the signer_pubkey from the frame (initiator's primary_pubkey).
-    const isInitiator = this.#sealInitiatedSessions.has(sessionIdHex);
+    // Determine verification key.
+    // Use #myPrimaryPubkey only if this client ran the FROST ceremony (received seal_verified).
+    // #frostCeremonyParticipant is set by #handleSealVerified before the ceremony runs —
+    // a concurrent-close counterparty (in #sealInitiatedSessions but NOT #frostCeremonyParticipant)
+    // must use signerPubkey from the frame (the actual initiator's key).
+    const isFrostInitiator = this.#frostCeremonyParticipant.has(sessionIdHex);
     let verifyKey: Uint8Array;
-    if (isInitiator) {
+    if (isFrostInitiator) {
       if (!this.#myPrimaryPubkey) {
         console.warn(`[cello-client] no primary_pubkey set on initiator for session ${sessionIdHex}`);
         return;
@@ -1443,6 +1454,9 @@ class CelloClientImpl implements CelloClient {
     // Store for #handleFrostSealed so it can use the authoritative leafCount/timestamp
     // even if local_tree_leaves is incomplete due to a desync race.
     this.#sealVerifiedData.set(sessionIdHex, { leafCount, timestamp });
+    // Mark this client as the FROST ceremony participant so #handleFrostSealed uses
+    // #myPrimaryPubkey for verification (anti-substitution guard).
+    this.#frostCeremonyParticipant.add(sessionIdHex);
 
     const tbs = buildSealTbs(sessionId, sealedRoot, leafCount, timestamp);
 
@@ -1555,21 +1569,22 @@ class CelloClientImpl implements CelloClient {
 
     if (!this.#thresholdSigner) return;
 
-    // For deferred seals, leaf_count may not be in the session_frost_sealed frame.
-    // Use local_tree_leaves count as fallback.
-    const leafCount = session.local_tree_leaves.length;
+    // Prefer stored sealVerifiedData leafCount (same as #handleFrostSealed) so verification
+    // uses the count from the FROST ceremony even if local_tree_leaves is incomplete.
+    const sealVerifiedEntry = this.#sealVerifiedData.get(sessionIdHex);
+    const leafCount = sealVerifiedEntry?.leafCount ?? session.local_tree_leaves.length;
     // M-003: close_timestamp must be set (stored during bilateral fallback from seal_verified).
     // Without it we cannot reconstruct the exact TBS and verification would be unsound.
-    const closeTimestamp = session.close_timestamp;
+    const closeTimestamp = session.close_timestamp ?? sealVerifiedEntry?.timestamp;
     if (closeTimestamp === undefined) {
       console.warn(`[cello-client] session_frost_sealed: no close_timestamp for ${sessionIdHex}, cannot verify TBS`);
       return;
     }
     const tbs = buildSealTbs(sessionId, sealedRoot, leafCount, closeTimestamp);
 
-    const isInitiator = this.#sealInitiatedSessions.has(sessionIdHex);
+    const isFrostInitiator = this.#frostCeremonyParticipant.has(sessionIdHex);
     let verifyKey: Uint8Array;
-    if (isInitiator) {
+    if (isFrostInitiator) {
       if (!this.#myPrimaryPubkey) return;
       verifyKey = this.#myPrimaryPubkey;
     } else {
@@ -1606,6 +1621,7 @@ class CelloClientImpl implements CelloClient {
     this.#sessionMessageQueues.delete(sessionIdHex);
     this.#outboundQueues.delete(sessionIdHex);
     this.#sealInitiatedSessions.delete(sessionIdHex);
+    this.#frostCeremonyParticipant.delete(sessionIdHex);
     // Resolve seal-frost-timeout waiter so initiateSessionSeal doesn't hang
     this.#sealFrostResolvers.get(sessionIdHex)?.();
     this.#sealFrostResolvers.delete(sessionIdHex);
@@ -2472,6 +2488,8 @@ class CelloClientImpl implements CelloClient {
       // Store the threshold signer so ceremony_request frames can be handled.
       // The signer holds the client's local FROST share and the directory as a stub.
       this.#thresholdSigner = dkgResult.signer;
+      // SESSION-005: update primary_pubkey so seal verification uses the DKG-derived key.
+      this.#myPrimaryPubkey = new Uint8Array(dkgResult.primaryPubkey);
     } catch {
       return { error: "dkg_failed" };
     }

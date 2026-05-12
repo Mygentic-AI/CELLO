@@ -34,20 +34,10 @@ import {
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
 import { generateKeypair } from "@cello/crypto";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { createSessionFixture } from "../session-fixture.js";
 import type { SessionFixtureResult } from "../session-fixture.js";
 
 setupV3Tests();
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function parseResult(result: Awaited<ReturnType<Client["callTool"]>>): unknown {
-  const text = (result.content as Array<{ type: string; text: string }>)
-    .find((c) => c.type === "text")?.text;
-  if (!text) throw new Error("No text content in tool result");
-  return JSON.parse(text);
-}
 
 /**
  * Register threshold signers for both A and B on the shared directory.
@@ -65,50 +55,11 @@ let scope: TestScope;
 beforeEach(() => { scope = createTestScope(); });
 afterEach(() => scope.run(async () => {}));
 
-// ─── AC-004: real directory signaling protocol exercised ──────────────────────
-
-describe("AC-004: session_request observable on directory inbound stream; real signaling protocol", () => {
-  it("AC-004: A calls cello_initiate_session; session_request frame flows through real /cello/signaling/1.0.0; B receives notification; session established end-to-end", async () => {
-    const fix = await createSessionFixture({ withMcp: true });
-    fix.directory.registerThresholdSigner(fix.agentA.pubkeyHex, fix.signerA);
-
-    scope.addCleanup(fix.stopAll);
-
-    const bSessionPromise = fix.agentB.mcp!.callTool({
-      name: "cello_await_session",
-      arguments: { timeout_ms: 15_000 },
-    });
-
-    const aResult = parseResult(
-      await fix.agentA.mcp!.callTool({
-        name: "cello_initiate_session",
-        arguments: { target_pubkey: fix.agentB.pubkeyHex },
-      })
-    ) as Record<string, unknown>;
-
-    expect(aResult.ok).toBe(true);
-    const sessionId = aResult.session_id as string;
-    expect(sessionId).toMatch(/^[0-9a-f]{32}$/);
-
-    const bResult = parseResult(await bSessionPromise) as {
-      type: string;
-      session_id: string;
-      genesis_prev_root: string;
-    };
-    expect(bResult.type).toBe("new_session");
-    expect(bResult.session_id).toBe(sessionId);
-    expect(bResult.genesis_prev_root).toBe(aResult.genesis_prev_root);
-
-    await waitFor(
-      () => fix.agentB.notifications!.some((n) => n.method === "notifications/claude/channel"),
-      { timeout: 5_000 }
-    );
-    const notif = fix.agentB.notifications!.find((n) => n.method === "notifications/claude/channel")!;
-    const params = notif.params as Record<string, unknown>;
-    expect(params.type).toBe("cello_session_request");
-    expect(params.from).toBe(fix.agentA.pubkeyHex);
-  }, 25_000);
-});
+// AC-004 (cello_initiate_session via MCP without connection) was removed in M3:
+// the MCP gate requires an established connection before initiating a session.
+// The signaling wire protocol is exercised by every other test in this file that
+// calls client.initiateSession() directly. The cello_session_request notification
+// on B is covered by mcp-002.test.ts AC-002-notif.
 
 // ─── H-001 (AC-006): simultaneous bidirectional initiation ───────────────────
 
