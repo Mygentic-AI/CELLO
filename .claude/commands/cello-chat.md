@@ -16,53 +16,39 @@ Three roles:
 
 # Path 1: Node Operator
 
+**Startup order matters: relay first, then directory.** The directory requires the relay's multiaddr at startup (`CELLO_RELAY_MULTIADDR` is mandatory and the process exits without it). The relay does not connect to the directory at startup — it only needs the directory's pubkey to authenticate admin frames, which it reads from a stable key file.
+
 ## Step 0 — Derive the directory pubkey
 
-The relay needs the directory's Ed25519 pubkey at startup to authenticate admin frames. Derive it from the directory's key file:
+The relay authenticates directory admin frames against the directory's Ed25519 pubkey. Since the directory key is persisted at `~/.cello/directory-key`, you can derive the pubkey before starting anything:
 
 ```bash
+cd /Users/andrep/Documents/code/trustless-cello
 node -e "
-const fs = require('fs');
-const raw = fs.readFileSync('/Users/andrep/.cello/directory-key');
-// FileKeyProvider format: first 32 bytes = private key seed, no prefix
-const seed = raw.slice(0, 32);
-const { createPrivateKey, createPublicKey } = require('crypto');
-const priv = createPrivateKey({ key: seed, format: 'der', type: 'pkcs8' });
-// Actually just read the stored pubkey if present at offset 32
-console.log('raw length:', raw.length, 'hex:', raw.toString('hex').slice(0, 32) + '...');
-"
+import('@cello/crypto').then(({ FileKeyProvider }) =>
+  FileKeyProvider.load(process.env.HOME + '/.cello/directory-key')
+    .then(kp => kp.getPublicKey())
+    .then(pk => console.log('CELLO_DIRECTORY_PUBKEY=' + Buffer.from(pk).toString('hex')))
+);"
 ```
 
-**Simpler — just start the directory first (Step 2), read its pubkey from stdout, then start the relay with it (Step 1 can be done after Step 2).** The directory always prints its pubkey on startup:
-```
-cello-directory pubkey: <64 hex chars>
-```
+If the key file doesn't exist yet, start the directory once (without `CELLO_RELAY_MULTIADDR`) just to generate it — it will print the pubkey and then exit with an error about the missing relay addr. That's fine; copy the pubkey line and proceed.
 
-## Step 1 — Start the directory
+Alternatively: start the relay without `CELLO_DIRECTORY_PUBKEY` in `NODE_ENV=test` — the relay accepts a random ephemeral key in test mode and prints a warning. Then start the directory, copy its pubkey, restart the relay with the real pubkey.
+
+## Step 1 — Start the relay
+
+Terminal 1:
 
 ```bash
-NODE_ENV=test pnpm --filter @cello/directory run start
-```
-
-The directory prints:
-```
-cello-directory pubkey: <64 hex chars>    ← copy this
-cello-directory listening on /ip4/127.0.0.1/tcp/4000/p2p/12D3KooW...   ← copy full multiaddr
-```
-
-**Copy both.** If port 4000 is in use: `CELLO_DIRECTORY_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4002 NODE_ENV=test pnpm ...`
-
-The directory's peer ID is stable as long as `~/.cello/directory-key` exists.
-
-**Important: every directory restart clears all registrations.** After restarting, all agents must re-register before initiating sessions.
-
-## Step 2 — Start the relay
-
-```bash
-CELLO_DIRECTORY_PUBKEY=<64-hex-chars-from-step-1> \
+cd /Users/andrep/Documents/code/trustless-cello
+CELLO_DIRECTORY_PUBKEY=<64-hex-from-step-0> \
 CELLO_DIRECTORY_MULTIADDR=/ip4/127.0.0.1/tcp/4000/p2p/12D3KooW... \
-NODE_ENV=test pnpm --filter @cello/relay run start
+NODE_ENV=test \
+pnpm --filter @cello/relay run start
 ```
+
+Replace `CELLO_DIRECTORY_MULTIADDR` with the directory's full multiaddr (which you know in advance because the directory peer ID is stable — it's printed on the directory's first-ever start and doesn't change as long as `~/.cello/directory-key` and `~/.cello/directory-transport-key` exist).
 
 The relay prints:
 ```
@@ -71,15 +57,45 @@ cello-relay listening on /ip4/127.0.0.1/tcp/4001/p2p/12D3KooW...   ← copy full
 cello-relay peer-id: 12D3KooW...
 ```
 
-Both `CELLO_DIRECTORY_PUBKEY` and `CELLO_DIRECTORY_MULTIADDR` are required:
-- `CELLO_DIRECTORY_PUBKEY` — relay authenticates directory admin frames against this key
-- `CELLO_DIRECTORY_MULTIADDR` — relay dials directory to submit FROST seal proofs
+**Copy the full multiaddr** (`/ip4/127.0.0.1/tcp/4001/p2p/12D3KooW...`). You need it for Step 2.
+
+Both relay env vars serve different purposes:
+- `CELLO_DIRECTORY_PUBKEY` — relay authenticates incoming directory admin frames against this key
+- `CELLO_DIRECTORY_MULTIADDR` — relay dials directory when bilateral SEAL is detected, to submit the FROST seal proof
+
+In `NODE_ENV=test`, if `CELLO_DIRECTORY_PUBKEY` is absent the relay uses an ephemeral key and prints a warning — only acceptable for testing when seal authentication doesn't matter. Without `CELLO_DIRECTORY_MULTIADDR` the relay starts fine but all seals will be `seal_deferred` (relay can't call back to directory).
+
+## Step 2 — Start the directory
+
+Terminal 2:
+
+```bash
+cd /Users/andrep/Documents/code/trustless-cello
+CELLO_RELAY_MULTIADDR=/ip4/127.0.0.1/tcp/4001/p2p/12D3KooW... \
+NODE_ENV=test \
+pnpm --filter @cello/directory run start
+```
+
+Replace the multiaddr with what the relay printed in Step 1.
+
+The directory prints:
+```
+cello-directory pubkey: <64 hex chars>    ← matches what you used in Step 1
+cello-directory listening on /ip4/127.0.0.1/tcp/4000/p2p/12D3KooW...   ← copy full multiaddr
+cello-directory peer-id: 12D3KooW...
+```
+
+If port 4000 is in use: prepend `CELLO_DIRECTORY_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4002`.
+
+The directory's peer ID is **stable** as long as `~/.cello/directory-key` and `~/.cello/directory-transport-key` exist. If those files are present, the peer ID is the same across restarts — you only need to update `~/.claude.json` once.
+
+**Important: every directory restart clears all in-memory registrations.** After restarting, all agents must call `cello_register()` and re-establish connections before initiating sessions.
 
 ## Step 3 — Update ~/.claude.json with directory multiaddr
 
-**This is `~/.claude.json`, not `~/.claude/settings.json`.** The JSON file Claude Code actually reads for MCP server config is `~/.claude.json`.
+**This is `~/.claude.json`, not `~/.claude/settings.json`.** Claude Code reads MCP server config from `~/.claude.json`.
 
-Find the `cello` entry and update `CELLO_DIRECTORY_MULTIADDR`:
+Find the `cello` entry and set `CELLO_DIRECTORY_MULTIADDR` to the directory's multiaddr from Step 2:
 
 ```json
 "mcpServers": {
@@ -96,22 +112,15 @@ Find the `cello` entry and update `CELLO_DIRECTORY_MULTIADDR`:
 
 **Do NOT include `CELLO_KEY_FILE` in the env block.** If it's there, both agents use the same key (Agent A's). Agent B must set `CELLO_KEY_FILE` via shell export before launching Claude Code — the shell export only works if `~/.claude.json` doesn't override it.
 
-After saving, rebuild the MCP binary if source has changed:
+After saving, rebuild the MCP binary if source has changed since last build:
 ```bash
+cd /Users/andrep/Documents/code/trustless-cello
 pnpm --filter @cello/adapter-claude-code run build
 ```
 
 ## Step 4 — Prepare Agent B's identity
 
-Agent B needs a separate key file. If it doesn't exist yet:
-```bash
-NODE_ENV=test node -e "
-const { FileKeyProvider } = require('/Users/andrep/Documents/code/trustless-cello/packages/crypto/dist/index.js');
-FileKeyProvider.generate('/Users/andrep/.cello/key-agent-b').then(kp => kp.getPublicKey()).then(pk => console.log('Agent B pubkey:', Buffer.from(pk).toString('hex')));
-"
-```
-
-Or just let Agent B start with `CELLO_KEY_FILE` set — it will auto-generate if missing.
+Agent B needs a separate key file. If `~/.cello/key-agent-b` doesn't exist yet, it will be auto-generated when Agent B first starts with `CELLO_KEY_FILE` set. Nothing to do here unless you want to pre-generate it.
 
 ## Step 5 — Start agents
 
@@ -126,27 +135,30 @@ export CELLO_KEY_FILE=/Users/andrep/.cello/key-agent-b
 claude
 ```
 
-The shell export must be in place before Claude Code starts — the MCP server reads env at process startup.
+The shell export must be set before `claude` is invoked — the MCP server process inherits env at startup and there's no way to change it after.
+
+Both agents must start their Claude Code sessions *after* `~/.claude.json` is updated. The MCP server bootstraps FROST shares by dialing `CELLO_DIRECTORY_MULTIADDR` at startup — a stale address means FROST fails silently and `cello_register` will error.
 
 ## Step 6 — Report ready
 
 ```
 Infrastructure ready.
-Directory:  /ip4/127.0.0.1/tcp/4000/p2p/12D3KooW...  (pubkey: <64-hex>)
 Relay:      /ip4/127.0.0.1/tcp/4001/p2p/12D3KooW...
-~/.claude.json updated with current directory multiaddr.
-Agent B: export CELLO_KEY_FILE=/Users/andrep/.cello/key-agent-b, then start claude.
+Directory:  /ip4/127.0.0.1/tcp/4000/p2p/12D3KooW...  (pubkey: <64-hex>)
+~/.claude.json updated.
+Agent A: start claude normally.
+Agent B: export CELLO_KEY_FILE=/Users/andrep/.cello/key-agent-b && claude
 ```
 
 ## Step 7 — Monitor
 
-Watch both terminals for errors. Common events to expect:
-- `[AUTH]` — agent authenticated (normal)
-- `[REG]` — DKG ceremony (normal, ~50ms)
-- `[CONN]` — connection request/verdict (normal)
-- `[SESS]` — session assignment (normal)
+Watch both terminals. Expected log events:
+- `[AUTH]` — agent authenticated to directory (normal)
+- `[REG]` — DKG ceremony started/completed (normal, ~50ms)
+- `[CONN]` — connection request relayed to target (normal)
+- `[SESS]` — session assignment issued (normal)
 - `[SEAL]` — seal ceremony (normal, ~50ms)
-- `[REG] Pre-check failed: target_not_found` — Agent A called connect before B registered; tell A to retry
+- `[REG] Pre-check failed: target_not_found` — Agent A tried to connect before B registered; tell A to retry after B calls `cello_register`
 
 ---
 
