@@ -3,7 +3,7 @@ name: Onboarding Application Architecture
 type: discussion
 date: 2026-05-13 15:49
 topics: [onboarding, registration, whatsapp, telegram, baileys, OTP, state-machine, bot, deployment, testing, infrastructure, correlation-token, FROST, M6]
-description: Detailed architecture of the M6 onboarding application — a standalone service that owns the WhatsApp and Telegram registration surface. Covers the Baileys vs. official WhatsApp Business API decision, the verification-only bot model (bot does phone OTP + email only; agent self-registers via pre-authorization token), the registration state machine, both ceremony paths, the testing strategy for Baileys E2E, and deployment model implications driven by Baileys' persistent WebSocket requirement.
+description: Detailed architecture of the M6 onboarding application — a standalone service that owns the WhatsApp and Telegram registration surface. Covers the Baileys vs. official WhatsApp Business API decision, the verification-only bot model (bot does phone OTP + email only; agent self-registers via pre-authorization token), the registration state machine, both ceremony paths, the end-to-end testing strategy for both bot channels, and deployment model implications driven by Baileys' persistent WebSocket requirement.
 ---
 
 # Onboarding Application Architecture
@@ -245,7 +245,7 @@ The onboarding application is a product surface. Per the testing architecture es
 
 Telegram provides a production-equivalent test environment at `api.telegram.org/bot<token>/test`. Test bot tokens are separate from production tokens. The test environment persists its own state independently from production.
 
-The Telegram E2E test suite:
+The Telegram end-to-end test suite:
 - Creates a scripted "user" session using the Telegram test API.
 - Sends messages to the test bot instance.
 - Asserts on bot replies at each step of the flow.
@@ -276,7 +276,7 @@ The Telegram and WhatsApp codepaths are distinct. Testing one is not testing the
 
 ### Pre-M5 local testing
 
-Both bot test suites can be developed and validated during M6 against locally running CELLO infrastructure. The staging environment (M5) is not required for bot development or test authoring. It is required to make the tests CI-gated. The sequencing is: build and validate locally during M6, move to CI-gated in M5's staging environment.
+Both bot test suites can be developed and validated during M6 against locally running CELLO infrastructure. The staging environment is built in M5, which precedes M6 in the roadmap, so staging is available from day one of M6. The end-to-end test suites should be CI-gated against staging from the start of M6 work, not added afterward.
 
 ---
 
@@ -368,6 +368,15 @@ The current design assumes one bot per channel (one WhatsApp number, one Telegra
 
 **4. Abandoned registration cleanup.**
 The state machine has a 7-day idle timeout, after which the in-flight record is discarded. But what does "cleanup" mean in practice? If the phone number is partially registered (phone confirmed, email not yet confirmed), is the phone hash released? Can the same phone number start a new registration immediately, or must the 7-day window expire first? The current design doesn't specify the cleanup behavior in detail. This needs a concrete answer before the M6 stories are written.
+
+**5. Pre-authorization API transport: HTTP or libp2p.**
+The onboarding application calls the CELLO directory to obtain a pre-authorization token once phone and email are confirmed. The directory already has a libp2p transport layer for agent-to-directory communication (`/cello/register/1.0.0`). The question is whether the onboarding application should call the directory over a private HTTP/REST endpoint (simple, easy to firewall, consistent with how other internal services communicate) or establish its own authenticated libp2p connection and call a new protocol stream (consistent with CELLO's internal protocol conventions, but adds implementation complexity for what is a simple internal service call). The choice affects how the onboarding application authenticates to the directory and how the call is firewalled from the public internet.
+
+**6. Pre-authorization token consumption: on presentation or on success.**
+When the agent presents the pre-authorization token during the FROST DKG, the directory must mark the token consumed to prevent replay. The question is *when*: immediately on presentation (the token is burned as soon as the directory sees it, even if the DKG then fails), or on successful DKG completion only (token remains valid for retry if DKG fails mid-ceremony). Consuming on presentation is safer — no replay possible — but means that a transient DKG failure forces the operator back through the bot ceremony for a new token. Consuming on success allows DKG retries without re-verifying, but requires the directory to handle a narrow window where a presented-but-not-yet-consumed token could theoretically be raced. The correct choice depends on how often DKG failures are expected in practice and how painful re-verification would be for operators.
+
+**7. Monorepo placement.**
+The onboarding application is a standalone deployable, not a CELLO protocol component. It calls the directory's internal API, but it does not implement the CELLO protocol itself. Should it live in `packages/onboarding/` within the CELLO monorepo (convenient, shares tooling and CI, but blurs the line between protocol and product), or in a separate repository (cleaner separation, independent deploy cadence, but adds cross-repo overhead for developers who work across both)? The decision affects how the M6 stories are structured and whether the onboarding application's tests run in the same CI pipeline as the protocol tests.
 
 ---
 
