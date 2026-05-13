@@ -209,7 +209,7 @@ The portal-first path is used when the human operator begins at the web portal r
 
 **Step 3 — Correlation token received by bot.** Operator messages the onboarding bot, either including the correlation token directly in their first message or in response to a bot prompt. Bot recognizes the token format, validates it against the portal session (token is looked up in a shared store keyed by the token value), and retrieves the email confirmation from the portal session.
 
-**Step 4 — Phone OTP.** The phone acquisition step follows the channel-specific flow. On WhatsApp, the bot already has the phone number from the sender JID and sends the OTP immediately. On Telegram, the bot sends the `request_contact` button, receives the `message.contact` event, then sends the OTP via MTProto. The same retry and verification logic as the bot-first path applies.
+**Step 4 — Phone acquisition.** The channel-specific flow applies. On WhatsApp, the bot already has the phone number from the sender JID and sends the OTP immediately. On Telegram, the bot sends the `request_contact` button, receives the `message.contact` event, and verifies `contact.user_id == message.from.id` — phone confirmed with no OTP needed. The same retry logic as the bot-first path applies.
 
 **Step 5 onwards.** Identical to the shared tail of the bot-first path: email confirmed, pre-authorization token issued, bot delivers the token to the operator.
 
