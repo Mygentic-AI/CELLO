@@ -141,7 +141,68 @@ The Telegram and WhatsApp bot sandbox environments are also largely independent 
 
 ### The staging environment builds incrementally across M4–M7
 
-The staging environment is not a single deliverable that arrives fully formed at the end of M5. It grows as each milestone adds something deployable:
+The staging environment is not a single deliverable that arrives fully formed at the end of M5. It grows as each milestone adds something deployable. The full M7 target architecture looks like this — components are annotated with the milestone that brings them online:
+
+```
+                         CELLO STAGING ARCHITECTURE (full picture at M7)
+                         ================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  CI PIPELINE  (M5+)                                                         │
+  │                                                                             │
+  │  git push → unit tests → integration tests → deploy to staging → E2E suite │
+  └─────────────────────────────────────────────────────────────────────────────┘
+                                         │
+                                         ▼ deploy
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  AWS STAGING ENVIRONMENT                                                 │
+  │                                                                          │
+  │  ┌─────────────────────┐   ┌──────────────────────┐                     │
+  │  │  Directory Node     │   │  Relay Node           │  ← M4 (first       │
+  │  │  PostgreSQL (M4)    │   │  SQLCipher (M4)       │    persistent       │
+  │  │  /cello/signaling   │   │  /cello/relay         │    deploy)          │
+  │  │  /cello/frost       │   │  /cello/dir-relay     │                     │
+  │  └──────────┬──────────┘   └──────────┬────────────┘                     │
+  │             │                         │                                  │
+  │             └────────────┬────────────┘                                  │
+  │                          │ libp2p (TCP + WebSocket)                      │
+  │  ┌───────────────────────┼───────────────────────────────────────┐       │
+  │  │  PRODUCT SURFACES     │                                       │       │
+  │  │                       │                                       │       │
+  │  │  ┌────────────┐  ┌────┴────────┐  ┌──────────────────────┐   │       │
+  │  │  │ Telegram   │  │ WhatsApp    │  │ Web Portal           │   │       │
+  │  │  │ Bot (M6)   │  │ Bot (M6)    │  │ (M7)                 │   │       │
+  │  │  └─────┬──────┘  └─────┬───────┘  └──────────┬───────────┘   │       │
+  │  │        │               │                     │               │       │
+  │  │        └───────────────┴─────────────────────┘               │       │
+  │  │                        │ phone OTP / email OTP                │       │
+  │  │                        │ OAuth oracles (M7)                   │       │
+  │  │  ┌─────────────────────▼─────────────────────────────────┐   │       │
+  │  │  │  Trust Signal Oracles (M7)                            │   │       │
+  │  │  │  LinkedIn OAuth · GitHub OAuth · SIM scoring (Twilio) │   │       │
+  │  │  └───────────────────────────────────────────────────────┘   │       │
+  │  └───────────────────────────────────────────────────────────────┘       │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  E2E TEST RUNNERS (each tier added when its target surface ships)        │
+  │                                                                          │
+  │  agent-agent/      Two scripted Claude Code sessions (M4+)               │
+  │                    ↳ can run against local processes pre-M5              │
+  │                                                                          │
+  │  onboarding/       Telegram sandbox → staging directory (M6+)            │
+  │                    WhatsApp sandbox → staging directory (M6+)            │
+  │                    ↳ bot tests can be authored against local infra       │
+  │                      during M6; CI-gated once M5 staging exists          │
+  │                                                                          │
+  │  portal/           Playwright → staging portal (M7+)                     │
+  │                                                                          │
+  │  trust-signals/    OAuth sandbox → staging oracle → staging directory    │
+  │                    (M7+)                                                  │
+  │                                                                          │
+  │  cross-framework/  Claude Code × OpenClaw → staging (per adapter)        │
+  └──────────────────────────────────────────────────────────────────────────┘
+```
 
 **After M4 (Persistence):** The directory and relay can be deployed with durable storage for the first time. The first staging deploy is minimal — no public access, no bot integration, no portal — but it is a real persistent deployment. Agent-to-agent E2E tests can be pointed at it. The cross-machine integration test (deferred since M0) can finally run against something stable.
 
