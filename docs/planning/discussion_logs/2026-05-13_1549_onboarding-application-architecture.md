@@ -3,7 +3,7 @@ name: Onboarding Application Architecture
 type: discussion
 date: 2026-05-13 15:49
 topics: [onboarding, registration, whatsapp, telegram, baileys, OTP, state-machine, bot, deployment, testing, infrastructure, correlation-token, FROST, M6]
-description: Detailed architecture of the M6 onboarding application — a standalone service that owns the WhatsApp and Telegram registration surface. Covers the Baileys vs. official WhatsApp Business API decision, the registration state machine, both ceremony paths, the testing strategy for Baileys E2E, and deployment model implications driven by Baileys' persistent WebSocket requirement.
+description: Detailed architecture of the M6 onboarding application — a standalone service that owns the WhatsApp and Telegram registration surface. Covers the Baileys vs. official WhatsApp Business API decision, the verification-only bot model (bot does phone OTP + email only; agent self-registers via pre-authorization token), the registration state machine, both ceremony paths, the testing strategy for Baileys E2E, and deployment model implications driven by Baileys' persistent WebSocket requirement.
 ---
 
 # Onboarding Application Architecture
@@ -17,6 +17,8 @@ Before M6, "registration" means running `cello_register` via the MCP adapter. Th
 The onboarding application is **not** part of the directory. It is **not** part of the relay. It is its own deployable with its own codebase, its own process, and its own persistence for in-flight registration state. It speaks WhatsApp and Telegram inbound; it speaks to the CELLO directory via internal API outbound. The directory's FROST machinery does not change. The onboarding application is a product shell around the existing registration API.
 
 The architectural principle here matters: the directory's job is protocol and key material. The onboarding application's job is user experience. They should not know each other's implementation details.
+
+Critically, the onboarding application is **verification-only**. It proves a real human authorized a registration — via phone OTP and email confirmation — and issues a pre-authorization token as evidence. It does not generate K_local. It does not participate in FROST DKG. The agent does both of those things for itself.
 
 ---
 
@@ -70,6 +72,46 @@ The migration is a transport swap, not a redesign.
 
 ---
 
+## The Bot Is Verification-Only — The Agent Self-Registers
+
+### Why the bot must not participate in key generation
+
+The bot's unique capability is reaching a real human through a channel they own. That is the identity proof. Phone OTP confirms the human controls this phone number. Email verification confirms they control this email address. The bot's job ends there.
+
+K_local generation and DKG participation cannot be delegated to the onboarding application. The split-key security model only holds if K_local is generated inside the agent process and never leaves it. If the onboarding application generated K_local — even transiently — it would create a custody moment that violates the model. The entire security claim of CELLO rests on neither the directory nor any third party ever holding K_local. Generating it in the onboarding application, or in a browser, or anywhere other than the agent process is a fundamental compromise of that claim.
+
+The agent is the only process that should ever hold K_local. The agent must generate it and participate in DKG directly — which is exactly what `cello_register()` already does in M3.
+
+### The bridge: a pre-authorization token
+
+When both phone OTP and email verification are confirmed, the directory issues a **pre-authorization token** — a short-lived, single-use credential that proves the human verification ceremonies completed. The bot delivers this token to the operator via the bot conversation.
+
+The operator configures their agent with the token. The agent calls `cello_register(token)`, presenting it to the directory during the FROST DKG as proof of pre-authorization. The directory accepts the DKG because the token is valid. K_local is generated inside the agent process throughout. The onboarding application never touches it.
+
+### The resulting split
+
+```
+Bot side (human-facing)               Agent side (technical)
+─────────────────────────             ──────────────────────────────────
+Phone OTP → confirmed
+Email link → confirmed
+Directory issues pre-auth token
+Bot: "Your token: CELLO-XXXXX         Operator: CELLO_REGISTRATION_TOKEN=CELLO-XXXXX
+     Configure your agent with it."
+                                       Agent: cello_register("CELLO-XXXXX")
+                                       FROST DKG runs over libp2p
+                                       K_local generated inside agent process
+                                       Registration complete
+```
+
+### Why this is the right tradeoff
+
+The operator still has a manual step — pasting a token into agent config. But the audience for M6 is agent operators: people running Claude Code sessions or OpenClaw agents who are already doing technical setup. `CELLO_REGISTRATION_TOKEN=xxx` is the same UX as `ANTHROPIC_API_KEY=xxx`. It is a one-time step, not ongoing friction.
+
+The alternative — generating K_local in the onboarding application or in a browser and exporting it to the agent — trades a small UX rough edge for a genuine security compromise. The trust model is the product's core claim. Weakening it at the first onboarding step is the wrong foundation to build on.
+
+---
+
 ## The Registration State Machine
 
 Every in-flight registration is an instance of a state machine. The onboarding application creates a machine instance when it receives the first message from a new phone number, and it maintains the machine's state across restarts (the M4 persistence dependency).
@@ -108,18 +150,18 @@ AWAITING_EMAIL
 AWAITING_EMAIL_CONFIRM
   ↓  verification email sent; waiting for operator to click link
 EMAIL_CONFIRMED
-  ↓  email link clicked
-AWAITING_DKG
-  ↓  onboarding app calls directory registration API
-DKG_IN_PROGRESS
-  ↓  directory FROST DKG completes
-COMPLETE
+  ↓  email link clicked; directory issues pre-authorization token
+PRE_AUTH_TOKEN_ISSUED
+  ↓  bot delivers token to operator; state machine ends here
 ```
+
+The onboarding application's responsibility ends at `PRE_AUTH_TOKEN_ISSUED`. The FROST DKG happens later, inside the agent process, initiated by the operator. The onboarding application never knows it happened. The directory knows because it validates the pre-authorization token when the agent presents it during DKG.
 
 Some states have timeout-driven transitions:
 - `AWAITING_CONTACT` (Telegram): if the user does not tap the contact button within 10 minutes, re-send the prompt.
 - `AWAITING_OTP`: OTP expires after 10 minutes. Expired → `AWAITING_OTP` reset (prompt to request a new OTP). Max 3 attempts before requiring a new OTP.
 - `AWAITING_EMAIL_CONFIRM`: email link expires after 24 hours. Expired → `AWAITING_EMAIL` (prompt to re-provide email).
+- `PRE_AUTH_TOKEN_ISSUED`: the token itself has a TTL (e.g. 24 hours) enforced by the directory. After expiry the operator must restart from the beginning — the phone and email ceremonies must be repeated because the authorization lapsed.
 - Any state: if the machine is idle for 7 days (configurable), the in-flight record is discarded and the phone number is eligible to start a new registration.
 
 The state machine also handles the portal-first entry point. When a portal-first correlation token is presented via bot message, the machine is initialized from `EMAIL_CONFIRMED` rather than `INITIAL` — the email ceremony was already completed in the portal, so only the phone acquisition and OTP steps remain.
@@ -150,11 +192,11 @@ This is the most common path for autonomous agents. The phone acquisition step d
 
 **Email step — Email provided.** Operator replies with an email address. Bot sends a verification link to that address (via SES or equivalent) and asks the operator to click it.
 
-**Email confirmed.** Operator clicks the link in their email. The link contains a one-time token that the onboarding application's web endpoint verifies. On success, the machine transitions to `EMAIL_CONFIRMED`.
+**Email confirmed.** Operator clicks the link in their email. The link contains a one-time token that the onboarding application's web endpoint verifies. On success, the machine transitions to `EMAIL_CONFIRMED`. The directory issues a pre-authorization token.
 
-**Key generation.** The onboarding application calls the CELLO directory's registration API: phone hash + email domain. The directory runs the FROST DKG ceremony — the agent generates K_local locally; the directory distributes K_server shares across directory nodes. This step is opaque to the operator. It happens in the background.
+**Token delivered.** Bot sends a message to the operator with the pre-authorization token and instructions: configure your agent with this token and call `cello_register`. The bot's job is done. The onboarding application's state machine reaches `PRE_AUTH_TOKEN_ISSUED` and stops.
 
-**Confirmation.** Bot sends a confirmation message containing the agent's CELLO pseudonym and a link to the portal where the operator can complete their trust profile and configure connection policy. Registration is complete. The agent is immediately online.
+**Agent self-registers (out of band).** The operator sets the token in their agent configuration. The agent calls `cello_register(token)`. The FROST DKG runs over libp2p between the agent and the directory nodes — K_local is generated inside the agent process, K_server shares are distributed across directory nodes. The directory validates the pre-authorization token during this ceremony and marks it consumed. The onboarding application is not involved. The agent is now registered and immediately online.
 
 ---
 
@@ -170,9 +212,9 @@ The portal-first path is used when the human operator begins at the web portal r
 
 **Step 4 — Phone OTP.** The phone acquisition step follows the channel-specific flow. On WhatsApp, the bot already has the phone number from the sender JID and sends the OTP immediately. On Telegram, the bot sends the `request_contact` button, receives the `message.contact` event, then sends the OTP via MTProto. The same retry and verification logic as the bot-first path applies.
 
-**Step 5 onwards.** Identical to steps 6–7 of the bot-first path.
+**Step 5 onwards.** Identical to the shared tail of the bot-first path: email confirmed, pre-authorization token issued, bot delivers the token to the operator.
 
-The two paths are not two implementations. They are two entry points into the same state machine. In both cases the state machine ends in `EMAIL_CONFIRMED + PHONE_CONFIRMED` before calling the directory API. The difference is only in the order of arrival and the surface through which each ceremony was completed.
+The two paths are not two implementations. They are two entry points into the same state machine. In both cases the state machine ends at `PRE_AUTH_TOKEN_ISSUED`. The difference is only in the order of arrival and the surface through which each ceremony was completed. The agent self-registers via `cello_register(token)` in both cases.
 
 ---
 
@@ -190,7 +232,7 @@ The two paths are not two implementations. They are two entry points into the sa
 
 **Correlation token store.** Stores active correlation tokens keyed by token value, mapping to their associated portal session ID and email confirmation status. TTL-backed (30 minutes). Shared between the portal backend and the onboarding application — either a shared Redis instance or a shared database table.
 
-**Directory client.** Calls the CELLO directory's internal registration API once both phone and email are confirmed. Passes phone hash and email domain. Receives the agent's pseudonym in response. Does not participate in FROST DKG directly — it triggers it via the directory API and receives the result.
+**Directory client.** Calls the CELLO directory's pre-authorization API once both phone and email are confirmed. Passes phone hash and email domain. Receives a pre-authorization token in response. Does not participate in FROST DKG and has no knowledge of K_local. The DKG happens later, between the agent and the directory, when the operator runs `cello_register(token)`.
 
 **Message sender.** Sends outbound messages via the appropriate channel adapter (Telegram Bot API or Baileys). Receives outbound commands from the state machine engine.
 
@@ -291,10 +333,25 @@ The onboarding application requires the following secrets, each managed in AWS S
                     └─────────────────────────────┼────────────────┘
                                                   ↓
                                          CELLO Directory API
-                                         (registration endpoint)
+                                     (pre-authorization endpoint)
+                                                  │
+                                         returns pre-auth token
+                                                  │
+                                         bot delivers token
+                                         to operator via chat
+                                                  │
+                              ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+                              (onboarding app is done at this point)
+                              ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                                  │
+                                    operator: cello_register(token)
+                                                  │
+                                         FROST DKG over libp2p
+                                    (agent ↔ directory, no bot involved)
+                                    K_local generated in agent process
 ```
 
-The onboarding application does not directly participate in FROST DKG. It triggers the directory's registration endpoint and relays the result back to the operator. The cryptographic ceremony is entirely inside the directory.
+The onboarding application never touches K_local. It obtains a pre-authorization token from the directory, delivers it to the operator, and stops. The FROST DKG runs later between the agent and the directory directly.
 
 ---
 
