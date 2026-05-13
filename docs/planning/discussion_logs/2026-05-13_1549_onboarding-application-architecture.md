@@ -1,24 +1,28 @@
 ---
-name: Onboarding Application Architecture
+name: CELLO Operations Agent Architecture
 type: discussion
 date: 2026-05-13 15:49
-topics: [onboarding, registration, whatsapp, telegram, baileys, OTP, state-machine, bot, deployment, testing, infrastructure, correlation-token, FROST, M6]
-description: Detailed architecture of the M6 onboarding application — a standalone service that owns the WhatsApp and Telegram registration surface. Covers the Baileys vs. official WhatsApp Business API decision, the verification-only bot model (bot does phone OTP + email only; agent self-registers via pre-authorization token), the registration state machine, both ceremony paths, the end-to-end testing strategy for both bot channels, and deployment model implications driven by Baileys' persistent WebSocket requirement.
+topics: [operations-agent, onboarding, registration, whatsapp, telegram, baileys, OTP, state-machine, bot, deployment, testing, infrastructure, correlation-token, FROST, M6, trust-signals, security-alerts]
+description: Architecture of the CELLO Operations Agent — the persistent out-of-band operator channel delivered via WhatsApp and Telegram. M6 ships the registration flow; subsequent milestones add trust signal notifications, security alerts (FALLBACK_CANARY, Not Me), key rotation nudges, and succession notifications. Covers Baileys vs. official WhatsApp Business API, the verification-only registration model (agent self-registers via pre-authorization token), the registration state machine, both ceremony paths, end-to-end testing strategy, and ECS deployment model.
 ---
 
-# Onboarding Application Architecture
+# CELLO Operations Agent Architecture
 
 ## What This Is and Why It Exists
 
-The onboarding application is M6 in the revised milestone sequence. It is the product surface that makes agent registration a real ceremony rather than a developer bootstrapping a CELLO process from a terminal.
+The CELLO Operations Agent is the human operator's persistent out-of-band channel — a WhatsApp and Telegram bot that mediates the full lifecycle of a CELLO agent, from initial registration through ongoing security alerts and trust signal management.
 
-Before M6, "registration" means running `cello_register` via the MCP adapter. That is not a product. The onboarding application changes that: it gives any operator (human or autonomous) a path from zero to a registered CELLO agent that requires no code, no terminal, and no knowledge of how FROST DKG works internally.
+It is M6 in the revised milestone sequence, where M6 ships the registration flow. But registration is the entry point, not the full scope. The Operations Agent is the channel through which the directory reaches the human operator independently of the agent process — which is the critical property. If the agent is compromised, a security alert must reach the operator via a channel the attacker does not control. That channel is the Operations Agent.
 
-The onboarding application is **not** part of the directory. It is **not** part of the relay. It is its own deployable with its own codebase, its own process, and its own persistence for in-flight registration state. It speaks WhatsApp and Telegram inbound; it speaks to the CELLO directory via internal API outbound. The directory's FROST machinery does not change. The onboarding application is a product shell around the existing registration API.
+**M6 scope (registration):** The Operations Agent makes agent registration a real ceremony rather than a developer bootstrapping a CELLO process from a terminal. Before M6, "registration" means running `cello_register` via the MCP adapter. That is not a product. The Operations Agent changes that: it gives any operator a path from zero to a registered CELLO agent that requires no code, no terminal, and no knowledge of how FROST DKG works internally.
 
-The architectural principle here matters: the directory's job is protocol and key material. The onboarding application's job is user experience. They should not know each other's implementation details.
+**Post-M6 scope (lifecycle operations):** Security alerts (`FALLBACK_CANARY`, anomaly alerts), emergency "Not Me" revocation, key rotation nudges, succession notifications, and trust signal delivery confirmations all flow through the Operations Agent. These are not onboarding functions — they are the reason the Operations Agent must be a persistent long-running service rather than a one-shot registration tool.
 
-Critically, the onboarding application is **verification-only**. It proves a real human authorized a registration — via phone OTP and email confirmation — and issues a pre-authorization token as evidence. It does not generate K_local. It does not participate in FROST DKG. The agent does both of those things for itself.
+The Operations Agent is **not** part of the directory. It is **not** part of the relay. It is its own deployable with its own codebase, its own process, and its own persistence. It speaks WhatsApp and Telegram inbound; it speaks to the CELLO directory via internal API outbound. The directory's FROST machinery does not change. The Operations Agent is a product shell around the directory's registration and notification APIs.
+
+The architectural principle here matters: the directory's job is protocol and key material. The Operations Agent's job is the human operator's experience. They should not know each other's implementation details.
+
+Critically, the registration path within the Operations Agent is **verification-only**. It proves a real human authorized a registration — via phone OTP and email confirmation — and issues a pre-authorization token as evidence. It does not generate K_local. It does not participate in FROST DKG. The agent does both of those things for itself.
 
 ---
 
@@ -28,7 +32,7 @@ Critically, the onboarding application is **verification-only**. It proves a rea
 
 Telegram provides a first-class developer experience for bots. The Telegram Bot API is a standard REST API over HTTPS, well-documented, and stable. Long-polling and webhooks are both viable. The test server at `api.telegram.org/bot<token>/test` provides a fully isolated sandbox environment with separate bot tokens and separate user accounts — the test server is never exposed to production traffic.
 
-For the onboarding application, Telegram is the lower-risk channel. There are no approval gates, no business verification requirements, no risk of the session expiring because a QR code wasn't refreshed. A bot token is a secret. Managing it is straightforward.
+For the Operations Agent, Telegram is the lower-risk channel. There are no approval gates, no business verification requirements, no risk of the session expiring because a QR code wasn't refreshed. A bot token is a secret. Managing it is straightforward.
 
 No special library is required beyond a standard Telegram Bot API HTTP client.
 
@@ -61,7 +65,7 @@ These are not blockers for M6, but they are risks that need to be understood bef
 
 ### The Migration Path
 
-The onboarding application's internal architecture treats the messaging channel as a transport layer. The state machine (see below) does not know whether it is receiving input from Baileys or the official API. When the business verification is complete and the official WhatsApp Business API is available:
+The Operations Agent's internal architecture treats the messaging channel as a transport layer. The state machine (see below) does not know whether it is receiving input from Baileys or the official API. When the business verification is complete and the official WhatsApp Business API is available:
 
 1. Replace the Baileys adapter with the official API adapter.
 2. The session persistence requirement goes away (the official API is stateless from the application's perspective — Meta manages the session).
@@ -78,7 +82,7 @@ The migration is a transport swap, not a redesign.
 
 The bot's unique capability is reaching a real human through a channel they own. That is the identity proof. Phone OTP confirms the human controls this phone number. Email verification confirms they control this email address. The bot's job ends there.
 
-K_local generation and DKG participation cannot be delegated to the onboarding application. The split-key security model only holds if K_local is generated inside the agent process and never leaves it. If the onboarding application generated K_local — even transiently — it would create a custody moment that violates the model. The entire security claim of CELLO rests on neither the directory nor any third party ever holding K_local. Generating it in the onboarding application, or in a browser, or anywhere other than the agent process is a fundamental compromise of that claim.
+K_local generation and DKG participation cannot be delegated to the Operations Agent. The split-key security model only holds if K_local is generated inside the agent process and never leaves it. If the Operations Agent generated K_local — even transiently — it would create a custody moment that violates the model. The entire security claim of CELLO rests on neither the directory nor any third party ever holding K_local. Generating it in the Operations Agent, or in a browser, or anywhere other than the agent process is a fundamental compromise of that claim.
 
 The agent is the only process that should ever hold K_local. The agent must generate it and participate in DKG directly — which is exactly what `cello_register()` already does in M3.
 
@@ -86,7 +90,7 @@ The agent is the only process that should ever hold K_local. The agent must gene
 
 When both phone OTP and email verification are confirmed, the directory issues a **pre-authorization token** — a short-lived, single-use credential that proves the human verification ceremonies completed. The bot delivers this token to the operator via the bot conversation.
 
-The operator configures their agent with the token. The agent calls `cello_register(token)`, presenting it to the directory during the FROST DKG as proof of pre-authorization. The directory accepts the DKG because the token is valid. K_local is generated inside the agent process throughout. The onboarding application never touches it.
+The operator configures their agent with the token. The agent calls `cello_register(token)`, presenting it to the directory during the FROST DKG as proof of pre-authorization. The directory accepts the DKG because the token is valid. K_local is generated inside the agent process throughout. The Operations Agent never touches it.
 
 ### The resulting split
 
@@ -108,13 +112,13 @@ Bot: "Your token: CELLO-XXXXX         Operator: CELLO_REGISTRATION_TOKEN=CELLO-X
 
 The operator still has a manual step — pasting a token into agent config. But the audience for M6 is agent operators: people running Claude Code sessions or OpenClaw agents who are already doing technical setup. `CELLO_REGISTRATION_TOKEN=xxx` is the same UX as `ANTHROPIC_API_KEY=xxx`. It is a one-time step, not ongoing friction.
 
-The alternative — generating K_local in the onboarding application or in a browser and exporting it to the agent — trades a small UX rough edge for a genuine security compromise. The trust model is the product's core claim. Weakening it at the first onboarding step is the wrong foundation to build on.
+The alternative — generating K_local in the Operations Agent or in a browser and exporting it to the agent — trades a small UX rough edge for a genuine security compromise. The trust model is the product's core claim. Weakening it at the first onboarding step is the wrong foundation to build on.
 
 ---
 
 ## The Registration State Machine
 
-Every in-flight registration is an instance of a state machine. The onboarding application creates a machine instance when it receives the first message from a new phone number, and it maintains the machine's state across restarts (the M4 persistence dependency).
+Every in-flight registration is an instance of a state machine. The Operations Agent creates a machine instance when it receives the first message from a new phone number, and it maintains the machine's state across restarts (the M4 persistence dependency).
 
 The two channels diverge during phone acquisition and converge at `PHONE_CONFIRMED`. After that the flow is identical regardless of channel.
 
@@ -156,7 +160,7 @@ PRE_AUTH_TOKEN_ISSUED
 
 The email ceremony is a 6-digit OTP delivered to the email address, replied to in the bot chat — the same channel the operator is already in. No web endpoint, no link click, no browser session. 15-minute expiry, max 3 attempts, rate-limited to 5 sends per hour per email address.
 
-The onboarding application's responsibility ends at `PRE_AUTH_TOKEN_ISSUED`. The FROST DKG happens later, inside the agent process, initiated by the operator. The onboarding application never knows it happened. The directory knows because it validates the pre-authorization token when the agent presents it during DKG.
+The Operations Agent's responsibility ends at `PRE_AUTH_TOKEN_ISSUED`. The FROST DKG happens later, inside the agent process, initiated by the operator. The Operations Agent never knows it happened. The directory knows because it validates the pre-authorization token when the agent presents it during DKG.
 
 Some states have timeout-driven transitions:
 - `AWAITING_CONTACT` (Telegram): if the user does not tap the contact button within 10 minutes, re-send the prompt.
@@ -193,9 +197,9 @@ This is the most common path for autonomous agents. The phone acquisition step d
 
 **Email OTP verified.** Operator replies with the code. If wrong, bot allows retries (up to 3 attempts before requiring a new send). If correct, the machine transitions to `EMAIL_CONFIRMED`. The directory issues a pre-authorization token.
 
-**Token delivered.** Bot sends a message to the operator with the pre-authorization token and instructions: configure your agent with this token and call `cello_register`. The bot's job is done. The onboarding application's state machine reaches `PRE_AUTH_TOKEN_ISSUED` and stops.
+**Token delivered.** Bot sends a message to the operator with the pre-authorization token and instructions: configure your agent with this token and call `cello_register`. The bot's job is done. The Operations Agent's state machine reaches `PRE_AUTH_TOKEN_ISSUED` and stops.
 
-**Agent self-registers (out of band).** The operator sets the token in their agent configuration. The agent calls `cello_register(token)`. The FROST DKG runs over libp2p between the agent and the directory nodes — K_local is generated inside the agent process, K_server shares are distributed across directory nodes. The directory validates the pre-authorization token during this ceremony and marks it consumed. The onboarding application is not involved. The agent is now registered and immediately online.
+**Agent self-registers (out of band).** The operator sets the token in their agent configuration. The agent calls `cello_register(token)`. The FROST DKG runs over libp2p between the agent and the directory nodes — K_local is generated inside the agent process, K_server shares are distributed across directory nodes. The directory validates the pre-authorization token during this ceremony and marks it consumed. The Operations Agent is not involved. The agent is now registered and immediately online.
 
 ---
 
@@ -219,7 +223,7 @@ The two paths are not two implementations. They are two entry points into the sa
 
 ## Internal Architecture
 
-### Services within the onboarding application
+### Services within the Operations Agent
 
 **Message router.** Receives inbound messages from the Telegram webhook and the Baileys event listener. Normalizes them to a common `InboundMessage` type (sender identifier, message text, channel). Dispatches to the state machine handler.
 
@@ -229,7 +233,7 @@ The two paths are not two implementations. They are two entry points into the sa
 
 **Email verification service.** Sends 6-digit OTP emails (via SES or equivalent). Tracks attempt counts and send rate per email address. Enforces 15-minute expiry and the 5-sends-per-hour rate limit. The entire ceremony stays within the bot conversation — no web endpoint, no link click.
 
-**Correlation token store.** Stores active correlation tokens keyed by token value, mapping to their associated portal session ID and email confirmation status. TTL-backed (30 minutes). Shared between the portal backend and the onboarding application — either a shared Redis instance or a shared database table.
+**Correlation token store.** Stores active correlation tokens keyed by token value, mapping to their associated portal session ID and email confirmation status. TTL-backed (30 minutes). Shared between the portal backend and the Operations Agent — either a shared Redis instance or a shared database table.
 
 **Directory client.** Calls the CELLO directory's pre-authorization API once both phone and email are confirmed. Passes phone hash and email domain. Receives a pre-authorization token in response. Does not participate in FROST DKG and has no knowledge of K_local. The DKG happens later, between the agent and the directory, when the operator runs `cello_register(token)`.
 
@@ -239,7 +243,7 @@ The two paths are not two implementations. They are two entry points into the sa
 
 ## Testing Strategy
 
-The onboarding application is a product surface. Per the testing architecture established in the infrastructure alignment discussion, it gets end-to-end tests that run as close gates — not as an afterthought.
+The Operations Agent is a product surface. Per the testing architecture established in the infrastructure alignment discussion, it gets end-to-end tests that run as close gates — not as an afterthought.
 
 ### Telegram end-to-end tests
 
@@ -282,19 +286,19 @@ Both bot test suites can be developed and validated during M6 against locally ru
 
 ## Deployment Model
 
-### Why the onboarding application is not a Lambda
+### Why the Operations Agent is not a Lambda
 
 The canonical CELLO deployment question when adding a new service is: Lambda or ECS?
 
 Lambda is the right answer when the service is stateless, request-scoped, and tolerant of cold starts. Most of CELLO's directory and relay functionality fits that shape.
 
-The onboarding application does not fit that shape because of Baileys. Baileys requires a **persistent WebSocket connection** to WhatsApp infrastructure. A Lambda function terminates between invocations. A new Lambda invocation cannot resume an existing Baileys session — it would need to re-establish the WebSocket and potentially re-authenticate, which is not reliable. More critically, Baileys session state (the auth credentials) must survive across the process lifecycle. Lambda's ephemeral execution model is incompatible with this.
+The Operations Agent does not fit that shape because of Baileys. Baileys requires a **persistent WebSocket connection** to WhatsApp infrastructure. A Lambda function terminates between invocations. A new Lambda invocation cannot resume an existing Baileys session — it would need to re-establish the WebSocket and potentially re-authenticate, which is not reliable. More critically, Baileys session state (the auth credentials) must survive across the process lifecycle. Lambda's ephemeral execution model is incompatible with this.
 
-The onboarding application must run as a **long-lived process** — an ECS task with a stable container instance and persistent volume for Baileys session state.
+The Operations Agent must run as a **long-lived process** — an ECS task with a stable container instance and persistent volume for Baileys session state.
 
-This decision applies even though the Telegram side of the onboarding application would work fine on Lambda. The simplest deployment is one deployable — one ECS task — rather than splitting Telegram to Lambda and WhatsApp to ECS. Operational simplicity favors keeping them together.
+This decision applies even though the Telegram side of the Operations Agent would work fine on Lambda. The simplest deployment is one deployable — one ECS task — rather than splitting Telegram to Lambda and WhatsApp to ECS. Operational simplicity favors keeping them together.
 
-When the onboarding application migrates from Baileys to the official WhatsApp Business API, this constraint disappears. The official API is stateless from the application's perspective. At that point, reconsideration of Lambda deployment is reasonable.
+When the Operations Agent migrates from Baileys to the official WhatsApp Business API, this constraint disappears. The official API is stateless from the application's perspective. At that point, reconsideration of Lambda deployment is reasonable.
 
 ### Baileys session persistence
 
@@ -305,7 +309,7 @@ Baileys session state must survive ECS task restarts. This means:
 
 ### Secrets
 
-The onboarding application requires the following secrets, each managed in AWS Secrets Manager:
+The Operations Agent requires the following secrets, each managed in AWS Secrets Manager:
 - Telegram bot token (production)
 - Telegram bot token (staging)
 - Baileys WhatsApp session credentials (rotated after initial QR code pairing)
@@ -316,7 +320,7 @@ The onboarding application requires the following secrets, each managed in AWS S
 
 ```
                     ┌──────────────────────────────────────────────┐
-                    │  Onboarding Application (ECS Task)           │
+                    │  CELLO Operations Agent (ECS Task)           │
                     │                                              │
   WhatsApp user ──→ │  Baileys WebSocket ──→ Message Router        │
   Telegram user ──→ │  Telegram Webhook  ──→    │                  │
@@ -339,7 +343,7 @@ The onboarding application requires the following secrets, each managed in AWS S
                                          to operator via chat
                                                   │
                               ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
-                              (onboarding app is done at this point)
+                              (registration flow complete at this point)
                               ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
                                                   │
                                     operator: cello_register(token)
@@ -349,7 +353,7 @@ The onboarding application requires the following secrets, each managed in AWS S
                                     K_local generated in agent process
 ```
 
-The onboarding application never touches K_local. It obtains a pre-authorization token from the directory, delivers it to the operator, and stops. The FROST DKG runs later between the agent and the directory directly.
+The Operations Agent never touches K_local. It obtains a pre-authorization token from the directory, delivers it to the operator, and stops. The FROST DKG runs later between the agent and the directory directly.
 
 ---
 
@@ -361,22 +365,22 @@ These are surfaced for a future design session. They are not resolved here.
 The Baileys → official API migration is a planned event, not an emergency. But there is no defined trigger. Is it a business milestone (Meta verification completed)? A usage threshold (N registrations/day)? A date-based commitment? The migration should be planned proactively rather than reactively. When does the team commit to starting the migration?
 
 **2. Email verification ownership.**
-The email verification flow described here lives in the onboarding application. The portal also sends email OTP (portal-first path). Should there be one email verification service shared by both, or two implementations? The portal-side email OTP is described in `frontend.md` with its own rate limits and behavior. Duplication is a maintenance risk. A shared email verification service (a library, or a separate microservice) would unify the behavior. What owns it?
+The email verification flow described here lives in the Operations Agent. The portal also sends email OTP (portal-first path). Should there be one email verification service shared by both, or two implementations? The portal-side email OTP is described in `frontend.md` with its own rate limits and behavior. Duplication is a maintenance risk. A shared email verification service (a library, or a separate microservice) would unify the behavior. What owns it?
 
-**3. Single bot or separate bots for new registration vs. existing agent management.**
-The current design assumes one bot per channel (one WhatsApp number, one Telegram handle) that handles all bot-mediated interactions — registration for new agents and, eventually, operational commands from existing agents (key rotation nudges, "Not Me" revocation, succession claim notifications, etc.). Are these better served by separate bots with distinct handles? A single bot means a single contact for users, but the surface grows over time. Two bots means clearer separation of concerns and less risk that an operational command is confused with a registration flow, but requires users to know about two bots.
+**3. Single bot handle or separate handles for registration vs. lifecycle operations.**
+The Operations Agent handles both registration (a one-time ceremony for new agents) and ongoing lifecycle operations (security alerts, "Not Me" revocation, key rotation nudges, trust signal confirmations, succession notifications). The question is whether these should share the same bot handle — one WhatsApp number and one Telegram handle for everything — or use separate handles with distinct identities. A single handle means one contact the operator remembers and configures once. Separate handles allow independent deployment and rollout of the lifecycle-operations surface without touching the registration flow, and reduce the blast radius if one surface is disrupted. The security alerting case adds urgency: if the registration bot is temporarily down, does that also silence `FALLBACK_CANARY` alerts? If yes, that is a serious availability concern for the compromise response path.
 
 **4. Abandoned registration cleanup.**
 The state machine has a 7-day idle timeout, after which the in-flight record is discarded. But what does "cleanup" mean in practice? If the phone number is partially registered (phone confirmed, email not yet confirmed), is the phone hash released? Can the same phone number start a new registration immediately, or must the 7-day window expire first? The current design doesn't specify the cleanup behavior in detail. This needs a concrete answer before the M6 stories are written.
 
 **5. Pre-authorization API transport: HTTP or libp2p.**
-The onboarding application calls the CELLO directory to obtain a pre-authorization token once phone and email are confirmed. The directory already has a libp2p transport layer for agent-to-directory communication (`/cello/register/1.0.0`). The question is whether the onboarding application should call the directory over a private HTTP/REST endpoint (simple, easy to firewall, consistent with how other internal services communicate) or establish its own authenticated libp2p connection and call a new protocol stream (consistent with CELLO's internal protocol conventions, but adds implementation complexity for what is a simple internal service call). The choice affects how the onboarding application authenticates to the directory and how the call is firewalled from the public internet.
+The Operations Agent calls the CELLO directory to obtain a pre-authorization token once phone and email are confirmed. The directory already has a libp2p transport layer for agent-to-directory communication (`/cello/register/1.0.0`). The question is whether the Operations Agent should call the directory over a private HTTP/REST endpoint (simple, easy to firewall, consistent with how other internal services communicate) or establish its own authenticated libp2p connection and call a new protocol stream (consistent with CELLO's internal protocol conventions, but adds implementation complexity for what is a simple internal service call). The choice affects how the Operations Agent authenticates to the directory and how the call is firewalled from the public internet.
 
 **6. Pre-authorization token consumption: on presentation or on success.**
 When the agent presents the pre-authorization token during the FROST DKG, the directory must mark the token consumed to prevent replay. The question is *when*: immediately on presentation (the token is burned as soon as the directory sees it, even if the DKG then fails), or on successful DKG completion only (token remains valid for retry if DKG fails mid-ceremony). Consuming on presentation is safer — no replay possible — but means that a transient DKG failure forces the operator back through the bot ceremony for a new token. Consuming on success allows DKG retries without re-verifying, but requires the directory to handle a narrow window where a presented-but-not-yet-consumed token could theoretically be raced. The correct choice depends on how often DKG failures are expected in practice and how painful re-verification would be for operators.
 
 **7. Monorepo placement.**
-The onboarding application is a standalone deployable, not a CELLO protocol component. It calls the directory's internal API, but it does not implement the CELLO protocol itself. Should it live in `packages/onboarding/` within the CELLO monorepo (convenient, shares tooling and CI, but blurs the line between protocol and product), or in a separate repository (cleaner separation, independent deploy cadence, but adds cross-repo overhead for developers who work across both)? The decision affects how the M6 stories are structured and whether the onboarding application's tests run in the same CI pipeline as the protocol tests.
+The Operations Agent is a standalone deployable, not a CELLO protocol component. It calls the directory's internal API, but it does not implement the CELLO protocol itself. Should it live in `packages/operations-agent/` within the CELLO monorepo (convenient, shares tooling and CI, but blurs the line between protocol and product), or in a separate repository (cleaner separation, independent deploy cadence, but adds cross-repo overhead for developers who work across both)? The decision affects how the M6 stories are structured and whether the Operations Agent's tests run in the same CI pipeline as the protocol tests.
 
 ---
 
@@ -384,7 +388,7 @@ The onboarding application is a standalone deployable, not a CELLO protocol comp
 
 - [[2026-05-13_1130_infrastructure-and-product-onboarding-alignment|Infrastructure and Product Onboarding Alignment]] — the discussion that established M6 as the onboarding milestone, the three-tier testing architecture, and the staging environment sequence this document builds on
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — §1.1 and §1.2 are the canonical source for the bot-first and portal-first registration paths; this document implements those flows as a concrete state machine
-- [[server-infrastructure|CELLO Server Infrastructure Requirements]] — defines the directory's registration API, OTP channel support (WhatsApp/Telegram/WeChat), phone hash uniqueness enforcement, and the FROST DKG the onboarding application triggers
+- [[server-infrastructure|CELLO Server Infrastructure Requirements]] — defines the directory's registration API, OTP channel support (WhatsApp/Telegram/WeChat), phone hash uniqueness enforcement, and the FROST DKG the Operations Agent triggers
 - [[frontend|CELLO Frontend Requirements]] — defines the portal-first path, the email OTP as correlation token, the registration completion flow, and the WebAuthn/TOTP enrollment warning that follows bot-first registration
-- [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — the M4 persistence work that the onboarding application depends on for durable state machine storage; Baileys session credentials are an additional persistence concern in the same tier
+- [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — the M4 persistence work that the Operations Agent depends on for durable state machine storage; Baileys session credentials are an additional persistence concern in the same tier
 - [[implementation-roadmap|CELLO Implementation Roadmap]] — M6 in the revised sequence; this document provides the architecture that M6 stories will implement
