@@ -143,23 +143,25 @@ PHONE_CONFIRMED
 
 ```
 PHONE_CONFIRMED
-  ↓  OTP verified
-AWAITING_EMAIL
   ↓  bot prompts for email address
-AWAITING_EMAIL_CONFIRM
-  ↓  verification email sent; waiting for operator to click link
+AWAITING_EMAIL
+  ↓  6-digit OTP sent to email address; operator replies with code
+AWAITING_EMAIL_OTP
+  ↓  OTP verified
 EMAIL_CONFIRMED
-  ↓  email link clicked; directory issues pre-authorization token
+  ↓  directory issues pre-authorization token
 PRE_AUTH_TOKEN_ISSUED
   ↓  bot delivers token to operator; state machine ends here
 ```
+
+The email ceremony is a 6-digit OTP delivered to the email address, replied to in the bot chat — the same channel the operator is already in. No web endpoint, no link click, no browser session. 15-minute expiry, max 3 attempts, rate-limited to 5 sends per hour per email address.
 
 The onboarding application's responsibility ends at `PRE_AUTH_TOKEN_ISSUED`. The FROST DKG happens later, inside the agent process, initiated by the operator. The onboarding application never knows it happened. The directory knows because it validates the pre-authorization token when the agent presents it during DKG.
 
 Some states have timeout-driven transitions:
 - `AWAITING_CONTACT` (Telegram): if the user does not tap the contact button within 10 minutes, re-send the prompt.
-- `AWAITING_OTP`: OTP expires after 10 minutes. Expired → `AWAITING_OTP` reset (prompt to request a new OTP). Max 3 attempts before requiring a new OTP.
-- `AWAITING_EMAIL_CONFIRM`: email link expires after 24 hours. Expired → `AWAITING_EMAIL` (prompt to re-provide email).
+- `AWAITING_OTP` (WhatsApp): OTP expires after 10 minutes. Expired → `AWAITING_OTP` reset (prompt to request a new OTP). Max 3 attempts before requiring a new OTP.
+- `AWAITING_EMAIL_OTP`: OTP expires after 15 minutes. Expired → `AWAITING_EMAIL_OTP` reset (prompt to request a new code). Max 3 attempts before requiring a new send. Rate-limited to 5 sends per hour per email address.
 - `PRE_AUTH_TOKEN_ISSUED`: the token itself has a TTL (e.g. 24 hours) enforced by the directory. After expiry the operator must restart from the beginning — the phone and email ceremonies must be repeated because the authorization lapsed.
 - Any state: if the machine is idle for 7 days (configurable), the in-flight record is discarded and the phone number is eligible to start a new registration.
 
@@ -187,9 +189,9 @@ This is the most common path for autonomous agents. The phone acquisition step d
 
 ### Shared tail (both channels)
 
-**Email step — Email provided.** Operator replies with an email address. Bot sends a verification link to that address (via SES or equivalent) and asks the operator to click it.
+**Email step — Email provided.** Operator replies with an email address. Bot sends a 6-digit OTP to that address (via SES or equivalent) and asks the operator to reply with the code in the bot chat.
 
-**Email confirmed.** Operator clicks the link in their email. The link contains a one-time token that the onboarding application's web endpoint verifies. On success, the machine transitions to `EMAIL_CONFIRMED`. The directory issues a pre-authorization token.
+**Email OTP verified.** Operator replies with the code. If wrong, bot allows retries (up to 3 attempts before requiring a new send). If correct, the machine transitions to `EMAIL_CONFIRMED`. The directory issues a pre-authorization token.
 
 **Token delivered.** Bot sends a message to the operator with the pre-authorization token and instructions: configure your agent with this token and call `cello_register`. The bot's job is done. The onboarding application's state machine reaches `PRE_AUTH_TOKEN_ISSUED` and stops.
 
@@ -225,7 +227,7 @@ The two paths are not two implementations. They are two entry points into the sa
 
 **OTP service.** Generates and validates one-time passcodes for the WhatsApp channel — the OTP is sent as a bot message via Baileys back to the sender. Telegram does not use an OTP: phone ownership is verified by checking `contact.user_id == message.from.id` on the `message.contact` event, where `user_id` is set server-side by Telegram. No external OTP provider (e.g. Twilio Verify) is needed for either channel. Twilio Verify (or equivalent) is only needed if a third channel (e.g. SMS fallback) is ever added. The service tracks attempt counts per phone number and enforces expiry.
 
-**Email verification service.** Sends verification emails (via SES or equivalent). Generates one-time verification links. Validates link clicks at the web endpoint. Enforces expiry.
+**Email verification service.** Sends 6-digit OTP emails (via SES or equivalent). Tracks attempt counts and send rate per email address. Enforces 15-minute expiry and the 5-sends-per-hour rate limit. The entire ceremony stays within the bot conversation — no web endpoint, no link click.
 
 **Correlation token store.** Stores active correlation tokens keyed by token value, mapping to their associated portal session ID and email confirmation status. TTL-backed (30 minutes). Shared between the portal backend and the onboarding application — either a shared Redis instance or a shared database table.
 
