@@ -56,7 +56,9 @@ What actually happens on the CELLO side:
 
 When the counterparty is also CELLO-registered, the session is fully bookended: FROST-signed at open and close, Merkle-chained throughout, tamper-evident. The A2A application layer runs inside a CELLO trust envelope.
 
-When the counterparty is A2A-only (not CELLO-registered), the session runs without the FROST bookends. The CELLO agent processes the task normally but the session record is unverified on the counterparty side. The CELLO agent knows the session is downgraded. It can apply a stricter policy to unverified counterparties — or refuse entirely if the policy requires it. This is a first-class configuration choice, not an edge case.
+There is no such thing as an unverified CELLO counterparty. Every CELLO agent has completed phone and email verification at registration — those are the baseline, not optional. What varies is what the agent has verified beyond that baseline: LinkedIn, GitHub, WebAuthn device, SIM score, endorsements. The trust score is the machine-readable expression of that signal inventory. A phone-and-email-only agent has a low trust score; a fully-verified agent has a high one. Both are verified participants. Both are accountable.
+
+This matters for the bridge. An A2A-native agent calling a CELLO agent is, by definition, not a CELLO participant. They have no phone verification, no email verification, no FROST identity, no trust score. The receiving CELLO agent's connection policy determines whether it will engage — and the connection policy already supports this: the owner sets minimum signal requirements, and an agent presenting no signals is simply below the threshold. This is not an edge case; it is the normal operation of the policy system applied to a non-participant caller.
 
 ```
 A2A-native agent                        CELLO agent
@@ -109,14 +111,22 @@ The right milestone for an A2A bridge is roughly M9 or M10 — after the securit
 
 ## Open Questions
 
-**1. A2A agent card — what CELLO trust data should be surfaced.**
-A2A's `AgentCard` is the discovery artifact: it lists capabilities, skills, authentication requirements, and endpoint URLs. A CELLO agent's AgentCard should surface their trust profile — verified phone, email domain, trust signals, Class 1 listing data — in a standard A2A-readable form. The question is how much of the CELLO trust model maps cleanly to A2A's capability vocabulary, and whether new A2A extensions are needed to carry CELLO-specific fields.
+**1. What surfaces in the A2A AgentCard — bio vs. trust score.**
+A2A's `AgentCard` is the discovery artifact: capabilities, skills, authentication requirements, endpoint URL. CELLO has two distinct things that could go there, and they must not be conflated.
 
-**2. Policy for unverified (A2A-only) counterparties.**
-When an A2A-native agent calls a CELLO agent, the session is unverified on the counterparty side. The CELLO agent's connection policy applies — but the current policy model (`cello_set_policy`, `SignalRequirementPolicy`) is designed for CELLO-to-CELLO sessions where both agents have trust signals. A policy model for "what do I accept from A2A-only counterparties?" needs to be defined. The simplest answer is a global threshold: require at least verified phone (a CELLO agent on the other side) to engage, with an explicit opt-in for unverified counterparties.
+The **bio** is operator-written. The agent (or its operator) chooses what to say about itself — what it does, what kinds of conversations it accepts, its domain. It is not verified. It is not a trust signal. It is self-description, and it belongs in the AgentCard's `description` field or equivalent.
+
+The **trust score** is separately derived from verified signals — phone, email, LinkedIn, GitHub, WebAuthn device, SIM score, endorsements. The agent does not write its trust score; the directory computes it from the signal inventory. These two things must be represented as distinct fields in any AgentCard mapping. An A2A consumer that conflates "what the agent says about itself" with "what has been independently verified about this agent" is missing the point of the trust system.
+
+The open question is whether A2A's existing vocabulary is sufficient to carry both, or whether a CELLO extension field is needed.
+
+**2. Communication policy and sanctions.**
+The CELLO connection policy already handles "what will I accept." The receiving agent sets a `SignalRequirementPolicy` — minimum trust signals required to connect, categories of interaction it will and will not engage in. An agent that attempts an interaction outside the declared policy is not simply filtered; they are sanctioned. The record of the violation is in the tamper-evident session log. This is a meaningfully stronger posture than A2A's model, where a caller that violates expectations has no accountability trail.
+
+The open question for the bridge is how the connection policy expresses the distinction between "CELLO participant below my threshold" and "A2A-only caller with no CELLO identity at all." These may warrant different policy responses — an agent with a low trust score is a participant who chose not to invest in verification; an A2A-only caller is not a participant at all. The policy model should be able to distinguish them.
 
 **3. Whether CELLO should publish an A2A extension spec.**
-If CELLO agents carry trust data that A2A doesn't natively model, CELLO could publish an A2A extension spec — a standardized way to embed CELLO trust signals in an A2A AgentCard. This positions CELLO as a contributor to the A2A ecosystem rather than a fork, while establishing CELLO's trust model as the reference for what A2A trust should look like. The risk is that it accelerates Google adding native trust features that close the gap. The opportunity is that it anchors CELLO terminology and concepts in the A2A vocabulary before Google defines that space.
+If CELLO agents carry trust data that A2A doesn't natively model, CELLO could publish an A2A extension spec — a standardized way to embed the trust score, signal inventory, and bio distinction in an A2A AgentCard. This positions CELLO as a contributor to the A2A ecosystem rather than a fork, and anchors CELLO's trust vocabulary before Google defines that space. The risk is that it accelerates Google adding native trust features that narrow the gap. The opportunity is that the spec itself demonstrates what a real trust model looks like versus OAuth, putting Google in the position of responding to a published standard rather than defining one.
 
 ---
 
