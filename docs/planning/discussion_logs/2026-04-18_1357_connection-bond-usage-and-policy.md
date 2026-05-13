@@ -101,12 +101,11 @@ Typical receiver bond requirements by type:
 
 Connection bonds — and the interaction scope declaration that depends on them for enforcement — require the commerce infrastructure from M9. The bond mechanism needs micropayment escrow, settlement, and dispute resolution before it can function. The M3 connection policy (`SignalRequirementPolicy`, trust threshold evaluation) ships without bonds. Bonds are a post-M9 extension.
 
-This means the interaction scope declaration also has two phases:
+This means the interaction scope declaration has two phases, each requiring its own milestone:
 
-- **M3:** The receiver can publish a scope as advisory text in their connection policy. A connecting agent that reads it and proceeds anyway is making a bad-faith choice — but there is no financial consequence yet. Scope violations are reported to the directory. The report is a signed, Merkle-evidenced event: the receiver submits the declared scope, the session record proving the actual interaction, and a violation claim. The directory records the violation against the offending agent's trust score. A pattern of ignoring declared scope is therefore reputation-damaging from day one — the bond adds financial consequences, but the directory report is already a meaningful sanction.
-- **Post-M9:** The scope declaration acquires teeth. Violating the declared scope forfeits the bond. The Merkle-logged stated intent is the evidence. Disputes are resolved against the cryptographic record.
+**Phase 1 — Scope declaration with directory reporting (unplaced, pre-M9).** The receiver publishes a scope as part of their connection policy. Violations are reportable to the directory: the receiver submits the declared scope, the session record proving the actual interaction, and a violation claim. The directory records it against the offending agent's trust score. No bond is at risk, but a pattern of ignoring declared scope is reputation-damaging. This phase requires the bio/discovery surface (so the scope can be published and read) and a violation reporting API at the directory. It has not been assigned to a milestone.
 
-Building the scope declaration into the M3 policy surface now is correct — the field should exist before it has enforcement weight so that agents build the habit of declaring and reading scope from day one. The enforcement mechanism follows when the commerce layer is ready.
+**Phase 2 — Bond forfeiture (post-M9).** Violating the declared scope forfeits the bond. The Merkle-logged stated intent at connection time is the evidence. Disputes are resolved against the cryptographic record. This phase requires M9 commerce infrastructure.
 
 ---
 
