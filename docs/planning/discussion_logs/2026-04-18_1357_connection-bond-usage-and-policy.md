@@ -97,6 +97,19 @@ Typical receiver bond requirements by type:
 
 ---
 
+## Milestone Dependency
+
+Connection bonds — and the interaction scope declaration that depends on them for enforcement — require the commerce infrastructure from M9. The bond mechanism needs micropayment escrow, settlement, and dispute resolution before it can function. The M3 connection policy (`SignalRequirementPolicy`, trust threshold evaluation) ships without bonds. Bonds are a post-M9 extension.
+
+This means the interaction scope declaration also has two phases:
+
+- **M3:** The receiver can publish a scope as advisory text in their connection policy. A connecting agent that reads it and proceeds anyway is making a bad-faith choice — but there is no financial consequence yet. Scope violations are reported to the directory. The report is a signed, Merkle-evidenced event: the receiver submits the declared scope, the session record proving the actual interaction, and a violation claim. The directory records the violation against the offending agent's trust score. A pattern of ignoring declared scope is therefore reputation-damaging from day one — the bond adds financial consequences, but the directory report is already a meaningful sanction.
+- **Post-M9:** The scope declaration acquires teeth. Violating the declared scope forfeits the bond. The Merkle-logged stated intent is the evidence. Disputes are resolved against the cryptographic record.
+
+Building the scope declaration into the M3 policy surface now is correct — the field should exist before it has enforcement weight so that agents build the habit of declaring and reading scope from day one. The enforcement mechanism follows when the commerce layer is ready.
+
+---
+
 ## Protocol Update Required
 
 The connection request flow in [[end-to-end-flow|end-to-end-flow.md]] (§5.1–§5.7) and the Connections domain in [[protocol-map|protocol-map.md]] need to be updated to reflect:
