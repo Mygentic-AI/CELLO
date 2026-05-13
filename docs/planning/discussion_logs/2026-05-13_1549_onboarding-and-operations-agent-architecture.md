@@ -1,12 +1,12 @@
 ---
-name: CELLO Operations Agent Architecture
+name: Onboarding and Operations Agent Architecture
 type: discussion
 date: 2026-05-13 15:49
 topics: [operations-agent, onboarding, registration, whatsapp, telegram, baileys, OTP, state-machine, bot, deployment, testing, infrastructure, correlation-token, FROST, M6, trust-signals, security-alerts]
 description: Architecture of the CELLO Operations Agent — the persistent out-of-band operator channel delivered via WhatsApp and Telegram. M6 ships the registration flow; subsequent milestones add trust signal notifications, security alerts (FALLBACK_CANARY, Not Me), key rotation nudges, and succession notifications. Covers Baileys vs. official WhatsApp Business API, the verification-only registration model (agent self-registers via pre-authorization token), the registration state machine, both ceremony paths, end-to-end testing strategy, and ECS deployment model.
 ---
 
-# CELLO Operations Agent Architecture
+# Onboarding and Operations Agent Architecture
 
 ## What This Is and Why It Exists
 

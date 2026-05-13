@@ -283,4 +283,4 @@ The `agent-agent/` subdirectory is the first to exist (M4) and the only one that
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]]
 - [[2026-05-09_1100_dashclaw-m4-competitive-review|DashClaw M4 Competitive Review]] — M8 Security & Defense gaps identified here
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — the onboarding flows that need real milestones
-- [[2026-05-13_1549_onboarding-application-architecture|Onboarding Application Architecture]] — detailed architecture of the M6 onboarding application: Baileys vs. official API decision, state machine, both ceremony paths, testing strategy, and deployment model
+- [[2026-05-13_1549_onboarding-and-operations-agent-architecture|Onboarding and Operations Agent Architecture]] — detailed architecture of the CELLO Operations Agent: Baileys vs. official API decision, registration state machine, both ceremony paths, testing strategy, deployment model, and lifecycle operations scope
