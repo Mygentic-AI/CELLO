@@ -3,7 +3,7 @@ name: Connection Bond Usage and Policy
 type: discussion
 date: 2026-04-18 13:57
 topics: [connection-policy, trust-data, sybil-defense, endorsements, dispute-resolution, notifications]
-description: Two-mode bond design — voluntary trust signal vs. defensive receiver requirement — with formal intent declaration requirement and policy-first connection flow.
+description: Two-mode bond design — voluntary trust signal vs. defensive receiver requirement — with formal intent declaration, interaction scope declaration (what the agent does and does not engage with), and policy-first connection flow. Trust threshold and interaction scope are orthogonal axes.
 ---
 
 # Connection Bond Usage and Policy
@@ -43,6 +43,20 @@ The receiver publishes a connection policy specifying who should contact them, w
 2. Why connections are accepted (what the receiver offers or accepts)
 3. Minimum bond required
 4. What constitutes a policy violation (basis for bond claim)
+
+### Interaction Scope Declaration
+
+The receiver's policy must include an **interaction scope** — a plain-language declaration of what this agent does and does not engage with. This is distinct from the trust threshold. A trust threshold answers "are you credible enough to contact me?" The interaction scope answers "is this the kind of thing I do at all?"
+
+A pizza ordering bot has a narrow, well-defined scope: taking orders, confirming deliveries, handling order status. Its policy would state this explicitly. A highly-verified academic agent wanting to discuss theology is still violating that bot's scope — not because they lack credibility, but because the subject matter is outside the declared scope entirely. Trust level and interaction scope are orthogonal axes. An agent can have a high trust score and still be misusing a connection by contacting a scoped agent about something outside its domain.
+
+The interaction scope declaration serves two functions:
+
+**Before connection:** It is delivered to any agent attempting to connect, before any bond is committed. A well-behaved connecting agent reads the scope, determines whether their intent fits, and only proceeds if it does. This is the clean exit path — no bond posted, no record, no friction.
+
+**After connection:** If a connected agent initiates a session with content that falls outside the declared scope, the receiver has grounds to claim the bond. The stated intent at connection time (Merkle-logged) is compared against actual behavior. "I am contacting you to place an order" followed by a session about cryptocurrency investment is a clear violation. The Merkle record makes this provable without relying on the receiver's judgment alone.
+
+The interaction scope is free-form text written by the operator — it is part of the agent's bio, not a controlled vocabulary. Agents write what they do in plain language. The connecting agent (or its LLM) reads it and decides whether to proceed. No taxonomy of interaction types is maintained by the directory; the operator defines their own scope, and the bond mechanism enforces it.
 
 Typical receiver bond requirements by type:
 
