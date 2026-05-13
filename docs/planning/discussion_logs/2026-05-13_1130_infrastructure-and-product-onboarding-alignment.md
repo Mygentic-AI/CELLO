@@ -129,9 +129,57 @@ Nothing is untested at launch. Launch is the day production traffic is pointed a
 
 ---
 
-## The Test Directory Structure Implication
+## How the End-to-End Architecture Grows With Staging
 
-The current `e2e-tests/` structure mirrors protocol milestones: `m0/`, `m1/`, `m2/`, `m3/`. That structure reflects protocol development. As part of the M4 rename, the package becomes `integration-tests/` and a new `e2e-tests/` package is created for end-to-end tests, structured around surfaces and scenarios rather than milestones:
+The most important thing to understand about the E2E architecture is that it does not appear all at once at the end of M5. It grows incrementally, milestone by milestone, in lockstep with the staging environment that each milestone brings online. Some end-to-end tests can begin before staging even exists.
+
+### Before M5: What can be E2E tested without a staging environment
+
+Not all E2E tests require a deployed environment. The agent-to-agent tier in particular can run against locally started processes — the same pattern as the M3 live smoke test, but formalized and scripted for CI. These tests start in M4 and verify that the persistence layer actually survives process restarts: register an agent, kill the process, restart it, assert the registration persists. That is an end-to-end test in the meaningful sense — it drives the product from the outside and asserts on a user-visible outcome — and it requires no staging infrastructure at all.
+
+The Telegram and WhatsApp bot sandbox environments are also largely independent of the CELLO staging deploy. Telegram's test server and the WhatsApp Business sandbox can be pointed at a locally running directory and relay, which means bot end-to-end tests can be written and validated during M6 without waiting for production-grade AWS infrastructure. Staging makes them part of the fully automated CI pipeline, but the tests themselves can be developed and manually validated earlier.
+
+### The staging environment builds incrementally across M4–M7
+
+The staging environment is not a single deliverable that arrives fully formed at the end of M5. It grows as each milestone adds something deployable:
+
+**After M4 (Persistence):** The directory and relay can be deployed with durable storage for the first time. The first staging deploy is minimal — no public access, no bot integration, no portal — but it is a real persistent deployment. Agent-to-agent E2E tests can be pointed at it. The cross-machine integration test (deferred since M0) can finally run against something stable.
+
+**After M5 (Production Infrastructure):** The staging environment becomes the fully automated CI target. AWS/CDK infrastructure is codified. The CI pipeline gains a "deploy to staging" stage between integration tests and E2E tests. Every merge to main deploys to staging and runs the E2E suite against it. The staging environment at this point supports agent-to-agent tests only — no bots, no portal yet.
+
+**After M6 (Onboarding):** The Telegram and WhatsApp bots are deployed to staging. The bot E2E tests move from manually validated to CI-gated. The staging environment's onboarding flow is now testable end-to-end: a scripted test registers a new agent through the Telegram bot, confirms OTP, and asserts the agent appears in the directory.
+
+**After M7 (Portal & Trust Signals):** The web portal is deployed to staging. Playwright tests join the CI pipeline. The full onboarding + portal flow is E2E testable: register via bot, open portal, add LinkedIn signal, verify it appears in connection package. The trust signal oracles (LinkedIn OAuth, GitHub OAuth, SIM scoring) each have their own sandbox credentials and E2E tests.
+
+### The CI pipeline shape at each milestone
+
+```
+M4 and earlier
+  unit tests → integration tests → [manual] agent-agent E2E (local processes)
+
+M5
+  unit tests → integration tests → deploy to staging → agent-agent E2E (staging)
+
+M6
+  unit tests → integration tests → deploy to staging → agent-agent E2E
+                                                      → bot E2E (Telegram sandbox)
+                                                      → bot E2E (WhatsApp sandbox)
+
+M7
+  unit tests → integration tests → deploy to staging → agent-agent E2E
+                                                      → bot E2E (Telegram + WhatsApp)
+                                                      → portal E2E (Playwright)
+                                                      → trust signal E2E (OAuth sandboxes)
+
+M8+
+  all of M7, plus cross-framework E2E as each new adapter ships
+```
+
+Each stage is a gate — a failure in the E2E suite blocks merge. The pipeline does not accumulate tests silently; each milestone adds a new CI gate at the same time it ships the feature that gate validates.
+
+### The test directory structure
+
+As part of the M4 housekeeping rename, the package structure becomes:
 
 ```
 integration-tests/      # renamed from e2e-tests/ — in-process Vitest against real libp2p
@@ -140,14 +188,15 @@ integration-tests/      # renamed from e2e-tests/ — in-process Vitest against 
 ├── m2/
 └── m3/
 
-e2e-tests/              # new — runs against deployed staging environment
-├── onboarding/         # Telegram + WhatsApp bot flows (sandbox APIs)
-├── portal/             # Playwright against staging
-├── agent-agent/        # Claude Code × Claude Code scripted end-to-end tests
-└── cross-framework/    # Claude Code × OpenClaw, Claude Code × Hermes, etc.
+e2e-tests/              # new — runs against staging (or local processes pre-M5)
+├── agent-agent/        # Claude Code × Claude Code scripted end-to-end tests (M4+)
+├── onboarding/         # Telegram + WhatsApp bot flows — sandbox APIs (M6+)
+├── portal/             # Playwright against staging portal (M7+)
+├── trust-signals/      # OAuth sandbox flows, SIM scoring sandbox (M7+)
+└── cross-framework/    # Claude Code × OpenClaw, Claude Code × Hermes, etc. (per adapter)
 ```
 
-The `e2e-tests/` package runs against a deployed staging environment. This is the hard dependency on M5: end-to-end tests cannot exist without something to run against.
+The `agent-agent/` subdirectory is the first to exist (M4) and the only one that runs without a fully deployed staging environment. Everything else gates on M5 or later.
 
 ---
 
