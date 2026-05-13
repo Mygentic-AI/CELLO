@@ -150,15 +150,15 @@ The staging environment is not a single deliverable that arrives fully formed at
   ┌─────────────────────────────────────────────────────────────────────────────┐
   │  CI PIPELINE  (M5+)                                                         │
   │                                                                             │
-  │  git push → unit tests → integration tests → deploy to staging → E2E suite │
+  │  git push → unit tests → integration tests → deploy to staging → E2E suite  │
   └─────────────────────────────────────────────────────────────────────────────┘
                                          │
                                          ▼ deploy
   ┌──────────────────────────────────────────────────────────────────────────┐
   │  AWS STAGING ENVIRONMENT                                                 │
   │                                                                          │
-  │  ┌─────────────────────┐   ┌──────────────────────┐                     │
-  │  │  Directory Node     │   │  Relay Node           │  ← M4 (first       │
+  │  ┌─────────────────────┐   ┌───────────────────────┐                     │
+  │  │  Directory Node     │   │  Relay Node           │  ← M4 (first        │
   │  │  PostgreSQL (M4)    │   │  SQLCipher (M4)       │    persistent       │
   │  │  /cello/signaling   │   │  /cello/relay         │    deploy)          │
   │  │  /cello/frost       │   │  /cello/dir-relay     │                     │
@@ -169,18 +169,18 @@ The staging environment is not a single deliverable that arrives fully formed at
   │  ┌───────────────────────┼───────────────────────────────────────┐       │
   │  │  PRODUCT SURFACES     │                                       │       │
   │  │                       │                                       │       │
-  │  │  ┌────────────┐  ┌────┴────────┐  ┌──────────────────────┐   │       │
-  │  │  │ Telegram   │  │ WhatsApp    │  │ Web Portal           │   │       │
-  │  │  │ Bot (M6)   │  │ Bot (M6)    │  │ (M7)                 │   │       │
-  │  │  └─────┬──────┘  └─────┬───────┘  └──────────┬───────────┘   │       │
-  │  │        │               │                     │               │       │
-  │  │        └───────────────┴─────────────────────┘               │       │
+  │  │  ┌────────────┐  ┌────┴────────┐  ┌──────────────────────┐    │       │
+  │  │  │ Telegram   │  │ WhatsApp    │  │ Web Portal           │    │       │
+  │  │  │ Bot (M6)   │  │ Bot (M6)    │  │ (M7)                 │    │       │
+  │  │  └─────┬──────┘  └─────┬───────┘  └──────────┬───────────┘    │       │
+  │  │        │               │                     │                │       │
+  │  │        └───────────────┴─────────────────────┘                │       │
   │  │                        │ phone OTP / email OTP                │       │
   │  │                        │ OAuth oracles (M7)                   │       │
-  │  │  ┌─────────────────────▼─────────────────────────────────┐   │       │
-  │  │  │  Trust Signal Oracles (M7)                            │   │       │
-  │  │  │  LinkedIn OAuth · GitHub OAuth · SIM scoring (Twilio) │   │       │
-  │  │  └───────────────────────────────────────────────────────┘   │       │
+  │  │  ┌─────────────────────▼─────────────────────────────────┐    │       │
+  │  │  │  Trust Signal Oracles (M7)                            │    │       │
+  │  │  │  LinkedIn OAuth · GitHub OAuth · SIM scoring (Twilio) │    │       │
+  │  │  └───────────────────────────────────────────────────────┘    │       │
   │  └───────────────────────────────────────────────────────────────┘       │
   └──────────────────────────────────────────────────────────────────────────┘
 
@@ -198,7 +198,7 @@ The staging environment is not a single deliverable that arrives fully formed at
   │  portal/           Playwright → staging portal (M7+)                     │
   │                                                                          │
   │  trust-signals/    OAuth sandbox → staging oracle → staging directory    │
-  │                    (M7+)                                                  │
+  │                    (M7+)                                                 │
   │                                                                          │
   │  cross-framework/  Claude Code × OpenClaw → staging (per adapter)        │
   └──────────────────────────────────────────────────────────────────────────┘
