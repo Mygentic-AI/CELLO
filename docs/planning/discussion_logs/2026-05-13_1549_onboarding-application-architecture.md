@@ -128,15 +128,14 @@ AWAITING_OTP
 PHONE_CONFIRMED
 ```
 
-**Telegram path** — Telegram bots do not receive the user's phone number automatically. A `request_contact` keyboard button is used to prompt the user to share it. Because a crafted contact could carry an arbitrary number, sharing the contact alone is not sufficient proof of ownership. The OTP is sent via a background MTProto job directly to the Telegram account associated with that phone number — proving the user can receive messages on the account bound to the number they shared.
+**Telegram path** — Telegram bots do not receive the user's phone number automatically. A `request_contact` keyboard button is used to prompt the user to share it. The `message.contact` event that comes back contains a `user_id` field set by Telegram's server — not supplied by the client. Checking that `contact.user_id == message.from.id` (with a `None` guard for the case where `user_id` is absent) is sufficient proof that the phone number belongs to the account sending the message. No OTP step is needed for Telegram. Telegram's own server-side binding is the verification.
 
 ```
 INITIAL
   ↓  first message received; contact button sent
 AWAITING_CONTACT
   ↓  user taps contact button; phone number received via message.contact event
-AWAITING_OTP
-  ↓  OTP sent via MTProto to the Telegram account associated with the phone number
+  ↓  assert contact.user_id == message.from.id (None guard required)
 PHONE_CONFIRMED
 ```
 
@@ -184,9 +183,7 @@ This is the most common path for autonomous agents. The phone acquisition step d
 
 **Step 1 — First message.** Operator sends any message or `/start` to the CELLO Telegram bot. Bot responds with a greeting explaining what CELLO is, then sends a `request_contact` keyboard button asking the operator to share their phone number.
 
-**Step 2 — Contact shared.** Operator taps the contact button. Telegram sends a `message.contact` event containing the phone number associated with their Telegram account. Bot stores the number. If the number is already registered in CELLO, bot says so and stops.
-
-**Step 3 — OTP verified.** Bot sends an OTP via a background MTProto message directly to the Telegram account associated with the phone number — confirming the operator controls the account bound to that number, not just that they can send an arbitrary contact card. Operator replies in the bot chat with the OTP code. If wrong, bot allows retries. If correct, phone is confirmed. Bot asks for an email address.
+**Step 2 — Contact shared.** Operator taps the contact button. Telegram sends a `message.contact` event containing the phone number associated with their Telegram account, with `user_id` set server-side by Telegram. Bot checks `contact.user_id == message.from.id` (with a `None` guard — if `user_id` is absent, the share is rejected). If the check passes, the phone number is confirmed as belonging to the account sending the message. If the number is already registered in CELLO, bot says so and stops. Otherwise, phone is confirmed and bot asks for an email address.
 
 ### Shared tail (both channels)
 
@@ -226,7 +223,7 @@ The two paths are not two implementations. They are two entry points into the sa
 
 **State machine engine.** Owns all in-flight registration state. Receives normalized messages and transitions state accordingly. Emits outbound message commands. Does not know about Telegram or WhatsApp — it knows about states and transitions.
 
-**OTP service.** Generates and validates one-time passcodes. The delivery mechanism differs by channel: for WhatsApp, the OTP is sent as a bot message via Baileys back to the sender; for Telegram, the OTP is sent via a MTProto background job to the Telegram account bound to the phone number — this is the step that proves ownership beyond the `request_contact` event. No external OTP provider (e.g. Twilio Verify) is needed for either channel — both channels deliver the OTP through their own infrastructure. Twilio Verify (or equivalent) is only needed if a third channel (e.g. SMS fallback) is ever added. The service tracks attempt counts per phone number and enforces expiry.
+**OTP service.** Generates and validates one-time passcodes for the WhatsApp channel — the OTP is sent as a bot message via Baileys back to the sender. Telegram does not use an OTP: phone ownership is verified by checking `contact.user_id == message.from.id` on the `message.contact` event, where `user_id` is set server-side by Telegram. No external OTP provider (e.g. Twilio Verify) is needed for either channel. Twilio Verify (or equivalent) is only needed if a third channel (e.g. SMS fallback) is ever added. The service tracks attempt counts per phone number and enforces expiry.
 
 **Email verification service.** Sends verification emails (via SES or equivalent). Generates one-time verification links. Validates link clicks at the web endpoint. Enforces expiry.
 
@@ -273,7 +270,7 @@ This is the right tradeoff because the Baileys failure mode most likely to occur
 
 ### Both channels need independent tests
 
-The Telegram and WhatsApp codepaths are distinct. Testing one is not testing the other. Both bot flows must have end-to-end test coverage. A Telegram test passing does not imply the WhatsApp path works — they share the state machine but have separate transport adapters, separate bot accounts, and different OTP delivery mechanisms (MTProto for Telegram; bot message via Baileys for WhatsApp).
+The Telegram and WhatsApp codepaths are distinct. Testing one is not testing the other. Both bot flows must have end-to-end test coverage. A Telegram test passing does not imply the WhatsApp path works — they share the state machine but have separate transport adapters, separate bot accounts, and different phone verification mechanisms (server-side `user_id` check for Telegram; OTP via Baileys bot message for WhatsApp).
 
 ### Pre-M5 local testing
 
@@ -309,7 +306,6 @@ Baileys session state must survive ECS task restarts. This means:
 The onboarding application requires the following secrets, each managed in AWS Secrets Manager:
 - Telegram bot token (production)
 - Telegram bot token (staging)
-- Telegram MTProto API credentials (for sending OTPs to the account associated with a phone number)
 - Baileys WhatsApp session credentials (rotated after initial QR code pairing)
 - SES credentials (email verification)
 - CELLO directory internal API key (for the registration call)
