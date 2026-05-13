@@ -74,15 +74,33 @@ The migration is a transport swap, not a redesign.
 
 Every in-flight registration is an instance of a state machine. The onboarding application creates a machine instance when it receives the first message from a new phone number, and it maintains the machine's state across restarts (the M4 persistence dependency).
 
-The states:
+The two channels diverge during phone acquisition and converge at `PHONE_CONFIRMED`. After that the flow is identical regardless of channel.
+
+**WhatsApp path** — the sender's phone number is available immediately from the Baileys JID (e.g. `15551234567@s.whatsapp.net`). There is no need to ask for it.
 
 ```
 INITIAL
-  ↓  first message received
-AWAITING_PHONE
-  ↓  operator provides phone number
+  ↓  first message received; phone extracted from sender JID
 AWAITING_OTP
-  ↓  OTP sent; waiting for operator to reply with code
+  ↓  OTP sent as WhatsApp message back to the conversation
+PHONE_CONFIRMED
+```
+
+**Telegram path** — Telegram bots do not receive the user's phone number automatically. A `request_contact` keyboard button is used to prompt the user to share it. Because a crafted contact could carry an arbitrary number, sharing the contact alone is not sufficient proof of ownership. The OTP is sent via a background MTProto job directly to the Telegram account associated with that phone number — proving the user can receive messages on the account bound to the number they shared.
+
+```
+INITIAL
+  ↓  first message received; contact button sent
+AWAITING_CONTACT
+  ↓  user taps contact button; phone number received via message.contact event
+AWAITING_OTP
+  ↓  OTP sent via MTProto to the Telegram account associated with the phone number
+PHONE_CONFIRMED
+```
+
+**Shared tail** — both paths continue here:
+
+```
 PHONE_CONFIRMED
   ↓  OTP verified
 AWAITING_EMAIL
@@ -99,11 +117,12 @@ COMPLETE
 ```
 
 Some states have timeout-driven transitions:
-- `AWAITING_OTP`: OTP expires after 10 minutes. Expired → `AWAITING_OTP` reset (prompt to request a new OTP).
+- `AWAITING_CONTACT` (Telegram): if the user does not tap the contact button within 10 minutes, re-send the prompt.
+- `AWAITING_OTP`: OTP expires after 10 minutes. Expired → `AWAITING_OTP` reset (prompt to request a new OTP). Max 3 attempts before requiring a new OTP.
 - `AWAITING_EMAIL_CONFIRM`: email link expires after 24 hours. Expired → `AWAITING_EMAIL` (prompt to re-provide email).
 - Any state: if the machine is idle for 7 days (configurable), the in-flight record is discarded and the phone number is eligible to start a new registration.
 
-The state machine also handles the portal-first entry point. When a portal-first correlation token is presented via bot message, the machine is initialized from `EMAIL_CONFIRMED` rather than `INITIAL` — the email ceremony was already completed in the portal, so only the phone OTP steps remain.
+The state machine also handles the portal-first entry point. When a portal-first correlation token is presented via bot message, the machine is initialized from `EMAIL_CONFIRMED` rather than `INITIAL` — the email ceremony was already completed in the portal, so only the phone acquisition and OTP steps remain.
 
 The full state record is persisted in a PostgreSQL table with the state machine instance keyed by the originating phone number hash. (The phone number itself is never stored; the hash is sufficient for de-duplication and correlation.)
 
@@ -111,21 +130,31 @@ The full state record is persisted in a PostgreSQL table with the state machine 
 
 ## Bot-First Path — Message-by-Message Flow
 
-This is the most common path for autonomous agents. The agent (or its human operator) initiates contact with the onboarding bot.
+This is the most common path for autonomous agents. The phone acquisition step differs between the two channels; everything from email onward is identical.
 
-**Step 1 — First message.** Operator sends any message to the CELLO onboarding bot (WhatsApp or Telegram). Bot responds with a greeting explaining what CELLO is and what the registration process involves. Bot asks for the operator's phone number.
+### WhatsApp (Baileys)
 
-**Step 2 — Phone number provided.** Operator replies with a phone number. Bot validates the format. If invalid, bot asks again. If the number is already registered in CELLO, bot says so and stops. If valid and new, bot sends an OTP to that phone number via Twilio Verify (or equivalent OTP provider) and asks for the code.
+**Step 1 — First message.** Operator sends any message to the CELLO WhatsApp number. Bot extracts the phone number from the Baileys JID — no need to ask for it. Bot responds with a greeting explaining what CELLO is. If the number is already registered in CELLO, bot says so and stops. Otherwise, bot sends an OTP as a WhatsApp message back to the same conversation and asks for the code.
 
-**Step 3 — OTP verified.** Operator replies with the OTP code. If wrong, bot says so and allows retries (up to 3 attempts before requiring a new OTP). If correct, bot acknowledges phone confirmation and asks for an email address.
+**Step 2 — OTP verified.** Operator replies with the OTP code. If wrong, bot says so and allows retries (up to 3 attempts before requiring a new OTP). If correct, phone is confirmed. Bot asks for an email address.
 
-**Step 4 — Email provided.** Operator replies with an email address. Bot sends a verification link to that address (via SES or equivalent) and asks the operator to click it.
+### Telegram
 
-**Step 5 — Email link clicked.** Operator clicks the link in their email. The link contains a one-time token that the onboarding application's web endpoint verifies. On success, the machine transitions to `EMAIL_CONFIRMED`.
+**Step 1 — First message.** Operator sends any message or `/start` to the CELLO Telegram bot. Bot responds with a greeting explaining what CELLO is, then sends a `request_contact` keyboard button asking the operator to share their phone number.
 
-**Step 6 — Key generation.** The onboarding application calls the CELLO directory's registration API: phone hash + email domain. The directory runs the FROST DKG ceremony — the agent generates K_local locally; the directory distributes K_server shares across directory nodes. This step is opaque to the operator. It happens in the background.
+**Step 2 — Contact shared.** Operator taps the contact button. Telegram sends a `message.contact` event containing the phone number associated with their Telegram account. Bot stores the number. If the number is already registered in CELLO, bot says so and stops.
 
-**Step 7 — Confirmation.** Bot sends a confirmation message containing the agent's CELLO pseudonym and a link to the portal where the operator can complete their trust profile and configure connection policy. Registration is complete. The agent is immediately online.
+**Step 3 — OTP verified.** Bot sends an OTP via a background MTProto message directly to the Telegram account associated with the phone number — confirming the operator controls the account bound to that number, not just that they can send an arbitrary contact card. Operator replies in the bot chat with the OTP code. If wrong, bot allows retries. If correct, phone is confirmed. Bot asks for an email address.
+
+### Shared tail (both channels)
+
+**Email step — Email provided.** Operator replies with an email address. Bot sends a verification link to that address (via SES or equivalent) and asks the operator to click it.
+
+**Email confirmed.** Operator clicks the link in their email. The link contains a one-time token that the onboarding application's web endpoint verifies. On success, the machine transitions to `EMAIL_CONFIRMED`.
+
+**Key generation.** The onboarding application calls the CELLO directory's registration API: phone hash + email domain. The directory runs the FROST DKG ceremony — the agent generates K_local locally; the directory distributes K_server shares across directory nodes. This step is opaque to the operator. It happens in the background.
+
+**Confirmation.** Bot sends a confirmation message containing the agent's CELLO pseudonym and a link to the portal where the operator can complete their trust profile and configure connection policy. Registration is complete. The agent is immediately online.
 
 ---
 
@@ -139,7 +168,7 @@ The portal-first path is used when the human operator begins at the web portal r
 
 **Step 3 — Correlation token received by bot.** Operator messages the onboarding bot, either including the correlation token directly in their first message or in response to a bot prompt. Bot recognizes the token format, validates it against the portal session (token is looked up in a shared store keyed by the token value), and retrieves the email confirmation from the portal session.
 
-**Step 4 — Phone OTP.** Bot asks the operator for their phone number and sends an OTP. Steps 2–3 from the bot-first path follow.
+**Step 4 — Phone OTP.** The phone acquisition step follows the channel-specific flow. On WhatsApp, the bot already has the phone number from the sender JID and sends the OTP immediately. On Telegram, the bot sends the `request_contact` button, receives the `message.contact` event, then sends the OTP via MTProto. The same retry and verification logic as the bot-first path applies.
 
 **Step 5 onwards.** Identical to steps 6–7 of the bot-first path.
 
@@ -155,7 +184,7 @@ The two paths are not two implementations. They are two entry points into the sa
 
 **State machine engine.** Owns all in-flight registration state. Receives normalized messages and transitions state accordingly. Emits outbound message commands. Does not know about Telegram or WhatsApp — it knows about states and transitions.
 
-**OTP service.** Generates and validates one-time passcodes. Backed by Twilio Verify (or equivalent). Tracks attempt counts per phone number. Enforces expiry.
+**OTP service.** Generates and validates one-time passcodes. The delivery mechanism differs by channel: for WhatsApp, the OTP is sent as a bot message via Baileys back to the sender; for Telegram, the OTP is sent via a MTProto background job to the Telegram account bound to the phone number — this is the step that proves ownership beyond the `request_contact` event. No external OTP provider (e.g. Twilio Verify) is needed for either channel — both channels deliver the OTP through their own infrastructure. Twilio Verify (or equivalent) is only needed if a third channel (e.g. SMS fallback) is ever added. The service tracks attempt counts per phone number and enforces expiry.
 
 **Email verification service.** Sends verification emails (via SES or equivalent). Generates one-time verification links. Validates link clicks at the web endpoint. Enforces expiry.
 
@@ -202,7 +231,7 @@ This is the right tradeoff because the Baileys failure mode most likely to occur
 
 ### Both channels need independent tests
 
-The Telegram and WhatsApp codepaths are distinct. Testing one is not testing the other. Both bot flows must have end-to-end test coverage. A Telegram test passing does not imply the WhatsApp path works — they share the state machine but have separate transport adapters, separate bot accounts, and separate OTP configuration paths.
+The Telegram and WhatsApp codepaths are distinct. Testing one is not testing the other. Both bot flows must have end-to-end test coverage. A Telegram test passing does not imply the WhatsApp path works — they share the state machine but have separate transport adapters, separate bot accounts, and different OTP delivery mechanisms (MTProto for Telegram; bot message via Baileys for WhatsApp).
 
 ### Pre-M5 local testing
 
@@ -238,8 +267,8 @@ Baileys session state must survive ECS task restarts. This means:
 The onboarding application requires the following secrets, each managed in AWS Secrets Manager:
 - Telegram bot token (production)
 - Telegram bot token (staging)
+- Telegram MTProto API credentials (for sending OTPs to the account associated with a phone number)
 - Baileys WhatsApp session credentials (rotated after initial QR code pairing)
-- Twilio Verify API credentials (OTP delivery)
 - SES credentials (email verification)
 - CELLO directory internal API key (for the registration call)
 
