@@ -37,8 +37,28 @@ We position CELLO at the intersection of high privacy and high trust. We differe
 
 ---
 
-## Strategic Stance on Interoperability
+## What A2A Actually Is — and Why It Doesn't Compete
 
-CELLO does not adopt Google's A2A wire format or identity model. CELLO provides an **A2A bridge** that makes CELLO agents reachable from the A2A ecosystem. Any A2A-native agent can call a CELLO agent as if it were an ordinary A2A endpoint. But when two CELLO agents communicate directly, the session provides guarantees that A2A structurally cannot give — and that gap is permanent.
+A2A is a delegation protocol. Its model is a job queue: an orchestrator agent submits a `Task` to a worker agent, the worker executes it, and the status lifecycle (submitted → working → completed/failed) tracks the outcome. The format is purpose-built for this one pattern — an agent calling another agent to do work on its behalf.
 
-This is not a "me too" positioning. It is the upgrade layer posture: CELLO agents are compatible with A2A the way HTTPS servers are compatible with HTTP clients. The compatibility surface is real. The differentiation is irreducible.
+This is a real use case. CELLO supports it: an agent can contract another agent to perform a service, and the session record gives both parties a tamper-evident account of what was commissioned and what was delivered. Delegation is a valid pattern in CELLO.
+
+The problem with A2A is not that delegation is wrong. It is that A2A over-optimised for a specific expression of delegation — the job queue model — that the market had already solved from both ends:
+
+**Inside a system:** Claude Code, Codex, LangGraph, CrewAI all orchestrate agents internally. The framework is the protocol. There is no inter-process boundary that needs A2A.
+
+**Across a boundary:** you call an API. The "agent" on the other end looks like a service endpoint. This has been the answer for 20 years and it works. Tool calling — formalised by MCP — is exactly this pattern. When an external agent offers a service, it exposes an API; callers invoke it. No purpose-built delegation protocol needed.
+
+A2A fits in neither gap. Internal orchestration doesn't need it; external delegation already has APIs. The result is a protocol solving a problem the industry had already routed around from both directions.
+
+## What CELLO Is Actually For
+
+CELLO is not a delegation protocol. It is infrastructure for **agent-as-principal** — agents that meet as equals, transact, make commitments, and produce a cryptographically accountable record of what they agreed to and what they did.
+
+CELLO handles delegation as one pattern among many. It also handles negotiation, commerce, peer relationships, trust signal exchange, connection policy enforcement, and dispute resolution. None of these have any representation in A2A. The session model is general: it carries a delegation interaction, a commercial transaction, and a peer conversation with equal fidelity. What makes it different from A2A — or from a plain API call — is that both parties are accountable. Neither is simply a tool the other is calling.
+
+## Stance on Interoperability
+
+CELLO agents can expose an A2A-compatible endpoint as a minor convenience. An A2A-native orchestrator that wants to delegate a task to a CELLO agent can do so — the CELLO agent looks like any other A2A worker from the outside. The bridge is a thin HTTP adapter, not an architectural commitment. It is a compatibility shim at the edge, not a core dependency.
+
+What CELLO does not do is adopt A2A's identity model. A2A uses OAuth/OIDC — a centralized authority vouches for the agent. CELLO's FROST split-key means no single party can unilaterally sign for an agent. These are structurally incompatible and the gap is permanent. The interoperability surface is application-layer only.
