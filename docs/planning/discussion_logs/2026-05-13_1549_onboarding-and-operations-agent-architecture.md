@@ -2,8 +2,8 @@
 name: Onboarding and Operations Agent Architecture
 type: discussion
 date: 2026-05-13 15:49
-topics: [operations-agent, onboarding, registration, whatsapp, telegram, baileys, OTP, state-machine, bot, deployment, testing, infrastructure, correlation-token, FROST, M6, trust-signals, security-alerts]
-description: Architecture of the CELLO Operations Agent — the persistent out-of-band operator channel delivered via WhatsApp and Telegram. M6 ships the registration flow; subsequent milestones add trust signal notifications, security alerts (FALLBACK_CANARY, Not Me), key rotation nudges, and succession notifications. Covers Baileys vs. official WhatsApp Business API, the verification-only registration model (agent self-registers via pre-authorization token), the registration state machine, both ceremony paths, end-to-end testing strategy, and ECS deployment model.
+topics: [operations-agent, onboarding, registration, whatsapp, telegram, wechat, baileys, OTP, state-machine, bot, deployment, testing, infrastructure, correlation-token, FROST, M6, trust-signals, security-alerts]
+description: Architecture of the CELLO Operations Agent — the persistent out-of-band operator channel delivered via WhatsApp, Telegram, and WeChat. M6 ships the registration flow; subsequent milestones add trust signal notifications, security alerts (FALLBACK_CANARY, Not Me), key rotation nudges, and succession notifications. Covers Baileys vs. official WhatsApp Business API, WeChat Official Account API constraints, the verification-only registration model (agent self-registers via pre-authorization token), the registration state machine, all three ceremony paths, end-to-end testing strategy, and ECS deployment model.
 ---
 
 # Onboarding and Operations Agent Architecture
@@ -26,7 +26,7 @@ Critically, the registration path within the Operations Agent is **verification-
 
 ---
 
-## The Two Inbound Channels
+## The Three Inbound Channels
 
 ### Telegram
 
@@ -62,6 +62,21 @@ These are not blockers for M6, but they are risks that need to be understood bef
 **Rate limits are unwritten.** The official WhatsApp Business API publishes rate limit rules. Baileys does not. WhatsApp Web limits exist but are not documented. Exceeding them can result in the phone number being temporarily flagged or — in persistent cases — banned. For the registration use case (low-volume, human-paced interactions), this is a low risk. It would become relevant if the bot were ever used for bulk messaging.
 
 **QR code initial setup.** The first session requires physically scanning a QR code from a phone that holds the target WhatsApp number. This is a one-time setup step, not an ongoing operational burden. But it means the initial deployment is not fully automated — a human must be present to scan. This needs to be in the deployment runbook.
+
+### WeChat — The Jurisdictional Channel
+
+WeChat is the third supported channel. It is critical for China market reach — a significant portion of the global agent operator population will only be reachable via WeChat, and excluding it makes CELLO effectively unavailable in that market.
+
+The WeChat Official Account API is the correct integration point. Unlike the Telegram Bot API or Baileys, WeChat imposes significant jurisdictional prerequisites:
+
+- A **Chinese business entity** is required to register a WeChat Official Account. A foreign company cannot register directly; a Chinese subsidiary or a licensed service provider acting as the account holder is required.
+- **ICP licensing** (Internet Content Provider filing with MIIT) is required for operating internet-facing services in China.
+- All traffic routes through **Tencent's gateway** — there is no self-hosted or unofficial alternative equivalent to Baileys for WeChat.
+- The Official Account API uses a webhook model (Tencent pushes inbound messages to a registered endpoint) and a token-based outbound API. The pattern is similar to Telegram webhooks in structure.
+
+**Phone verification on WeChat** works differently from both other channels. WeChat does not expose the user's phone number to third-party bots by default. Phone number retrieval requires the user to explicitly authorize it via a WeChat login flow (OAuth-style), which returns a `unionid` and optionally a phone number if the user grants the `scope=snsapi_userinfo` permission. The bot-first path on WeChat therefore requires an additional authorization step that doesn't exist on WhatsApp or Telegram.
+
+**M6 scope for WeChat:** WeChat support is explicitly deferred from M6. The jurisdictional prerequisites (Chinese business entity, ICP license) cannot be satisfied by a startup in early product development. WeChat is designed into the architecture as a first-class channel — the state machine, transport adapter pattern, and internal interfaces all accommodate it — but the WeChat adapter is not built until the business entity and ICP requirements are met. This is a business milestone dependency, not a technical one.
 
 ### The Migration Path
 
@@ -324,6 +339,7 @@ The Operations Agent requires the following secrets, each managed in AWS Secrets
                     │                                              │
   WhatsApp user ──→ │  Baileys WebSocket ──→ Message Router        │
   Telegram user ──→ │  Telegram Webhook  ──→    │                  │
+  WeChat user   ──→ │  WeChat Webhook    ──→    │  (post-M6)       │
                     │                           ↓                  │
                     │                    State Machine Engine       │
                     │                        ↑   │                 │
