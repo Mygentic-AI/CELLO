@@ -591,6 +591,17 @@ For SUCCESSION_INITIATED additionally:
 
 **FLAGGED sessions without arbitration — [GAP G-28 RESOLVED]**: No automatic trust impact on the flagged party without a verdict. A FLAG that is never submitted to arbitration expires after 7 days with no consequence to either party. However, serial flag-and-abandon is itself a behavioral signal: if a flagging agent abandons more than 3 flags in a rolling 90-day window without submission, that pattern is recorded in the flagger's trust profile. This eliminates the harassment attack vector (flag repeatedly, never submit, cause B reputational damage) while keeping flagging as a zero-cost first step. B is never penalized without a verdict.
 
+**Arbitration verdict classes**: Five distinct outcomes with different trust score implications:
+- `UPHELD` — inference finds the complaint substantiated. Trust score impact on flagged party. Bond/stake release condition triggered where applicable.
+- `DISMISSED` — inference finds no violation. Minor notation only; no trust score impact.
+- `ARBITRATION_REFUSED` — defendant declined to submit their copy by the deadline. Recorded as a separate signal; the complaint may still be evaluated on the plaintiff's verified copy. Refusal compounds a negative verdict but is always permitted — the privacy guarantee cannot require forced disclosure. Pattern analysis must distinguish `refusal_on_substantiated` from `refusal_on_unsubstantiated` complaints; aggregating them produces uninterpretable noise.
+- `UNSUBSTANTIATED` — plaintiff could not provide a verified leaf sequence. No evaluation possible. Recorded against the plaintiff. A complaint without a verifiable copy is a flag, not a complaint.
+- `ESCALATED` — inference panel cannot resolve; human review triggered.
+
+**Programmatic arbitration request flow**: The directory issues `ARBITRATION_SUBMISSION_REQUESTED` to both parties with a deadline timestamp. Failure to respond by the deadline is treated as refusal and recorded as `ARBITRATION_REFUSED`. This is a protocol-level request — not a human chasing parties. The notification includes: `conversation_id`, sealed root, deadline.
+
+**Gaming resistance**: An agent that files complaints without providing verified copies accumulates an `UNSUBSTANTIATED` pattern. An agent that refuses on unsubstantiated complaints receives a weaker negative signal than one refusing on substantiated complaints. The pattern — not any single incident — is the signal. See [[2026-05-14_1702_arbitration-mechanics-and-dispute-resolution|Arbitration Mechanics and Dispute Resolution]] for the full four-scenario matrix and behavioral rules.
+
 ### Discovery
 
 **Two-tier access model:**
@@ -769,7 +780,8 @@ See [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay 
 
 - Relay nodes see: ephemeral libp2p Peer IDs, agents' public keys (read-only, received from directory at session assignment), signed SHA-256 hashes, encrypted traffic, per-session ephemeral Merkle state
 - Relay nodes never see: message content, agent real identities, phone numbers, K_server_X shares, or any persistent identity data
-- Relay nodes hold NO persistent state — per-session Merkle state is destroyed after the seal handoff to the directory
+- Relay nodes hold NO long-term persistent state — per-session Merkle state is destroyed after the seal handoff to the directory
+- **Relay WAL (crash recovery only)**: Relay nodes maintain a per-session write-ahead log on local disk during active sessions. Each entry is one serialized Structure 2 leaf (~250 bytes). Purpose: if a relay crashes and restarts mid-session, it reconstructs in-memory Merkle state from the WAL rather than forcing agents to re-submit the full leaf sequence from the beginning. The WAL is destroyed after the directory confirms the seal. It is never replicated, never persisted beyond session end, and is not a database — a simple append-only file per session. Storage cost: negligible (a multi-day high-volume session is a few megabytes).
 - Hashes are non-reversible and non-revealing — relay nodes can be placed in any jurisdiction without data residency constraints
 
 ### P2P connection relay
@@ -793,6 +805,7 @@ See [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay 
 - Relay verifies the sender's signature against the sender's public key
 - Relay assigns the canonical sequence number and constructs Structure 2 (outer leaf): `sequence_number || sender_pubkey || message_content_hash || sender_signature (Structure 1 embedded) || scan_result || prev_root`
 - Relay relays Structure 2 to the counterparty
+- **Relay ACK is a signed cryptographic receipt** — not merely a network-level delivery confirmation. The relay signs `SHA-256(hash_H || sequence_number || timestamp)` and returns this to the sender. The sender stores it. If the relay later claims a hash was never submitted, the sender can present the relay's own signed ACK as proof. A relay cannot deny sequencing something it already signed for.
 - Receivers verify the sender's K_local signature directly — they do not trust the relay's version
 - **Adversarial sequencing defence**: each sender includes `last_seen_seq` in Structure 1, creating a causal chain. If Alice's message says "I've seen up to seq 5," the relay cannot place that message before seq 5 without the inconsistency being provable. The directory verifies causal consistency at seal time.
 - Relay nodes do not participate in FROST ceremonies
@@ -800,13 +813,18 @@ See [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay 
 
 ### Relay failure recovery
 
+**P2P-first robustness model**: The relay is not load-bearing for conversation continuity. A and B communicate directly via P2P. If the relay fails, A and B keep talking — the conversation does not stop. What stops is Merkle accounting. Agents queue hashes locally (see agent hash queue below) and submit them when a new relay is assigned.
+
 If a relay node goes down mid-session:
 1. Both agents detect the relay is gone (connection drops)
 2. Both agents still hold their local Merkle tree copies with all leaves and the last confirmed sequence number
 3. Both agents have a persistent libp2p connection to the directory (dormant but open)
 4. Both agents signal the directory: "relay X is down, session Y needs reassignment"
-5. Directory assigns a new relay, hands it the session ID, public keys, and the last confirmed sequence number (reported by both agents — must agree)
-6. New relay picks up sequencing from the confirmed point; agents resume
+5. Directory assigns a new relay, hands it the session ID, public keys, and the last confirmed sequence number reported by both agents
+6. **Pre-seal reconciliation**: if A and B report different last confirmed sequence numbers (one-sided delivery failure before the crash), the new relay serves the missing leaves to the behind party from the old relay's WAL handoff (if available) or from the ahead agent's re-submission of leaves covered by signed relay ACKs. Both parties confirm consistent trees before sequencing resumes.
+7. New relay picks up sequencing from the confirmed point; agents resume
+
+**Agent hash queue — first-class protocol primitive**: Agents maintain a local queue of hashes pending relay submission. This is not an implementation convenience — it is the primary recovery mechanism for relay failures. When relay connectivity is interrupted, agents continue the P2P conversation and queue hashes locally. On relay recovery or reassignment, the queued hashes are submitted in order. The relay sequences them, both trees catch up, and seal proceeds normally. The agent carrying its own hash queue is what makes the P2P-first model correct under relay failure — not the relay's WAL.
 
 For sessions with a direct P2P connection (~70–80%): messages continue flowing via P2P during relay failure. Only hash relay is interrupted. Agents queue hashes locally and submit to the new relay on reassignment. No messages lost.
 
