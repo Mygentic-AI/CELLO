@@ -210,7 +210,9 @@ The full client data store is encrypted with `backup_key` and uploaded to user-c
 
 Conversation Merkle trees are the only data that cannot be reconstructed from scratch — they must be in the encrypted backup or recovered from counterparties. Everything else is either re-queryable from the directory (track record stats) or re-derivable from the identity key.
 
-**Conversation tree retention policy (AC-2 resolved):** The client retains full Merkle trees for two years from the conversation seal date, then prunes them from local storage. The retention window is configurable via `cello_configure` (`merkle_retention_days`, default `730`). The node operator can override this default at deployment time. After pruning, the sealed root hash and MMR peak remain in the directory's conversation seal record — non-repudiation at the conversation level is preserved. What is lost after pruning is the ability to produce individual leaf-level proofs; disputes referencing pruned leaves must rely on the counterparty's copy or the directory's sealed root. The client surfaces the configured retention window in `cello_status` and emits a `MERKLE_PRUNE_SCHEDULED` notification 30 days before any batch of trees is pruned, giving the owner the option to export or extend before deletion.
+**Conversation tree retention policy (AC-2 resolved):** The client retains full Merkle trees for two years from the conversation seal date, then prunes them from local storage. The retention window is configurable via `cello_configure` (`merkle_retention_days`, default `730`). The node operator can override this default at deployment time. After pruning, the sealed root hash and MMR peak remain in the directory's conversation seal record — non-repudiation at the conversation level is preserved.
+
+**Pruning is a dispute rights decision, not a storage optimization.** What is lost after pruning is not merely leaf-level proof capability — it is the ability to substantiate any dispute about that conversation. The directory's sealed root is a commitment anchor, not proof material: it confirms a conversation happened but cannot help construct any inclusion proof. If an agent prunes its local tree and the counterparty is adversarial, the agent cannot dispute anything about that conversation. The client must surface this consequence explicitly before any pruning operation is permitted — not as a buried technical note but as a visible owner decision. The 30-day `MERKLE_PRUNE_SCHEDULED` notification exists precisely to give the owner the option to export or extend before this right is surrendered.
 
 ### Succession package
 
@@ -439,6 +441,10 @@ When a relay node fails mid-session:
 4. Directory assigns a new relay, handing it the session ID, both agents' public keys, and the last confirmed sequence number (the directory verifies both agents' reported sequence numbers agree)
 5. New relay picks up sequencing from the confirmed point; both agents reconnect to it
 6. Session resumes with no message loss
+
+**Agent hash queue — first-class protocol primitive:** The client maintains a local queue of Structure 1 hashes pending relay submission. This is not an implementation detail — it is the primary robustness guarantee for relay failures. When relay connectivity is interrupted, the P2P conversation continues and hashes accumulate in the queue. On relay recovery or reassignment, the queued hashes are submitted in order. The relay sequences them, both trees catch up, and seal proceeds normally. The relay's WAL handles relay crash recovery; the agent's hash queue handles relay failure from the agent's perspective. These are distinct mechanisms.
+
+**Signed relay ACK storage:** The relay ACK for each submitted hash is a signed cryptographic receipt — `relay_signature(SHA-256(hash_H || sequence_number || timestamp))`. The client must store these receipts. They are the evidence if a relay later denies having sequenced a hash, and are required for re-submission to a new relay when the old relay's WAL is unavailable.
 
 **For direct P2P sessions (~70–80%):** messages continue flowing directly over P2P during the relay outage. Only the hash relay path is interrupted. The client queues Structure 1 leaves locally and submits them to the new relay on reassignment.
 
