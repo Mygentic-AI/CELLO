@@ -341,11 +341,11 @@ The Operations Agent requires the following secrets, each managed in AWS Secrets
   Telegram user ──→ │  Telegram Webhook  ──→    │                  │
   WeChat user   ──→ │  WeChat Webhook    ──→    │  (post-M6)       │
                     │                           ↓                  │
-                    │                    State Machine Engine       │
+                    │                    State Machine Engine      │
                     │                        ↑   │                 │
-                    │              Postgres   │   │  OTP Service    │
+                    │              Postgres   │   │  OTP Service   │
                     │            (state)  ────┘   ↓                │
-                    │                       Email Verification      │
+                    │                       Email Verification     │
                     │                         Service              │
                     │                             │                │
                     └─────────────────────────────┼────────────────┘
