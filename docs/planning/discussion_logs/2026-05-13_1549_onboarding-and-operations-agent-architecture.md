@@ -67,16 +67,17 @@ These are not blockers for M6, but they are risks that need to be understood bef
 
 WeChat is the third supported channel. It is critical for China market reach — a significant portion of the global agent operator population will only be reachable via WeChat, and excluding it makes CELLO effectively unavailable in that market.
 
-The WeChat Official Account API is the correct integration point. Unlike the Telegram Bot API or Baileys, WeChat imposes significant jurisdictional prerequisites:
+**Why there is no Baileys equivalent for WeChat.** The natural question is whether an unofficial library exists for WeChat the way Baileys exists for WhatsApp. The answer is: there was one, but Tencent closed the path. WeChat Web (`web.wechat.com`) exposed a protocol that was reverse-engineered — `itchat` (Python) was the WeChat equivalent of Baileys, and `wechaty` built a bot framework on top of it. Tencent progressively restricted web login starting around 2019; by 2020–2021 most new accounts could no longer authenticate via the web protocol at all. `itchat` is effectively dead. `wechaty` still exists but its free web puppet is largely broken, and the working puppets are paid third-party services operating in a gray area with their own reliability risks. Unlike WhatsApp — where Baileys is a viable unofficial path and the official API has approval friction — WeChat's unofficial path is closed and the official path has jurisdictional friction. There is no clean workaround equivalent to Baileys for M6.
 
-- A **Chinese business entity** is required to register a WeChat Official Account. A foreign company cannot register directly; a Chinese subsidiary or a licensed service provider acting as the account holder is required.
-- **ICP licensing** (Internet Content Provider filing with MIIT) is required for operating internet-facing services in China.
-- All traffic routes through **Tencent's gateway** — there is no self-hosted or unofficial alternative equivalent to Baileys for WeChat.
-- The Official Account API uses a webhook model (Tencent pushes inbound messages to a registered endpoint) and a token-based outbound API. The pattern is similar to Telegram webhooks in structure.
+The WeChat Official Account API is therefore the only viable integration point. It imposes:
 
-**Phone verification on WeChat** works differently from both other channels. WeChat does not expose the user's phone number to third-party bots by default. Phone number retrieval requires the user to explicitly authorize it via a WeChat login flow (OAuth-style), which returns a `unionid` and optionally a phone number if the user grants the `scope=snsapi_userinfo` permission. The bot-first path on WeChat therefore requires an additional authorization step that doesn't exist on WhatsApp or Telegram.
+- A **Chinese business entity** to register a WeChat Official Account. A foreign company cannot register directly; a Chinese subsidiary or a licensed service provider acting as account holder is required.
+- **ICP licensing** (Internet Content Provider filing with MIIT) for operating internet-facing services in China.
+- All traffic routed through **Tencent's gateway**. The Official Account API uses a webhook model (Tencent pushes inbound messages to a registered endpoint) and a token-based outbound API — structurally similar to Telegram webhooks.
 
-**M6 scope for WeChat:** WeChat support is explicitly deferred from M6. The jurisdictional prerequisites (Chinese business entity, ICP license) cannot be satisfied by a startup in early product development. WeChat is designed into the architecture as a first-class channel — the state machine, transport adapter pattern, and internal interfaces all accommodate it — but the WeChat adapter is not built until the business entity and ICP requirements are met. This is a business milestone dependency, not a technical one.
+**Phone verification on WeChat** works differently from both other channels. WeChat does not expose the user's phone number to third-party bots by default. Retrieval requires explicit user authorization via a WeChat OAuth flow, returning a `unionid` and optionally a phone number if the user grants `scope=snsapi_userinfo`. The bot-first path on WeChat therefore requires an additional authorization step absent from WhatsApp and Telegram.
+
+**M6 scope for WeChat:** WeChat support is deferred from M6 on both business and technical grounds — the jurisdictional prerequisites cannot be satisfied by a startup in early product development, and the unofficial path is closed. WeChat is designed into the architecture as a first-class channel — the transport adapter pattern and internal interfaces accommodate it — but the WeChat adapter is not built until the business entity and ICP requirements are met.
 
 ### The Migration Path
 
