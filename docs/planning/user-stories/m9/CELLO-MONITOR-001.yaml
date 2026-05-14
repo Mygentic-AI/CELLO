@@ -1,0 +1,94 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-MONITOR-001
+domain: Continuous Verification
+actor: CLIENT
+priority: P0
+components:
+  - client
+  - scripts
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want an automated security audit suite that evaluates the integrity of the
+  system's security state, 
+  so that I can detect configuration drift, binary tampering, or permission 
+  escalation that static pipeline guards might miss.
+
+  The suite is agent-agnostic: the core verification logic lives in a 
+  standardized audit script. Each agent implementation (Hermes, Claude Code, etc.) 
+  is responsible for invoking this script via its own native scheduling 
+  capability, ensuring the monitoring remains decoupled from the specific 
+  client implementation.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the audit script executes"
+    action: "the script shall perform a deep scan: check file permissions for 
+      non-standard modifications, compute SHA-256 hashes for security-critical 
+      binaries and scanner models, check for unexpected changes in sensitive 
+      config files, and report findings in a structured audit-result.json format 
+      which includes the status of each check and metadata on detected deviations."
+
+  - trigger: "When an agent client starts"
+    action: "the client shall evaluate its internal capability to schedule 
+      tasks; if the client supports periodic execution (e.g., cron integration), 
+      the client must register the audit script for daily execution to ensure
+      the security state is verified consistently without manual intervention."
+
+  - trigger: "If a verification check fails (e.g., hash mismatch, permission drift)"
+    action: "the client shall log a critical security event and, where 
+      configured for the specific agent, alert the owner via the out-of-band 
+      notification path (e.g., Telegram, WhatsApp, or CLI alert)."
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The audit script is run in a clean environment"
+    when: "The audit completes"
+    then: "A structured audit-result.json is generated with all checks passed; 
+      the script returns exit code 0."
+    test_type: unit
+    component_under_test: scripts
+
+  - id: AC-002
+    given: "The scanner model file has been modified (tampered)"
+    when: "The audit script executes"
+    then: "The SHA-256 hash check fails; the audit-result.json records a 
+      'tamper' status for the scanner model; the script returns exit code 1."
+    test_type: unit
+    component_under_test: scripts
+
+  - id: AC-003
+    given: "A client (e.g., Hermes Agent) that supports cron-like scheduling"
+    when: "The client starts"
+    then: "The client identifies the audit script integration and successfully 
+      registers it to run at a daily cadence."
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-004
+    given: "The audit script detects a failure"
+    when: "The audit concludes"
+    then: "The agent logs the event as a CRITICAL error and initiates 
+      notification of the failure if out-of-band channels are configured."
+    test_type: unit
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The audit script shall never rely on the agent's internal state 
+      for verification of critical binaries."
+    adversarial_condition: "even when the agent reports 'system healthy' — the 
+      audit script must perform independent disk-level verification to ensure 
+      that binary integrity has not been compromised."
+    test_type: unit
+    component_under_test: scripts
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1"
+  discussion_logs:
+    - "2026-04-11_1400_security-architecture-layers-and-trust-signal-classes"

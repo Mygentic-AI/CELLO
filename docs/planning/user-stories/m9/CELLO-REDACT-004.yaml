@@ -1,0 +1,210 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-REDACT-004
+domain: Redaction & Governance
+actor: CLIENT
+priority: P0
+components:
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want every blocking decision across all six layers logged to an append-only
+  destination with tamper-resistant guarantees, and a nightly automated
+  verification job that checks the integrity of the defense pipeline
+  so that the system's security posture is continuously observable, novel attack
+  patterns are detectable from log analysis, and configuration drift or
+  tampering is caught within 24 hours.
+
+  Audit logging captures what happened without capturing what was in the blocked
+  payload — the sanitized stats and trigger identifiers are logged, not the raw
+  message content.
+
+  Continuous verification is not manual: it runs on a schedule (nightly or more
+  frequently) and its findings produce automated alerts and block the next
+  deployment. The verification script is itself covered by the checksum check —
+  an attacker who modifies the verifier must also modify the deployment artifact,
+  which triggers a separate integrity alarm.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When any layer (1–6) makes a blocking decision"
+    action: "the client shall write a structured log event to the audit log before
+      returning the block result; the event shall include: timestamp (ISO 8601),
+      layer number, source type, decision (block/review/pass), trigger (which check
+      or step fired), detection stats from Layer 1 if applicable, and Layer 2 risk
+      score if applicable; the raw message content shall not be logged"
+
+  - trigger: "When a blocking decision event is written"
+    action: "the client shall write it to the configured append-only destination;
+      in the default configuration this is the local append-only log file; the
+      client process shall not have permissions to modify or delete already-written
+      log entries"
+
+  - trigger: "When the nightly verification job runs"
+    action: "the job shall perform all of the following checks:
+      (1) file permissions on security module files are read-only to the agent process,
+      (2) gateway configuration (thresholds, source classification table) matches the
+      expected values from the deployment artifact,
+      (3) no secrets have been accidentally committed to the repository (scan using
+      the secret patterns from Layer 3),
+      (4) security module files have not been modified since last deployment (SHA-256
+      checksum comparison against the deployment artifact),
+      (5) the verification script itself has not been modified (the verifier's checksum
+      is also in the deployment artifact and is verified before the script runs),
+      (6) suspicious log activity: block-rate anomalies, unusual source volumes, Layer
+      2 score distribution shifts since the last verification run"
+
+  - trigger: "When any verification check fails"
+    action: "the job shall produce an alert (to the configured alert destination:
+      PagerDuty, SNS, Slack, or equivalent) and set a flag that blocks the next
+      deployment until a human reviews and clears the finding"
+
+  - trigger: "When a verification run completes with all checks passing"
+    action: "the job shall write a verification-passed event to the audit log with
+      the run timestamp and a summary of what was checked"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Layer 1 blocks a message"
+    when: "The blocking decision is made"
+    then: "A structured event is written to the audit log containing: timestamp,
+      layer: 1, source type, decision: 'block', trigger (the step number that fired),
+      detection stats (per-step signal counts); the raw message text is absent from
+      the event"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-002
+    given: "Layer 2 blocks a message with a risk score of 85"
+    when: "The blocking decision is made"
+    then: "A structured event is written containing: layer: 2, decision: 'block',
+      trigger: 'score_threshold', Layer 2 risk score: 85; the raw message text
+      is absent"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-003
+    given: "Layer 3 blocks a message due to a secrets match"
+    when: "The blocking decision is made"
+    then: "A structured event is written containing: layer: 3, trigger: 'secrets_check',
+      the matched secret pattern type (not the secret value itself)"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-004
+    given: "The audit log has been written with blocking events"
+    when: "The client process attempts to modify or delete a previously written entry"
+    then: "The attempt fails; the log file's append-only configuration prevents
+      modification; existing entries are immutable from the perspective of the
+      client process"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-005
+    given: "A security module file has been modified since the last deployment
+      (checksum does not match the deployment artifact)"
+    when: "The nightly verification job runs"
+    then: "Check (4) detects the mismatch; an alert is fired; the next deployment
+      is blocked"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-006
+    given: "The verification script itself has been modified"
+    when: "The nightly verification job runs"
+    then: "The verifier checks its own checksum against the deployment artifact
+      before running any other check; if the checksum does not match, an alert is
+      fired and the verification run aborts"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-007
+    given: "A secret has been committed to the repository"
+    when: "The nightly verification job's secret-scan check runs"
+    then: "The secret pattern is detected; an alert is fired; the next deployment
+      is blocked"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-008
+    given: "The Layer 2 block rate has spiked significantly above the baseline
+      for the rolling window"
+    when: "The nightly verification job's log-anomaly check runs"
+    then: "The anomaly is detected; an alert is fired; the finding is included
+      in the verification run's audit log entry"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-009
+    given: "All nightly verification checks pass"
+    when: "The verification run completes"
+    then: "A verification-passed event is written to the audit log; no alert is
+      fired; the next deployment is not blocked"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-010
+    given: "A blocking decision is logged"
+    when: "The log event is inspected"
+    then: "The event contains no substring matching the blocked message's content;
+      only metadata (layer, trigger, stats, score) is present"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-011
+    given: "Layer 4 redaction pipeline matches and replaces a secret in an outbound
+      message (but does NOT block — redaction is a pass-through with substitution)"
+    when: "The redaction event is written to the audit log"
+    then: "A structured event is written containing: layer: 4, decision: 'redacted',
+      trigger: 'secret_match'; the replaced value is absent; the placeholder type
+      is present"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-012
+    given: "Layer 5 spend cap is exceeded and a call is rejected"
+    when: "The rejection is made"
+    then: "A structured event is written to the audit log containing: layer: 5,
+      decision: 'block', trigger: 'spend_cap_exceeded', current spend, and window
+      remaining"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-013
+    given: "Layer 6 denies a file read because the path is outside the allow-list"
+    when: "The denial is made"
+    then: "A structured event is written to the audit log containing: layer: 6,
+      decision: 'block', trigger: 'path_not_allowed', and the denied path"
+    test_type: unit
+    component_under_test: client
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The audit log shall not contain raw message content from any blocked
+      or reviewed message"
+    adversarial_condition: "even when the logging code is written with a 'debug
+      mode' flag that logs extra context — the raw message payload must never appear
+      in audit log output regardless of log level; it may contain the injected
+      instructions or sensitive data that should not be persisted"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: "The verification script shall verify its own checksum before
+      executing any check"
+    adversarial_condition: "even when the verification script has been modified by
+      an attacker who also modified the security modules — the verifier's self-check
+      fires first and aborts the run, ensuring a tampered verifier cannot issue
+      false 'all clear' results"
+    test_type: unit
+    component_under_test: client
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Security and Prompt Injection Defense"
+  end_to_end_flow: "§7.1, §7.2"
+  discussion_logs:
+    - "2026-04-11_1400_security-architecture-layers-and-trust-signal-classes"
