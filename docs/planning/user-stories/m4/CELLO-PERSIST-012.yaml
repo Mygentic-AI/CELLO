@@ -1,0 +1,220 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-012
+domain: Persistence
+milestone: M4
+actor: CLIENT
+priority: P0
+components:
+  - client
+  - relay
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want a local queue of Structure 1 hashes pending relay submission,
+  with signed relay ACKs stored as cryptographic receipts,
+  so that relay connectivity interruptions do not lose hashes and any
+  relay that later denies sequencing a hash can be disproved.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the client computes a Structure 1 hash for a message"
+    action: "the client shall enqueue the hash in the local hash queue before
+      attempting relay submission; the hash is not removed from the queue
+      until a signed relay ACK is received and stored"
+
+  - trigger: "When the relay accepts a submitted hash"
+    action: "the relay shall return a signed ACK:
+      relay_signature(SHA-256(hash_H || sequence_number || timestamp));
+      the client shall store the ACK in the ClientStore alongside the hash"
+
+  - trigger: "When relay connectivity is interrupted"
+    action: "the client shall continue enqueuing hashes locally; the P2P
+      conversation continues uninterrupted; no hash is dropped"
+
+  - trigger: "When relay connectivity is restored or a new relay is assigned"
+    action: "the client shall submit queued hashes to the relay in FIFO order;
+      each submission waits for an ACK before submitting the next; the queue
+      drains fully before normal operation resumes"
+
+  - trigger: "When the client needs to re-submit hashes to a new relay whose
+      predecessor's WAL is unavailable"
+    action: "the client uses its locally stored signed ACKs as evidence of
+      prior sequencing; the new relay accepts re-submissions with valid ACKs
+      from the previous relay"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The client computes a Structure 1 hash for a message"
+    when: "the hash is enqueued before relay submission"
+    then: "the hash is present in the local queue in the ClientStore;
+      querying the queue returns the hash in insertion order before any
+      ACK is received"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-002
+    given: "A hash has been submitted to the relay and the relay returns a
+      signed ACK"
+    when: "the client processes the ACK"
+    then: "the ACK is stored in the ClientStore keyed by hash; the hash is
+      removed from the pending queue; a subsequent queue read does not
+      include the ACked hash"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-003
+    given: "The relay is unreachable and the client generates 5 hashes"
+    when: "relay connectivity is restored"
+    then: "all 5 hashes are submitted to the relay in FIFO order; each
+      receives an ACK before the next is submitted; all 5 ACKs are stored;
+      the queue is empty after all submissions complete — verified by
+      inspecting the queue and ACK store in the ClientStore"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-004
+    given: "A signed relay ACK is stored for hash H with sequence_number S"
+    when: "the ACK signature is verified"
+    then: "verify(relay_pubkey, SHA-256(H || S || timestamp), ACK.signature)
+      returns true — the ACK is a valid Ed25519 signature by the relay's
+      registered public key"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-005
+    given: "The original relay has crashed and its WAL is unavailable; the
+      client has stored signed ACKs for hashes 1–8"
+    when: "the client re-submits hashes 1–8 to a new relay with their ACKs"
+    then: "the new relay accepts the re-submissions; the Merkle state on the
+      new relay reflects all 8 hashes in the correct sequence — verified by
+      querying the new relay's session state from a separate process"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-006
+    given: "The client queue contains hashes pending submission"
+    when: "client.hashqueue.depth is inspected in the log output"
+    then: "client.hashqueue.depth is logged at INFO with { agentId, depth }
+      on a 30-second interval while depth > 0 — enabling operators to
+      observe relay connectivity degradation"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-007
+    given: "A relay ACK fails signature verification"
+    when: "the client attempts to store the ACK"
+    then: "client.relay.ack.invalid is logged at WARN with { agentId,
+      sessionId, hashHex, reason }; the ACK is discarded; the hash remains
+      in the pending queue for resubmission"
+    test_type: unit
+    component_under_test: client
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "A hash shall never be removed from the pending queue without
+      a valid stored ACK"
+    adversarial_condition: "even when the relay claims to have sequenced the
+      hash but returns a malformed or unsigned ACK — the client retains the
+      hash in the queue and resubmits"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: "The client shall never submit hashes out of FIFO order to
+      the relay"
+    adversarial_condition: "even when a later hash is available and an earlier
+      hash's submission is retrying — the queue is strictly ordered; submitting
+      out of order would break the relay's Merkle sequence"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-003
+    statement: "Stored relay ACKs shall be immutable — once written to the
+      ClientStore they shall never be modified or deleted by the application"
+    adversarial_condition: "even when the session is sealed and the ACKs are
+      no longer needed for queue management — they are retained as evidence
+      for potential dispute resolution"
+    test_type: unit
+    component_under_test: client
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the relay is unreachable for longer than
+      hash_queue_max_age (default: 24 hours)"
+    fallback: "client.hashqueue.stale is logged at WARN with { agentId,
+      depth, oldestHashAge }; the ops-warning alarm fires; the queue
+      continues to grow; no hashes are dropped — the operator must resolve
+      the relay connectivity issue"
+    test_type: integration
+    component_under_test: client
+
+  - id: DB-002
+    condition: "While the new relay rejects a re-submission with a valid ACK
+      from the previous relay"
+    fallback: "client.relay.resubmit.rejected is logged at ERROR with
+      { agentId, sessionId, hashHex, reason }; the hash remains in the queue;
+      the operator is alerted — relay rejection of a validly-ACKed hash is
+      a protocol violation requiring manual investigation"
+    test_type: integration
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: client.hashqueue.enqueued
+      level: info
+      trigger: "a hash is added to the pending queue"
+      context_fields: [agentId, sessionId, hashHex, queueDepth, correlationId]
+      correlationId: true
+
+    - name: client.hashqueue.acked
+      level: info
+      trigger: "a hash is ACKed and removed from the queue"
+      context_fields: [agentId, sessionId, hashHex, sequenceNumber,
+        correlationId]
+      correlationId: true
+
+    - name: client.hashqueue.depth
+      level: info
+      trigger: "queue depth polling interval (30s) while depth > 0"
+      context_fields: [agentId, depth, oldestHashAge]
+      correlationId: false
+
+  error_events:
+    - name: client.relay.ack.invalid
+      level: warn
+      trigger: "a relay ACK fails signature verification"
+      context_fields: [agentId, sessionId, hashHex, reason]
+
+    - name: client.hashqueue.stale
+      level: warn
+      trigger: "queue contains hashes older than hash_queue_max_age"
+      context_fields: [agentId, depth, oldestHashAge]
+
+    - name: client.relay.resubmit.rejected
+      level: error
+      trigger: "new relay rejects a re-submission with a valid prior ACK"
+      context_fields: [agentId, sessionId, hashHex, reason]
+
+  alarms:
+    - condition: "client.hashqueue.stale fires"
+      fires_to: ops-warning
+    - condition: "client.relay.resubmit.rejected fires at any time"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Message Exchange / Session Lifecycle"
+  discussion_logs:
+    - "2026-04-11_1700_persistence-layer-design"
+    - "2026-05-14_1702_relay-session-mechanics-and-recovery"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  depends_on:
+    - CELLO-PERSIST-001
+    - CELLO-PERSIST-009
