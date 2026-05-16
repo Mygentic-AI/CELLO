@@ -50,6 +50,41 @@ At the end of M6:
 
 ---
 
+## Adapter Pattern
+
+M6 introduces three new external dependencies. Each is behind an interface with a local stub implementation. This follows the pattern established for all external dependencies in [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration Strategy]].
+
+| Interface | Local Stub | Production Implementation |
+|-----------|------------|--------------------------|
+| `MessagingChannel` | `CliAdapter` — reads from stdin, writes to stdout | `BaileysAdapter` (WhatsApp), `TelegramAdapter` |
+| `OtpDeliveryProvider` | Prints OTP to console | AWS SES email delivery |
+| `SecurityAlertProvider` | Logs alert locally | Routes to operator's active messaging channel |
+| `TokenValidator` | Hardcoded dev token → fixed Principal | Directory JWT validation |
+
+**`MessagingChannel` interface** — single interface, multiple implementations. The state machine engine and all business logic import `MessagingChannel` only. The engine does not know whether it is talking to Baileys, Telegram, or the CLI adapter.
+
+```typescript
+interface MessagingChannel {
+  send(to: string, message: string): Promise<void>
+  onMessage(handler: (from: string, message: string) => void): void
+  resolveIdentity(from: string): Promise<ChannelIdentity>
+}
+
+type ChannelIdentity = {
+  channel: 'whatsapp' | 'telegram' | 'wechat' | 'cli'
+  phoneNumber?: string   // WhatsApp: from Baileys JID; Telegram: from contact.user_id
+  channelUserId: string  // channel-native identifier
+}
+```
+
+**WeChat accommodation:** `MessagingChannel` is designed to accommodate WeChat as a first-class channel from the start — the `channel` discriminant includes `'wechat'` even though `WeChatAdapter` is not built at M6. The interface must not be designed around only two channels.
+
+**`CliAdapter` as the CI test transport:** the "fake Baileys transport" described in prior documents is the `CliAdapter`. It is a real implementation of `MessagingChannel` over stdin/stdout — not a mock. The state machine exercises identical logic paths regardless of which adapter is loaded.
+
+**`SecurityAlertProvider`** is designed and stubbed at M6 for the lifecycle operations that ship in later milestones. The stub logs locally. The production implementation routes to the operator's active messaging channel via the same `MessagingChannel` interface.
+
+---
+
 ## The Operations Agent Is Not Part of the Directory
 
 The Operations Agent is a standalone deployable. It calls the CELLO directory's pre-authorization API, but it does not implement the CELLO protocol itself. It is a product shell around the directory's registration and notification APIs.
