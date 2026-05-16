@@ -350,5 +350,6 @@ Once PERSIST-001 and PERSIST-002 are done, the directory track, client track, an
 - [[2026-05-14_1702_arbitration-mechanics-and-dispute-resolution|Arbitration Mechanics and Dispute Resolution]] — client backup as non-repudiation obligation; pruning as dispute rights decision
 - [[2026-05-14_1853_milestone-sequence-revision|Milestone Sequence Revision]] — sequencing decisions that place M4 here and defer federation to M5
 - [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration Strategy]] — adapter inventory, local development infrastructure, environment tiers, CI/CD pipeline
+- [[2026-05-16_0900_m4-cloud-infrastructure-decisions|M4 Cloud Infrastructure Decisions]] — VPC topology, RDS access, IAM scoping, Secrets Manager naming convention, KMS, S3 audit bucket, IaC templates
 - [[server-infrastructure|CELLO Server Infrastructure Requirements]] — PostgreSQL RLS, hash chain, KMS, pgaudit, federation (M5)
 - [[agent-client|CELLO Agent Client Requirements]] — SQLCipher, key provider abstraction, backup, hash queue, signed relay ACK storage

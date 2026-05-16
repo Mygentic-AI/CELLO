@@ -236,6 +236,7 @@ Standard SPARC gate sequence plus live smoke tests:
 
 - [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration Strategy]] — CI/CD pipeline design, Lambda router pattern, IaC discipline, environment tiers
 - [[2026-05-14_1853_milestone-sequence-revision|Milestone Sequence Revision]] — sequencing decisions placing M5 here
+- [[2026-05-16_0900_m4-cloud-infrastructure-decisions|M4 Cloud Infrastructure Decisions]] — VPC, IAM, Secrets Manager naming convention, KMS, S3 audit bucket established at M4; M5 adds two regions and federation on top of this foundation
 - [[2026-04-08_1700_node-architecture-and-replication|Node Architecture and Replication]] — three-phase node deployment strategy, threshold parameters, primary/backup replication topology
 - [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]] — relay as session-level Merkle engine; relay node separation from directory
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — schema and federation replication strategy this infrastructure hosts
