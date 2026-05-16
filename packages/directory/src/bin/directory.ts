@@ -106,6 +106,57 @@ if (env === "local" && pgPool) {
   }
 }
 
+// ─── PERSIST-003: RLS startup check ─────────────────────────────────────────
+// Verify that every append-only table has row-level security enabled.
+// Logs db.rls.verified on success; logs db.rls.missing and exits 1 on any gap.
+// This runs after the migration version guard so the tables are guaranteed to exist.
+// TODO(PERSIST-003): extend RLS check to dev/staging/production when pgPool is wired for those envs
+// Must match APPEND_ONLY_TABLES in src/__tests__/persist-003-rls.test.ts
+if (env === "local" && pgPool) {
+  const appendOnlyTables = [
+    "agent_registrations", "social_verifications", "social_verification_freshness_checks",
+    "social_binding_releases", "device_bindings", "endorsements", "attestations",
+    "bio_history", "pseudonym_bindings", "connection_requests", "conversation_seals",
+    "conversation_attestations", "conversation_participation", "conversation_proof_leaves",
+    "conversation_proof_mmr_nodes", "directory_checkpoints", "checkpoint_node_signatures",
+    "arbitration_verdicts", "notification_events", "revocations", "tombstones",
+    "social_proof_freezes", "anomaly_events", "recovery_contact_designations",
+    "recovery_contact_members", "recovery_events", "recovery_vouches",
+    "voucher_accountability_events", "voucher_lockouts", "trust_seeders", "seeder_vouches",
+    "seeder_accountability_events", "seeder_lockouts", "key_rotation_log",
+    "identity_migration_log", "agent_authorizations", "authorization_revocations",
+    "authorization_violation_events", "contact_aliases", "contact_alias_retirements",
+    "directory_listings", "group_rooms", "room_memberships",
+  ] as const;
+
+  const rlsResult = await pgPool.query<{ tablename: string; relrowsecurity: boolean }>(
+    `SELECT c.relname AS tablename, c.relrowsecurity
+     FROM pg_class c
+     JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public'
+       AND c.relkind = 'r'
+       AND c.relname = ANY($1)`,
+    [appendOnlyTables as unknown as string[]],
+  );
+
+  const rlsMap = new Map(rlsResult.rows.map((r) => [r.tablename, r.relrowsecurity]));
+  let rlsGap = false;
+
+  for (const tableName of appendOnlyTables) {
+    if (!rlsMap.get(tableName)) {
+      logger.error("db.rls.missing", { tableName, env });
+      rlsGap = true;
+    }
+  }
+
+  if (rlsGap) {
+    await pgPool.end();
+    process.exit(1);
+  }
+
+  logger.info("db.rls.verified", { tableCount: appendOnlyTables.length, env });
+}
+
 // envelopeKeyProvider/clientStore/relayWal/jobScheduler are instantiated here and
 // will be wired into createDirectoryNode in PERSIST-003+.
 const envelopeKeyProvider = (() => {
