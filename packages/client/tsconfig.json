@@ -7,6 +7,7 @@
   "include": ["src"],
   "references": [
     { "path": "../crypto" },
+    { "path": "../interfaces" },
     { "path": "../protocol-types" },
     { "path": "../test-fixtures" },
     { "path": "../transport" },

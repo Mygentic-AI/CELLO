@@ -51,7 +51,7 @@ import {
 } from "../directory-node.js";
 import type { RelayAdapter } from "../directory-node.js";
 import type { RelaySessionAssignment } from "../directory-types.js";
-import { InMemoryDirectoryStore } from "../directory-store.js";
+import { InMemoryDirectoryStore } from "@cello/interfaces/stubs";
 import { NetworkDirectoryNode, runNetworkDkg } from "@cello/client";
 
 setupV3Tests();

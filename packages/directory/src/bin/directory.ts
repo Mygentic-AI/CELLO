@@ -17,7 +17,7 @@ import { randomBytes } from "node:crypto";
 import { FileKeyProvider } from "@cello/crypto";
 import { createDirectoryNode } from "../directory-node.js";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
-import { InMemoryDirectoryStore } from "../directory-store.js";
+import { InMemoryDirectoryStore } from "@cello/interfaces/stubs";
 import { InMemoryShareStore } from "../share-store.js";
 
 const keyPath = process.env["CELLO_DIRECTORY_KEY_FILE"] ?? join(homedir(), ".cello", "directory-key");

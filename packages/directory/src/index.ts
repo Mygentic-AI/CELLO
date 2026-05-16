@@ -23,8 +23,6 @@ export type {
 } from "./directory-types.js";
 export { WALL_CLOCK } from "./directory-types.js";
 
-export type { DirectoryStore } from "./directory-store.js";
-export { InMemoryDirectoryStore } from "./directory-store.js";
 
 export {
   encodeSignalingAuthChallenge,

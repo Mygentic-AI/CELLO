@@ -33,7 +33,10 @@ export {
 } from "./structure2.js";
 
 export { computeGenesisPrevRoot, encodeSealPayload, decodeSealPayload, buildSessionEstablishmentTbs, buildSealTbs } from "./session.js";
-export type { SessionAssignment, SessionAssignmentFrost, SessionAssignmentSingle, ParticipantInfo, RelayEndpointInfo, SealPayload } from "./session.js";
+export type {
+  SessionAssignment, SessionAssignmentFrost, SessionAssignmentSingle, ParticipantInfo, RelayEndpointInfo, SealPayload,
+  SessionAbandoned, SessionSealedSingle, SessionSealedFrost, SessionSealed, SealRejectionReason, SessionSealRejected, SealVerified,
+} from "./session.js";
 
 export type {
   MlDsaKeyProvider,

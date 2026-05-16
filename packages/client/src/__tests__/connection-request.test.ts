@@ -60,6 +60,7 @@ import { createNode } from "@cello/transport";
 import {
   createDirectoryNode,
 } from "@cello/directory";
+import { InMemoryDirectoryStore } from "@cello/interfaces/stubs";
 import type { RelayAdapter, RelaySessionAssignment } from "@cello/directory";
 import { createRelayNode } from "@cello/relay";
 import { createClient } from "../client.js";
@@ -530,15 +531,13 @@ describe("CONNREQ-002-AC-011: tampered package_cbor — ML-DSA signature invalid
 describe("CONNREQ-002-AC-012: connection_id is identical on A, B, and directory", () => {
   it("AC-012: connection_id returned by cello_request_connection equals the id on B and on directory store", async () => {
     const dirKeyProvider = generateKeypair();
-    const store = (await import("@cello/directory")).InMemoryDirectoryStore
-      ? new (await import("@cello/directory")).InMemoryDirectoryStore()
-      : null;
+    const store = new InMemoryDirectoryStore();
     const { node: dirNode, stop: stopDir } = await createDirectoryNode({
       keyProvider: dirKeyProvider,
       relay: makeRelay(),
       relayEndpoint: { peer_id: "relay-peer-id", multiaddrs: [] },
       requireRegistration: true,
-      ...(store ? { store } : {}),
+      store,
     });
     scope.addCleanup(stopDir);
 

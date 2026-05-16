@@ -110,23 +110,20 @@ import type { AgentProfile } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
 import type { CelloNode } from "@cello/transport";
 import type { Stream } from "@libp2p/interface";
+import type { SessionAbandoned, SessionSealed, SessionSealRejected, SealVerified } from "@cello/protocol-types";
+import type { SealNotarization } from "@cello/interfaces";
 import type {
   SessionAssignment,
   SessionAssignmentFrame,
-  SessionAbandoned,
-  SessionSealed,
-  SessionSealRejected,
-  SealNotarization,
   TimeSource,
   RelaySealData,
   RelaySessionAssignment,
-  SealVerified,
   SealFrostSignature,
   SessionFrostSealed,
 } from "./directory-types.js";
 import { WALL_CLOCK } from "./directory-types.js";
-import type { DirectoryStore } from "./directory-store.js";
-import { InMemoryDirectoryStore } from "./directory-store.js";
+import type { DirectoryStore } from "@cello/interfaces";
+import { InMemoryDirectoryStore } from "@cello/interfaces/stubs";
 import {
   encodeSignalingAuthChallenge,
   encodeSignalingAuthFailed,

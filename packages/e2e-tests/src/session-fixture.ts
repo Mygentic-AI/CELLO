@@ -33,7 +33,8 @@ import {
 } from "@cello/crypto/frost/frost-threshold-signer.js";
 import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
 import { createNode } from "@cello/transport";
-import { createDirectoryNode, InMemoryDirectoryStore } from "@cello/directory";
+import { createDirectoryNode } from "@cello/directory";
+import { InMemoryDirectoryStore } from "@cello/interfaces/stubs";
 import { NetworkRelayAdapter } from "@cello/directory/network-relay-adapter.js";
 import type { CelloDirectoryNode } from "@cello/directory";
 import { createRelayNode } from "@cello/relay";

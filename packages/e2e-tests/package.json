@@ -16,6 +16,7 @@
     "@cello/client": "workspace:*",
     "@cello/crypto": "workspace:*",
     "@cello/directory": "workspace:*",
+    "@cello/interfaces": "workspace:*",
     "@cello/protocol-types": "workspace:*",
     "@cello/relay": "workspace:*",
     "@cello/transport": "workspace:*",

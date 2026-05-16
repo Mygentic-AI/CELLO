@@ -1,0 +1,31 @@
+{
+  "name": "@cello/interfaces",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./stubs": {
+      "import": "./dist/stubs/index.js",
+      "types": "./dist/stubs/index.d.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cello/protocol-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.2"
+  }
+}

@@ -72,73 +72,19 @@ export interface SessionAssignmentFrame {
   assignment: SessionAssignment;
 }
 
-// ─── Session outcome frame types ──────────────────────────────────────────────
-
-export interface SessionAbandoned {
-  type: "session_abandoned";
-  session_id: Uint8Array; // 16 bytes
-}
-
-/**
- * M1 session_sealed frame (single-key directory signature).
- * Refused in M2 clients per SESSION-005 SI-003.
- * @deprecated Use SessionSealedFrost instead in M2+.
- */
-export interface SessionSealedSingle {
-  type: "session_sealed";
-  signature_type: "single";
-  session_id: Uint8Array;          // 16 bytes
-  sealed_root: Uint8Array;         // 32-byte final Merkle root
-  directory_signature: Uint8Array; // 64-byte Ed25519 over canonical CBOR([session_id, sealed_root, close_timestamp])
-  close_timestamp: number;         // Unix ms
-}
-
-/**
- * M2 session_sealed frame (FROST-notarized ceremony signature).
- * SESSION-005: seal_type is 'frost' when the FROST ceremony completes.
- */
-export interface SessionSealedFrost {
-  type: "session_sealed";
-  signature_type: "frost";
-  session_id: Uint8Array;          // 16 bytes
-  sealed_root: Uint8Array;         // 32-byte final Merkle root
-  frost_signature: Uint8Array;     // 64-byte combined FROST signature over seal TBS
-  signer_pubkey: Uint8Array;       // 32-byte initiator primary_pubkey (group public key)
-  close_timestamp: number;         // Unix ms
-  leaf_count?: number;             // total leaves in the sealed tree (SESSION-005 H-003)
-}
-
-/** Discriminated union: M2 sends SessionSealedFrost; old M1 wire format is SessionSealedSingle. */
-export type SessionSealed = SessionSealedSingle | SessionSealedFrost;
-
-export interface SessionSealRejected {
-  type: "session_seal_rejected";
-  session_id: Uint8Array; // 16 bytes
-  reason: SealRejectionReason;
-}
-
-export type SealRejectionReason =
-  | "merkle_root_mismatch"
-  | "leaf_signature_invalid"
-  | "prev_root_chain_broken"
-  | "causal_chain_violated"
-  | "seal_leaves_invalid"
-  | "seal_signature_invalid";
+// ─── Session outcome frame types (re-exported from @cello/protocol-types) ────
+// These are wire-format events that cross process boundaries.
+export type {
+  SessionAbandoned,
+  SessionSealedSingle,
+  SessionSealedFrost,
+  SessionSealed,
+  SealRejectionReason,
+  SessionSealRejected,
+  SealVerified,
+} from "@cello/protocol-types";
 
 // ─── SESSION-005: New signaling frames ────────────────────────────────────────
-
-/**
- * seal_verified: directory → seal initiator, after all three verification passes pass.
- * Tells the initiator: "I've verified the tree — coordinate the FROST ceremony now."
- * Per SESSION-005 step 4 in the seal ceremony flow.
- */
-export interface SealVerified {
-  type: "seal_verified";
-  session_id: Uint8Array;  // 16 bytes
-  sealed_root: Uint8Array; // 32-byte final Merkle root (recomputed by directory)
-  leaf_count: number;      // total leaves in the verified tree
-  timestamp: number;       // Unix ms (used in FROST TBS)
-}
 
 /**
  * seal_frost_signature: seal initiator → directory, after FROST ceremony completes.
@@ -209,15 +155,8 @@ export type {
 } from "@cello/protocol-types";
 
 // ─── Internal directory session state ─────────────────────────────────────────
-
-export interface SealNotarization {
-  session_id: Uint8Array;          // 16 bytes
-  sealed_root: Uint8Array;         // 32-byte Merkle root
-  participant_a_pubkey: Uint8Array; // 32 bytes
-  participant_b_pubkey: Uint8Array; // 32 bytes
-  close_timestamp: number;         // Unix ms
-  frost_signature: Uint8Array;     // 64-byte FROST (or legacy Ed25519) signature over the notarization
-}
+// SealNotarization is a storage-only type — defined in @cello/interfaces, imported where needed.
+export type { SealNotarization } from "@cello/interfaces";
 
 // ─── Relay seal data (mirror of relay-types SealData, kept local to avoid cross-package import) ──
 
