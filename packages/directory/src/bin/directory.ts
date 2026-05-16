@@ -110,7 +110,7 @@ if (env === "local" && pgPool) {
 // Verify that every append-only table has row-level security enabled.
 // Logs db.rls.verified on success; logs db.rls.missing and exits 1 on any gap.
 // This runs after the migration version guard so the tables are guaranteed to exist.
-// TODO(PERSIST-003): extend RLS check to dev/staging/production when pgPool is wired for those envs
+// TODO: extend RLS check to dev/staging/production when pgPool is wired for those envs
 // Must match APPEND_ONLY_TABLES in src/__tests__/persist-003-rls.test.ts
 if (env === "local" && pgPool) {
   const appendOnlyTables = [

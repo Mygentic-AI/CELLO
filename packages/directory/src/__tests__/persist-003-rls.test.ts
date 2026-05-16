@@ -28,7 +28,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const isLocal = process.env["CELLO_ENV"] === "local";
@@ -169,6 +169,34 @@ describe("PERSIST-003 AC-007 / SI-002: migration lint", () => {
       badGrants,
       `V2 migration must not GRANT UPDATE or DELETE to cello_service. Found: ${JSON.stringify(badGrants)}`,
     ).toBeNull();
+  });
+
+  it("DB-001: no migration file contains UPDATE DML (ADD COLUMN migrations must not UPDATE existing rows)", () => {
+    // DB-001: ADD COLUMN migrations must never back-fill data via UPDATE.
+    // An UPDATE in a migration locks the table and violates the append-only contract.
+    const migrationFiles = readdirSync(MIGRATIONS_DIR).filter((f) => /^V\d+__.*\.sql$/.test(f));
+
+    const violations: string[] = [];
+    for (const file of migrationFiles) {
+      const content = readFileSync(resolve(MIGRATIONS_DIR, file), "utf8");
+
+      // Strip single-line comments (-- ...) and block comments (/* ... */) before scanning.
+      const stripped = content
+        .replace(/--[^\n]*/g, "")
+        .replace(/\/\*[\s\S]*?\*\//g, "");
+
+      // Match UPDATE as a DML statement: UPDATE followed by whitespace and a table name.
+      // This distinguishes "UPDATE tbl SET ..." from "REVOKE UPDATE, DELETE" or
+      // "GRANT UPDATE" where UPDATE is a privilege keyword, not DML.
+      if (/\bUPDATE\s+\w/i.test(stripped)) {
+        violations.push(file);
+      }
+    }
+
+    expect(
+      violations,
+      `DB-001: the following migration files contain UPDATE DML, which is not permitted:\n${violations.join("\n")}`,
+    ).toHaveLength(0);
   });
 
   it("SI-002: every table created in V2 has RLS enabled in the same file (not a separate migration)", () => {

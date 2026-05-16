@@ -78,6 +78,7 @@
 import { ed25519_FROST } from "@noble/curves/ed25519.js";
 import type { NonceCommitments } from "@noble/curves/abstract/frost.js";
 import type { FrostContext } from "@cello/crypto/frost/types.js";
+import type { Logger } from "@cello/interfaces";
 import type { ShareStore, LocalShare } from "./share-store.js";
 import { InMemoryShareStore } from "./share-store.js";
 
@@ -268,6 +269,8 @@ export interface FrostDirectoryHandlerOptions {
   readonly shareStore?: ShareStore;
   /** Optional FALLBACK_CANARY event listener (for testing/monitoring) */
   readonly onFallbackCanary?: (event: FallbackCanaryEvent) => void;
+  /** Structured logger injected at the composition root */
+  readonly logger?: Logger;
 }
 
 // ─── FrostDirectoryHandler ────────────────────────────────────────────────────
@@ -288,6 +291,7 @@ export class FrostDirectoryHandler {
   readonly #nodeId: string;
   readonly #shareStore: ShareStore;
   readonly #onFallbackCanary: ((event: FallbackCanaryEvent) => void) | undefined;
+  readonly #logger: Logger | undefined;
 
   // In-flight ceremony registry: "${agentPubkey}:${epochId}" → InFlightEntry
   // Tracks which Peer ID owns the in-flight ceremony for each (agent, epoch) pair.
@@ -315,6 +319,7 @@ export class FrostDirectoryHandler {
     this.#nodeId = opts.nodeId;
     this.#shareStore = opts.shareStore ?? new InMemoryShareStore();
     this.#onFallbackCanary = opts.onFallbackCanary;
+    this.#logger = opts.logger;
   }
 
   get nodeId(): string { return this.#nodeId; }
@@ -524,7 +529,7 @@ export class FrostDirectoryHandler {
         framedMsg,
       );
     } catch (err) {
-      console.error("[frost-handler] signRawMessage signShare failed:", err instanceof Error ? err.message : "unknown");
+      this.#logger?.error("frost.sign.share.failed", { error: err instanceof Error ? err.message : "unknown" });
       return { ok: false, reason: "AGENT_NOT_BOOTSTRAPPED" };
     }
 
@@ -767,7 +772,7 @@ export class FrostDirectoryHandler {
       try { ed25519_FROST.DKG.clean(state.secret); } catch { /* ignore */ }
       this.#dkgStates.delete(stateKey);
       // SECURITY: do NOT include error message or state in return value
-      console.error("[frost-handler] DKG round3 failed:", err instanceof Error ? err.message : "unknown");
+      this.#logger?.error("frost.dkg.round3.failed", { error: err instanceof Error ? err.message : "unknown" });
       return { ok: false, reason: "share_verification_failed" };
     }
 
@@ -821,10 +826,7 @@ export class FrostDirectoryHandler {
       );
     } catch (err) {
       // Crypto failure — do NOT include share bytes in the error
-      console.error(
-        "[frost-handler] signShare failed:",
-        err instanceof Error ? err.message : "unknown error"
-      );
+      this.#logger?.error("frost.sign.share.failed", { error: err instanceof Error ? err.message : "unknown error" });
       return { ok: false, reason: "AGENT_NOT_BOOTSTRAPPED" };
     }
 
@@ -834,14 +836,13 @@ export class FrostDirectoryHandler {
 
   #fireFallbackCanary(event: FallbackCanaryEvent): void {
     // M2: log only — no push notification
-    console.warn(
-      "[frost-handler] FALLBACK_CANARY:" +
-        ` agent=${event.agentPubkey.slice(0, 16)}…` +
-        ` epoch=${event.epochId}` +
-        ` inFlight=${event.inFlightPeerId}` +
-        ` conflict=${event.conflictingPeerId}` +
-        ` ts=${event.timestamp}`
-    );
+    this.#logger?.warn("frost.ceremony.fallback.canary", {
+      agentId: event.agentPubkey.slice(0, 16),
+      epochId: event.epochId,
+      inFlightPeerId: event.inFlightPeerId,
+      conflictingPeerId: event.conflictingPeerId,
+      timestamp: event.timestamp,
+    });
     if (this.#onFallbackCanary) {
       this.#onFallbackCanary(event);
     }

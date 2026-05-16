@@ -111,7 +111,7 @@ import { createNode } from "@cello/transport";
 import type { CelloNode } from "@cello/transport";
 import type { Stream } from "@libp2p/interface";
 import type { SessionAbandoned, SessionSealed, SessionSealRejected, SealVerified } from "@cello/protocol-types";
-import type { SealNotarization } from "@cello/interfaces";
+import type { SealNotarization, Logger } from "@cello/interfaces";
 import type {
   SessionAssignment,
   SessionAssignmentFrame,
@@ -234,6 +234,8 @@ export interface DirectoryNodeOptions {
    * Only effective in NODE_ENV=test.
    */
   packageCborInterceptor?: (cbor: Uint8Array) => Uint8Array;
+  /** Structured logger injected at the composition root */
+  logger?: Logger;
 }
 
 export class CelloDirectoryNode {
@@ -245,6 +247,7 @@ export class CelloDirectoryNode {
   readonly #store: DirectoryStore;
   readonly #clock: TimeSource;
   readonly #frostHandler: FrostDirectoryHandler;
+  readonly #logger: Logger | undefined;
 
   // REG-001: forceDkgFailure — test injection for below-threshold DKG simulation
   readonly #forceDkgFailure: boolean;
@@ -332,12 +335,14 @@ export class CelloDirectoryNode {
     };
     this.#store = opts.store ?? new InMemoryDirectoryStore();
     this.#clock = opts.clock ?? WALL_CLOCK;
+    this.#logger = opts.logger;
     this.#frostHandler = new FrostDirectoryHandler({
       // Default to libp2p peer ID so that NetworkDirectoryNode.id = peerID matches
       // the FROST identifier derivation used in DKG and signing ceremonies.
       nodeId: opts.nodeId ?? opts.node.getPeerId(),
       shareStore: opts.shareStore,
       onFallbackCanary: opts.onFallbackCanary,
+      logger: opts.logger,
     });
     this.#forceDkgFailure = opts.forceDkgFailure ?? false;
     this.#requireRegistration = opts.requireRegistration ?? false;
@@ -1390,7 +1395,7 @@ export class CelloDirectoryNode {
     const ceremonyId = `session-${Buffer.from(session_id).toString("hex")}`;  // unique per ceremony
     const conflict = this.#frostHandler.checkConflict(initiatorHex, epochId, ceremonyId, ceremonyId);
     if (conflict) {
-      console.warn(`[directory] CEREMONY_CONFLICT: agent=${initiatorHex.slice(0, 16)}`);
+      this.#logger?.warn("frost.ceremony.conflict", { agentId: initiatorHex.slice(0, 16) });
       this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "ceremony_conflict" }));
       return;
     }
@@ -1997,6 +2002,8 @@ export interface CreateDirectoryNodeOptions {
    * Only effective in NODE_ENV=test.
    */
   packageCborInterceptor?: (cbor: Uint8Array) => Uint8Array;
+  /** Structured logger injected at the composition root */
+  logger?: Logger;
 }
 
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{
@@ -2026,6 +2033,7 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     requireRegistration: opts.requireRegistration,
     requireConnectionGate: opts.requireConnectionGate,
     packageCborInterceptor: opts.packageCborInterceptor,
+    logger: opts.logger,
   });
   await directory.start();
 

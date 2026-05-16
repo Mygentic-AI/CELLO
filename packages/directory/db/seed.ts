@@ -34,9 +34,82 @@ async function seed(): Promise<void> {
   try {
     await client.query("BEGIN");
 
-    // TODO(PERSIST-003): truncate and seed tables once schema is defined.
-    // Each scenario maps 1:1 to a table row. Add INSERTs here after
-    // V2__directory_schema.sql is written.
+    // Truncate append-only tables in dependency order so FK constraints don't block.
+    // conversation_attestations and conversation_participation reference conversation_seals,
+    // so they must be truncated before conversation_seals.
+    await client.query(`
+      TRUNCATE TABLE
+        conversation_attestations,
+        conversation_participation,
+        conversation_seals,
+        connection_requests,
+        agent_registrations,
+        notification_events
+      RESTART IDENTITY CASCADE
+    `);
+
+    // ── Scenario 1: Registered operator with no active sessions ─────────────
+    // One row in agent_registrations; no conversation rows.
+    await client.query(
+      `INSERT INTO agent_registrations
+         (agent_id, identity_key_hash, phone_hash, initial_signing_key_hash,
+          initial_fallback_pubkey_hash, trust_tier, provisional_period_start, registered_at)
+       VALUES ($1, $2, $3, $4, $5, 'PROVISIONAL', now(), now())`,
+      [
+        "00000000-0000-0000-0000-000000000001",
+        "0000000000000000000000000000000000000000000000000000000000000001",
+        "0000000000000000000000000000000000000000000000000000000000000002",
+        "0000000000000000000000000000000000000000000000000000000000000003",
+        "0000000000000000000000000000000000000000000000000000000000000004",
+      ],
+    );
+
+    // ── Scenario 2: Unregistered operator ───────────────────────────────────
+    // No row needed — an absent agent_registrations row IS the unregistered state.
+
+    // ── Scenario 3: Active session mid-conversation ──────────────────────────
+    // A conversation_seals row with close_type='REOPEN' models a conversation that
+    // has been (re)opened and is currently active. The conversation_participation
+    // rows record which pseudonyms are in the conversation.
+    await client.query(
+      `INSERT INTO conversation_seals
+         (conversation_id, merkle_root, close_type, participant_count, seal_date)
+       VALUES ($1, $2, 'REOPEN', 2, current_date)`,
+      [
+        "00000000-0000-0000-0000-000000000010",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      ],
+    );
+    await client.query(
+      `INSERT INTO conversation_participation (conversation_id, party_pseudonym)
+       VALUES ($1, $2), ($1, $3)`,
+      [
+        "00000000-0000-0000-0000-000000000010",
+        "pseudonym-alice-dev",
+        "pseudonym-bob-dev",
+      ],
+    );
+
+    // ── Scenario 4: Sealed session ───────────────────────────────────────────
+    // A conversation_seals row with close_type='MUTUAL_SEAL' is a fully sealed conversation.
+    await client.query(
+      `INSERT INTO conversation_seals
+         (conversation_id, merkle_root, close_type, participant_count, seal_date)
+       VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date - interval '1 day')`,
+      [
+        "00000000-0000-0000-0000-000000000020",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      ],
+    );
+    await client.query(
+      `INSERT INTO conversation_participation (conversation_id, party_pseudonym)
+       VALUES ($1, $2), ($1, $3)`,
+      [
+        "00000000-0000-0000-0000-000000000020",
+        "pseudonym-charlie-dev",
+        "pseudonym-diana-dev",
+      ],
+    );
 
     await client.query("COMMIT");
     process.stdout.write("seed: baseline scenarios applied.\n");
