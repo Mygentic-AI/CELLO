@@ -48,6 +48,8 @@ Three RDS PostgreSQL instances, one per region (recommended: us-east-1, eu-west-
 
 **Replication:** PostgreSQL logical replication. Each node is both a publisher and a subscriber to the other two. All append-only core tables replicate to all nodes. The hash chain computed at INSERT on the originating node replicates as-is — receiving nodes verify the chain on sync rather than recomputing it.
 
+**Session ownership:** Each session is assigned to exactly one owning node at session establishment. The `sessions` table carries an `owning_node_id` column populated at session creation. The owning node is the sole writer for that session's hash chain entries — `SELECT FOR UPDATE` on the previous chain row serializes writes on that node only. Session ownership is non-transferable: if the owning node fails mid-session, the session fails and the client must re-establish it. No other node attempts to take over writes for the failed session, eliminating any risk of concurrent hash chain writes from different nodes.
+
 **Instance sizing:** At Alpha with low traffic, `db.t3.medium` or `db.t3.large` is sufficient. Instance class is a deployment parameter, not a protocol constraint.
 
 **KMS:** One AWS KMS master key per node, in the node's region. K_server_X shares are encrypted at rest with the regional KMS key. KMS is invoked at node startup to unwrap the master key into memory — not per-agent-share.
@@ -68,7 +70,7 @@ Each directory node runs as an ECS Fargate service in its region. The directory 
 
 Relay nodes run as ECS Fargate services. At Alpha, CELLO operates all relay nodes.
 
-**Relay pool manifest:** a signed JSON document listing relay node public keys and WebSocket endpoints, signed by CELLO's consortium key, versioned. The directory reads the manifest at startup. The manifest is stored in S3 and referenced by the directory task definition — updating the manifest triggers a directory service reload.
+**Relay pool manifest:** a signed JSON document listing relay node public keys and WebSocket endpoints, versioned. The manifest is signed by the directory node with the lowest `node_id` in the current manifest, using that node's existing Ed25519 node signing key (`cello/{env}/directory/node-private-key`). Clients verify against the signing node's registered public key — the same key that signs SessionAssignments, so no new trust anchor is introduced. The directory reads the manifest at startup. The manifest is stored in S3 and referenced by the directory task definition — updating the manifest triggers a directory service reload.
 
 **Health checks:** the directory pings each relay on a 30-second interval. A relay that fails 3 consecutive pings is marked unavailable and excluded from session assignment until it recovers.
 
@@ -82,7 +84,9 @@ Relay nodes run as ECS Fargate services. At Alpha, CELLO operates all relay node
 
 **Threshold:** 2-of-3 directory nodes must sign a checkpoint for it to be confirmed. Tolerates one node being temporarily unavailable without stalling checkpoints.
 
-**Coordinator:** the node with the lowest node ID in the current manifest acts as coordinator. Deterministic — no election needed.
+**Coordinator:** the node with the lowest `node_id` in the current manifest acts as coordinator. Deterministic — no election needed.
+
+**Coordinator failover:** non-coordinator nodes detect coordinator absence by watching for a new row in `directory_checkpoints` (replicated via logical replication). If no new checkpoint row appears within `checkpoint_interval + 60s`, the node with the next-lowest available `node_id` initiates the round as coordinator. No gossip protocol, no heartbeat — detection is a read on an already-replicated table. If no node successfully completes a round, the round is skipped and retried at the next interval.
 
 **Mechanics:**
 1. Coordinator computes the checkpoint hash: `SHA-256(mmr_peaks_serialized || identity_merkle_root || checkpoint_id)`
