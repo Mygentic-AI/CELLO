@@ -1,0 +1,199 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-006
+domain: Persistence
+milestone: M4
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Directory Node,
+  I want all database access and INSERTs logged via pgaudit and shipped
+  to external storage via the AuditLogShipper interface,
+  so that a compromised cello_service role cannot erase its own access
+  history and every data access is independently verifiable.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When pgaudit is enabled via the RDS parameter group"
+    action: "PostgreSQL shall write a structured audit log entry for every
+      SELECT, INSERT, UPDATE, DELETE, and DDL statement executed by any
+      role, including cello_service"
+
+  - trigger: "When the AuditLogShipper receives an audit log entry"
+    action: "the shipper shall forward the entry to its configured destination
+      without modification; log entries are never buffered beyond a single
+      flush interval"
+
+  - trigger: "When CELLO_ENV=local"
+    action: "LocalAuditLogShipper writes each entry as a structured JSON line
+      to a local file sink at the path configured in AUDIT_LOG_PATH"
+
+  - trigger: "When CELLO_ENV=cloud"
+    action: "S3AuditLogShipper ships each entry to the cello-audit-logs-cloud
+      S3 bucket under the prefix audit/{date}/; the shipper uses the ECS task
+      role's PutObject permission — no separate credentials"
+
+  - trigger: "When AuditLogShipper.flush() is called"
+    action: "all buffered entries are shipped before the method returns; flush
+      is called on graceful shutdown and on a 60-second interval"
+
+  - trigger: "When the cello_service role attempts to DELETE or TRUNCATE the
+      pgaudit log destination"
+    action: "the operation is rejected — cello_service has no WRITE access to
+      the audit log file or the S3 audit bucket beyond PutObject"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "pgaudit is enabled on the local Postgres container via
+      shared_preload_libraries and pgaudit.log = 'all'"
+    when: "cello_service executes an INSERT on conversation_seals"
+    then: "a pgaudit log entry appears in the Postgres log output containing
+      the role name, statement type (INSERT), table name, and timestamp —
+      verified by parsing the Postgres container log after the INSERT"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "CELLO_ENV=local and AUDIT_LOG_PATH is set"
+    when: "the directory service handles a request that causes a database INSERT"
+    then: "LocalAuditLogShipper writes at least one structured JSON line to
+      the file at AUDIT_LOG_PATH containing { role, statement, table, timestamp };
+      the file is append-only — no existing lines are modified"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "AuditLogShipper.flush() is called"
+    when: "the method returns"
+    then: "all entries that were passed to ship() before flush() was called
+      are present in the destination — no entries are lost between ship() and
+      flush()"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-004
+    given: "The directory service is shut down gracefully"
+    when: "the shutdown sequence runs"
+    then: "AuditLogShipper.flush() is called before the process exits —
+      verified by confirming no audit entries are pending after shutdown
+      completes"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "CELLO_ENV=local and AUDIT_LOG_PATH is not set"
+    when: "the directory service starts"
+    then: "the process exits with code 1 and logs adapter.config.missing with
+      { missingKey: 'AUDIT_LOG_PATH', env: 'local' }"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-006
+    given: "10 audit log entries have been shipped via LocalAuditLogShipper"
+    when: "the audit log file is read"
+    then: "it contains exactly 10 lines, each a valid JSON object — no partial
+      writes, no truncation, no interleaved lines from concurrent writes"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "The AuditLogShipper interface is defined"
+    when: "a developer reads the interface"
+    then: "it exposes exactly two methods: ship(entry: AuditLogEntry):
+      Promise<void> and flush(): Promise<void> — nothing more; the interface
+      is narrow by design"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The cello_service role shall have no ability to delete,
+      truncate, or modify audit log entries after they are shipped"
+    adversarial_condition: "even when the cello_service application role is
+      fully compromised — the S3 bucket policy grants PutObject only, and the
+      local file sink is opened in append-only mode (O_APPEND); neither
+      allows deletion or overwrite"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "Audit log entries shall never be dropped silently — if
+      AuditLogShipper.ship() fails, the error shall be logged and the entry
+      retried; entries shall not be discarded on first failure"
+    adversarial_condition: "even when the S3 endpoint is temporarily
+      unavailable — the shipper shall buffer and retry, not silently drop"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "pgaudit shall log all statements by cello_service — the
+      pgaudit.log parameter shall not be scoped to a subset of statement
+      types that excludes SELECT"
+    adversarial_condition: "even if a developer narrows pgaudit.log to
+      'write' to reduce log volume — read access by a compromised role
+      must be detectable; pgaudit.log must include 'read' or be set to 'all'"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the S3 audit log destination is unavailable
+      (CELLO_ENV=cloud)"
+    fallback: "S3AuditLogShipper shall buffer entries in memory and retry
+      on a 30-second interval; the directory shall continue serving requests;
+      audit.shipper.degraded is logged at WARN with { reason, bufferedCount };
+      if the buffer exceeds 10,000 entries, audit.shipper.buffer.overflow is
+      logged at ERROR and ops-critical fires"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: audit.shipper.flushed
+      level: info
+      trigger: "AuditLogShipper.flush() completes successfully"
+      context_fields: [entriesShipped, durationMs]
+      correlationId: false
+
+  error_events:
+    - name: audit.shipper.degraded
+      level: warn
+      trigger: "audit log destination is unavailable; shipper is buffering"
+      context_fields: [reason, bufferedCount]
+
+    - name: audit.shipper.buffer.overflow
+      level: error
+      trigger: "buffered audit entry count exceeds 10,000"
+      context_fields: [bufferedCount, reason]
+
+    - name: audit.ship.failed
+      level: error
+      trigger: "a single ship() call fails after all retries exhausted"
+      context_fields: [reason, entryTimestamp]
+
+  alarms:
+    - condition: "audit.shipper.buffer.overflow fires at any time"
+      fires_to: ops-critical
+    - condition: "audit.ship.failed fires more than 3 times in 5 minutes"
+      fires_to: ops-warning
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-04-11_1700_persistence-layer-design"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+    - "2026-05-16_0900_m4-cloud-infrastructure-decisions"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  depends_on:
+    - CELLO-PERSIST-001
+    - CELLO-PERSIST-002
+    - CELLO-PERSIST-003
