@@ -1,24 +1,47 @@
 #!/usr/bin/env node
 /**
- * CELLO Directory binary (CELLO-NODE-004)
+ * CELLO Directory composition root (CELLO-NODE-004 / PERSIST-001)
+ *
+ * Adapter selection is driven by CELLO_ENV:
+ *   local  — Docker Compose Postgres + all local stubs (no AWS)
+ *   dev    — RDS + KMS + CloudWatch + EventBridge (real AWS, dev key)
+ *
+ * The process exits with code 1 and logs adapter.config.missing if any
+ * required configuration key is absent. It never starts with a silently
+ * misconfigured adapter.
  *
  * Environment variables:
- *   CELLO_DIRECTORY_KEY_FILE           — path to persisted directory signing keypair (default: ~/.cello/directory-key)
- *   CELLO_DIRECTORY_TRANSPORT_KEY_FILE — path to persisted libp2p transport key (default: ~/.cello/directory-transport-key)
+ *   CELLO_ENV                          — required: local | dev | staging | production
+ *   DATABASE_URL                       — required for CELLO_ENV=local
+ *   DEV_ENVELOPE_KEY                   — required for CELLO_ENV=local (64-char hex)
+ *   CELLO_DIRECTORY_KEY_FILE           — path to persisted directory signing keypair
+ *   CELLO_DIRECTORY_TRANSPORT_KEY_FILE — path to persisted libp2p transport key
  *   CELLO_DIRECTORY_LISTEN_ADDR        — libp2p listen address (default: /ip4/0.0.0.0/tcp/4000)
  *   CELLO_RELAY_MULTIADDR              — relay multiaddr (required)
- *                                         Format: /ip4/<host>/tcp/<port>/p2p/<peer-id>
- *                                         The directory connects to the relay at startup using NetworkRelayAdapter.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import pg from "pg";
 import { FileKeyProvider } from "@cello/crypto";
 import { createDirectoryNode } from "../directory-node.js";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
-import { InMemoryDirectoryStore } from "@cello/interfaces/stubs";
+import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler } from "@cello/interfaces/stubs";
 import { InMemoryShareStore } from "../share-store.js";
+import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
+
+const env = process.env["CELLO_ENV"];
+const logger = new StdoutLogger();
+
+function requireEnv(key: string): string {
+  const val = process.env[key];
+  if (!val) {
+    logger.error("adapter.config.missing", { missingKey: key, env });
+    process.exit(1);
+  }
+  return val;
+}
 
 const keyPath = process.env["CELLO_DIRECTORY_KEY_FILE"] ?? join(homedir(), ".cello", "directory-key");
 const transportKeyPath = process.env["CELLO_DIRECTORY_TRANSPORT_KEY_FILE"] ?? join(homedir(), ".cello", "directory-transport-key");
@@ -26,21 +49,72 @@ const listenAddr = process.env["CELLO_DIRECTORY_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/t
 const relayAddr = process.env["CELLO_RELAY_MULTIADDR"];
 
 if (!relayAddr) {
-  process.stderr.write("cello-directory: CELLO_RELAY_MULTIADDR is required\n");
-  process.stderr.write("Example: CELLO_RELAY_MULTIADDR=/ip4/127.0.0.1/tcp/4001/p2p/<peer-id>\n");
+  logger.error("adapter.config.missing", { missingKey: "CELLO_RELAY_MULTIADDR", env });
   process.exit(1);
 }
+
+if (!env) {
+  logger.error("adapter.config.missing", { missingKey: "CELLO_ENV", env: "(unset)" });
+  process.exit(1);
+}
+
+if (env !== "local" && env !== "dev" && env !== "staging" && env !== "production") {
+  logger.error("adapter.config.missing", { missingKey: "CELLO_ENV", env, reason: "unrecognised value" });
+  process.exit(1);
+}
+
+// ─── Adapter instantiation ────────────────────────────────────────────────
+
+let pgPool: pg.Pool | undefined;
+
+const store = (() => {
+  if (env === "local") {
+    const databaseUrl = requireEnv("DATABASE_URL");
+    pgPool = new pg.Pool({ connectionString: databaseUrl });
+    const s = new PgDirectoryStore(pgPool);
+    logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env });
+    return s;
+  }
+  // dev/staging/production: RdsDirectoryStore (not yet implemented — will replace in PERSIST-003+)
+  logger.error("adapter.init.failed", { adapterName: "DirectoryStore", reason: `CELLO_ENV=${env} not yet supported` });
+  process.exit(1);
+})();
+
+// envelopeKeyProvider/clientStore/relayWal/jobScheduler are instantiated here and
+// will be wired into createDirectoryNode in PERSIST-003+.
+const envelopeKeyProvider = (() => {
+  if (env === "local") {
+    const devKey = requireEnv("DEV_ENVELOPE_KEY");
+    const p = new LocalEnvelopeKeyProvider(devKey);
+    logger.info("adapter.initialised", { adapterName: "EnvelopeKeyProvider", implementation: "LocalEnvelopeKeyProvider", env });
+    return p;
+  }
+  // dev+: KmsEnvelopeKeyProvider (PERSIST-005)
+  logger.error("adapter.init.failed", { adapterName: "EnvelopeKeyProvider", reason: `CELLO_ENV=${env} not yet supported` });
+  process.exit(1);
+})();
+void envelopeKeyProvider; // wired in PERSIST-005
+
+void new LocalClientStore(); // wired in PERSIST-003+
+logger.info("adapter.initialised", { adapterName: "ClientStore", implementation: "LocalClientStore", env });
+
+void new InMemoryRelayWal(); // wired in PERSIST-003+
+logger.info("adapter.initialised", { adapterName: "RelayWal", implementation: "InMemoryRelayWal", env });
+
+void new LocalJobScheduler(); // wired in PERSIST-003+
+logger.info("adapter.initialised", { adapterName: "JobScheduler", implementation: "LocalJobScheduler", env });
+
+// ─── Key loading ──────────────────────────────────────────────────────────
 
 let kp: FileKeyProvider;
 try {
   kp = await FileKeyProvider.load(keyPath);
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`cello-directory: key file error: ${msg}\n`);
+  logger.error("adapter.init.failed", { adapterName: "FileKeyProvider", reason: msg });
   process.exit(1);
 }
 
-// Load or generate persisted transport key (ensures stable Peer ID across restarts)
 let transportPrivateKey: Uint8Array;
 try {
   transportPrivateKey = readFileSync(transportKeyPath);
@@ -48,24 +122,22 @@ try {
   transportPrivateKey = randomBytes(32);
   mkdirSync(join(homedir(), ".cello"), { recursive: true });
   writeFileSync(transportKeyPath, transportPrivateKey, { mode: 0o600 });
-  process.stdout.write(`cello-directory: generated new transport key at ${transportKeyPath}\n`);
+  logger.info("adapter.initialised", { adapterName: "TransportKey", implementation: "generated", env });
 }
 
-const store = new InMemoryDirectoryStore();
 const shareStore = new InMemoryShareStore();
 
-// Parse relay multiaddr to extract peer_id
+// ─── Relay setup ──────────────────────────────────────────────────────────
+
 const relayParts = relayAddr.split("/");
 const p2pIndex = relayParts.findIndex((p) => p === "p2p");
 const relayPeerId = p2pIndex !== -1 ? relayParts[p2pIndex + 1] : "";
 
 if (!relayPeerId) {
-  process.stderr.write("cello-directory: CELLO_RELAY_MULTIADDR must include /p2p/<peer-id>\n");
+  logger.error("adapter.config.missing", { missingKey: "CELLO_RELAY_MULTIADDR", env, reason: "must include /p2p/<peer-id>" });
   process.exit(1);
 }
 
-// NetworkRelayAdapter: directory communicates with relay via /cello/directory-relay/1.0.0
-// Signs each outbound frame with the directory's signing key.
 const networkRelay = new NetworkRelayAdapter({
   keyProvider: kp,
   relayPeerId,
@@ -73,7 +145,9 @@ const networkRelay = new NetworkRelayAdapter({
 });
 
 const dirPubkey = await kp.getPublicKey();
-process.stdout.write(`cello-directory pubkey: ${Buffer.from(dirPubkey).toString("hex")}\n`);
+logger.info("adapter.initialised", { adapterName: "DirectoryNode", implementation: "CelloDirectoryNode", env, pubkey: Buffer.from(dirPubkey).toString("hex") });
+
+// ─── Node startup ─────────────────────────────────────────────────────────
 
 let result: Awaited<ReturnType<typeof createDirectoryNode>>;
 try {
@@ -88,29 +162,30 @@ try {
   });
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`cello-directory: startup error: ${msg}\n`);
+  logger.error("adapter.init.failed", { adapterName: "CelloDirectoryNode", reason: msg });
   process.exit(1);
 }
 
-// Connect adapter after directory node is started
 try {
   await networkRelay.connect(result.node);
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
   // Log but don't exit — relay may not be reachable yet; adapter will retry on each call
-  process.stderr.write(`cello-directory: relay connection warning: ${msg}\n`);
+  logger.warn("adapter.init.failed", { adapterName: "NetworkRelayAdapter", reason: msg });
 }
 
 for (const addr of result.node.listenAddresses()) {
-  process.stdout.write(`cello-directory listening on ${addr}\n`);
+  logger.info("adapter.initialised", { adapterName: "ListenAddr", implementation: addr.toString(), env });
 }
-process.stdout.write(`cello-directory peer-id: ${result.node.getPeerId()}\n`);
 
 const shutdown = () => {
-  result.stop().catch((err: unknown) => {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`cello-directory: stop error: ${msg}\n`);
-  }).finally(() => process.exit(0));
+  result.stop()
+    .then(() => pgPool?.end())
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("adapter.init.failed", { adapterName: "shutdown", reason: msg });
+    })
+    .finally(() => process.exit(0));
 };
 
 process.on("SIGTERM", shutdown);
