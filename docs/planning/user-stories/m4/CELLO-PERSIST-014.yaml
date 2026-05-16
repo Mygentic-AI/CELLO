@@ -59,12 +59,15 @@ acceptance_criteria:
 
   - id: AC-002
     given: "Agent B has received SEAL_REJECTED_TREE_MISMATCH with
-      partyASequence=10 and partyBSequence=8"
+      partyASequence=10 and partyBSequence=8; Agent B is a separate OS process
+      from the relay"
     when: "Agent B requests leaves 9–10 from the relay WAL"
     then: "the relay returns exactly 2 leaves with sequence numbers 9 and 10;
-      it does not return leaves 1–8; the leaves are the same bytes the relay
-      originally sequenced — verified by comparing against the relay's
-      internal WAL state"
+      it does not return leaves 1–8; Agent B verifies each leaf against Agent
+      A's Ed25519 signature (Agent A's registered public key, not the relay's
+      identity) and both leaves pass verification — this is the cross-process
+      observable that can only be satisfied if the real WAL bytes were served,
+      since a fabricated leaf would fail Agent A's signature check"
     test_type: e2e
     component_under_test: relay
 

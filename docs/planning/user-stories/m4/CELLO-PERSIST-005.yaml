@@ -98,11 +98,18 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-007
-    given: "The EnvelopeKeyProvider.rotate() method is called with a keyId"
-    when: "rotation completes"
-    then: "key.rotation.initiated is logged at INFO with { keyId }; subsequent
-      decrypt calls for shares encrypted under the old key still succeed
-      during the rotation window — the interface supports key versioning"
+    given: "The EnvelopeKeyProvider interface is defined in packages/interfaces/;
+      it includes a rotate(keyId: string): Promise<void> method alongside
+      encrypt() and decrypt(); LocalEnvelopeKeyProvider retains the old key
+      version in memory during a rotation window to allow decryption of
+      shares written under the old key"
+    when: "EnvelopeKeyProvider.rotate() is called and then decrypt() is called
+      with a ciphertext encrypted under the old key"
+    then: "key.rotation.initiated is logged at INFO with { keyId }; decrypt()
+      returns the correct plaintext — the rotation window allows coexistence
+      of old and new key versions; a new encrypt() call uses the new key;
+      the model is dual-key coexistence, not immediate re-encryption of
+      existing shares"
     test_type: unit
     component_under_test: directory
 

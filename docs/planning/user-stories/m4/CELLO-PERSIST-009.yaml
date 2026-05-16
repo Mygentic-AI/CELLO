@@ -105,7 +105,7 @@ acceptance_criteria:
     given: "The SQLCipher database schema needs to be updated"
     when: "the client opens a database at an older schema version"
     then: "the client applies pending schema migrations using the same Flyway
-      pattern as the directory — migration files in client/db/migrations/,
+      pattern as the directory — migration files in packages/client/db/migrations/,
       applied in version order before accepting any read or write operations"
     test_type: integration
     component_under_test: client

@@ -60,7 +60,10 @@ acceptance_criteria:
     then: "the import resolves to packages/interfaces/ and not to any concrete
       implementation package — verified by checking that no application package
       has a direct dependency on packages/interfaces/stubs/ or any production
-      adapter package in its package.json"
+      adapter package in its package.json; EnvelopeKeyProvider exposes
+      encrypt(plaintext, keyId), decrypt(ciphertext, keyId), and
+      rotate(keyId): Promise<void> — all three methods are present in the
+      interface definition"
     test_type: unit
     component_under_test: directory
 

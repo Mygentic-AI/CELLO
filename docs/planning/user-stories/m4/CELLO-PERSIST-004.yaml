@@ -180,3 +180,5 @@ references:
     - CELLO-PERSIST-001
     - CELLO-PERSIST-002
     - CELLO-PERSIST-003
+  blocks:
+    - CELLO-PERSIST-007

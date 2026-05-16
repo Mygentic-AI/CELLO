@@ -101,14 +101,19 @@ acceptance_criteria:
     component_under_test: client
 
   - id: AC-007
-    given: "The full M0–M3 test suite runs with the real EncryptedFileSigningKeyProvider"
-    when: "all tests pass"
-    then: "no test bypasses SigningKeyProvider by accessing a private key
-      directly — all signing in integration and e2e tests goes through the
-      provider interface; verified by grepping for direct private key usage
-      outside provider implementations"
-    test_type: integration
+    given: "The SigningKeyProvider interface and EncryptedFileSigningKeyProvider
+      are implemented"
+    when: "a grep is run across the codebase for direct private key access
+      outside of provider implementations"
+    then: "no test file and no application file accesses a raw private key
+      outside of packages/*/src/*-signing-key-provider*.ts — all signing goes
+      through the provider interface; this is a static verification, not a
+      runtime test"
+    test_type: unit
     component_under_test: client
+    milestone_gate_note: "Running the full M0–M3 test suite with the real
+      EncryptedFileSigningKeyProvider is a milestone-close gate item for M4,
+      not a story AC — it belongs in the milestone close checklist"
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:

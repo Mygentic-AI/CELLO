@@ -85,11 +85,15 @@ acceptance_criteria:
 
   - id: AC-005
     given: "The original relay has crashed and its WAL is unavailable; the
-      client has stored signed ACKs for hashes 1–8"
+      client has stored signed ACKs for hashes 1–8; both agents are separate
+      OS processes"
     when: "the client re-submits hashes 1–8 to a new relay with their ACKs"
-    then: "the new relay accepts the re-submissions; the Merkle state on the
-      new relay reflects all 8 hashes in the correct sequence — verified by
-      querying the new relay's session state from a separate process"
+    then: "the new relay accepts the re-submissions; both agents successfully
+      submit matching seal attempts to the directory, which records a single
+      row in conversation_seals — verified by a third process querying the
+      directory after the seal; this is the only cross-process confirmation
+      that the new relay's Merkle state is correct and consistent with both
+      agents"
     test_type: e2e
     component_under_test: client
 

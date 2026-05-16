@@ -51,8 +51,10 @@ acceptance_criteria:
     then: "conversation_proof_leaves contains exactly one row with leaf_index=0
       and leaf_hash equal to the sealed conversation root hash;
       conversation_proof_mmr_nodes contains the single peak node for a
-      1-leaf MMR; the MMR structure is valid per RFC 6962 Merkle tree
-      construction"
+      1-leaf MMR; the MMR structure is valid per the MMR spec in
+      docs/planning/discussion_logs/2026-04-13_1400_meta-merkle-tree-design.md
+      (not RFC 6962, which is a balanced binary Merkle tree — incompatible
+      with MMR indexing)"
     test_type: unit
     component_under_test: directory
 
@@ -204,5 +206,6 @@ references:
     - CELLO-PERSIST-001
     - CELLO-PERSIST-002
     - CELLO-PERSIST-003
+    - CELLO-PERSIST-004
   blocks:
     - CELLO-PERSIST-008

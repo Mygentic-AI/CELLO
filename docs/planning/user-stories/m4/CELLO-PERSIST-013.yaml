@@ -124,8 +124,11 @@ security_invariants:
       a session seal — it is a crash-recovery tool only"
     adversarial_condition: "even when a relay presents WAL-reconstructed state
       as a seal candidate — the directory independently verifies the seal
-      against agent-submitted roots, not relay-reported state"
-    test_type: e2e
+      against agent-submitted roots, not relay-reported state; this invariant
+      is exercised in CELLO-PERSIST-014 and CELLO-PERSIST-015 (the seal path
+      stories) and in CELLO-PERSIST-E2E-001 SI-002; PERSIST-013 alone cannot
+      verify it since it has no dependency on the seal path"
+    test_type: integration
     component_under_test: relay
 
   - id: SI-002
