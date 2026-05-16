@@ -57,8 +57,8 @@ behavior:
   - trigger: "When a push to main passes the staging smoke test"
     action: "the CodePipeline proceeds to deploy the same Docker image to
       production ECS services sequentially across all three regions
-      (eu-west-1 first, then us-east-1, then me-central-1); a failing staging
-      smoke test blocks the production deploy"
+      (us-east-1 first, then eu-central-1, then ap-northeast-1); a failing
+      staging smoke test blocks the production deploy"
 
   - trigger: "When a directory node starts"
     action: "the node reads the relay pool manifest from S3, verifies the
@@ -148,16 +148,18 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-007
-    given: "The staging environment (3-node, eu-west-1 only at reduced
+    given: "The staging environment (3-node, us-east-1 only at reduced
       instance sizes) is running and healthy; a commit is pushed to main that
       touches packages/directory/"
     when: "the CodePipeline build stage completes successfully"
     then: "the pipeline deploys the new image to the staging ECS service; the
       staging smoke test CodeBuild stage runs; if the smoke test passes, the
-      pipeline deploys the same image to the production directory ECS service
-      in us-east-1 — verified by checking the CodePipeline execution history
-      from a separate AWS CLI process; the production deploy uses the same
-      image digest that passed staging, not a newly built image"
+      pipeline deploys the same image digest sequentially to the production
+      directory ECS services in us-east-1, eu-central-1, and ap-northeast-1 —
+      verified by querying the ECS active task definition image URI in each
+      region from a separate AWS CLI process after the pipeline completes and
+      asserting all three URIs share the same image digest as the staging
+      deploy; no new image build occurs after the staging smoke test passes"
     test_type: e2e
     component_under_test: directory
 
@@ -267,7 +269,7 @@ degraded_behavior:
       fewer than 2 nodes are available to sign a checkpoint"
     fallback: "the checkpoint round is skipped and retried at the next
       interval; federation.checkpoint.skipped is logged at WARN with
-      { checkpointId, availableNodes, requiredThreshold }; the ops-warning
+      { checkpointId, availableNodes, requiredThreshold }; the ops-critical
       alarm fires if no checkpoint is confirmed within 30 minutes"
     test_type: integration
     component_under_test: directory
@@ -276,8 +278,8 @@ degraded_behavior:
     condition: "While all relay nodes are unavailable (all fail health checks)"
     fallback: "the directory returns RELAY_UNAVAILABLE on session establishment;
       the client retries on a backoff schedule; no session is established until
-      at least one relay recovers; relay.pool.empty is logged at ERROR with
-      { availableCount: 0 }"
+      at least one relay recovers; relay.pool.unavailable is logged at ERROR
+      with { totalRelays, availableCount: 0 }"
     test_type: integration
     component_under_test: directory
 
