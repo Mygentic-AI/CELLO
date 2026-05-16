@@ -1,0 +1,225 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-013
+domain: Persistence
+milestone: M4
+actor: DIR
+priority: P0
+components:
+  - relay
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Relay Node,
+  I want a per-session write-ahead log on local disk that records every
+  Structure 2 leaf during an active session,
+  so that a relay crash and restart reconstructs in-memory Merkle state
+  from the WAL rather than forcing agents to re-submit the full leaf
+  sequence from scratch.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a new relay session begins"
+    action: "the relay shall open a WAL file at a deterministic path derived
+      from the session ID; the file is opened in append-only mode; no existing
+      WAL file for the same session ID shall be truncated on open"
+
+  - trigger: "When the relay sequences a Structure 2 leaf"
+    action: "the relay shall append the serialized leaf to the WAL file and
+      fsync before returning the signed ACK to the client — the WAL entry
+      is durable before the ACK is issued"
+
+  - trigger: "When the relay process restarts with an active session's WAL
+      present"
+    action: "the relay shall read the WAL file sequentially, reconstruct the
+      in-memory Merkle state leaf by leaf, and resume the session at the
+      last confirmed sequence number — no agent re-submission required"
+
+  - trigger: "When the directory confirms a session seal"
+    action: "the relay shall delete the WAL file for that session; the WAL
+      is not retained after seal — it is a crash-recovery tool, not a
+      permanent record"
+
+  - trigger: "When CELLO_ENV=local"
+    action: "InMemoryRelayWal holds entries in a Map keyed by session ID —
+      no file I/O; crash recovery is not testable in this mode but all
+      other WAL behaviours are"
+
+  - trigger: "When CELLO_ENV=cloud or production"
+    action: "FileRelayWal writes entries to disk at WAL_DIR/{sessionId}.wal;
+      WAL_DIR is configured via environment variable"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A relay session has started and WAL_DIR is configured"
+    when: "the relay sequences 3 Structure 2 leaves"
+    then: "the WAL file at WAL_DIR/{sessionId}.wal contains exactly 3
+      entries in append order; each entry deserialises to the original leaf;
+      the file exists on disk before the first ACK is returned to the client
+      — verified by reading the WAL file directly after each ACK"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-002
+    given: "A relay has sequenced 6 leaves and is killed with SIGKILL"
+    when: "the relay process restarts"
+    then: "the relay reads the WAL and reconstructs Merkle state with 6
+      leaves; the relay reports sequence_number=6 as its last confirmed
+      sequence; no agent re-submission is required — verified by querying
+      the relay's session state from a separate process after restart without
+      submitting any new leaves"
+    test_type: e2e
+    component_under_test: relay
+
+  - id: AC-003
+    given: "A relay session WAL contains 10 entries"
+    when: "the relay processes a leaf that produces a WAL entry with a
+      corrupt checksum (simulated)"
+    then: "the relay logs relay.wal.entry.corrupt at ERROR with { sessionId,
+      entryIndex, reason } and returns RELAY_SESSION_UNRECOVERABLE — it does
+      not reconstruct partial state from a corrupt WAL"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-004
+    given: "The directory confirms a session seal"
+    when: "the relay processes the seal confirmation"
+    then: "the WAL file for that session is deleted; WAL_DIR contains no
+      file for the sealed session ID; the relay logs relay.wal.deleted with
+      { sessionId }"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-005
+    given: "WAL_DIR is not configured and CELLO_ENV=cloud"
+    when: "the relay starts"
+    then: "the relay exits with code 1 and logs adapter.config.missing with
+      { missingKey: 'WAL_DIR', env: 'cloud' } before accepting any sessions"
+    test_type: unit
+    component_under_test: relay
+
+  - id: AC-006
+    given: "A relay reconstructs state from a WAL on restart"
+    when: "reconstruction completes"
+    then: "relay.wal.reconstructed is logged at INFO with { sessionId,
+      leafCount, durationMs }; the relay then accepts new leaf submissions
+      at sequence_number = leafCount + 1"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-007
+    given: "The RelayWal interface is defined"
+    when: "a developer reads the interface"
+    then: "it exposes: append(sessionId, leaf): Promise<void>,
+      reconstruct(sessionId): Promise<Leaf[]>, and delete(sessionId):
+      Promise<void>; nothing more; the interface has no method that reads
+      individual entries by index"
+    test_type: unit
+    component_under_test: relay
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The WAL shall never be used as the authoritative source for
+      a session seal — it is a crash-recovery tool only"
+    adversarial_condition: "even when a relay presents WAL-reconstructed state
+      as a seal candidate — the directory independently verifies the seal
+      against agent-submitted roots, not relay-reported state"
+    test_type: e2e
+    component_under_test: relay
+
+  - id: SI-002
+    statement: "A WAL entry shall be fsynced to disk before the relay issues
+      the signed ACK for that leaf"
+    adversarial_condition: "even under high throughput where fsync adds
+      latency — the ACK is the promise that the leaf is durable; issuing
+      the ACK before fsync makes the promise false"
+    test_type: integration
+    component_under_test: relay
+
+  - id: SI-003
+    statement: "The relay shall never reconstruct partial Merkle state from
+      a corrupt or truncated WAL — it shall return RELAY_SESSION_UNRECOVERABLE
+      and require agents to re-submit from their hash queues"
+    adversarial_condition: "even when only the last entry is corrupt —
+      a partial reconstruction produces an incorrect sequence number and
+      would cause the relay to issue duplicate sequence numbers"
+    test_type: integration
+    component_under_test: relay
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the WAL file is corrupt or truncated on relay restart"
+    fallback: "the relay logs relay.wal.unrecoverable at ERROR with
+      { sessionId, reason } and returns RELAY_SESSION_UNRECOVERABLE to any
+      agent that connects for this session; agents fall back to re-submitting
+      from their local hash queues with their stored signed ACKs as evidence"
+    test_type: integration
+    component_under_test: relay
+
+  - id: DB-002
+    condition: "While WAL_DIR disk is full during an active session"
+    fallback: "the relay logs relay.wal.write.failed at ERROR with
+      { sessionId, reason: 'disk_full' } and halts leaf sequencing for the
+      affected session; existing sessions on other WAL files are unaffected;
+      the relay does not issue ACKs for leaves it cannot persist"
+    test_type: integration
+    component_under_test: relay
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: relay.wal.opened
+      level: info
+      trigger: "a WAL file is opened for a new session"
+      context_fields: [sessionId, walPath]
+      correlationId: false
+
+    - name: relay.wal.reconstructed
+      level: info
+      trigger: "WAL reconstruction completes successfully on restart"
+      context_fields: [sessionId, leafCount, durationMs]
+      correlationId: false
+
+    - name: relay.wal.deleted
+      level: info
+      trigger: "WAL file deleted after seal confirmation"
+      context_fields: [sessionId]
+      correlationId: false
+
+  error_events:
+    - name: relay.wal.unrecoverable
+      level: error
+      trigger: "WAL is corrupt or truncated on reconstruction"
+      context_fields: [sessionId, reason]
+
+    - name: relay.wal.write.failed
+      level: error
+      trigger: "WAL append fails (disk full, I/O error)"
+      context_fields: [sessionId, reason]
+
+    - name: relay.wal.entry.corrupt
+      level: error
+      trigger: "a WAL entry fails checksum validation during reconstruction"
+      context_fields: [sessionId, entryIndex, reason]
+
+  alarms:
+    - condition: "relay.wal.unrecoverable fires at any time"
+      fires_to: ops-warning
+    - condition: "relay.wal.write.failed fires at any time"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Message Exchange / Session Lifecycle / Node Operations"
+  discussion_logs:
+    - "2026-05-14_1702_relay-session-mechanics-and-recovery"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  depends_on:
+    - CELLO-PERSIST-001
+  blocks:
+    - CELLO-PERSIST-014
+    - CELLO-PERSIST-015
