@@ -1,0 +1,208 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-007
+domain: Persistence
+milestone: M4
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Directory Node,
+  I want each sealed conversation to append a leaf to a Merkle Mountain
+  Range, with internal nodes computed and staged for checkpointing,
+  so that any agent can obtain a compact inclusion proof that their
+  conversation was sealed into the global append-only proof ledger.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a conversation seal is confirmed"
+    action: "the directory shall append one row to conversation_proof_leaves
+      containing the sealed conversation root hash, then update
+      conversation_proof_mmr_nodes to reflect the new MMR peak set, and
+      insert the leaf into conversation_seal_staging"
+
+  - trigger: "When a checkpoint is confirmed"
+    action: "the directory shall compute the checkpoint hash from the current
+      MMR peak set, record it in the checkpoints table, and clear
+      conversation_seal_staging of all leaves included in the checkpoint"
+
+  - trigger: "When an agent requests an inclusion proof for a sealed conversation"
+    action: "the directory shall compute and return the Merkle path from the
+      conversation leaf to the nearest MMR peak, sufficient for the agent to
+      verify inclusion without trusting the directory"
+
+  - trigger: "When conversation_seal_staging is cleared after a checkpoint"
+    action: "only rows with checkpoint_id set to the confirmed checkpoint are
+      deleted; rows added after the checkpoint was initiated are retained for
+      the next checkpoint"
+
+  - trigger: "Ubiquitous"
+    action: "conversation_proof_leaves and conversation_proof_mmr_nodes are
+      append-only tables governed by RLS (PERSIST-003); their hash chains
+      are maintained per PERSIST-004; no row is ever modified or deleted"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An empty MMR with no leaves"
+    when: "the first conversation seal is appended"
+    then: "conversation_proof_leaves contains exactly one row with leaf_index=0
+      and leaf_hash equal to the sealed conversation root hash;
+      conversation_proof_mmr_nodes contains the single peak node for a
+      1-leaf MMR; the MMR structure is valid per RFC 6962 Merkle tree
+      construction"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-002
+    given: "An MMR with N leaves"
+    when: "a new conversation seal is appended"
+    then: "conversation_proof_leaves gains one row with leaf_index=N;
+      conversation_proof_mmr_nodes is updated to reflect the new peak set;
+      the previous N leaves are unchanged — verified by asserting row count
+      and that no existing row's hash has changed"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-003
+    given: "An MMR with 8 leaves and a confirmed checkpoint"
+    when: "an agent requests an inclusion proof for leaf 3"
+    then: "the directory returns a Merkle path of sibling hashes from leaf 3
+      to the MMR peak; the agent can independently verify inclusion by
+      recomputing the path and comparing to the checkpoint's peak hash —
+      verified by running the verification algorithm in the test"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "5 conversation seals have been added to conversation_seal_staging
+      since the last checkpoint"
+    when: "a checkpoint is confirmed covering those 5 seals"
+    then: "conversation_seal_staging has 0 rows with the confirmed checkpoint_id;
+      conversation_proof_leaves still has all rows (append-only); the
+      checkpoint row in the checkpoints table contains the correct MMR peak
+      hash for N+5 leaves"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "Seals are being added concurrently while a checkpoint is being
+      confirmed"
+    when: "the checkpoint confirmation completes"
+    then: "only seals that were staged before the checkpoint was initiated are
+      included in it; seals added after initiation remain in
+      conversation_seal_staging for the next checkpoint — no seal is lost
+      or double-counted"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "A checkpoint has been confirmed"
+    when: "mmr.checkpoint.confirmed is inspected"
+    then: "it is logged at INFO with { checkpointId, leafCount, peakHash,
+      stagedSealCount } — sufficient for an operator to verify the checkpoint
+      covered the expected seals"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-007
+    given: "An MMR with leaves from 100 sealed conversations"
+    when: "the chain verification pass runs on conversation_proof_leaves and
+      conversation_proof_mmr_nodes"
+    then: "both tables pass verification (per PERSIST-004) — the MMR construction
+      does not produce any chain breaks"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "An inclusion proof shall only be issued for leaves that are
+      committed to a confirmed checkpoint — not for leaves in
+      conversation_seal_staging"
+    adversarial_condition: "even when an agent requests a proof immediately
+      after their seal is appended but before a checkpoint is confirmed —
+      the directory shall return PROOF_NOT_YET_AVAILABLE rather than a
+      proof against an uncommitted peak"
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "The leaf_hash stored in conversation_proof_leaves shall equal
+      the sealed conversation root hash — it shall not be accepted from the
+      caller"
+    adversarial_condition: "even when a caller supplies a leaf_hash in their
+      seal request — the directory computes it from the verified seal data,
+      never from caller input"
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "No leaf shall appear in more than one checkpoint"
+    adversarial_condition: "even under concurrent seal and checkpoint
+      operations — the staging table's checkpoint_id assignment is atomic;
+      a leaf assigned to checkpoint N cannot be assigned to checkpoint N+1"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While a checkpoint confirmation fails mid-way (e.g. process
+      crash after clearing staging but before writing the checkpoint row)"
+    fallback: "on restart, the directory detects the incomplete checkpoint
+      by finding staged seals with a checkpoint_id that has no corresponding
+      row in the checkpoints table; it re-runs the checkpoint for those seals
+      rather than losing them — idempotent checkpoint completion"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: mmr.leaf.appended
+      level: info
+      trigger: "a conversation seal is appended to the MMR"
+      context_fields: [sessionId, leafIndex, leafHash, correlationId]
+      correlationId: true
+
+    - name: mmr.checkpoint.confirmed
+      level: info
+      trigger: "a checkpoint is confirmed and staging is cleared"
+      context_fields: [checkpointId, leafCount, peakHash, stagedSealCount]
+      correlationId: false
+
+  error_events:
+    - name: mmr.checkpoint.incomplete
+      level: error
+      trigger: "a partially-written checkpoint is detected on startup"
+      context_fields: [checkpointId, stagedSealCount]
+
+    - name: mmr.proof.unavailable
+      level: warn
+      trigger: "a proof is requested for a leaf not yet in a confirmed checkpoint"
+      context_fields: [sessionId, leafIndex]
+
+  alarms:
+    - condition: "mmr.checkpoint.incomplete fires at any time"
+      fires_to: ops-critical
+    - condition: "no mmr.checkpoint.confirmed in 30 minutes"
+      fires_to: ops-warning
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Merkle Trees / Node Operations"
+  discussion_logs:
+    - "2026-04-11_1700_persistence-layer-design"
+    - "2026-04-13_1400_meta-merkle-tree-design"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  depends_on:
+    - CELLO-PERSIST-001
+    - CELLO-PERSIST-002
+    - CELLO-PERSIST-003
+  blocks:
+    - CELLO-PERSIST-008
