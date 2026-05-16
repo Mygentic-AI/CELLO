@@ -1,0 +1,202 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-009
+domain: Persistence
+milestone: M4
+actor: CLIENT
+priority: P0
+components:
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want all conversation records, trust data, and keys stored in a
+  SQLCipher-encrypted local database with a key derived from the agent's
+  identity key,
+  so that the local store is unreadable without the correct identity key
+  and survives process restarts with all data intact.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the client initialises with a valid identity key"
+    action: "the client shall derive db_key = HKDF(identity_key,
+      'local-db-key', agent_id) and open the SQLCipher database at the
+      configured path using db_key as the encryption key"
+
+  - trigger: "When CELLO_ENV=local"
+    action: "LocalClientStore opens an unencrypted SQLite database at a
+      temporary path — no SQLCipher dependency required for the local
+      development loop"
+
+  - trigger: "When CELLO_ENV=cloud or production"
+    action: "SQLCipherClientStore opens the database with the derived db_key;
+      the file on disk is opaque ciphertext"
+
+  - trigger: "When the client process restarts with the same identity key"
+    action: "the client shall open the existing SQLCipher database and read
+      all previously written records without data loss"
+
+  - trigger: "When the client writes a conversation record, trust data entry,
+      or key material to the store"
+    action: "the write is committed before the method returns; a subsequent
+      read in a new process returns the same data"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An identity key and agent_id"
+    when: "db_key is derived"
+    then: "db_key = HKDF-SHA256(ikm=identity_key, salt=none, info='local-db-key'
+      || agent_id, length=32); the same identity_key and agent_id always
+      produce the same db_key; a different identity_key produces a different
+      db_key — verified by asserting equality and inequality in a unit test"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-002
+    given: "A SQLCipher database opened with db_key and a record written"
+    when: "the database file is opened with the SQLite library directly
+      (without SQLCipher) or with a different key"
+    then: "the open fails or returns garbage — the file content is not
+      readable as plain SQLite; verified by attempting to read the file
+      with a standard SQLite library and asserting an error or corrupt data"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-003
+    given: "A client process writes 5 conversation records and exits"
+    when: "a new client process starts with the same identity key and opens
+      the same database file"
+    then: "all 5 records are present and their contents are identical to
+      what was written — verified by reading each record and asserting
+      field equality"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-004
+    given: "CELLO_ENV=local"
+    when: "the client initialises"
+    then: "LocalClientStore opens without requiring SQLCipher; the full
+      Vitest suite passes without SQLCipher installed — verified by running
+      tests in a CI environment without the SQLCipher native module"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-005
+    given: "The ClientStore interface is defined"
+    when: "a developer reads the interface"
+    then: "it exposes methods for storing and retrieving: conversation records,
+      trust data entries, and key material; each method is typed against the
+      canonical CONTEXT.md types; the interface has no SQLite or SQLCipher
+      specific types in its signature"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-006
+    given: "A client with an existing database is running"
+    when: "client.store.opened is inspected in the log output"
+    then: "it is logged at INFO with { env, dbPath, agentId } — no db_key,
+      no identity_key, no key material appears in any log output during
+      initialisation"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-007
+    given: "The SQLCipher database schema needs to be updated"
+    when: "the client opens a database at an older schema version"
+    then: "the client applies pending schema migrations using the same Flyway
+      pattern as the directory — migration files in client/db/migrations/,
+      applied in version order before accepting any read or write operations"
+    test_type: integration
+    component_under_test: client
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The db_key shall never be stored on disk, logged, or included
+      in any error message or diagnostic output"
+    adversarial_condition: "even when the database fails to open — the error
+      handler must log client.store.open.failed with { reason, agentId } only,
+      never with the key"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: "The identity_key shall never be passed to any method other
+      than the db_key derivation function"
+    adversarial_condition: "even when the ClientStore implementation needs to
+      re-derive the key after a reconnect — it receives only the derived
+      db_key, not the identity_key"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-003
+    statement: "The SQLCipher database file shall use AES-256 in CBC mode
+      with PBKDF2 key derivation at the SQLCipher default iteration count —
+      no weaker cipher or lower iteration count shall be configured"
+    adversarial_condition: "even when performance benchmarks suggest a lower
+      iteration count would improve startup time — security settings are
+      not tunable via application configuration"
+    test_type: unit
+    component_under_test: client
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the database file is corrupt or the db_key does not
+      match the file"
+    fallback: "the client shall log client.store.open.failed at ERROR with
+      { reason, agentId } and halt — it shall not attempt to create a new
+      empty database over the corrupt file, as this would silently destroy
+      conversation history the agent needs for dispute resolution"
+    test_type: integration
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: client.store.opened
+      level: info
+      trigger: "the ClientStore is successfully initialised"
+      context_fields: [env, dbPath, agentId]
+      correlationId: false
+
+    - name: client.store.migration.applied
+      level: info
+      trigger: "a client schema migration is applied"
+      context_fields: [version, description, executionTime]
+      correlationId: false
+
+  error_events:
+    - name: client.store.open.failed
+      level: error
+      trigger: "the ClientStore fails to open (corrupt file, wrong key,
+        missing file)"
+      context_fields: [reason, agentId]
+
+    - name: client.store.migration.failed
+      level: error
+      trigger: "a client schema migration fails"
+      context_fields: [version, description, reason]
+
+  alarms:
+    - condition: "client.store.open.failed fires at any time"
+      fires_to: ops-critical
+    - condition: "client.store.migration.failed fires at any time"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "MCP Tool Surface / Session Lifecycle"
+  discussion_logs:
+    - "2026-04-11_1700_persistence-layer-design"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+    - "2026-05-14_1702_arbitration-mechanics-and-dispute-resolution"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  depends_on:
+    - CELLO-PERSIST-001
+  blocks:
+    - CELLO-PERSIST-010
+    - CELLO-PERSIST-011
+    - CELLO-PERSIST-012
