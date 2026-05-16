@@ -97,7 +97,10 @@ postgres:
 
 **Migration discipline**: migrations are the single source of truth. The local Postgres container and RDS are brought to identical state by running the same migration files in the same order. Manual schema tweaks to make a test pass are a warning sign that migrations have drifted.
 
-**Open decision**: migration tool (Flyway, Liquibase, custom). Must be resolved before M4 stories are written. The choice has downstream consequences for how RLS policies and triggers are structured and how the CI/CD pipeline applies migrations before deploying new code.
+**Migration tool decision: Flyway (PostgreSQL) + custom lightweight runner (SQLite/SQLCipher).** Resolved in the M4 milestone outline.
+
+- **Directory (PostgreSQL)**: Flyway Community Edition. SQL-first, versioned files (`V{n}__{description}.sql`) tracked in `flyway_schema_history`. RLS policies and pgaudit triggers are written as plain SQL. `node-flywaydb` npm package integrates into the pnpm workspace. `flyway migrate` runs in CodeBuild before the new ECS image is deployed. Free community edition covers all required features.
+- **Client (SQLite/SQLCipher)**: a lightweight custom migration runner. Flyway Community does not support SQLite. The runner reads versioned `.sql` files from `packages/client/db/migrations/` in `V{n}__{description}.sql` order, applies each in a transaction, and tracks applied versions in a `schema_migrations` table (`version TEXT PRIMARY KEY, applied_at TIMESTAMP`). No external tooling dependency.
 
 ---
 

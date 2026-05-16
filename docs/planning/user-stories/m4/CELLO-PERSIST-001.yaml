@@ -149,12 +149,17 @@ security_invariants:
     component_under_test: directory
 
   - id: SI-002
-    statement: "No production adapter implementation shall be importable in
-      CELLO_ENV=local — the composition root shall be the only code that
-      references concrete adapter classes"
-    adversarial_condition: "even when a developer directly imports a production
-      adapter in a test file — the package.json dependency graph shall make
-      this a missing-module error, not a runtime failure"
+    statement: "PgDirectoryStore and other concrete production adapters shall
+      not be exported from packages/directory's public API (index.ts) — the
+      composition root (server.ts / bin/directory.ts) is the only place in the
+      codebase that imports concrete adapter classes"
+    adversarial_condition: "even when a developer writes a deliberate deep
+      import path (e.g. @cello/directory/src/adapters/pg-directory-store.ts)
+      in a test file — this is detectable and blocked by a no-restricted-imports
+      ESLint rule that flags deep package imports outside of the composition
+      root; enforcement is by barrel export discipline + lint, not by the
+      pnpm package graph (which does not prevent deep imports within
+      packages already in the workspace)"
     test_type: unit
     component_under_test: directory
 
