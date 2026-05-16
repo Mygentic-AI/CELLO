@@ -13,6 +13,7 @@ node_modules/
 packages/*/dist/
 packages/*/tsconfig.tsbuildinfo
 
-# Claude Code agent worktrees
+# Claude Code local artifacts
 .claude/worktrees/
 .claude/skills/
+.claude-flow/
