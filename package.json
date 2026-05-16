@@ -10,6 +10,9 @@
     "lint": "eslint packages/*/src",
     "dev": "pnpm --filter @cello/directory run start & pnpm --filter @cello/relay run start"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": ["@journeyapps/sqlcipher", "esbuild", "better-sqlite3", "argon2", "@oqs/liboqs-js", "agentdb", "hnswlib-node", "cbor-extract", "protobufjs", "sharp"]
+  },
   "devDependencies": {
     "@claude-flow/memory": "^3.0.0-alpha.2",
     "@claude-flow/shared": "^3.0.0-alpha.1",

@@ -4,3 +4,5 @@ export type { EnvelopeKeyProvider } from "./envelope-key-provider.js";
 export type { ClientStore } from "./client-store.js";
 export type { RelayWal } from "./relay-wal.js";
 export type { JobScheduler, ScheduledJob } from "./job-scheduler.js";
+export type { SessionWal, Leaf } from "./session-wal.js";
+export { RELAY_SESSION_UNRECOVERABLE } from "./session-wal.js";

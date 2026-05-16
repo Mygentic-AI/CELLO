@@ -26,6 +26,10 @@ export default [
             group: ["**/adapters/pg-directory-store*"],
             message: "PgDirectoryStore may only be imported from the composition root (bin/directory.ts).",
           },
+          {
+            group: ["**/sqlcipher-client-store*"],
+            message: "SQLCipherClientStore may only be imported from the composition root. Application code imports the ClientStore interface only.",
+          },
         ],
       }],
     },

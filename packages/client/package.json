@@ -22,6 +22,7 @@
     "@cello/crypto": "workspace:*",
     "@cello/protocol-types": "workspace:*",
     "@cello/transport": "workspace:*",
+    "@journeyapps/sqlcipher": "^6.0.0",
     "@libp2p/interface": "^3.2.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cbor-x": "^1.6.0",

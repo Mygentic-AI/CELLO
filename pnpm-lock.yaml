@@ -84,6 +84,9 @@ importers:
       '@cello/transport':
         specifier: workspace:*
         version: link:../transport
+      '@journeyapps/sqlcipher':
+        specifier: ^6.0.0
+        version: 6.0.0
       '@libp2p/interface':
         specifier: ^3.2.2
         version: 3.2.2
@@ -253,6 +256,9 @@ importers:
       '@cello/crypto':
         specifier: workspace:*
         version: link:../crypto
+      '@cello/interfaces':
+        specifier: workspace:*
+        version: link:../interfaces
       '@cello/protocol-types':
         specifier: workspace:*
         version: link:../protocol-types
@@ -849,6 +855,10 @@ packages:
   '@inquirer/figures@1.0.15':
     resolution: {integrity: sha512-t2IEY+unGHOzAaVM5Xx6DEWKeXlDDcNPeDyUpsRc6CUhBfU3VQOEl+Vssh7VNp1dR8MdUJBWhuObjXCsVpjN5g==}
     engines: {node: '>=18'}
+
+  '@journeyapps/sqlcipher@6.0.0':
+    resolution: {integrity: sha512-YmWSQIR4cnv+5L38lYJoS/dIF/+bEZBaACATbeTyq4XKjMHcxdIlFnElBLiIqa9rwseOIimIYjudgOOCovud3Q==}
+    os: [darwin, linux]
 
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
@@ -3682,6 +3692,11 @@ snapshots:
   '@inquirer/figures@1.0.15':
     optional: true
 
+  '@journeyapps/sqlcipher@6.0.0':
+    dependencies:
+      bindings: 1.5.0
+      node-addon-api: 8.7.0
+
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
   '@js-sdsl/ordered-map@4.4.2':
@@ -5736,8 +5751,7 @@ snapshots:
   node-addon-api@6.1.0:
     optional: true
 
-  node-addon-api@8.7.0:
-    optional: true
+  node-addon-api@8.7.0: {}
 
   node-gyp-build-optional-packages@5.1.1:
     dependencies:
