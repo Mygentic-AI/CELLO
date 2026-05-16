@@ -1,0 +1,195 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-010
+domain: Persistence
+milestone: M4
+actor: CLIENT
+priority: P0
+components:
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want Ed25519 signing operations performed through a pluggable
+  SigningKeyProvider interface whose backends keep the private key
+  inside the provider,
+  so that the private key never exists as plaintext in application
+  memory and can be backed by hardware security where available.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the client needs to sign data"
+    action: "the client shall call SigningKeyProvider.sign(data) and receive
+      a Signature; the private key never leaves the provider — the provider
+      performs signing internally and returns only the signature"
+
+  - trigger: "When the client needs to identify itself"
+    action: "the client shall call SigningKeyProvider.getPublicKey() to
+      obtain the Ed25519 public key; the public key is the only key material
+      that crosses the provider boundary"
+
+  - trigger: "When CELLO_ENV=local"
+    action: "EncryptedFileSigningKeyProvider reads the private key from an
+      encrypted key file at the path in SIGNING_KEY_PATH, decrypts it into
+      memory for signing, and zeroes the in-memory key material after each
+      sign() call"
+
+  - trigger: "When running on macOS or Windows desktop"
+    action: "KeychainSigningKeyProvider delegates signing to the OS Keychain
+      or Secure Enclave; the private key never enters the Node.js process
+      heap"
+
+  - trigger: "When the SigningKeyProvider cannot perform a sign() operation"
+    action: "it throws a SigningKeyProviderError with a reason field; the
+      client propagates the error rather than retrying with a weaker fallback"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A SigningKeyProvider instance is initialised with a known Ed25519
+      keypair"
+    when: "sign(data) is called with 32 bytes of data"
+    then: "the returned Signature is a valid Ed25519 signature over data that
+      verifies against the public key returned by getPublicKey() — verified
+      using the standard Ed25519 verify function with no mocks"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-002
+    given: "Two calls to sign() with the same data"
+    when: "both signatures are verified against the public key"
+    then: "both signatures verify successfully; Ed25519 signatures are
+      deterministic — both calls return identical bytes"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-003
+    given: "The SigningKeyProvider interface is defined"
+    when: "a developer reads the interface"
+    then: "it exposes exactly two methods: getPublicKey(): Promise<PublicKey>
+      and sign(data: Bytes): Promise<Signature>; the interface has no
+      method that returns the private key; it is named SigningKeyProvider
+      (not KeyProvider, not EnvelopeKeyProvider)"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-004
+    given: "CELLO_ENV=local and SIGNING_KEY_PATH points to an encrypted key file"
+    when: "EncryptedFileSigningKeyProvider signs data"
+    then: "the signature verifies correctly; after sign() returns, no private
+      key bytes remain in process memory — verified by zeroing the key buffer
+      and asserting it is all zeros after the call"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-005
+    given: "SIGNING_KEY_PATH is not set or points to a missing file"
+    when: "EncryptedFileSigningKeyProvider is initialised"
+    then: "initialisation throws SigningKeyProviderError with { reason:
+      'key_file_not_found', path } before any sign() call is possible —
+      the error is surfaced at startup, not deferred to first use"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-006
+    given: "A client using SigningKeyProvider signs a message"
+    when: "the log output is inspected"
+    then: "client.key.signed is logged at INFO with { agentId, dataLength }
+      only — no private key bytes, no key file path, no passphrase appears
+      in any log event"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-007
+    given: "The full M0–M3 test suite runs with the real EncryptedFileSigningKeyProvider"
+    when: "all tests pass"
+    then: "no test bypasses SigningKeyProvider by accessing a private key
+      directly — all signing in integration and e2e tests goes through the
+      provider interface; verified by grepping for direct private key usage
+      outside provider implementations"
+    test_type: integration
+    component_under_test: client
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The SigningKeyProvider interface shall have no method that
+      returns, exports, or exposes the private key in any form"
+    adversarial_condition: "even as a convenience method for testing — any
+      test that needs to verify signing behaviour shall do so by verifying
+      the signature output, never by extracting the private key"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: "The private key shall be zeroed from memory immediately after
+      each sign() call in EncryptedFileSigningKeyProvider"
+    adversarial_condition: "even when sign() throws — the finally block shall
+      zero the key buffer before the error propagates"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-003
+    statement: "The client shall never fall back to a weaker signing mechanism
+      if SigningKeyProvider.sign() fails"
+    adversarial_condition: "even when the provider is temporarily unavailable
+      — the client propagates the error; it does not generate an ephemeral
+      key and sign with it instead"
+    test_type: unit
+    component_under_test: client
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the OS Keychain is locked or unavailable
+      (KeychainSigningKeyProvider)"
+    fallback: "sign() throws SigningKeyProviderError with { reason:
+      'keychain_locked' }; the client surfaces this to the operator as a
+      requires-attention event — it does not fall back to any file-based
+      key; the operator must unlock the keychain to resume"
+    test_type: unit
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: client.key.signed
+      level: info
+      trigger: "a successful sign() operation completes"
+      context_fields: [agentId, dataLength]
+      correlationId: true
+
+    - name: client.key.provider.initialised
+      level: info
+      trigger: "SigningKeyProvider initialises successfully"
+      context_fields: [agentId, providerType]
+      correlationId: false
+
+  error_events:
+    - name: client.key.sign.failed
+      level: error
+      trigger: "sign() throws SigningKeyProviderError"
+      context_fields: [agentId, reason]
+
+    - name: client.key.provider.init.failed
+      level: error
+      trigger: "SigningKeyProvider initialisation fails"
+      context_fields: [agentId, providerType, reason]
+
+  alarms:
+    - condition: "client.key.provider.init.failed fires at any time"
+      fires_to: ops-critical
+    - condition: "client.key.sign.failed fires more than 3 times in 1 minute"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Authentication / MCP Tool Surface"
+  discussion_logs:
+    - "2026-04-11_1700_persistence-layer-design"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  depends_on:
+    - CELLO-PERSIST-001
+    - CELLO-PERSIST-009
