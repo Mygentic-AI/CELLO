@@ -46,10 +46,13 @@ acceptance_criteria:
   - id: AC-001
     given: "An identity key and agent_id"
     when: "db_key is derived"
-    then: "db_key = HKDF-SHA256(ikm=identity_key, salt=none, info='local-db-key'
-      || agent_id, length=32); the same identity_key and agent_id always
-      produce the same db_key; a different identity_key produces a different
-      db_key — verified by asserting equality and inequality in a unit test"
+    then: "db_key = HKDF-SHA256(ikm=identity_key, salt=none,
+      info='local-db-key' || 0x00 || agent_id, length=32); the null-byte
+      separator prevents prefix-collision between different (literal, agentId)
+      pairs that would produce the same concatenation without it; the same
+      identity_key and agent_id always produce the same db_key; a different
+      identity_key produces a different db_key — verified by asserting equality
+      and inequality in a unit test"
     test_type: unit
     component_under_test: client
 

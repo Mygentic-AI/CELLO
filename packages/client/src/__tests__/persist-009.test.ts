@@ -11,15 +11,20 @@
  *   AC-007: Migration runner — schema_migrations table populated after open
  *
  *   SI-001: db_key never appears in any log output
- *   SI-002: SQLCipherClientStore constructor takes db_key, not identity_key (architectural)
- *   SI-003: No PRAGMA cipher_* commands weaken the defaults
+ *   SI-002: passing identity_key directly instead of derived db_key produces unreadable data
+ *   SI-003: SQLCipher kdf_iter matches default (256000); no weakening PRAGMAs applied
+ *
+ *   DB-001: corrupt/wrong-key open halts with client.store.open.failed; file not overwritten
+ *
+ *   observability: migration.failed — client.store.migration.failed logged with version,
+ *                                     description, reason when a migration SQL is invalid
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { rmSync, mkdirSync } from "node:fs";
+import { rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { LocalClientStore } from "@cello/interfaces/stubs";
 import type { ClientStore } from "@cello/interfaces";
 
@@ -185,6 +190,17 @@ describeWithSQLCipher("PERSIST-009 AC-002 — SQLCipher encryption opacity", () 
       // The error event must include agentId but must NOT include key material
       const failedEvent = failedEvents[failedEvents.length - 1];
       expect(failedEvent.context).toHaveProperty("agentId");
+
+      // M-002 / M-003: After the wrong-key open fails, re-open with the correct key and assert
+      // the original data is still intact — proving the corrupt/wrong-key attempt did not
+      // overwrite the file (DB-001), and that reason is present in the error event.
+      expect(failedEvent.context).toHaveProperty("reason");
+
+      const recoveredStore = new SQLCipherClientStore(dbKey, { dbPath, agentId: "agent-opacity-test", logger });
+      await recoveredStore.open();
+      const recovered = await recoveredStore.get("secret");
+      expect(recovered).toEqual(new Uint8Array([42, 99]));
+      await recoveredStore.close();
     } finally {
       cleanupPath(dbPath);
     }
@@ -518,6 +534,251 @@ describeWithSQLCipher("PERSIST-009 SI-003 — No weakening PRAGMA cipher setting
       await expect(badStore.open()).rejects.toThrow();
     } finally {
       cleanupPath(dbPath);
+    }
+  });
+
+  it("SI-003: kdf_iter is 256000 (SQLCipher 4 default) — no cipher-weakening pragmas applied", async () => {
+    // Directly query PRAGMA kdf_iter after opening the database with a valid key.
+    // If any weakening PRAGMA (e.g., PRAGMA kdf_iter = 1) had been issued, this
+    // assertion would fail. SQLCipher 4 default is 256000 iterations of PBKDF2.
+    //
+    // Note: PRAGMA cipher_settings is not available in all SQLCipher builds. We use
+    // PRAGMA kdf_iter directly as the best available proxy in @journeyapps/sqlcipher.
+
+    // Minimal types for the raw SQLCipher database handle used only in this test.
+    interface RawDb {
+      run: (sql: string, params: unknown[], cb: (err: Error | null) => void) => void;
+      get: (sql: string, params: unknown[], cb: (err: Error | null, row?: Record<string, unknown>) => void) => void;
+      close: (cb: (err: Error | null) => void) => void;
+    }
+    interface RawSqlCipher {
+      Database: new (f: string, m: number, cb: (e: Error | null) => void) => RawDb;
+      OPEN_READWRITE: number;
+      OPEN_CREATE: number;
+    }
+
+    const { createRequire } = await import("node:module");
+    const req = createRequire(import.meta.url);
+    const sqlite3 = req("@journeyapps/sqlcipher") as RawSqlCipher;
+
+    const dbPath = makeTmpDbPath();
+    const logger = makeSpyLogger();
+    const identityKey = randomBytes(32);
+    const dbKey = deriveDbKey(identityKey, "agent-si003-kdfiter");
+
+    try {
+      // Open normally via SQLCipherClientStore (full path through production code)
+      const store = new SQLCipherClientStore(dbKey, { dbPath, agentId: "agent-si003-kdfiter", logger });
+      await store.open();
+      await store.close();
+
+      // Now open the same file directly via the SQLCipher module to query kdf_iter.
+      // This bypasses SQLCipherClientStore to read the actual pragma value from the db.
+      const keyHex = Buffer.from(dbKey).toString("hex");
+      const db = await new Promise<RawDb>((resolve, reject) => {
+        const d = new sqlite3.Database(
+          dbPath,
+          sqlite3.OPEN_READWRITE,
+          (err: Error | null) => { if (err) reject(err); else resolve(d); },
+        );
+      });
+
+      const run = (sql: string): Promise<void> =>
+        new Promise<void>((res, rej) =>
+          db.run(sql, [], (err: Error | null) => (err ? rej(err) : res())),
+        );
+      const get = (sql: string): Promise<Record<string, unknown> | undefined> =>
+        new Promise<Record<string, unknown> | undefined>((res, rej) =>
+          db.get(sql, [], (err: Error | null, row?: Record<string, unknown>) =>
+            (err ? rej(err) : res(row)),
+          ),
+        );
+      const close = (): Promise<void> =>
+        new Promise<void>((res, rej) =>
+          db.close((err: Error | null) => (err ? rej(err) : res())),
+        );
+
+      await run(`PRAGMA key = "x'${keyHex}'"`);
+      // Verify key is accepted
+      await get("SELECT count(*) FROM sqlite_master");
+
+      const row = await get("PRAGMA kdf_iter");
+      await close();
+
+      // SQLCipher 4 default is 256000 iterations. If it were weakened, this would differ.
+      // Note: PRAGMA results from @journeyapps/sqlcipher may come back as string or number
+      // depending on the build; coerce to number before comparing.
+      expect(row).toBeDefined();
+      expect(Number((row as { kdf_iter: number | string }).kdf_iter)).toBe(256000);
+    } finally {
+      cleanupPath(dbPath);
+    }
+  });
+});
+
+// ─── SI-002: identity_key must not be passed directly as db_key ──────────────
+
+describeWithSQLCipher("PERSIST-009 SI-002 — identity_key != db_key (adversarial)", () => {
+  it("SI-002: opening a db_key-encrypted file with identity_key directly fails — proves keys are cryptographically distinct", async () => {
+    // Adversarial condition (SI-002): someone accidentally passes identity_key instead
+    // of the HKDF-derived db_key. The database must be inaccessible because identity_key
+    // and db_key are cryptographically distinct values.
+    //
+    // Test procedure:
+    //   1. Derive db_key from identity_key_A via HKDF.
+    //   2. Open a database with db_key (correct, derived key).
+    //   3. Close the database.
+    //   4. Attempt to open the SAME file passing identity_key_A directly as the db_key.
+    //   5. Assert: the open fails or the data is unreadable — proving the interface
+    //      enforces that only the derived key can access the file, not the raw identity key.
+    const dbPath = makeTmpDbPath();
+    const logger = makeSpyLogger();
+    const identityKeyA = randomBytes(32);
+    const dbKey = deriveDbKey(identityKeyA, "agent-si002-test");
+
+    try {
+      // Step 1-3: create the database using the correct derived db_key
+      const store = new SQLCipherClientStore(dbKey, {
+        dbPath,
+        agentId: "agent-si002-test",
+        logger,
+      });
+      await store.open();
+      await store.set("si002-record", new Uint8Array([0xde, 0xad, 0xbe, 0xef]));
+      await store.close();
+
+      // Step 4: attempt to open the SAME file using identity_key_A directly as the db_key.
+      // identity_key_A and db_key are distinct Uint8Arrays produced by different operations
+      // (random bytes vs HKDF output). SQLCipher will reject the wrong key.
+      const badStore = new SQLCipherClientStore(identityKeyA, {
+        dbPath,
+        agentId: "agent-si002-test",
+        logger,
+      });
+
+      // Step 5: assert the open fails — identity_key is NOT the db_key
+      await expect(badStore.open()).rejects.toThrow();
+
+      // Confirm client.store.open.failed was emitted (SI-001 preserved)
+      const failedEvents = logger.events.filter((e) => e.event === "client.store.open.failed");
+      expect(failedEvents.length).toBeGreaterThan(0);
+    } finally {
+      cleanupPath(dbPath);
+    }
+  });
+});
+
+// ─── DB-001: corrupt/wrong-key open halts; file not overwritten ──────────────
+
+describeWithSQLCipher("PERSIST-009 DB-001 — halt on corrupt/wrong-key; no overwrite", () => {
+  it("DB-001: wrong-key open halts with client.store.open.failed; correct-key re-open succeeds with original data", async () => {
+    // DB-001 stated condition: corrupt file OR wrong key → log client.store.open.failed
+    // and halt; do NOT overwrite the file with a new empty database.
+    //
+    // This test proves the "no overwrite" clause: after a wrong-key open attempt,
+    // the original data is still readable with the correct key.
+    const dbPath = makeTmpDbPath();
+    const logger = makeSpyLogger();
+    const correctKey = deriveDbKey(randomBytes(32), "agent-db001-test");
+    const wrongKey = deriveDbKey(randomBytes(32), "agent-db001-wrong");
+
+    try {
+      // Write original data with the correct key
+      const storeA = new SQLCipherClientStore(correctKey, { dbPath, agentId: "agent-db001-test", logger });
+      await storeA.open();
+      await storeA.set("original", new Uint8Array([0x01, 0x02, 0x03]));
+      await storeA.close();
+
+      // Attempt open with wrong key — must fail
+      const badStore = new SQLCipherClientStore(wrongKey, { dbPath, agentId: "agent-db001-test", logger });
+      await expect(badStore.open()).rejects.toThrow();
+
+      // client.store.open.failed must have been logged
+      const failedEvents = logger.events.filter((e) => e.event === "client.store.open.failed");
+      expect(failedEvents.length).toBeGreaterThan(0);
+
+      // File not overwritten: re-open with the correct key and assert original data intact
+      const storeB = new SQLCipherClientStore(correctKey, { dbPath, agentId: "agent-db001-test", logger });
+      await storeB.open();
+      const retrieved = await storeB.get("original");
+      expect(retrieved).toEqual(new Uint8Array([0x01, 0x02, 0x03]));
+      await storeB.close();
+    } finally {
+      cleanupPath(dbPath);
+    }
+  });
+
+  it("L-002 / DB-001: corrupt file (random bytes) → client.store.open.failed logged; open throws", async () => {
+    // DB-001 also covers corrupt files (not just wrong key). Write random bytes to the
+    // database path and assert the store rejects the open with client.store.open.failed.
+    const dbPath = makeTmpDbPath();
+    const logger = makeSpyLogger();
+    const dbKey = deriveDbKey(randomBytes(32), "agent-db001-corrupt");
+
+    try {
+      // Write garbage bytes to the DB path — simulates a corrupted file
+      writeFileSync(dbPath, randomBytes(256));
+
+      const store = new SQLCipherClientStore(dbKey, { dbPath, agentId: "agent-db001-corrupt", logger });
+      await expect(store.open()).rejects.toThrow();
+
+      const failedEvents = logger.events.filter((e) => e.event === "client.store.open.failed");
+      expect(failedEvents.length).toBeGreaterThan(0);
+    } finally {
+      cleanupPath(dbPath);
+    }
+  });
+});
+
+// ─── observability: migration.failed ─────────────────────────────────────────
+
+describeWithSQLCipher("PERSIST-009 observability: migration.failed — client.store.migration.failed", () => {
+  it("client.store.migration.failed logged with version, description, reason when migration SQL is invalid", async () => {
+    // B-002: verify that client.store.migration.failed is emitted with all three required
+    // context fields (version, description, reason) when a migration file contains invalid SQL.
+    //
+    // Strategy: create a temporary migrations directory containing a single V1 file with
+    // intentionally broken SQL, then open a store pointing at that directory.
+    const dbPath = makeTmpDbPath();
+    const logger = makeSpyLogger();
+    const dbKey = deriveDbKey(randomBytes(32), "agent-migration-fail-test");
+
+    // Build a temporary migrations directory with one invalid migration
+    const tmpMigrationsDir = join(tmpdir(), `cello-migrations-bad-${randomBytes(6).toString("hex")}`);
+    mkdirSync(tmpMigrationsDir, { recursive: true });
+    const badSqlPath = join(tmpMigrationsDir, "V1__broken_schema.sql");
+    writeFileSync(badSqlPath, "CREATE TABLE syntax error intentionally broken (");
+
+    try {
+      const store = new SQLCipherClientStore(dbKey, {
+        dbPath,
+        agentId: "agent-migration-fail-test",
+        migrationsPath: tmpMigrationsDir,
+        logger,
+      });
+
+      // Open must throw because the migration fails
+      await expect(store.open()).rejects.toThrow();
+
+      // client.store.migration.failed must be logged
+      const failedEvents = logger.events.filter((e) => e.event === "client.store.migration.failed");
+      expect(failedEvents.length).toBeGreaterThanOrEqual(1);
+
+      const ev = failedEvents[0];
+      expect(ev.level).toBe("error");
+      // All three required context fields must be present
+      expect(ev.context).toHaveProperty("version");
+      expect(ev.context).toHaveProperty("description");
+      expect(ev.context).toHaveProperty("reason");
+      // Sanity: version and description come from the filename
+      expect(ev.context.version).toBe("V1__broken_schema");
+      expect(ev.context.description).toBe("broken schema");
+      // reason should contain some indication of the SQL error
+      expect(typeof ev.context.reason).toBe("string");
+      expect((ev.context.reason as string).length).toBeGreaterThan(0);
+    } finally {
+      cleanupPath(dbPath);
+      rmSync(tmpMigrationsDir, { recursive: true, force: true });
     }
   });
 });
