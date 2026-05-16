@@ -57,9 +57,11 @@ const sessionWal = celloEnv === "local"
   : new FileSessionWal({ walDir, logger });
 
 if (!dirPubkeyHex && process.env["NODE_ENV"] !== "test") {
-  process.stderr.write("cello-relay: CELLO_DIRECTORY_PUBKEY is required\n");
-  process.stderr.write("Example: CELLO_DIRECTORY_PUBKEY=<64-hex-chars> cello-relay\n");
-  process.stderr.write("Set NODE_ENV=test to use a random ephemeral key (test mode only)\n");
+  logger.error("relay.startup.failed", {
+    reason: "CELLO_DIRECTORY_PUBKEY is required",
+    hint: "Set CELLO_DIRECTORY_PUBKEY to a 64-char lowercase hex string (32-byte Ed25519 pubkey)",
+    testHint: "Set NODE_ENV=test to use a random ephemeral key (test mode only)",
+  });
   process.exit(1);
 }
 
@@ -67,7 +69,9 @@ if (!dirPubkeyHex && process.env["NODE_ENV"] !== "test") {
 let dirPubkey: Uint8Array;
 if (dirPubkeyHex) {
   if (!/^[0-9a-fA-F]{64}$/.test(dirPubkeyHex)) {
-    process.stderr.write("cello-relay: CELLO_DIRECTORY_PUBKEY must be a 64-char lowercase hex string (32-byte Ed25519 pubkey)\n");
+    logger.error("relay.startup.failed", {
+      reason: "CELLO_DIRECTORY_PUBKEY must be a 64-char lowercase hex string (32-byte Ed25519 pubkey)",
+    });
     process.exit(1);
   }
   dirPubkey = new Uint8Array(Buffer.from(dirPubkeyHex, "hex"));
@@ -75,7 +79,9 @@ if (dirPubkeyHex) {
   // Test mode only: use a random ephemeral pubkey
   const ephemeralKp = generateKeypair();
   dirPubkey = await ephemeralKp.getPublicKey();
-  process.stderr.write("cello-relay: WARNING: CELLO_DIRECTORY_PUBKEY not set; using ephemeral key (test mode only)\n");
+  logger.warn("relay.startup.ephemeral-key", {
+    reason: "CELLO_DIRECTORY_PUBKEY not set; using ephemeral key (test mode only)",
+  });
 }
 
 // Load or generate relay signing keypair (FileKeyProvider format — same as directory)
@@ -83,13 +89,13 @@ let kp: FileKeyProvider;
 try {
   kp = await FileKeyProvider.load(keyPath);
 } catch (err: unknown) {
-  const msg = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`cello-relay: key file error: ${msg}\n`);
+  const reason = err instanceof Error ? err.message : String(err);
+  logger.error("relay.startup.failed", { reason: `key file error: ${reason}`, keyPath });
   process.exit(1);
 }
 
 const relayPubkey = await kp.getPublicKey();
-process.stdout.write(`cello-relay pubkey: ${Buffer.from(relayPubkey).toString("hex")}\n`);
+logger.info("relay.startup.pubkey", { pubkey: Buffer.from(relayPubkey).toString("hex") });
 
 // Load or generate persisted transport key (ensures stable Peer ID across restarts)
 let transportPrivateKey: Uint8Array;
@@ -99,7 +105,7 @@ try {
   transportPrivateKey = randomBytes(32);
   mkdirSync(join(homedir(), ".cello"), { recursive: true });
   writeFileSync(transportKeyPath, transportPrivateKey, { mode: 0o600 });
-  process.stdout.write(`cello-relay: generated new transport key at ${transportKeyPath}\n`);
+  logger.info("relay.startup.transport-key.generated", { transportKeyPath });
 }
 
 // Wire NetworkDirectoryAdapter if CELLO_DIRECTORY_MULTIADDR is set
@@ -109,14 +115,17 @@ if (directoryMultiaddr) {
   const p2pIndex = parts.findIndex((p) => p === "p2p");
   const dirPeerId = p2pIndex !== -1 ? parts[p2pIndex + 1] : null;
   if (!dirPeerId) {
-    process.stderr.write("cello-relay: CELLO_DIRECTORY_MULTIADDR must include /p2p/<peer-id>\n");
+    logger.error("relay.startup.failed", {
+      reason: "CELLO_DIRECTORY_MULTIADDR must include /p2p/<peer-id>",
+      directoryMultiaddr,
+    });
     process.exit(1);
   }
   directoryAdapter = new NetworkDirectoryAdapter({
     directoryPeerId: dirPeerId,
     directoryMultiaddrs: [directoryMultiaddr],
   });
-  process.stderr.write(`cello-relay: directory seal callbacks → ${directoryMultiaddr}\n`);
+  logger.info("relay.startup.directory-adapter", { directoryMultiaddr });
 }
 
 let relayResult: Awaited<ReturnType<typeof createRelayNode>>;
@@ -129,8 +138,8 @@ try {
     directory: directoryAdapter,
   });
 } catch (err: unknown) {
-  const msg = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`cello-relay: startup error: ${msg}\n`);
+  const reason = err instanceof Error ? err.message : String(err);
+  logger.error("relay.startup.failed", { reason });
   process.exit(1);
 }
 
@@ -140,14 +149,14 @@ if (directoryAdapter) {
 }
 
 for (const addr of relayResult.node.listenAddresses()) {
-  process.stdout.write(`cello-relay listening on ${addr}\n`);
+  logger.info("relay.started.listening", { addr: String(addr) });
 }
-process.stdout.write(`cello-relay peer-id: ${relayResult.node.getPeerId()}\n`);
+logger.info("relay.started", { peerId: relayResult.node.getPeerId() });
 
 const shutdown = () => {
   relayResult.stop().catch((err: unknown) => {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`cello-relay: stop error: ${msg}\n`);
+    const reason = err instanceof Error ? err.message : String(err);
+    logger.error("relay.shutdown.failed", { reason });
   }).finally(() => process.exit(0));
 };
 

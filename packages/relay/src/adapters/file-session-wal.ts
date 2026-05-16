@@ -128,26 +128,11 @@ export class FileSessionWal implements SessionWal {
   }
 
   /**
-   * AC-005: Validate configuration at composition root startup.
-   * CELLO_ENV=dev/production: walDir must be non-empty.
-   * CELLO_ENV=local: no validation needed (InMemorySessionWal is used).
-   * Throws if walDir is missing in dev/production; the binary catches this and exits 1.
-   * Used in tests to assert the error message format.
-   */
-  static assertConfig(env: string, walDir: string): void {
-    if (env === "local") return;
-    if (!walDir) {
-      throw new Error(
-        `adapter.config.missing: { missingKey: 'WAL_DIR', env: '${env}' } — WAL_DIR must be set for CELLO_ENV=${env}`
-      );
-    }
-  }
-
-  /**
-   * M-002: Boolean config check for use in the composition root.
+   * AC-005: Boolean config check for use in the composition root.
    * Returns false if walDir is missing in dev/production (so the caller can emit
    * a structured adapter.config.missing log event before process.exit(1)).
    * Returns true if configuration is valid.
+   * CELLO_ENV=local: no WAL_DIR required — InMemorySessionWal is used instead.
    */
   static validateConfig(env: string, walDir: string): boolean {
     if (env === "local") return true;

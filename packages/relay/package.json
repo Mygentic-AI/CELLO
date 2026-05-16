@@ -19,6 +19,7 @@
   },
   "scripts": {
     "typecheck": "tsc --build",
+    "lint": "eslint src",
     "test": "vitest run",
     "start": "node dist/bin/relay.js"
   },

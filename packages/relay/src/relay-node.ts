@@ -79,6 +79,7 @@ import { buildStructure2, encodeStructure2, computeGenesisPrevRoot } from "@cell
 import { createNode } from "@cello/transport";
 import type { CelloNode } from "@cello/transport";
 import type { Stream } from "@libp2p/interface";
+import type { Logger } from "@cello/interfaces";
 import type {
   SessionAssignment,
   RelaySessionState,
@@ -170,6 +171,7 @@ export interface RelayNodeOptions {
   directoryPubkey: Uint8Array;
   directory?: DirectoryAdapter;
   store?: RelayStore;
+  logger?: Logger;
 }
 
 export class CelloRelayNode {
@@ -177,6 +179,7 @@ export class CelloRelayNode {
   readonly #directoryPubkey: Uint8Array;
   readonly #directory: DirectoryAdapter | null;
   readonly #store: RelayStore;
+  readonly #logger: Logger;
 
   // nonce_hex → NonceEntry
   readonly #nonces = new Map<string, NonceEntry>();
@@ -192,6 +195,13 @@ export class CelloRelayNode {
     this.#directoryPubkey = opts.directoryPubkey;
     this.#directory = opts.directory ?? null;
     this.#store = opts.store ?? new InMemoryRelayStore();
+    // Logger is optional for backward compatibility; defaults to a no-op for pre-M4 callers.
+    this.#logger = opts.logger ?? {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    };
   }
 
   async start(): Promise<void> {
@@ -537,7 +547,12 @@ export class CelloRelayNode {
       try {
         await this.#sendFrame(stream, encodeHashSubmitError({ type: "hash_submit_error", reason: error }));
       } catch (err) {
-        console.debug("[relay] hash_submit_error send failed", { reason: error, err });
+        this.#logger.error("relay.send.failed", {
+          event: "hash_submit_error",
+          reason: error,
+          sessionId: sessionKey,
+          err: err instanceof Error ? err.message : String(err),
+        });
       }
     };
 
@@ -660,7 +675,12 @@ export class CelloRelayNode {
     try {
       await this.#sendFrame(stream, encodeHashSubmitAck({ type: "hash_submit_ack", sequence_number: seq }));
     } catch (err) {
-      console.debug("[relay] hash_submit_ack send failed", { seq, err });
+      this.#logger.error("relay.send.failed", {
+        event: "hash_submit_ack",
+        seq,
+        sessionId: sessionKey,
+        err: err instanceof Error ? err.message : String(err),
+      });
     }
 
     const counterpartyHex = senderPubkeyHex === aHex ? bHex : aHex;
@@ -678,7 +698,12 @@ export class CelloRelayNode {
     try {
       await this.#sendFrame(stream, deliveryFrame);
     } catch (err) {
-      console.debug("[relay] leaf echo send failed", { seq, err });
+      this.#logger.error("relay.send.failed", {
+        event: "leaf_echo",
+        seq,
+        sessionId: sessionKey,
+        err: err instanceof Error ? err.message : String(err),
+      });
     }
 
     // Deliver to counterparty

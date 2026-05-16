@@ -114,12 +114,11 @@ acceptance_criteria:
     component_under_test: relay
 
   - id: AC-007
-    given: "The RelayWal interface is defined"
+    given: "The SessionWal interface is defined"
     when: "a developer reads the interface"
-    then: "it exposes: append(sessionId, leaf): Promise<void>,
-      reconstruct(sessionId): Promise<Leaf[]>, and delete(sessionId):
-      Promise<void>; nothing more; the interface has no method that reads
-      individual entries by index"
+    then: "it exposes: open(sessionId): Promise<void>, append(sessionId,
+      leaf): Promise<void>, reconstruct(sessionId): Promise<Leaf[]>, and
+      delete(sessionId): Promise<void>; nothing more"
     test_type: unit
     component_under_test: relay
 
