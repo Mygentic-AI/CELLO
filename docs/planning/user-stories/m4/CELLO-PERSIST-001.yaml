@@ -22,9 +22,13 @@ story: >
 behavior:
   - trigger: "When CELLO_ENV=local"
     action: "the composition root in server.ts shall instantiate local stub
-      implementations for all M4 interfaces: InMemoryDirectoryStore (or
-      local Postgres), LocalClientStore, InMemoryRelayWal, LocalEnvelopeKeyProvider,
-      StdoutLogger, and LocalJobScheduler"
+      implementations for all M4 interfaces: PgDirectoryStore pointed at the
+      local Docker Compose Postgres container, LocalClientStore,
+      InMemoryRelayWal, LocalEnvelopeKeyProvider, StdoutLogger, and
+      LocalJobScheduler. InMemoryDirectoryStore exists as a unit-test-only
+      stub for tests that exercise application logic against the interface
+      contract without needing a running database — it is not used by
+      CELLO_ENV=local at runtime"
 
   - trigger: "When CELLO_ENV=cloud"
     action: "the composition root shall instantiate production implementations:
@@ -61,12 +65,14 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-002
-    given: "CELLO_ENV=local and no AWS credentials present"
+    given: "CELLO_ENV=local, the Docker Compose Postgres container is running,
+      and no AWS credentials are present"
     when: "the directory service starts"
-    then: "all adapters initialise using local stubs; the service accepts a
-      test request and returns a valid response; no AWS SDK call is made —
-      verified by asserting zero outbound network connections during startup
-      and the test request"
+    then: "all adapters initialise: PgDirectoryStore connects to the local
+      Postgres container, all other adapters use their local stubs; the
+      service accepts a test request and returns a valid response; no AWS SDK
+      call is made — verified by asserting zero outbound network connections
+      beyond localhost during startup and the test request"
     test_type: integration
     component_under_test: directory
 
@@ -88,13 +94,23 @@ acceptance_criteria:
     test_type: unit
     component_under_test: directory
 
-  - id: AC-005
-    given: "packages/interfaces/stubs/ contains stub implementations for all
-      six M4 interfaces"
-    when: "the full Vitest suite runs with CELLO_ENV=local and no Docker
-      containers running"
-    then: "all tests pass — no test requires a running Postgres container,
-      a KMS endpoint, an S3 bucket, or any other external service"
+  - id: AC-005a
+    given: "packages/interfaces/stubs/ contains InMemoryDirectoryStore and
+      stubs for the five other M4 interfaces; no Docker containers are running"
+    when: "the unit test suite runs (test_type: unit tests only)"
+    then: "all unit tests pass — unit tests use InMemoryDirectoryStore and
+      never require a running Postgres container, KMS endpoint, S3 bucket,
+      or any other external service"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-005b
+    given: "The Docker Compose Postgres container is running with migrations
+      applied"
+    when: "the integration test suite runs (test_type: integration tests)"
+    then: "integration tests use PgDirectoryStore against the real container;
+      they pass — RLS policies, hash chain constraints, and pgaudit are
+      exercised against real PostgreSQL, not an in-memory stub"
     test_type: integration
     component_under_test: directory
 
