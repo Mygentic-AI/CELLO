@@ -171,6 +171,43 @@ security_invariants:
     test_type: integration
     component_under_test: relay
 
+  - id: SI-005
+    statement: "The hash chain shall make any tampering or deletion of
+      persisted rows detectable, regardless of how the modification was made"
+    adversarial_condition: "even when a row is modified or deleted by a
+      PostgreSQL superuser or via a direct backup restore — the chain_hash of
+      the next row will not match the recomputed value, and a chain
+      verification pass shall report the break"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-006
+    statement: "K_server_X shares shall never be stored as plaintext in the
+      database"
+    adversarial_condition: "even when the EnvelopeKeyProvider is misconfigured
+      or returns an error — the directory shall reject the INSERT rather than
+      persist an unencrypted share"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-007
+    statement: "The pgaudit log shall be unmodifiable and undeletable by the
+      cello_service database role"
+    adversarial_condition: "even when the cello_service role is compromised and
+      attempts to DELETE or TRUNCATE the audit log table or the pgaudit log
+      files — the role shall have no WRITE access to audit infrastructure"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-008
+    statement: "The KMS master key shall never be written to disk, logged, or
+      included in any error message or diagnostic output"
+    adversarial_condition: "even when the directory encounters a startup error
+      after unwrapping the key — the unwrapped key material must not appear in
+      any log event, exception message, or crash dump"
+    test_type: unit
+    component_under_test: directory
+
 # ─── Degraded Behavior ──────────────────────────────────────
 degraded_behavior:
   - id: DB-001
