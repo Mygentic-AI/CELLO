@@ -1,0 +1,188 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-001
+domain: Persistence
+milestone: M4
+actor: DIR
+priority: P0
+components:
+  - directory
+  - relay
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Directory Node,
+  I want all external dependencies to be behind narrow interfaces with
+  local stub implementations,
+  so that the inner development loop requires no cloud infrastructure and
+  the production implementations can be swapped in at deployment time
+  without changing application code.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When CELLO_ENV=local"
+    action: "the composition root in server.ts shall instantiate local stub
+      implementations for all M4 interfaces: InMemoryDirectoryStore (or
+      local Postgres), LocalClientStore, InMemoryRelayWal, LocalEnvelopeKeyProvider,
+      StdoutLogger, and LocalJobScheduler"
+
+  - trigger: "When CELLO_ENV=cloud"
+    action: "the composition root shall instantiate production implementations:
+      RdsDirectoryStore, SQLCipherClientStore, FileRelayWal, KmsEnvelopeKeyProvider,
+      CloudWatchLogger, and EventBridgeJobScheduler"
+
+  - trigger: "When a required adapter is missing its configuration at startup"
+    action: "the application shall exit immediately with a clear error message
+      naming the missing configuration key — it shall never start with a
+      silently misconfigured adapter"
+
+  - trigger: "When any interface method is called"
+    action: "the stub implementation shall satisfy the interface contract
+      without making any network call, spawning any subprocess, or requiring
+      any environment variable beyond CELLO_ENV"
+
+  - trigger: "Ubiquitous"
+    action: "no application code outside packages/interfaces/ shall import
+      from a concrete adapter implementation — all imports shall be against
+      the interface type only"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "packages/interfaces/ exists with exported TypeScript interfaces for
+      DirectoryStore, ClientStore, RelayWal, EnvelopeKeyProvider, Logger,
+      and JobScheduler"
+    when: "any application package imports one of these interfaces"
+    then: "the import resolves to packages/interfaces/ and not to any concrete
+      implementation package — verified by checking that no application package
+      has a direct dependency on packages/interfaces/stubs/ or any production
+      adapter package in its package.json"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-002
+    given: "CELLO_ENV=local and no AWS credentials present"
+    when: "the directory service starts"
+    then: "all adapters initialise using local stubs; the service accepts a
+      test request and returns a valid response; no AWS SDK call is made —
+      verified by asserting zero outbound network connections during startup
+      and the test request"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "CELLO_ENV=local"
+    when: "EnvelopeKeyProvider.encrypt() is called with plaintext bytes and a keyId"
+    then: "it returns ciphertext that can be decrypted by EnvelopeKeyProvider.decrypt()
+      with the same keyId, using in-process AES with the dev key from the
+      DEV_ENVELOPE_KEY environment variable — no KMS call is made"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-004
+    given: "CELLO_ENV is set to an unrecognised value or a required configuration
+      key is absent"
+    when: "the application starts"
+    then: "the process exits with code 1 and logs adapter.config.missing at
+      ERROR with { missingKey, env } before accepting any connections"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-005
+    given: "packages/interfaces/stubs/ contains stub implementations for all
+      six M4 interfaces"
+    when: "the full Vitest suite runs with CELLO_ENV=local and no Docker
+      containers running"
+    then: "all tests pass — no test requires a running Postgres container,
+      a KMS endpoint, an S3 bucket, or any other external service"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "The Logger stub (StdoutLogger) is instantiated"
+    when: "logger.info(), logger.warn(), and logger.error() are called"
+    then: "each call writes a single-line structured JSON object to stdout
+      containing at minimum { event, level, timestamp } and all context
+      fields passed — no call throws or swallows the event silently"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-007
+    given: "The EnvelopeKeyProvider interface is defined"
+    when: "a developer reads the interface definition"
+    then: "the interface is named EnvelopeKeyProvider (not KeyProvider,
+      not SigningKeyProvider) and its JSDoc comment states it is for
+      encrypting K_server_X shares at rest — distinct from SigningKeyProvider
+      which is the client-side Ed25519 interface defined in M0"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The LocalEnvelopeKeyProvider shall never use a hardcoded key —
+      it shall always read the dev key from the DEV_ENVELOPE_KEY environment
+      variable"
+    adversarial_condition: "even when DEV_ENVELOPE_KEY is not set — the stub
+      shall throw a clear error rather than fall back to a hardcoded key that
+      could make its way into a production build"
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "No production adapter implementation shall be importable in
+      CELLO_ENV=local — the composition root shall be the only code that
+      references concrete adapter classes"
+    adversarial_condition: "even when a developer directly imports a production
+      adapter in a test file — the package.json dependency graph shall make
+      this a missing-module error, not a runtime failure"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: adapter.initialised
+      level: info
+      trigger: "each adapter is successfully instantiated at startup"
+      context_fields: [adapterName, implementation, env]
+      correlationId: false
+
+  error_events:
+    - name: adapter.config.missing
+      level: error
+      trigger: "a required configuration key is absent at startup"
+      context_fields: [missingKey, env]
+
+    - name: adapter.init.failed
+      level: error
+      trigger: "an adapter throws during instantiation"
+      context_fields: [adapterName, reason]
+
+  alarms:
+    - condition: "adapter.init.failed fires at any time"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+    - "2026-05-16_0900_m4-cloud-infrastructure-decisions"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  blocks:
+    - CELLO-PERSIST-002
+    - CELLO-PERSIST-003
+    - CELLO-PERSIST-004
+    - CELLO-PERSIST-005
+    - CELLO-PERSIST-006
+    - CELLO-PERSIST-007
+    - CELLO-PERSIST-008
+    - CELLO-PERSIST-009
+    - CELLO-PERSIST-010
+    - CELLO-PERSIST-011
+    - CELLO-PERSIST-012
+    - CELLO-PERSIST-013
+    - CELLO-PERSIST-014
+    - CELLO-PERSIST-015
