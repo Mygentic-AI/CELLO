@@ -72,7 +72,7 @@ const store = (() => {
   if (env === "local") {
     const databaseUrl = requireEnv("DATABASE_URL");
     pgPool = new pg.Pool({ connectionString: databaseUrl });
-    const s = new PgDirectoryStore(pgPool);
+    const s = new PgDirectoryStore(pgPool, logger);
     logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env });
     return s;
   }

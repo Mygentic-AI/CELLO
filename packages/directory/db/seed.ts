@@ -25,7 +25,7 @@ if (env !== "local") {
 }
 
 const DATABASE_URL =
-  process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5432/cello_dev";
+  process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
 
 const client = new pg.Client({ connectionString: DATABASE_URL });
 

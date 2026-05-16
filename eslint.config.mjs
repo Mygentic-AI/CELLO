@@ -23,7 +23,7 @@ export default [
       "no-restricted-imports": ["error", {
         patterns: [
           {
-            group: ["**/adapters/pg-directory-store*", "**/adapters/pg-directory-store.js"],
+            group: ["**/adapters/pg-directory-store*"],
             message: "PgDirectoryStore may only be imported from the composition root (bin/directory.ts).",
           },
         ],

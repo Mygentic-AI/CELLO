@@ -85,7 +85,7 @@ const isLocal = process.env["CELLO_ENV"] === "local";
 const describeIntegration = isLocal ? describe : describe.skip;
 
 describeIntegration("AC-002: CELLO_ENV=local startup — all adapters initialise against real Postgres", () => {
-  it("logs adapter.initialised for all six adapters before first connection attempt", () => {
+  it("logs adapter.initialised for all five adapters before first connection attempt", () => {
     // Run the binary with valid local config; it will exit 1 on missing key file
     // but all six adapter.initialised events fire before that point.
     const result = runBin({
@@ -95,7 +95,7 @@ describeIntegration("AC-002: CELLO_ENV=local startup — all adapters initialise
       CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWTest",
     });
     const out = result.stdout + result.stderr;
-    // All six adapters log adapter.initialised
+    // Five adapters log adapter.initialised (Logger is the sink — it cannot log its own creation)
     expect(out).toContain("PgDirectoryStore");
     expect(out).toContain("EnvelopeKeyProvider");
     expect(out).toContain("ClientStore");

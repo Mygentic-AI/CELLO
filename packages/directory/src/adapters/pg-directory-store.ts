@@ -11,21 +11,31 @@ import type {
   DirectoryStore,
   DirectoryNotification,
   SealNotarization,
+  Logger,
 } from "@cello/interfaces";
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello/protocol-types";
 
 
 export class PgDirectoryStore implements DirectoryStore {
   readonly #pool: pg.Pool;
+  readonly #logger: Logger;
 
-  constructor(pool: pg.Pool) {
+  constructor(pool: pg.Pool, logger: Logger) {
     this.#pool = pool;
+    this.#logger = logger;
+  }
+
+  #fire(query: Promise<unknown>): void {
+    void query.catch((err: unknown) => {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.#logger.error("adapter.write.failed", { adapterName: "PgDirectoryStore", reason });
+    });
   }
 
   // ─── SealNotarization ────────────────────────────────────────────────────
 
   recordNotarization(notarization: SealNotarization): void {
-    void this.#pool.query(
+    this.#fire(this.#pool.query(
       `INSERT INTO seal_notarizations
          (session_id, sealed_root, participant_a_pubkey, participant_b_pubkey,
           close_timestamp, frost_signature)
@@ -39,7 +49,7 @@ export class PgDirectoryStore implements DirectoryStore {
         notarization.close_timestamp,
         Buffer.from(notarization.frost_signature),
       ],
-    );
+    ));
   }
 
   getNotarization(_sessionIdHex: string): SealNotarization | undefined {
@@ -51,11 +61,11 @@ export class PgDirectoryStore implements DirectoryStore {
   // ─── Notification queues ─────────────────────────────────────────────────
 
   enqueueNotification(pubkeyHex: string, event: DirectoryNotification): void {
-    void this.#pool.query(
+    this.#fire(this.#pool.query(
       `INSERT INTO notification_queue (pubkey_hex, payload)
        VALUES ($1, $2)`,
       [pubkeyHex, JSON.stringify(event)],
-    );
+    ));
   }
 
   drainNotifications(_pubkeyHex: string): DirectoryNotification[] {
@@ -66,7 +76,7 @@ export class PgDirectoryStore implements DirectoryStore {
   // ─── Agent profiles ───────────────────────────────────────────────────────
 
   setProfile(profile: AgentProfile): void {
-    void this.#pool.query(
+    this.#fire(this.#pool.query(
       `INSERT INTO agent_profiles
          (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status)
        VALUES ($1,$2,$3,$4,$5,$6)
@@ -79,7 +89,7 @@ export class PgDirectoryStore implements DirectoryStore {
         profile.registered_at,
         profile.status,
       ],
-    );
+    ));
   }
 
   getProfile(_kLocalPubkeyHex: string): AgentProfile | undefined {
@@ -97,13 +107,13 @@ export class PgDirectoryStore implements DirectoryStore {
   // ─── Connection records ──────────────────────────────────────────────────
 
   createConnection(connectionId: string, participantA: string, participantB: string, establishedAt: number): void {
-    void this.#pool.query(
+    this.#fire(this.#pool.query(
       `INSERT INTO connections
          (connection_id, participant_a, participant_b, established_at, status)
        VALUES ($1,$2,$3,$4,'active')
        ON CONFLICT (connection_id) DO NOTHING`,
       [connectionId, participantA, participantB, establishedAt],
-    );
+    ));
   }
 
   hasConnection(_pubkeyA: string, _pubkeyB: string): { connection_id: string } | null {
@@ -115,11 +125,11 @@ export class PgDirectoryStore implements DirectoryStore {
   }
 
   queuePendingConnectionRequest(targetPubkey: string, request: PendingConnectionRequest): boolean {
-    void this.#pool.query(
+    this.#fire(this.#pool.query(
       `INSERT INTO pending_connection_requests (target_pubkey, payload)
        VALUES ($1, $2)`,
       [targetPubkey, JSON.stringify(request)],
-    );
+    ));
     return true;
   }
 
