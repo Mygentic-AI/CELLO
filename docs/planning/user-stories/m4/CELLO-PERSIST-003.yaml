@@ -1,0 +1,190 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-003
+domain: Persistence
+milestone: M4
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Directory Node,
+  I want all core protocol tables created via Flyway migrations with
+  row-level security policies that make UPDATE and DELETE physically
+  impossible for the cello_service role,
+  so that the append-only guarantee is enforced at the database level
+  and cannot be bypassed by application code.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When Flyway migrations are applied to a fresh database"
+    action: "the directory schema shall contain all core protocol tables as
+      defined in the Persistence Layer Design document, each with RLS enabled
+      and an INSERT-only policy for the cello_service role — no UPDATE or
+      DELETE policy exists for cello_service on any append-only table"
+
+  - trigger: "When the cello_service role issues an INSERT on an append-only table"
+    action: "PostgreSQL shall permit the INSERT"
+
+  - trigger: "When the cello_service role issues an UPDATE or DELETE on any
+      append-only table"
+    action: "PostgreSQL shall reject the operation with a permission denied error
+      before any row is modified"
+
+  - trigger: "When the postgres superuser role issues an UPDATE or DELETE"
+    action: "the operation succeeds — RLS applies to cello_service only;
+      superuser bypass is accepted and addressed by the hash chain (PERSIST-004)
+      and pgaudit (PERSIST-006)"
+
+  - trigger: "When a new append-only table is added in a future migration"
+    action: "the migration file for that table must include RLS enablement and
+      the INSERT-only policy before the migration is considered complete —
+      enforced by the migration review checklist"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Flyway migrations have been applied to a local Postgres container"
+    when: "the schema is inspected via information_schema"
+    then: "every append-only table listed in the Persistence Layer Design
+      document exists, has relrowsecurity=true, and has exactly one policy
+      named insert_only with cmd='INSERT' for cello_service — verified by
+      querying pg_policies for each table"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "The cello_service role is connected to cello_dev"
+    when: "cello_service attempts INSERT INTO conversation_seals with valid data"
+    then: "the INSERT succeeds and the row is present in the table"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "The cello_service role is connected to cello_dev and a row exists
+      in conversation_seals"
+    when: "cello_service attempts UPDATE conversation_seals SET root_hash='x'
+      WHERE id={existing_id}"
+    then: "PostgreSQL returns ERROR: new row violates row-level security policy
+      or permission denied; the row is unchanged — verified by re-querying
+      the row after the attempt"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "The cello_service role is connected to cello_dev and a row exists
+      in conversation_seals"
+    when: "cello_service attempts DELETE FROM conversation_seals WHERE
+      id={existing_id}"
+    then: "PostgreSQL rejects the operation; the row is still present —
+      verified by re-querying the row after the attempt"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "The full set of append-only tables is enumerated"
+    when: "each table is tested for UPDATE and DELETE rejection under
+      cello_service"
+    then: "every append-only table rejects both UPDATE and DELETE — not just
+      conversation_seals; the test iterates the full table list from the
+      Persistence Layer Design document"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "The cello_service role has no SELECT policy defined on any table"
+    when: "cello_service attempts SELECT on an append-only table"
+    then: "the SELECT succeeds — RLS in PostgreSQL defaults to DENY for
+      commands without a matching policy, but SELECT is not restricted for
+      cello_service; this is intentional and verified"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "A migration file is reviewed before merge"
+    when: "the migration introduces a new append-only table"
+    then: "the migration file contains: ALTER TABLE {name} ENABLE ROW LEVEL
+      SECURITY; and CREATE POLICY insert_only ON {name} FOR INSERT TO
+      cello_service WITH CHECK (true); — verified by the CI migration lint
+      check which fails if a new table lacks these two statements"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The cello_service role shall never be granted UPDATE or DELETE
+      privileges on any append-only table, directly or via a role grant"
+    adversarial_condition: "even when a future migration accidentally grants
+      broader privileges — the CI migration lint check and the AC-005 test
+      suite shall catch this before it reaches any environment"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "RLS shall be enabled on every append-only table before any
+      data is inserted — it shall not be added retroactively after rows exist"
+    adversarial_condition: "even if a developer applies the table creation
+      migration and inserts test data before the RLS migration — Flyway
+      migration ordering must place RLS enablement in the same migration as
+      table creation, not a subsequent one"
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "The cello_service role shall have no DDL privileges — it cannot
+      ALTER TABLE, DROP TABLE, or DROP POLICY"
+    adversarial_condition: "even when the cello_service application role is
+      compromised — it cannot disable its own RLS policies"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While a future migration attempts to add a column to an
+      append-only table"
+    fallback: "the migration shall ADD COLUMN only — it shall not UPDATE
+      existing rows to backfill the column; existing rows keep the column
+      NULL; application code must handle NULL for the new column gracefully"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: db.rls.verified
+      level: info
+      trigger: "directory startup confirms RLS is enabled on all append-only
+        tables after migrations complete"
+      context_fields: [tableCount, env]
+      correlationId: false
+
+  error_events:
+    - name: db.rls.missing
+      level: error
+      trigger: "startup RLS check finds a table that should have RLS enabled
+        but does not"
+      context_fields: [tableName, env]
+
+  alarms:
+    - condition: "db.rls.missing fires at any time"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-04-11_1700_persistence-layer-design"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  depends_on:
+    - CELLO-PERSIST-001
+    - CELLO-PERSIST-002
+  blocks:
+    - CELLO-PERSIST-004
+    - CELLO-PERSIST-005
+    - CELLO-PERSIST-006
+    - CELLO-PERSIST-007
