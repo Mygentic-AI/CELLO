@@ -19,6 +19,23 @@ Set `$MILESTONE` to the lowercase form (e.g. `m3`).
 
 Read `CONTEXT.md` at the repo root. This is the canonical glossary — terms, packages, interfaces. Do not contradict it.
 
+## Step 2b — For M4+ milestones: load adapter and observability context
+
+If the target milestone is M4 or later, read these before touching any story:
+
+1. **`docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md`** — the adapter inventory, Logger interface, event taxonomy seed, environment wiring decisions, and composition root pattern. Every external dependency in M4+ stories is behind an interface defined here. An implementer who hasn't read this will reinvent interfaces that already exist or wire adapters incorrectly.
+
+2. **`packages/interfaces/`** — the canonical location for all shared interfaces. Read the files that correspond to the story being implemented. Do not define interfaces inline in implementation packages — they belong here.
+
+Key facts every M4+ implementer must know before starting:
+
+- **All external dependencies are behind interfaces.** `DirectoryStore`, `ClientStore`, `RelayWal`, `EnvelopeKeyProvider`, `Logger`, `JobScheduler`, `MessagingChannel`, `OtpDeliveryProvider`, `AuditLogShipper` — all have local stubs in `packages/interfaces/stubs/` and production implementations separately. Never hardcode a real AWS call in application code.
+- **Composition root is `server.ts`.** Adapter selection is driven by `CELLO_ENV`. No magic injection, no framework. The app fails at startup with a clear error if any required adapter configuration is missing.
+- **`EnvelopeKeyProvider` ≠ `SigningKeyProvider`.** `EnvelopeKeyProvider` is the KMS interface for encrypting K_server_X shares at rest (introduced M4). `SigningKeyProvider` is the client-side Ed25519 interface (introduced M0). These must not be confused or merged.
+- **Logger is injected, never imported directly.** No `console.log` in implementation code. Events use the `domain.noun.verb` taxonomy. The correlation ID is minted once per flow and threaded through every async call.
+- **Local Postgres via Docker Compose, not mocked.** RLS, pgaudit, and hash chain constraints are database-level constructs. A mock database cannot catch a broken RLS policy.
+- **`CELLO_ENV=local`** uses Docker Compose + all local stubs. **`CELLO_ENV=cloud`** uses real AWS services with dev KMS key, isolated from production data.
+
 ## Step 3 — Read prior milestone writeups
 
 Read every file in `docs/planning/milestone-writeups/` **except** files for the target milestone or later. These tell you what is already built and proven in production.
@@ -64,6 +81,12 @@ One paragraph per milestone. What was proved. What infrastructure exists.
 - No milestone closes without the live multi-process smoke test passing
 - Phase C gate sequence: tests → lint → typecheck → build → code review → commit
 - **Test fixture discipline:** never write a new `makeFixture()` from scratch. Import `createSessionFixture` from `packages/e2e-tests/src/session-fixture.ts`. If the story needs a new capability, add an `opts` parameter to the shared fixture. This is enforced by `cello-review` — a from-scratch fixture is a blocking finding.
+
+**M4+ additional constraints:**
+- **Adapter pattern is mandatory.** Every external dependency goes through the interface in `packages/interfaces/`. Never call AWS directly from application code. The interface boundary must be narrow — add to an interface only in response to a specific failing test or production behavior being implemented right now.
+- **Observability ACs are first-class.** Every story has named log events, required context fields, and correlationId threading for async flows. `/cello-review` Step 4c will verify implementation matches ACs exactly. `console.log` in implementation code is a blocking finding.
+- **Interface names are precise.** `EnvelopeKeyProvider` encrypts K_server_X shares (KMS, M4). `SigningKeyProvider` signs with Ed25519 (client-side, M0). Using the wrong one is a type error and a security error.
+- **Smoke test definition grows with each milestone.** The M4 smoke test minimum: migrations applied cleanly, app starts, basic authenticated request succeeds, `EnvelopeKeyProvider` encrypt/decrypt roundtrip works. Add to the milestone close gate, do not replace it.
 
 ### Using the shared fixture
 
