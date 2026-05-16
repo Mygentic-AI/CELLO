@@ -377,6 +377,7 @@ The 80/20 applies to sequencing, not to skipping. Each of these four must be pre
 - [[agent-client|CELLO Agent Client Requirements]] — the client is the runtime host for all six defense layers; Part 5 specifies the client's implementation responsibilities for each layer including DeBERTa delivery, audit logging, and continuous verification
 - [[2026-04-24_1530_inference-billing-protocol|Inference Billing Protocol]] — per-session inference cost caps are enforced as a Layer 5 runtime governance check on every response leaf
 - [[2026-05-09_1100_dashclaw-m4-competitive-review|DashClaw Competitive Review]] — maps DashClaw's shipped security/governance patterns against CELLO's six layers; identifies production pattern lists applicable to SCAN-003 and REDACT-004, and two M4 design gaps (Layer 3 block notifications, per-peer defense policy overrides)
+- [[2026-05-16_1130_security-layer-improvements-from-production-reference|Security Layer Improvements from Production Reference Analysis]] — six concrete improvements to the six-layer design: RE2 engine for Layer 1 pattern matching (closes ReDoS attack class), Shannon entropy scoring for Step 8, three missing PII types in Layer 4 (SSN, credit card, IP address), honey tokens as active deception, policy change approval gate, and production-concrete audit log streaming with KMS-wrapped credentials
 
 ---
 

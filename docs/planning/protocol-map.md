@@ -141,6 +141,7 @@ The receiver's scan is the security boundary. The sender's scan is an honesty si
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — four-layer system model; where scanning fits
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — gate pyramid principle
 - [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — FROST stays for session/seal; ML-DSA for all non-threshold signatures; library choice (liboqs)
+- [[2026-05-16_1130_security-layer-improvements-from-production-reference|Security Layer Improvements from Production Reference Analysis]] — six concrete improvements: RE2 engine for Layer 1 (closes ReDoS), entropy scoring for Step 8, three missing PII types (SSN/CC/IP) in Layer 4, honey tokens (new deception primitive), policy change approval gate, audit log streaming with KMS-wrapped credentials
 
 **Also see:**
 - [[design-problems|Design Problems]] — Problem 8 (ML supply chain, resolved) and Problem 12 (false positive handling, resolved with one deferred edge case)
