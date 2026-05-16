@@ -58,7 +58,7 @@ M4 introduces external systems (PostgreSQL, KMS, ECS, relay WAL). The inner loop
 
 **Adapter pattern — mandatory.** Every external dependency is behind an interface in `packages/interfaces/` with a local stub in `packages/interfaces/stubs/`. Never call AWS directly from application code. Interface boundary is narrow — add to it only when a specific failing test or production behavior requires it.
 
-**Composition root.** All adapters are instantiated in `server.ts`. `CELLO_ENV` drives selection (`local` | `cloud` | `staging` | `production`). App fails at startup with a clear error if any required adapter configuration is missing.
+**Composition root.** All adapters are instantiated in `server.ts`. `CELLO_ENV` drives selection (`local` | `dev` | `staging` | `production`). App fails at startup with a clear error if any required adapter configuration is missing.
 
 **Interface name precision.** `EnvelopeKeyProvider` encrypts K_server_X shares at rest via KMS (introduced M4). `SigningKeyProvider` is the client-side Ed25519 signing interface (introduced M0). These are distinct — confusing them is a type error and a security error.
 

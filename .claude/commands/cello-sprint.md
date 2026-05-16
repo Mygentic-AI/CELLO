@@ -34,7 +34,7 @@ Key facts every M4+ implementer must know before starting:
 - **`EnvelopeKeyProvider` ≠ `SigningKeyProvider`.** `EnvelopeKeyProvider` is the KMS interface for encrypting K_server_X shares at rest (introduced M4). `SigningKeyProvider` is the client-side Ed25519 interface (introduced M0). These must not be confused or merged.
 - **Logger is injected, never imported directly.** No `console.log` in implementation code. Events use the `domain.noun.verb` taxonomy. The correlation ID is minted once per flow and threaded through every async call.
 - **Local Postgres via Docker Compose, not mocked.** RLS, pgaudit, and hash chain constraints are database-level constructs. A mock database cannot catch a broken RLS policy.
-- **`CELLO_ENV=local`** uses Docker Compose + all local stubs. **`CELLO_ENV=cloud`** uses real AWS services with dev KMS key, isolated from production data.
+- **`CELLO_ENV=local`** uses Docker Compose + all local stubs. **`CELLO_ENV=dev`** uses real AWS services with dev KMS key, isolated from production data.
 
 ## Step 3 — Read prior milestone writeups
 
