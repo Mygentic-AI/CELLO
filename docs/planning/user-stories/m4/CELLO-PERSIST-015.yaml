@@ -1,0 +1,222 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-015
+domain: Persistence
+milestone: M4
+actor: CLIENT
+priority: P0
+components:
+  - directory
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want to seal a conversation unilaterally after the counterparty
+  has been unreachable for longer than delivery_grace_seconds,
+  so that an active agent is not permanently blocked from closing
+  a session by an absent counterparty.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a party has been waiting for the counterparty to submit
+      a seal attempt for longer than delivery_grace_seconds (default: 600s)"
+    action: "the waiting party may send SEAL_UNILATERAL to the directory;
+      the directory shall seal on the submitting party's Merkle root and
+      record the counterparty's attestation_status as ABSENT in
+      conversation_attestations"
+
+  - trigger: "When the directory confirms a unilateral seal"
+    action: "the directory shall write one row to conversation_seals with
+      the submitting party's root and seal_type=UNILATERAL; it shall write
+      one row to conversation_attestations for the absent party with
+      attestation_status=ABSENT"
+
+  - trigger: "When the absent party reconnects after a unilateral seal"
+    action: "the directory shall deliver a SEAL_UNILATERAL notification to
+      the absent party containing the sealed root and the seal timestamp"
+
+  - trigger: "When the absent party receives a SEAL_UNILATERAL notification"
+    action: "the absent party shall verify the sealed root against its own
+      local Merkle state for the leaves it did receive; it shall log the
+      outcome but take no further protocol action — the session is closed
+      and cannot be reopened"
+
+  - trigger: "When SEAL_UNILATERAL is submitted before delivery_grace_seconds
+      has elapsed"
+    action: "the directory shall reject the request with
+      SEAL_UNILATERAL_TOO_EARLY and return the remaining grace period in
+      seconds"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Agent A and Agent B have an active session; Agent B's process
+      is terminated; delivery_grace_seconds elapses"
+    when: "Agent A sends SEAL_UNILATERAL to the directory as a separate
+      OS process"
+    then: "the directory confirms the unilateral seal; conversation_seals
+      contains one row with seal_type=UNILATERAL and Agent A's root hash;
+      conversation_attestations contains one row for Agent B with
+      attestation_status=ABSENT — verified by querying both tables from
+      a separate process after the seal"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-002
+    given: "Agent A attempts SEAL_UNILATERAL before delivery_grace_seconds
+      has elapsed"
+    when: "the directory receives the request"
+    then: "the directory returns SEAL_UNILATERAL_TOO_EARLY with
+      { remainingSeconds } — no seal row is written; Agent A must wait"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A unilateral seal has been confirmed with Agent B recorded as ABSENT"
+    when: "a new Agent B process starts and connects to the directory"
+    then: "the directory delivers a SEAL_UNILATERAL notification to Agent B
+      containing { sessionId, sealedRoot, sealedAt, sealType: 'UNILATERAL' };
+      the notification is delivered via the directory's notification mechanism,
+      not via shared memory — verified by Agent B running as a separate
+      process with no shared state with Agent A"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-004
+    given: "Agent B receives a SEAL_UNILATERAL notification"
+    when: "Agent B verifies the sealed root against its local Merkle state"
+    then: "if Agent B's local root matches the sealed root: session.unilateral.verified
+      is logged at INFO with { sessionId, match: true }; if it does not match:
+      session.unilateral.mismatch is logged at WARN with { sessionId,
+      match: false, localRoot, sealedRoot } — in both cases the session
+      remains closed; no protocol action is taken"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-005
+    given: "A unilateral seal has been confirmed"
+    when: "either party attempts to submit a new message hash for the sealed
+      session"
+    then: "the directory rejects the submission with SESSION_SEALED; the
+      session cannot be reopened by any means"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "Agent A submits SEAL_UNILATERAL"
+    when: "the seal is confirmed"
+    then: "session.sealed is logged at INFO with { sessionId, sealType:
+      'UNILATERAL', rootHash, correlationId } on Agent A's client; the
+      same correlationId that was minted when the session began is present
+      in this event"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-007
+    given: "delivery_grace_seconds is configurable per deployment"
+    when: "DELIVERY_GRACE_SECONDS environment variable is set to 60"
+    then: "Agent A can submit SEAL_UNILATERAL after 60 seconds, not 600;
+      the directory enforces the configured value, not a hardcoded default"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "SEAL_UNILATERAL shall not be accepted before
+      delivery_grace_seconds has elapsed — the directory enforces this
+      based on session start time and last activity timestamp, not on
+      the submitting party's claimed elapsed time"
+    adversarial_condition: "even when the submitting party sends a
+      fabricated timestamp claiming the grace period has elapsed — the
+      directory computes elapsed time from its own records"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "A unilateral seal shall produce exactly one row in
+      conversation_seals — it shall not be possible to overwrite or
+      supplement a unilateral seal with a bilateral seal for the same
+      session"
+    adversarial_condition: "even when the absent party reconnects and
+      attempts to submit their own seal for the same session — the
+      directory rejects the attempt with SESSION_SEALED"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "The absent party's ABSENT attestation shall be recorded
+      in the same database transaction as the seal row — the two records
+      are atomic"
+    adversarial_condition: "even when the directory crashes between writing
+      the seal row and writing the attestation row — on restart, the
+      directory detects the missing attestation and writes it before
+      accepting any new operations on the session"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the absent party never reconnects after a unilateral
+      seal"
+    fallback: "the ABSENT attestation remains in conversation_attestations
+      permanently; the session is closed; no follow-up action is required
+      from the present party — session closed is session closed"
+    test_type: unit
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While the directory is unavailable when the absent party
+      reconnects to receive the SEAL_UNILATERAL notification"
+    fallback: "the directory queues the notification and delivers it on
+      the absent party's next successful connection; the notification is
+      not lost — it remains in the notification queue until delivered
+      and acknowledged"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: session.sealed
+      level: info
+      trigger: "a unilateral seal is confirmed"
+      context_fields: [sessionId, sealType, rootHash, correlationId]
+      correlationId: true
+
+    - name: session.unilateral.verified
+      level: info
+      trigger: "absent party verifies sealed root matches its local state"
+      context_fields: [sessionId, match, correlationId]
+      correlationId: true
+
+  error_events:
+    - name: session.unilateral.mismatch
+      level: warn
+      trigger: "absent party's local root does not match the sealed root"
+      context_fields: [sessionId, localRoot, sealedRoot]
+
+    - name: session.unilateral.too.early
+      level: warn
+      trigger: "SEAL_UNILATERAL submitted before grace period elapsed"
+      context_fields: [sessionId, remainingSeconds]
+
+  alarms:
+    - condition: "session.unilateral.mismatch fires more than 3 times
+        in 1 hour"
+      fires_to: ops-warning
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Session Lifecycle"
+  discussion_logs:
+    - "2026-05-14_1702_relay-session-mechanics-and-recovery"
+    - "2026-05-14_1702_arbitration-mechanics-and-dispute-resolution"
+    - "2026-04-11_1700_persistence-layer-design"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  depends_on:
+    - CELLO-PERSIST-001
+    - CELLO-PERSIST-013
