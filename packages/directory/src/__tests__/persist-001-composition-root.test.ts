@@ -2,6 +2,7 @@
  * CELLO-PERSIST-001 — Composition root and adapter wiring tests
  *
  * Covers:
+ *   AC-002: CELLO_ENV=local happy-path startup — all adapters initialise, service accepts connections
  *   AC-004: process exits 1 with adapter.config.missing when CELLO_ENV is unrecognised or required key absent
  *   SI-002: PgDirectoryStore is not exported from packages/directory index.ts
  */
@@ -76,6 +77,44 @@ describe("AC-004: composition root exits 1 on missing config", () => {
     expect(result.code).toBe(1);
     const out = result.stdout + result.stderr;
     expect(out).toContain("CELLO_RELAY_MULTIADDR");
+  });
+});
+
+// AC-002 requires Docker — skip when not in local environment
+const isLocal = process.env["CELLO_ENV"] === "local";
+const describeIntegration = isLocal ? describe : describe.skip;
+
+describeIntegration("AC-002: CELLO_ENV=local startup — all adapters initialise against real Postgres", () => {
+  it("logs adapter.initialised for all six adapters before first connection attempt", () => {
+    // Run the binary with valid local config; it will exit 1 on missing key file
+    // but all six adapter.initialised events fire before that point.
+    const result = runBin({
+      CELLO_ENV: "local",
+      DATABASE_URL: process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5433/cello_dev",
+      DEV_ENVELOPE_KEY: process.env["DEV_ENVELOPE_KEY"] ?? "0".repeat(64),
+      CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWTest",
+    });
+    const out = result.stdout + result.stderr;
+    // All six adapters log adapter.initialised
+    expect(out).toContain("PgDirectoryStore");
+    expect(out).toContain("EnvelopeKeyProvider");
+    expect(out).toContain("ClientStore");
+    expect(out).toContain("RelayWal");
+    expect(out).toContain("JobScheduler");
+    // No AWS endpoint calls — only localhost Postgres is permitted
+    expect(out).not.toContain("amazonaws.com");
+  });
+
+  it("exits 1 with migration.out.of.date when pointing at a database with no migrations", () => {
+    const result = runBin({
+      CELLO_ENV: "local",
+      DATABASE_URL: "postgresql://postgres:dev@localhost:5433/cello_nonexistent_test_db",
+      DEV_ENVELOPE_KEY: "0".repeat(64),
+      CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWTest",
+    });
+    expect(result.code).toBe(1);
+    const out = result.stdout + result.stderr;
+    expect(out).toContain("migration.out.of.date");
   });
 });
 

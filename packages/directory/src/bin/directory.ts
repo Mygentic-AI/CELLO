@@ -20,8 +20,9 @@
  *   CELLO_RELAY_MULTIADDR              — relay multiaddr (required)
  */
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import pg from "pg";
 import { FileKeyProvider } from "@cello/crypto";
@@ -79,6 +80,31 @@ const store = (() => {
   logger.error("adapter.init.failed", { adapterName: "DirectoryStore", reason: `CELLO_ENV=${env} not yet supported` });
   process.exit(1);
 })();
+
+// ─── AC-010: Schema version guard ────────────────────────────────────────────
+// Query flyway_schema_history and refuse to start if migrations haven't been applied.
+if (env === "local" && pgPool) {
+  const migrationsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../db/migrations");
+  const migrationFiles = readdirSync(migrationsDir).filter((f) => /^V\d+__.*\.sql$/.test(f));
+  const expectedVersion = migrationFiles.length;
+
+  let appliedVersion = 0;
+  try {
+    const result = await pgPool.query<{ max_rank: number | null }>(
+      `SELECT MAX(installed_rank) AS max_rank FROM flyway_schema_history WHERE success = true`,
+    );
+    appliedVersion = result.rows[0]?.max_rank ?? 0;
+  } catch {
+    // flyway_schema_history doesn't exist — migrations have never run
+    appliedVersion = 0;
+  }
+
+  if (appliedVersion < expectedVersion) {
+    logger.error("migration.out.of.date", { appliedVersion, expectedVersion, env });
+    await pgPool.end();
+    process.exit(1);
+  }
+}
 
 // envelopeKeyProvider/clientStore/relayWal/jobScheduler are instantiated here and
 // will be wired into createDirectoryNode in PERSIST-003+.
@@ -171,7 +197,7 @@ try {
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
   // Log but don't exit — relay may not be reachable yet; adapter will retry on each call
-  logger.warn("adapter.init.failed", { adapterName: "NetworkRelayAdapter", reason: msg });
+  logger.error("adapter.init.failed", { adapterName: "NetworkRelayAdapter", reason: msg });
 }
 
 for (const addr of result.node.listenAddresses()) {

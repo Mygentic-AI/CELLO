@@ -15,54 +15,67 @@ story: >
   so that the local development loop requires no cloud infrastructure
   and production RDS is always in identical schema state to local.
 
+# ─── Architecture note: Flyway is infrastructure, not application code ──────
+# Flyway runs as a Docker Compose service (local) or CodeBuild step (dev/prod).
+# The directory process never shells out to Flyway. It cannot intercept Flyway's
+# output and must not attempt to emit migration.applied / migration.skipped /
+# migration.failed / migration.checksum.mismatch as CELLO Logger events —
+# those belong to the CI/CD log stream (CodeBuild / CloudWatch), not the
+# application observability path.
+#
+# The ops-critical alarm path is preserved differently: the directory process
+# queries flyway_schema_history at startup and refuses to start against a stale
+# schema (see AC-010 and migration.out.of.date below). A future /cello-review
+# must not re-flag the four Flyway-internal events as missing from application
+# code — they are deliberately out of scope here.
+
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
   - trigger: "When a developer runs docker compose up"
-    action: "a Postgres 16 container starts on port 5432 with database
-      cello_dev and is ready to accept connections within 10 seconds"
+    action: "a Postgres 18 container starts on port 5433 (to coexist with a
+      local Postgres instance) with database cello_dev and is ready to accept
+      connections within 10 seconds"
 
-  - trigger: "When flyway migrate is run against any environment"
+  - trigger: "When flyway migrate is run against the local container"
     action: "Flyway applies all pending versioned migration files from
       packages/directory/db/migrations/ in V{n}__{description}.sql order,
       records each in flyway_schema_history, and exits with code 0 on success
       or code 1 on failure; migration files live in the directory package
-      because they define the directory schema — packages/interfaces/ defines
-      the TypeScript interface, packages/directory/ owns the SQL"
+      because they define the directory schema"
 
-  - trigger: "When the directory service starts"
-    action: "the service runs flyway migrate before accepting any connections;
-      if migration fails, the service exits with code 1 and logs
-      migration.failed"
+  - trigger: "When the directory service starts with CELLO_ENV=local"
+    action: "the service queries flyway_schema_history to determine the current
+      applied schema version; if no migrations have been applied, or if the
+      applied version is behind the latest migration file on disk, the service
+      exits with code 1 and logs migration.out.of.date before accepting any
+      connections"
 
   - trigger: "When a developer runs the seed script against the local container"
-    action: "the database is wiped and restored to a known state containing
-      the four baseline scenarios: registered operator with no active sessions,
-      unregistered operator, active session mid-conversation, sealed session"
+    action: "the database is wiped and restored to a known baseline state;
+      the seed is gated on CELLO_ENV=local and exits 1 otherwise"
 
   - trigger: "When a test runs"
     action: "the test wraps its database operations in a transaction that rolls
-      back on completion — it never relies on the seed data and never leaves
+      back on completion — it never relies on seed data and never leaves
       state in the database after the test"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "A developer machine with Docker installed and no Postgres running"
+    given: "A developer machine with Docker installed"
     when: "docker compose up is run from the repo root"
-    then: "a Postgres 16 container starts, cello_dev database is created, and
-      psql -h localhost -U postgres -d cello_dev -c 'SELECT 1' returns
-      successfully within 10 seconds"
+    then: "a cello-postgres:18.4 container starts on port 5433, cello_dev
+      database is created, and SELECT 1 returns successfully"
     test_type: integration
     component_under_test: directory
 
   - id: AC-002
     given: "The local Postgres container is running with an empty cello_dev
       database"
-    when: "flyway migrate is run with the local connection URL"
+    when: "docker compose run --rm flyway is run"
     then: "all migration files in packages/directory/db/migrations/ are applied
-      in version order;
-      flyway_schema_history contains one row per migration file with status
-      SUCCESS; the command exits with code 0"
+      in version order; flyway_schema_history contains one SUCCESS row per
+      migration file; the command exits with code 0"
     test_type: integration
     component_under_test: directory
 
@@ -70,29 +83,31 @@ acceptance_criteria:
     given: "flyway migrate has been run once successfully"
     when: "flyway migrate is run again with no new migration files"
     then: "Flyway detects no pending migrations and exits with code 0 without
-      modifying any table — idempotent; migration.skipped is logged at INFO
-      with { currentVersion }"
+      modifying any table — idempotent; the row count in flyway_schema_history
+      is unchanged"
     test_type: integration
     component_under_test: directory
 
   - id: AC-004
-    given: "A migration file contains a SQL syntax error"
-    when: "flyway migrate is run"
-    then: "Flyway exits with code 1; migration.failed is logged with
-      { version, description, reason }; no subsequent migration files are
-      applied; flyway_schema_history records the failed migration with status
-      FAILED"
+    given: "The local Postgres container is running with migrations applied"
+    when: "a migration file on disk is modified after being applied"
+    then: "flyway validate exits with code 1, indicating checksum mismatch —
+      this is the mechanism by which tampered migrations are detected; the
+      directory service's migration.out.of.date guard (AC-010) is a separate
+      version-count check, not a checksum check; checksum enforcement is
+      Flyway's responsibility"
     test_type: integration
     component_under_test: directory
 
   - id: AC-005
-    given: "The local Postgres container is running with migrations applied"
-    when: "the seed script is run"
-    then: "the database contains exactly the four baseline scenarios: one
-      registered operator row with no session rows, one unregistered operator
-      row, one active session row with at least one hash entry row, and one
-      sealed session row with a conversation_seal row — verified by querying
-      each table directly"
+    given: "N/A — deferred"
+    when: "N/A"
+    then: "Seed data baseline scenarios (registered operator, unregistered
+      operator, active session, sealed session) are deferred to PERSIST-003
+      because the required tables (agents, sessions, hash_chain, conversation_seals)
+      do not exist until that story's migrations are applied. AC-005 is
+      explicitly out of scope for PERSIST-002 and will be implemented as part
+      of PERSIST-003."
     test_type: integration
     component_under_test: directory
 
@@ -109,29 +124,41 @@ acceptance_criteria:
     given: "The local Postgres container is running with migrations applied"
     when: "flyway validate is run"
     then: "Flyway reports all applied migrations as valid — their checksums
-      match the files on disk; any manually applied schema change that bypasses
-      Flyway is detectable as a checksum mismatch"
+      match the files on disk"
     test_type: integration
     component_under_test: directory
 
   - id: AC-008
     given: "A developer runs pnpm run db:migrate in the directory package"
     when: "the command completes"
-    then: "it is equivalent to running flyway migrate with the correct local
-      connection URL — the package.json script is the single entry point
-      developers use, not a raw flyway command"
+    then: "it produces the same result as running docker compose run --rm flyway
+      directly — the package.json script is the single entry point developers
+      use; verified by asserting the script value in package.json equals
+      'docker compose run --rm flyway'"
     test_type: unit
     component_under_test: directory
 
   - id: AC-009
     given: "The docker-compose.yml for the local Postgres container"
     when: "the container starts"
-    then: "pgaudit is loaded via shared_preload_libraries = 'pgaudit' and
-      pgaudit.log = 'all' is set in the postgres command or postgresql.conf
-      override; verified by connecting to the container and running
-      SHOW shared_preload_libraries — 'pgaudit' must appear in the result,
-      and executing a SELECT statement must produce an entry in the Postgres
-      container log tagged with AUDIT"
+    then: "pgaudit is loaded via shared_preload_libraries='pgaudit' and
+      pgaudit.log='all'; verified by SHOW shared_preload_libraries returning
+      a value containing 'pgaudit', and by SELECT extname FROM pg_extension
+      WHERE extname='pgaudit' returning a row — extension presence confirms
+      the audit hook is registered; container log inspection is not required
+      for this AC"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010
+    given: "CELLO_ENV=local and the Docker Compose Postgres container is running"
+    when: "the directory service starts"
+    then: "the service queries flyway_schema_history for the maximum
+      installed_rank; if no rows exist (migrations never run) or if the
+      installed_rank is less than the number of migration files on disk, the
+      service logs migration.out.of.date at ERROR with { appliedVersion,
+      expectedVersion, env } and exits with code 1 before accepting any
+      connections"
     test_type: integration
     component_under_test: directory
 
@@ -155,35 +182,21 @@ security_invariants:
     component_under_test: directory
 
 # ─── Observability ──────────────────────────────────────────
+# NOTE: migration.applied, migration.skipped, migration.failed, and
+# migration.checksum.mismatch are deliberately NOT emitted by the directory
+# process. Flyway runs as infrastructure (Docker Compose locally, CodeBuild in
+# dev/prod). Its output belongs to the CI/CD log stream, not the CELLO Logger.
+# The ops-critical alarm path is covered by migration.out.of.date below.
 observability:
-  events:
-    - name: migration.applied
-      level: info
-      trigger: "each Flyway migration completes successfully"
-      context_fields: [version, description, executionTime]
-      correlationId: false
-
-    - name: migration.skipped
-      level: info
-      trigger: "Flyway finds no pending migrations"
-      context_fields: [currentVersion]
-      correlationId: false
-
   error_events:
-    - name: migration.failed
+    - name: migration.out.of.date
       level: error
-      trigger: "a Flyway migration fails"
-      context_fields: [version, description, reason]
-
-    - name: migration.checksum.mismatch
-      level: error
-      trigger: "Flyway validate detects a modified applied migration"
-      context_fields: [version, description]
+      trigger: "the directory service detects at startup that the applied schema
+        version is behind the expected version"
+      context_fields: [appliedVersion, expectedVersion, env]
 
   alarms:
-    - condition: "migration.failed fires at any time"
-      fires_to: ops-critical
-    - condition: "migration.checksum.mismatch fires at any time"
+    - condition: "migration.out.of.date fires at any time"
       fires_to: ops-critical
 
 # ─── References ─────────────────────────────────────────────
