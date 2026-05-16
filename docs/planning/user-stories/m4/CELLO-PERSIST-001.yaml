@@ -30,7 +30,7 @@ behavior:
       contract without needing a running database — it is not used by
       CELLO_ENV=local at runtime"
 
-  - trigger: "When CELLO_ENV=cloud"
+  - trigger: "When CELLO_ENV=dev"
     action: "the composition root shall instantiate production implementations:
       RdsDirectoryStore, SQLCipherClientStore, FileRelayWal, KmsEnvelopeKeyProvider,
       CloudWatchLogger, and EventBridgeJobScheduler"
@@ -184,7 +184,7 @@ references:
   protocol_map: "Node Operations"
   discussion_logs:
     - "2026-05-16_0753_development-pipeline-and-local-iteration"
-    - "2026-05-16_0900_m4-cloud-infrastructure-decisions"
+    - "2026-05-16_0900_m4-infrastructure-decisions"
   milestone_outline: "docs/planning/user-stories/m4/outline.md"
   e2e_story: CELLO-PERSIST-E2E-001
   blocks:

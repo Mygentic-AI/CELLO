@@ -25,7 +25,7 @@ The goal is to preserve the fast inner loop for as long as possible by putting e
 
 ## Decision: Adapter Pattern for All External Dependencies
 
-Every external dependency gets an interface. The interface is defined by what the consumer needs, not by what the external system can do. Two implementations exist for each: a local stub for development and a real implementation for cloud deployment.
+Every external dependency gets an interface. The interface is defined by what the consumer needs, not by what the external system can do. Two implementations exist for each: a local stub for development and a real implementation for AWS deployment.
 
 The interface boundary must be narrow. If the local implementation ever needs to simulate provider-specific behavior to make tests pass, the boundary is in the wrong place.
 
@@ -76,7 +76,7 @@ interface KeyProvider {
 
 **Production implementation**: AWS KMS. Dev and prod use separate KMS keys in the same AWS account. Key policy on the dev key allows dev credentials. Key policy on the prod key allows only the production ECS task role — dev credentials cannot touch it.
 
-**Decision**: no LocalStack for KMS. LocalStack's key policy enforcement has known gaps. The in-process stub covers the inner loop; the real dev KMS key covers the residual cloud seam.
+**Decision**: no LocalStack for KMS. LocalStack's key policy enforcement has known gaps. The in-process stub covers the inner loop; the real dev KMS key covers the residual AWS seam.
 
 ---
 
@@ -172,17 +172,18 @@ const channel = process.env.CELLO_ENV === 'local'
 
 Phase 1 (now through ~M8): two tiers.
 - `local` — Docker Compose, stub adapters, real Postgres container, no AWS dependency
-- `cloud` — real AWS account, real services, IaC-deployed, dev KMS key, isolated from prod data
+- `dev` — real AWS account, real services, IaC-deployed, dev KMS key, isolated from prod data
 
 Phase 2 (~M8 onward, approaching real users): three tiers.
 - `local` — unchanged
-- `staging` — rename of `cloud`, tightened to mirror production topology more closely
+- `dev` — unchanged; `dev` is a permanent tier name, not a placeholder
+- `staging` — new tier, mirrors production topology at reduced instance sizes
 - `production` — new, separate parameter set, production KMS key, production data
 
-The rename from `cloud` to `staging` is a parameter change in the IaC, not a rebuild.
+`dev` is the permanent name for the AWS-backed pre-staging environment. It was considered naming this tier `cloud` on the grounds that it is the only cloud tier in Phase 1, but that name was rejected: `cloud` is redundant with "VPC" and "AWS" in resource names, non-descriptive to anyone without historical context, and expensive to rename later — S3 bucket names, RDS instance identifiers, and KMS key aliases cannot be renamed in place. `dev` is accurate, unambiguous, and consistent with how it is already referenced (the KMS key is `cello-dev-master-key`, Secrets Manager paths use `cello/dev/...`).
 
 ```typescript
-type Environment = 'local' | 'cloud' | 'staging' | 'production'
+type Environment = 'local' | 'dev' | 'staging' | 'production'
 ```
 
 ---
@@ -221,7 +222,7 @@ GitHub push to main
 
 **Shared dependency handling**: if `packages/crypto` or `packages/protocol-types` changes, all downstream pipelines trigger. Model this as an `"all"` sentinel in the mappings config.
 
-**IaC discipline**: everything that exists in AWS exists in IaC. The console is a scratchpad. Any emergency fix applied via console is backported to IaC before closing the laptop. One template per service, environment passed as a parameter — `cello-local`, `cello-cloud`, `cello-staging`, `cello-production` are instantiations of the same template with different values. Two diverging templates means two sources of truth that will drift.
+**IaC discipline**: everything that exists in AWS exists in IaC. The console is a scratchpad. Any emergency fix applied via console is backported to IaC before closing the laptop. One template per service, environment passed as a parameter — `cello-local`, `cello-dev`, `cello-staging`, `cello-production` are instantiations of the same template with different values. Two diverging templates means two sources of truth that will drift.
 
 **Rollback**: fix forward for a single developer. Rollback machinery adds complexity that isn't warranted yet.
 
@@ -233,7 +234,7 @@ GitHub push to main
 
 Some behaviors cannot be emulated locally regardless of tooling quality: real IAM policy evaluation, Lambda cold start timing under real network conditions, RDS failover behavior, ECS task networking. These require a real AWS environment to test.
 
-The `cloud` environment is the designated place to test the seam. It uses real AWS services, real IAM, real KMS dev key — but is completely isolated from production data. Fast to deploy to via `lambda update-function-code` (30 seconds) rather than full SAM redeployments (15-20 minutes).
+The `dev` environment is the designated place to test the seam. It uses real AWS services, real IAM, real KMS dev key — but is completely isolated from production data. Fast to deploy to via `lambda update-function-code` (30 seconds) rather than full SAM redeployments (15-20 minutes).
 
 The SAM/CloudFormation full redeploy is for infrastructure changes. Code changes use targeted update commands.
 
@@ -284,5 +285,5 @@ Interfaces needed before M4 stories are written go into `packages/interfaces/` i
 7. `/cello-review` updated to verify observability implementation
 8. `/cello-sprint` updated to load interfaces and event taxonomy as mandatory context
 9. Migration tool decision made
-10. IaC template for `cloud` environment with parameter sets
+10. IaC template for `dev` environment with parameter sets
 11. cello-pipeline-filter Lambda updated with data-driven mappings config

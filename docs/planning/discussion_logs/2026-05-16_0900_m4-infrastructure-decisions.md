@@ -1,15 +1,15 @@
 ---
-name: M4 Cloud Infrastructure Decisions
+name: M4 Infrastructure Decisions
 type: discussion
 date: 2026-05-16 09:00
 topics: [infrastructure, AWS, VPC, RDS, KMS, ECS, Secrets Manager, IAM, M4]
 status: active
-description: AWS infrastructure decisions for the M4 cloud environment — VPC topology, RDS access, IAM scoping, Secrets Manager structure, and region selection.
+description: AWS infrastructure decisions for the M4 dev environment — VPC topology, RDS access, IAM scoping, Secrets Manager structure, and region selection.
 ---
 
-# M4 Cloud Infrastructure Decisions
+# M4 Infrastructure Decisions
 
-The M4 `cloud` environment is the first time CELLO touches real AWS infrastructure. These decisions were made to be minimal but production-shaped — so that M5 federates on top of M4's foundation rather than starting from scratch.
+The M4 `dev` environment is the first time CELLO touches real AWS infrastructure. These decisions were made to be minimal but production-shaped — so that M5 federates on top of M4's foundation rather than starting from scratch.
 
 ---
 
@@ -17,7 +17,7 @@ The M4 `cloud` environment is the first time CELLO touches real AWS infrastructu
 
 **Decision: us-east-1.**
 
-M5 produces a three-region topology (us-east-1, eu-west-1, me-central-1). M4's `cloud` environment is the us-east-1 node established early. Consistency with M5's primary region avoids a region migration between milestones.
+M5 produces a three-region topology (us-east-1, eu-west-1, me-central-1). M4's `dev` environment is the us-east-1 node established early. Consistency with M5's primary region avoids a region migration between milestones.
 
 ---
 
@@ -33,7 +33,7 @@ M5 produces a three-region topology (us-east-1, eu-west-1, me-central-1). M4's `
 
 The rationale for doing this at M4 rather than at M5: a VPC created at M4 is the same VPC M5 federates. Retrofitting private subnets onto an existing RDS instance in M5 requires a replacement, not a config change.
 
-**IaC:** one CloudFormation template, `cello-vpc.yaml`, parameterised by environment (`cloud`, `staging`, `production`). M4 instantiates the `cloud` parameter set.
+**IaC:** one CloudFormation template, `cello-vpc.yaml`, parameterised by environment (`dev`, `staging`, `production`). M4 instantiates the `dev` parameter set.
 
 ---
 
@@ -58,10 +58,10 @@ kms:Decrypt, kms:DescribeKey
   Resource: arn:aws:kms:us-east-1:{account}:key/{dev-key-id}
 
 secretsmanager:GetSecretValue
-  Resource: arn:aws:secretsmanager:us-east-1:{account}:secret:cello/cloud/*
+  Resource: arn:aws:secretsmanager:us-east-1:{account}:secret:cello/dev/*
 
 s3:PutObject
-  Resource: arn:aws:s3:::cello-audit-logs-cloud/*
+  Resource: arn:aws:s3:::cello-audit-logs-dev/*
 ```
 
 No `*` resources. No `kms:Encrypt` on the task role — the KMS master key encrypts K_server_X shares at node startup (unwrap), not per-operation. The `EnvelopeKeyProvider` performs encryption in-process using the unwrapped key; KMS is only called once at startup to decrypt (unwrap) the master key.
@@ -76,9 +76,9 @@ No `*` resources. No `kms:Encrypt` on the task role — the KMS master key encry
 
 | Secret path | Contents | Rotation |
 |---|---|---|
-| `cello/cloud/directory/rds-credentials` | `{ "username": "cello_service", "password": "..." }` | AWS-managed auto-rotation, 30 days |
-| `cello/cloud/directory/node-private-key` | Ed25519 private key bytes (hex) for this directory node's libp2p identity | Manual — requires coordinated node restart |
-| `cello/cloud/directory/kms-key-arn` | ARN of the dev KMS master key | Not rotated — ARN is stable |
+| `cello/dev/directory/rds-credentials` | `{ "username": "cello_service", "password": "..." }` | AWS-managed auto-rotation, 30 days |
+| `cello/dev/directory/node-private-key` | Ed25519 private key bytes (hex) for this directory node's libp2p identity | Manual — requires coordinated node restart |
+| `cello/dev/directory/kms-key-arn` | ARN of the dev KMS master key | Not rotated — ARN is stable |
 
 ### What Does NOT Go In
 
@@ -90,11 +90,11 @@ No `*` resources. No `kms:Encrypt` on the task role — the KMS master key encry
 
 **Pattern:** `cello/{env}/{component}/{name}`
 
-- `{env}`: `cloud` | `staging` | `production`
+- `{env}`: `dev` | `staging` | `production`
 - `{component}`: `directory` | `relay` | `pipeline`
 - `{name}`: kebab-case description
 
-**Why path-based naming matters:** IAM policies use `StringLike` on the resource ARN with `cello/cloud/*` vs `cello/production/*`. The ECS task role for the cloud environment cannot read production secrets by construction — the prefix condition in the IAM policy enforces this without needing separate accounts.
+**Why path-based naming matters:** IAM policies use `StringLike` on the resource ARN with `cello/dev/*` vs `cello/production/*`. The ECS task role for the dev environment cannot read production secrets by construction — the prefix condition in the IAM policy enforces this without needing separate accounts.
 
 ### ECS Task Definition Reference Pattern
 
@@ -104,11 +104,11 @@ Secrets are referenced by ARN in the task definition, never inlined:
 "secrets": [
   {
     "name": "DB_PASSWORD",
-    "valueFrom": "arn:aws:secretsmanager:us-east-1:{account}:secret:cello/cloud/directory/rds-credentials:password::"
+    "valueFrom": "arn:aws:secretsmanager:us-east-1:{account}:secret:cello/dev/directory/rds-credentials:password::"
   },
   {
     "name": "NODE_PRIVATE_KEY",
-    "valueFrom": "arn:aws:secretsmanager:us-east-1:{account}:secret:cello/cloud/directory/node-private-key::"
+    "valueFrom": "arn:aws:secretsmanager:us-east-1:{account}:secret:cello/dev/directory/node-private-key::"
   }
 ]
 ```
@@ -121,8 +121,8 @@ No secrets in environment variables that are not injected via Secrets Manager. N
 
 | Bucket | Purpose | Lifecycle |
 |---|---|---|
-| `cello-audit-logs-cloud` | pgaudit logs from `AuditLogShipper` | 90-day S3 Standard → Glacier archive |
-| `cello-migrations-cloud` | (optional) Flyway baseline snapshots | No lifecycle — manual management |
+| `cello-audit-logs-dev` | pgaudit logs from `AuditLogShipper` | 90-day S3 Standard → Glacier archive |
+| `cello-migrations-dev` | (optional) Flyway baseline snapshots | No lifecycle — manual management |
 
 Bucket policy: `cello_service` ECS task role has `PutObject` only. No `GetObject`, no `DeleteObject`, no `ListBucket`. The audit log is append-only by IAM policy, not just by application convention.
 
@@ -130,7 +130,7 @@ Bucket policy: `cello_service` ECS task role has `PutObject` only. No `GetObject
 
 ## KMS
 
-One KMS key in us-east-1 for the `cloud` environment: `cello-dev-master-key`.
+One KMS key in us-east-1 for the `dev` environment: `cello-dev-master-key`.
 
 - Key policy: allows the directory ECS task role to `kms:Decrypt` and `kms:DescribeKey` only
 - Developer IAM users get `kms:Encrypt` for initial key setup only, not as an ongoing permission
@@ -149,7 +149,7 @@ One KMS key in us-east-1 for the `cloud` environment: `cello-dev-master-key`.
 | `cello-kms.yaml` | KMS key and key policy |
 | `cello-s3.yaml` | S3 buckets and bucket policies |
 
-All templates accept `Environment` as a parameter (`cloud` | `staging` | `production`). Resource names and ARN references are derived from the parameter — no copy-pasted templates per environment.
+All templates accept `Environment` as a parameter (`dev` | `staging` | `production`). Resource names and ARN references are derived from the parameter — no copy-pasted templates per environment.
 
 ---
 
@@ -161,4 +161,4 @@ M5 does not replace any of the above. It adds:
 - ALB in the public subnet (already wired at M4, just not fronting anything yet)
 - WAF on the ALB
 
-The M4 `cloud` environment becomes the us-east-1 node in the M5 three-node topology without infrastructure replacement.
+The M4 `dev` environment becomes the us-east-1 node in the M5 three-node topology without infrastructure replacement.

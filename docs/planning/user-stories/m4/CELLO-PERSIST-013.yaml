@@ -44,7 +44,7 @@ behavior:
       no file I/O; crash recovery is not testable in this mode but all
       other WAL behaviours are"
 
-  - trigger: "When CELLO_ENV=cloud or production"
+  - trigger: "When CELLO_ENV=dev or production"
     action: "FileRelayWal writes entries to disk at WAL_DIR/{sessionId}.wal;
       WAL_DIR is configured via environment variable"
 
@@ -91,10 +91,10 @@ acceptance_criteria:
     component_under_test: relay
 
   - id: AC-005
-    given: "WAL_DIR is not configured and CELLO_ENV=cloud"
+    given: "WAL_DIR is not configured and CELLO_ENV=dev"
     when: "the relay starts"
     then: "the relay exits with code 1 and logs adapter.config.missing with
-      { missingKey: 'WAL_DIR', env: 'cloud' } before accepting any sessions"
+      { missingKey: 'WAL_DIR', env: 'dev' } before accepting any sessions"
     test_type: unit
     component_under_test: relay
 

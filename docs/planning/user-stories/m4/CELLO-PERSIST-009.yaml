@@ -28,7 +28,7 @@ behavior:
       temporary path — no SQLCipher dependency required for the local
       development loop"
 
-  - trigger: "When CELLO_ENV=cloud or production"
+  - trigger: "When CELLO_ENV=dev or production"
     action: "SQLCipherClientStore opens the database with the derived db_key;
       the file on disk is opaque ciphertext"
 

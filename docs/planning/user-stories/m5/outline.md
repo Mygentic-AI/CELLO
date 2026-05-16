@@ -123,7 +123,7 @@ Folder-to-pipeline mappings are data-driven — a JSON config file in the repo, 
 
 **Shared dependency rule:** a change to `packages/crypto/` or `packages/protocol-types/` triggers all downstream pipelines. Modelled as an `"all"` sentinel in the mappings config.
 
-**IaC discipline:** one CloudFormation template per service, environment passed as a parameter (`cloud`, `staging`, `production`). The console is a scratchpad only — any emergency fix applied via console is backported to IaC before closing the session.
+**IaC discipline:** one CloudFormation template per service, environment passed as a parameter (`dev`, `staging`, `production`). The console is a scratchpad only — any emergency fix applied via console is backported to IaC before closing the session.
 
 ### Pipeline Stages (per package)
 
@@ -135,7 +135,7 @@ Folder-to-pipeline mappings are data-driven — a JSON config file in the repo, 
 5. Apply database migrations (directory package only)
 6. Docker image build and push to ECR
 
-**Staging deploy:** pipeline deploys the new image to the staging ECS services. Staging is a 3-node setup functionally equivalent to production at reduced instance sizes. In Phase 1 (through ~M8), the `cloud` environment serves as staging — see [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration Strategy]] for environment tier decisions.
+**Staging deploy:** pipeline deploys the new image to the staging ECS services. Staging is a 3-node setup functionally equivalent to production at reduced instance sizes. In Phase 1 (through ~M8), the `dev` environment serves as staging — see [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration Strategy]] for environment tier decisions.
 
 **Staging smoke test:** CodeBuild runs the live multi-process smoke test suite against the staging environment:
 - Two agent sessions established end-to-end
@@ -236,7 +236,7 @@ Standard SPARC gate sequence plus live smoke tests:
 
 - [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration Strategy]] — CI/CD pipeline design, Lambda router pattern, IaC discipline, environment tiers
 - [[2026-05-14_1853_milestone-sequence-revision|Milestone Sequence Revision]] — sequencing decisions placing M5 here
-- [[2026-05-16_0900_m4-cloud-infrastructure-decisions|M4 Cloud Infrastructure Decisions]] — VPC, IAM, Secrets Manager naming convention, KMS, S3 audit bucket established at M4; M5 adds two regions and federation on top of this foundation
+- [[2026-05-16_0900_m4-infrastructure-decisions|M4 Infrastructure Decisions]] — VPC, IAM, Secrets Manager naming convention, KMS, S3 audit bucket established at M4; M5 adds two regions and federation on top of this foundation
 - [[2026-04-08_1700_node-architecture-and-replication|Node Architecture and Replication]] — three-phase node deployment strategy, threshold parameters, primary/backup replication topology
 - [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]] — relay as session-level Merkle engine; relay node separation from directory
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — schema and federation replication strategy this infrastructure hosts

@@ -31,8 +31,8 @@ behavior:
     action: "LocalAuditLogShipper writes each entry as a structured JSON line
       to a local file sink at the path configured in AUDIT_LOG_PATH"
 
-  - trigger: "When CELLO_ENV=cloud"
-    action: "S3AuditLogShipper ships each entry to the cello-audit-logs-cloud
+  - trigger: "When CELLO_ENV=dev"
+    action: "S3AuditLogShipper ships each entry to the cello-audit-logs-dev
       S3 bucket under the prefix audit/{date}/; the shipper uses the ECS task
       role's PutObject permission — no separate credentials"
 
@@ -144,7 +144,7 @@ security_invariants:
 degraded_behavior:
   - id: DB-001
     condition: "While the S3 audit log destination is unavailable
-      (CELLO_ENV=cloud)"
+      (CELLO_ENV=dev)"
     fallback: "S3AuditLogShipper shall buffer entries in memory and retry
       on a 30-second interval; the directory shall continue serving requests;
       audit.shipper.degraded is logged at WARN with { reason, bufferedCount };
@@ -190,7 +190,7 @@ references:
   discussion_logs:
     - "2026-04-11_1700_persistence-layer-design"
     - "2026-05-16_0753_development-pipeline-and-local-iteration"
-    - "2026-05-16_0900_m4-cloud-infrastructure-decisions"
+    - "2026-05-16_0900_m4-infrastructure-decisions"
   milestone_outline: "docs/planning/user-stories/m4/outline.md"
   e2e_story: CELLO-PERSIST-E2E-001
   depends_on:

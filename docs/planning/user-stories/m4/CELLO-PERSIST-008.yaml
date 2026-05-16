@@ -31,7 +31,7 @@ behavior:
     action: "LocalJobScheduler triggers the analytics job on demand via
       pnpm run analytics:run or on a locally-configured cron interval"
 
-  - trigger: "When CELLO_ENV=cloud"
+  - trigger: "When CELLO_ENV=dev"
     action: "EventBridgeJobScheduler triggers the analytics job on a fixed
       schedule (default: every 6 hours) via an EventBridge Scheduled Rule
       targeting the ECS task"

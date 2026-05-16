@@ -37,7 +37,7 @@ behavior:
       decryption in-process using the key from DEV_ENVELOPE_KEY; no KMS
       call is made"
 
-  - trigger: "When CELLO_ENV=cloud"
+  - trigger: "When CELLO_ENV=dev"
     action: "KmsEnvelopeKeyProvider wraps and unwraps using the AWS KMS dev
       master key ARN from Secrets Manager; the KMS key never leaves AWS"
 
@@ -149,7 +149,7 @@ security_invariants:
 degraded_behavior:
   - id: DB-001
     condition: "While the KMS service is unavailable at directory startup
-      (CELLO_ENV=cloud)"
+      (CELLO_ENV=dev)"
     fallback: "the directory shall refuse to start and log key.unwrap.failed
       with { reason, keyId }; it shall not start with unencrypted shares or
       a cached key from a previous run — fail hard, not silently"
@@ -217,7 +217,7 @@ references:
   discussion_logs:
     - "2026-04-11_1700_persistence-layer-design"
     - "2026-05-16_0753_development-pipeline-and-local-iteration"
-    - "2026-05-16_0900_m4-cloud-infrastructure-decisions"
+    - "2026-05-16_0900_m4-infrastructure-decisions"
   milestone_outline: "docs/planning/user-stories/m4/outline.md"
   e2e_story: CELLO-PERSIST-E2E-001
   depends_on:
