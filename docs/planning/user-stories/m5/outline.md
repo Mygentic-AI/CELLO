@@ -44,7 +44,7 @@ At the end of M5:
 
 ### Directory Nodes — RDS PostgreSQL Federation
 
-Three RDS PostgreSQL instances, one per region (recommended: us-east-1, eu-west-1, me-central-1 — matching the primary operator geographies for Alpha).
+Three RDS PostgreSQL instances, one per region (us-east-1, eu-central-1, ap-northeast-1 — Tier 1 regions providing Americas, Europe, and Asia-Pacific coverage).
 
 **Replication:** PostgreSQL logical replication. Each node is both a publisher and a subscriber to the other two. All append-only core tables replicate to all nodes. The hash chain computed at INSERT on the originating node replicates as-is — receiving nodes verify the chain on sync rather than recomputing it.
 
@@ -115,12 +115,12 @@ Native CodePipeline V2 path filtering via CodeConnections was evaluated and reje
 
 ```
 GitHub push to main
-  → github-webhook-receiver Lambda (eu-west-1)
+  → github-webhook-receiver Lambda (us-east-1)
       verifies HMAC signature → puts payload on EventBridge github-events bus
-  → cello-pipeline-filter Lambda
+  → cello-pipeline-filter Lambda (us-east-1)
       inspects commit.modified/added/removed paths
       triggers matching CodePipeline(s) via start_pipeline_execution
-  → per-package CodePipeline
+  → per-package CodePipeline (us-east-1)
 ```
 
 Folder-to-pipeline mappings are data-driven — a JSON config file in the repo, read by `cello-pipeline-filter` at invocation time. Adding a new package updates the config, not the Lambda.
@@ -151,7 +151,7 @@ Folder-to-pipeline mappings are data-driven — a JSON config file in the repo, 
 
 **Production deploy gate:** staging smoke test must pass. A single failing smoke test blocks the production deployment. No manual approval required at Alpha — the smoke test is the gate.
 
-**Production deploy:** pipeline deploys the same image (already built and tested) to production ECS services across all three regions. Regional deployments are sequential — us-east-1 first, then eu-west-1, then me-central-1 — so a bad deployment is caught after one region rather than all three simultaneously.
+**Production deploy:** pipeline deploys the same image (already built and tested) to production ECS services across all three regions. Regional deployments are sequential — us-east-1 first, then eu-central-1, then ap-northeast-1 — so a bad deployment is caught after one region rather than all three simultaneously.
 
 ### Rollback
 

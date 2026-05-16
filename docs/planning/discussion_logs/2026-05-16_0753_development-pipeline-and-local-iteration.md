@@ -87,7 +87,7 @@ interface KeyProvider {
 ```yaml
 # docker-compose.yml
 postgres:
-  image: postgres:16
+  image: postgres:18.4
   environment:
     POSTGRES_DB: cello_dev
     POSTGRES_PASSWORD: dev
@@ -206,12 +206,12 @@ The repo structure should be reviewed before M4 to establish this convention.
 **Pipeline shape:**
 ```
 GitHub push to main
-  → github-webhook-receiver Lambda (eu-west-1)
+  → github-webhook-receiver Lambda (us-east-1)
       verifies HMAC signature → puts payload on EventBridge github-events bus
-  → EventBridge rule triggers cello-pipeline-filter Lambda
+  → EventBridge rule triggers cello-pipeline-filter Lambda (us-east-1)
       inspects commit.modified/added/removed paths
       triggers matching CodePipeline(s) via start_pipeline_execution
-  → CodePipeline → CodeBuild
+  → CodePipeline → CodeBuild (us-east-1)
       lint, typecheck, test
       apply migrations
       deploy (lambda update-function-code or ecs update-service)

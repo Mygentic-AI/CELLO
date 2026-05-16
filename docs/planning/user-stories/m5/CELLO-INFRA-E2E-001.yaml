@@ -1,0 +1,429 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-E2E-001
+domain: Node Operations
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+  - relay
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Directory Node cluster,
+  I want three federated nodes running in production with logical replication,
+  checkpoint cross-signing, a CI/CD pipeline gated on a staging smoke test,
+  and a managed relay pool,
+  so that agent conversations are durable and tamper-evident across a real
+  multi-node network, and every production deployment is validated before
+  it reaches users.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a conversation seal is written on the owning directory node"
+    action: "the seal replicates via PostgreSQL logical replication to the
+      other two nodes; each receiving node verifies the hash chain on sync;
+      the seal is queryable from any of the three nodes as separate OS processes"
+
+  - trigger: "When a session is established"
+    action: "the directory assigns an owning_node_id to the session at creation;
+      all hash chain writes for that session go exclusively to the owning node;
+      no other node writes to that session's hash chain entries"
+
+  - trigger: "When the owning node for a session fails mid-session"
+    action: "the session fails; the client receives an error and must
+      re-establish the session; no other node attempts to take over hash chain
+      writes for the failed session"
+
+  - trigger: "When the checkpoint interval elapses (every 10 minutes)"
+    action: "the coordinator node (lowest available node_id) collects all
+      conversation_seal_staging rows since the last checkpoint, sorts them
+      deterministically (recorded_at ASC, conversation_id ASC), extends the
+      MMR, computes the checkpoint hash, and broadcasts to the other two nodes
+      for signing; 2-of-3 signatures confirm the checkpoint"
+
+  - trigger: "When the coordinator node is absent at checkpoint time"
+    action: "non-coordinator nodes detect absence by watching for a new
+      directory_checkpoints row in the replicated state; if no row appears
+      within checkpoint_interval + 60s, the next-lowest available node_id
+      initiates the round as coordinator"
+
+  - trigger: "When a relay node fails 3 consecutive 30-second health checks"
+    action: "the directory marks the relay as unavailable in its relay pool
+      state; new session assignments route only to available relays; the failed
+      relay is excluded until it recovers and passes health checks"
+
+  - trigger: "When a push to main passes the staging smoke test"
+    action: "the CodePipeline proceeds to deploy the same Docker image to
+      production ECS services sequentially across all three regions
+      (eu-west-1 first, then us-east-1, then me-central-1); a failing staging
+      smoke test blocks the production deploy"
+
+  - trigger: "When a directory node starts"
+    action: "the node reads the relay pool manifest from S3, verifies the
+      Ed25519 signature against the signing node's registered public key
+      (lowest node_id), and refuses to accept session assignments until the
+      manifest is verified"
+
+  - trigger: "When pgaudit produces a log entry"
+    action: "the AuditLogShipper ships the entry to the S3 audit bucket
+      (cello-audit-logs-{env}); the shipped entry is unmodifiable and
+      undeletable by the cello_service database role"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Three directory node processes running as separate OS processes,
+      each connected to its own RDS PostgreSQL instance with logical replication
+      configured between all three"
+    when: "a conversation seal is written on node-1 (us-east-1)"
+    then: "within 5 seconds, querying conversation_seals from a separate
+      process connected to node-2 (eu-central-1) and node-3 (ap-northeast-1)
+      returns the same seal row with an identical chain_hash — verified by
+      asserting field equality across three independent database connections,
+      not shared memory"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-002
+    given: "A session established on node-1 with owning_node_id = 'node-1'"
+    when: "the node-1 ECS task is stopped (SIGTERM via ECS StopTask API)"
+    then: "the client receives a connection error from the directory within
+      30 seconds; a new session established after node-1 stops is assigned to
+      a different owning node; the old session's hash chain entries on node-2
+      and node-3 are intact and unchanged — no additional rows written after
+      the owning node stopped, verified by counting chain rows before and
+      after from a separate process on node-2"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-003
+    given: "Three directory nodes running, all replicating; 5 conversation
+      seals have accumulated in conversation_seal_staging since the last
+      checkpoint"
+    when: "the checkpoint interval elapses"
+    then: "a new row appears in directory_checkpoints on all three nodes
+      within 2 minutes; checkpoint_node_signatures contains exactly 2 or 3
+      rows for that checkpoint_id, each with a distinct node_id and a valid
+      Ed25519 signature over the checkpoint_hash — verified by querying
+      checkpoint_node_signatures from a process separate from all three
+      directory nodes and verifying each signature against the corresponding
+      node's registered public key"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-004
+    given: "The coordinator node (lowest node_id) is stopped before the
+      checkpoint interval elapses; two nodes remain running"
+    when: "checkpoint_interval + 60s elapses"
+    then: "a new checkpoint row appears in directory_checkpoints with
+      coordinator_node_id set to the next-lowest available node_id; the
+      checkpoint carries 2 valid signatures from the two remaining nodes —
+      verified from a separate process; checkpointing did not stall"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A relay node process is running and accepting sessions; the
+      directory is configured to ping it on a 30-second interval"
+    when: "the relay process is killed and 3 consecutive ping intervals pass
+      (≥90 seconds)"
+    then: "a new session establishment request from a client receives a relay
+      assignment that does not include the failed relay; querying the
+      directory's relay pool state from a separate process shows the failed
+      relay marked as unavailable — verified without any shared memory between
+      the client process and the directory process"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-006
+    given: "A relay node that was marked unavailable has restarted and passed
+      3 consecutive health checks"
+    when: "the next session establishment request arrives"
+    then: "the relay is eligible for assignment again; querying relay pool
+      state from a separate process shows it as available — verified before
+      the session assignment is made"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-007
+    given: "The staging environment (3-node, eu-west-1 only at reduced
+      instance sizes) is running and healthy; a commit is pushed to main that
+      touches packages/directory/"
+    when: "the CodePipeline build stage completes successfully"
+    then: "the pipeline deploys the new image to the staging ECS service; the
+      staging smoke test CodeBuild stage runs; if the smoke test passes, the
+      pipeline deploys the same image to the production directory ECS service
+      in us-east-1 — verified by checking the CodePipeline execution history
+      from a separate AWS CLI process; the production deploy uses the same
+      image digest that passed staging, not a newly built image"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-008
+    given: "The staging smoke test stage is running; the smoke test process
+      establishes two agent sessions end-to-end against the staging directory"
+    when: "the smoke test fails (directory returns an error on session
+      establishment)"
+    then: "the CodePipeline execution halts at the staging smoke test stage;
+      the production deploy stage does not run — verified by checking
+      CodePipeline execution history from a separate process and asserting no
+      production ECS UpdateService call was made during that execution"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-009
+    given: "A directory node process is starting with CELLO_ENV=dev"
+    when: "the relay pool manifest is read from S3"
+    then: "the node verifies the manifest's Ed25519 signature against the
+      registered public key of the node_id named in the manifest's signer
+      field; if signature verification fails, the node logs
+      relay.manifest.invalid at ERROR with { reason, signerNodeId } and
+      halts; it does not accept session assignments with an unverified manifest
+      — verified by providing a manifest with a corrupted signature and
+      asserting the process exits non-zero"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010
+    given: "A conversation seal triggers a pgaudit log entry; AuditLogShipper
+      is configured with S3AuditLogShipper pointing at cello-audit-logs-dev"
+    when: "the log entry is shipped"
+    then: "a corresponding object appears in cello-audit-logs-dev/{date}/
+      within 60 seconds; the cello_service IAM role cannot delete or overwrite
+      that object — verified by attempting s3:DeleteObject as the cello_service
+      role and asserting AccessDenied"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-011
+    given: "Two agents running as separate OS processes complete a conversation
+      and both submit seal attempts to the 3-node directory"
+    when: "the seal is confirmed"
+    then: "an MMR leaf is appended on the owning node and replicates to all
+      three nodes; a checkpoint within 10 minutes includes the new leaf in
+      mmr_peaks; querying the directory from Agent B's process for an MMR
+      inclusion proof for the sealed conversation returns a valid proof that
+      Agent B can verify locally against the checkpoint_hash without any
+      further directory query — verified by running the 5-step MMR verification
+      algorithm in Agent B's process using only the returned proof and the
+      publicly known checkpoint_hash from checkpoint_node_signatures"
+    test_type: e2e
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The hash chain for a session shall never have entries written
+      by more than one directory node"
+    adversarial_condition: "even when the owning node fails mid-session and
+      another node has the session's chain entries in its replicated state —
+      no takeover write occurs; the chain is frozen at the last replicated entry"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "A checkpoint shall never be confirmed with fewer than 2
+      valid node signatures"
+    adversarial_condition: "even when the coordinator is the only node that
+      responds — the coordinator's lone signature does not constitute a
+      confirmed checkpoint; the round is skipped and retried"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "The relay pool manifest shall never be accepted if its
+      signature does not verify against the signing node's registered public key"
+    adversarial_condition: "even when the manifest contents are otherwise
+      well-formed and the S3 object is present — an invalid signature causes
+      the node to halt, not fall back to an unverified manifest"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-004
+    statement: "The production ECS deploy shall never execute if the staging
+      smoke test did not pass in the same pipeline execution"
+    adversarial_condition: "even when the staging deploy succeeded and the
+      smoke test was skipped or timed out — a non-passing smoke test status
+      blocks the production stage"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: SI-005
+    statement: "Node private keys and RDS credentials shall never appear in
+      ECS task definition environment variables, CloudWatch logs, or Docker
+      images"
+    adversarial_condition: "even when the ECS task definition is inspected
+      directly — all secrets are referenced by Secrets Manager ARN, never
+      inlined"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While only one of three directory nodes is reachable and
+      fewer than 2 nodes are available to sign a checkpoint"
+    fallback: "the checkpoint round is skipped and retried at the next
+      interval; federation.checkpoint.skipped is logged at WARN with
+      { checkpointId, availableNodes, requiredThreshold }; the ops-warning
+      alarm fires if no checkpoint is confirmed within 30 minutes"
+    test_type: integration
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While all relay nodes are unavailable (all fail health checks)"
+    fallback: "the directory returns RELAY_UNAVAILABLE on session establishment;
+      the client retries on a backoff schedule; no session is established until
+      at least one relay recovers; relay.pool.empty is logged at ERROR with
+      { availableCount: 0 }"
+    test_type: integration
+    component_under_test: directory
+
+  - id: DB-003
+    condition: "While the S3 audit bucket is unavailable and AuditLogShipper
+      cannot ship pgaudit entries"
+    fallback: "AuditLogShipper buffers entries in memory; audit.shipper.buffered
+      is logged at WARN with { bufferedCount }; if bufferedCount exceeds 10,000
+      the ops-critical alarm fires; no entries are dropped until the buffer
+      limit is reached"
+    test_type: integration
+    component_under_test: directory
+
+  - id: DB-004
+    condition: "While the staging environment is unhealthy (staging directory
+      ECS service not reachable)"
+    fallback: "the staging deploy stage fails; the smoke test does not run;
+      the production deploy does not proceed; the pipeline execution ends with
+      FAILED status; no production traffic is affected"
+    test_type: e2e
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: federation.replication.verified
+      level: info
+      trigger: "a receiving node verifies an incoming replicated row's chain hash"
+      context_fields: [nodeId, sessionId, leafIndex, chainHash, durationMs]
+      correlationId: false
+
+    - name: federation.checkpoint.confirmed
+      level: info
+      trigger: "a checkpoint is confirmed with threshold signatures"
+      context_fields: [checkpointId, mmrLeafCount, signingNodes, durationMs, correlationId]
+      correlationId: true
+
+    - name: federation.checkpoint.round.initiated
+      level: info
+      trigger: "coordinator initiates a checkpoint round"
+      context_fields: [checkpointId, coordinatorNodeId, batchSize, correlationId]
+      correlationId: true
+
+    - name: relay.health.check.passed
+      level: info
+      trigger: "a relay passes a health check ping"
+      context_fields: [relayId, latencyMs]
+      correlationId: false
+
+    - name: relay.pool.recovered
+      level: info
+      trigger: "a previously unavailable relay passes 3 consecutive health checks"
+      context_fields: [relayId, downtimeDurationMs]
+      correlationId: false
+
+    - name: relay.manifest.loaded
+      level: info
+      trigger: "directory successfully loads and verifies the relay pool manifest"
+      context_fields: [signerNodeId, relayCount, manifestVersion]
+      correlationId: false
+
+    - name: pipeline.staging.smoke_test.passed
+      level: info
+      trigger: "staging smoke test completes successfully"
+      context_fields: [pipelineExecutionId, durationMs, scenariosRun]
+      correlationId: false
+
+    - name: audit.shipper.shipped
+      level: info
+      trigger: "AuditLogShipper successfully ships a batch to S3"
+      context_fields: [entryCount, s3Key, durationMs]
+      correlationId: false
+
+  error_events:
+    - name: federation.replication.chain_hash_mismatch
+      level: error
+      trigger: "a receiving node detects a chain hash mismatch on a replicated row"
+      context_fields: [nodeId, sessionId, leafIndex, expectedHash, receivedHash]
+
+    - name: federation.checkpoint.skipped
+      level: warn
+      trigger: "a checkpoint round completes without reaching the 2-of-3 threshold"
+      context_fields: [checkpointId, availableNodes, requiredThreshold]
+
+    - name: relay.health.check.failed
+      level: warn
+      trigger: "a relay fails a health check ping"
+      context_fields: [relayId, consecutiveFailures, reason]
+
+    - name: relay.pool.unavailable
+      level: error
+      trigger: "all relay nodes are marked unavailable"
+      context_fields: [totalRelays, availableCount]
+
+    - name: relay.manifest.invalid
+      level: error
+      trigger: "relay pool manifest signature verification fails"
+      context_fields: [reason, signerNodeId]
+
+    - name: pipeline.staging.smoke_test.failed
+      level: error
+      trigger: "staging smoke test fails; production deploy blocked"
+      context_fields: [pipelineExecutionId, failedScenario, reason]
+
+    - name: audit.shipper.buffered
+      level: warn
+      trigger: "AuditLogShipper cannot reach S3 and is buffering entries"
+      context_fields: [bufferedCount, oldestEntryAge]
+
+  alarms:
+    - condition: "federation.checkpoint.skipped fires and no federation.checkpoint.confirmed
+        fires within 30 minutes"
+      fires_to: ops-critical
+    - condition: "federation.replication.chain_hash_mismatch fires at any time"
+      fires_to: ops-critical
+    - condition: "relay.pool.unavailable fires at any time"
+      fires_to: ops-critical
+    - condition: "relay.manifest.invalid fires at any time"
+      fires_to: ops-critical
+    - condition: "audit.shipper.buffered with bufferedCount > 10000"
+      fires_to: ops-critical
+    - condition: "pipeline.staging.smoke_test.failed fires at any time"
+      fires_to: ops-warning
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations / Session Lifecycle / Persistence"
+  discussion_logs:
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+    - "2026-04-13_1400_meta-merkle-tree-design"
+    - "2026-04-08_1700_node-architecture-and-replication"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  component_stories:
+    - CELLO-INFRA-001  # IaC — multi-region VPC/RDS/ECS/KMS templates
+    - CELLO-INFRA-002  # PostgreSQL logical replication + session ownership
+    - CELLO-INFRA-003  # Checkpoint cross-signing + coordinator failover
+    - CELLO-INFRA-004  # ECS directory service deployment
+    - CELLO-INFRA-005  # ECS relay service deployment
+    - CELLO-INFRA-006  # Relay public key registration
+    - CELLO-INFRA-007  # CodePipeline + Lambda router (CI/CD)
+    - CELLO-INFRA-008  # Staging environment + smoke test gate
+    - CELLO-INFRA-009  # Relay pool manifest + health checks
+    - CELLO-INFRA-010  # AuditLogShipper (S3AuditLogShipper)
+    - CELLO-INFRA-011  # CloudWatch alarms + dashboards
+    - CELLO-INFRA-012  # WAF + Shield Standard
+    - CELLO-INFRA-013  # Secrets rotation + ACM
+    - CELLO-INFRA-014  # CloudStorageProvider S3 (deferred from PERSIST-011)
+    - CELLO-INFRA-015  # NotificationQueue reliability (deferred from PERSIST-015)
