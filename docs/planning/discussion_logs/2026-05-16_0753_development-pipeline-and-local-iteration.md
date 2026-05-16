@@ -1,0 +1,254 @@
+---
+name: Development Pipeline and Local Iteration Strategy
+type: discussion
+date: 2026-05-16 07:53
+topics: [infrastructure, testing, ci-cd, adapter-pattern, observability, local-development]
+status: active
+description: Decisions on how to maintain fast local iteration cycles as CELLO moves from hermetically sealed protocol code into external systems (M4+).
+---
+
+# Development Pipeline and Local Iteration Strategy
+
+## The Core Problem
+
+M0–M3 were hermetically sealed. The entire stack — directory node, relay node, two clients — ran in a single Vitest process. Test feedback was near-instant. Red-first TDD was practical.
+
+M4 onward is categorically different. PostgreSQL with RLS, KMS envelope encryption, EFS, Lambda, and ECS Fargate are all external systems. The test feedback loop breaks because:
+
+- Failures are ambiguous: is it code, an IAM permission, a schema migration, a connection pool timeout?
+- "Real behavior" requires standing infrastructure
+- Without deliberate design, every change becomes a 15-20 minute deploy cycle
+
+The goal is to preserve the fast inner loop for as long as possible by putting every external dependency behind an interface with a local implementation.
+
+---
+
+## Decision: Adapter Pattern for All External Dependencies
+
+Every external dependency gets an interface. The interface is defined by what the consumer needs, not by what the external system can do. Two implementations exist for each: a local stub for development and a real implementation for cloud deployment.
+
+The interface boundary must be narrow. If the local implementation ever needs to simulate provider-specific behavior to make tests pass, the boundary is in the wrong place.
+
+**Rule**: never add to an interface except in response to a specific failing test or a specific production behavior being implemented right now.
+
+---
+
+## Authentication
+
+**Interface:**
+```typescript
+interface TokenValidator {
+  validate(token: string): Promise<Principal>
+}
+
+type Principal =
+  | { type: 'operator'; operatorId: string; roles: string[] }
+  | { type: 'service'; serviceId: string; scope: string[] }
+  | { type: 'scheduled_job'; jobId: string; ownerId: string }
+```
+
+**Local implementation**: accepts a hardcoded dev token, returns a fixed `Principal`. No network call, no auth provider dependency.
+
+**Production implementation**: validates JWT against the chosen auth provider's JWKS endpoint.
+
+**Key decisions:**
+- Define the full principal taxonomy before choosing an auth provider. The provider mints tokens; the taxonomy is the real contract.
+- Principal types for CELLO at minimum: operator (interactive), service-to-service (headless), scheduled job. Additional types added only when a specific story requires them.
+- `AuthenticatedIdentity` struct is designed from actual token claims, not from what we wish the token contained. Inspect the real JWT before designing the interface.
+- Fail fast at startup if required configuration is missing — never fail silently at runtime.
+
+**Note from cello-agent**: token proliferation is real. Interactive sessions, headless background tasks, and scheduled jobs ended up with different token types for good reasons. Design the principal taxonomy upfront to avoid retrofitting.
+
+---
+
+## Secrets / KMS
+
+**Interface:**
+```typescript
+interface KeyProvider {
+  encrypt(plaintext: Uint8Array, keyId: string): Promise<Uint8Array>
+  decrypt(ciphertext: Uint8Array, keyId: string): Promise<Uint8Array>
+  rotate(keyId: string): Promise<void>
+}
+```
+
+**Local implementation**: AES encryption with a hardcoded dev key from an env var. No Docker dependency, instant, deterministic. Tests the code that uses the result of a KMS call, not the KMS call itself.
+
+**Production implementation**: AWS KMS. Dev and prod use separate KMS keys in the same AWS account. Key policy on the dev key allows dev credentials. Key policy on the prod key allows only the production ECS task role — dev credentials cannot touch it.
+
+**Decision**: no LocalStack for KMS. LocalStack's key policy enforcement has known gaps. The in-process stub covers the inner loop; the real dev KMS key covers the residual cloud seam.
+
+---
+
+## Database / Migrations
+
+**Decision**: real Postgres in a Docker container locally, not a mock. RLS append-only enforcement, pgaudit triggers, and hash chain constraints are database-level constructs. A mock database never catches a broken RLS policy.
+
+```yaml
+# docker-compose.yml
+postgres:
+  image: postgres:16
+  environment:
+    POSTGRES_DB: cello_dev
+    POSTGRES_PASSWORD: dev
+  ports:
+    - "5432:5432"
+```
+
+**Migration discipline**: migrations are the single source of truth. The local Postgres container and RDS are brought to identical state by running the same migration files in the same order. Manual schema tweaks to make a test pass are a warning sign that migrations have drifted.
+
+**Open decision**: migration tool (Flyway, Liquibase, custom). Must be resolved before M4 stories are written. The choice has downstream consequences for how RLS policies and triggers are structured and how the CI/CD pipeline applies migrations before deploying new code.
+
+---
+
+## Seed Data
+
+Two distinct problems requiring different solutions:
+
+**Test isolation**: transaction rollback. Each test runs inside a transaction that rolls back at completion. Nothing written to disk. Near-instant. Supports hundreds of tests per second. This is the standard Postgres test pattern.
+
+**Development seeding**: a committed seed SQL file — a `pg_dump` snapshot of a known good state. Running it wipes and restores in seconds. When a new scenario is needed, set it up manually once, dump it, commit the file. The seed file lives in version control alongside migrations.
+
+**Minimum seed scenarios before M4**: registered operator, unregistered operator, active session, sealed session.
+
+---
+
+## Observability
+
+**Interface:**
+```typescript
+interface Logger {
+  info(event: string, context: Record<string, unknown>): void
+  warn(event: string, context: Record<string, unknown>): void
+  error(event: string, error: Error, context: Record<string, unknown>): void
+}
+```
+
+**Local implementation**: structured JSON to stdout, pretty-printed for readability (pino-pretty or jq).
+
+**Production implementation**: same structured JSON to CloudWatch — which is what CloudWatch expects.
+
+**Structured logging is mandatory from day one.** Not `console.log("session started for " + userId)`. Instead:
+```typescript
+logger.info("session.started", { userId, sessionId, principalType })
+```
+
+**Correlation IDs are mandatory for all async multi-process flows.** CELLO has async flows involving client, directory, and relay in sequence. Every log line in a flow must carry a shared `correlationId` minted at flow initiation and threaded through every subsequent call. Without this, debugging a FROST ceremony failure means correlating three separate streams of unconnected log lines.
+
+**Event taxonomy** must be established before M4 stories are written. Event names are constants, not strings scattered through the codebase. Naming convention: `domain.noun.verb` — e.g., `session.started`, `frost.dkg.round1.complete`, `connection.request.received`.
+
+**Observability is a garden, not a setup task.** It requires continuous weeding:
+- Every story's acceptance criteria must include observability requirements: named events for each significant state transition, correlation ID threading, error paths with sufficient diagnostic context, alerting thresholds for new failure modes.
+- `/cello-story` must prompt for observability ACs.
+- `/cello-review` must verify that implementation log events match story-specified events, use consistent taxonomy, and carry required context fields.
+- `/cello-sprint` must load the Logger interface and current event taxonomy as mandatory context before any story agent begins.
+- A periodic taxonomy audit at each milestone close standardizes naming before it drifts.
+
+**What belongs in the event taxonomy seed (before M4):**
+- `operator.registered`, `operator.registration.failed`
+- `session.started`, `session.sealed`, `session.closed`
+- `frost.dkg.initiated`, `frost.dkg.round1.complete`, `frost.dkg.round2.complete`, `frost.dkg.failed`
+- `connection.request.received`, `connection.request.accepted`, `connection.request.declined`
+- `key.encrypted`, `key.decrypted`, `key.rotation.initiated`
+- `migration.applied`, `migration.failed`
+
+---
+
+## Environment Wiring
+
+**Decision: composition root pattern.** All adapters are instantiated in a single location at application startup — `server.ts` or equivalent. No magic, no framework. Environment selection is explicit and readable:
+
+```typescript
+const channel = process.env.CELLO_ENV === 'local'
+  ? new CliAdapter()
+  : new BaileysAdapter(config)
+```
+
+**Startup validation is mandatory.** If a required adapter is missing its configuration, the application fails immediately with a clear error. Never fail silently at runtime.
+
+**Environment variable is never set manually.** It comes from IaC in AWS and from a committed `.env.example` locally. No undocumented environment state.
+
+**Environment tiers:**
+
+Phase 1 (now through ~M8): two tiers.
+- `local` — Docker Compose, stub adapters, real Postgres container, no AWS dependency
+- `cloud` — real AWS account, real services, IaC-deployed, dev KMS key, isolated from prod data
+
+Phase 2 (~M8 onward, approaching real users): three tiers.
+- `local` — unchanged
+- `staging` — rename of `cloud`, tightened to mirror production topology more closely
+- `production` — new, separate parameter set, production KMS key, production data
+
+The rename from `cloud` to `staging` is a parameter change in the IaC, not a rebuild.
+
+```typescript
+type Environment = 'local' | 'cloud' | 'staging' | 'production'
+```
+
+---
+
+## Interfaces in Well-Known Locations
+
+All shared interfaces live in `packages/interfaces/` (or equivalent well-known path). `/cello-sprint` points at these files as required reading before any story agent begins. Agents do not rediscover or reinvent interface contracts independently.
+
+The repo structure should be reviewed before M4 to establish this convention.
+
+---
+
+## CI/CD Pipeline
+
+**Stack**: AWS CodePipeline V2, CodeBuild, CodeDeploy, EventBridge, Lambda. All on AWS credits.
+
+**Pipeline shape:**
+```
+GitHub push to main
+  → github-webhook-receiver Lambda (eu-west-1)
+      verifies HMAC signature → puts payload on EventBridge github-events bus
+  → EventBridge rule triggers cello-pipeline-filter Lambda
+      inspects commit.modified/added/removed paths
+      triggers matching CodePipeline(s) via start_pipeline_execution
+  → CodePipeline → CodeBuild
+      lint, typecheck, test
+      apply migrations
+      deploy (lambda update-function-code or ecs update-service)
+      run smoke test
+  → SNS notification: pass or fail
+```
+
+**Path filtering**: use the Lambda router pattern (cello-pipeline-filter) rather than CodePipeline V2 native path filtering via CodeConnections. Native path filtering was attempted on cello-agent and failed due to coarse glob behavior and tooling that lagged the API. The Lambda router is proven, behavior is deterministic, and we own the logic completely.
+
+**Enhancement over cello-agent**: make folder-to-pipeline mappings data-driven — a JSON config file in the repo read by the Lambda at invocation time. Adding a new package updates the config file, not the Lambda.
+
+**Shared dependency handling**: if `packages/crypto` or `packages/protocol-types` changes, all downstream pipelines trigger. Model this as an `"all"` sentinel in the mappings config.
+
+**IaC discipline**: everything that exists in AWS exists in IaC. The console is a scratchpad. Any emergency fix applied via console is backported to IaC before closing the laptop. One template per service, environment passed as a parameter — `cello-local`, `cello-cloud`, `cello-staging`, `cello-production` are instantiations of the same template with different values. Two diverging templates means two sources of truth that will drift.
+
+**Rollback**: fix forward for a single developer. Rollback machinery adds complexity that isn't warranted yet.
+
+**Smoke test definition per milestone**: minimum for M4 — migrations applied cleanly, app starts, basic authenticated request succeeds, KMS encrypt/decrypt roundtrip works.
+
+---
+
+## The Residual Cloud Seam
+
+Some behaviors cannot be emulated locally regardless of tooling quality: real IAM policy evaluation, Lambda cold start timing under real network conditions, RDS failover behavior, ECS task networking. These require a real AWS environment to test.
+
+The `cloud` environment is the designated place to test the seam. It uses real AWS services, real IAM, real KMS dev key — but is completely isolated from production data. Fast to deploy to via `lambda update-function-code` (30 seconds) rather than full SAM redeployments (15-20 minutes).
+
+The SAM/CloudFormation full redeploy is for infrastructure changes. Code changes use targeted update commands.
+
+---
+
+## Artifacts Required Before M4
+
+1. `packages/interfaces/` established with `Logger`, `TokenValidator`, `KeyProvider`, `MessagingChannel`
+2. Local and production implementations of each
+3. Docker Compose file with Postgres container
+4. Seed SQL file covering four baseline scenarios
+5. Event taxonomy seed (15-20 named events)
+6. `/cello-story` updated to require observability ACs
+7. `/cello-review` updated to verify observability implementation
+8. `/cello-sprint` updated to load interfaces and event taxonomy as mandatory context
+9. Migration tool decision made
+10. IaC template for `cloud` environment with parameter sets
+11. cello-pipeline-filter Lambda updated with data-driven mappings config
