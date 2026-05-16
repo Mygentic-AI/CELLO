@@ -20,6 +20,9 @@ Read in parallel:
 
 If the story depends on other stories (`depends_on`), note which interfaces/types those stories define — the implementation must use them, not reinvent them.
 
+**For M4+ stories also read:**
+- `docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md` — the canonical event taxonomy and Logger interface. Every log event in the implementation must be checked against the taxonomy in this document.
+
 ---
 
 ## Step 2 — AC coverage check
@@ -90,6 +93,26 @@ scope.addCleanup(fix.stopAll);
 
 ---
 
+## Step 4c — Observability implementation check (M4+)
+
+For every observability AC in the story, verify the implementation:
+
+1. **Event name matches exactly.** If the AC specifies `session.started`, the implementation must call `logger.info("session.started", ...)` — not `logger.info("session_started", ...)` or `logger.info("SessionStarted", ...)`. Name drift is a blocking issue.
+
+2. **Required context fields are present.** If the AC specifies `{ sessionId, agentId, relayId }`, all three must appear in the context object passed to the Logger. Missing fields are blocking.
+
+3. **Logger interface is used, not console.** Any `console.log`, `console.error`, or `console.warn` in implementation code (not tests) is blocking for M4+ stories. All output must go through the injected `Logger` interface.
+
+4. **correlationId is threaded.** For any AC asserting correlationId threading across an async/multi-process flow, verify: the correlationId is minted once at flow initiation, passed through every async call in the flow, and appears on every log event in the flow. A flow that logs a correlationId on entry but drops it mid-flow fails this check.
+
+5. **Error paths are covered.** Every error path that has an observability AC must have a corresponding log call with the correct event name and context fields. An empty `catch` block or a `catch` that only rethrows without logging is blocking.
+
+6. **No ad-hoc event names.** Event names not in the story's observability ACs and not in the canonical event taxonomy are flagged [medium] — they should be added to the taxonomy, not silently used.
+
+**The key verification question for each log call:** *"If this service crashes immediately after this log line, would the on-call engineer have enough information to diagnose the problem without SSH access?"* If no — the context fields are insufficient.
+
+---
+
 ## Step 5 — YAGNI and scope check
 
 - Does the implementation contain code beyond what the story's ACs require?
@@ -108,6 +131,7 @@ Confirm the implementation agent ran the full Phase C gate sequence:
 - [ ] Lint clean (`pnpm run lint`) — zero errors in the changed packages
 - [ ] Typecheck clean (`pnpm run typecheck`) — zero errors
 - [ ] Story ID present in commit message
+- [ ] **(M4+)** Observability implementation check passed (Step 4c)
 
 If any gate was skipped or failed, that is blocking regardless of test results.
 
@@ -117,7 +141,7 @@ If any gate was skipped or failed, that is blocking regardless of test results.
 
 Report findings using severity levels:
 
-- **[blocking]** — must be fixed before this story is considered done. AC not covered, SI negative test missing, transport-path assertion missing for integration/e2e protocol ACs, package boundary violation, gate sequence failure.
+- **[blocking]** — must be fixed before this story is considered done. AC not covered, SI negative test missing, transport-path assertion missing for integration/e2e protocol ACs, package boundary violation, gate sequence failure. For M4+ stories: observability event name mismatch, missing required context fields, `console.log` in implementation code, dropped correlationId.
 - **[high]** — security surface, key material leak path, or correctness bug. Must be fixed before the next story begins.
 - **[medium]** — code quality, naming, style inconsistency with the rest of the codebase. Fix before milestone close.
 - **[low]** — informational. Report to user; does not block.
