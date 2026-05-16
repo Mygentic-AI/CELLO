@@ -1,0 +1,278 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-E2E-001
+domain: Persistence
+milestone: M4
+actor: CLIENT
+priority: P0
+components:
+  - directory
+  - relay
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want conversation data to survive process restarts, relay crashes, and
+  one-sided delivery failures,
+  so that sealed conversations are tamper-evident and recoverable under
+  realistic failure conditions.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When Agent A and Agent B exchange messages over a relay session"
+    action: "the directory shall persist each hash in an append-only table with
+      a running SHA-256 hash chain, and the relay shall write each Structure 2
+      leaf to a per-session WAL file"
+
+  - trigger: "When the relay crashes mid-session and restarts"
+    action: "the relay shall reconstruct its in-memory Merkle state from the WAL
+      file without requiring agents to re-submit the full leaf sequence"
+
+  - trigger: "When Agent B has not received some tail leaves that Agent A sent"
+    action: "the directory shall reject the seal attempt with SEAL_REJECTED_TREE_MISMATCH,
+      return both parties' sequence numbers, and the behind party shall request
+      missing leaves from the relay WAL, advance its tree, and retry the seal"
+
+  - trigger: "When Agent B is unreachable for longer than delivery_grace_seconds"
+    action: "Agent A shall send SEAL_UNILATERAL; the directory shall seal on A's
+      copy, recording B's absence as ABSENT in conversation_attestations"
+
+  - trigger: "When Agent B reconnects after a unilateral seal"
+    action: "B shall receive the SEAL_UNILATERAL notification and verify A's
+      sealed root against its local copy"
+
+  - trigger: "When the directory service starts"
+    action: "the directory shall apply all pending Flyway migrations before
+      accepting any connections, and fail at startup with a clear error if
+      migration fails"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A directory node process, a relay node process, Agent A process, and
+      Agent B process are all running as separate OS processes with no shared
+      memory; the directory has run Flyway migrations to the current schema"
+    when: "Agent A and Agent B exchange 10 messages over the relay session"
+    then: "the directory's conversation_hash_entries table contains exactly 10
+      rows for this session, each row's chain_hash is the SHA-256 of
+      (record_contents || previous_chain_hash), and querying any row after
+      INSERT returns the same chain_hash (proving persistence, not in-memory
+      state)"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-002
+    given: "An active relay session has 6 leaves in the WAL and the relay
+      process is killed with SIGKILL after leaf 6"
+    when: "the relay process is restarted"
+    then: "the relay reconstructs Merkle state from the WAL and reports
+      sequence number 6 as its last confirmed sequence — verified by querying
+      the relay's session state from a separate process after restart, without
+      any agent re-submitting leaves"
+    test_type: e2e
+    component_under_test: relay
+
+  - id: AC-003
+    given: "Agent A has sent 10 leaves but Agent B has only received 8 (leaves
+      9 and 10 were not delivered); both agents attempt to seal"
+    when: "the directory receives both seal attempts"
+    then: "the directory returns SEAL_REJECTED_TREE_MISMATCH with A's sequence
+      number 10 and B's sequence number 8; B requests leaves 9–10 from the
+      relay WAL; B advances its tree; both parties retry; the seal succeeds
+      with a consistent final root — verified by the directory's
+      conversation_seals table containing one row with matching root from both
+      parties"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-004
+    given: "Agent A has sent 5 leaves and Agent B's process has been terminated
+      (unreachable); delivery_grace_seconds has elapsed"
+    when: "Agent A sends SEAL_UNILATERAL"
+    then: "the directory seals on A's copy; conversation_attestations records
+      B's attestation_status as ABSENT; the conversation_seals table contains
+      one row with A's root — verified by a separate process querying the
+      directory after the seal"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A unilateral seal has completed with B recorded as ABSENT"
+    when: "a new Agent B process starts and connects to the directory"
+    then: "B receives the SEAL_UNILATERAL notification; B verifies A's sealed
+      root against its local Merkle state for the leaves it did receive; the
+      notification is delivered via the directory's notification mechanism,
+      not via shared memory"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-006
+    given: "A client process is restarted after a sealed conversation"
+    when: "the client opens its SQLCipher local database with the correct
+      db_key derived from the identity key"
+    then: "all conversation records, trust data, and keys are readable; the
+      same data is unreadable if opened with a different key — verified by
+      attempting to open the database file with a wrong key and asserting
+      decryption failure"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-007
+    given: "The directory service process starts with CELLO_ENV=local"
+    when: "Flyway detects pending migrations"
+    then: "all pending migrations are applied in version order before the first
+      connection is accepted; migration.applied is logged for each migration
+      with { version, description, executionTime }; if any migration fails,
+      migration.failed is logged and the process exits with a non-zero code"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "The directory's RLS policies are in place for the cello_service role"
+    when: "the cello_service role attempts UPDATE or DELETE on any append-only
+      table"
+    then: "PostgreSQL rejects the operation with a permission denied error;
+      verified by executing UPDATE/DELETE directly against the containerised
+      Postgres instance as the cello_service role"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The directory shall never allow a sealed conversation's hash
+      chain to be modified or deleted"
+    adversarial_condition: "even when the cello_service database role is
+      compromised and issues UPDATE or DELETE statements directly"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "The relay WAL shall never be used as the authoritative source
+      for a seal — only as a recovery mechanism for agents to catch up"
+    adversarial_condition: "even when the relay is restarted and presents a
+      reconstructed Merkle state"
+    test_type: e2e
+    component_under_test: relay
+
+  - id: SI-003
+    statement: "The client SQLCipher database shall never be readable without
+      the correct db_key"
+    adversarial_condition: "even when the database file is copied to another
+      machine and opened with the SQLite library directly"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-004
+    statement: "A gap-fill operation shall only serve tail leaves — leaves
+      strictly after the last agreed sequence number"
+    adversarial_condition: "even when the behind party requests leaves with
+      sequence numbers below the last agreed checkpoint"
+    test_type: integration
+    component_under_test: relay
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the relay WAL file is corrupted or missing on restart"
+    fallback: "the relay shall reject the session recovery attempt and return
+      RELAY_SESSION_UNRECOVERABLE; agents fall back to the agent hash queue
+      and re-submit from their local queues rather than from the WAL"
+    test_type: integration
+    component_under_test: relay
+
+  - id: DB-002
+    condition: "While the KMS service is unavailable at directory startup"
+    fallback: "the directory shall refuse to start and log
+      key.unwrap.failed with { reason, keyId }; it shall not start with
+      unencrypted K_server_X shares in memory as a fallback"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: migration.applied
+      level: info
+      trigger: "each Flyway migration completes successfully at startup"
+      context_fields: [version, description, executionTime]
+      correlationId: false
+
+    - name: session.seal.attempted
+      level: info
+      trigger: "a seal attempt is received from either party"
+      context_fields: [sessionId, agentId, sequenceNumber, correlationId]
+      correlationId: true
+
+    - name: session.sealed
+      level: info
+      trigger: "a seal is confirmed in the directory"
+      context_fields: [sessionId, sealType, rootHash, correlationId]
+      correlationId: true
+
+    - name: relay.wal.reconstructed
+      level: info
+      trigger: "relay reconstructs Merkle state from WAL after restart"
+      context_fields: [sessionId, leafCount, correlationId]
+      correlationId: true
+
+    - name: session.gap.fill.requested
+      level: info
+      trigger: "a behind party requests missing leaves from the relay"
+      context_fields: [sessionId, fromSequence, toSequence, correlationId]
+      correlationId: true
+
+  error_events:
+    - name: migration.failed
+      level: error
+      trigger: "a Flyway migration fails at startup"
+      context_fields: [version, description, reason]
+
+    - name: session.seal.rejected.mismatch
+      level: warn
+      trigger: "directory rejects a seal due to tree mismatch"
+      context_fields: [sessionId, partyASequence, partyBSequence, correlationId]
+
+    - name: relay.wal.unrecoverable
+      level: error
+      trigger: "relay WAL is missing or corrupt on restart"
+      context_fields: [sessionId, reason]
+
+    - name: key.unwrap.failed
+      level: error
+      trigger: "KMS unavailable at directory startup"
+      context_fields: [reason, keyId]
+
+  alarms:
+    - condition: "migration.failed fires at any time"
+      fires_to: ops-critical
+    - condition: "session.seal.rejected.mismatch rate > 5% over 5 minutes"
+      fires_to: ops-warning
+    - condition: "key.unwrap.failed fires at any time"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations / Session Lifecycle / Persistence"
+  discussion_logs:
+    - "2026-04-11_1700_persistence-layer-design"
+    - "2026-05-14_1702_relay-session-mechanics-and-recovery"
+    - "2026-05-14_1702_arbitration-mechanics-and-dispute-resolution"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  component_stories:
+    - CELLO-PERSIST-001  # interfaces bootstrap
+    - CELLO-PERSIST-002  # docker + flyway
+    - CELLO-PERSIST-003  # RLS schema
+    - CELLO-PERSIST-004  # hash chain
+    - CELLO-PERSIST-005  # KMS/EnvelopeKeyProvider
+    - CELLO-PERSIST-006  # pgaudit
+    - CELLO-PERSIST-007  # MMR
+    - CELLO-PERSIST-008  # analytics cron
+    - CELLO-PERSIST-009  # SQLCipher
+    - CELLO-PERSIST-010  # SigningKeyProvider
+    - CELLO-PERSIST-011  # cloud backup
+    - CELLO-PERSIST-012  # hash queue
+    - CELLO-PERSIST-013  # relay WAL
+    - CELLO-PERSIST-014  # gap-fill reconciliation
+    - CELLO-PERSIST-015  # unilateral seal
