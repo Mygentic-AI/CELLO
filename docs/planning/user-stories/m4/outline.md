@@ -112,18 +112,20 @@ db_key = HKDF(identity_key, "local-db-key", agent_id)
 
 SQLCipher is the recommended option. Operators may choose alternatives based on their deployment context and security requirements.
 
-### Key Provider Abstraction
+### Signing Key Provider Abstraction
 
-The agent operates against a key provider interface with pluggable backends:
+The agent operates against a `SigningKeyProvider` interface with pluggable backends:
 
 ```typescript
-interface KeyProvider {
+interface SigningKeyProvider {
   getPublicKey(): Promise<PublicKey>
   sign(data: Bytes): Promise<Signature>
 }
 ```
 
 The private key never leaves the provider in most implementations — the provider performs signing internally and returns only the signature. Backends by deployment context: OS Keychain / Secure Enclave (macOS/Windows desktop), libsecret (Linux), Cloud secret manager via instance IAM role (cloud VM), Secrets + Vault Agent Injector (Kubernetes), TPM-sealed key (bare metal), Secure element (robot/appliance), Encrypted key file (VPS fallback).
+
+**Naming note:** `SigningKeyProvider` is the client-side signing interface introduced in M0. It is distinct from `EnvelopeKeyProvider` (the KMS interface for encrypting K_server_X shares at rest, introduced in this milestone). See the Local Development Infrastructure section above.
 
 ### Encrypted Cloud Backup
 
@@ -193,6 +195,64 @@ A party cannot claim a resubmitted leaf is false — if they're behind, they don
 
 ---
 
+## Local Development Infrastructure
+
+M4 is the first milestone where external systems are load-bearing. The adapter pattern is mandatory — every external dependency gets an interface with a local stub implementation so the inner development loop does not require cloud infrastructure.
+
+### Interfaces Required Before M4 Stories Are Written
+
+All of the following live in `packages/interfaces/`. Local stubs live in `packages/interfaces/stubs/`. See [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration Strategy]] for the full adapter inventory and design decisions.
+
+| Interface | Local Stub | Production Implementation |
+|-----------|------------|--------------------------|
+| `DirectoryStore` | Real Postgres via Docker Compose | RDS PostgreSQL |
+| `ClientStore` | Local unencrypted SQLite | SQLCipher |
+| `RelayWal` | In-memory WAL | Append-only file on disk |
+| `EnvelopeKeyProvider` | In-process AES with dev key from env var | AWS KMS |
+| `Logger` | stdout structured JSON (pino-pretty) | CloudWatch structured JSON |
+| `JobScheduler` | Local cron or manual trigger | EventBridge Scheduler |
+
+**Naming note:** `EnvelopeKeyProvider` is the KMS interface for encrypting K_server_X shares at rest. It is distinct from `SigningKeyProvider` (the client-side interface for Ed25519 signing operations, introduced in M0). These must not share a name.
+
+### Docker Compose
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: cello_dev
+      POSTGRES_PASSWORD: dev
+    ports:
+      - "5432:5432"
+```
+
+The local Postgres container is brought to the correct schema state by running the same migration files in the same order as production. Manual schema tweaks to make tests pass are a warning sign that migrations have drifted.
+
+### Migration Tool
+
+**Open decision — must be resolved before M4 stories are written.** The choice has downstream consequences for how RLS policies and append-only triggers are structured and how the CI/CD pipeline applies migrations before deploying new code. Options: Flyway, Liquibase, custom scripts.
+
+### Seed Data
+
+Four baseline scenarios committed as a seed SQL file before M4 coding begins:
+1. Registered operator, no active sessions
+2. Unregistered operator
+3. Active session (mid-conversation)
+4. Sealed session
+
+Tests use transaction rollback — never the seed data. The seed file is for manual development iteration.
+
+### Environment Wiring
+
+All adapters are instantiated via the composition root in `server.ts`. Selection is driven by `CELLO_ENV`:
+- `local` — Docker Compose, all local stubs
+- `cloud` — real AWS services, dev KMS key, isolated from production data
+
+The application fails at startup with a clear error if any required adapter configuration is missing.
+
+---
+
 ## Milestone Close Gate
 
 Standard SPARC gate sequence plus:
@@ -220,5 +280,6 @@ All five scenarios as live multi-process smoke tests — not in-process Vitest.
 - [[2026-05-14_1702_relay-session-mechanics-and-recovery|Relay Session Mechanics and Recovery]] — relay WAL design, agent hash queue as protocol primitive, pre-seal reconciliation
 - [[2026-05-14_1702_arbitration-mechanics-and-dispute-resolution|Arbitration Mechanics and Dispute Resolution]] — client backup as non-repudiation obligation; pruning as dispute rights decision
 - [[2026-05-14_1853_milestone-sequence-revision|Milestone Sequence Revision]] — sequencing decisions that place M4 here and defer federation to M5
+- [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration Strategy]] — adapter inventory, local development infrastructure, environment tiers, CI/CD pipeline
 - [[server-infrastructure|CELLO Server Infrastructure Requirements]] — PostgreSQL RLS, hash chain, KMS, pgaudit, federation (M5)
 - [[agent-client|CELLO Agent Client Requirements]] — SQLCipher, key provider abstraction, backup, hash queue, signed relay ACK storage
