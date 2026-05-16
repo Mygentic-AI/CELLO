@@ -1,15 +1,15 @@
 ---
-name: M4 Attack Corpus Reference
+name: M9 Attack Corpus Reference
 type: design
 date: 2026-05-03
 topics: [prompt-injection, security, sanitization, attack-corpus, testing, L1B3RT4S, P4RS3LT0NGV3, TOKEN80M8]
 status: active
-description: Curated catalog of attack techniques organized by defense layer. Used as the test fixture index for M4 stories — TDD agents writing adversarial tests look here for real attack payloads.
+description: Curated catalog of attack techniques organized by defense layer. Used as the test fixture index for M9 stories — TDD agents writing adversarial tests look here for real attack payloads.
 ---
 
-# M4 Attack Corpus Reference
+# M9 Attack Corpus Reference
 
-This document catalogs the attack techniques that M4 stories are hardened against, organized by the defense layer responsible for catching each class. It is the test fixture index for the M4 story set: when a TDD agent writes adversarial tests, they use the technique descriptions here to construct real payloads rather than inventing synthetic ones.
+This document catalogs the attack techniques that M9 stories are hardened against, organized by the defense layer responsible for catching each class. It is the test fixture index for the M9 story set: when a TDD agent writes adversarial tests, they use the technique descriptions here to construct real payloads rather than inventing synthetic ones.
 
 Stories reference this document by section (e.g., "see §1 of the attack corpus reference") rather than embedding individual technique names inline. When new techniques are discovered, update this document — the stories automatically cover them via the reference.
 

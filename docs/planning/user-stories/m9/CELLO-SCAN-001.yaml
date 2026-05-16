@@ -331,7 +331,7 @@ security_invariants:
 references:
   protocol_map: "Security and Prompt Injection Defense"
   end_to_end_flow: "§7.1"
-  attack_corpus: "docs/planning/user-stories/m4/attack-corpus-reference.md §1"
+  attack_corpus: "docs/planning/user-stories/m9/attack-corpus-reference.md §1"
   external_sources:
     - "https://github.com/elder-plinius/P4RS3LT0NGV3 — 159 text transforms including all encoding, Unicode, and steganography techniques tested by this story"
     - "https://github.com/elder-plinius/L1B3RT4S — jailbreak catalog; §1.6 pattern corpus derived from this repo"

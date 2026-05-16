@@ -321,7 +321,7 @@ degraded_behavior:
 references:
   protocol_map: "Security and Prompt Injection Defense"
   end_to_end_flow: "§7.1"
-  attack_corpus: "docs/planning/user-stories/m4/attack-corpus-reference.md §2, §4"
+  attack_corpus: "docs/planning/user-stories/m9/attack-corpus-reference.md §2, §4"
   external_sources:
     - "https://github.com/elder-plinius/L1B3RT4S — semantic injection patterns (role-play, social engineering, indirect injection) that Layer 2 must catch; see §2 of attack-corpus-reference"
     - "https://huggingface.co/microsoft/deberta-v3-small — DeBERTa-v3-small base model; the specific prompt-injection-fine-tuned INT8 variant and its SHA-256 hash are implementation decisions that must be pinned in the postinstall script before M4 ships; the pinned URL and hash must be committed to source control alongside the download script"

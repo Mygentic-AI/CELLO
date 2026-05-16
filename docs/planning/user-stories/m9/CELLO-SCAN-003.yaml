@@ -240,7 +240,7 @@ degraded_behavior:
 references:
   protocol_map: "Security and Prompt Injection Defense"
   end_to_end_flow: "§7.1"
-  attack_corpus: "docs/planning/user-stories/m4/attack-corpus-reference.md §3"
+  attack_corpus: "docs/planning/user-stories/m9/attack-corpus-reference.md §3"
   discussion_logs:
     - "2026-04-11_1400_security-architecture-layers-and-trust-signal-classes"
     - "2026-04-08_1900_connection-staking-and-institutional-defense"
