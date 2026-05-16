@@ -1,0 +1,203 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-008
+domain: Persistence
+milestone: M4
+actor: DIR
+priority: P1
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Directory Node,
+  I want a scheduled analytics job that computes per-pseudonym statistics,
+  conversation graph edges, and graph analysis results from the existing
+  protocol tables,
+  so that trust evaluation and anti-Sybil scoring have pre-computed
+  inputs without running expensive queries at request time.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When JobScheduler triggers the analytics job"
+    action: "the job shall compute and upsert: per-pseudonym stats into the
+      pseudonym_stats materialized view (conversation count, unique
+      counterparties, clean/flagged ratio, last activity); conversation graph
+      edges into the conversation_graph_edges table (pre-computed adjacency
+      between pseudonym pairs); graph analysis results into
+      graph_analysis_results (clustering coefficients, community assignments,
+      conductance scores)"
+
+  - trigger: "When CELLO_ENV=local"
+    action: "LocalJobScheduler triggers the analytics job on demand via
+      pnpm run analytics:run or on a locally-configured cron interval"
+
+  - trigger: "When CELLO_ENV=cloud"
+    action: "EventBridgeJobScheduler triggers the analytics job on a fixed
+      schedule (default: every 6 hours) via an EventBridge Scheduled Rule
+      targeting the ECS task"
+
+  - trigger: "When the analytics job runs"
+    action: "it reads only from append-only protocol tables; it never modifies
+      any append-only table; its output tables (pseudonym_stats,
+      conversation_graph_edges, graph_analysis_results) are separate from
+      the append-only protocol tables and support UPSERT"
+
+  - trigger: "If the analytics job fails"
+    action: "the failure is logged with analytics.job.failed and the job exits;
+      the previous run's output remains in place — stale analytics data is
+      preferable to no analytics data; the next scheduled run retries"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The database contains 3 pseudonyms with known conversation counts,
+      counterparty sets, and clean/flagged ratios from seed data"
+    when: "the analytics job runs"
+    then: "pseudonym_stats contains exactly 3 rows with correct values for
+      each pseudonym — conversation_count, unique_counterparty_count,
+      clean_ratio, flagged_ratio, last_activity — verified by asserting
+      each field value matches the expected value derived from the seed data"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "The database contains known conversation pairs from seed data"
+    when: "the analytics job runs"
+    then: "conversation_graph_edges contains one row per unique pseudonym pair
+      that has had at least one conversation, with edge_weight equal to the
+      number of sealed conversations between them"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "conversation_graph_edges has been populated by the analytics job"
+    when: "the analytics job runs graph analysis"
+    then: "graph_analysis_results contains one row per pseudonym with
+      clustering_coefficient, community_id, and conductance_score populated;
+      no row has a NULL value for any of these fields"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "The analytics job has run once and pseudonym_stats has rows"
+    when: "the analytics job runs again with updated conversation data"
+    then: "pseudonym_stats rows are upserted — existing rows are updated, new
+      pseudonyms get new rows; no duplicate rows are created; no rows from
+      the previous run that no longer apply are left stale beyond one run cycle"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "The analytics job is triggered via LocalJobScheduler"
+    when: "the job completes successfully"
+    then: "analytics.job.completed is logged at INFO with { durationMs,
+      pseudonymCount, edgeCount, runId }; the log event appears before the
+      job exits"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-006
+    given: "The analytics job encounters a database error mid-run"
+    when: "the error is raised"
+    then: "analytics.job.failed is logged at ERROR with { reason, runId,
+      phase }; the job exits without corrupting any output table — partial
+      writes to output tables are rolled back; the previous complete run's
+      data remains intact"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "CELLO_ENV=local"
+    when: "pnpm run analytics:run is executed"
+    then: "the analytics job runs once synchronously and exits with code 0
+      on success or code 1 on failure — suitable for CI validation that
+      the job runs without error against the seed data"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The analytics job shall only read from protocol tables —
+      it shall never INSERT, UPDATE, or DELETE any append-only table"
+    adversarial_condition: "even if a bug in the job attempts a write to a
+      protocol table — RLS will reject it; the job's database role shall
+      have SELECT-only access to all append-only tables"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "The analytics job shall run as a separate database role
+      (cello_analytics) with SELECT-only access — it shall not share the
+      cello_service role"
+    adversarial_condition: "even for convenience — a compromised analytics
+      job must not be able to INSERT into protocol tables or read
+      encrypted K_server_X shares"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the analytics job is running and the database becomes
+      unavailable mid-run"
+    fallback: "the job rolls back any partial writes to output tables and
+      exits with analytics.job.failed; the previous complete run's output
+      remains in place; the next scheduled run retries from scratch"
+    test_type: integration
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While the analytics job has not run in more than 24 hours
+      (e.g. repeated failures)"
+    fallback: "analytics.job.stale is logged at WARN and the ops-warning
+      alarm fires; trust evaluation code that depends on analytics output
+      must handle stale or missing rows gracefully rather than failing hard"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: analytics.job.started
+      level: info
+      trigger: "the analytics job begins execution"
+      context_fields: [runId, triggeredBy]
+      correlationId: false
+
+    - name: analytics.job.completed
+      level: info
+      trigger: "the analytics job completes successfully"
+      context_fields: [runId, durationMs, pseudonymCount, edgeCount]
+      correlationId: false
+
+  error_events:
+    - name: analytics.job.failed
+      level: error
+      trigger: "the analytics job exits with an error"
+      context_fields: [runId, reason, phase]
+
+    - name: analytics.job.stale
+      level: warn
+      trigger: "no successful analytics run in more than 24 hours"
+      context_fields: [lastSuccessfulRunAt]
+
+  alarms:
+    - condition: "analytics.job.failed fires 3 times consecutively"
+      fires_to: ops-warning
+    - condition: "analytics.job.stale fires"
+      fires_to: ops-warning
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Anti-Sybil / Node Operations"
+  discussion_logs:
+    - "2026-04-11_1700_persistence-layer-design"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  depends_on:
+    - CELLO-PERSIST-001
+    - CELLO-PERSIST-002
+    - CELLO-PERSIST-003
+    - CELLO-PERSIST-007
