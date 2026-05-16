@@ -132,6 +132,25 @@ degraded_behavior:
     test_type: integration | e2e
     component_under_test: {component}
 
+# ─── Observability (M4+ stories only) ─────────────────────
+# Named log events, required context fields, and alerting for this story.
+# Omit for M0–M3 stories. Required for any story touching M4+ code.
+observability:
+  events:
+    - name: "{domain.noun.verb}"          # e.g. session.started
+      level: info | warn | error
+      trigger: "{when this event fires}"
+      context_fields: [{field1}, {field2}]  # minimum fields required
+      correlationId: true | false           # must this event carry a correlationId?
+  error_events:
+    - name: "{domain.noun.verb.failed}"
+      level: warn | error
+      trigger: "{error condition}"
+      context_fields: [{field1}, {reason}]
+  alarms:
+    - condition: "{CloudWatch alarm condition, e.g. error rate > 5% over 5 min}"
+      fires_to: "{alert channel}"
+
 # ─── References ─────────────────────────────────────────────
 references:
   protocol_map: "{domain from protocol-map.md}"
@@ -187,6 +206,10 @@ A story is ready to pull when:
 - [ ] Dependencies on other stories are identified (e.g., "requires CELLO-AUTH-001 to be implemented first")
 - [ ] **For component stories:** at least one E2E story exists that exercises this component's output end-to-end
 - [ ] **For component stories with data fields:** every field has a named protocol step that populates it (no "something will call this later")
+- [ ] **(M4+)** Every significant state transition has a named log event in `domain.noun.verb` format with required context fields specified
+- [ ] **(M4+)** Async/multi-process flows specify correlationId threading
+- [ ] **(M4+)** Every error path has a named error event with sufficient diagnostic context
+- [ ] **(M4+)** New failure modes have a corresponding alarm threshold specified
 
 ### Definition of Done (before marking complete)
 
@@ -198,6 +221,9 @@ A story is done when:
 - [ ] No security invariant from other stories in the same domain is broken by the implementation
 - [ ] Code compiles/type-checks cleanly (no new warnings)
 - [ ] **For `test_type: e2e` ACs:** the test runs against real nodes (relay + directory running as processes), not mocks. A test that spins up in-process fakes does not satisfy an e2e AC.
+- [ ] **(M4+)** All log events specified in the `observability` block are present in the implementation with correct event names and context fields
+- [ ] **(M4+)** No `console.log` in implementation code — all output goes through the injected `Logger` interface
+- [ ] **(M4+)** correlationId is threaded through every event in flows that specify it
 
 ### Milestone Close Gate
 
