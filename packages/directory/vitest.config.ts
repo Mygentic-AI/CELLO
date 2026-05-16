@@ -6,5 +6,8 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
     // REG-001: DKG tests require longer timeout (real FROST crypto + libp2p streams)
     testTimeout: 30_000,
+    poolOptions: {
+      threads: { maxThreads: 3 },
+    },
   },
 });
