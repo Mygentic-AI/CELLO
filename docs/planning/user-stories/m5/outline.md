@@ -58,6 +58,8 @@ Three RDS PostgreSQL instances, one per region (us-east-1, eu-central-1, ap-nort
 
 **Connection:** Directory nodes expose their libp2p signaling protocol (`/cello/signaling/1.0.0`) on port 443 via WebSocket transport. TLS termination at the load balancer (ALB). Agents connect to the ALB endpoint; the ALB routes to the ECS service running the directory node process.
 
+**Inter-node networking — VPC Peering:** All traffic between directory nodes (RDS logical replication AND checkpoint cross-signing) travels over VPC Peering, never the public internet. Three peering connections are established: us-east-1↔eu-central-1, eu-central-1↔ap-northeast-1, us-east-1↔ap-northeast-1. RDS instances accept replication connections only from peer VPC CIDR ranges. Directory ECS tasks communicate with peer nodes over the peering connections for checkpoint rounds. Public ALBs carry only agent→directory traffic. **Evaluate Transit Gateway at 6+ nodes** — VPC Peering scales to 3 connections at 3 nodes but grows quadratically; Transit Gateway is the right upgrade path when the node count grows.
+
 ### Directory Node ECS Services
 
 Each directory node runs as an ECS Fargate service in its region. The directory service process connects to its regional RDS instance and participates in the libp2p node pool.
@@ -136,8 +138,9 @@ Folder-to-pipeline mappings are data-driven — a JSON config file in the repo, 
 2. `pnpm run lint`
 3. `pnpm run typecheck`
 4. `pnpm run test` — full Vitest suite including integration tests
-5. Apply database migrations (directory package only)
-6. Docker image build and push to ECR
+5. Docker image build and push to ECR
+
+**Database migrations — run at ECS task startup, not in CodeBuild.** The directory ECS task runs `flyway migrate` as its entrypoint before starting the directory service process. If migrations fail, the task fails its health check and ECS keeps the previous task running — clean rollback with no manual intervention. This eliminates the need for VPC-attached CodeBuild (which would require a NAT Gateway for outbound internet access). CodeBuild runs outside the VPC with standard internet access.
 
 **Staging deploy:** pipeline deploys the new image to the staging ECS services. Staging is a 3-node setup functionally equivalent to production at reduced instance sizes. In Phase 1 (through ~M8), the `dev` environment serves as staging — see [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration Strategy]] for environment tier decisions.
 
@@ -203,8 +206,10 @@ AWS Shield Standard is enabled by default on ALBs. Shield Advanced is a Consorti
 
 - VPC per region with private subnets for RDS and ECS tasks
 - ALB in public subnet, all other resources private
-- Security groups: RDS accepts connections only from ECS task security group; ECS tasks accept inbound only from ALB
+- Security groups: RDS accepts connections only from ECS task security group and peer VPC CIDR ranges (for replication); ECS tasks accept inbound only from ALB
 - No public IP addresses on ECS tasks or RDS instances
+- No NAT Gateway required — VPC Interface Endpoints cover all AWS service access from private subnets (ECR, Secrets Manager, KMS, CloudWatch Logs); S3 Gateway Endpoint (free) covers audit log and manifest bucket access; no outbound internet required from private subnets
+- VPC Peering connections (3 total, one per node pair) carry all inter-node traffic; see "Inter-node networking" above
 
 ---
 

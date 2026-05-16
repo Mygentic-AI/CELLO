@@ -229,6 +229,10 @@ GitHub push to main
 
 **Rollback**: fix forward for a single developer. Rollback machinery adds complexity that isn't warranted yet.
 
+**Database migrations — ECS startup, not CodeBuild.** The directory ECS task runs `flyway migrate` as its entrypoint before starting the directory service process. If migrations fail, the task fails its health check and ECS keeps the previous task revision running — clean rollback with no manual intervention. This was chosen over VPC-attached CodeBuild because VPC-attached CodeBuild loses default internet access and requires a NAT Gateway for outbound traffic (`pnpm install`, ECR pushes). No NAT Gateway is needed for M5 — VPC Interface Endpoints cover all AWS service access from private subnets (ECR, Secrets Manager, KMS, CloudWatch Logs); S3 Gateway Endpoint (free) covers S3 access. CodeBuild runs outside the VPC with standard internet access.
+
+**Inter-node networking — VPC Peering, not public ALBs.** All traffic between directory nodes (RDS logical replication AND checkpoint cross-signing) travels over VPC Peering. Three peering connections are established at M5 (one per node pair). Public ALBs carry only agent→directory traffic. Chosen over routing checkpoint traffic over public ALB endpoints because: (a) private traffic never leaves the AWS backbone — no public attack surface for inter-node trust operations; (b) VPC Peering is fully managed with zero operational overhead once configured. **Evaluate Transit Gateway at 6+ nodes** — peering connections grow quadratically and Transit Gateway is the correct upgrade path.
+
 **Smoke test definition per milestone**: minimum for M4 — migrations applied cleanly, app starts, basic authenticated request succeeds, KMS encrypt/decrypt roundtrip works.
 
 ---
