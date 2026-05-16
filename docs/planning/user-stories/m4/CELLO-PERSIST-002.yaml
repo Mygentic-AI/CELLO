@@ -1,0 +1,185 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-002
+domain: Persistence
+milestone: M4
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Directory Node,
+  I want a Docker Compose Postgres container and Flyway migration tooling
+  that brings any environment to the correct schema state,
+  so that the local development loop requires no cloud infrastructure
+  and production RDS is always in identical schema state to local.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a developer runs docker compose up"
+    action: "a Postgres 16 container starts on port 5432 with database
+      cello_dev and is ready to accept connections within 10 seconds"
+
+  - trigger: "When flyway migrate is run against any environment"
+    action: "Flyway applies all pending versioned migration files in
+      V{n}__{description}.sql order, records each in flyway_schema_history,
+      and exits with code 0 on success or code 1 on failure"
+
+  - trigger: "When the directory service starts"
+    action: "the service runs flyway migrate before accepting any connections;
+      if migration fails, the service exits with code 1 and logs
+      migration.failed"
+
+  - trigger: "When a developer runs the seed script against the local container"
+    action: "the database is wiped and restored to a known state containing
+      the four baseline scenarios: registered operator with no active sessions,
+      unregistered operator, active session mid-conversation, sealed session"
+
+  - trigger: "When a test runs"
+    action: "the test wraps its database operations in a transaction that rolls
+      back on completion — it never relies on the seed data and never leaves
+      state in the database after the test"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A developer machine with Docker installed and no Postgres running"
+    when: "docker compose up is run from the repo root"
+    then: "a Postgres 16 container starts, cello_dev database is created, and
+      psql -h localhost -U postgres -d cello_dev -c 'SELECT 1' returns
+      successfully within 10 seconds"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "The local Postgres container is running with an empty cello_dev
+      database"
+    when: "flyway migrate is run with the local connection URL"
+    then: "all migration files in db/migrations/ are applied in version order;
+      flyway_schema_history contains one row per migration file with status
+      SUCCESS; the command exits with code 0"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "flyway migrate has been run once successfully"
+    when: "flyway migrate is run again with no new migration files"
+    then: "Flyway detects no pending migrations and exits with code 0 without
+      modifying any table — idempotent"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "A migration file contains a SQL syntax error"
+    when: "flyway migrate is run"
+    then: "Flyway exits with code 1; migration.failed is logged with
+      { version, description, reason }; no subsequent migration files are
+      applied; flyway_schema_history records the failed migration with status
+      FAILED"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "The local Postgres container is running with migrations applied"
+    when: "the seed script is run"
+    then: "the database contains exactly the four baseline scenarios: one
+      registered operator row with no session rows, one unregistered operator
+      row, one active session row with at least one hash entry row, and one
+      sealed session row with a conversation_seal row — verified by querying
+      each table directly"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "A Vitest test opens a database connection and inserts a row"
+    when: "the test completes (pass or fail)"
+    then: "the inserted row is not present in the database after the test —
+      verified by a subsequent query in a separate connection outside the
+      test transaction"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "The local Postgres container is running with migrations applied"
+    when: "flyway validate is run"
+    then: "Flyway reports all applied migrations as valid — their checksums
+      match the files on disk; any manually applied schema change that bypasses
+      Flyway is detectable as a checksum mismatch"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "A developer runs pnpm run db:migrate in the directory package"
+    when: "the command completes"
+    then: "it is equivalent to running flyway migrate with the correct local
+      connection URL — the package.json script is the single entry point
+      developers use, not a raw flyway command"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "Migration files shall never be modified after they have been
+      applied to any environment"
+    adversarial_condition: "even to fix a bug in an already-applied migration —
+      a new migration file must be written instead; Flyway's checksum validation
+      shall detect any modification to an applied file and refuse to proceed"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "The seed script shall only be runnable against CELLO_ENV=local"
+    adversarial_condition: "even when pointed at a cloud or production connection
+      string — the seed script shall check CELLO_ENV and exit with code 1 if
+      it is not 'local'"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: migration.applied
+      level: info
+      trigger: "each Flyway migration completes successfully"
+      context_fields: [version, description, executionTime]
+      correlationId: false
+
+    - name: migration.skipped
+      level: info
+      trigger: "Flyway finds no pending migrations"
+      context_fields: [currentVersion]
+      correlationId: false
+
+  error_events:
+    - name: migration.failed
+      level: error
+      trigger: "a Flyway migration fails"
+      context_fields: [version, description, reason]
+
+    - name: migration.checksum.mismatch
+      level: error
+      trigger: "Flyway validate detects a modified applied migration"
+      context_fields: [version, description]
+
+  alarms:
+    - condition: "migration.failed fires at any time"
+      fires_to: ops-critical
+    - condition: "migration.checksum.mismatch fires at any time"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+    - "2026-05-16_0900_m4-cloud-infrastructure-decisions"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  depends_on:
+    - CELLO-PERSIST-001
+  blocks:
+    - CELLO-PERSIST-003
+    - CELLO-PERSIST-009
+    - CELLO-PERSIST-013
