@@ -21,7 +21,9 @@
   "scripts": {
     "typecheck": "tsc --build",
     "test": "vitest run",
-    "start": "node dist/bin/directory.js"
+    "start": "node dist/bin/directory.js",
+    "db:migrate": "docker compose run --rm flyway",
+    "db:seed": "node --import tsx/esm db/seed.ts"
   },
   "bin": {
     "cello-directory": "./dist/bin/directory.js"
@@ -30,7 +32,9 @@
     "@cello/client": "workspace:*",
     "@cello/relay": "workspace:*",
     "@claude-flow/testing": "*",
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/pg": "8.20.0",
+    "tsx": "^4.0.0"
   },
   "dependencies": {
     "@cello/crypto": "workspace:*",
@@ -40,6 +44,7 @@
     "@libp2p/interface": "^3.0.0",
     "@noble/curves": "2.2.0",
     "cbor-x": "^1.6.4",
-    "it-length-prefixed": "^9.1.0"
+    "it-length-prefixed": "^9.1.0",
+    "pg": "8.18.0"
   }
 }

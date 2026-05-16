@@ -6,6 +6,10 @@ docs/planning/discussion_logs_drafts/
 # Obsidian vault config
 .obsidian/
 
+# Environment files
+.env.local
+.env.*.local
+
 # Node
 node_modules/
 

@@ -1,0 +1,37 @@
+services:
+  postgres:
+    build:
+      context: docker/postgres
+    image: cello-postgres:18.4
+    environment:
+      POSTGRES_DB: cello_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: dev
+    ports:
+      - "5433:5432"
+    command: >
+      postgres
+      -c shared_preload_libraries=pgaudit
+      -c pgaudit.log=all
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cello_dev"]
+      interval: 2s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  flyway:
+    image: flyway/flyway:11.13.2
+    command: migrate
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/cello_dev
+      FLYWAY_USER: postgres
+      FLYWAY_PASSWORD: dev
+      FLYWAY_LOCATIONS: filesystem:/flyway/sql
+      FLYWAY_CONNECT_RETRIES: 10
+    volumes:
+      - ./packages/directory/db/migrations:/flyway/sql
+    depends_on:
+      postgres:
+        condition: service_healthy
+
