@@ -1,0 +1,223 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-014
+domain: Persistence
+milestone: M4
+actor: DIR
+priority: P0
+components:
+  - directory
+  - relay
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Directory Node,
+  I want to detect tree mismatches at seal time and coordinate gap-fill
+  so the behind party can catch up and the seal proceeds,
+  so that a one-sided delivery failure does not permanently block a
+  conversation from being sealed.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When both parties submit seal requests with different sequence
+      numbers"
+    action: "the directory shall reject the seal with
+      SEAL_REJECTED_TREE_MISMATCH and return both parties' reported sequence
+      numbers in the response"
+
+  - trigger: "When a party receives SEAL_REJECTED_TREE_MISMATCH"
+    action: "the behind party (lower sequence number) shall request the missing
+      leaves from the relay WAL using the sequence range
+      (their_sequence + 1 .. ahead_party_sequence)"
+
+  - trigger: "When the relay serves gap-fill leaves"
+    action: "the relay shall serve only leaves with sequence numbers strictly
+      greater than the last agreed sequence number — it shall never re-serve
+      leaves the behind party already has"
+
+  - trigger: "When the behind party receives gap-fill leaves"
+    action: "the behind party shall verify each leaf's sender signature and
+      hash chain position before appending it to their local Merkle tree"
+
+  - trigger: "When the behind party's tree matches the ahead party's sequence
+      number"
+    action: "both parties retry the seal; the directory accepts the seal if
+      both roots match"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Agent A has sent 10 leaves and Agent B has received 8; both
+      parties are running as separate OS processes; both submit seal requests"
+    when: "the directory receives both requests"
+    then: "the directory returns SEAL_REJECTED_TREE_MISMATCH to both parties
+      with { partyA_sequence: 10, partyB_sequence: 8 } — verified by
+      asserting the error code and both sequence numbers in the response
+      received by each separate process"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-002
+    given: "Agent B has received SEAL_REJECTED_TREE_MISMATCH with
+      partyB_sequence=8 and partyA_sequence=10"
+    when: "Agent B requests leaves 9 and 10 from the relay WAL"
+    then: "the relay returns exactly 2 leaves with sequence numbers 9 and 10;
+      it does not return leaves 1–8 — verified by asserting the relay returns
+      exactly the requested range"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-003
+    given: "Agent B receives gap-fill leaves 9 and 10 from the relay"
+    when: "Agent B verifies and appends each leaf"
+    then: "each leaf's sender signature verifies against Agent A's registered
+      public key; Agent B's Merkle root after appending both leaves equals
+      Agent A's Merkle root — verified by computing both roots independently"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-004
+    given: "Agent B has caught up to sequence 10 after gap-fill"
+    when: "both parties retry the seal"
+    then: "the directory accepts the seal; conversation_seals contains one
+      row with a root hash that matches both parties' computed roots —
+      verified by querying the directory from a separate process"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-005
+    given: "Agent B requests gap-fill leaves starting from sequence 5 but
+      has already received leaves 1–8"
+    when: "the relay processes the request"
+    then: "the relay returns only leaves 9 and 10 (strictly after the last
+      agreed sequence); it does not re-serve leaves 5–8 even though they
+      are requested — the relay enforces the tail-only constraint"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-006
+    given: "A gap-fill leaf fails sender signature verification"
+    when: "Agent B attempts to append it"
+    then: "Agent B rejects the leaf, logs client.gap.fill.leaf.invalid at
+      WARN with { sessionId, sequenceNumber, reason }, and does not advance
+      its Merkle tree past the last valid leaf — the seal cannot proceed
+      with an unverified leaf"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-007
+    given: "The relay WAL for the session has been deleted (seal already
+      confirmed on a previous attempt)"
+    when: "Agent B requests gap-fill leaves"
+    then: "the relay returns RELAY_WAL_NOT_FOUND with { sessionId }; Agent B
+      logs client.gap.fill.wal.unavailable at WARN; the seal attempt is
+      blocked pending operator investigation"
+    test_type: integration
+    component_under_test: relay
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "Gap-fill shall only serve tail leaves — sequence numbers
+      strictly greater than the last agreed sequence number between both
+      parties"
+    adversarial_condition: "even when the behind party requests leaves with
+      sequence numbers below the divergence point — the relay enforces the
+      tail constraint regardless of what range is requested"
+    test_type: integration
+    component_under_test: relay
+
+  - id: SI-002
+    statement: "The behind party shall verify every gap-fill leaf's sender
+      signature before appending it to their Merkle tree"
+    adversarial_condition: "even when the relay is compromised and serves
+      forged leaves — a leaf with an invalid signature must be rejected;
+      an unverified leaf appended to the tree would produce a root the
+      directory cannot verify"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-003
+    statement: "A party cannot claim a gap-fill leaf is false — if they are
+      behind, they do not have an alternative version of leaves they have
+      not received"
+    adversarial_condition: "even when the behind party disputes the gap-fill
+      content — the leaves either verify against the sender signature and
+      hash chain or they do not; there is no third state"
+    test_type: unit
+    component_under_test: client
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the relay WAL is unavailable for gap-fill (crashed,
+      deleted prematurely, or unreachable)"
+    fallback: "the relay returns RELAY_WAL_NOT_FOUND; the behind party logs
+      client.gap.fill.wal.unavailable; the seal is blocked; the behind party
+      must obtain missing leaves from the ahead party directly via an
+      out-of-band mechanism or accept the seal cannot proceed — this is an
+      operator-escalation scenario"
+    test_type: integration
+    component_under_test: relay
+
+  - id: DB-002
+    condition: "While gap-fill leaves arrive but the behind party's hash
+      chain verification fails (chain break detected)"
+    fallback: "Agent B logs client.gap.fill.chain.break at ERROR with
+      { sessionId, breakAtSequence }; the seal is blocked; this indicates
+      either a compromised relay or a bug in leaf serialisation — requires
+      operator investigation"
+    test_type: integration
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: session.seal.mismatch.detected
+      level: warn
+      trigger: "directory detects tree mismatch and issues
+        SEAL_REJECTED_TREE_MISMATCH"
+      context_fields: [sessionId, partyASequence, partyBSequence,
+        correlationId]
+      correlationId: true
+
+    - name: session.gap.fill.completed
+      level: info
+      trigger: "behind party completes gap-fill and trees are in sync"
+      context_fields: [sessionId, leavesReceived, correlationId]
+      correlationId: true
+
+  error_events:
+    - name: client.gap.fill.leaf.invalid
+      level: warn
+      trigger: "a gap-fill leaf fails signature or chain verification"
+      context_fields: [sessionId, sequenceNumber, reason]
+
+    - name: client.gap.fill.wal.unavailable
+      level: warn
+      trigger: "relay WAL unavailable for gap-fill"
+      context_fields: [sessionId, reason]
+
+    - name: client.gap.fill.chain.break
+      level: error
+      trigger: "chain break detected in gap-fill leaves"
+      context_fields: [sessionId, breakAtSequence]
+
+  alarms:
+    - condition: "client.gap.fill.chain.break fires at any time"
+      fires_to: ops-critical
+    - condition: "session.seal.mismatch.detected rate > 10% over 5 minutes"
+      fires_to: ops-warning
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Session Lifecycle / Message Exchange"
+  discussion_logs:
+    - "2026-05-14_1702_relay-session-mechanics-and-recovery"
+    - "2026-04-11_1700_persistence-layer-design"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  depends_on:
+    - CELLO-PERSIST-001
+    - CELLO-PERSIST-009
+    - CELLO-PERSIST-013
