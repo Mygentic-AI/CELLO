@@ -103,20 +103,39 @@ Relay nodes run as ECS Fargate services. At Alpha, CELLO operates all relay node
 
 ### Stack
 
-AWS CodePipeline + CodeBuild. GitHub as source. Direct ECS deployment (no CodeDeploy). All infrastructure defined in CloudFormation or CDK.
+AWS CodePipeline V2 + CodeBuild. GitHub as source via webhook. Path-based selective deployment via Lambda router. Direct ECS deployment (no CodeDeploy). All infrastructure defined in IaC — nothing created via console that does not also exist in IaC. See [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration Strategy]] for full pipeline design and rationale.
 
-### Pipeline Stages
+### Path-Based Trigger Architecture
 
-**Source:** CodePipeline monitors the `main` branch on GitHub. Any push to `main` triggers the pipeline.
+Native CodePipeline V2 path filtering via CodeConnections was evaluated and rejected — glob behavior is coarse and tooling lagged the API at time of design. The Lambda router pattern is used instead.
+
+```
+GitHub push to main
+  → github-webhook-receiver Lambda (eu-west-1)
+      verifies HMAC signature → puts payload on EventBridge github-events bus
+  → cello-pipeline-filter Lambda
+      inspects commit.modified/added/removed paths
+      triggers matching CodePipeline(s) via start_pipeline_execution
+  → per-package CodePipeline
+```
+
+Folder-to-pipeline mappings are data-driven — a JSON config file in the repo, read by `cello-pipeline-filter` at invocation time. Adding a new package updates the config, not the Lambda.
+
+**Shared dependency rule:** a change to `packages/crypto/` or `packages/protocol-types/` triggers all downstream pipelines. Modelled as an `"all"` sentinel in the mappings config.
+
+**IaC discipline:** one CloudFormation template per service, environment passed as a parameter (`cloud`, `staging`, `production`). The console is a scratchpad only — any emergency fix applied via console is backported to IaC before closing the session.
+
+### Pipeline Stages (per package)
 
 **Build:** CodeBuild runs:
 1. `pnpm install`
 2. `pnpm run lint`
 3. `pnpm run typecheck`
 4. `pnpm run test` — full Vitest suite including integration tests
-5. Docker image build and push to ECR
+5. Apply database migrations (directory package only)
+6. Docker image build and push to ECR
 
-**Staging deploy:** pipeline deploys the new image to the staging ECS services (directory + relay). Staging is a 3-node setup functionally equivalent to production at reduced instance sizes.
+**Staging deploy:** pipeline deploys the new image to the staging ECS services. Staging is a 3-node setup functionally equivalent to production at reduced instance sizes. In Phase 1 (through ~M8), the `cloud` environment serves as staging — see [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration Strategy]] for environment tier decisions.
 
 **Staging smoke test:** CodeBuild runs the live multi-process smoke test suite against the staging environment:
 - Two agent sessions established end-to-end
@@ -132,11 +151,24 @@ AWS CodePipeline + CodeBuild. GitHub as source. Direct ECS deployment (no CodeDe
 
 ### Rollback
 
-ECS maintains the previous task definition. If a production deployment causes a CloudWatch alarm to fire within 10 minutes of deployment (error rate spike, health check failures), the on-call operator triggers a manual rollback to the previous task definition. Automated rollback is a Consortium-phase concern.
+Fix forward for a single developer. ECS maintains the previous task definition — manual rollback to the previous revision is available if a CloudWatch alarm fires within 10 minutes of deployment. Automated rollback is a Consortium-phase concern.
 
 ---
 
 ## Operational Security
+
+### AuditLogShipper Adapter
+
+pgaudit log shipping to S3 is implemented behind an `AuditLogShipper` interface:
+
+```typescript
+interface AuditLogShipper {
+  ship(logEntry: AuditLogEntry): Promise<void>
+  flush(): Promise<void>
+}
+```
+
+Production implementation ships to S3 in the same region as the RDS instance. Local stub writes to a local file sink. This follows the adapter pattern established for all external dependencies in [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration Strategy]].
 
 ### CloudWatch
 
@@ -202,6 +234,7 @@ Standard SPARC gate sequence plus live smoke tests:
 
 ## Related Documents
 
+- [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration Strategy]] — CI/CD pipeline design, Lambda router pattern, IaC discipline, environment tiers
 - [[2026-05-14_1853_milestone-sequence-revision|Milestone Sequence Revision]] — sequencing decisions placing M5 here
 - [[2026-04-08_1700_node-architecture-and-replication|Node Architecture and Replication]] — three-phase node deployment strategy, threshold parameters, primary/backup replication topology
 - [[2026-04-17_1400_directory-relay-architecture-reassessment|Directory/Relay Architecture Reassessment]] — relay as session-level Merkle engine; relay node separation from directory
