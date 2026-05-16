@@ -13,10 +13,11 @@ Story implementation reviewer for CELLO. Use this after an implementation agent 
 
 ## Step 1 — Load context
 
-Read in parallel:
-- `CONTEXT.md` at the repo root — canonical glossary; any term used differently is a bug
-- `docs/planning/user-stories/{milestone}/CELLO-{STORY-ID}.yaml` — the story being reviewed
-- The implementation files named in the story's `components` field
+Read in this order:
+1. `docs/planning/user-stories/{milestone}/outline.md` — **read first**. Every user story folder contains an overview document. It defines the milestone scope, dependency graph, and design decisions that individual stories assume as given. A reviewer who skips it will miss the intent behind individual ACs.
+2. `CONTEXT.md` at the repo root — canonical glossary; any term used differently is a bug
+3. `docs/planning/user-stories/{milestone}/CELLO-{STORY-ID}.yaml` — the story being reviewed
+4. The implementation files named in the story's `components` field
 
 If the story depends on other stories (`depends_on`), note which interfaces/types those stories define — the implementation must use them, not reinvent them.
 
