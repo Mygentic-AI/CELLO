@@ -274,6 +274,75 @@ All five scenarios as live multi-process smoke tests — not in-process Vitest.
 
 ---
 
+## Story Map
+
+### E2E Story (written first)
+
+| ID | Title |
+|---|---|
+| PERSIST-E2E-001 | M4 end-to-end: two agents complete a conversation, seal it, survive a relay crash mid-session, and reconcile a one-sided delivery failure. Unilateral seal path also exercised. |
+
+### Infrastructure Setup
+
+| ID | Title | Blocks |
+|---|---|---|
+| PERSIST-001 | `packages/interfaces/` bootstrap — define and export all M4 interfaces with local stubs | everything |
+| PERSIST-002 | Docker Compose + Flyway migrations — Postgres container wired to migration files, full schema applied in order | directory, client, relay tracks |
+
+### Directory Track
+
+| ID | Title | Depends on |
+|---|---|---|
+| PERSIST-003 | Append-only schema with RLS — all core tables with RLS policies making UPDATE/DELETE impossible | PERSIST-002 |
+| PERSIST-004 | Hash chain on INSERT — every INSERT extends SHA-256 chain; any gap or modification breaks it | PERSIST-003 |
+| PERSIST-005 | KMS envelope encryption for K_server_X shares — `EnvelopeKeyProvider`, local AES stub | PERSIST-003 |
+| PERSIST-006 | pgaudit logging — access and INSERTs logged via `AuditLogShipper` to S3 / local file sink | PERSIST-003 |
+| PERSIST-007 | MMR single-node construction — proof leaves, MMR nodes, seal staging tables | PERSIST-003 |
+| PERSIST-008 | Analytics cron job — per-pseudonym stats, graph edges, graph analysis via `JobScheduler` | PERSIST-007 |
+
+### Client Track
+
+| ID | Title | Depends on |
+|---|---|---|
+| PERSIST-009 | SQLCipher local database — `ClientStore` backed by SQLCipher; `db_key` HKDF-derived from identity key | PERSIST-001 |
+| PERSIST-010 | `SigningKeyProvider` abstraction — pluggable Ed25519 backend; OS Keychain + encrypted file fallback | PERSIST-009 |
+| PERSIST-011 | Encrypted cloud backup — `backup_key` HKDF-derived; cloud provider sees only ciphertext | PERSIST-009 |
+| PERSIST-012 | Agent hash queue + signed relay ACKs — local queue persists across relay disconnections; ACK receipts stored | PERSIST-009 |
+
+### Relay Track
+
+| ID | Title | Depends on |
+|---|---|---|
+| PERSIST-013 | Relay WAL — per-session append-only WAL; crash+restart reconstructs Merkle state; WAL destroyed after seal | PERSIST-001 |
+| PERSIST-014 | Gap-fill reconciliation (Case 1) — directory detects tree mismatch, behind party requests missing leaves, retry succeeds | PERSIST-013 |
+| PERSIST-015 | Unilateral seal (Case 2) — after timeout A seals unilaterally; B receives notification on reconnect | PERSIST-013 |
+
+### Dependency Order
+
+```
+PERSIST-001 (interfaces)
+  └── PERSIST-002 (docker + flyway)
+        ├── PERSIST-003 (RLS schema)
+        │     ├── PERSIST-004 (hash chain)
+        │     ├── PERSIST-005 (KMS/EnvelopeKeyProvider)
+        │     ├── PERSIST-006 (pgaudit)
+        │     └── PERSIST-007 (MMR)
+        │           └── PERSIST-008 (analytics cron)
+        ├── PERSIST-009 (SQLCipher)          ← parallel with directory track
+        │     ├── PERSIST-010 (SigningKeyProvider)
+        │     ├── PERSIST-011 (cloud backup)
+        │     └── PERSIST-012 (hash queue)
+        └── PERSIST-013 (relay WAL)          ← parallel with directory + client tracks
+              ├── PERSIST-014 (gap-fill reconciliation)
+              └── PERSIST-015 (unilateral seal)
+
+PERSIST-E2E-001 requires all of 003–015
+```
+
+Once PERSIST-001 and PERSIST-002 are done, the directory track, client track, and relay track are independent and can run as parallel agents.
+
+---
+
 ## Related Documents
 
 - [[2026-04-11_1700_persistence-layer-design|Persistence Layer Design]] — complete schema reference; all directory tables defined here
