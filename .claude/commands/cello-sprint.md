@@ -147,6 +147,14 @@ it("...", async () => {
 
 **Extending the fixture:** if a story needs something the fixture doesn't cover, add an `opts` field with a default that doesn't break existing tests. Do not copy-paste the fixture code into the test file.
 
+### Coding discipline
+
+**Think before coding.** State assumptions explicitly before implementing. If multiple interpretations exist, surface them — don't pick silently. If something is unclear, stop and ask. Undiscovered confusion at implementation time costs far more than a clarifying question before.
+
+**Minimum code.** Write the least code that satisfies the ACs. No abstractions for single-use code. No configurability that no AC requires. No error handling for scenarios that cannot happen. If you write 200 lines and it could be 50, rewrite it before the gate sequence.
+
+**Surgical changes.** Touch only what the story requires. Do not improve adjacent code, reformat unrelated files, or refactor things that aren't broken. Match existing style. When your changes make something unused (imports, variables, functions), remove those orphans. Do not remove pre-existing dead code unless the story requires it — mention it instead.
+
 ### Ready to pick up
 Which story (or stories, if parallelizable) should be implemented next, based on dependency order and what's already done.
 

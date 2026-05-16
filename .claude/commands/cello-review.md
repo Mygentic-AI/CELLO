@@ -113,13 +113,22 @@ For every observability AC in the story, verify the implementation:
 
 ---
 
-## Step 5 — YAGNI and scope check
+## Step 5 — Code discipline check
 
-- Does the implementation contain code beyond what the story's ACs require?
-- Are there abstractions, config options, or error paths that no AC exercises?
-- Are there TODO/FIXME comments that indicate deferred implementation in a shipped story?
+**Scope (YAGNI):**
+- Does the implementation contain code beyond what the story's ACs require? Flag [low] unless it introduces a security surface.
+- Are there abstractions, config options, or error paths that no AC exercises? Flag [low].
+- TODO/FIXME comments indicating deferred implementation in a shipped story? Flag [medium].
 
-Flag these as [low] unless they introduce a security surface, in which case [high].
+**Simplicity:**
+- Could any function or module be materially shorter without losing correctness? Flag [medium].
+- Are there abstractions that exist for a single call site? Flag [medium].
+- Are there speculative generalisations ("we might need this later")? Flag [low].
+
+**Surgical changes:**
+- Do the changed lines trace directly to the story's ACs? Lines that don't — reformatting, unrelated refactors, style fixes — are scope violations. Flag [medium].
+- Did the implementation create orphans (unused imports, variables, functions made unused by this change) and leave them in place? Flag [medium].
+- Did the implementation remove or rewrite pre-existing code that the story did not require touching? Flag [medium] unless it fixes a security issue.
 
 ---
 
