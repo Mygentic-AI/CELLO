@@ -2,9 +2,15 @@
 
 ## What This Project Is
 
-CELLO is a peer-to-peer identity and trust layer for agent-to-agent communication. The core idea: agents need to verify who they're talking to, sign messages with tamper-proof guarantees, and defend against prompt injection — without trusting a centralized platform.
+CELLO is a peer-to-peer identity and trust layer for agent-to-agent communication: split-key signing (FROST), tamper-evident hash chains, and prompt-injection defense — without trusting a centralized platform.
 
-The **`docs/planning/`** folder is an **Obsidian vault**. It is the primary design record for the project. All architectural decisions, open problems, and discussion logs live here.
+`docs/planning/` is an **Obsidian vault** — the primary design record. All architectural decisions and discussion logs live here.
+
+---
+
+## Required Reading
+
+**Read `CONTEXT.md` at the repo root before any implementation work.** Canonical glossary — terms, package structure, interface contracts. Using terms not defined there is a bug.
 
 ---
 
@@ -12,260 +18,75 @@ The **`docs/planning/`** folder is an **Obsidian vault**. It is the primary desi
 
 ```
 docs/planning/
-├── protocol-map.md                  # Start here — maps all 9 protocol domains, readiness status, and key discussion logs
-├── cello-design.md                  # Original vision — 10-step trust chain, revenue model, competitive landscape
-├── end-to-end-flow.md               # Deep canonical narrative — every domain in one coherent story (1100+ lines)
-├── prompt-injection-defense-layers-v2.md
-├── day-0-agent-driven-development-plan.md
-├── protocol-review/
-│   ├── open-decisions.md            # 12 resolved design decisions
-│   ├── design-problems.md           # 12 design problems — all closed
-│   └── day-zero-review/
-│       ├── 00-synthesis.md          # Adversarial review summary
-│       └── 01–08-*.md               # Individual review reports
-└── discussion_logs/
-    └── YYYY-MM-DD_HHMM_slug.md      # One file per design session
+├── protocol-map.md          # Start here — 9 protocol domains, readiness, key discussion logs
+├── end-to-end-flow.md       # Canonical narrative — every domain in one story
+├── discussion_logs/         # YYYY-MM-DD_HHMM_slug.md — one file per design session
+└── user-stories/            # m0/ m1/ … — story YAML files per milestone
 ```
 
-Every document has **YAML frontmatter** with:
-- `name` — human-readable title
-- `type` — `design` | `discussion` | `review` | `plan` | `decision`
-- `date` — creation date
-- `topics` — array of tags used for cross-linking
-- `status` — `active` | `open` | `resolved` | `reference`
-- `description` — one-sentence summary
+Every document needs YAML frontmatter: `name`, `type`, `date`, `topics`, `status`, `description`.
 
 ---
 
-## Required Reading
+## SPARC Development Process — Non-Negotiable
 
-**Read `CONTEXT.md` at the repo root before any implementation work.** It is the canonical glossary for CELLO — terms, package structure, interface contracts, and architectural decisions. Using terms not defined there, or contradicting definitions in it, is a mistake.
+CELLO is financial trust infrastructure. Every story, every package, every time.
+
+Full process: `docs/planning/day-0-agent-driven-development-plan.md`
+
+**Five phases in order:**
+
+**S — Specification:** Read the full story YAML first. Stories must describe production behavior — every AC must pass if participants are in different OS processes on different machines.
+
+**P — Pseudocode:** Write pseudocode before any implementation. Crypto code must cite the RFC (Ed25519 → RFC 8032, FROST → RFC 9591).
+
+**A — Architecture:** Define TypeScript interfaces and confirm package boundaries before coding.
+
+**R — Refinement (TDD, absolute rule):** Write all tests first → confirm all red → implement → confirm all green. No implementation before red tests exist. No mocks for crypto operations.
+
+**C — Completion gate (in order):** `pnpm run test` → `pnpm run lint` → `pnpm run typecheck` → build → code review (`feature-dev:code-reviewer` agent) → commit with story ID.
+
+**Milestone close gate:** No milestone closes until a live multi-process smoke test passes. Vitest green ≠ done.
+
+**Test fixture discipline:** Never write a new `makeFixture()` from scratch. Use and extend `packages/e2e-tests/src/session-fixture.ts`. Add `opts` fields with non-breaking defaults. Enforced by `/cello-review` — from-scratch fixture is blocking.
 
 ---
 
-# ⚠️ IMPORTANT MANDATORY: SPARC Development Process
+## M4+ Development Model
 
-**This is non-negotiable. Every story, every package, every time. No exceptions.**
+M4 introduces external systems (PostgreSQL, KMS, ECS, relay WAL). The inner loop stays fast only with deliberate discipline. See full decisions in `docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md`.
 
-CELLO is financial trust infrastructure. Cutting process corners is how vulnerabilities get shipped.
-Read the full process: `docs/planning/day-0-agent-driven-development-plan.md`
+**Adapter pattern — mandatory.** Every external dependency is behind an interface in `packages/interfaces/` with a local stub in `packages/interfaces/stubs/`. Never call AWS directly from application code. Interface boundary is narrow — add to it only when a specific failing test or production behavior requires it.
 
-## The Five Phases — In Order, Always
+**Composition root.** All adapters are instantiated in `server.ts`. `CELLO_ENV` drives selection (`local` | `cloud` | `staging` | `production`). App fails at startup with a clear error if any required adapter configuration is missing.
 
-### Phase S — Specification
+**Interface name precision.** `EnvelopeKeyProvider` encrypts K_server_X shares at rest via KMS (introduced M4). `SigningKeyProvider` is the client-side Ed25519 signing interface (introduced M0). These are distinct — confusing them is a type error and a security error.
 
-User stories exist in `docs/planning/user-stories/`. Read the full YAML before writing a single line of code or test. Every AC maps 1:1 to a test case.
+**Logger — injected, never imported directly.** No `console.log` in implementation code. Events use `domain.noun.verb` taxonomy (e.g. `session.started`, `frost.dkg.round1.complete`). The canonical taxonomy lives in the pipeline discussion log above. Correlation IDs are minted once per async flow and threaded through every event in that flow.
 
-**Stories must describe production behavior, not test-harness behavior.** If a story says "runs in-process" or "uses stubs," the implementation will work in tests and fail in production. Every AC must be satisfiable by separate processes communicating over real network connections. When writing or reviewing a story, ask: "Would this AC pass if the participants were in different processes on different machines?" If not, the story is underspecified.
+**Observability ACs are first-class.** Every M4+ story must specify: named log events, required context fields per event, correlationId threading for async flows, error path coverage, and alarm thresholds for new failure modes. `/cello-story` enforces this at write time. `/cello-review` Step 4c verifies implementation matches ACs exactly. Missing events, wrong names, missing fields, and `console.log` in implementation are blocking findings.
 
-### Phase P — Pseudocode (MANDATORY before coding)
-Before writing any implementation:
-1. Write high-level pseudocode for each component in a comment block or discussion log
-2. Crypto code MUST reference the RFC or NIST publication: Ed25519 → RFC 8032, SHA-256 → FIPS 180-4, FROST → RFC 9591
-3. Review the pseudocode against the spec ACs. Catch structural problems now, not after 200 lines.
+**Local Postgres via Docker Compose — not mocked.** RLS, pgaudit, and hash chain constraints are database-level constructs. A mock database cannot catch a broken RLS policy.
 
-### Phase A — Architecture (MANDATORY before coding)
-1. Define TypeScript interfaces and type signatures before implementing them
-2. Confirm package boundaries: which package owns what, which imports are allowed
-3. Verify against `CONTEXT.md` definitions — use the exact terms defined there
-
-### Phase R — Refinement (TDD: RED first, then GREEN)
-
-**The TDD rule is absolute:**
-
-```
-1. Write ALL tests for the story first — derived directly from the ACs and SIs
-2. Run: pnpm run test — ALL new tests MUST FAIL (red). If a test passes before implementation exists, the test is wrong.
-3. Write implementation — minimum code to make tests pass
-4. Run: pnpm run test — ALL tests MUST PASS (green)
-5. Refactor if needed — tests must stay green
-```
-
-**You are not allowed to write implementation code before the tests exist and have been confirmed red.**
-
-Test files must use `@claude-flow/testing`:
-```typescript
-import { setupV3Tests, createTestScope, measureTime, assertV3PerformanceTargets } from '@claude-flow/testing';
-setupV3Tests();
-```
-
-Crypto tests: use `measureTime()` + `assertV3PerformanceTargets()` for performance assertions.
-Async/P2P tests: use `waitFor()`, `retry()`, `withTimeout()` — not raw `setTimeout`.
-Isolation: use `createTestScope()` for cleanup, not manual teardown.
-
-**No mocks for cryptographic operations.** Real keys, real signing, real verification. Always.
-
-### Test Fixture Discipline (MANDATORY)
-
-**Never write a new `makeFixture()` function from scratch.** Every story that needs infrastructure (directory, relay, libp2p nodes, FROST) must use and extend the shared session fixture.
-
-The canonical fixture lives at: `packages/test-fixtures/src/session-fixture.ts`
-
-**Before writing any test infrastructure:**
-1. Read `packages/test-fixtures/src/session-fixture.ts`
-2. If the story needs something the fixture doesn't support: add an `opts` parameter to the fixture, with a default that doesn't break existing tests
-3. Import `SessionFixture` in the new test file — never copy-paste fixture code
-
-**What belongs in the shared fixture:** Directory node, relay node, libp2p node creation, FROST ceremony bootstrap, cleanup coordination.
-
-**What belongs in the test file:** Story-specific `waitFor` helpers, local assertion logic, anything used by only one test.
-
-**Why:** Every milestone used to rewrite 300-400 lines of fixture code from scratch. By M3 we had 6 near-identical `makeFixture()` functions. Adding a protocol feature now requires editing 6 files instead of 1. The fixture grows forward; it does not get rewritten.
-
-### Phase C — Completion: Gate Sequence (ALL MANDATORY, IN ORDER)
-
-After all tests are green, run this exact sequence before committing:
-
-```
-Step 1 — Tests green:       pnpm run test         (all pass)
-Step 2 — Lint:              pnpm run lint         (zero errors)
-Step 3 — Typecheck:         pnpm run typecheck    (zero errors)
-Step 4 — Build:             pnpm --filter @cello/<name> run typecheck  (package compiles to dist/)
-Step 5 — Code Review:       Agent({ subagent_type: "feature-dev:code-reviewer", ... })
-Step 6 — Commit:            Story ID in commit message
-```
-
-### Milestone Close Gate: Live Smoke Test
-
-**No milestone is closed until a live multi-process smoke test passes.** Start relay, directory, and two agent sessions as separate OS processes. Execute the milestone's claimed capability. If it fails, the milestone is not done — regardless of how many Vitest tests pass.
-
-**Step 5 — Code Review is mandatory.** After each phase (P pseudocode, A architecture, R implementation) dispatch a `feature-dev:code-reviewer` agent against what was just produced. Do not skip this for "simple" changes. The review agent must check:
-- Implementation matches the ACs exactly (no extra, no missing)
-- Security invariants enforced (no private key leakage paths, no silent failures)
-- Package boundaries respected
-- No YAGNI violations — no code beyond what the story requires
-- `@claude-flow/testing` used correctly
-
-Every AC in the story YAML has a corresponding named test.
-Every SI in the story YAML has a negative test (adversarial condition).
-Commit only after the reviewer returns no blocking issues.
-
-## What Skipping Any Phase Looks Like
-
-- Skipping P: structural bugs caught at integration, not spec review
-- Skipping A: interface mismatches between packages discovered late
-- Skipping red-first TDD: tests that never actually caught a bug — untested code shipped as "tested"
-- Not using `@claude-flow/testing`: inconsistent async handling, missing performance assertions, manual cleanup that leaks state
-
-## Parallel Agent Dispatch
-
-MSG-001 and TRANSPORT-001 are independent and run in parallel as separate agents.
-Each agent owns its package. Neither touches the other's package.
-The E2E agent runs only after both complete and pass their ACs.
+**CI/CD: AWS CodePipeline V2 + Lambda router.** Path-based triggers via `cello-pipeline-filter` Lambda (data-driven JSON mappings config). Native CodePipeline V2 path filtering was evaluated and rejected — coarse glob behavior, tooling lagged API. IaC discipline: everything in AWS exists in IaC; one template per service, environment as parameter.
 
 ---
 
 ## Slash Commands
 
-### `/cello-read`
-**Use at the start of any session.** Loads context about the current state of the project without reading everything.
-
-### `/cello-link`
-**Use after adding or modifying documents.** Scans the vault and adds wikilinks between documents that share topics. Run this whenever a new discussion log is created.
-
-### `/cello-chat`
-**Use to enter a CELLO peer-to-peer conversation session.** Guides an agent through the full setup flow: establish identity via `cello_status`, exchange addresses with the other agent, connect bidirectionally via `cello_connect_peer`, then enter a listen-and-reply loop using `cello_receive` and `cello_send`.
-
-**This skill must be updated after each milestone.** As CELLO adds capabilities — directory lookups (M1), trust data exchange (M2), FROST-signed endorsements (M2) — the conversation flow will gain new steps. After each milestone ships, revisit `.claude/commands/cello-chat.md` and update it to reflect the new tools and flows that are now available.
+- **`/cello-read`** — Use at session start. Loads current project state without reading everything.
+- **`/cello-sprint M4`** — Implementation briefing for a milestone. For M4+, loads adapter/observability context.
+- **`/cello-story`** — Write new user stories. Enforces E2E-first ordering and observability ACs.
+- **`/cello-review STORY-ID`** — Review a completed implementation. Verifies AC coverage, SI coverage, observability implementation, fixture discipline, gate sequence.
+- **`/cello-link`** — Run after adding or modifying documents. Wires new files into the vault graph via wikilinks.
+- **`/cello-chat`** — Enter a CELLO peer-to-peer conversation session. Update after each milestone.
 
 ---
 
 ## Discussion Log Conventions
 
-When creating a new discussion log:
+Filename: `docs/planning/discussion_logs/YYYY-MM-DD_HHMM_short-slug.md`
 
-1. **Filename:** `docs/planning/discussion_logs/YYYY-MM-DD_HHMM_short-slug.md`
-2. **Frontmatter:** Always include all five fields (`name`, `type`, `date`, `topics`, `description`)
-3. **Type:** always `discussion`
-4. **Topics:** be specific — use existing topic tags where possible to enable cross-linking
-5. **Run `/cello-link`** after committing to wire it into the graph
+Required frontmatter: `name`, `type: discussion`, `date`, `topics`, `description`.
 
-Example frontmatter:
-```yaml
----
-name: Example Discussion Topic
-type: discussion
-date: 2026-04-10 14:00
-topics: [connection-policy, trust-data, FROST]
-description: One sentence describing what was decided or explored in this session.
----
-```
-
----
-
-## Key Design Principles (for context)
-
-- **Hash relay, not message relay** — the directory sees hashes, never content
-- **Split-key signing (FROST)** — neither the agent nor the directory can sign alone
-- **Client-side trust data** — directory stores hashes of trust scores, never the data itself
-- **Graceful degradation** — directory outage drops to K_local-only, never a full stop
-- **Receiver-side scanning is the security boundary** — sender's scan is a signal, not the defense
-
----
-
-# Behavioral guidelines to reduce common LLM coding mistakes. 
-
-**Tradeoff:** These guidelines bias toward caution over speed. 
-For trivial tasks, use judgment.
-
-## 1. Think Before Coding
-
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
-
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them. Don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
-
-## 2. Simplicity First
-
-**Minimum code that solves the problem. Nothing speculative.**
-
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-
-Ask yourself: "Would a senior engineer say this is overcomplicated?" 
-If yes, simplify.
-
-## 3. Surgical Changes
-
-**Touch only what you must. Clean up only your own mess.**
-
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it. Don't delete it.
-
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
-
-The test: every changed line should trace directly to the user's request.
-
-## 4. Goal-Driven Execution
-
-**Define success criteria. Loop until verified.**
-
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-
-For multi-step tasks, state a brief plan:
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-
-Strong success criteria let you loop independently. 
-Weak criteria ("make it work") require constant clarification.
-
----
-
-**These guidelines are working if:** fewer unnecessary changes in diffs, 
-fewer rewrites due to overcomplication, and clarifying questions come 
-before implementation rather than after mistakes.
+Run `/cello-link` after committing.
