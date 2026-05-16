@@ -231,7 +231,7 @@ The local Postgres container is brought to the correct schema state by running t
 
 ### Migration Tool
 
-**Open decision — must be resolved before M4 stories are written.** The choice has downstream consequences for how RLS policies and append-only triggers are structured and how the CI/CD pipeline applies migrations before deploying new code. Options: Flyway, Liquibase, custom scripts.
+**Decision: Flyway.** SQL-first, versioned files (`V1__description.sql`) tracked in `flyway_schema_history`. RLS policies and pgaudit triggers are written as plain SQL with no DSL translation. `node-flywaydb` npm package integrates into the pnpm workspace. CI/CD: `flyway migrate` runs in CodeBuild before the new ECS image is deployed. Free community edition covers all required features.
 
 ### Seed Data
 
