@@ -70,7 +70,8 @@ acceptance_criteria:
     given: "flyway migrate has been run once successfully"
     when: "flyway migrate is run again with no new migration files"
     then: "Flyway detects no pending migrations and exits with code 0 without
-      modifying any table — idempotent"
+      modifying any table — idempotent; migration.skipped is logged at INFO
+      with { currentVersion }"
     test_type: integration
     component_under_test: directory
 
@@ -120,6 +121,18 @@ acceptance_criteria:
       connection URL — the package.json script is the single entry point
       developers use, not a raw flyway command"
     test_type: unit
+    component_under_test: directory
+
+  - id: AC-009
+    given: "The docker-compose.yml for the local Postgres container"
+    when: "the container starts"
+    then: "pgaudit is loaded via shared_preload_libraries = 'pgaudit' and
+      pgaudit.log = 'all' is set in the postgres command or postgresql.conf
+      override; verified by connecting to the container and running
+      SHOW shared_preload_libraries — 'pgaudit' must appear in the result,
+      and executing a SELECT statement must produce an entry in the Postgres
+      container log tagged with AUDIT"
+    test_type: integration
     component_under_test: directory
 
 # ─── Security Invariants ────────────────────────────────────

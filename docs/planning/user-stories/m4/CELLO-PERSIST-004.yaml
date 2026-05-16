@@ -91,10 +91,12 @@ acceptance_criteria:
       database"
     when: "both attempt to INSERT a row into the same hash-chained table
       concurrently"
-    then: "one INSERT succeeds and one fails with a serialization error or
-      unique constraint violation — the chain is never forked; the
-      application retries the failed INSERT with the updated previous
-      chain_hash"
+    then: "one INSERT succeeds and one fails — the chain is never forked;
+      the serialization mechanism is SELECT FOR UPDATE on the most recent
+      row before computing the new chain_hash: whichever instance acquires
+      the row lock first wins; the other instance waits, then re-reads the
+      updated chain_hash and retries the INSERT; the retry succeeds; the
+      final table state has exactly two new rows in the correct chain order"
     test_type: integration
     component_under_test: directory
 

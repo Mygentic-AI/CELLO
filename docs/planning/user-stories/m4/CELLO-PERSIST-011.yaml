@@ -33,7 +33,29 @@ behavior:
     action: "the client shall download the ciphertext, verify the SHA-256
       checksum, decrypt with backup_key, and replace the local SQLCipher
       database file — after restore the client opens the database with db_key
-      and verifies it is readable before declaring restore complete"
+      and verifies it is readable before declaring restore complete; the
+      restore flow requires the identity_key to be available before the
+      database is restored, because backup_key and db_key are both derived
+      from identity_key; the identity_key is held by the SigningKeyProvider
+      (EncryptedFileSigningKeyProvider or KeychainSigningKeyProvider from
+      PERSIST-010) which is initialized from a separately-stored key file
+      or OS keychain entry — not from the SQLCipher database — and therefore
+      survives device loss if the signing key file or keychain entry is
+      independently backed up by the operator"
+
+  - trigger: "When the operator has lost their device and needs to restore"
+    action: "the operator must first restore their signing key (from the
+      encrypted key file backup or OS keychain export) to initialize the
+      SigningKeyProvider; only then can backup_key be derived and the
+      SQLCipher database restored; the signing key recovery path is outside
+      the scope of this story but must be documented in operator runbooks"
+
+  - trigger: "When backup or restore involves cloud storage"
+    action: "all cloud storage access goes through a CloudStorageProvider
+      interface defined in packages/interfaces/; M4 provides a local stub
+      (LocalCloudStorageProvider) that writes to a configured local directory;
+      the production S3 implementation is added in M5; this interface is added
+      to PERSIST-001's interface inventory as part of this story's implementation"
 
   - trigger: "When the operator has not configured a cloud storage destination"
     action: "backup operations are skipped with client.backup.not.configured
@@ -67,11 +89,16 @@ acceptance_criteria:
     component_under_test: client
 
   - id: AC-003
-    given: "A backup has been uploaded and the local database file is deleted"
-    when: "restore is triggered with the correct backup_key"
-    then: "the ciphertext is downloaded, checksum verified, decrypted, and
-      written to the local path; the client opens the restored database with
-      db_key and all previously written records are present"
+    given: "A backup has been uploaded and the local database file is deleted;
+      the identity_key is available via the SigningKeyProvider (i.e. the
+      signing key file or keychain entry has been independently restored or
+      is on the new device — this is the prerequisite for restore)"
+    when: "restore is triggered"
+    then: "backup_key is derived from identity_key; the ciphertext is
+      downloaded, checksum verified, decrypted, and written to the local path;
+      the client opens the restored database with db_key and all previously
+      written records are present — verified by reading each record and
+      asserting field equality against the pre-deletion values"
     test_type: integration
     component_under_test: client
 

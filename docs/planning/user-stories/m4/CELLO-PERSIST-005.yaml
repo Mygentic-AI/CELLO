@@ -134,12 +134,18 @@ security_invariants:
     component_under_test: directory
 
   - id: SI-003
-    statement: "An INSERT into agent_key_shares shall be rejected if
-      encrypted_share is not ciphertext — the directory service shall verify
-      that encryption succeeded before attempting the INSERT"
+    statement: "An INSERT into agent_key_shares shall be rejected if the
+      ciphertext output fails a structural validity check — the directory
+      service shall verify that encryption produced output of the expected
+      length (plaintext_length + 28 bytes for a 12-byte nonce + 16-byte
+      AES-256-GCM auth tag) and that the output is not the zero-length
+      empty buffer"
     adversarial_condition: "even when EnvelopeKeyProvider.encrypt() returns
-      bytes identical to the input (which would indicate a broken no-op
-      implementation) — the service shall detect this and refuse the INSERT"
+      a no-op implementation that outputs garbage or an empty buffer — the
+      structural length check catches a broken provider before any INSERT;
+      note: AES-256-GCM output is structurally longer than input by exactly
+      nonce_length + tag_length (28 bytes), so an equality check against the
+      plaintext is structurally impossible and must not be used as the guard"
     test_type: unit
     component_under_test: directory
 

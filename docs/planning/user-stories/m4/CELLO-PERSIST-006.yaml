@@ -1,7 +1,7 @@
 # ─── Identity ───────────────────────────────────────────────
 id: CELLO-PERSIST-006
 domain: Persistence
-milestone: M4
+milestone: M5
 actor: DIR
 priority: P0
 components:

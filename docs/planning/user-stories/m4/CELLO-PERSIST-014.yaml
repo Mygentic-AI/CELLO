@@ -204,4 +204,6 @@ references:
   e2e_story: CELLO-PERSIST-E2E-001
   depends_on:
     - CELLO-PERSIST-001
+    - CELLO-PERSIST-002
+    - CELLO-PERSIST-003
     - CELLO-PERSIST-013

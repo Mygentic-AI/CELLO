@@ -26,7 +26,21 @@ behavior:
   - trigger: "When the relay accepts a submitted hash"
     action: "the relay shall return a signed ACK:
       relay_signature(SHA-256(hash_H || sequence_number || timestamp));
-      the client shall store the ACK in the ClientStore alongside the hash"
+      the relay signs using its own Ed25519 signing key managed by a
+      SigningKeyProvider instance in the relay process; the relay's public
+      key is registered with the directory at relay startup and is
+      retrievable by any client via the directory's relay registration
+      endpoint; the client shall store the ACK in the ClientStore alongside
+      the hash"
+
+  - trigger: "When a new relay receives a re-submitted hash with an ACK
+      from a previous relay"
+    action: "the new relay shall look up the previous relay's public key
+      from the directory using the relay ID embedded in the ACK; it shall
+      verify the ACK signature against that public key before accepting
+      the re-submission and issuing a new ACK; if the previous relay's
+      public key is not found in the directory, the new relay rejects the
+      re-submission with RELAY_PREDECESSOR_UNKNOWN"
 
   - trigger: "When relay connectivity is interrupted"
     action: "the client shall continue enqueuing hashes locally; the P2P
@@ -75,11 +89,14 @@ acceptance_criteria:
     component_under_test: client
 
   - id: AC-004
-    given: "A signed relay ACK is stored for hash H with sequence_number S"
+    given: "A signed relay ACK is stored for hash H with sequence_number S;
+      the ACK includes the signing relay's relayId"
     when: "the ACK signature is verified"
     then: "verify(relay_pubkey, SHA-256(H || S || timestamp), ACK.signature)
-      returns true — the ACK is a valid Ed25519 signature by the relay's
-      registered public key"
+      returns true — relay_pubkey is fetched from the directory using the
+      ACK's relayId; the ACK is a valid Ed25519 signature by the relay's
+      registered public key; the relayId in the ACK is what allows a new
+      relay to look up the predecessor's public key"
     test_type: unit
     component_under_test: client
 

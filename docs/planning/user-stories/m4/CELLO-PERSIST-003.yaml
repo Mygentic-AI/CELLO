@@ -25,12 +25,18 @@ behavior:
       DELETE policy exists for cello_service on any append-only table"
 
   - trigger: "When the cello_service role issues an INSERT on an append-only table"
-    action: "PostgreSQL shall permit the INSERT"
+    action: "PostgreSQL shall permit the INSERT — cello_service has an explicit
+      INSERT policy (FOR INSERT WITH CHECK (true)) and GRANT INSERT privilege;
+      cello_service also has an explicit SELECT policy (FOR SELECT USING (true))
+      and GRANT SELECT privilege so it can read its own data"
 
   - trigger: "When the cello_service role issues an UPDATE or DELETE on any
       append-only table"
-    action: "PostgreSQL shall reject the operation with a permission denied error
-      before any row is modified"
+    action: "PostgreSQL shall reject the operation with 'ERROR: permission denied
+      for table {name}' — UPDATE and DELETE are blocked by explicit REVOKE at
+      the privilege level (not by a missing RLS policy, which would return
+      UPDATE 0 silently rather than an error); both the REVOKE and the absence
+      of any UPDATE/DELETE RLS policy enforce the append-only guarantee in depth"
 
   - trigger: "When the postgres superuser role issues an UPDATE or DELETE"
     action: "the operation succeeds — RLS applies to cello_service only;
@@ -48,9 +54,11 @@ acceptance_criteria:
     given: "Flyway migrations have been applied to a local Postgres container"
     when: "the schema is inspected via information_schema"
     then: "every append-only table listed in the Persistence Layer Design
-      document exists, has relrowsecurity=true, and has exactly one policy
-      named insert_only with cmd='INSERT' for cello_service — verified by
-      querying pg_policies for each table"
+      document exists, has relrowsecurity=true, and has exactly two policies
+      for cello_service: insert_only (cmd='INSERT') and select_all (cmd='SELECT');
+      GRANT INSERT, SELECT on each table is present; no GRANT UPDATE or DELETE
+      exists for cello_service — verified by querying pg_policies and
+      information_schema.role_table_grants for each table"
     test_type: integration
     component_under_test: directory
 
@@ -63,22 +71,26 @@ acceptance_criteria:
 
   - id: AC-003
     given: "The cello_service role is connected to cello_dev and a row exists
-      in conversation_seals"
+      in conversation_seals; UPDATE privilege has been explicitly revoked from
+      cello_service"
     when: "cello_service attempts UPDATE conversation_seals SET root_hash='x'
       WHERE id={existing_id}"
-    then: "PostgreSQL returns ERROR: new row violates row-level security policy
-      or permission denied; the row is unchanged — verified by re-querying
-      the row after the attempt"
+    then: "PostgreSQL returns 'ERROR: permission denied for table conversation_seals';
+      the row is unchanged — verified by re-querying the row after the attempt;
+      a REVOKE-level error (not a silent UPDATE 0) is required so the failure
+      is unambiguous to application code"
     test_type: integration
     component_under_test: directory
 
   - id: AC-004
     given: "The cello_service role is connected to cello_dev and a row exists
-      in conversation_seals"
+      in conversation_seals; DELETE privilege has been explicitly revoked from
+      cello_service"
     when: "cello_service attempts DELETE FROM conversation_seals WHERE
       id={existing_id}"
-    then: "PostgreSQL rejects the operation; the row is still present —
-      verified by re-querying the row after the attempt"
+    then: "PostgreSQL returns 'ERROR: permission denied for table conversation_seals';
+      the row is still present — verified by re-querying the row after the
+      attempt; a REVOKE-level error (not a silent DELETE 0) is required"
     test_type: integration
     component_under_test: directory
 
@@ -93,11 +105,14 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-006
-    given: "The cello_service role has no SELECT policy defined on any table"
+    given: "The cello_service role has a SELECT policy (FOR SELECT USING (true))
+      and GRANT SELECT on all append-only tables"
     when: "cello_service attempts SELECT on an append-only table"
-    then: "the SELECT succeeds — RLS in PostgreSQL defaults to DENY for
-      commands without a matching policy, but SELECT is not restricted for
-      cello_service; this is intentional and verified"
+    then: "the SELECT succeeds and returns all rows visible to the policy —
+      verified by inserting a known row and confirming it is returned by a
+      subsequent SELECT; note: if the SELECT policy were absent, RLS would
+      return zero rows (not an error), which would break the application
+      silently; the explicit SELECT policy and GRANT are both required"
     test_type: integration
     component_under_test: directory
 
@@ -105,9 +120,11 @@ acceptance_criteria:
     given: "A migration file is reviewed before merge"
     when: "the migration introduces a new append-only table"
     then: "the migration file contains: ALTER TABLE {name} ENABLE ROW LEVEL
-      SECURITY; and CREATE POLICY insert_only ON {name} FOR INSERT TO
-      cello_service WITH CHECK (true); — verified by the CI migration lint
-      check which fails if a new table lacks these two statements"
+      SECURITY; CREATE POLICY insert_only ON {name} FOR INSERT TO cello_service
+      WITH CHECK (true); CREATE POLICY select_all ON {name} FOR SELECT TO
+      cello_service USING (true); GRANT INSERT, SELECT ON {name} TO cello_service;
+      — verified by the CI migration lint check which fails if a new table
+      lacks these four statements; GRANT UPDATE and GRANT DELETE must not appear"
     test_type: unit
     component_under_test: directory
 

@@ -322,20 +322,20 @@ references:
     - CELLO-PERSIST-003
     - CELLO-PERSIST-004
     - CELLO-PERSIST-005
-    - CELLO-PERSIST-006  # pgaudit must be active before E2E runs (SI-007)
     - CELLO-PERSIST-007
     - CELLO-PERSIST-009
+    - CELLO-PERSIST-010  # SigningKeyProvider required for leaf signature verification
     - CELLO-PERSIST-012
     - CELLO-PERSIST-013
     - CELLO-PERSIST-014
     - CELLO-PERSIST-015
   component_stories:
     - CELLO-PERSIST-001  # interfaces bootstrap
-    - CELLO-PERSIST-002  # docker + flyway
+    - CELLO-PERSIST-002  # docker + flyway (includes pgaudit container activation)
     - CELLO-PERSIST-003  # RLS schema
     - CELLO-PERSIST-004  # hash chain
     - CELLO-PERSIST-005  # KMS/EnvelopeKeyProvider
-    - CELLO-PERSIST-006  # pgaudit
+    - CELLO-PERSIST-006  # pgaudit+AuditLogShipper — M5 story; pgaudit activation is in PERSIST-002
     - CELLO-PERSIST-007  # MMR
     - CELLO-PERSIST-008  # analytics cron — P1; validated via standalone pnpm run analytics:run, not part of E2E scenario
     - CELLO-PERSIST-009  # SQLCipher
