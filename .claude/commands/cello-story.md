@@ -80,6 +80,43 @@ For each protocol step or component behavior the E2E story requires:
 - Does a method exist to store/produce this data? → Who calls it in the live flow? Name the caller explicitly.
 - Is a field described in the output shape? → Which AC describes how it gets populated, not just that it's present?
 
+## Observability ACs (mandatory from M4)
+
+Every story that touches M4+ code must include explicit observability acceptance criteria. Observability is not an implementation detail — it is a first-class AC like any other.
+
+**For each significant state transition in the story, the ACs must specify:**
+
+1. **Named log event** — the exact event name in `domain.noun.verb` format. "Something is logged" is not an AC. `session.started` is.
+2. **Required context fields** — the minimum fields the log event must carry. Example: `session.started` requires `{ sessionId, agentId, relayId, principalType }`.
+3. **Correlation ID** — for any async or multi-process flow, the AC must assert that a `correlationId` minted at flow initiation is present on every log event in that flow.
+4. **Error path coverage** — every error path in the story has a named error event with enough context to diagnose without a debugger. Example: `session.relay.assignment.failed` with `{ sessionId, reason, relayId }`.
+5. **Alert thresholds** — for any new failure mode introduced by this story, an AC specifies the CloudWatch alarm condition. Example: "a `session.relay.assignment.failed` rate > 5% over 5 minutes fires the relay-health alarm."
+
+**Event naming convention:** `domain.noun.verb` — e.g. `frost.dkg.round1.complete`, `session.seal.failed`, `relay.health.degraded`. Check the event taxonomy in [[2026-05-16_0753_development-pipeline-and-local-iteration]] before inventing new names. Add new names to the taxonomy rather than using ad-hoc strings.
+
+**The Logger interface:**
+```typescript
+interface Logger {
+  info(event: string, context: Record<string, unknown>): void
+  warn(event: string, context: Record<string, unknown>): void
+  error(event: string, error: Error, context: Record<string, unknown>): void
+}
+```
+
+Events go through the `Logger` interface, not `console.log`. The implementation is injected via the composition root — never imported directly.
+
+**What bad observability ACs look like:**
+- "Errors are logged" — no event name, no context fields
+- "The session start is observable" — too vague to verify
+- "Logs include the session ID" — event name still missing
+
+**What good observability ACs look like:**
+- "`session.started` is logged at INFO with `{ sessionId, agentId, relayId }` within the session establishment path"
+- "If relay assignment fails, `session.relay.assignment.failed` is logged at WARN with `{ sessionId, reason, availableRelayCount }`"
+- "All log events in the FROST DKG flow carry the same `correlationId` minted when the ceremony is initiated"
+
+---
+
 ## Step 3: Validate before declaring ready
 
 For each story, run through the Definition of Ready checklist from `user-story-format.md`:
@@ -91,6 +128,12 @@ For each story, run through the Definition of Ready checklist from `user-story-f
 - [ ] Every `test_type: integration` or `test_type: e2e` AC that describes a multi-party protocol asserts the transport path (stream opens, handler invocations, frame counts) — not only the final return value
 - [ ] No AC would pass if `NODE_ENV=test` routed through a stub shortcut instead of the real protocol
 - [ ] The story does NOT require implementing a new `makeFixture()` — test infrastructure comes from `packages/e2e-tests/src/session-fixture.ts`; if a new capability is needed, the fixture is extended with a new `opts` field (with a non-breaking default), not replaced or duplicated
+- [ ] **(M4+)** Every significant state transition has a named log event in `domain.noun.verb` format
+- [ ] **(M4+)** Every named log event specifies its required context fields
+- [ ] **(M4+)** Async/multi-process flows assert `correlationId` threading through all events in the flow
+- [ ] **(M4+)** Every error path has a named error event with sufficient diagnostic context
+- [ ] **(M4+)** New failure modes introduced by this story have a corresponding alarm threshold AC
+- [ ] **(M4+)** All event names appear in (or are proposed additions to) the event taxonomy in [[2026-05-16_0753_development-pipeline-and-local-iteration]]
 
 ## What the shared fixture already covers
 
