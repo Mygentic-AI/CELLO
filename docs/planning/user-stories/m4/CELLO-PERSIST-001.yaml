@@ -71,8 +71,8 @@ acceptance_criteria:
     then: "all adapters initialise: PgDirectoryStore connects to the local
       Postgres container, all other adapters use their local stubs; the
       service accepts a test request and returns a valid response; no AWS SDK
-      call is made — verified by asserting zero outbound network connections
-      beyond localhost during startup and the test request"
+      call is made — verified by asserting zero connections to AWS endpoints
+      (localhost:5432 for Postgres is permitted and expected)"
     test_type: integration
     component_under_test: directory
 

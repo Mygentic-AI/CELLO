@@ -22,9 +22,12 @@ behavior:
       cello_dev and is ready to accept connections within 10 seconds"
 
   - trigger: "When flyway migrate is run against any environment"
-    action: "Flyway applies all pending versioned migration files in
-      V{n}__{description}.sql order, records each in flyway_schema_history,
-      and exits with code 0 on success or code 1 on failure"
+    action: "Flyway applies all pending versioned migration files from
+      packages/directory/db/migrations/ in V{n}__{description}.sql order,
+      records each in flyway_schema_history, and exits with code 0 on success
+      or code 1 on failure; migration files live in the directory package
+      because they define the directory schema — packages/interfaces/ defines
+      the TypeScript interface, packages/directory/ owns the SQL"
 
   - trigger: "When the directory service starts"
     action: "the service runs flyway migrate before accepting any connections;
@@ -56,7 +59,8 @@ acceptance_criteria:
     given: "The local Postgres container is running with an empty cello_dev
       database"
     when: "flyway migrate is run with the local connection URL"
-    then: "all migration files in db/migrations/ are applied in version order;
+    then: "all migration files in packages/directory/db/migrations/ are applied
+      in version order;
       flyway_schema_history contains one row per migration file with status
       SUCCESS; the command exits with code 0"
     test_type: integration
