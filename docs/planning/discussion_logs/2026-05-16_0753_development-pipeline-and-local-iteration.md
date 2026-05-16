@@ -239,10 +239,44 @@ The SAM/CloudFormation full redeploy is for infrastructure changes. Code changes
 
 ---
 
+## Adapter Inventory
+
+Every external dependency gets an interface with two implementations: a local stub and a real production implementation. The interface is defined by what the consumer needs, not by what the external system can do.
+
+Interfaces needed before M4 stories are written go into `packages/interfaces/` immediately. Later interfaces are added just-in-time as their milestone approaches.
+
+| Interface | Real Implementation | Local Stub | Milestone |
+|-----------|-------------------|------------|-----------|
+| `TokenValidator` | Auth provider JWKS validation | Hardcoded dev token → fixed Principal | M4 |
+| `KeyProvider` | AWS KMS | In-process AES with dev key from env var | M4 |
+| `DirectoryStore` | RDS PostgreSQL | Local Postgres container | M4 |
+| `ClientStore` | SQLCipher | Local unencrypted SQLite | M4 |
+| `RelayWal` | Crash-recovery WAL | In-memory WAL | M4 |
+| `Logger` | CloudWatch structured JSON | stdout structured JSON (pino-pretty) | M4 |
+| `JobScheduler` | EventBridge Scheduler | Local cron or manual trigger | M4 (analytics cron) |
+| `MessagingChannel` — WhatsApp | Baileys persistent WebSocket | CLI stdin/stdout | M6 |
+| `MessagingChannel` — Telegram | Telegraf or Grammy | CLI stdin/stdout | M6 |
+| `MessagingChannel` — WeChat | WeChat Official Account API (deferred) | CLI stdin/stdout | Deferred |
+| `OtpDeliveryProvider` | Email via SES or similar | Prints OTP to console | M6 |
+| `SecurityAlertProvider` | Routes to operator's messaging channel | Logs locally | M6 |
+| `TrustSignalProofProvider` | Passport.js OAuth per provider | Hardcoded proof stub | M7 |
+| `TrustAuditorAgent` | Browser harness read-only agent | Hardcoded TrustSignalData stub | M7 |
+| `SearchIndex` | BM25 + vector search (OpenSearch or similar) | In-memory stub | M8 |
+| `AuditLogShipper` | pgaudit shipped to S3 | Local file sink | M5 |
+| `PaymentProvider` | Micropayment mechanism TBD | Stub | M13 |
+
+**Notes:**
+- `MessagingChannel` is a single interface with implementations per provider. The CLI adapter serves all three channels locally — it reads from stdin and writes to stdout, channel-agnostic.
+- `OtpDeliveryProvider` is separate from `MessagingChannel` because OTP delivery may use email rather than the messaging channel.
+- `WeChat` interface must be accommodated in `MessagingChannel` from the start even though the implementation is deferred — the interface cannot be designed around only two channels.
+- `PaymentProvider` interface design is deferred until M9 commerce design session.
+
+---
+
 ## Artifacts Required Before M4
 
-1. `packages/interfaces/` established with `Logger`, `TokenValidator`, `KeyProvider`, `MessagingChannel`
-2. Local and production implementations of each
+1. `packages/interfaces/` established with `Logger`, `TokenValidator`, `KeyProvider`, `MessagingChannel`, `DirectoryStore`, `ClientStore`, `RelayWal`, `JobScheduler`
+2. Local and production implementations for M4-required interfaces
 3. Docker Compose file with Postgres container
 4. Seed SQL file covering four baseline scenarios
 5. Event taxonomy seed (15-20 named events)
