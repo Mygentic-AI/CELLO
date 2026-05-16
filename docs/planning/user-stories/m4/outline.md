@@ -211,6 +211,7 @@ All of the following live in `packages/interfaces/`. Local stubs live in `packag
 | `EnvelopeKeyProvider` | In-process AES with dev key from env var | AWS KMS |
 | `Logger` | stdout structured JSON (pino-pretty) | CloudWatch structured JSON |
 | `JobScheduler` | Local cron or manual trigger | EventBridge Scheduler |
+| `CloudStorageProvider` | Local file sink (writes to configured local directory) | S3 (M5) |
 
 **Naming note:** `EnvelopeKeyProvider` is the KMS interface for encrypting K_server_X shares at rest. It is distinct from `SigningKeyProvider` (the client-side interface for Ed25519 signing operations, introduced in M0). These must not share a name.
 
@@ -231,7 +232,11 @@ The local Postgres container is brought to the correct schema state by running t
 
 ### Migration Tool
 
-**Decision: Flyway.** SQL-first, versioned files (`V1__description.sql`) tracked in `flyway_schema_history`. RLS policies and pgaudit triggers are written as plain SQL with no DSL translation. `node-flywaydb` npm package integrates into the pnpm workspace. CI/CD: `flyway migrate` runs in CodeBuild before the new ECS image is deployed. Free community edition covers all required features.
+Two tools — one per database engine:
+
+**Directory (PostgreSQL): Flyway Community Edition.** SQL-first, versioned files (`V{n}__{description}.sql`) tracked in `flyway_schema_history`. RLS policies and pgaudit triggers are written as plain SQL with no DSL translation. `node-flywaydb` npm package integrates into the pnpm workspace. CI/CD: `flyway migrate` runs in CodeBuild before the new ECS image is deployed. Free community edition covers all required features.
+
+**Client (SQLite/SQLCipher): lightweight custom migration runner.** Flyway Community does not support SQLite. The runner reads versioned `.sql` files from `packages/client/db/migrations/` in `V{n}__{description}.sql` order, applies each in a transaction, and tracks applied versions in a `schema_migrations` table (`version TEXT PRIMARY KEY, applied_at TIMESTAMP`). No external tooling dependency.
 
 ### Seed Data
 
