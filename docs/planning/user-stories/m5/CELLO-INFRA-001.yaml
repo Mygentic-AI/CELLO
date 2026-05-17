@@ -1,0 +1,296 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-001
+domain: Node Operations
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+  - relay
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO infrastructure operator,
+  I want all M5 AWS resources defined in CloudFormation IaC templates
+  parameterised by environment and region,
+  so that the three-node production topology (us-east-1, eu-central-1,
+  ap-northeast-1) is instantiated by running the same templates with
+  different parameter sets — no manual console steps, no per-region
+  copy-paste.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When an operator deploys the M5 IaC templates with
+      Environment=dev and Region=us-east-1"
+    action: "the existing M4 dev resources (VPC, RDS, ECS directory
+      service, KMS key, Secrets Manager secrets, S3 audit bucket) are
+      extended in-place; no existing resource is replaced; new resources
+      (VPC Interface Endpoints, relay manifest S3 bucket, relay Secrets
+      Manager entry, cello-ecs-relay stack) are added to the us-east-1
+      environment"
+
+  - trigger: "When an operator deploys the M5 IaC templates with
+      Environment=production and Region=eu-central-1 (or ap-northeast-1)"
+    action: "a complete CELLO node is provisioned in that region: VPC with
+      private subnets, RDS PostgreSQL 18.4, ECS Fargate cluster for
+      directory and relay services, KMS key, Secrets Manager secrets,
+      S3 audit and manifest buckets, VPC Interface Endpoints — all
+      resource names derived from Environment and Region parameters"
+
+  - trigger: "When all three regional stacks are deployed"
+    action: "three VPC Peering connections are established
+      (us-east-1↔eu-central-1, eu-central-1↔ap-northeast-1,
+      us-east-1↔ap-northeast-1); RDS security groups in each region
+      accept port 5432 inbound from the peer VPC CIDR ranges; directory
+      ECS task security groups accept checkpoint traffic from peer VPC
+      CIDR ranges"
+
+  - trigger: "When CELLO's CI/CD infrastructure is deployed in us-east-1"
+    action: "a github-webhook-receiver Lambda, cello-pipeline-filter
+      Lambda, EventBridge github-events bus, and per-package CodePipelines
+      are created in us-east-1 — completely independent of the cello-agent
+      CI/CD infrastructure in eu-west-1; no shared IAM roles, no shared
+      S3 buckets, no shared Lambda functions between the two projects"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The M5 IaC templates are applied with Environment=production
+      and Region=eu-central-1"
+    when: "the CloudFormation stacks complete"
+    then: "the following stacks exist in eu-central-1 with status
+      CREATE_COMPLETE or UPDATE_COMPLETE: cello-vpc-production,
+      cello-rds-production, cello-ecs-directory-production,
+      cello-ecs-relay-production, cello-secrets-production,
+      cello-kms-production, cello-s3-production — verified by running
+      aws cloudformation describe-stacks from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "The three regional stacks are all deployed"
+    when: "VPC Peering connections are inspected"
+    then: "three VPC Peering connections exist with status active:
+      us-east-1↔eu-central-1, eu-central-1↔ap-northeast-1,
+      us-east-1↔ap-northeast-1; route tables in each VPC's private
+      subnets have routes for peer VPC CIDR ranges pointing at the
+      peering connection — verified with aws ec2 describe-vpc-peering-connections
+      and aws ec2 describe-route-tables from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A regional stack is deployed with VPC Interface Endpoints
+      configured"
+    when: "the endpoint list is inspected"
+    then: "the following VPC Interface Endpoints exist in the VPC:
+      com.amazonaws.{region}.ecr.api, com.amazonaws.{region}.ecr.dkr,
+      com.amazonaws.{region}.secretsmanager,
+      com.amazonaws.{region}.kms,
+      com.amazonaws.{region}.logs;
+      an S3 Gateway Endpoint also exists for com.amazonaws.{region}.s3;
+      no NAT Gateway exists in any subnet — verified by asserting
+      aws ec2 describe-nat-gateways returns an empty list for the VPC"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "A regional stack is deployed"
+    when: "the Secrets Manager secrets are inspected"
+    then: "the following secrets exist under cello/{env}/:
+      cello/{env}/directory/rds-credentials,
+      cello/{env}/directory/node-private-key,
+      cello/{env}/directory/kms-key-arn,
+      cello/{env}/relay/node-private-key;
+      secret values are not present in any CloudFormation template or
+      parameter file — templates create the secret resource with an
+      empty placeholder value; values are populated separately by the
+      operator — verified by asserting the template files contain no
+      SecretString with actual key material"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A regional stack is deployed"
+    when: "the ECS directory task role IAM policy is inspected"
+    then: "the task role has exactly: kms:Decrypt and kms:DescribeKey
+      on the regional KMS key ARN; secretsmanager:GetSecretValue on
+      cello/{env}/directory/*; s3:PutObject on cello-audit-logs-{env}/*;
+      no wildcard resources; no kms:Encrypt; no s3:GetObject,
+      s3:DeleteObject, or s3:ListBucket — verified by calling
+      aws iam get-role-policy from a separate terminal and asserting
+      each permission and resource"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "A regional stack is deployed"
+    when: "the ECS relay task role IAM policy is inspected"
+    then: "the relay task role has exactly:
+      secretsmanager:GetSecretValue on cello/{env}/relay/node-private-key;
+      no KMS permissions; no S3 permissions; no directory secret access —
+      verified by calling aws iam get-role-policy from a separate terminal"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-007
+    given: "A regional stack is deployed"
+    when: "the S3 buckets are inspected"
+    then: "the following buckets exist: cello-audit-logs-{env}-{region}
+      and cello-relay-manifest-{env}-{region}; the audit bucket policy
+      allows s3:PutObject from the directory ECS task role only — no
+      s3:GetObject, s3:DeleteObject, s3:ListBucket; the manifest bucket
+      policy allows s3:GetObject from the directory and relay ECS task
+      roles; versioning is enabled on the manifest bucket — verified
+      by calling aws s3api get-bucket-policy and get-bucket-versioning
+      from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "The CELLO CI/CD infrastructure is deployed in us-east-1"
+    when: "the Lambda functions and pipelines are inspected"
+    then: "github-webhook-receiver and cello-pipeline-filter Lambda
+      functions exist in us-east-1; 8 CodePipelines exist in us-east-1
+      (one per @cello/* package); the S3 artifacts bucket is named
+      cello-codepipeline-artifacts-us-east-1; none of these resources
+      exist in eu-west-1 under the CELLO project — verified by checking
+      both regions from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-009
+    given: "The IaC templates are applied with two different Environment
+      parameter values (dev and production)"
+    when: "all resource names are inspected across both environments"
+    then: "no resource name in the production environment matches any
+      resource name in the dev environment; IAM resource conditions use
+      cello/dev/* vs cello/production/* path prefixes such that the
+      dev ECS task role cannot read production secrets — verified by
+      attempting GetSecretValue on a production secret ARN using dev
+      task role credentials and asserting AccessDenied"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "No secret values shall appear in any CloudFormation
+      template, parameter file, or IaC script committed to the repository"
+    adversarial_condition: "even when bootstrapping a new environment
+      for the first time — templates create secret resources with empty
+      placeholder values; the operator populates values separately via
+      AWS CLI or console after stack creation"
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "The production KMS key policy shall never include dev
+      IAM credentials"
+    adversarial_condition: "even when the same AWS account hosts both
+      dev and production environments — key policies are separate
+      CloudFormation resources with distinct principal lists"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "CELLO's CI/CD infrastructure in us-east-1 shall share
+      no IAM roles, S3 buckets, Lambda functions, or EventBridge buses
+      with cello-agent's CI/CD infrastructure in eu-west-1"
+    adversarial_condition: "even when it would be operationally
+      convenient to reuse an existing role — a change to shared
+      infrastructure for CELLO could silently break cello-agent"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-004
+    statement: "VPC Peering connections shall carry only port 5432
+      (RDS replication) and the directory checkpoint protocol port
+      between peer VPCs; all other cross-VPC traffic shall be blocked
+      by security group rules"
+    adversarial_condition: "even when a developer adds a permissive
+      security group rule for debugging — the IaC security group
+      definitions are the authoritative rules and must not contain
+      wildcard port ranges for peer CIDR ranges"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While a CloudFormation stack update fails mid-way
+      through a regional deployment"
+    fallback: "CloudFormation rolls back to the previous stack state
+      automatically; infra.stack.rollback is logged; the operator
+      investigates the CloudFormation events before retrying; no
+      partial state is left in AWS — CloudFormation's atomic update
+      model guarantees this"
+    test_type: unit
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While a VPC Peering connection request is pending
+      acceptance in the peer region"
+    fallback: "RDS replication and checkpoint cross-signing cannot
+      proceed until the peering connection is active; the operator
+      must accept the peering connection in the peer region's console
+      or via IaC; infra.peering.pending is logged at WARN with
+      { peeringConnectionId, requesterRegion, accepterRegion }"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: infra.stack.deployed
+      level: info
+      trigger: "a CloudFormation stack reaches CREATE_COMPLETE or
+        UPDATE_COMPLETE"
+      context_fields: [stackName, environment, region, durationMs]
+      correlationId: false
+
+    - name: infra.peering.active
+      level: info
+      trigger: "a VPC Peering connection reaches the active state"
+      context_fields: [peeringConnectionId, requesterRegion, accepterRegion]
+      correlationId: false
+
+  error_events:
+    - name: infra.stack.rollback
+      level: error
+      trigger: "a CloudFormation stack update rolls back"
+      context_fields: [stackName, environment, region, reason]
+
+    - name: infra.peering.pending
+      level: warn
+      trigger: "a VPC Peering connection is awaiting acceptance"
+      context_fields: [peeringConnectionId, requesterRegion, accepterRegion]
+
+  alarms:
+    - condition: "infra.stack.rollback fires at any time"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on: []
+  blocks:
+    - CELLO-INFRA-002
+    - CELLO-INFRA-003
+    - CELLO-INFRA-004
+    - CELLO-INFRA-005
+    - CELLO-INFRA-006
+    - CELLO-INFRA-007
+    - CELLO-INFRA-008
+    - CELLO-INFRA-009
+    - CELLO-INFRA-010
+    - CELLO-INFRA-011
+    - CELLO-INFRA-012
+    - CELLO-INFRA-013
+    - CELLO-INFRA-014
+    - CELLO-INFRA-015
