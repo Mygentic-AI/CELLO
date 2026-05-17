@@ -1,0 +1,211 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-011
+domain: Node Operations
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+  - relay
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO infrastructure operator,
+  I want CloudWatch alarms and dashboards covering all three regions
+  with consistent alarm routing to ops-critical and ops-warning SNS
+  topics,
+  so that any production failure surfaces within 5 minutes and the
+  on-call operator has a single dashboard showing the health of all
+  nodes simultaneously.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When an ops-critical alarm condition is met in any
+      region"
+    action: "the CloudWatch alarm transitions to ALARM state and
+      publishes to the cello-ops-critical SNS topic in that region;
+      the SNS topic notifies the on-call operator via the configured
+      subscription (email, PagerDuty, or equivalent); the alarm
+      includes the region, service name, and metric that triggered
+      it in the alarm description"
+
+  - trigger: "When an ops-warning alarm condition is met in any
+      region"
+    action: "the CloudWatch alarm transitions to ALARM state and
+      publishes to the cello-ops-warning SNS topic in that region;
+      the notification goes to a lower-priority channel than
+      ops-critical; the operator investigates at next opportunity"
+
+  - trigger: "When an operator opens the CELLO operations dashboard"
+    action: "the dashboard shows per-region panels for directory
+      service health, relay pool health, RDS CPU and storage,
+      ECS task count, checkpoint confirmation rate, and error rate;
+      all three regions (us-east-1, eu-central-1, ap-northeast-1)
+      are visible on a single dashboard without switching views"
+
+  - trigger: "When a new M5 alarm condition is defined in a
+      component story"
+    action: "the corresponding CloudWatch alarm and SNS routing
+      are provisioned by the cello-cloudwatch CloudFormation stack;
+      all alarm definitions are in IaC — no alarm is created via
+      the console without a corresponding IaC definition"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The cello-cloudwatch CloudFormation stack is deployed
+      in all three regions"
+    when: "the alarm list is inspected in each region"
+    then: "the following alarms exist in each region with state
+      OK or INSUFFICIENT_DATA on a healthy system:
+      cello-directory-ecs-task-count (threshold: runningCount < 1),
+      cello-relay-ecs-task-count (threshold: runningCount < 1),
+      cello-rds-cpu (threshold: > 80% for 5 minutes),
+      cello-rds-storage (threshold: < 10GB free),
+      cello-checkpoint-gap (threshold: no confirmed checkpoint
+      in 30 minutes),
+      cello-replication-slot-inactive,
+      cello-replication-chain-hash-mismatch,
+      cello-relay-pool-unavailable,
+      cello-relay-manifest-invalid,
+      cello-audit-shipper-buffer-full —
+      verified by calling aws cloudwatch describe-alarms from
+      a separate terminal in each region"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "The ECS directory service runningCount drops to 0
+      in us-east-1"
+    when: "5 minutes elapse"
+    then: "the cello-directory-ecs-task-count alarm transitions
+      to ALARM state; a notification is published to the
+      cello-ops-critical SNS topic in us-east-1; the notification
+      includes the region and alarm name — verified by checking
+      CloudWatch alarm state and SNS delivery logs from a separate
+      terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "No federation.checkpoint.confirmed event has been
+      logged for 30 minutes"
+    when: "the cello-checkpoint-gap alarm is evaluated"
+    then: "the alarm transitions to ALARM state and publishes to
+      cello-ops-critical; the alarm description includes the last
+      confirmed checkpoint time — verified by suppressing checkpoint
+      rounds for 31 minutes and checking alarm state from a
+      separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "The CELLO operations dashboard is deployed"
+    when: "an operator opens it in the AWS console"
+    then: "the dashboard shows panels for all three regions in
+      a single view; each region panel includes: ECS directory
+      task count, ECS relay task count, RDS CPU utilisation,
+      checkpoint confirmation rate (confirmations per hour),
+      error rate (5xx responses per minute), replication lag;
+      no region requires a separate dashboard or console navigation
+      to view — verified by inspecting the dashboard definition
+      in the CloudFormation template"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-005
+    given: "The cello-cloudwatch CloudFormation stack is deployed"
+    when: "the SNS topics are inspected"
+    then: "cello-ops-critical and cello-ops-warning SNS topics
+      exist in each of the three regions; each topic has at least
+      one subscription configured (email or protocol endpoint) —
+      verified by calling aws sns list-topics and
+      aws sns list-subscriptions-by-topic from a separate terminal
+      in each region"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "RDS storage free space drops below 10GB in
+      eu-central-1"
+    when: "the cello-rds-storage alarm evaluates"
+    then: "the alarm transitions to ALARM state in eu-central-1
+      and publishes to the eu-central-1 cello-ops-warning topic —
+      verified by calling aws cloudwatch set-alarm-state to force
+      the alarm into ALARM and checking SNS delivery from a
+      separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "All CloudWatch alarms are defined in the
+      cello-cloudwatch CloudFormation template"
+    when: "the AWS console CloudWatch alarm list is compared
+      to the IaC template"
+    then: "every alarm in the console has a corresponding
+      resource in the CloudFormation template; no alarm exists
+      that was created outside IaC — verified by running
+      aws cloudformation list-stack-resources and comparing
+      to aws cloudwatch describe-alarms from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "All ops-critical alarm conditions defined across
+      all M5 component stories shall have a corresponding
+      CloudWatch alarm in IaC — no alarm condition shall exist
+      only in story text without a deployed alarm"
+    adversarial_condition: "even when adding a new alarm condition
+      in a story late in the milestone — the cello-cloudwatch
+      stack is updated before the milestone closes"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While an SNS topic subscription is misconfigured
+      and notifications are not delivered"
+    fallback: "the CloudWatch alarm still transitions to ALARM
+      state and is visible in the console; the missed notification
+      is a delivery failure, not an alarm failure; the operator
+      must verify SNS subscriptions are active as part of the
+      M5 deployment checklist"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: infra.alarm.state_change
+      level: info
+      trigger: "a CloudWatch alarm transitions between OK,
+        ALARM, and INSUFFICIENT_DATA states"
+      context_fields: [alarmName, region, previousState,
+        currentState, reason]
+      correlationId: false
+
+  error_events:
+    - name: infra.alarm.sns_delivery_failed
+      level: warn
+      trigger: "SNS fails to deliver an alarm notification"
+      context_fields: [alarmName, region, topicArn, reason]
+
+  alarms:
+    - condition: "any cello-ops-critical alarm remains in ALARM
+        state for more than 30 minutes without acknowledgement"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on:
+    - CELLO-INFRA-004
+  blocks: []
