@@ -1,0 +1,212 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-014
+domain: Persistence
+milestone: M5
+actor: CLIENT
+priority: P1
+components:
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want a production S3CloudStorageProvider that uploads encrypted
+  database backups to an operator-configured S3 bucket,
+  so that the local SQLCipher database can be recovered after device
+  loss without the cloud provider ever seeing plaintext.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a backup is triggered with CELLO_ENV=dev or
+      production and an S3 destination is configured"
+    action: "the client uses S3CloudStorageProvider to upload the
+      AES-256-GCM encrypted database ciphertext to the configured
+      S3 bucket under the key prefix backups/{agentId}/{timestamp}.enc;
+      the upload uses the ECS task role's IAM credentials (instance
+      profile) or the operator-supplied AWS credentials; the upload
+      completes before backup metadata is written to the local store"
+
+  - trigger: "When a restore is triggered with an S3 source URL"
+    action: "the S3CloudStorageProvider downloads the ciphertext from
+      the configured S3 bucket; the client verifies the SHA-256
+      checksum against the stored metadata; if verification passes,
+      the client decrypts and writes to a temporary path, then
+      atomically replaces the live database; if verification fails,
+      client.backup.restore.failed is logged at ERROR with
+      { reason: 'checksum_mismatch', agentId }"
+
+  - trigger: "When no S3 destination is configured
+      (BACKUP_S3_BUCKET is unset)"
+    action: "backup operations are skipped; client.backup.not.configured
+      is logged at WARN with { agentId }; no error is raised and
+      the local database is unaffected"
+
+  - trigger: "When CELLO_ENV=local"
+    action: "LocalCloudStorageProvider is used (M4 implementation);
+      S3CloudStorageProvider is not instantiated; no AWS credentials
+      or network access are required for backup operations in
+      local development"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The CloudStorageProvider interface is defined in
+      packages/interfaces/ (M4 PERSIST-011)"
+    when: "S3CloudStorageProvider is inspected"
+    then: "it implements CloudStorageProvider with upload(key,
+      data) and download(key) methods; no S3-specific types
+      appear in the CloudStorageProvider interface signature —
+      verified by reading packages/interfaces/src/cloud-storage-provider.ts
+      and packages/client/src/s3-cloud-storage-provider.ts"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-002
+    given: "An S3 bucket is configured and the client performs
+      a backup"
+    when: "the upload completes"
+    then: "an object exists in the configured bucket under
+      backups/{agentId}/{timestamp}.enc; the object's content
+      is not equal to the plaintext SQLCipher database file
+      (it is AES-256-GCM ciphertext); the backup metadata in
+      the local store contains the S3 object key, timestamp,
+      and SHA-256 checksum of the uploaded ciphertext —
+      verified by calling s3:GetObject and comparing object
+      size and content from a process separate from the client"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-003
+    given: "A backup has been uploaded to S3 and the local
+      database file is deleted; the identity_key is available
+      via the SigningKeyProvider"
+    when: "restore is triggered with the S3 source URL"
+    then: "the S3CloudStorageProvider downloads the ciphertext;
+      the SHA-256 checksum matches the stored metadata value;
+      the client decrypts and writes to a temporary file,
+      verifies it opens with db_key, then atomically replaces
+      the live database path; all previously written records
+      are present after restore — verified by reading each
+      record from the restored database in a new client process"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-004
+    given: "The S3 upload fails (simulated by using an invalid
+      bucket name)"
+    when: "the backup is triggered"
+    then: "client.backup.upload.failed is logged at ERROR with
+      { reason, agentId }; no partial backup object remains in
+      S3; the local database is unaffected — verified by
+      asserting the S3 bucket contains no new objects after
+      the failed upload from a separate process"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-005
+    given: "BACKUP_S3_BUCKET is unset"
+    when: "backup is triggered"
+    then: "client.backup.not.configured is logged at WARN with
+      { agentId }; the operation exits without error; no S3 API
+      call is made — verified by asserting no AWS API calls
+      occur during the backup attempt"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-006
+    given: "Two consecutive backups of the same database file
+      are performed"
+    when: "the two ciphertext objects in S3 are compared"
+    then: "the two objects have different content — each backup
+      uses a fresh random AES-256-GCM nonce; nonce reuse is
+      not possible across backups — verified by downloading
+      both objects and asserting their bytes differ"
+    test_type: unit
+    component_under_test: client
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The backup_key shall never be uploaded to S3,
+      stored in backup metadata, or appear in any log event"
+    adversarial_condition: "even when client.backup.upload.failed
+      is logged — the error handler includes only { reason,
+      agentId }; no key material appears in any log output"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: "A restore operation shall never overwrite the
+      live database until the downloaded ciphertext passes
+      SHA-256 checksum verification"
+    adversarial_condition: "even when the S3 object is truncated
+      or corrupted in transit — the client writes to a temporary
+      path, verifies the checksum, and only atomically replaces
+      the live database on success; a failed verification discards
+      the temporary file"
+    test_type: unit
+    component_under_test: client
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the S3 upload fails (network error, auth
+      failure, quota exceeded)"
+    fallback: "client.backup.upload.failed is logged at ERROR
+      with { reason, agentId }; the local database is unaffected;
+      the next triggered backup retries the full upload — no
+      partial uploads are left as the primary backup"
+    test_type: unit
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: client.backup.completed
+      level: info
+      trigger: "a backup upload to S3 completes successfully"
+      context_fields: [agentId, destinationType, ciphertextBytes,
+        durationMs]
+      correlationId: false
+
+    - name: client.backup.restore.completed
+      level: info
+      trigger: "a restore from S3 completes successfully"
+      context_fields: [agentId, sourceUrl, durationMs]
+      correlationId: false
+
+  error_events:
+    - name: client.backup.upload.failed
+      level: error
+      trigger: "S3 upload fails"
+      context_fields: [reason, agentId]
+
+    - name: client.backup.restore.failed
+      level: error
+      trigger: "restore fails (checksum mismatch, decrypt error,
+        download failure)"
+      context_fields: [reason, agentId]
+
+    - name: client.backup.not.configured
+      level: warn
+      trigger: "backup triggered but no S3 destination configured"
+      context_fields: [agentId]
+
+  alarms:
+    - condition: "client.backup.upload.failed fires 3 times
+        consecutively"
+      fires_to: ops-warning
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "MCP Tool Surface / Session Lifecycle"
+  discussion_logs:
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on:
+    - CELLO-PERSIST-009
+    - CELLO-PERSIST-010
+    - CELLO-PERSIST-011
+    - CELLO-INFRA-001
+  blocks: []
