@@ -28,7 +28,12 @@ Derive the milestone from the ID prefix (PERSIST → m4, CONNPOL → m3, etc.).
 
 - **Working directory:** `/Users/andrep/Documents/code/trustless-cello`
 
-- **Do not commit until the built-in review passes.** The review is Step 6 of this agent.
+- **You must work in a git worktree.** Never implement directly on the main branch. Before touching any file, create an isolated worktree:
+  ```bash
+  git worktree add .claude/worktrees/STORY-ID -b STORY-ID
+  cd .claude/worktrees/STORY-ID
+  ```
+  All reads, writes, tests, and commits happen inside the worktree. When done, the worktree branch is ready to be merged or pushed. This is mandatory — it keeps parallel story agents from stomping each other's changes.
 
 ---
 
