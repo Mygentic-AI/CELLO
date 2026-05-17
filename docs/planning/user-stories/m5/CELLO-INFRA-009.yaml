@@ -1,0 +1,290 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-009
+domain: Node Operations
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+  - relay
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Directory Node,
+  I want to manage a signed relay pool manifest with continuous health
+  checks and latency-based session assignment,
+  so that agents are always assigned to a verified, reachable relay
+  and degraded relays are automatically excluded from new sessions.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a directory node starts"
+    action: "the directory reads the relay pool manifest from the
+      S3 bucket cello-relay-manifest-{env}-{region}; it verifies
+      the Ed25519 signature on the manifest using the registered
+      public key of the node_id named in the manifest's signer
+      field; if verification fails, the directory logs
+      relay.manifest.invalid at ERROR with { reason, signerNodeId }
+      and halts — it does not accept session assignments with an
+      unverified manifest"
+
+  - trigger: "When the relay pool manifest is loaded and verified"
+    action: "the directory begins pinging each relay in the manifest
+      on a 30-second interval; each ping is a lightweight HTTP GET
+      to the relay's health check endpoint; the relay responds with
+      HTTP 200 and { relayId, status: 'ok' }; the directory records
+      the relay's consecutive failure count and last known latency"
+
+  - trigger: "When a relay fails 3 consecutive health check pings"
+    action: "the directory marks the relay as unavailable in its
+      in-memory relay pool state; relay.health.check.failed is logged
+      at WARN with { relayId, consecutiveFailures: 3, reason };
+      the relay is excluded from session assignment until it recovers"
+
+  - trigger: "When a relay that was unavailable passes 3 consecutive
+      health check pings"
+    action: "the directory marks the relay as available again;
+      relay.pool.recovered is logged at INFO with { relayId,
+      downtimeDurationMs }; the relay becomes eligible for new
+      session assignments"
+
+  - trigger: "When a client requests session establishment and
+      provides its RTT measurements to known relays"
+    action: "the directory assigns the session to the available relay
+      with the lowest RTT as reported by the client; if the client
+      provides no RTT measurements, the directory assigns the relay
+      with the lowest consecutive failure count; if all relays are
+      unavailable, the directory returns RELAY_UNAVAILABLE and the
+      client retries on a backoff schedule"
+
+  - trigger: "When the relay pool manifest is updated (new relay
+      added or removed)"
+    action: "the operator uploads a new signed manifest to S3;
+      the directory picks up the new manifest on its next startup
+      or on an explicit reload trigger; the manifest version field
+      increments monotonically; a manifest with a lower version than
+      the currently loaded manifest is rejected"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A relay pool manifest is stored in S3 signed by the
+      directory node with the lowest node_id using its
+      node-private-key"
+    when: "a directory node starts and loads the manifest"
+    then: "the directory verifies the Ed25519 signature against
+      the signing node's registered public key; relay.manifest.loaded
+      is logged at INFO with { signerNodeId, relayCount,
+      manifestVersion }; health check pings begin within 30 seconds
+      of startup — verified by inspecting the directory CloudWatch
+      logs from a separate process"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "A relay pool manifest with a corrupted signature is
+      stored in S3"
+    when: "a directory node starts and loads the manifest"
+    then: "the directory logs relay.manifest.invalid at ERROR with
+      { reason: 'signature_verification_failed', signerNodeId };
+      the process exits non-zero; no session assignments are accepted —
+      verified by providing a tampered manifest and asserting the
+      directory ECS task fails its health check"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A relay node is running and healthy"
+    when: "30 seconds elapse"
+    then: "the directory has sent at least one health check ping
+      to the relay's health check endpoint; relay.health.check.passed
+      is logged at INFO with { relayId, latencyMs }; the relay's
+      consecutive failure count is 0 — verified by inspecting
+      directory logs from a separate monitoring process"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "A relay node's process is killed"
+    when: "3 consecutive health check intervals elapse (≥90 seconds)"
+    then: "relay.health.check.failed is logged at WARN with
+      { relayId, consecutiveFailures: 3, reason }; the relay is
+      marked unavailable in the directory's pool state; a new
+      session establishment request returns an assignment that
+      does not include the failed relay — verified by attempting
+      session establishment from a client process after the relay
+      is marked unavailable"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A relay that was marked unavailable restarts and passes
+      its health check"
+    when: "3 consecutive health check pings succeed"
+    then: "relay.pool.recovered is logged at INFO with { relayId,
+      downtimeDurationMs }; the relay is marked available; the next
+      session establishment request may assign the recovered relay —
+      verified by confirming the relay appears in session assignments
+      from a client process after recovery"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-006
+    given: "All relays in the pool are marked unavailable"
+    when: "a client requests session establishment"
+    then: "the directory returns RELAY_UNAVAILABLE; relay.pool.unavailable
+      is logged at ERROR with { totalRelays, availableCount: 0 };
+      the ops-critical alarm fires — verified from a client process
+      separate from the directory"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "A client reports RTT measurements of 15ms to relay-A
+      and 80ms to relay-B; both relays are available"
+    when: "the directory assigns a relay for the session"
+    then: "relay-A is assigned (lowest RTT); the assignment is
+      returned to the client in the session establishment response —
+      verified by the client process asserting the assigned relayId
+      matches relay-A's relayId"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-008
+    given: "A manifest with version=2 is loaded; the operator
+      uploads a manifest with version=1 to S3"
+    when: "the directory processes a reload trigger"
+    then: "the directory rejects the manifest with
+      relay.manifest.version.stale logged at WARN with
+      { currentVersion: 2, receivedVersion: 1 }; the existing
+      manifest (version=2) remains active"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The relay pool manifest shall never be accepted
+      without a verified Ed25519 signature from the lowest node_id
+      directory node's registered public key"
+    adversarial_condition: "even when the manifest contents are
+      otherwise valid and the S3 object is present — an invalid
+      or missing signature causes the directory to halt rather
+      than fall back to an unverified manifest"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "A relay shall only be assigned to a session if
+      it is present in the current verified manifest AND passes
+      health checks — being registered in relay_registrations
+      alone is not sufficient for session assignment"
+    adversarial_condition: "even when a relay has a valid
+      registered public key in the directory — it must also
+      appear in the signed manifest and be currently available
+      to receive new sessions"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "The manifest version shall never decrease —
+      a manifest with a lower version than the currently loaded
+      manifest is rejected"
+    adversarial_condition: "even when an operator accidentally
+      uploads an older manifest version — the directory detects
+      the rollback attempt and retains the higher-version manifest"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While S3 is temporarily unavailable at directory
+      startup and the manifest cannot be loaded"
+    fallback: "the directory retries the S3 read on a backoff
+      schedule; relay.manifest.load.failed is logged at ERROR
+      with { reason, attempt }; the directory does not start
+      accepting session assignments until the manifest is
+      successfully loaded and verified"
+    test_type: integration
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While all relays are unavailable"
+    fallback: "the directory returns RELAY_UNAVAILABLE on all
+      session establishment requests; relay.pool.unavailable
+      is logged at ERROR; the ops-critical alarm fires; health
+      check pings continue on the 30-second interval so the
+      directory detects relay recovery automatically"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: relay.manifest.loaded
+      level: info
+      trigger: "directory successfully loads and verifies the
+        relay pool manifest at startup"
+      context_fields: [signerNodeId, relayCount, manifestVersion]
+      correlationId: false
+
+    - name: relay.health.check.passed
+      level: info
+      trigger: "a relay passes a health check ping"
+      context_fields: [relayId, latencyMs]
+      correlationId: false
+
+    - name: relay.pool.recovered
+      level: info
+      trigger: "a previously unavailable relay passes 3 consecutive
+        health checks"
+      context_fields: [relayId, downtimeDurationMs]
+      correlationId: false
+
+  error_events:
+    - name: relay.manifest.invalid
+      level: error
+      trigger: "manifest signature verification fails at startup"
+      context_fields: [reason, signerNodeId]
+
+    - name: relay.manifest.load.failed
+      level: error
+      trigger: "directory cannot read manifest from S3 at startup"
+      context_fields: [reason, attempt]
+
+    - name: relay.manifest.version.stale
+      level: warn
+      trigger: "incoming manifest version is lower than current"
+      context_fields: [currentVersion, receivedVersion]
+
+    - name: relay.health.check.failed
+      level: warn
+      trigger: "a relay fails a health check ping"
+      context_fields: [relayId, consecutiveFailures, reason]
+
+    - name: relay.pool.unavailable
+      level: error
+      trigger: "all relays in the pool are marked unavailable"
+      context_fields: [totalRelays, availableCount]
+
+  alarms:
+    - condition: "relay.manifest.invalid fires at any time"
+      fires_to: ops-critical
+    - condition: "relay.pool.unavailable fires at any time"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations / Session Lifecycle"
+  discussion_logs:
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on:
+    - CELLO-INFRA-004
+    - CELLO-INFRA-005
+    - CELLO-INFRA-006
+  blocks:
+    - CELLO-INFRA-E2E-001
