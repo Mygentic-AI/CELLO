@@ -410,7 +410,6 @@ describe("PERSIST-012 AC-005 — relay failover with prior ACKs", () => {
 
     // Enqueue 8 hashes and ACK them all with original relay
     const hashes: string[] = [];
-    const originalAcks: RelayAck[] = [];
 
     for (let i = 0; i < 8; i++) {
       const h = randomBytes(32).toString("hex");
@@ -424,7 +423,6 @@ describe("PERSIST-012 AC-005 — relay failover with prior ACKs", () => {
         sequenceNumber: i + 1,
         timestamp: Date.now(),
       });
-      originalAcks.push(ack);
       await queue.processAck(sessionId, h, ack, async () => ack.relayPubkey, `corr-${i}`);
     }
 
@@ -508,7 +506,7 @@ describe("PERSIST-012 AC-005 — relay failover with prior ACKs", () => {
     await queue.enqueue(sessionId, hashHex, "corr-resubmit");
 
     // New relay cannot find predecessor → rejects re-submission
-    const result = await queue.handleResubmitRejection(sessionId, hashHex, RELAY_PREDECESSOR_UNKNOWN, "corr-resubmit");
+    const result = await queue.handleResubmitRejection(sessionId, hashHex, RELAY_PREDECESSOR_UNKNOWN);
     expect(result).toBe(RELAY_PREDECESSOR_UNKNOWN);
 
     // client.relay.resubmit.rejected must be logged
@@ -547,6 +545,8 @@ describe("PERSIST-012 AC-006 — queue depth polling", () => {
     expect(depthEvents[0]!.context).toHaveProperty("agentId", agentId);
     expect(depthEvents[0]!.context).toHaveProperty("depth");
     expect((depthEvents[0]!.context["depth"] as number)).toBeGreaterThan(0);
+    expect(depthEvents[0]!.context).toHaveProperty("oldestHashAge");
+    expect(typeof depthEvents[0]!.context["oldestHashAge"]).toBe("number");
   });
 
   it("pollDepth() does NOT log when depth is 0", async () => {
@@ -806,7 +806,7 @@ describe("PERSIST-012 DB-002 — relay rejects re-submission with valid prior AC
     const hashHex = randomBytes(32).toString("hex");
     await queue.enqueue(sessionId, hashHex, "corr-001");
 
-    const result = await queue.handleResubmitRejection(sessionId, hashHex, "RELAY_RESUBMIT_REJECTED", "corr-001");
+    const result = await queue.handleResubmitRejection(sessionId, hashHex, "RELAY_RESUBMIT_REJECTED");
     expect(result).toBe("RELAY_RESUBMIT_REJECTED");
 
     // client.relay.resubmit.rejected must be logged at ERROR

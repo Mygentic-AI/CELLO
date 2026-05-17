@@ -73,7 +73,7 @@
 import { randomBytes, createHash } from "node:crypto";
 import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { verify, buildMerkleTree, merkleRoot, generateKeypair, msgLeafHash, ctrlLeafHash, nodeHash } from "@cello/crypto";
+import { verify, buildMerkleTree, merkleRoot, generateKeypair, msgLeafHash, ctrlLeafHash, nodeHash, buildRelayAckTbs } from "@cello/crypto";
 import type { KeyProvider, LeafInput } from "@cello/crypto";
 import { buildStructure2, encodeStructure2, computeGenesisPrevRoot } from "@cello/protocol-types";
 import { createNode } from "@cello/transport";
@@ -783,13 +783,7 @@ export class CelloRelayNode {
     let ackFrame: import("./relay-types.js").HashSubmitAck = { type: "hash_submit_ack", sequence_number: seq };
     if (this.#ackSigningKeyProvider !== null && this.#relayId !== null) {
       try {
-        const contentHashBytes = Buffer.from(s1.content_hash);
-        const seqBuf = Buffer.allocUnsafe(4);
-        seqBuf.writeUInt32BE(seq >>> 0, 0);
-        const tsBuf = Buffer.allocUnsafe(8);
-        tsBuf.writeBigUInt64BE(BigInt(ackTimestamp), 0);
-        const preimage = Buffer.concat([contentHashBytes, seqBuf, tsBuf]);
-        const tbs = new Uint8Array(createHash("sha256").update(preimage).digest());
+        const tbs = buildRelayAckTbs(s1.content_hash, seq, ackTimestamp);
         const relaySig = await this.#ackSigningKeyProvider.sign(tbs);
         ackFrame = {
           type: "hash_submit_ack",

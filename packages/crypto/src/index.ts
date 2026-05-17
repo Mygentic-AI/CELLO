@@ -9,7 +9,7 @@ export {
   mlDsaVerify,
   mlDsaEnsureLoaded,
 } from "./ml-dsa.js";
-export { hash, msgLeafHash, nodeHash, ctrlLeafHash } from "./hashing.js";
+export { hash, msgLeafHash, nodeHash, ctrlLeafHash, buildRelayAckTbs } from "./hashing.js";
 export type { MerkleTree, LeafInput } from "./merkle.js";
 export { buildMerkleTree, merkleRoot, inclusionProof, verifyInclusion } from "./merkle.js";
 export type {

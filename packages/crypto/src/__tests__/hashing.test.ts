@@ -1,13 +1,15 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
   setupV3Tests,
   describe,
   it,
   expect,
 } from "@claude-flow/testing";
-import { hash, msgLeafHash, nodeHash, ctrlLeafHash } from "../hashing.js";
+import { hash, msgLeafHash, nodeHash, ctrlLeafHash, buildRelayAckTbs } from "../hashing.js";
+import { generateKeypair, verify } from "../ed25519.js";
 
 setupV3Tests();
 
@@ -133,6 +135,57 @@ describe("second-preimage protection (SI-001)", () => {
     expect(toHex(msgLeafHash(input))).toBe(vectors.message_leaf[1].output_hex);
     expect(toHex(ctrlLeafHash(input))).toBe(vectors.control_leaf[1].output_hex);
     expect(vectors.message_leaf[1].output_hex).not.toBe(vectors.control_leaf[1].output_hex);
+  });
+});
+
+// ─── PERSIST-012 buildRelayAckTbs — canonical relay ACK TBS ──────────────────
+//
+// Single implementation shared by the relay (signer) and the client (verifier).
+// Tests here are the cross-path contract: both sides use buildRelayAckTbs so
+// divergence is impossible.
+describe("buildRelayAckTbs (PERSIST-012)", () => {
+  it("returns 32 bytes (SHA-256 output)", () => {
+    const tbs = buildRelayAckTbs(randomBytes(32), 1, Date.now());
+    expect(tbs.length).toBe(32);
+  });
+
+  it("is deterministic — same inputs produce same bytes", () => {
+    const h = randomBytes(32);
+    expect(buildRelayAckTbs(h, 42, 1716000000000)).toEqual(buildRelayAckTbs(h, 42, 1716000000000));
+  });
+
+  it("different hash bytes → different TBS", () => {
+    const seq = 1; const ts = 1000;
+    expect(buildRelayAckTbs(randomBytes(32), seq, ts)).not.toEqual(buildRelayAckTbs(randomBytes(32), seq, ts));
+  });
+
+  it("different sequence numbers → different TBS", () => {
+    const h = randomBytes(32);
+    expect(buildRelayAckTbs(h, 1, 1000)).not.toEqual(buildRelayAckTbs(h, 2, 1000));
+  });
+
+  it("different timestamps → different TBS", () => {
+    const h = randomBytes(32);
+    expect(buildRelayAckTbs(h, 1, 1000)).not.toEqual(buildRelayAckTbs(h, 1, 2000));
+  });
+
+  it("relay sign (raw bytes) → client verify (hex-decoded): same TBS, signature passes", async () => {
+    const relayKp = generateKeypair();
+    const relayPubkey = await relayKp.getPublicKey();
+    const contentHashBytes = randomBytes(32);
+    const seq = 7;
+    const ts = 1716000000000;
+
+    // Relay uses raw bytes (as relay-node.ts does)
+    const relayTbs = buildRelayAckTbs(contentHashBytes, seq, ts);
+    const sig = await relayKp.sign(relayTbs);
+
+    // Client hex-decodes the hash then calls buildRelayAckTbs (via buildSignedAckTbs)
+    const contentHashHex = Buffer.from(contentHashBytes).toString("hex");
+    const clientTbs = buildRelayAckTbs(Buffer.from(contentHashHex, "hex"), seq, ts);
+
+    expect(relayTbs).toEqual(clientTbs);
+    expect(verify(relayPubkey, clientTbs, sig)).toBe(true);
   });
 });
 

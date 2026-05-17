@@ -69,8 +69,7 @@
  *   All-sessions index: "hq:sessions"         → JSON string[] of sessionIds with queues
  */
 
-import { createHash } from "node:crypto";
-import { verify } from "@cello/crypto";
+import { verify, buildRelayAckTbs } from "@cello/crypto";
 import type { ClientStore, Logger } from "@cello/interfaces";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -144,35 +143,17 @@ const SESSIONS_INDEX_KEY = "hq:sessions";
 /**
  * Build the to-be-signed bytes for a relay ACK.
  *
- * TBS = SHA-256(hash_bytes || seq_BE4 || ts_BE8)
+ * Hex-decodes hashHex and delegates to buildRelayAckTbs (the canonical
+ * implementation in @cello/crypto shared with the relay signer).
  *
- * Deterministic fixed-width encoding prevents ambiguity:
- *   hash_bytes: 32 bytes from hex decode
- *   seq_BE4:    4-byte big-endian uint32
- *   ts_BE8:     8-byte big-endian uint64 (using BigInt for full 64-bit range)
- *
- * RFC 8032 (Ed25519), FIPS 180-4 (SHA-256)
+ * TBS = SHA-256(hash_bytes || seq_BE4 || ts_BE8). RFC 8032, FIPS 180-4.
  */
 export function buildSignedAckTbs(
   hashHex: string,
   sequenceNumber: number,
   timestamp: number,
 ): Uint8Array {
-  // 32 bytes: the content hash
-  const hashBytes = Buffer.from(hashHex, "hex");
-
-  // 4 bytes: sequence_number as big-endian uint32
-  const seqBuf = Buffer.allocUnsafe(4);
-  seqBuf.writeUInt32BE(sequenceNumber >>> 0, 0);
-
-  // 8 bytes: timestamp as big-endian uint64 (using BigInt for correctness)
-  const tsBuf = Buffer.allocUnsafe(8);
-  const tsBig = BigInt(timestamp);
-  tsBuf.writeBigUInt64BE(tsBig, 0);
-
-  const preimage = Buffer.concat([hashBytes, seqBuf, tsBuf]);
-  const digest = createHash("sha256").update(preimage).digest();
-  return new Uint8Array(digest);
+  return buildRelayAckTbs(Buffer.from(hashHex, "hex"), sequenceNumber, timestamp);
 }
 
 /**
@@ -366,12 +347,7 @@ export class AgentHashQueue {
     const depth = allPending.length;
     if (depth === 0) return;
 
-    this.#logger.info("client.hashqueue.depth", {
-      agentId: this.#agentId,
-      depth,
-    });
-
-    // DB-001: stale check
+    // DB-001: compute oldest age before logging so it appears in the depth event
     const now = Date.now();
     let oldest = now;
     for (const entry of allPending) {
@@ -380,6 +356,13 @@ export class AgentHashQueue {
       }
     }
     const oldestHashAge = now - oldest;
+
+    this.#logger.info("client.hashqueue.depth", {
+      agentId: this.#agentId,
+      depth,
+      oldestHashAge,
+    });
+
     if (oldestHashAge > this.#hashQueueMaxAgeMs) {
       this.#logger.warn("client.hashqueue.stale", {
         agentId: this.#agentId,
@@ -403,7 +386,6 @@ export class AgentHashQueue {
     sessionId: string,
     hashHex: string,
     reason: string,
-    _correlationId: string,
   ): Promise<string> {
     this.#logger.error("client.relay.resubmit.rejected", {
       agentId: this.#agentId,

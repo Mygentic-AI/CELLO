@@ -30,29 +30,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { randomBytes, createHash } from "node:crypto";
-import { generateKeypair, verify } from "@cello/crypto";
-
-// ─── Inline TBS builder (same algorithm as client, tested independently) ──────
-//
-// This function is a local copy of the shared TBS algorithm.
-// The relay and client independently implement this calculation to ensure
-// they agree on the byte representation (a contract test).
-
-function buildAckTbs(
-  hashBytes: Uint8Array,
-  sequenceNumber: number,
-  timestamp: number,
-): Uint8Array {
-  const seqBuf = Buffer.allocUnsafe(4);
-  seqBuf.writeUInt32BE(sequenceNumber >>> 0, 0);
-
-  const tsBuf = Buffer.allocUnsafe(8);
-  tsBuf.writeBigUInt64BE(BigInt(timestamp), 0);
-
-  const preimage = Buffer.concat([Buffer.from(hashBytes), seqBuf, tsBuf]);
-  return new Uint8Array(createHash("sha256").update(preimage).digest());
-}
+import { randomBytes } from "node:crypto";
+import { generateKeypair, verify, buildRelayAckTbs } from "@cello/crypto";
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -65,7 +44,7 @@ describe("PERSIST-012 relay signed ACK — signing behavior", () => {
     const seq = 7;
     const ts = Date.now();
 
-    const tbs = buildAckTbs(hashBytes, seq, ts);
+    const tbs = buildRelayAckTbs(hashBytes, seq, ts);
     const sig = await relayKp.sign(tbs);
 
     expect(sig.length).toBe(64);
@@ -81,7 +60,7 @@ describe("PERSIST-012 relay signed ACK — signing behavior", () => {
     const seq = 1;
     const ts = Date.now();
 
-    const tbs = buildAckTbs(hashBytes, seq, ts);
+    const tbs = buildRelayAckTbs(hashBytes, seq, ts);
     const impostorSig = await impostorKp.sign(tbs);
 
     expect(verify(relayPubkey, tbs, impostorSig)).toBe(false);
@@ -92,8 +71,8 @@ describe("PERSIST-012 relay signed ACK — signing behavior", () => {
     const seq = 42;
     const ts = 1716000000000;
 
-    const tbs1 = buildAckTbs(hashBytes, seq, ts);
-    const tbs2 = buildAckTbs(hashBytes, seq, ts);
+    const tbs1 = buildRelayAckTbs(hashBytes, seq, ts);
+    const tbs2 = buildRelayAckTbs(hashBytes, seq, ts);
 
     expect(tbs1).toEqual(tbs2);
     expect(tbs1.length).toBe(32); // SHA-256 output
@@ -105,20 +84,20 @@ describe("PERSIST-012 relay signed ACK — signing behavior", () => {
     const seq = 1;
     const ts = 1000;
 
-    expect(buildAckTbs(h1, seq, ts)).not.toEqual(buildAckTbs(h2, seq, ts));
+    expect(buildRelayAckTbs(h1, seq, ts)).not.toEqual(buildRelayAckTbs(h2, seq, ts));
   });
 
   it("different sequence numbers produce different TBS", () => {
     const h = randomBytes(32);
     const ts = 1000;
 
-    expect(buildAckTbs(h, 1, ts)).not.toEqual(buildAckTbs(h, 2, ts));
+    expect(buildRelayAckTbs(h, 1, ts)).not.toEqual(buildRelayAckTbs(h, 2, ts));
   });
 
   it("different timestamps produce different TBS", () => {
     const h = randomBytes(32);
     const seq = 1;
 
-    expect(buildAckTbs(h, seq, 1000)).not.toEqual(buildAckTbs(h, seq, 2000));
+    expect(buildRelayAckTbs(h, seq, 1000)).not.toEqual(buildRelayAckTbs(h, seq, 2000));
   });
 });
