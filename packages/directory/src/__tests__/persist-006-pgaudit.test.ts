@@ -461,7 +461,7 @@ describeIntegration("PERSIST-006 AC-001: pgaudit logs INSERT on conversation_sea
 
     let logs = "";
     try {
-      logs = execSync(`docker logs ${containerName} 2>&1 | tail -200`, {
+      logs = execSync(`docker logs ${containerName} --since 10s 2>&1`, {
         encoding: "utf8",
         timeout: 5000,
       });
