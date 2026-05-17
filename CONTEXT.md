@@ -136,6 +136,21 @@ type SendResult =
 
 ---
 
+## Port assignments (M5+)
+
+Canonical port numbers for CELLO services. These are the authoritative values for IaC security group rules.
+
+| Port | Service | Protocol | Notes |
+|------|---------|----------|-------|
+| 443  | Directory node (agent-facing) | HTTPS/WebSocket | TLS termination at ALB; agents connect here |
+| 4000 | Relay node health check | HTTP | Internal VPC only; never exposed via ALB; directory pings GET /health |
+| 4001 | Directory inter-node checkpoint signing | libp2p/TCP | VPC Peering only; never exposed to internet; used for checkpoint round communication between directory nodes |
+| 5432 | RDS PostgreSQL (logical replication) | TCP | VPC Peering only; never exposed to internet |
+
+Security group rules on VPC Peering connections permit only ports 5432 and 4001 from peer VPC CIDR ranges.
+
+---
+
 ## What "client never imports from directory or relay" means
 
 The `client` package imports only from `protocol-types`, `crypto`, and `transport`. It reaches `directory` and `relay` exclusively over libp2p streams. The package boundary is real even when all packages are co-located in the same Vitest process.

@@ -195,7 +195,12 @@ observability:
 
   alarms:
     - condition: "any cello-ops-critical alarm remains in ALARM
-        state for more than 30 minutes without acknowledgement"
+        state for more than 30 minutes — CloudWatch has no native
+        acknowledgement concept; alarms return to OK when the metric
+        recovers; persistent-alarm escalation requires an EventBridge
+        rule + Lambda pattern that is deferred to a post-M5
+        Consortium-phase concern; at M5 this condition is monitored
+        via the CloudWatch dashboard and on-call operator review"
       fires_to: ops-critical
 
 # ─── References ─────────────────────────────────────────────

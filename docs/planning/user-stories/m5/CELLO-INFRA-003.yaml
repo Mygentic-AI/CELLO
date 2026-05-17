@@ -161,7 +161,26 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
-  - id: AC-008
+  - id: AC-008-crash-mid-clear
+    given: "A coordinator has written a confirmed directory_checkpoints
+      row but crashes before deleting the corresponding rows from
+      conversation_seal_staging (simulated by injecting a process kill
+      between the INSERT to directory_checkpoints and the DELETE from
+      conversation_seal_staging)"
+    when: "the coordinator restarts and the next checkpoint interval elapses"
+    then: "the coordinator detects that conversation_seal_staging contains
+      rows whose staging_id values are already referenced in
+      conversation_proof_leaf_checkpoints (indicating they were included
+      in a prior confirmed checkpoint); it skips those rows and does not
+      include them in the new batch; the new checkpoint includes only
+      staging rows that are genuinely new since the last confirmed
+      checkpoint — verified by asserting the new checkpoint's mmr_leaf_count
+      equals the previous checkpoint's mmr_leaf_count plus only the
+      newly accumulated seals, not double-counting the already-committed rows"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-009
     given: "The checkpoint gap alarm threshold is configurable via
       CHECKPOINT_GAP_ALARM_MINUTES (default 30); the test sets this
       to 1 minute; no checkpoint has been confirmed for 1 minute"

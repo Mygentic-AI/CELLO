@@ -349,7 +349,8 @@ observability:
 
     - name: audit.shipper.shipped
       level: info
-      trigger: "AuditLogShipper successfully ships a batch to S3"
+      trigger: "AuditLogShipper successfully ships an entry to S3
+        (per-write, no batching; entryCount is always 1)"
       context_fields: [entryCount, s3Key, durationMs]
       correlationId: false
 

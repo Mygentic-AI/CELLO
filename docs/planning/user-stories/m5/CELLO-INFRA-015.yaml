@@ -64,14 +64,15 @@ acceptance_criteria:
     then: "the pending_notifications table is created with columns:
       notification_id UUID NOT NULL UNIQUE, recipient_agent_id TEXT
       NOT NULL, notification_type TEXT NOT NULL, payload JSONB NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(), delivered_at
-      TIMESTAMPTZ NULL; an index exists on (recipient_agent_id,
-      delivered_at) for efficient undelivered query; RLS is enabled
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(); an index exists on
+      (recipient_agent_id) for efficient undelivered query; RLS is enabled
       with insert_only and select_all policies; cello_service has
-      INSERT and SELECT only — DELETE is explicitly revoked, making
-      the table append-only — verified by querying
-      information_schema.columns and pg_indexes from a separate
-      database connection"
+      INSERT, SELECT, and DELETE — no UPDATE is permitted; DELETE is
+      required for acknowledged-row cleanup (rows are deleted on
+      acknowledgement, not retained) — verified by querying
+      information_schema.columns, pg_indexes, and pg_policies from a
+      separate database connection; attempting UPDATE returns permission
+      denied"
     test_type: integration
     component_under_test: directory
 
@@ -179,15 +180,15 @@ security_invariants:
     test_type: integration
     component_under_test: directory
 
-  - id: SI-002
-    statement: "A notification shall be delivered at most once
-      per recipient connection — drainUndelivered returns only
-      rows where delivered_at IS NULL; acknowledged notifications
+  - id: SI-003
+    statement: "A notification shall be delivered at most once —
+      acknowledge() deletes the row; drainUndelivered returns only
+      rows still present in the table; acknowledged notifications
       are not re-delivered on subsequent reconnects"
     adversarial_condition: "even when the agent reconnects
-      multiple times — the delivered_at filter ensures idempotent
-      delivery; the acknowledge call is idempotent (updating an
-      already-set delivered_at is a no-op)"
+      multiple times — the deletion ensures idempotent delivery;
+      the acknowledge call is idempotent (deleting a non-existent
+      row is a no-op)"
     test_type: unit
     component_under_test: directory
 

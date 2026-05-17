@@ -237,8 +237,11 @@ degraded_behavior:
     fallback: "RDS replication and checkpoint cross-signing cannot
       proceed until the peering connection is active; the operator
       must accept the peering connection in the peer region's console
-      or via IaC; infra.peering.pending is logged at WARN with
-      { peeringConnectionId, requesterRegion, accepterRegion }"
+      or via IaC; infra.peering.pending is logged at INFO with
+      { peeringConnectionId, requesterRegion, accepterRegion,
+      action_required: 'accept peering connection in peer region' };
+      this event fires predictably on every clean first-time deployment
+      and is expected — it is not an error condition"
     test_type: unit
     component_under_test: directory
 
@@ -265,9 +268,11 @@ observability:
       context_fields: [stackName, environment, region, reason]
 
     - name: infra.peering.pending
-      level: warn
-      trigger: "a VPC Peering connection is awaiting acceptance"
-      context_fields: [peeringConnectionId, requesterRegion, accepterRegion]
+      level: info
+      trigger: "a VPC Peering connection is awaiting acceptance
+        (expected on every clean first-time deployment)"
+      context_fields: [peeringConnectionId, requesterRegion, accepterRegion,
+        action_required]
 
   alarms:
     - condition: "infra.stack.rollback fires at any time"

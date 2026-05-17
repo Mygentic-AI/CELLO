@@ -181,7 +181,10 @@ observability:
   events:
     - name: waf.request.blocked
       level: info
-      trigger: "WAF blocks a request"
+      trigger: "WAF blocks a non-rate-limit request (reputation list,
+        common rule set, geo-block); waf.rate_limit.triggered fires
+        instead for rate-based rule blocks to avoid duplicate log
+        entries for the same blocked request"
       context_fields: [sourceIp, ruleId, action, httpMethod,
         uri, region]
       correlationId: false
@@ -189,7 +192,8 @@ observability:
   error_events:
     - name: waf.rate_limit.triggered
       level: warn
-      trigger: "rate-based rule blocks a source IP"
+      trigger: "rate-based rule blocks a source IP; this event fires
+        instead of waf.request.blocked for rate-limit blocks"
       context_fields: [sourceIp, requestCount, windowSeconds,
         region]
 

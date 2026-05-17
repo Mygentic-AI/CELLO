@@ -120,10 +120,11 @@ acceptance_criteria:
     then: "the receiving node computes SHA-256(record_contents ||
       previous_chain_hash) and asserts it equals the row's chain_hash;
       if they match, federation.replication.verified is logged at INFO
-      with { nodeId, sessionId, chainHash }; this verification is
-      performed in a separate process from the owning node — verified
-      by asserting the INFO log event appears in node-2's logs after
-      the row replicates from node-1"
+      with { nodeId, sessionId, leafIndex, chainHash, durationMs };
+      this verification is performed in a separate process from the
+      owning node — verified by asserting the INFO log event appears
+      in node-2's logs after the row replicates from node-1, and that
+      all five context fields are present"
     test_type: e2e
     component_under_test: directory
 

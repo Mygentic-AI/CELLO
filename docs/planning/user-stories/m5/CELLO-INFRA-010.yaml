@@ -34,8 +34,8 @@ behavior:
   - trigger: "When the in-memory buffer reaches 10,000 entries"
     action: "the ops-critical alarm fires; the shipper begins
       dropping the oldest entries to prevent unbounded memory growth;
-      audit.shipper.entries.dropped is logged at ERROR with
-      { droppedCount, reason: 'buffer_full' }"
+      audit.shipper.buffer.overflow is logged at ERROR with
+      { droppedCount, bufferedCount }"
 
   - trigger: "When CELLO_ENV=local"
     action: "the LocalAuditLogShipper is used instead of
@@ -217,8 +217,9 @@ observability:
   events:
     - name: audit.shipper.shipped
       level: info
-      trigger: "AuditLogShipper ships an entry to S3 successfully"
-      context_fields: [s3Key, durationMs]
+      trigger: "AuditLogShipper ships an entry to S3 successfully;
+        entryCount is always 1 for per-write shipping (no batching)"
+      context_fields: [entryCount, s3Key, durationMs]
       correlationId: false
 
     - name: audit.shipper.flushed

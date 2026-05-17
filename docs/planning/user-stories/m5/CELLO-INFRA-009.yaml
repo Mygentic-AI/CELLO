@@ -63,9 +63,12 @@ behavior:
       added or removed)"
     action: "the operator uploads a new signed manifest to S3;
       the directory picks up the new manifest on its next startup
-      or on an explicit reload trigger; the manifest version field
-      increments monotonically; a manifest with a lower version than
-      the currently loaded manifest is rejected"
+      (ECS task restart); the manifest version field increments
+      monotonically; a manifest with a lower version than the
+      currently loaded manifest is rejected; an in-process reload
+      trigger without a restart is deferred to a future milestone —
+      at M5 the operator triggers a manifest reload by performing
+      a rolling ECS service update"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
