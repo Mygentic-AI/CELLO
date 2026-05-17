@@ -21,3 +21,4 @@ packages/*/tsconfig.tsbuildinfo
 .claude/worktrees/
 .claude/skills/
 .claude-flow/
+packages/directory/test-sigterm-*.mjs
