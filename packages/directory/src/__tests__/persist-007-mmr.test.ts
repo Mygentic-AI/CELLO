@@ -241,6 +241,93 @@ describe("PERSIST-007 unit: inclusion proof computation and verification", () =>
 
 });
 
+// AC-006 unit test: exercises the mmr.checkpoint.confirmed log call through a stub pool
+// that returns deterministic responses, so no DB connection is required.
+// This test runs in standard CI (no CELLO_ENV=local, no Postgres).
+describe("PERSIST-007 unit: AC-006 mmr.checkpoint.confirmed log call", () => {
+  it("AC-006: MmrStore.confirmCheckpoint emits mmr.checkpoint.confirmed at INFO with { checkpointId, leafCount, peakHash, stagedSealCount }", async () => {
+    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const checkpointId = "test-checkpoint-uuid-ac006";
+    const stagedSealCount = 2;
+    const leafCount = 2;
+
+    // Build a minimal stub pool that satisfies every query() call in confirmCheckpoint(),
+    // without making a real DB connection.
+    //
+    // confirmCheckpoint query order:
+    //   1. SELECT peak_hash FROM directory_checkpoints WHERE checkpoint_id = $1  → 0 rows (not idempotent)
+    //   2. SELECT session_id, ... FROM conversation_seal_staging WHERE checkpoint_id = $1 → N rows
+    //   3. SELECT COUNT(*) AS count FROM conversation_proof_leaves → leafCount
+    //   4. SELECT leaf_index, leaf_hash, seal_merkle_root, recorded_at FROM ... (fetchCurrentPeaks via pool)
+    //      – sub-query for peaks reconstruction (fetchCurrentPeaksFromPool → fetchCurrentPeaks)
+    //   5. SELECT chain_hash FROM directory_checkpoints ORDER BY id DESC LIMIT 1 → 0 rows
+    //
+    // #fetchCurrentPeaksFromPool acquires a client from pool.connect(), so we also need
+    // a stubClient with a query() that returns the leaves for peak reconstruction.
+    const stubLeaves = [
+      { leaf_index: 0, leaf_hash: "a".repeat(64), seal_merkle_root: "a".repeat(64), recorded_at: new Date("2026-01-01") },
+      { leaf_index: 1, leaf_hash: "b".repeat(64), seal_merkle_root: "b".repeat(64), recorded_at: new Date("2026-01-02") },
+    ];
+
+    const stubPool = {
+      query: vi.fn().mockImplementation(async (sql: string) => {
+        // 1. Checkpoint existence check
+        if (sql.includes("SELECT peak_hash FROM directory_checkpoints WHERE checkpoint_id")) {
+          return { rows: [] };
+        }
+        // 2. Staging rows for this checkpoint
+        if (sql.includes("FROM conversation_seal_staging WHERE checkpoint_id")) {
+          return { rows: [
+            { session_id: "session-1", seal_merkle_root: "a".repeat(64), recorded_at: new Date() },
+            { session_id: "session-2", seal_merkle_root: "b".repeat(64), recorded_at: new Date() },
+          ]};
+        }
+        // 3. Leaf count
+        if (sql.includes("COUNT(*) AS count FROM conversation_proof_leaves")) {
+          return { rows: [{ count: String(leafCount) }] };
+        }
+        // 5. Previous checkpoint chain_hash
+        if (sql.includes("FROM directory_checkpoints ORDER BY id DESC LIMIT 1")) {
+          return { rows: [] };
+        }
+        return { rows: [] };
+      }),
+      connect: vi.fn().mockResolvedValue({
+        // stubClient for #fetchCurrentPeaks and the transaction
+        query: vi.fn().mockImplementation(async (sql: string) => {
+          if (sql.includes("FROM conversation_proof_leaves ORDER BY leaf_index ASC")) {
+            return { rows: stubLeaves };
+          }
+          // Transaction control and other inserts/deletes succeed silently
+          return { rows: [] };
+        }),
+        release: vi.fn(),
+      }),
+    } as unknown as import("pg").Pool;
+
+    const store = new MmrStore(stubPool, logger);
+    await store.confirmCheckpoint(checkpointId);
+
+    // mmr.checkpoint.confirmed must have been logged at INFO with all four required fields
+    expect(logger.info).toHaveBeenCalledWith(
+      "mmr.checkpoint.confirmed",
+      expect.objectContaining({
+        checkpointId,
+        leafCount,
+        stagedSealCount,
+      }),
+    );
+
+    // peakHash must be a 64-char hex string (computed by #computePeakHash)
+    const calls = (logger.info as ReturnType<typeof vi.fn>).mock.calls;
+    const confirmedCall = calls.find((c) => c[0] === "mmr.checkpoint.confirmed");
+    expect(confirmedCall).toBeDefined();
+    expect(typeof confirmedCall![1].peakHash).toBe("string");
+    expect(confirmedCall![1].peakHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
 // ─── Integration tests — require CELLO_ENV=local + running Postgres ──────────
 
 const isLocal = process.env["CELLO_ENV"] === "local";

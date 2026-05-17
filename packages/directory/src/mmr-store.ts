@@ -294,12 +294,7 @@ export class MmrStore {
     }
 
     // Log mmr.checkpoint.confirmed
-    this.#logger.info("mmr.checkpoint.confirmed", {
-      checkpointId,
-      leafCount,
-      peakHash,
-      stagedSealCount,
-    });
+    this.#emitCheckpointConfirmed(checkpointId, leafCount, peakHash, stagedSealCount);
 
     return peakHash;
   }
@@ -543,6 +538,15 @@ export class MmrStore {
     }
 
     return peaks;
+  }
+
+  /**
+   * Emit the mmr.checkpoint.confirmed log event.
+   * Extracted so a unit test can exercise the log call without a DB connection.
+   * AC-006: logs at INFO with { checkpointId, leafCount, peakHash, stagedSealCount }.
+   */
+  #emitCheckpointConfirmed(checkpointId: string, leafCount: number, peakHash: string, stagedSealCount: number): void {
+    this.#logger.info("mmr.checkpoint.confirmed", { checkpointId, leafCount, peakHash, stagedSealCount });
   }
 
   /**
