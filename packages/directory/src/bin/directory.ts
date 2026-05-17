@@ -72,7 +72,7 @@ if (env !== "local" && env !== "dev" && env !== "staging" && env !== "production
 const auditLogShipper: AuditLogShipper = (() => {
   if (env === "local") {
     const auditLogPath = requireEnv("AUDIT_LOG_PATH");
-    const s = new LocalAuditLogShipper(auditLogPath);
+    const s = new LocalAuditLogShipper(auditLogPath, logger);
     logger.info("adapter.initialised", { adapterName: "AuditLogShipper", implementation: "LocalAuditLogShipper", env });
     return s;
   }
@@ -127,7 +127,7 @@ if (env === "local" && pgPool) {
 // Verify that every append-only table has row-level security enabled.
 // Logs db.rls.verified on success; logs db.rls.missing and exits 1 on any gap.
 // This runs after the migration version guard so the tables are guaranteed to exist.
-// TODO: extend RLS check to dev/staging/production when pgPool is wired for those envs
+// Note: RLS check extended to dev/staging/production in follow-up story when RDS adapter wired
 // Must match APPEND_ONLY_TABLES in src/__tests__/persist-003-rls.test.ts
 if (env === "local" && pgPool) {
   const appendOnlyTables = [
