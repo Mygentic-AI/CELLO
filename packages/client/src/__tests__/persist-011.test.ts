@@ -56,6 +56,22 @@ import { ClientBackup } from "../client-backup.js";
 import { BACKUP_WARNING } from "../client-backup.js";
 import { LocalCloudStorageProvider } from "@cello/interfaces/stubs";
 
+// ─── SQLCipher integration for AC-003 — skip if native module unavailable ─────
+
+let sqlCipherAvailable = false;
+let SQLCipherClientStore: typeof import("../sqlcipher-client-store.js").SQLCipherClientStore;
+
+try {
+  const mod = await import("../sqlcipher-client-store.js");
+  SQLCipherClientStore = mod.SQLCipherClientStore;
+  sqlCipherAvailable = true;
+} catch {
+  // SQLCipher native module not available (CELLO_ENV=local CI scenario)
+  sqlCipherAvailable = false;
+}
+
+const describeWithSQLCipher = sqlCipherAvailable ? describe : describe.skip;
+
 // ─── Test helpers ────────────────────────────────────────────────────────────
 
 /** Minimal spy logger. */
@@ -254,9 +270,9 @@ describe("PERSIST-011 AC-002 — AES-256-GCM encryption", () => {
   });
 });
 
-// ─── AC-003: Full restore roundtrip ─────────────────────────────────────────
+// ─── AC-003: Full restore roundtrip with real SQLCipher database ────────────
 
-describe("PERSIST-011 AC-003 — full restore roundtrip", () => {
+describeWithSQLCipher("PERSIST-011 AC-003 — full restore roundtrip with SQLCipher database", () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -267,17 +283,32 @@ describe("PERSIST-011 AC-003 — full restore roundtrip", () => {
     cleanupDir(tmpDir);
   });
 
-  it("upload, delete local, restore — file contents match original exactly", async () => {
+  it("backup, delete, restore — client opens DB with db_key and all records are present", async () => {
     const identityKey = randomBytes(32);
     const agentId = "agent-ac003";
-    const originalContent = randomBytes(4096); // simulate a DB file
     const dbPath = join(tmpDir, "local.db");
-    writeFileSync(dbPath, originalContent);
+    const dbKey = deriveDbKey(identityKey, agentId);
 
     const { logger } = makeSpyLogger();
     const cloudStorage = new LocalCloudStorageProvider(tmpDir);
     const localStore = new Map<string, Uint8Array>();
 
+    // Step 1: Create and populate a real SQLCipher database with known records
+    const store = new SQLCipherClientStore(dbKey, { dbPath, agentId, logger });
+    await store.open();
+
+    const testRecords = [
+      { key: "session:001", value: new Uint8Array([1, 2, 3, 4]) },
+      { key: "trust:002", value: new Uint8Array([5, 6, 7, 8]) },
+      { key: "merkle:003", value: new Uint8Array([9, 10, 11, 12]) },
+    ];
+
+    for (const record of testRecords) {
+      await store.set(record.key, record.value);
+    }
+    await store.close();
+
+    // Step 2: Backup the database
     const backup = new ClientBackup({
       agentId,
       identityKey,
@@ -286,22 +317,54 @@ describe("PERSIST-011 AC-003 — full restore roundtrip", () => {
       logger,
       getMetadata: (key) => Promise.resolve(localStore.get(key)),
       setMetadata: (key, val) => { localStore.set(key, val); return Promise.resolve(); },
+      // AC-003: verifyRestored opens DB with db_key and verifies records are readable
+      verifyRestored: async (restoredPath: string) => {
+        const verifyStore = new SQLCipherClientStore(dbKey, {
+          dbPath: restoredPath,
+          agentId,
+          logger,
+        });
+        await verifyStore.open();
+
+        // Verify all test records are present and match expected values
+        for (const record of testRecords) {
+          const retrieved = await verifyStore.get(record.key);
+          if (retrieved === undefined) {
+            await verifyStore.close();
+            throw new Error(`Record ${record.key} not found after restore`);
+          }
+          if (Buffer.compare(Buffer.from(retrieved), Buffer.from(record.value)) !== 0) {
+            await verifyStore.close();
+            throw new Error(`Record ${record.key} value mismatch after restore`);
+          }
+        }
+
+        await verifyStore.close();
+      },
     });
 
-    // Step 1: backup
     await backup.backup();
 
-    // Step 2: delete local DB
+    // Step 3: Delete local DB
     rmSync(dbPath);
     expect(existsSync(dbPath)).toBe(false);
 
-    // Step 3: restore
+    // Step 4: Restore — verification callback is invoked before completion
     await backup.restore();
 
-    // Step 4: verify file contents match original
+    // Step 5: Verify file exists and is a valid SQLCipher database with correct records
     expect(existsSync(dbPath)).toBe(true);
-    const restored = readFileSync(dbPath);
-    expect(Buffer.from(restored)).toEqual(Buffer.from(originalContent));
+
+    const finalStore = new SQLCipherClientStore(dbKey, { dbPath, agentId, logger });
+    await finalStore.open();
+
+    for (const record of testRecords) {
+      const retrieved = await finalStore.get(record.key);
+      expect(retrieved).toBeDefined();
+      expect(Buffer.from(retrieved!)).toEqual(Buffer.from(record.value));
+    }
+
+    await finalStore.close();
   });
 });
 

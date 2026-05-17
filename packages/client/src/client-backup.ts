@@ -94,6 +94,14 @@ export interface ClientBackupOptions {
    * Defaults to no-op if not provided.
    */
   setMetadata?: (key: string, value: Uint8Array) => Promise<void>;
+  /**
+   * Optional: verify the restored database is readable after restore completes.
+   * AC-003: After writing the decrypted file, restore() calls this callback
+   * to open the database with db_key and verify records are readable before
+   * declaring restore complete. If this callback throws, restore fails.
+   * Defaults to no-op if not provided (useful for pure encryption tests).
+   */
+  verifyRestored?: (dbPath: string) => Promise<void>;
 }
 
 // ─── ClientBackup ─────────────────────────────────────────────────────────────
@@ -111,6 +119,7 @@ export class ClientBackup {
   readonly #logger: Logger;
   readonly #getMetadata: (key: string) => Promise<Uint8Array | undefined>;
   readonly #setMetadata: (key: string, value: Uint8Array) => Promise<void>;
+  readonly #verifyRestored: (dbPath: string) => Promise<void>;
 
   constructor(options: ClientBackupOptions) {
     this.#agentId = options.agentId;
@@ -120,6 +129,7 @@ export class ClientBackup {
     this.#logger = options.logger;
     this.#getMetadata = options.getMetadata ?? (() => Promise.resolve(undefined));
     this.#setMetadata = options.setMetadata ?? (() => Promise.resolve());
+    this.#verifyRestored = options.verifyRestored ?? (() => Promise.resolve());
   }
 
   /**
@@ -226,7 +236,8 @@ export class ClientBackup {
    *   6. Decrypt with AES-256-GCM.
    *   7. Write plaintext to temp path: dbPath + '.restore-tmp' (SI-003).
    *   8. Atomic rename temp → dbPath.
-   *   9. Log client.backup.restore.completed.
+   *   9. Call verifyRestored callback to open DB with db_key and verify readable (AC-003).
+   *  10. Log client.backup.restore.completed.
    */
   async restore(): Promise<void> {
     // AC-005: no cloud storage destination configured
@@ -293,6 +304,11 @@ export class ClientBackup {
       // If write fails mid-way, the live DB is untouched
       await writeFile(tempPath, plaintext);
       await rename(tempPath, this.#dbPath);
+
+      // AC-003: After writing the restored file, open the database with db_key
+      // and verify it is readable before declaring restore complete.
+      // If verification throws, the error propagates and restore fails.
+      await this.#verifyRestored(this.#dbPath);
 
       const durationMs = Date.now() - startMs;
       this.#logger.info("client.backup.restore.completed", {
