@@ -46,6 +46,8 @@ export type { NetworkRelayAdapterOptions } from "./network-relay-adapter.js";
 
 export type { ShareStore, LocalShare } from "./share-store.js";
 export { InMemoryShareStore } from "./share-store.js";
+export { PersistentShareStore } from "./persistent-share-store.js";
+export { EncryptedPgShareStore } from "./encrypted-share-store.js";
 
 export type {
   CeremonyRoundOk,

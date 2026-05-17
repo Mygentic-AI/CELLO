@@ -75,6 +75,13 @@ export class LocalEnvelopeKeyProvider implements EnvelopeKeyProvider {
         `Set DEV_ENVELOPE_KEY in your .env.local file.`,
       );
     }
+    // Validate hex format
+    if (!/^[0-9a-fA-F]{64}$/.test(devEnvelopeKeyHex)) {
+      throw new Error(
+        `DEV_ENVELOPE_KEY must contain only hexadecimal characters (0-9, a-f, A-F). ` +
+        `Set DEV_ENVELOPE_KEY in your .env.local file.`,
+      );
+    }
     this.#currentKey = Buffer.from(devEnvelopeKeyHex, "hex");
     this.#logger = logger;
   }
@@ -85,20 +92,30 @@ export class LocalEnvelopeKeyProvider implements EnvelopeKeyProvider {
    * Total overhead: 28 bytes (SI-003).
    * Nonce is random per call (SI-004).
    * keyId is bound as AAD — wrong keyId causes auth tag failure on decrypt (AC-004).
+   * Logs key.encrypted on success, key.encrypted.failed on error (if logger provided).
    */
   async encrypt(plaintext: Uint8Array, keyId: string): Promise<Uint8Array> {
-    const iv = randomBytes(IV_BYTES);
-    const cipher = createCipheriv("aes-256-gcm", this.#currentKey, iv);
-    cipher.setAAD(Buffer.from(keyId, "utf8"));
-    const ciphered = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-    const tag = cipher.getAuthTag();
-    return Buffer.concat([iv, tag, ciphered]);
+    try {
+      const iv = randomBytes(IV_BYTES);
+      const cipher = createCipheriv("aes-256-gcm", this.#currentKey, iv);
+      cipher.setAAD(Buffer.from(keyId, "utf8"));
+      const ciphered = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+      const tag = cipher.getAuthTag();
+      const result = Buffer.concat([iv, tag, ciphered]);
+      this.#logger?.info("key.encrypted", { keyId });
+      return result;
+    } catch (err: unknown) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.#logger?.error("key.encrypted.failed", { keyId, reason });
+      throw err;
+    }
   }
 
   /**
    * Decrypt ciphertext produced by encrypt().
    * Tries #currentKey first; on auth tag failure, tries #previousKey (dual-key window).
    * Throws if neither key succeeds — no partial plaintext is returned (AC-004).
+   * Logs key.decrypted on success, key.decrypted.failed on error (if logger provided).
    */
   async decrypt(ciphertext: Uint8Array, keyId: string): Promise<Uint8Array> {
     const buf = Buffer.from(ciphertext);
@@ -118,13 +135,17 @@ export class LocalEnvelopeKeyProvider implements EnvelopeKeyProvider {
         const decipher = createDecipheriv("aes-256-gcm", key, iv);
         decipher.setAAD(aad);
         decipher.setAuthTag(tag);
-        return new Uint8Array(Buffer.concat([decipher.update(body), decipher.final()]));
+        const result = new Uint8Array(Buffer.concat([decipher.update(body), decipher.final()]));
+        this.#logger?.info("key.decrypted", { keyId });
+        return result;
       } catch {
         // Auth tag mismatch — try next key
       }
     }
 
-    throw new Error("Decryption failed: authentication tag mismatch for all available key versions");
+    const error = new Error("Decryption failed: authentication tag mismatch for all available key versions");
+    this.#logger?.error("key.decrypted.failed", { keyId, reason: error.message });
+    throw error;
   }
 
   /**

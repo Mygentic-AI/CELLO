@@ -32,6 +32,7 @@ import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelay
 import { InMemoryShareStore } from "../share-store.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { EncryptedPgShareStore } from "../encrypted-share-store.js";
+import { PersistentShareStore } from "../persistent-share-store.js";
 
 const env = process.env["CELLO_ENV"];
 const logger = new StdoutLogger();
@@ -204,17 +205,21 @@ try {
   logger.info("adapter.initialised", { adapterName: "TransportKey", implementation: "generated", env });
 }
 
-const shareStore = new InMemoryShareStore();
+// ─── PERSIST-005: PersistentShareStore for K_server_X share persistence ───────
+// Combines InMemoryShareStore (FROST ceremony operations) with EncryptedPgShareStore
+// (encrypted PostgreSQL persistence). When shares are stored, they are:
+//   1. Cached in memory for immediate FROST signing
+//   2. Serialized to bytes and encrypted via EnvelopeKeyProvider
+//   3. Persisted to agent_key_shares table
+// If pgPool is unavailable (CELLO_ENV != local for M4), falls back to InMemoryShareStore only.
+const shareStore = pgPool
+  ? new PersistentShareStore(new EncryptedPgShareStore(pgPool, envelopeKeyProvider, logger))
+  : new InMemoryShareStore();
 
-// ─── PERSIST-005: EncryptedPgShareStore for K_server_X share persistence ─────
-// Wraps EnvelopeKeyProvider + PgPool to persist encrypted shares to agent_key_shares.
-// The runtime InMemoryShareStore holds FROST types for ceremony operations;
-// EncryptedPgShareStore handles encrypted persistence to Postgres.
-const encryptedShareStore = pgPool
-  ? new EncryptedPgShareStore(pgPool, envelopeKeyProvider, logger)
-  : null;
-if (encryptedShareStore) {
-  logger.info("adapter.initialised", { adapterName: "EncryptedShareStore", implementation: "EncryptedPgShareStore", env });
+if (pgPool) {
+  logger.info("adapter.initialised", { adapterName: "ShareStore", implementation: "PersistentShareStore", env });
+} else {
+  logger.info("adapter.initialised", { adapterName: "ShareStore", implementation: "InMemoryShareStore", env });
 }
 
 // ─── Relay setup ──────────────────────────────────────────────────────────

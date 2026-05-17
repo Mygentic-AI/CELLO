@@ -219,6 +219,17 @@ describe("PERSIST-005 AC-006: LocalEnvelopeKeyProvider rejects invalid DEV_ENVEL
   it("AC-006: constructor throws when DEV_ENVELOPE_KEY is wrong length", () => {
     expect(() => new LocalEnvelopeKeyProvider("abcd1234")).toThrow(/DEV_ENVELOPE_KEY/);
   });
+
+  it("MEDIUM-7: constructor throws when DEV_ENVELOPE_KEY contains non-hex characters", () => {
+    const invalidKeys = [
+      "g".repeat(64), // 'g' is not a hex char
+      "0".repeat(63) + "z", // ends with 'z'
+      "hello world" + "0".repeat(53), // spaces and letters
+    ];
+    for (const key of invalidKeys) {
+      expect(() => new LocalEnvelopeKeyProvider(key)).toThrow(/hexadecimal/);
+    }
+  });
 });
 
 describe("PERSIST-005 SI-001: encryption error — no plaintext bytes in error or log", () => {
