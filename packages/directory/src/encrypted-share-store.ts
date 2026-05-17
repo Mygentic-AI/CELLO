@@ -6,7 +6,7 @@
  *
  * Pseudocode (Phase P):
  *
- *   storeShare(agentId, epochId, shareBytes):
+ *   storeShare(agentId, epochId, shareBytes, correlationId?):
  *     // 1. Encrypt — NIST SP 800-38D (AES-256-GCM)
  *     keyId = deriveKeyId(agentId, epochId)
  *     ciphertext = await envelopeKeyProvider.encrypt(shareBytes, keyId)
@@ -25,7 +25,7 @@
  *     // 4. Log key.encrypted at INFO (AC-005)
  *     log key.encrypted with { keyId, agentId, correlationId? }
  *
- *   getShareBytes(agentId, epochId):
+ *   getShareBytes(agentId, epochId, correlationId?):
  *     // 1. SELECT encrypted_share from agent_key_shares
  *     keyId = deriveKeyId(agentId, epochId)
  *     row = await pool.query(SELECT encrypted_share FROM agent_key_shares WHERE ...)
@@ -33,7 +33,7 @@
  *
  *     // 2. Decrypt
  *     plaintext = await envelopeKeyProvider.decrypt(row.encrypted_share, keyId)
- *     log key.decrypted at INFO with { keyId, agentId }
+ *     log key.decrypted at INFO with { keyId, agentId, correlationId? }
  *     return plaintext
  *
  * Security invariants:
@@ -90,11 +90,14 @@ export class EncryptedPgShareStore {
    *   - the database INSERT fails
    *
    * Never logs the plaintext shareBytes (SI-001).
+   *
+   * @param correlationId - optional correlationId for threading async flow context (AC-005)
    */
   async storeShare(
     agentId: string,
     epochId: string,
     shareBytes: Uint8Array,
+    correlationId?: string,
   ): Promise<void> {
     const keyId = this.#keyId(agentId, epochId);
     const plaintextLen = shareBytes.length;
@@ -132,7 +135,11 @@ export class EncryptedPgShareStore {
 
     // Step 4: Log key.encrypted at INFO (AC-005)
     // SI-001: context contains only keyId and agentId — no share material
-    this.#logger.info("key.encrypted", { keyId, agentId });
+    const context: Record<string, unknown> = { keyId, agentId };
+    if (correlationId !== undefined) {
+      context.correlationId = correlationId;
+    }
+    this.#logger.info("key.encrypted", context);
   }
 
   /**
@@ -143,10 +150,13 @@ export class EncryptedPgShareStore {
    * Logs key.decrypted at INFO on success.
    *
    * Never logs the decrypted plaintext (SI-001).
+   *
+   * @param correlationId - optional correlationId for threading async flow context
    */
   async getShareBytes(
     agentId: string,
     epochId: string,
+    correlationId?: string,
   ): Promise<Uint8Array | null> {
     const keyId = this.#keyId(agentId, epochId);
 
@@ -171,7 +181,11 @@ export class EncryptedPgShareStore {
     }
 
     // SI-001: log keyId and agentId only — never the decrypted plaintext
-    this.#logger.info("key.decrypted", { keyId, agentId });
+    const context: Record<string, unknown> = { keyId, agentId };
+    if (correlationId !== undefined) {
+      context.correlationId = correlationId;
+    }
+    this.#logger.info("key.decrypted", context);
     return plaintext;
   }
 }

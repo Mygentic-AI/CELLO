@@ -38,6 +38,10 @@
  *   - SI-003: output length = plaintext + 28 (IV_BYTES + TAG_BYTES)
  *   - keyId bound as AAD — ciphertext for keyId "A" cannot be decrypted with keyId "B"
  *   - dual-key coexistence: #previousKey retained during rotation window for backward decrypt
+ *
+ * Observability note:
+ *   - encrypt/decrypt do not log — EncryptedPgShareStore handles key.encrypted and key.decrypted
+ *   - rotate logs key.rotation.initiated at the provider level (AC-007)
  */
 
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
@@ -92,30 +96,23 @@ export class LocalEnvelopeKeyProvider implements EnvelopeKeyProvider {
    * Total overhead: 28 bytes (SI-003).
    * Nonce is random per call (SI-004).
    * keyId is bound as AAD — wrong keyId causes auth tag failure on decrypt (AC-004).
-   * Logs key.encrypted on success, key.encrypted.failed on error (if logger provided).
+   * No logging at provider level — EncryptedPgShareStore handles observability (AC-005).
    */
   async encrypt(plaintext: Uint8Array, keyId: string): Promise<Uint8Array> {
-    try {
-      const iv = randomBytes(IV_BYTES);
-      const cipher = createCipheriv("aes-256-gcm", this.#currentKey, iv);
-      cipher.setAAD(Buffer.from(keyId, "utf8"));
-      const ciphered = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-      const tag = cipher.getAuthTag();
-      const result = Buffer.concat([iv, tag, ciphered]);
-      this.#logger?.info("key.encrypted", { keyId });
-      return result;
-    } catch (err: unknown) {
-      const reason = err instanceof Error ? err.message : String(err);
-      this.#logger?.error("key.encrypted.failed", { keyId, reason });
-      throw err;
-    }
+    const iv = randomBytes(IV_BYTES);
+    const cipher = createCipheriv("aes-256-gcm", this.#currentKey, iv);
+    cipher.setAAD(Buffer.from(keyId, "utf8"));
+    const ciphered = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    const result = Buffer.concat([iv, tag, ciphered]);
+    return result;
   }
 
   /**
    * Decrypt ciphertext produced by encrypt().
    * Tries #currentKey first; on auth tag failure, tries #previousKey (dual-key window).
    * Throws if neither key succeeds — no partial plaintext is returned (AC-004).
-   * Logs key.decrypted on success, key.decrypted.failed on error (if logger provided).
+   * No logging at provider level — EncryptedPgShareStore handles observability.
    */
   async decrypt(ciphertext: Uint8Array, keyId: string): Promise<Uint8Array> {
     const buf = Buffer.from(ciphertext);
@@ -136,16 +133,13 @@ export class LocalEnvelopeKeyProvider implements EnvelopeKeyProvider {
         decipher.setAAD(aad);
         decipher.setAuthTag(tag);
         const result = new Uint8Array(Buffer.concat([decipher.update(body), decipher.final()]));
-        this.#logger?.info("key.decrypted", { keyId });
         return result;
       } catch {
         // Auth tag mismatch — try next key
       }
     }
 
-    const error = new Error("Decryption failed: authentication tag mismatch for all available key versions");
-    this.#logger?.error("key.decrypted.failed", { keyId, reason: error.message });
-    throw error;
+    throw new Error("Decryption failed: authentication tag mismatch for all available key versions");
   }
 
   /**
