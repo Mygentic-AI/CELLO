@@ -21,7 +21,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { rmSync, mkdirSync, writeFileSync, readdirSync, statSync, readFileSync } from "node:fs";
 import { verify } from "@cello/crypto";
 import type { SigningKeyProvider } from "@cello/interfaces";
 import { SigningKeyProviderError } from "@cello/interfaces";
@@ -210,10 +210,13 @@ describe("PERSIST-010 AC-003 — SigningKeyProvider interface has exactly two me
       logger,
     });
 
-    // The provider object should not have any property that could expose the private key
+    // The provider object should not have any method that could expose raw key material.
+    // Pattern catches: private, secret, seed, export, getKey, getBuffer, getInternal.
+    // Note: isKeyBufferZeroedForTesting() is intentionally NOT caught — it returns boolean
+    // only and does not expose key bytes.
     const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(provider));
     const dangerousMethods = methods.filter((m) =>
-      /private|secret|seed|export/i.test(m),
+      /private|secret|seed|export|getKey|getBuffer|getInternal/i.test(m),
     );
     expect(dangerousMethods).toEqual([]);
   });
@@ -250,14 +253,12 @@ describe("PERSIST-010 AC-004 / SI-002 — key buffer zeroed after sign()", () =>
     const pubkey = await provider.getPublicKey();
     expect(verify(pubkey, data, signature)).toBe(true);
 
-    // The internal seed buffer should be zeroed after sign()
-    // We verify by checking getInternalKeyBufferForTesting() is all zeros
-    const internalBuffer = provider.getInternalKeyBufferForTesting();
-    const allZeros = internalBuffer.every((b) => b === 0);
-    expect(allZeros).toBe(true);
+    // The internal seed buffer should be zeroed after sign() — verified without
+    // exposing the key bytes (SI-001): isKeyBufferZeroedForTesting() returns boolean only.
+    expect(provider.isKeyBufferZeroedForTesting()).toBe(true);
   });
 
-  it("key buffer zeroed even when sign() would throw (SI-002 try/finally)", async () => {
+  it("key buffer zeroed even when sign() throws after key load (SI-002 try/finally)", async () => {
     const seed = randomBytes(32);
     const keyPath = join(tmpDir, "test.key");
     writeKeyFile(keyPath, seed);
@@ -268,15 +269,17 @@ describe("PERSIST-010 AC-004 / SI-002 — key buffer zeroed after sign()", () =>
       logger,
     });
 
-    // Corrupt the internal state to force a sign() failure
-    provider.corruptForTesting();
+    // Use throwAfterLoadForTesting() — this causes sign() to throw AFTER the seed has
+    // been read into the working buffer (non-zero key material is in the buffer at throw
+    // time). The finally block must still zero it. This is the genuine SI-002 adversarial
+    // path; corruptForTesting() exits before the file is read and never loads key material.
+    provider.throwAfterLoadForTesting();
 
-    // sign() should throw but the key buffer should still be zeroed
-    await expect(provider.sign(randomBytes(32))).rejects.toThrow();
+    // sign() should throw
+    await expect(provider.sign(randomBytes(32))).rejects.toThrow("injected failure after key load");
 
-    const internalBuffer = provider.getInternalKeyBufferForTesting();
-    const allZeros = internalBuffer.every((b) => b === 0);
-    expect(allZeros).toBe(true);
+    // The finally block must have zeroed the buffer even though sign() threw
+    expect(provider.isKeyBufferZeroedForTesting()).toBe(true);
   });
 });
 
@@ -570,5 +573,65 @@ describe("PERSIST-010 — corrupt key file handling", () => {
       name: "SigningKeyProviderError",
       reason: "key_file_corrupt",
     });
+  });
+});
+
+// ─── AC-007: No direct raw key access outside provider implementations ────────
+
+describe("PERSIST-010 AC-007 — no direct private key access outside provider files", () => {
+  /**
+   * Static verification: scan all .ts source files under packages/client/src/ and assert
+   * that @noble/curves/ed25519 (the raw Ed25519 signing primitive) is only imported in
+   * files whose name matches *-signing-key-provider*.ts.
+   *
+   * Scope: packages/client only. The @cello/crypto package is the legitimate home of
+   * low-level crypto primitives and may use ed25519 directly. This test enforces that
+   * CLIENT application code always goes through the SigningKeyProvider abstraction,
+   * never calling ed25519 directly with seed bytes.
+   *
+   * Test files (__tests__/**) are excluded — the test fixture in this file imports
+   * EncryptedFileSigningKeyProvider which itself is the allowed entry point.
+   */
+  it("AC-007 — within @cello/client, @noble/curves/ed25519 only imported in *-signing-key-provider* files", () => {
+    // packages/client/src/ — the application code boundary
+    const clientSrcRoot = join(__dirname, "../");
+
+    // Recursively collect all .ts files, excluding node_modules, dist, and __tests__
+    function collectTsFiles(dir: string): string[] {
+      const results: string[] = [];
+      for (const entry of readdirSync(dir)) {
+        const fullPath = join(dir, entry);
+        if (entry === "node_modules" || entry === "dist" || entry === "__tests__") continue;
+        const stat = statSync(fullPath);
+        if (stat.isDirectory()) {
+          results.push(...collectTsFiles(fullPath));
+        } else if (entry.endsWith(".ts")) {
+          results.push(fullPath);
+        }
+      }
+      return results;
+    }
+
+    const appFiles = collectTsFiles(clientSrcRoot);
+
+    // Files allowed to import @noble/curves/ed25519 directly
+    const allowedPattern = /-signing-key-provider/;
+
+    const violations: string[] = [];
+    for (const filePath of appFiles) {
+      // Skip allowed provider files
+      if (allowedPattern.test(filePath)) continue;
+
+      const content = readFileSync(filePath, "utf8");
+      // Check for actual import statements using the raw ed25519 primitive.
+      // We match only `import` or `require` statements, not comments or prose.
+      const importPattern = /^\s*(?:import|export)\s+.*['"]@noble\/curves\/ed25519/m;
+      const requirePattern = /require\s*\(\s*['"]@noble\/curves\/ed25519/;
+      if (importPattern.test(content) || requirePattern.test(content)) {
+        violations.push(filePath.replace(clientSrcRoot, "src/"));
+      }
+    }
+
+    expect(violations).toEqual([]);
   });
 });
