@@ -27,7 +27,7 @@ import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import pg from "pg";
 
 import { LocalAuditLogShipper, StdoutLogger } from "@cello/interfaces/stubs";
@@ -309,7 +309,9 @@ process.stdout.write("READY\\n");
 await new Promise(() => {});
 `;
 
-    const scriptPath = join(dir, "test-sigterm.mjs");
+    // Write script inside PKG so Node can resolve workspace packages via pnpm node_modules.
+    // A /tmp path has no access to the workspace and @cello/interfaces cannot be resolved.
+    const scriptPath = join(PKG, `test-sigterm-${randomUUID()}.mjs`);
     await writeFile(scriptPath, testScript, "utf8");
 
     // Spawn the process
@@ -356,6 +358,7 @@ await new Promise(() => {});
 
     // Cleanup
     await rm(dir, { recursive: true, force: true });
+    await rm(scriptPath, { force: true });
   });
 });
 
@@ -409,10 +412,11 @@ afterAll(async () => {
 describeIntegration("PERSIST-006 AC-001: pgaudit logs INSERT on conversation_seals", () => {
   it("pgaudit is enabled with pgaudit.log=all — log_min_messages is logged for any statement", async () => {
     // Verify that pgaudit.log = 'all' is set — meaning SELECT is included (SI-003).
-    const result = await pool.query<{ log: string }>(
+    // SHOW pgaudit.log returns a column named "pgaudit.log" (with dot), not "log".
+    const result = await pool.query<Record<string, string>>(
       `SHOW pgaudit.log`,
     );
-    const logSetting = result.rows[0]?.log ?? "";
+    const logSetting = (result.rows[0]?.["pgaudit.log"] ?? "").toLowerCase();
     // 'all' or comma-separated list that includes 'read' or 'all'
     expect(logSetting.toLowerCase()).toMatch(/all|read/);
   });
@@ -428,18 +432,20 @@ describeIntegration("PERSIST-006 AC-001: pgaudit logs INSERT on conversation_sea
     // AC-001: Execute actual INSERT and verify pgaudit log entry appears in container logs
     const testConversationId = randomBytes(16).toString("hex");
     const testSealHash = randomBytes(32).toString("hex");
-    const testSequenceNum = Math.floor(Math.random() * 1000000);
 
-    // Execute INSERT
+    // Execute INSERT using the real conversation_seals schema (V2)
     await pool.query(
-      `INSERT INTO conversation_seals (conversation_id, sequence_num, seal_hash, signed_at)
-       VALUES ($1, $2, $3, NOW())`,
-      [testConversationId, testSequenceNum, testSealHash],
+      `INSERT INTO conversation_seals (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
+       VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date, $3)`,
+      [testConversationId, testSealHash, "0".repeat(64)],
     );
 
     // Parse Postgres container logs to find the audit entry
     // Use docker logs to read the pgaudit log output
-    const containerName = "cello-postgres-1"; // Docker Compose default
+    // Docker Compose prefixes the project directory name; discover it dynamically.
+    const containerName = execSync("docker compose ps -q postgres 2>/dev/null || docker ps --filter name=postgres --format '{{.Names}}' | head -1", {
+      cwd: PKG, encoding: "utf8",
+    }).trim() || "trustless-cello-postgres-1";
     let logs = "";
     try {
       logs = execSync(`docker logs ${containerName} 2>&1 | tail -100`, {
@@ -462,8 +468,8 @@ describeIntegration("PERSIST-006 AC-001: pgaudit logs INSERT on conversation_sea
   it("SI-003: pgaudit.log includes read-level (SELECT) logging — not narrowed to writes only", async () => {
     // PERSIST-006 SI-003: pgaudit.log must not be scoped to exclude SELECT.
     // If set to 'all', read is implicitly included. If set explicitly, 'read' must appear.
-    const result = await pool.query<{ log: string }>(`SHOW pgaudit.log`);
-    const logSetting = (result.rows[0]?.log ?? "").toLowerCase();
+    const result = await pool.query<Record<string, string>>(`SHOW pgaudit.log`);
+    const logSetting = (result.rows[0]?.["pgaudit.log"] ?? "").toLowerCase();
     // Accepted values: 'all', or a comma-list that includes 'read'
     const coversRead = logSetting === "all" || logSetting.split(",").map((s) => s.trim()).includes("read");
     expect(coversRead).toBe(true);
