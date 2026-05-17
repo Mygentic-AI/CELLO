@@ -236,13 +236,19 @@ export class AnalyticsJob {
         );
       }
 
-      // DELETE stale edges
+      // DELETE stale edges — parameterized to match the safe pattern used for
+      // pseudonym_stats and graph_analysis_results stale deletions above.
       if (edgeRows.length > 0) {
-        // Build a list of (pseudonym_a, pseudonym_b) pairs to keep
-        const keepPairs = edgeRows.map((e) => `('${e.pseudonym_a.replace(/'/g, "''")}','${e.pseudonym_b.replace(/'/g, "''")}')`);
+        const keepA = edgeRows.map((e) => e.pseudonym_a);
+        const keepB = edgeRows.map((e) => e.pseudonym_b);
         await writeClient.query(
           `DELETE FROM conversation_graph_edges
-           WHERE (pseudonym_a, pseudonym_b) NOT IN (${keepPairs.join(",")})`,
+           WHERE NOT EXISTS (
+             SELECT 1 FROM UNNEST($1::text[], $2::text[]) AS keep(a, b)
+             WHERE keep.a = conversation_graph_edges.pseudonym_a
+               AND keep.b = conversation_graph_edges.pseudonym_b
+           )`,
+          [keepA, keepB],
         );
       } else {
         await writeClient.query(`DELETE FROM conversation_graph_edges`);

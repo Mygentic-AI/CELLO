@@ -156,6 +156,7 @@ logger.info("session.started", { userId, sessionId, principalType })
 - `migration.applied`, `migration.failed`
 - `adapter.write.failed` — context fields: `{ adapterName, reason }`; fired when a fire-and-forget write (e.g. `PgDirectoryStore#fire`) rejects; the write is not retried and the caller is not notified
 - `relay.ack.sign.failed` — level: error; context fields: `{ seq, sessionId, err }`; fired when the relay's ACK signing key provider throws during `hash_submit_ack` generation; the relay falls back to issuing an unsigned ACK so the submission is not rejected; added in PERSIST-012
+- `adapter.config.missing` — level: error; context fields: `{ adapter, missingVar }`; fired at startup when a required environment variable for an adapter is absent; the process exits with code 1; used consistently across all composition root entrypoints
 
 ---
 

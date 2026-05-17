@@ -167,7 +167,7 @@ describe("PERSIST-008 unit: AC-006 analytics.job.failed log call", () => {
     expect(logger.error).toHaveBeenCalledWith(
       "analytics.job.failed",
       expect.any(Error),
-      expect.objectContaining({ runId, phase: expect.any(String) }),
+      expect.objectContaining({ runId, phase: expect.any(String), reason: expect.any(String) }),
     );
   });
 });
@@ -577,6 +577,14 @@ describeIntegration("PERSIST-008 integration: SI-002 separate DB roles", () => {
       svcClient.release();
     }
   });
+
+  it("SI-002: cello_analytics cannot SELECT from agent_key_shares (no grant)", async () => {
+    // Adversarial condition: a compromised analytics job must not be able to read
+    // encrypted K_server_X shares. cello_analytics has no SELECT grant on agent_key_shares.
+    await expect(
+      analyticsPool.query("SELECT COUNT(*) FROM agent_key_shares"),
+    ).rejects.toThrow();
+  });
 });
 
 describeIntegration("PERSIST-008 integration: DB-001 partial writes rolled back on error", () => {
@@ -629,7 +637,7 @@ describeIntegration("PERSIST-008 integration: DB-001 partial writes rolled back 
     expect(logger.error).toHaveBeenCalledWith(
       "analytics.job.failed",
       expect.any(Error),
-      expect.objectContaining({ phase: expect.any(String) }),
+      expect.objectContaining({ phase: expect.any(String), reason: expect.any(String) }),
     );
 
     // Original pseudonym_stats data must be intact — confirmed by checking superPool
