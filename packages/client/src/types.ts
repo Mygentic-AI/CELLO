@@ -49,7 +49,7 @@ export interface SessionRecord {
    * 'bilateral' — directory unreachable at seal time; bilateral K_local seal only.
    * Undefined until a seal ceremony completes (status becomes 'sealed' or 'seal_deferred').
    */
-  seal_type?: "frost" | "bilateral";
+  seal_type?: "frost" | "bilateral" | "unilateral";
 
   /**
    * SESSION-005: FROST combined signature on the SealNotarization.

@@ -912,6 +912,15 @@ export class CelloDirectoryNode {
         }
       }
 
+      // PERSIST-014: clean up any pending seal attempts where this client was a participant
+      if (authedPubkeyHex) {
+        for (const [sessionIdHex, attempts] of this.#pendingSealAttempts) {
+          if (attempts.some((a) => a.partyHex === authedPubkeyHex)) {
+            this.#pendingSealAttempts.delete(sessionIdHex);
+          }
+        }
+      }
+
       // Close the write side so yamux can fully release the stream slot.
       // Without this, the stream stays half-open until the remote side closes its read,
       // which causes yamux to count it as active and eventually hit the stream limit.
@@ -1561,6 +1570,13 @@ export class CelloDirectoryNode {
     frame: import("./directory-types.js").SealAttempt,
   ): void {
     const sessionIdHex = Buffer.from(frame.session_id).toString("hex");
+
+    // C-003: Verify sender is a legitimate participant in this session
+    const pendingSession = this.#pendingSessions.get(sessionIdHex);
+    if (!pendingSession || (pendingSession.initiatorHex !== senderHex && pendingSession.targetHex !== senderHex)) {
+      return; // Silently reject non-participants
+    }
+
     // PERSIST-015: update last activity on seal attempt
     this.#sessionLastActivity.set(sessionIdHex, this.#clock.now());
 
@@ -1635,8 +1651,12 @@ export class CelloDirectoryNode {
 
     // SI-001: compute elapsed time from directory's own records
     const lastActivity = this.#sessionLastActivity.get(sessionIdHex);
+    if (lastActivity == null) {
+      // Unknown session — silently reject without leaking session existence
+      return;
+    }
     const now = this.#clock.now();
-    const elapsedMs = lastActivity != null ? now - lastActivity : 0;
+    const elapsedMs = now - lastActivity;
     const graceMs = this.#deliveryGraceSeconds * 1000;
 
     if (elapsedMs < graceMs) {
@@ -1692,7 +1712,11 @@ export class CelloDirectoryNode {
     });
     try { this.#sendFrame(stream, confirmFrame); } catch { /* */ }
 
-    protocolLog("SEAL", `Unilateral seal — session ${truncHex(sessionIdHex)}, submitter ${truncHex(senderHex)}`);
+    this.#logger?.info("session.unilateral.sealed", {
+      sessionId: sessionIdHex,
+      submitterHex: truncHex(senderHex),
+      correlationId: sessionIdHex,
+    });
   }
 
   /**
@@ -2229,6 +2253,7 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     requireConnectionGate: opts.requireConnectionGate,
     packageCborInterceptor: opts.packageCborInterceptor,
     logger: opts.logger,
+    deliveryGraceSeconds: opts.deliveryGraceSeconds,
   });
   await directory.start();
 

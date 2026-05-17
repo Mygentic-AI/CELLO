@@ -17,9 +17,8 @@ import { describe, it, expect, test } from "vitest";
 import { randomBytes } from "node:crypto";
 import { Encoder } from "cbor-x";
 import { generateKeypair } from "@cello/crypto";
-import { createNode } from "@cello/transport";
 import { createDirectoryNode } from "../directory-node.js";
-import { decodeInboundSignalingFrame } from "../directory-frames.js";
+import { decodeInboundSignalingFrame, decodeOutboundSignalingFrame } from "../directory-frames.js";
 
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
@@ -110,37 +109,27 @@ describe("PERSIST-015: SealUnilateral frame encoding/decoding", () => {
 });
 
 describe("PERSIST-015: Directory unilateral seal logic", () => {
-  it("AC-002: directory rejects SEAL_UNILATERAL before grace period elapses", async () => {
-    // Use a short grace period for testing
-    const { node, stop } = await createTestDirectoryNode({ deliveryGraceSeconds: 60 });
-
-    try {
-      const clientKp = generateKeypair();
-      const clientNode = await createNode({
-        keyProvider: clientKp,
-        listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
-      });
-      await clientNode.start();
-
-      const dirAddr = node.listenAddresses()[0]!;
-      await clientNode.dial(dirAddr);
-
-      const dirPeerId = node.getPeerId();
-      const stream = await clientNode.newStream(dirPeerId, "/cello/signaling/1.0.0");
-
-      // Stream opened — verifies basic connectivity
-      // Full seal_unilateral exchange tested in e2e
-      expect(stream).toBeDefined();
-
-      await stream.close();
-      await clientNode.stop();
-    } finally {
-      await stop();
+  it("AC-002: seal_unilateral_too_early frame is decodable by the outbound decoder", () => {
+    // Verify the outbound decoder handles seal_unilateral_too_early so tests can inspect it.
+    // The grace-period enforcement logic is tested end-to-end in the multi-process gate.
+    const sessionId = randomBytes(16);
+    const encoded = CBOR_ENC.encode({
+      type: "seal_unilateral_too_early",
+      session_id: sessionId,
+      remaining_seconds: 540,
+    });
+    const decoded = decodeOutboundSignalingFrame(encoded);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.type).toBe("seal_unilateral_too_early");
+    if (decoded!.type === "seal_unilateral_too_early") {
+      expect(decoded.remaining_seconds).toBe(540);
+      expect(Buffer.from(decoded.session_id)).toEqual(Buffer.from(sessionId));
     }
   });
 
-  it("AC-007: delivery_grace_seconds is configurable", async () => {
-    // Verify custom grace period is accepted
+  it("AC-007: delivery_grace_seconds is configurable and forwarded through the factory", async () => {
+    // Verify the factory forwards deliveryGraceSeconds to the CelloDirectoryNode constructor.
+    // Before the C-001 fix this was silently dropped and the default 600s was always used.
     const { stop } = await createTestDirectoryNode({ deliveryGraceSeconds: 60 });
     await stop();
 
@@ -172,11 +161,8 @@ describe("PERSIST-015: Directory unilateral seal logic", () => {
     }
   });
 
-  it("SI-002: unilateral seal produces exactly one seal (duplicate rejected)", () => {
-    // This is verified at the directory level — the #unilateralSeals map
-    // uses session_id_hex as key, so a second attempt for the same session
-    // is a no-op (the method returns early if already sealed)
-    // Full e2e test verifies this across processes
-    expect(true).toBe(true);
+  test.todo("SI-002: duplicate unilateral seal is rejected (requires auth handshake — multi-process gate)", () => {
+    // Full e2e test verifies: #unilateralSeals map ensures second call is a no-op.
+    // Cannot be tested without completing the auth handshake, which requires a running session.
   });
 });
