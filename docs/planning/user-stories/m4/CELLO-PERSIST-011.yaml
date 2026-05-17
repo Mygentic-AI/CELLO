@@ -214,6 +214,18 @@ observability:
       trigger: "backup triggered but no destination configured"
       context_fields: [agentId]
 
+    - name: client.backup.restore.not.configured
+      level: warn
+      trigger: "restore triggered but no cloud storage destination configured"
+      context_fields: [agentId]
+
+    - name: client.backup.restore.no.metadata
+      level: warn
+      trigger: "restore proceeds without stored metadata for checksum
+        verification (new-device restore scenario where metadata was not
+        separately backed up)"
+      context_fields: [agentId, checksumComputed]
+
   alarms:
     - condition: "client.backup.upload.failed fires 3 times consecutively"
       fires_to: ops-warning
