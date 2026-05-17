@@ -54,7 +54,7 @@
  *       --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { AnalyticsJob } from "../analytics-job.js";
@@ -316,7 +316,30 @@ afterAll(async () => {
   await analyticsPool?.end();
 });
 
-describeIntegration("PERSIST-008 integration: AC-001 per-pseudonym stats", () => {
+// Isolation wrapper: cleans protocol tables AND analytics output tables before each test.
+// Scoped inside describe blocks to avoid bleeding into other test files (Vitest
+// top-level beforeEach bleeds across files when maxThreads=1).
+async function cleanAllTestTables(): Promise<void> {
+  if (!superPool) return;
+  // TRUNCATE protocol tables with CASCADE (removes participation/attestation rows too)
+  await superPool.query(
+    "TRUNCATE conversation_seals, conversation_participation, conversation_attestations, notification_events RESTART IDENTITY CASCADE",
+  );
+  await cleanAnalyticsTables(superPool);
+}
+
+function describeIntegrationIsolated(name: string, fn: () => void): void {
+  describeIntegration(name, () => {
+    // beforeAll: clean the slate when this suite starts (runs once, doesn't bleed).
+    // afterEach: clean after each test for the next one in this suite.
+    // Not using beforeEach — Vitest bleeds beforeEach across files in one worker.
+    beforeAll(cleanAllTestTables);
+    afterEach(cleanAllTestTables);
+    fn();
+  });
+}
+
+describeIntegrationIsolated("PERSIST-008 integration: AC-001 per-pseudonym stats", () => {
   it("AC-001: analytics job populates pseudonym_stats with correct values for 3 pseudonyms", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -385,7 +408,7 @@ describeIntegration("PERSIST-008 integration: AC-001 per-pseudonym stats", () =>
   });
 });
 
-describeIntegration("PERSIST-008 integration: AC-002 conversation graph edges", () => {
+describeIntegrationIsolated("PERSIST-008 integration: AC-002 conversation graph edges", () => {
   it("AC-002: analytics job populates conversation_graph_edges with correct edge weights", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -432,7 +455,7 @@ describeIntegration("PERSIST-008 integration: AC-002 conversation graph edges", 
   });
 });
 
-describeIntegration("PERSIST-008 integration: AC-003 graph analysis results", () => {
+describeIntegrationIsolated("PERSIST-008 integration: AC-003 graph analysis results", () => {
   it("AC-003: graph_analysis_results has one row per pseudonym with no NULL fields after analytics run", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -469,7 +492,7 @@ describeIntegration("PERSIST-008 integration: AC-003 graph analysis results", ()
   });
 });
 
-describeIntegration("PERSIST-008 integration: AC-004 upsert on second run", () => {
+describeIntegrationIsolated("PERSIST-008 integration: AC-004 upsert on second run", () => {
   it("AC-004: second run with updated data upserts rows — no duplicates, stale rows removed", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -509,7 +532,7 @@ describeIntegration("PERSIST-008 integration: AC-004 upsert on second run", () =
   });
 });
 
-describeIntegration("PERSIST-008 integration: AC-007 run exits cleanly", () => {
+describeIntegrationIsolated("PERSIST-008 integration: AC-007 run exits cleanly", () => {
   it("AC-007: AnalyticsJob.run() completes without error when run against the real DB with seed data", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -532,7 +555,7 @@ describeIntegration("PERSIST-008 integration: AC-007 run exits cleanly", () => {
   });
 });
 
-describeIntegration("PERSIST-008 integration: SI-001 cello_analytics role is SELECT-only on protocol tables", () => {
+describeIntegrationIsolated("PERSIST-008 integration: SI-001 cello_analytics role is SELECT-only on protocol tables", () => {
   it("SI-001: cello_analytics role cannot INSERT into conversation_seals (RLS enforced)", async () => {
     // Attempt INSERT via the analytics pool — must be rejected
     await expect(
@@ -563,7 +586,7 @@ describeIntegration("PERSIST-008 integration: SI-001 cello_analytics role is SEL
   });
 });
 
-describeIntegration("PERSIST-008 integration: SI-002 separate DB roles", () => {
+describeIntegrationIsolated("PERSIST-008 integration: SI-002 separate DB roles", () => {
   it("SI-002: AnalyticsJob uses read pool (cello_analytics) for reads and write pool (cello_service) for writes", async () => {
     // Verify cello_analytics can connect and query
     const client = await analyticsPool.connect();
@@ -593,7 +616,7 @@ describeIntegration("PERSIST-008 integration: SI-002 separate DB roles", () => {
   });
 });
 
-describeIntegration("PERSIST-008 integration: DB-001 partial writes rolled back on error", () => {
+describeIntegrationIsolated("PERSIST-008 integration: DB-001 partial writes rolled back on error", () => {
   it("DB-001: mid-run DB error rolls back partial writes; previous run data intact", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
