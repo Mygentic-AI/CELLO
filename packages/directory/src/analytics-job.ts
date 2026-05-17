@@ -333,11 +333,7 @@ export class AnalyticsJob {
       // ─── Record run in analytics_run_log ─────────────────────────────────
       await writeClient.query(
         `INSERT INTO analytics_run_log (run_id, last_run_at, pseudonym_count, edge_count)
-         VALUES ($1, now(), $2, $3)
-         ON CONFLICT (run_id) DO UPDATE SET
-           last_run_at     = now(),
-           pseudonym_count = EXCLUDED.pseudonym_count,
-           edge_count      = EXCLUDED.edge_count`,
+         VALUES ($1, now(), $2, $3)`,
         [runId, pseudonymCount, edgeCount],
       );
 

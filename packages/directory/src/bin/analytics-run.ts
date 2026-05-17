@@ -32,9 +32,17 @@ if (!readUrl) {
   process.exit(1);
 }
 
-// Write pool defaults to cello_service user derived from DATABASE_URL
-const writeUrl = process.env["DATABASE_WRITE_URL"]
-  ?? readUrl.replace(/^(postgres(?:ql)?):\/\/[^:]+:[^@]+@/, "$1://cello_service:cello_service_dev@");
+// In non-local environments DATABASE_WRITE_URL is required — no silent credential fallback.
+// In local development it may be omitted; the cello_service_dev password is derived from
+// DATABASE_URL for convenience.
+let writeUrl = process.env["DATABASE_WRITE_URL"];
+if (!writeUrl) {
+  if (env !== "local") {
+    logger.error("adapter.config.missing", { missingKey: "DATABASE_WRITE_URL" });
+    process.exit(1);
+  }
+  writeUrl = readUrl.replace(/^(postgres(?:ql)?):\/\/[^:]+:[^@]+@/, "$1://cello_service:cello_service_dev@");
+}
 
 const readPool = new pg.Pool({ connectionString: readUrl });
 const writePool = new pg.Pool({ connectionString: writeUrl });
