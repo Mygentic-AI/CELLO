@@ -194,6 +194,28 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
+  - id: AC-010-canonical-tbs
+    given: "The checkpoint hash formula is SHA-256(mmr_peaks_serialized
+      || identity_merkle_root || checkpoint_id) where mmr_peaks_serialized
+      is a canonical JSON array of hex-encoded peak hashes ordered by MMR
+      position ascending"
+    when: "the serialization function is inspected"
+    then: "buildCheckpointTbs (or equivalent canonical name) lives in
+      @cello/crypto — both the coordinator (which signs/produces the hash)
+      and each non-coordinator verifier (which independently recomputes
+      the hash to validate the proposal) import this function from
+      @cello/crypto; no inline serialization of mmr_peaks exists in
+      packages/directory; a cross-path contract test in @cello/crypto
+      asserts: coordinator serializes → non-coordinator serializes the
+      same input → byte-for-byte identical output → same checkpoint hash;
+      this prevents the silent divergence failure mode where two honest
+      nodes produce different hashes from the same MMR state (lesson from
+      M4 bug #12: buildRelayAckTbs independently implemented in relay and
+      client — ACK verification would have silently failed if implementations
+      diverged)"
+    test_type: unit
+    component_under_test: directory
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001

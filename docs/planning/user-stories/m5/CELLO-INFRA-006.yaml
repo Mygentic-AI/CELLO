@@ -153,6 +153,18 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
+  - id: AC-008-idempotency
+    given: "The V10 relay registration schema migration has been applied
+      once to a database that already has V1–V9 applied"
+    when: "flyway migrate is run a second time against the same database"
+    then: "flyway exits 0 with no new rows in flyway_schema_history;
+      the CREATE TABLE for relay_registrations uses IF NOT EXISTS;
+      running V10 twice is safe — verified by applying V10 twice and
+      asserting flyway_schema_history row count does not change on the
+      second run"
+    test_type: integration
+    component_under_test: directory
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001

@@ -151,6 +151,18 @@ acceptance_criteria:
     test_type: unit
     component_under_test: directory
 
+  - id: AC-008-idempotency
+    given: "The V11 pending_notifications schema migration has been
+      applied once to a database that already has V1–V10 applied"
+    when: "flyway migrate is run a second time against the same database"
+    then: "flyway exits 0 with no new rows in flyway_schema_history;
+      the CREATE TABLE for pending_notifications uses IF NOT EXISTS;
+      the CREATE INDEX uses IF NOT EXISTS; running V11 twice is safe —
+      verified by applying V11 twice and asserting flyway_schema_history
+      row count does not change on the second run"
+    test_type: integration
+    component_under_test: directory
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001

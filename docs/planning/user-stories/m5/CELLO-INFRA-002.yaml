@@ -154,7 +154,23 @@ acceptance_criteria:
     test_type: e2e
     component_under_test: directory
 
-  - id: AC-008
+  - id: AC-008-idempotency
+    given: "The V9 federation schema migration has been applied once
+      to a database that already has V1–V8 applied"
+    when: "flyway migrate is run a second time against the same database"
+    then: "flyway exits 0 with no new rows in flyway_schema_history;
+      no error is produced; every CREATE in V9 uses IF NOT EXISTS;
+      every ALTER TABLE ADD COLUMN uses DO $$ BEGIN IF NOT EXISTS
+      (SELECT 1 FROM information_schema.columns WHERE table_name=...
+      AND column_name=...) THEN ALTER TABLE ... ADD COLUMN ...; END IF;
+      END $$; running the migration on a database that already has the
+      sessions table or the V9 columns is safe — verified by applying
+      V9 twice and asserting flyway_schema_history row count does not
+      change on the second run"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010
     given: "All three nodes are running and replicating"
     when: "pg_stat_replication is queried on each node"
     then: "each node shows two active replication slots (one per peer)
@@ -197,7 +213,31 @@ security_invariants:
       only — no INSERT, UPDATE, DELETE, or DDL on any table"
     adversarial_condition: "even when the cello_replication role is
       compromised — it can read the WAL stream but cannot modify any
-      table or schema directly"
+      table or schema directly; the cello_replication role does NOT
+      need RLS SELECT policies — it reads the WAL stream, not via
+      SELECT; adding SELECT policies for this role is incorrect and
+      unnecessary"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-004
+    statement: "configurePgTypes() shall be called on every database
+      connection on every node in every region before any chain hash
+      computation or verification"
+    adversarial_condition: "the pg driver converts DATE columns to
+      JavaScript Date objects using the local timezone — a DATE stored
+      as '2026-01-01' in Tokyo (UTC+9) reads back as
+      '2025-12-31T15:00:00.000Z' in Frankfurt (UTC+1) if type parsers
+      are not configured; this produces a different chain_hash on
+      the receiving node than the owning node computed at INSERT time,
+      causing federation.replication.chain_hash_mismatch to fire on
+      every replicated row; configurePgTypes() must set DATE and
+      TIMESTAMP type parsers to return raw strings; it must be called
+      from the PgDirectoryStore constructor, not at module import time
+      (module-scope global state contaminates other test files —
+      lesson from M4 bug #8); startup verification: each node on first
+      connect queries a known DATE value and asserts it returns a string,
+      not a Date object"
     test_type: integration
     component_under_test: directory
 
