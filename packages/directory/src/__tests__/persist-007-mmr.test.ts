@@ -453,9 +453,17 @@ async function truncateMmrTables(): Promise<void> {
   `);
 }
 
-beforeEach(truncateMmrTables);
+// Wrap describeIntegration to add beforeEach(truncateMmrTables) inside each block.
+// Top-level beforeEach in Vitest bleeds across test files when maxThreads=1 — scoping
+// it inside each describe block prevents cross-file contamination.
+function describeIntegrationIsolated(name: string, fn: () => void): void {
+  describeIntegration(name, () => {
+    beforeEach(truncateMmrTables);
+    fn();
+  });
+}
 
-describeIntegration("PERSIST-007 integration: mmr.leaf.appended observability", () => {
+describeIntegrationIsolated("PERSIST-007 integration: mmr.leaf.appended observability", () => {
   it("mmr.leaf.appended: appendSeal emits mmr.leaf.appended at INFO with { sessionId, leafIndex, leafHash, correlationId }", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const store = new MmrStore(servicePool, logger);
@@ -479,7 +487,7 @@ describeIntegration("PERSIST-007 integration: mmr.leaf.appended observability", 
   });
 });
 
-describeIntegration("PERSIST-007 integration: AC-003 inclusion proof for leaf 3 in 8-leaf MMR", () => {
+describeIntegrationIsolated("PERSIST-007 integration: AC-003 inclusion proof for leaf 3 in 8-leaf MMR", () => {
   it("AC-003: 8-leaf MMR, proof for leaf 3 verifies against checkpoint peak", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const store = new MmrStore(servicePool, logger);
@@ -519,7 +527,7 @@ describeIntegration("PERSIST-007 integration: AC-003 inclusion proof for leaf 3 
   });
 });
 
-describeIntegration("PERSIST-007 integration: Fix4 — 3-leaf MMR proof has non-empty sibling_hashes", () => {
+describeIntegrationIsolated("PERSIST-007 integration: Fix4 — 3-leaf MMR proof has non-empty sibling_hashes", () => {
   it("Fix4: getInclusionProof for leaf 0 in 3-leaf MMR returns proof with sibling_hashes", async () => {
     // 3-leaf MMR: 2 peaks (height-1 subtree for leaves 0,1 and height-0 peak for leaf 2).
     // Internal node for leaves 0,1 is at mmr_position 2 — which is HIGHER than any leaf position
@@ -557,7 +565,7 @@ describeIntegration("PERSIST-007 integration: Fix4 — 3-leaf MMR proof has non-
   });
 });
 
-describeIntegration("PERSIST-007 integration: AC-004 checkpoint clears staging, leaves retained", () => {
+describeIntegrationIsolated("PERSIST-007 integration: AC-004 checkpoint clears staging, leaves retained", () => {
   it("AC-004: 5 seals staged → checkpoint confirmed → staging has 0 rows, leaves has 5 rows", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const store = new MmrStore(servicePool, logger);
@@ -605,7 +613,7 @@ describeIntegration("PERSIST-007 integration: AC-004 checkpoint clears staging, 
   });
 });
 
-describeIntegration("PERSIST-007 integration: AC-005 concurrent seals during checkpoint", () => {
+describeIntegrationIsolated("PERSIST-007 integration: AC-005 concurrent seals during checkpoint", () => {
   it("AC-005: seals added after checkpoint initiation are NOT included in the checkpoint", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const store = new MmrStore(servicePool, logger);
@@ -649,7 +657,7 @@ describeIntegration("PERSIST-007 integration: AC-005 concurrent seals during che
   });
 });
 
-describeIntegration("PERSIST-007 integration: AC-006 mmr.checkpoint.confirmed observability", () => {
+describeIntegrationIsolated("PERSIST-007 integration: AC-006 mmr.checkpoint.confirmed observability", () => {
   it("AC-006: MmrStore.confirmCheckpoint emits mmr.checkpoint.confirmed at INFO with required fields", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const store = new MmrStore(servicePool, logger);
@@ -682,7 +690,7 @@ describeIntegration("PERSIST-007 integration: AC-006 mmr.checkpoint.confirmed ob
   });
 });
 
-describeIntegration("PERSIST-007 integration: AC-007 chain verification on 100-leaf MMR", () => {
+describeIntegrationIsolated("PERSIST-007 integration: AC-007 chain verification on 100-leaf MMR", () => {
   it("AC-007: 100-leaf MMR — both conversation_proof_leaves and conversation_proof_mmr_nodes pass chain verification", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const store = new MmrStore(servicePool, logger);
@@ -702,7 +710,7 @@ describeIntegration("PERSIST-007 integration: AC-007 chain verification on 100-l
   });
 });
 
-describeIntegration("PERSIST-007 integration: SI-001 proof unavailable for staging leaf", () => {
+describeIntegrationIsolated("PERSIST-007 integration: SI-001 proof unavailable for staging leaf", () => {
   it("SI-001: leaf in staging (not in checkpoint) → getInclusionProof returns PROOF_NOT_YET_AVAILABLE", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const store = new MmrStore(servicePool, logger);
@@ -725,7 +733,7 @@ describeIntegration("PERSIST-007 integration: SI-001 proof unavailable for stagi
   });
 });
 
-describeIntegration("PERSIST-007 integration: SI-003 no leaf in >1 checkpoint", () => {
+describeIntegrationIsolated("PERSIST-007 integration: SI-003 no leaf in >1 checkpoint", () => {
   it("SI-003: leaf assigned to checkpoint N cannot be assigned to checkpoint N+1", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const store = new MmrStore(servicePool, logger);
@@ -763,7 +771,7 @@ describeIntegration("PERSIST-007 integration: SI-003 no leaf in >1 checkpoint", 
   });
 });
 
-describeIntegration("PERSIST-007 integration: DB-001 incomplete checkpoint recovery", () => {
+describeIntegrationIsolated("PERSIST-007 integration: DB-001 incomplete checkpoint recovery", () => {
   it("DB-001: orphaned staging rows with missing checkpoint row → detected and re-run completes idempotently", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const store = new MmrStore(servicePool, logger);

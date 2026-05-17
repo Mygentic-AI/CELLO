@@ -189,14 +189,15 @@ afterAll(async () => {
   await servicePool?.end();
 });
 
-// Each integration test must start with a clean chain — verifyChain reads all rows,
-// so cross-test pollution causes spurious chain-break failures.
-beforeEach(async () => {
-  if (!superPool) return;
-  await superPool.query("TRUNCATE notification_events, conversation_seals RESTART IDENTITY CASCADE");
-});
-
 describeIntegration("PERSIST-004 integration: hash chain in Postgres", () => {
+  // Each integration test must start with a clean chain — verifyChain reads all rows,
+  // so cross-test pollution causes spurious chain-break failures.
+  // Scoped inside describeIntegration to avoid bleeding into other test files
+  // (top-level beforeEach in Vitest applies across files when maxThreads=1).
+  beforeEach(async () => {
+    if (!superPool) return;
+    await superPool.query("TRUNCATE notification_events, conversation_seals RESTART IDENTITY CASCADE");
+  });
   // Use a unique test run prefix to avoid collisions with other test runs
   const testRunId = randomUUID().slice(0, 8);
 
