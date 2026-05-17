@@ -7,14 +7,25 @@
  *   SI-002: PgDirectoryStore is not exported from packages/directory index.ts
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 import { execSync } from "node:child_process";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
 import { createRequire } from "node:module";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 
 const PKG = resolve(import.meta.dirname, "../..");
 // Resolve tsx/esm absolute path so the subprocess can import it without relying on shell PATH
 const tsxEsm = createRequire(import.meta.url).resolve("tsx/esm");
+
+// Track temp directories for cleanup
+const tempDirs: string[] = [];
+
+afterAll(async () => {
+  for (const dir of tempDirs) {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 function runBin(env: NodeJS.ProcessEnv): { stdout: string; stderr: string; code: number } {
   // Merge then strip undefined entries so callers can unset vars from process.env
@@ -52,26 +63,32 @@ describe("AC-004: composition root exits 1 on missing config", () => {
     expect(out).toContain("adapter.config.missing");
   });
 
-  it("exits 1 when CELLO_ENV=local and DATABASE_URL is absent", () => {
+  it("exits 1 when CELLO_ENV=local and DATABASE_URL is absent", async () => {
     // Pass DATABASE_URL: undefined so runBin's spread clears it even if set in process.env.
     // AUDIT_LOG_PATH is set so the binary reaches the DATABASE_URL check (PERSIST-006 check runs first).
-    const result = runBin({ CELLO_ENV: "local", CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooW", AUDIT_LOG_PATH: "/tmp/audit.jsonl", DATABASE_URL: undefined });
+    const dir = await mkdtemp(join(tmpdir(), "cello-test-"));
+    tempDirs.push(dir);
+    const auditPath = join(dir, "audit.jsonl");
+    const result = runBin({ CELLO_ENV: "local", CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooW", AUDIT_LOG_PATH: auditPath, DATABASE_URL: undefined });
     expect(result.code).toBe(1);
     const out = result.stdout + result.stderr;
     expect(out).toContain("DATABASE_URL");
   });
 
-  it("exits 1 when CELLO_ENV=local and DEV_ENVELOPE_KEY is absent", () => {
+  it("exits 1 when CELLO_ENV=local and DEV_ENVELOPE_KEY is absent", async () => {
     // Requires a database with all migrations applied (including V3).
     // The migration version guard runs before the DEV_ENVELOPE_KEY check, so
     // this test only exercises the correct code path when the DB is up to date.
     // Marked skip when not running in CELLO_ENV=local (integration environment).
     const isLocal = process.env["CELLO_ENV"] === "local";
     if (!isLocal) return;
+    const dir = await mkdtemp(join(tmpdir(), "cello-test-"));
+    tempDirs.push(dir);
+    const auditPath = join(dir, "audit.jsonl");
     const result = runBin({
       CELLO_ENV: "local",
       DATABASE_URL: "postgresql://postgres:dev@localhost:5433/cello_dev",
-      AUDIT_LOG_PATH: "/tmp/audit.jsonl",
+      AUDIT_LOG_PATH: auditPath,
       CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooW",
       DEV_ENVELOPE_KEY: undefined,
     });
@@ -93,14 +110,17 @@ const isLocal = process.env["CELLO_ENV"] === "local";
 const describeIntegration = isLocal ? describe : describe.skip;
 
 describeIntegration("AC-002: CELLO_ENV=local startup — all adapters initialise against real Postgres", () => {
-  it("logs adapter.initialised for all five adapters before first connection attempt", () => {
+  it("logs adapter.initialised for all five adapters before first connection attempt", async () => {
     // Run the binary with valid local config; it will exit 1 on missing key file
     // but all six adapter.initialised events fire before that point.
+    const dir = await mkdtemp(join(tmpdir(), "cello-test-"));
+    tempDirs.push(dir);
+    const auditPath = join(dir, "audit.jsonl");
     const result = runBin({
       CELLO_ENV: "local",
       DATABASE_URL: process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5433/cello_dev",
       DEV_ENVELOPE_KEY: process.env["DEV_ENVELOPE_KEY"] ?? "0".repeat(64),
-      AUDIT_LOG_PATH: "/tmp/cello-audit-persist001.jsonl",
+      AUDIT_LOG_PATH: auditPath,
       CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWTest",
     });
     const out = result.stdout + result.stderr;
@@ -115,12 +135,15 @@ describeIntegration("AC-002: CELLO_ENV=local startup — all adapters initialise
     expect(out).not.toContain("amazonaws.com");
   });
 
-  it("exits 1 with migration.out.of.date when pointing at a database with no migrations", () => {
+  it("exits 1 with migration.out.of.date when pointing at a database with no migrations", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cello-test-"));
+    tempDirs.push(dir);
+    const auditPath = join(dir, "audit.jsonl");
     const result = runBin({
       CELLO_ENV: "local",
       DATABASE_URL: "postgresql://postgres:dev@localhost:5433/cello_nonexistent_test_db",
       DEV_ENVELOPE_KEY: "0".repeat(64),
-      AUDIT_LOG_PATH: "/tmp/cello-audit-persist001.jsonl",
+      AUDIT_LOG_PATH: auditPath,
       CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWTest",
     });
     expect(result.code).toBe(1);

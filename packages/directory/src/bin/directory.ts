@@ -277,8 +277,8 @@ const shutdown = () => {
   result.stop()
     .then(() => pgPool?.end())
     .then(() => auditLogShipper.flush())
-    .then(() => {
-      logger.info("audit.shipper.flushed", { entriesShipped: 0, durationMs: Date.now() - startMs });
+    .then((entriesShipped: number) => {
+      logger.info("audit.shipper.flushed", { entriesShipped, durationMs: Date.now() - startMs });
     })
     .catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);

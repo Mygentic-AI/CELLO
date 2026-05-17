@@ -19,13 +19,16 @@ export interface AuditLogEntry {
   table: string;
   /** ISO-8601 timestamp of the statement */
   timestamp: string;
+  /** Optional correlation ID to thread async flows */
+  correlationId?: string;
 }
 
 /**
  * AuditLogShipper — exactly two methods by design (AC-007).
  * ship() is called per log entry; flush() drains all buffered entries before returning.
+ * flush() returns the total number of entries shipped (both immediate and retried).
  */
 export interface AuditLogShipper {
   ship(entry: AuditLogEntry): Promise<void>;
-  flush(): Promise<void>;
+  flush(): Promise<number>;
 }

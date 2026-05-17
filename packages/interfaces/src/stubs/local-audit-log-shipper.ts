@@ -39,6 +39,7 @@ export class LocalAuditLogShipper implements AuditLogShipper {
   readonly #path: string;
   // SI-002: retry queue — entries that failed to write are held here until flush()
   readonly #retryQueue: AuditLogEntry[] = [];
+  #shippedCount = 0;
 
   constructor(path: string) {
     this.#path = path;
@@ -49,6 +50,7 @@ export class LocalAuditLogShipper implements AuditLogShipper {
     const line = JSON.stringify(entry) + "\n";
     try {
       await appendFile(this.#path, line, { flag: "a" });
+      this.#shippedCount++;
     } catch (err) {
       // SI-002: do not silently drop — add to retry queue and re-throw so caller
       // can log audit.ship.failed with the error context
@@ -57,15 +59,42 @@ export class LocalAuditLogShipper implements AuditLogShipper {
     }
   }
 
-  async flush(): Promise<void> {
+  async flush(): Promise<number> {
     // AC-003: drain retry queue — all entries shipped before this call must be
     // persisted before flush() returns
+    // Maximum 3 retry attempts per entry to prevent infinite loops on persistent failures
+    const maxRetries = 3;
+    const failedEntries: AuditLogEntry[] = [];
+
     while (this.#retryQueue.length > 0) {
-      const entry = this.#retryQueue[0]!;
+      const entry = this.#retryQueue[0];
+      if (!entry) break;
+
       const line = JSON.stringify(entry) + "\n";
-      // SI-001: flag:'a' — O_APPEND
-      await appendFile(this.#path, line, { flag: "a" });
+      let retryCount = 0;
+      let success = false;
+
+      while (retryCount < maxRetries && !success) {
+        try {
+          // SI-001: flag:'a' — O_APPEND
+          await appendFile(this.#path, line, { flag: "a" });
+          this.#shippedCount++;
+          success = true;
+        } catch (err) {
+          retryCount++;
+          if (retryCount >= maxRetries) {
+            failedEntries.push(entry);
+            // Log the permanent failure but don't throw — flush() must complete
+            // TODO: inject logger to avoid console.error
+             
+            console.error("audit.ship.retry.exhausted", { entry, error: err });
+          }
+        }
+      }
+
       this.#retryQueue.shift();
     }
+
+    return this.#shippedCount;
   }
 }

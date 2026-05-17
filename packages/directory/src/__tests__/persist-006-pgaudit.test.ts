@@ -21,8 +21,8 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
@@ -67,6 +67,9 @@ describe("PERSIST-006 AC-007: AuditLogShipper interface exposes exactly ship() a
       (n) => n !== "constructor",
     );
     expect(proto.sort()).toEqual(["flush", "ship"].sort());
+
+    // Cleanup
+    await rm(dir, { recursive: true, force: true });
   });
 });
 
@@ -85,14 +88,18 @@ describe("PERSIST-006 AC-003: flush() drains all buffered entries before returni
     for (const e of entries) {
       await shipper.ship(e);
     }
-    await shipper.flush();
+    const count = await shipper.flush();
 
+    expect(count).toBe(3);
     const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
     expect(lines).toHaveLength(3);
     for (const [i, line] of lines.entries()) {
       const parsed = JSON.parse(line) as AuditLogEntry;
       expect(parsed.statement).toBe(entries[i]!.statement);
     }
+
+    // Cleanup
+    await rm(dir, { recursive: true, force: true });
   });
 });
 
@@ -116,6 +123,9 @@ describe("PERSIST-006 AC-006: 10 ship() calls → 10 JSON lines, no partial writ
       const parsed = JSON.parse(line) as AuditLogEntry;
       expect(parsed).toMatchObject({ role: "cello_service", table: "conversation_seals" });
     }
+
+    // Cleanup
+    await rm(dir, { recursive: true, force: true });
   });
 
   it("SI-001: pre-existing lines are not modified — file is append-only", async () => {
@@ -124,7 +134,7 @@ describe("PERSIST-006 AC-006: 10 ship() calls → 10 JSON lines, no partial writ
 
     // Write a sentinel line manually
     const sentinel = JSON.stringify({ role: "sentinel", statement: "SENTINEL", table: "t", timestamp: "ts" });
-    writeFileSync(path, sentinel + "\n", { flag: "a" });
+    await writeFile(path, sentinel + "\n", { flag: "a" });
 
     const shipper = new LocalAuditLogShipper(path);
     await shipper.ship(makeEntry({ statement: "INSERT" }));
@@ -134,6 +144,9 @@ describe("PERSIST-006 AC-006: 10 ship() calls → 10 JSON lines, no partial writ
     // Sentinel must still be the first line — it was not overwritten
     expect(lines[0]).toBe(sentinel);
     expect(lines).toHaveLength(2);
+
+    // Cleanup
+    await rm(dir, { recursive: true, force: true });
   });
 });
 
@@ -155,6 +168,9 @@ describe("PERSIST-006 AC-002: LocalAuditLogShipper writes structured JSON", () =
     expect(parsed.statement).toBe("INSERT");
     expect(parsed.table).toBe("conversation_seals");
     expect(typeof parsed.timestamp).toBe("string");
+
+    // Cleanup
+    await rm(dir, { recursive: true, force: true });
   });
 });
 
@@ -263,6 +279,9 @@ describe("PERSIST-006 SI-002: ship() failure triggers retry — entries not sile
     expect(lines).toHaveLength(1);
     const parsed = JSON.parse(lines[0]!) as AuditLogEntry;
     expect(parsed.statement).toBe("INSERT");
+
+    // Cleanup
+    await rm(dir, { recursive: true, force: true });
   });
 });
 
