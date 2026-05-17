@@ -51,6 +51,7 @@ function makeLeaf(seq: number): Leaf {
     content_hash: new Uint8Array(randomBytes(32)),
     sender_signature: new Uint8Array(randomBytes(64)),
     prev_root: new Uint8Array(randomBytes(32)),
+    structure1_cbor: new Uint8Array(randomBytes(48)),
   };
 }
 

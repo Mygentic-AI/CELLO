@@ -133,10 +133,11 @@ export interface GapFillRequest {
 
 export interface GapFillLeaf {
   sequence_number: number;
-  sender_pubkey: Uint8Array;   // 32 bytes
-  content_hash: Uint8Array;    // 32 bytes
+  sender_pubkey: Uint8Array;    // 32 bytes
+  content_hash: Uint8Array;     // 32 bytes
   sender_signature: Uint8Array; // 64 bytes
-  prev_root: Uint8Array;       // 32 bytes
+  prev_root: Uint8Array;        // 32 bytes
+  structure1_cbor: Uint8Array;  // exact bytes sender signed — required for signature verification
 }
 
 export interface GapFillResponse {

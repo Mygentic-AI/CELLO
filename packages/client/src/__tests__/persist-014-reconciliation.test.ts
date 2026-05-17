@@ -67,6 +67,7 @@ describe("PERSIST-014: Client gap-fill leaf verification", () => {
       content_hash: contentHash,
       sender_signature: tamperedSig,
       prev_root: randomBytes(32),
+      structure1_cbor: structure1Tbs,
     };
 
     // Verify leaf signature (same logic client uses)

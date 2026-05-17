@@ -23,6 +23,7 @@ function makeLeaf(seq: number, senderPubkey?: Uint8Array): Leaf {
     content_hash: randomBytes(32),
     sender_signature: randomBytes(64),
     prev_root: randomBytes(32),
+    structure1_cbor: randomBytes(48),
   };
 }
 

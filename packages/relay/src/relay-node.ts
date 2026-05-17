@@ -578,9 +578,17 @@ export class CelloRelayNode {
       return;
     }
 
+    // Validate bounds before WAL access
+    if (frame.from_seq < 0 || frame.to_seq < 0 || frame.from_seq > frame.to_seq || (frame.to_seq - frame.from_seq) > 1000) {
+      try {
+        await this.#sendFrame(stream, encodeGapFillError({ type: "gap_fill_error", reason: "wal_unavailable" }));
+      } catch { /* stream closed */ }
+      return;
+    }
+
     // If no SessionWal is configured, WAL is unavailable
     if (!this.#sessionWal) {
-      this.#logger.error("relay.gap.fill.wal.unavailable", { sessionId: sessionKey, reason: "session_wal_not_configured" });
+      this.#logger.error("relay.gap.fill.failed", { sessionId: sessionKey, reason: "session_wal_not_configured" });
       try {
         await this.#sendFrame(stream, encodeGapFillError({ type: "gap_fill_error", reason: "wal_unavailable" }));
       } catch { /* stream closed */ }
@@ -589,7 +597,7 @@ export class CelloRelayNode {
 
     const result = await this.#sessionWal.getLeaves(sessionKey, frame.from_seq, frame.to_seq);
     if (result === RELAY_SESSION_UNRECOVERABLE) {
-      this.#logger.error("relay.gap.fill.wal.unavailable", { sessionId: sessionKey, reason: "wal_unrecoverable" });
+      this.#logger.error("relay.gap.fill.failed", { sessionId: sessionKey, reason: "wal_unrecoverable" });
       try {
         await this.#sendFrame(stream, encodeGapFillError({ type: "gap_fill_error", reason: "wal_unavailable" }));
       } catch { /* stream closed */ }
@@ -606,6 +614,7 @@ export class CelloRelayNode {
           content_hash: l.content_hash,
           sender_signature: l.sender_signature,
           prev_root: l.prev_root,
+          structure1_cbor: l.structure1_cbor,
         })),
       }));
     } catch { /* stream closed */ }
@@ -851,6 +860,10 @@ export interface CreateRelayNodeOptions {
   store?: RelayStore;
   /** Persisted transport key for stable Peer ID (32-byte Ed25519 seed) */
   transportPrivateKey?: Uint8Array;
+  /** PERSIST-014: WAL for serving gap-fill leaves. Required for reconciliation support. */
+  sessionWal?: SessionWal;
+  /** Structured logger injected at the composition root */
+  logger?: Logger;
 }
 
 export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
@@ -871,6 +884,8 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     directoryPubkey: opts.directoryPubkey,
     directory: opts.directory,
     store: opts.store,
+    sessionWal: opts.sessionWal,
+    logger: opts.logger,
   });
   await relay.start();
 

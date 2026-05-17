@@ -31,6 +31,7 @@ export interface Leaf {
   content_hash: Uint8Array;
   sender_signature: Uint8Array;
   prev_root: Uint8Array;
+  structure1_cbor: Uint8Array;  // exact bytes sender signed — required for gap-fill signature verification
 }
 
 /**

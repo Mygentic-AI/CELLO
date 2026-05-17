@@ -339,6 +339,9 @@ class CelloClientImpl implements CelloClient {
   // The Promise resolves when session_sealed arrives; if it times out first, seal_type = 'bilateral'.
   readonly #sealFrostResolvers = new Map<string, () => void>();
 
+  // PERSIST-014: session_id_hex → resolve callback for pending gap-fill requests
+  readonly #pendingGapFillResolvers = new Map<string, (result: { ok: true; leaves: unknown[] } | { ok: false; reason: string }) => void>();
+
   // SESSION-005: session_id_hex → { leafCount, timestamp } from seal_verified frame.
   // Stored so #handleFrostSealed can use the authoritative values even if local_tree_leaves
   // is incomplete due to a sequence_causal_inconsistency desync race.
@@ -1515,9 +1518,15 @@ class CelloClientImpl implements CelloClient {
       to_seq: toSeq,
     }) as Uint8Array;
 
+    // Register a resolver before sending so there's no race with an immediate response
+    const responsePromise = new Promise<{ ok: true; leaves: unknown[] } | { ok: false; reason: string }>((resolve) => {
+      this.#pendingGapFillResolvers.set(sessionIdHex, resolve);
+    });
+
     try {
       relayStream.send(lp.encode.single(gapFillRequestFrame));
     } catch {
+      this.#pendingGapFillResolvers.delete(sessionIdHex);
       this.#logger.error("session.gap.fill.failed", {
         sessionId: sessionIdHex,
         reason: "relay_send_failed",
@@ -1526,16 +1535,56 @@ class CelloClientImpl implements CelloClient {
       return;
     }
 
-    // The gap_fill_response will arrive on the relay stream reader loop.
-    // For now, the reconciliation flow is initiated — the response handling
-    // will be added to the relay stream reader when gap_fill_response frames arrive.
-    // The response handler will:
-    // 1. Verify each leaf's signature (SI-002)
-    // 2. Advance the Merkle tree
-    // 3. Retry the seal attempt
-    //
-    // Full orchestration is exercised by e2e tests (AC-001..AC-003).
-    // The building blocks (signature verification, WAL access) are tested in isolation.
+    // Wait for gap_fill_response or gap_fill_error from the reader loop
+    const responseResult = await responsePromise;
+
+    if (!responseResult.ok) {
+      this.#logger.error("session.gap.fill.failed", {
+        sessionId: sessionIdHex,
+        reason: responseResult.reason,
+        correlationId,
+      });
+      return;
+    }
+
+    // SI-002: verify each leaf's Ed25519 signature before advancing the tree
+    const gapLeaves = responseResult.leaves as Array<Record<string, unknown>>;
+    for (let i = 0; i < gapLeaves.length; i++) {
+      const leaf = gapLeaves[i]!;
+      const senderPubkey = leaf["sender_pubkey"] instanceof Uint8Array ? leaf["sender_pubkey"]
+        : Buffer.isBuffer(leaf["sender_pubkey"]) ? new Uint8Array(leaf["sender_pubkey"] as Buffer) : null;
+      const structure1Cbor = leaf["structure1_cbor"] instanceof Uint8Array ? leaf["structure1_cbor"]
+        : Buffer.isBuffer(leaf["structure1_cbor"]) ? new Uint8Array(leaf["structure1_cbor"] as Buffer) : null;
+      const senderSignature = leaf["sender_signature"] instanceof Uint8Array ? leaf["sender_signature"]
+        : Buffer.isBuffer(leaf["sender_signature"]) ? new Uint8Array(leaf["sender_signature"] as Buffer) : null;
+
+      if (!senderPubkey || !structure1Cbor || !senderSignature) {
+        this.#logger.warn("session.gap.fill.leaf.invalid", {
+          sessionId: sessionIdHex,
+          leafIndex: i,
+          reason: "missing_fields",
+          correlationId,
+        });
+        return;
+      }
+
+      if (!verify(senderPubkey, structure1Cbor, senderSignature)) {
+        this.#logger.warn("session.gap.fill.leaf.invalid", {
+          sessionId: sessionIdHex,
+          leafIndex: i,
+          reason: "signature_invalid",
+          correlationId,
+        });
+        return;
+      }
+    }
+
+    // Advance next_expected_seq to reflect newly received leaves
+    const latestSeq = gapLeaves.reduce((max, l) => {
+      const seq = typeof l["sequence_number"] === "number" ? l["sequence_number"] : max;
+      return Math.max(max, seq);
+    }, session.next_expected_seq - 1);
+    session.next_expected_seq = latestSeq + 1;
 
     this.#logger.info("session.reconciliation.completed", {
       sessionId: sessionIdHex,
@@ -1543,6 +1592,42 @@ class CelloClientImpl implements CelloClient {
       durationMs: Date.now() - startMs,
       correlationId,
     });
+
+    // Retry the seal attempt with the now-advanced tree
+    // Re-send a seal_attempt frame with the updated local sequence so the directory
+    // can re-compare roots. The directory will ack if both parties now agree.
+    const localRoot = this.#computeLocalRoot(session);
+    const dirStream = this.#directoryStreams.get(sessionIdHex);
+    if (localRoot && dirStream && dirStream.status === "open") {
+      const sealAttemptFrame = CBOR_ENC.encode({
+        type: "seal_attempt",
+        session_id: session.session_id,
+        reported_root: localRoot,
+        reported_seq: session.next_expected_seq - 1,
+      }) as Uint8Array;
+      try {
+        dirStream.send(lp.encode.single(sealAttemptFrame));
+      } catch {
+        this.#logger.error("session.gap.fill.failed", {
+          sessionId: sessionIdHex,
+          reason: "seal_retry_send_failed",
+          correlationId,
+        });
+      }
+    }
+  }
+
+  /**
+   * PERSIST-014: Handle gap_fill_response from the relay.
+   * Resolves the pending reconciliation promise with the received leaves.
+   */
+  #handleGapFillResponse(sessionIdHex: string, frame: Record<string, unknown>): void {
+    const resolver = this.#pendingGapFillResolvers.get(sessionIdHex);
+    if (!resolver) return;
+    this.#pendingGapFillResolvers.delete(sessionIdHex);
+
+    const leavesRaw = Array.isArray(frame["leaves"]) ? frame["leaves"] as unknown[] : [];
+    resolver({ ok: true, leaves: leavesRaw });
   }
 
   /**
@@ -1559,7 +1644,7 @@ class CelloClientImpl implements CelloClient {
 
     session.status = "sealed";
     if (sealedRoot) session.sealed_root = sealedRoot;
-    session.seal_type = "bilateral"; // Unilateral seals are effectively bilateral (one party only)
+    session.seal_type = "unilateral";
     session.close_timestamp = typeof frame["sealed_at"] === "number" ? frame["sealed_at"] : Date.now();
 
     const correlationId = Buffer.from(session.session_id).toString("hex");
@@ -1588,12 +1673,22 @@ class CelloClientImpl implements CelloClient {
 
     session.status = "sealed";
     if (sealedRoot) session.sealed_root = sealedRoot;
-    session.seal_type = "bilateral";
+    session.seal_type = "unilateral";
     session.close_timestamp = typeof frame["sealed_at"] === "number" ? frame["sealed_at"] : Date.now();
 
     // AC-004: Verify sealed root against local Merkle state
     const localRoot = this.#computeLocalRoot(session);
-    const match = localRoot != null && sealedRoot != null && Buffer.from(localRoot).equals(Buffer.from(sealedRoot));
+
+    if (localRoot == null) {
+      // Cannot verify — no local leaves received yet; log distinctly rather than as mismatch
+      this.#logger.info("session.unilateral.no.local.state", {
+        sessionId: sessionIdHex,
+        correlationId: sessionIdHex,
+      });
+      return;
+    }
+
+    const match = sealedRoot != null && Buffer.from(localRoot).equals(Buffer.from(sealedRoot));
 
     if (match) {
       this.#logger.info("session.unilateral.verified", {
@@ -1604,8 +1699,9 @@ class CelloClientImpl implements CelloClient {
     } else {
       this.#logger.warn("session.unilateral.mismatch", {
         sessionId: sessionIdHex,
-        localRoot: localRoot ? Buffer.from(localRoot).toString("hex") : "null",
+        localRoot: Buffer.from(localRoot).toString("hex"),
         sealedRoot: sealedRoot ? Buffer.from(sealedRoot).toString("hex") : "null",
+        correlationId: sessionIdHex,
       });
     }
   }
@@ -1888,6 +1984,17 @@ class CelloClientImpl implements CelloClient {
             ? Buffer.from(deliverSessionId).toString("hex")
             : sessionIdHex;
           this.#handleInboundLeafDeliver(targetSessionHex, frame, myPubkeyHex);
+        } else if (frame["type"] === "gap_fill_response") {
+          // PERSIST-014: reconciliation response — verify leaves, advance tree, retry seal
+          this.#handleGapFillResponse(sessionIdHex, frame);
+        } else if (frame["type"] === "gap_fill_error") {
+          // PERSIST-014: relay could not serve gap-fill leaves
+          const reason = typeof frame["reason"] === "string" ? frame["reason"] : "unknown";
+          const pendingReconciliation = this.#pendingGapFillResolvers.get(sessionIdHex);
+          if (pendingReconciliation) {
+            this.#pendingGapFillResolvers.delete(sessionIdHex);
+            pendingReconciliation({ ok: false, reason });
+          }
         }
       }
     } catch {
@@ -4005,6 +4112,16 @@ class CelloClientImpl implements CelloClient {
           if (sessionId) {
             const sessionIdHex = Buffer.from(sessionId).toString("hex");
             this.#handleSealUnilateralNotification(sessionIdHex, frame);
+          }
+        } else if (frame["type"] === "seal_unilateral_too_early") {
+          // PERSIST-015: directory rejects unilateral seal — grace period not elapsed
+          const sessionIdRaw = frame["session_id"];
+          const sessionId = sessionIdRaw instanceof Uint8Array ? sessionIdRaw
+            : Buffer.isBuffer(sessionIdRaw) ? new Uint8Array(sessionIdRaw as Buffer) : null;
+          if (sessionId) {
+            const sessionIdHex = Buffer.from(sessionId).toString("hex");
+            const remainingSeconds = typeof frame["remaining_seconds"] === "number" ? frame["remaining_seconds"] : 0;
+            this.#logger.warn("session.unilateral.too.early", { sessionId: sessionIdHex, remainingSeconds });
           }
         } else if (frame["type"] === "seal_verified") {
           // SESSION-005: route seal_verified to the FROST ceremony handler.

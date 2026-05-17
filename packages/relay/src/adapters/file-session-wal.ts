@@ -70,6 +70,7 @@ interface WalJsonEntry {
   ch: string;  // content_hash base64
   ss: string;  // sender_signature base64
   pr: string;  // prev_root base64
+  sc: string;  // structure1_cbor base64
 }
 
 function serializeEntry(leaf: Leaf): Buffer {
@@ -79,6 +80,7 @@ function serializeEntry(leaf: Leaf): Buffer {
     ch:  Buffer.from(leaf.content_hash).toString("base64"),
     ss:  Buffer.from(leaf.sender_signature).toString("base64"),
     pr:  Buffer.from(leaf.prev_root).toString("base64"),
+    sc:  Buffer.from(leaf.structure1_cbor).toString("base64"),
   };
   return Buffer.from(JSON.stringify(entry), "utf8");
 }
@@ -91,6 +93,7 @@ function deserializeEntry(jsonBytes: Buffer): Leaf {
     content_hash: new Uint8Array(Buffer.from(entry.ch, "base64")),
     sender_signature: new Uint8Array(Buffer.from(entry.ss, "base64")),
     prev_root: new Uint8Array(Buffer.from(entry.pr, "base64")),
+    structure1_cbor: new Uint8Array(Buffer.from(entry.sc ?? "", "base64")),
   };
 }
 
@@ -345,12 +348,74 @@ export class FileSessionWal implements SessionWal {
   }
 
   /**
+   * PERSIST-014: Read all WAL leaves from the file WITHOUT disturbing any open handle.
+   * Unlike `reconstruct()`, this does NOT close or remove `#handles` or `#opened`.
+   * Used for live gap-fill requests while the session may still be appending.
+   */
+  async #readAllFromFile(sessionId: string): Promise<Leaf[] | typeof RELAY_SESSION_UNRECOVERABLE> {
+    const walPath = this.#walPath(sessionId);
+
+    let fileBytes: Buffer;
+    try {
+      fileBytes = await readFile(walPath);
+    } catch (err: unknown) {
+      // File doesn't exist → no leaves yet
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+      const reason = err instanceof Error ? err.message : String(err);
+      this.#logger.error("relay.wal.unrecoverable", { sessionId, reason });
+      return RELAY_SESSION_UNRECOVERABLE;
+    }
+
+    const leaves: Leaf[] = [];
+    let offset = 0;
+    let entryIndex = 0;
+
+    while (offset < fileBytes.length) {
+      if (offset + 4 > fileBytes.length) {
+        this.#logger.error("relay.wal.unrecoverable", { sessionId, reason: `truncated_header at offset ${offset}` });
+        return RELAY_SESSION_UNRECOVERABLE;
+      }
+      const jsonLen = fileBytes.readUInt32BE(offset);
+      offset += 4;
+
+      if (offset + jsonLen + 4 > fileBytes.length) {
+        this.#logger.error("relay.wal.unrecoverable", { sessionId, reason: `truncated_entry at entryIndex ${entryIndex}` });
+        return RELAY_SESSION_UNRECOVERABLE;
+      }
+      const jsonBytes = fileBytes.subarray(offset, offset + jsonLen);
+      offset += jsonLen;
+
+      const storedChecksum = fileBytes.subarray(offset, offset + 4);
+      offset += 4;
+
+      if (!storedChecksum.equals(computeChecksum(Buffer.from(jsonBytes)))) {
+        this.#logger.error("relay.wal.entry.corrupt", { sessionId, entryIndex, reason: "checksum_mismatch" });
+        this.#logger.error("relay.wal.unrecoverable", { sessionId, reason: `corrupt_entry at entryIndex ${entryIndex}` });
+        return RELAY_SESSION_UNRECOVERABLE;
+      }
+
+      try {
+        leaves.push(deserializeEntry(Buffer.from(jsonBytes)));
+      } catch (err: unknown) {
+        const reason = err instanceof Error ? err.message : String(err);
+        this.#logger.error("relay.wal.entry.corrupt", { sessionId, entryIndex, reason: `json_parse_failed: ${reason}` });
+        this.#logger.error("relay.wal.unrecoverable", { sessionId, reason: `corrupt_entry at entryIndex ${entryIndex}: json_parse_failed` });
+        return RELAY_SESSION_UNRECOVERABLE;
+      }
+
+      entryIndex++;
+    }
+
+    return leaves;
+  }
+
+  /**
    * PERSIST-014: Retrieve leaves for gap-fill reconciliation.
-   * Reconstructs the WAL and filters to leaves with sequence_number > fromSeq AND <= toSeq.
-   * SI-001: Only serves leaves above the last agreed sequence number.
+   * Reads the WAL file directly without closing any active file handles.
+   * SI-001: Only serves leaves with sequence_number > fromSeq and <= toSeq.
    */
   async getLeaves(sessionId: string, fromSeq: number, toSeq: number): Promise<Leaf[] | typeof RELAY_SESSION_UNRECOVERABLE> {
-    const allLeaves = await this.reconstruct(sessionId);
+    const allLeaves = await this.#readAllFromFile(sessionId);
     if (allLeaves === RELAY_SESSION_UNRECOVERABLE) {
       return RELAY_SESSION_UNRECOVERABLE;
     }

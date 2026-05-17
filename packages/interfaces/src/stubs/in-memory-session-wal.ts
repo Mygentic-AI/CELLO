@@ -46,6 +46,7 @@ export class InMemorySessionWal implements SessionWal {
       content_hash: new Uint8Array(leaf.content_hash),
       sender_signature: new Uint8Array(leaf.sender_signature),
       prev_root: new Uint8Array(leaf.prev_root),
+      structure1_cbor: new Uint8Array(leaf.structure1_cbor),
     });
   }
 
@@ -65,6 +66,7 @@ export class InMemorySessionWal implements SessionWal {
       content_hash: new Uint8Array(l.content_hash),
       sender_signature: new Uint8Array(l.sender_signature),
       prev_root: new Uint8Array(l.prev_root),
+      structure1_cbor: new Uint8Array(l.structure1_cbor),
     }));
   }
 
@@ -86,6 +88,7 @@ export class InMemorySessionWal implements SessionWal {
         content_hash: new Uint8Array(l.content_hash),
         sender_signature: new Uint8Array(l.sender_signature),
         prev_root: new Uint8Array(l.prev_root),
+        structure1_cbor: new Uint8Array(l.structure1_cbor),
       }));
   }
 }

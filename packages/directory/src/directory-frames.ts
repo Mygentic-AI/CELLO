@@ -424,7 +424,12 @@ export type OutboundSignalingFrame =
   | ConnectionRequestError
   | ConnectionRequestInbound
   | DisclosureRequestInbound
-  | DisclosureResponseInbound;
+  | DisclosureResponseInbound
+  | SealRejectedTreeMismatch
+  | SealAttemptAck
+  | SealUnilateralTooEarly
+  | SealUnilateralConfirmed
+  | SealUnilateralNotification;
 
 /** Decode a frame sent by the directory (used in tests to inspect what was sent). */
 export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignalingFrame | null {
@@ -709,6 +714,53 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     const threshold = typeof o["threshold"] === "number" ? o["threshold"] : null;
     if (!epochId || participants === null || threshold === null) return null;
     return { type: "dkg_ready" as const, epochId, participants, threshold };
+  }
+
+  // ─── PERSIST-014 outbound frames ─────────────────────────────────────────
+
+  if (o["type"] === "seal_rejected_tree_mismatch") {
+    const session_id = toUint8Array(o["session_id"]);
+    const party_a_sequence = typeof o["party_a_sequence"] === "number" ? o["party_a_sequence"] : null;
+    const party_b_sequence = typeof o["party_b_sequence"] === "number" ? o["party_b_sequence"] : null;
+    if (!session_id || session_id.length !== 16) return null;
+    if (party_a_sequence === null || party_b_sequence === null) return null;
+    return { type: "seal_rejected_tree_mismatch", session_id, party_a_sequence, party_b_sequence };
+  }
+
+  if (o["type"] === "seal_attempt_ack") {
+    const session_id = toUint8Array(o["session_id"]);
+    if (!session_id || session_id.length !== 16) return null;
+    return { type: "seal_attempt_ack", session_id };
+  }
+
+  // ─── PERSIST-015 outbound frames ─────────────────────────────────────────
+
+  if (o["type"] === "seal_unilateral_too_early") {
+    const session_id = toUint8Array(o["session_id"]);
+    const remaining_seconds = typeof o["remaining_seconds"] === "number" ? o["remaining_seconds"] : null;
+    if (!session_id || session_id.length !== 16) return null;
+    if (remaining_seconds === null) return null;
+    return { type: "seal_unilateral_too_early", session_id, remaining_seconds };
+  }
+
+  if (o["type"] === "seal_unilateral_confirmed") {
+    const session_id = toUint8Array(o["session_id"]);
+    const sealed_root = toUint8Array(o["sealed_root"]);
+    const sealed_at = typeof o["sealed_at"] === "number" ? o["sealed_at"] : null;
+    if (!session_id || session_id.length !== 16) return null;
+    if (!sealed_root || sealed_root.length !== 32) return null;
+    if (sealed_at === null) return null;
+    return { type: "seal_unilateral_confirmed", session_id, sealed_root, sealed_at };
+  }
+
+  if (o["type"] === "seal_unilateral_notification") {
+    const session_id = toUint8Array(o["session_id"]);
+    const sealed_root = toUint8Array(o["sealed_root"]);
+    const sealed_at = typeof o["sealed_at"] === "number" ? o["sealed_at"] : null;
+    if (!session_id || session_id.length !== 16) return null;
+    if (!sealed_root || sealed_root.length !== 32) return null;
+    if (sealed_at === null) return null;
+    return { type: "seal_unilateral_notification", session_id, sealed_root, sealed_at, seal_type: "UNILATERAL" };
   }
 
   return null;

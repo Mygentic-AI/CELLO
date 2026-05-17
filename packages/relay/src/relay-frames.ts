@@ -66,6 +66,7 @@ export function encodeGapFillResponse(frame: GapFillResponse): Uint8Array {
       content_hash: l.content_hash,
       sender_signature: l.sender_signature,
       prev_root: l.prev_root,
+      structure1_cbor: l.structure1_cbor,
     })),
   });
 }
