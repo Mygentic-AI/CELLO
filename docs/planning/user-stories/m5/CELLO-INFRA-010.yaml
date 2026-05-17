@@ -1,0 +1,249 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-010
+domain: Node Operations
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Directory Node,
+  I want pgaudit log entries shipped to S3 via an AuditLogShipper
+  adapter with buffering and retry on unavailability,
+  so that all database access is recorded in tamper-resistant
+  external storage that the cello_service role cannot modify or delete.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a pgaudit log entry is produced by the database"
+    action: "the directory service's AuditLogShipper receives the
+      entry via ship(entry); the S3AuditLogShipper writes the entry
+      as a structured JSON line to cello-audit-logs-{env}-{region}
+      under the key prefix audit/{YYYY-MM-DD}/; entries are shipped
+      per-write with no intentional batching delay"
+
+  - trigger: "When S3 is temporarily unavailable"
+    action: "the S3AuditLogShipper buffers entries in memory;
+      audit.shipper.buffered is logged at WARN with { bufferedCount,
+      oldestEntryAge }; the shipper retries on an exponential backoff
+      schedule; no entries are dropped until the buffer limit of
+      10,000 entries is reached"
+
+  - trigger: "When the in-memory buffer reaches 10,000 entries"
+    action: "the ops-critical alarm fires; the shipper begins
+      dropping the oldest entries to prevent unbounded memory growth;
+      audit.shipper.entries.dropped is logged at ERROR with
+      { droppedCount, reason: 'buffer_full' }"
+
+  - trigger: "When CELLO_ENV=local"
+    action: "the LocalAuditLogShipper is used instead of
+      S3AuditLogShipper; it appends entries as structured JSON
+      lines to a local file at the path configured via
+      AUDIT_LOG_PATH; no AWS dependency is required"
+
+  - trigger: "When the directory service process shuts down"
+    action: "flush() is called on the AuditLogShipper; the shipper
+      attempts to ship all buffered entries before the process exits;
+      if S3 is still unavailable after the flush timeout (10 seconds),
+      the process exits and buffered entries are lost — this is
+      logged at ERROR with { lostEntryCount }"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The AuditLogShipper interface is defined in
+      packages/interfaces/"
+    when: "a developer reads the interface"
+    then: "it exposes exactly: ship(entry: AuditLogEntry):
+      Promise<void> and flush(): Promise<void>; AuditLogEntry
+      has fields: timestamp, sessionId, objectType, command,
+      statementText, parameters; no S3 or AWS-specific types
+      appear in the interface signature — verified by reading
+      packages/interfaces/src/audit-log-shipper.ts"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-002
+    given: "The S3AuditLogShipper is configured with
+      CELLO_ENV=dev and a valid S3 bucket"
+    when: "ship(entry) is called"
+    then: "a JSON line object appears in
+      cello-audit-logs-dev-us-east-1 under the key
+      audit/{YYYY-MM-DD}/{timestamp}-{uuid}.jsonl within
+      10 seconds; the object contains all AuditLogEntry fields —
+      verified by calling s3:GetObject on the written key from
+      a separate process using operator credentials (not
+      cello_service role)"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "The cello_service ECS task role attempts to delete
+      or overwrite an audit log object"
+    when: "s3:DeleteObject or s3:PutObject to an existing key
+      is called as the task role"
+    then: "s3:DeleteObject returns AccessDenied; s3:PutObject
+      to a new key succeeds; s3:PutObject to an existing key
+      returns AccessDenied (versioning enabled, object lock
+      configured) — verified by running both operations as
+      the task role from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "S3 is made unavailable (simulated by revoking
+      s3:PutObject from the task role temporarily)"
+    when: "ship(entry) is called 5 times"
+    then: "all 5 entries are held in the in-memory buffer;
+      audit.shipper.buffered is logged at WARN with
+      { bufferedCount: 5, oldestEntryAge }; no entries are
+      dropped; when S3 access is restored, all 5 buffered
+      entries are shipped — verified by counting objects in
+      the S3 bucket before and after restoration from a
+      separate process"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "The in-memory buffer contains 10,000 entries and
+      S3 remains unavailable"
+    when: "ship(entry) is called for the 10,001st entry"
+    then: "audit.shipper.entries.dropped is logged at ERROR
+      with { droppedCount: 1, reason: 'buffer_full' };
+      the ops-critical alarm fires; the buffer size does not
+      exceed 10,000 entries — verified by inspecting the
+      shipper's buffer size from a test process"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-006
+    given: "CELLO_ENV=local and AUDIT_LOG_PATH=/tmp/audit.jsonl"
+    when: "ship(entry) is called"
+    then: "a JSON line is appended to /tmp/audit.jsonl; no AWS
+      credentials or network access are required; the full Vitest
+      suite passes without any S3 or AWS dependency — verified
+      by running tests with AWS credentials unset"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-007
+    given: "The directory service shuts down with 3 entries
+      buffered"
+    when: "flush() is called during shutdown"
+    then: "all 3 buffered entries are shipped to S3 before the
+      process exits if S3 is available; audit.shipper.flushed
+      is logged at INFO with { flushedCount: 3 }; if S3 is
+      unavailable, the process logs audit.shipper.flush.failed
+      at ERROR with { lostEntryCount: 3 } and exits — verified
+      by inspecting S3 object count before and after a clean
+      shutdown from a separate process"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "Audit log entries shall never be dropped due to
+      S3 unavailability until the buffer limit of 10,000 entries
+      is reached"
+    adversarial_condition: "even during extended S3 outages —
+      the shipper retries on backoff; entries accumulate in memory
+      until the buffer limit; the ops-critical alarm gives
+      operators time to investigate before entries are lost"
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "The cello_service role shall have s3:PutObject
+      only on the audit bucket — no s3:GetObject, s3:DeleteObject,
+      s3:ListBucket, or s3:PutObject to existing keys"
+    adversarial_condition: "even when a compromised cello_service
+      role attempts to delete or overwrite audit entries — the
+      bucket policy and S3 Object Lock prevent modification of
+      written objects"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "The AuditLogShipper interface shall have no
+      AWS-specific or S3-specific types in its signature"
+    adversarial_condition: "even when adding new shipping
+      destinations in future milestones — the interface is defined
+      by what the consumer needs; implementation details are
+      encapsulated in S3AuditLogShipper"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While S3 is unavailable for more than 5 minutes"
+    fallback: "audit.shipper.buffered continues to fire at WARN
+      on each retry attempt; the ops-critical alarm fires when
+      bufferedCount exceeds 10,000; the directory continues
+      serving requests normally — audit log shipping failure
+      does not halt the directory service"
+    test_type: integration
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While the directory process crashes with buffered
+      entries that were never flushed"
+    fallback: "the buffered entries are lost; ECS restarts the
+      task; the audit gap is visible as a time range with no
+      S3 objects; the ops-critical alarm from the crash fires
+      and prompts operator investigation of the gap"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: audit.shipper.shipped
+      level: info
+      trigger: "AuditLogShipper ships an entry to S3 successfully"
+      context_fields: [s3Key, durationMs]
+      correlationId: false
+
+    - name: audit.shipper.flushed
+      level: info
+      trigger: "flush() ships all buffered entries on shutdown"
+      context_fields: [flushedCount, durationMs]
+      correlationId: false
+
+  error_events:
+    - name: audit.shipper.buffered
+      level: warn
+      trigger: "S3 unavailable; entries accumulating in buffer"
+      context_fields: [bufferedCount, oldestEntryAge]
+
+    - name: audit.shipper.entries.dropped
+      level: error
+      trigger: "buffer limit reached; oldest entries dropped"
+      context_fields: [droppedCount, reason]
+
+    - name: audit.shipper.flush.failed
+      level: error
+      trigger: "flush() cannot ship buffered entries on shutdown"
+      context_fields: [lostEntryCount]
+
+  alarms:
+    - condition: "audit.shipper.buffered fires with
+        bufferedCount > 10000"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on:
+    - CELLO-INFRA-001
+    - CELLO-PERSIST-002
+  blocks:
+    - CELLO-INFRA-E2E-001
