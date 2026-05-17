@@ -277,7 +277,8 @@ Interfaces needed before M4 stories are written go into `packages/interfaces/` i
 | `TrustSignalProofProvider` | Passport.js OAuth per provider | Hardcoded proof stub | M7 |
 | `TrustAuditorAgent` | Browser harness read-only agent | Hardcoded TrustSignalData stub | M7 |
 | `SearchIndex` | BM25 + vector search (OpenSearch or similar) | In-memory stub | M8 |
-| `AuditLogShipper` | pgaudit shipped to S3 | Local file sink | M5 |
+| `AuditLogShipper` | pgaudit shipped to S3 | Local file sink | M4 (implemented in PERSIST-006) |
+| `CloudStorageProvider` | S3 | Local file sink (writes to configured local directory) | M4 (implemented in PERSIST-011) |
 | `PaymentProvider` | Micropayment mechanism TBD | Stub | M13 |
 
 **Notes:**

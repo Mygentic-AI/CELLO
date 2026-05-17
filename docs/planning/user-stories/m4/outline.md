@@ -96,7 +96,7 @@ A scheduled batch job runs against the existing PostgreSQL tables and writes der
 - Conversation graph edge table (pre-computed adjacency between pseudonym pairs)
 - Graph analysis results table (clustering coefficients, community assignments, conductance scores)
 
-Implementation: a standard cron job against the local PostgreSQL instance. At M4 it runs on the single node. At M5 when federation is live, it runs on one node and results replicate via logical replication. No distributed coordination needed.
+Implementation: a `JobScheduler`-driven approach with an `analytics:run` CLI entry point (`packages/directory/src/bin/analytics-run.ts`). The `AnalyticsJob` class is registered as the handler for `scheduler.onJob("analytics", ...)` in the directory composition root. The CLI entry is used for manual invocations and CI validation (`pnpm run analytics:run`). At M4 it runs on the single node via `LocalJobScheduler`. At M5 when federation is live, it runs on one node and results replicate via logical replication. No distributed coordination needed.
 
 ---
 
@@ -107,7 +107,7 @@ Implementation: a standard cron job against the local PostgreSQL instance. At M4
 SQLCipher provides transparent AES-256 encryption of the local SQLite database file. The `db_key` is derived from the master key:
 
 ```
-db_key = HKDF(identity_key, "local-db-key", agent_id)
+db_key = HKDF-SHA256(ikm=identity_key, salt=none, info="local-db-key" || NUL || agent_id, length=32)
 ```
 
 SQLCipher is the recommended option. Operators may choose alternatives based on their deployment context and security requirements.
@@ -132,7 +132,7 @@ The private key never leaves the provider in most implementations — the provid
 The full client data store is encrypted with `backup_key` and uploaded to user-configured cloud storage:
 
 ```
-backup_key = HKDF(identity_key, "backup-key", agent_id)
+backup_key = HKDF-SHA256(ikm=identity_key, salt=none, info="backup-key" || NUL || agent_id, length=32)
 ```
 
 The cloud provider sees only ciphertext.
@@ -211,7 +211,7 @@ All of the following live in `packages/interfaces/`. Local stubs live in `packag
 | `EnvelopeKeyProvider` | In-process AES with dev key from env var | AWS KMS |
 | `Logger` | stdout structured JSON (pino-pretty) | CloudWatch structured JSON |
 | `JobScheduler` | Local cron or manual trigger | EventBridge Scheduler |
-| `CloudStorageProvider` | Local file sink (writes to configured local directory) | S3 (M5) |
+| `CloudStorageProvider` | Local file sink (writes to configured local directory) | S3 (implemented in PERSIST-011; production S3 wiring deferred to M5) |
 
 **Naming note:** `EnvelopeKeyProvider` is the KMS interface for encrypting K_server_X shares at rest. It is distinct from `SigningKeyProvider` (the client-side interface for Ed25519 signing operations, introduced in M0). These must not share a name.
 
