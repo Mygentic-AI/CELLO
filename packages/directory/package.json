@@ -22,6 +22,7 @@
     "typecheck": "tsc --build",
     "test": "vitest run",
     "start": "node dist/bin/directory.js",
+    "analytics:run": "node --import tsx/esm src/bin/analytics-run.ts",
     "db:migrate": "docker compose run --rm flyway",
     "db:seed": "node --import tsx/esm db/seed.ts"
   },
