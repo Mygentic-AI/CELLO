@@ -178,6 +178,21 @@ export interface RelayNodeOptions {
   logger?: Logger;
   /** PERSIST-014: SessionWal for gap-fill leaf serving. */
   sessionWal?: SessionWal;
+  /**
+   * PERSIST-012: Signing key provider for signed relay ACKs.
+   * When present, the relay signs every hash_submit_ack with this key and
+   * includes relay_id, relay_signature, and timestamp in the ACK frame.
+   * The relay's public key must be registered with the directory at startup
+   * so clients can verify ACK signatures.
+   * When absent, the relay issues unsigned ACKs (backward-compatible).
+   */
+  ackSigningKeyProvider?: KeyProvider;
+  /**
+   * PERSIST-012: Stable relay identifier included in signed ACKs.
+   * Required when ackSigningKeyProvider is set.
+   * Clients use this to look up the relay's public key from the directory.
+   */
+  relayId?: string;
 }
 
 export class CelloRelayNode {
@@ -187,6 +202,10 @@ export class CelloRelayNode {
   readonly #store: RelayStore;
   readonly #logger: Logger;
   readonly #sessionWal: SessionWal | null;
+  /** PERSIST-012: signing key for hash_submit_ack signatures. Null = unsigned ACKs. */
+  readonly #ackSigningKeyProvider: KeyProvider | null;
+  /** PERSIST-012: stable relay identifier included in signed ACKs. */
+  readonly #relayId: string | null;
 
   // nonce_hex → NonceEntry
   readonly #nonces = new Map<string, NonceEntry>();
@@ -203,6 +222,8 @@ export class CelloRelayNode {
     this.#directory = opts.directory ?? null;
     this.#store = opts.store ?? new InMemoryRelayStore();
     this.#sessionWal = opts.sessionWal ?? null;
+    this.#ackSigningKeyProvider = opts.ackSigningKeyProvider ?? null;
+    this.#relayId = opts.relayId ?? null;
     // Logger is optional for backward compatibility; defaults to a no-op for pre-M4 callers.
     this.#logger = opts.logger ?? {
       debug: () => {},
@@ -756,8 +777,39 @@ export class CelloRelayNode {
     };
     this.#store.setSession(sessionKey, newState);
 
+    // PERSIST-012: Build signed ACK when a signing key is configured.
+    // TBS = SHA-256(hash_bytes || seq_BE4 || ts_BE8) per RFC 8032, FIPS 180-4.
+    const ackTimestamp = Date.now();
+    let ackFrame: import("./relay-types.js").HashSubmitAck = { type: "hash_submit_ack", sequence_number: seq };
+    if (this.#ackSigningKeyProvider !== null && this.#relayId !== null) {
+      try {
+        const contentHashBytes = Buffer.from(s1.content_hash);
+        const seqBuf = Buffer.allocUnsafe(4);
+        seqBuf.writeUInt32BE(seq >>> 0, 0);
+        const tsBuf = Buffer.allocUnsafe(8);
+        tsBuf.writeBigUInt64BE(BigInt(ackTimestamp), 0);
+        const preimage = Buffer.concat([contentHashBytes, seqBuf, tsBuf]);
+        const tbs = new Uint8Array(createHash("sha256").update(preimage).digest());
+        const relaySig = await this.#ackSigningKeyProvider.sign(tbs);
+        ackFrame = {
+          type: "hash_submit_ack",
+          sequence_number: seq,
+          relay_id: this.#relayId,
+          relay_signature: relaySig,
+          timestamp: ackTimestamp,
+        };
+      } catch (sigErr: unknown) {
+        // Signing failed — fall back to unsigned ACK; log but do not reject the submission
+        this.#logger.error("relay.ack.sign.failed", {
+          seq,
+          sessionId: sessionKey,
+          err: sigErr instanceof Error ? sigErr.message : String(sigErr),
+        });
+      }
+    }
+
     try {
-      await this.#sendFrame(stream, encodeHashSubmitAck({ type: "hash_submit_ack", sequence_number: seq }));
+      await this.#sendFrame(stream, encodeHashSubmitAck(ackFrame));
     } catch (err) {
       this.#logger.error("relay.send.failed", {
         event: "hash_submit_ack",
@@ -864,6 +916,16 @@ export interface CreateRelayNodeOptions {
   sessionWal?: SessionWal;
   /** Structured logger injected at the composition root */
   logger?: Logger;
+  /**
+   * PERSIST-012: Signing key provider for signed relay ACKs.
+   * When present, the relay signs every hash_submit_ack.
+   */
+  ackSigningKeyProvider?: KeyProvider;
+  /**
+   * PERSIST-012: Stable relay identifier for signed ACKs.
+   * Required when ackSigningKeyProvider is set.
+   */
+  relayId?: string;
 }
 
 export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
@@ -886,6 +948,8 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     store: opts.store,
     sessionWal: opts.sessionWal,
     logger: opts.logger,
+    ackSigningKeyProvider: opts.ackSigningKeyProvider,
+    relayId: opts.relayId,
   });
   await relay.start();
 

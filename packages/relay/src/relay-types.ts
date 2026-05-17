@@ -78,6 +78,24 @@ export interface HashSubmitError {
 export interface HashSubmitAck {
   type: "hash_submit_ack";
   sequence_number: number;
+  /**
+   * PERSIST-012: Stable identifier for the signing relay.
+   * Allows the client (and future relays) to look up the relay's public key
+   * for ACK signature verification. Absent when relay has no signing key.
+   */
+  relay_id?: string;
+  /**
+   * PERSIST-012: 64-byte Ed25519 signature over SHA-256(hash_bytes || seq_BE4 || ts_BE8).
+   * Signed by the relay's signing key (not the transport key).
+   * Absent when relay has no signing key configured.
+   */
+  relay_signature?: Uint8Array;
+  /**
+   * PERSIST-012: Unix ms timestamp embedded in the ACK TBS.
+   * Required for deterministic signature reconstruction by the client.
+   * Absent when relay has no signing key configured.
+   */
+  timestamp?: number;
 }
 
 // ─── SessionAssignment (from directory, in-process call) ─────────────────────
