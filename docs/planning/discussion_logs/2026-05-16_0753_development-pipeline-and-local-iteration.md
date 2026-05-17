@@ -155,6 +155,7 @@ logger.info("session.started", { userId, sessionId, principalType })
 - `key.encrypted`, `key.decrypted`, `key.rotation.initiated`
 - `migration.applied`, `migration.failed`
 - `adapter.write.failed` — context fields: `{ adapterName, reason }`; fired when a fire-and-forget write (e.g. `PgDirectoryStore#fire`) rejects; the write is not retried and the caller is not notified
+- `relay.ack.sign.failed` — level: error; context fields: `{ seq, sessionId, err }`; fired when the relay's ACK signing key provider throws during `hash_submit_ack` generation; the relay falls back to issuing an unsigned ACK so the submission is not rejected; added in PERSIST-012
 
 ---
 

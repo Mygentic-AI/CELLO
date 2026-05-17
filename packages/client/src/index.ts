@@ -1,4 +1,16 @@
 export { createClient } from "./client.js";
+export {
+  AgentHashQueue,
+  buildSignedAckTbs,
+  verifyRelayAck,
+  RELAY_PREDECESSOR_UNKNOWN,
+} from "./agent-hash-queue.js";
+export type {
+  AgentHashQueueOptions,
+  RelayAck,
+  PendingHashEntry,
+  RelayPredecessorUnknown,
+} from "./agent-hash-queue.js";
 export { NetworkDirectoryNode, bootstrapNetworkKeyShares, runNetworkDkg } from "./network-directory-node.js";
 export { createMcpSessionServer } from "./mcp-server.js";
 export { ClientBackup, BACKUP_WARNING } from "./client-backup.js";

@@ -37,6 +37,16 @@ export function encodeAuthOk(_frame: RelayAuthOk): Uint8Array {
 }
 
 export function encodeHashSubmitAck(frame: HashSubmitAck): Uint8Array {
+  // PERSIST-012: include relay_id, relay_signature, timestamp when present (signed ACK)
+  if (frame.relay_id !== undefined && frame.relay_signature !== undefined && frame.timestamp !== undefined) {
+    return ENC.encode({
+      type: frame.type,
+      sequence_number: frame.sequence_number,
+      relay_id: frame.relay_id,
+      relay_signature: frame.relay_signature,
+      timestamp: frame.timestamp,
+    });
+  }
   return ENC.encode({ type: frame.type, sequence_number: frame.sequence_number });
 }
 

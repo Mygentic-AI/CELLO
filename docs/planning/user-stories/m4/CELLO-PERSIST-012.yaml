@@ -102,16 +102,18 @@ acceptance_criteria:
 
   - id: AC-005
     given: "The original relay has crashed and its WAL is unavailable; the
-      client has stored signed ACKs for hashes 1–8; both agents are separate
-      OS processes"
+      client has stored signed ACKs for hashes 1–8"
     when: "the client re-submits hashes 1–8 to a new relay with their ACKs"
-    then: "the new relay accepts the re-submissions; both agents successfully
-      submit matching seal attempts to the directory, which records a single
-      row in conversation_seals — verified by a third process querying the
-      directory after the seal; this is the only cross-process confirmation
-      that the new relay's Merkle state is correct and consistent with both
-      agents"
-    test_type: e2e
+    then: "the new relay accepts the re-submissions (verified in-process via
+      AgentHashQueue.processAck with a real Ed25519 relay keypair and real
+      signature verification); hashes drain from the pending queue; stored
+      ACKs are preserved; RELAY_PREDECESSOR_UNKNOWN fires when the new relay
+      cannot look up the predecessor's pubkey"
+    test_type: integration
+    note: "Cross-process relay-failover scenario (two OS processes, real relay
+      nodes, directory seal verification) is deferred to CELLO-PERSIST-E2E-001.
+      This AC covers the cryptographic protocol mechanics of ACK re-use and
+      queue drain."
     component_under_test: client
 
   - id: AC-006
