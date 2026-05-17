@@ -104,6 +104,10 @@ acceptance_criteria:
       writes to output tables are rolled back; the previous complete run's
       data remains intact"
     test_type: integration
+    note: "The Vitest integration test verifies the error path and log event
+      using a stub faultyWritePool (no live Postgres required for CI). Real
+      Postgres transaction rollback is verified in CELLO-PERSIST-E2E-001
+      as part of the M4 milestone close gate."
     component_under_test: directory
 
   - id: AC-007

@@ -157,6 +157,10 @@ logger.info("session.started", { userId, sessionId, principalType })
 - `adapter.write.failed` — context fields: `{ adapterName, reason }`; fired when a fire-and-forget write (e.g. `PgDirectoryStore#fire`) rejects; the write is not retried and the caller is not notified
 - `relay.ack.sign.failed` — level: error; context fields: `{ seq, sessionId, err }`; fired when the relay's ACK signing key provider throws during `hash_submit_ack` generation; the relay falls back to issuing an unsigned ACK so the submission is not rejected; added in PERSIST-012
 - `adapter.config.missing` — level: error; context fields: `{ adapter, missingVar }`; fired at startup when a required environment variable for an adapter is absent; the process exits with code 1; used consistently across all composition root entrypoints
+- `analytics.job.started` — level: info; context fields: `{ runId, triggeredBy }`; fired at the start of every analytics job run; `triggeredBy` is `"scheduler"` for EventBridge-triggered runs and `"cli"` for manual invocations; added in PERSIST-008
+- `analytics.job.completed` — level: info; context fields: `{ runId, durationMs, pseudonymCount, edgeCount }`; fired on successful run completion; added in PERSIST-008
+- `analytics.job.failed` — level: error; context fields: `{ runId, reason, phase }`; fired when any phase fails; the write transaction is rolled back before this event fires; added in PERSIST-008
+- `analytics.job.stale` — level: warn; context fields: `{ lastSuccessfulRunAt }`; fired by `checkStale()` when no successful run has been recorded in over 24 hours; added in PERSIST-008
 
 ---
 

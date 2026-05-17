@@ -129,10 +129,10 @@ describe("PERSIST-008 unit: AC-005 analytics.job.completed log call", () => {
       }),
     );
 
-    // analytics.job.started must also be logged
+    // analytics.job.started must also be logged with { runId, triggeredBy }
     expect(logger.info).toHaveBeenCalledWith(
       "analytics.job.started",
-      expect.objectContaining({ runId }),
+      expect.objectContaining({ runId, triggeredBy: expect.any(String) }),
     );
   });
 });

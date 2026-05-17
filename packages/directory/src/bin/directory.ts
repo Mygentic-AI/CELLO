@@ -36,6 +36,7 @@ import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { EncryptedPgShareStore } from "../encrypted-share-store.js";
 import { PersistentShareStore } from "../persistent-share-store.js";
 import { MmrStore } from "../mmr-store.js";
+import { AnalyticsJob } from "../analytics-job.js";
 
 const env = process.env["CELLO_ENV"];
 const logger = new StdoutLogger();
@@ -212,8 +213,28 @@ logger.info("adapter.initialised", { adapterName: "ClientStore", implementation:
 void new InMemoryRelayWal(); // wired in PERSIST-003+
 logger.info("adapter.initialised", { adapterName: "RelayWal", implementation: "InMemoryRelayWal", env });
 
-void new LocalJobScheduler(); // wired in PERSIST-003+
+// ─── PERSIST-008: JobScheduler + AnalyticsJob wiring ─────────────────────────
+// The scheduler dispatches "analytics" jobs on EventBridge (dev+) or in-process
+// setTimeout (local). AnalyticsJob.run() is registered as the handler so both
+// scheduler-triggered and CLI-triggered runs use identical logic.
+const scheduler = new LocalJobScheduler();
 logger.info("adapter.initialised", { adapterName: "JobScheduler", implementation: "LocalJobScheduler", env });
+
+if (env === "local" && pgPool) {
+  // Derive a cello_analytics read pool from DATABASE_URL (user swap — local only).
+  const analyticsReadUrl = requireEnv("DATABASE_URL")
+    .replace(/^(postgres(?:ql)?):\/\/[^:]+:[^@]+@/, "$1://cello_analytics:cello_analytics_dev@");
+  const analyticsReadPool = new pg.Pool({ connectionString: analyticsReadUrl });
+  const analyticsJob = new AnalyticsJob(analyticsReadPool, pgPool, logger);
+
+  scheduler.onJob("analytics", async (job) => {
+    const { randomUUID } = await import("node:crypto");
+    const runId = (job.payload as { runId?: string })?.runId ?? randomUUID();
+    await analyticsJob.run(runId, "scheduler");
+  });
+
+  logger.info("adapter.initialised", { adapterName: "AnalyticsJob", triggeredBy: "scheduler", env });
+}
 
 // ─── Key loading ──────────────────────────────────────────────────────────
 
