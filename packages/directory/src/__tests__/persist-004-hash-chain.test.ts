@@ -317,6 +317,12 @@ describeIntegration("PERSIST-004 integration: hash chain in Postgres", () => {
     // Run verifyChain — should detect break at the tampered row
     const result = await store.verifyChain("agent_registrations");
     expect(result.valid).toBe(false);
+    // breakAtSequence is asserted as toBeDefined() rather than a specific value because
+    // the integration tests run without transaction rollback between runs. Prior test
+    // runs may have left rows in the table, so the break position within the full table
+    // scan is not predictable — it depends on how many rows preceded this test run's
+    // insertions. The break will always be at or after position 5 within this batch,
+    // but its absolute sequence number in the table varies.
     expect(result.breakAtSequence).toBeDefined();
     expect(result.storedHash).toBeDefined();
     expect(result.recomputedHash).toBeDefined();
@@ -368,6 +374,12 @@ describeIntegration("PERSIST-004 integration: hash chain in Postgres", () => {
     // Run verifyChain — should detect the gap
     const result = await store.verifyChain("connection_requests");
     expect(result.valid).toBe(false);
+    // breakAtSequence is asserted as toBeDefined() rather than a specific value because
+    // the integration tests do not use transaction rollback between runs. Rows from
+    // prior test runs remain in the table, so the position of the deleted row (originally
+    // index 6 within this batch) varies in absolute terms across runs. The chain break
+    // will always be detected — the exact sequence number is not predictable without
+    // full table isolation.
     expect(result.breakAtSequence).toBeDefined();
 
     await pool.end();

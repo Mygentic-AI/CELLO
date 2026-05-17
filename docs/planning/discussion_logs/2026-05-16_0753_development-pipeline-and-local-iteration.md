@@ -154,6 +154,7 @@ logger.info("session.started", { userId, sessionId, principalType })
 - `connection.request.received`, `connection.request.accepted`, `connection.request.declined`
 - `key.encrypted`, `key.decrypted`, `key.rotation.initiated`
 - `migration.applied`, `migration.failed`
+- `adapter.write.failed` — context fields: `{ adapterName, reason }`; fired when a fire-and-forget write (e.g. `PgDirectoryStore#fire`) rejects; the write is not retried and the caller is not notified
 
 ---
 

@@ -180,6 +180,19 @@ export class PgDirectoryStore implements DirectoryStore {
       throw new Error(`insertWithChain: unknown table '${tableName}'`);
     }
 
+    // Runtime guard: every column key (except chain_hash) must be present in record.
+    // This catches caller bugs where columns/values and record diverge — both are used
+    // independently (record for serialization, columns/values for the INSERT) so they
+    // must stay in sync.
+    for (const col of columns) {
+      if (col === "chain_hash") continue;
+      if (!(col in record)) {
+        throw new Error(
+          `insertWithChain: column '${col}' is listed in columns but missing from record for table '${tableName}'`,
+        );
+      }
+    }
+
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
