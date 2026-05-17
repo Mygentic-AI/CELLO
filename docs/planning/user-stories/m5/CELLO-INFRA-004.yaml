@@ -1,0 +1,269 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-004
+domain: Node Operations
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Directory Node cluster,
+  I want the directory service running as an ECS Fargate service in
+  each of the three production regions, with Flyway migrations applied
+  at task startup before the service accepts connections,
+  so that each node is always at the correct schema version and a
+  failed migration prevents a broken node from serving traffic.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When an ECS directory task starts"
+    action: "the task entrypoint runs flyway migrate against the
+      regional RDS instance before starting the directory service
+      process; if flyway migrate exits non-zero, the task exits
+      non-zero, fails its ECS health check, and ECS keeps the
+      previous task revision running; the directory service process
+      is never started if migrations fail"
+
+  - trigger: "When flyway migrate completes successfully"
+    action: "the directory service process starts, reads its
+      configuration from Secrets Manager (rds-credentials,
+      node-private-key, kms-key-arn), unwraps the KMS master key
+      into memory, establishes its RDS connection pool, and begins
+      accepting connections on port 443 via the ALB"
+
+  - trigger: "When the directory service process starts successfully"
+    action: "directory.service.started is logged at INFO with
+      { nodeId, region, environment, schemaVersion }; the ECS
+      health check endpoint returns HTTP 200; the ALB routes
+      traffic to the task"
+
+  - trigger: "When the ECS task definition is updated (new image)"
+    action: "ECS performs a rolling replacement: the new task is
+      started alongside the old task; if the new task passes its
+      health check, the old task is stopped; if the new task fails
+      its health check within the health check grace period, ECS
+      stops the new task and the old task continues serving traffic"
+
+  - trigger: "When the directory service is deployed to production"
+    action: "deployments are sequential across regions — us-east-1
+      first, then eu-central-1, then ap-northeast-1; the next region
+      is not updated until the previous region's ECS service reaches
+      a stable state (all tasks healthy)"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The cello-ecs-directory CloudFormation stack is deployed
+      with Environment=production and Region=us-east-1"
+    when: "the ECS service is inspected"
+    then: "the service has desiredCount=1, runningCount=1; the active
+      task definition uses the latest image from ECR; the task is
+      in a private subnet with no public IP — verified by calling
+      aws ecs describe-services and aws ecs describe-tasks from a
+      separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "An ECS directory task starts from a clean state"
+    when: "the task logs are inspected during startup"
+    then: "migration.applied is logged at INFO for each Flyway
+      migration that runs, with { version, description, executionTime };
+      directory.service.started is logged at INFO with { nodeId,
+      region, environment, schemaVersion } after all migrations
+      complete; these log events appear in CloudWatch Logs in the
+      /cello/{env}/directory log group — verified from a separate
+      process querying CloudWatch Logs"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A new ECS task starts with a deliberately broken migration
+      file (syntax error injected)"
+    when: "flyway migrate runs"
+    then: "flyway exits non-zero; migration.failed is logged at ERROR
+      with { version, description, reason }; the task exits non-zero;
+      ECS health check fails; the previous task revision continues
+      running and serving traffic — verified by querying the ECS
+      service's runningCount (still 1) and the active task definition
+      revision (still the previous revision) from a separate terminal
+      after the failed deployment attempt"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "The ECS task definition references Secrets Manager secrets
+      by ARN"
+    when: "the task definition JSON is inspected"
+    then: "the secrets array contains ARN references for
+      cello/{env}/directory/rds-credentials,
+      cello/{env}/directory/node-private-key, and
+      cello/{env}/directory/kms-key-arn; no secret values appear
+      as plaintext in environment variables or the task definition
+      JSON — verified by calling aws ecs describe-task-definition
+      and asserting no secret values are present in the output"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "The directory service is running in production us-east-1"
+    when: "a new image is deployed to eu-central-1 after us-east-1
+      reaches stable state"
+    then: "the CodePipeline deploy stage for eu-central-1 does not
+      begin until aws ecs wait services-stable completes for
+      us-east-1; if us-east-1 fails to reach stable state within
+      10 minutes, the pipeline halts and eu-central-1 and
+      ap-northeast-1 are not updated — verified by inspecting the
+      CodePipeline execution history from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "The directory service task is running"
+    when: "the ALB health check endpoint is called"
+    then: "GET /health returns HTTP 200 with { status: 'ok',
+      nodeId, schemaVersion } within 5 seconds — verified from
+      a process separate from the directory service, connecting
+      through the ALB endpoint"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "The directory ECS task role is inspected"
+    when: "its IAM policy is evaluated against an attempted
+      s3:DeleteObject on the audit bucket"
+    then: "the operation returns AccessDenied — the task role has
+      s3:PutObject only on cello-audit-logs-{env}/*; no GetObject,
+      DeleteObject, or ListBucket; verified by calling the S3 API
+      as the task role from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "The directory service is running with CELLO_ENV=production"
+    when: "the CloudWatch log group is inspected"
+    then: "logs appear in /cello/production/directory; no log line
+      contains the node private key, RDS password, or KMS master
+      key in any form — verified by grepping the log group output
+      for known secret substrings from a separate monitoring process"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The directory service process shall never start if
+      Flyway migrations did not complete successfully in the same
+      task invocation"
+    adversarial_condition: "even when the migration step is skipped
+      by a misconfigured entrypoint script — the entrypoint uses
+      set -e and chains flyway migrate && start-directory; any
+      non-zero exit from flyway prevents the start-directory command
+      from running"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "No secret values shall appear in ECS task definition
+      environment variables, Docker image layers, or CloudWatch logs"
+    adversarial_condition: "even when a developer adds a debug log
+      statement that prints process.env — the composition root reads
+      secrets from injected environment variables whose values come
+      from Secrets Manager ARN references, never from hardcoded
+      strings"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "The ECS task shall have no public IP address and
+      shall not be reachable directly from the internet — all
+      inbound traffic routes through the ALB"
+    adversarial_condition: "even when a developer modifies the
+      task networking configuration to assign a public IP —
+      the security group on the task accepts inbound only from
+      the ALB security group; direct internet traffic is blocked
+      at the security group level"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the ECS task crashes after startup (OOM,
+      unhandled exception)"
+    fallback: "ECS restarts the task up to 3 times with exponential
+      backoff; if the task fails 3 consecutive health checks after
+      restart, ECS stops attempting restarts and the service enters
+      a degraded state; directory.service.crashed is logged at ERROR
+      with { nodeId, region, reason, consecutiveFailures }; the
+      ops-critical alarm fires"
+    test_type: integration
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While Secrets Manager is temporarily unavailable
+      at task startup"
+    fallback: "the task fails to retrieve its secrets, exits
+      non-zero, and ECS retries with backoff; directory.secrets.unavailable
+      is logged at ERROR with { nodeId, region, reason }; the task
+      does not start with stale or empty credentials"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: directory.service.started
+      level: info
+      trigger: "directory service process starts successfully after
+        migrations complete"
+      context_fields: [nodeId, region, environment, schemaVersion]
+      correlationId: false
+
+    - name: directory.service.stopped
+      level: info
+      trigger: "directory service process exits cleanly (SIGTERM)"
+      context_fields: [nodeId, region, environment, uptimeMs]
+      correlationId: false
+
+  error_events:
+    - name: directory.service.crashed
+      level: error
+      trigger: "directory service process exits unexpectedly"
+      context_fields: [nodeId, region, reason, consecutiveFailures]
+
+    - name: directory.secrets.unavailable
+      level: error
+      trigger: "task cannot retrieve secrets from Secrets Manager
+        at startup"
+      context_fields: [nodeId, region, reason]
+
+  alarms:
+    - condition: "ECS service runningCount drops below desiredCount
+        for more than 5 minutes"
+      fires_to: ops-critical
+    - condition: "directory.service.crashed fires more than 3 times
+        in 10 minutes"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on:
+    - CELLO-INFRA-001
+    - CELLO-INFRA-002
+  blocks:
+    - CELLO-INFRA-005
+    - CELLO-INFRA-006
+    - CELLO-INFRA-008
+    - CELLO-INFRA-009
+    - CELLO-INFRA-010
+    - CELLO-INFRA-011
+    - CELLO-INFRA-012
