@@ -1,0 +1,218 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-005
+domain: Node Operations
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - relay
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Relay Node,
+  I want the relay service running as a persistent ECS Fargate service
+  with its own Ed25519 signing key loaded from Secrets Manager,
+  so that the relay can sign ACKs with a stable, revocable identity
+  and relay nodes are managed independently of directory nodes.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When an ECS relay task starts"
+    action: "the task reads cello/{env}/relay/node-private-key from
+      Secrets Manager; the relay service process initialises its
+      SigningKeyProvider with the loaded key; the relay begins
+      accepting libp2p connections and signing ACKs with its
+      Ed25519 identity; relay.service.started is logged at INFO
+      with { relayId, region, environment }"
+
+  - trigger: "When the relay service signs an ACK"
+    action: "the relay uses the Ed25519 private key loaded from
+      Secrets Manager at startup; the private key is held in memory
+      only for the lifetime of the task; it is never written to disk,
+      logged, or included in any error message"
+
+  - trigger: "When the relay ECS task definition is updated (new image)"
+    action: "ECS performs a rolling replacement; the new task starts
+      alongside the old task; active relay sessions on the old task
+      continue until natural session end or until the old task is
+      drained; the new task begins accepting new sessions once healthy"
+
+  - trigger: "When the relay task role is inspected"
+    action: "the role has secretsmanager:GetSecretValue on
+      cello/{env}/relay/node-private-key only; no KMS permissions;
+      no S3 permissions; no directory secret access — the relay's
+      IAM footprint is the minimum required to load its signing key"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The cello-ecs-relay CloudFormation stack is deployed with
+      Environment=production and Region=us-east-1"
+    when: "the ECS service is inspected"
+    then: "the service has desiredCount=1, runningCount=1; the active
+      task is in a private subnet with no public IP; the task
+      definition references cello/production/relay/node-private-key
+      by Secrets Manager ARN — verified by calling aws ecs
+      describe-services and aws ecs describe-task-definition from
+      a separate terminal"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-002
+    given: "An ECS relay task starts"
+    when: "the task logs are inspected"
+    then: "relay.service.started is logged at INFO with { relayId,
+      region, environment }; the relayId matches the public key
+      derived from the node-private-key loaded from Secrets Manager —
+      verified from a separate process querying the CloudWatch log
+      group /cello/{env}/relay"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-003
+    given: "The relay task role is inspected"
+    when: "aws iam simulate-principal-policy is run against the role"
+    then: "secretsmanager:GetSecretValue on
+      cello/{env}/relay/node-private-key returns allowed;
+      kms:Decrypt returns denied;
+      s3:PutObject returns denied;
+      secretsmanager:GetSecretValue on cello/{env}/directory/*
+      returns denied — verified from a separate terminal"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-004
+    given: "The relay service is running and signs an ACK"
+    when: "the CloudWatch log group /cello/{env}/relay is searched
+      for the private key value"
+    then: "no log line contains any substring of the node private key
+      bytes in hex, base64, or any other encoding — verified by
+      extracting the key bytes from Secrets Manager in a test process
+      and asserting they do not appear in any log output during normal
+      operation or during a simulated startup error"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-005
+    given: "The relay ECS service is running in all three regions"
+    when: "each relay task's relayId is extracted from its startup log"
+    then: "all three relayIds are distinct — each relay loaded a
+      different node-private-key from Secrets Manager; no two relays
+      share a signing identity — verified by comparing relayIds across
+      three separate CloudWatch log group queries"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-006
+    given: "An active relay task is running with live sessions"
+    when: "a new task revision is deployed (rolling replacement)"
+    then: "the old task continues running until ECS drains it; the
+      new task starts accepting new sessions after passing its health
+      check; at no point are both desiredCount and runningCount below
+      1 — verified by polling aws ecs describe-services every 5 seconds
+      during the deployment from a separate terminal"
+    test_type: integration
+    component_under_test: relay
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The relay node private key shall never be written to
+      disk, logged, or included in any error message or diagnostic
+      output"
+    adversarial_condition: "even when the relay encounters a startup
+      error after loading the key from Secrets Manager — the error
+      handler logs relay.service.start.failed with { reason, relayId }
+      only, never with the key bytes"
+    test_type: integration
+    component_under_test: relay
+
+  - id: SI-002
+    statement: "Each relay node shall have a distinct signing identity —
+      no two relay tasks in any environment shall share a private key"
+    adversarial_condition: "even when provisioning a replacement relay
+      after a task failure — a new key pair is generated and registered
+      rather than reusing the failed task's key"
+    test_type: integration
+    component_under_test: relay
+
+  - id: SI-003
+    statement: "The relay task shall have no public IP and shall not
+      be reachable directly from the internet"
+    adversarial_condition: "even when a developer modifies the task
+      networking configuration — the security group accepts inbound
+      only from the ALB security group; all agent connections route
+      through the ALB"
+    test_type: integration
+    component_under_test: relay
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While Secrets Manager is temporarily unavailable
+      at relay task startup"
+    fallback: "the task fails to load its signing key, logs
+      relay.service.start.failed at ERROR with { reason, region },
+      exits non-zero, and ECS retries with backoff; the relay does
+      not start with an empty or stub signing key"
+    test_type: integration
+    component_under_test: relay
+
+  - id: DB-002
+    condition: "While the relay task crashes after startup"
+    fallback: "ECS restarts the task; active sessions on the crashed
+      task are lost; clients reconnect and re-establish sessions;
+      relay.service.crashed is logged at ERROR with { relayId, region,
+      reason }; the ops-critical alarm fires"
+    test_type: integration
+    component_under_test: relay
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: relay.service.started
+      level: info
+      trigger: "relay service process starts and signing key is loaded"
+      context_fields: [relayId, region, environment]
+      correlationId: false
+
+    - name: relay.service.stopped
+      level: info
+      trigger: "relay service process exits cleanly (SIGTERM)"
+      context_fields: [relayId, region, environment, uptimeMs]
+      correlationId: false
+
+  error_events:
+    - name: relay.service.start.failed
+      level: error
+      trigger: "relay service fails to start (key load failure,
+        config error)"
+      context_fields: [reason, region]
+
+    - name: relay.service.crashed
+      level: error
+      trigger: "relay service process exits unexpectedly"
+      context_fields: [relayId, region, reason]
+
+  alarms:
+    - condition: "ECS relay service runningCount drops below
+        desiredCount for more than 5 minutes"
+      fires_to: ops-critical
+    - condition: "relay.service.crashed fires more than 3 times
+        in 10 minutes"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on:
+    - CELLO-INFRA-001
+    - CELLO-INFRA-004
+  blocks:
+    - CELLO-INFRA-006
+    - CELLO-INFRA-009
