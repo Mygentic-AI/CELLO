@@ -26,24 +26,79 @@ export const CHAIN_GENESIS = createHash("sha256")
  * Columns excluded from chain serialization.
  *
  * - chain_hash: the value being computed — including it would be circular (SI-001)
- * - id: auto-generated BIGSERIAL — not present in the record at INSERT time; pg
- *   returns it as a string (bigint) at SELECT time, causing a type mismatch
- * - created_at: auto-generated DEFAULT now() — same reason as id
+ * - id: auto-generated BIGSERIAL — not present in the record at INSERT time
+ * - *_at columns: auto-generated DEFAULT now() timestamps — not present in the
+ *   caller-supplied record at INSERT time; including them would cause verifyChain
+ *   (which uses SELECT *) to produce a different hash than computeChainHash at
+ *   INSERT time. All tables use the pattern "column_name ending in _at" for these.
  */
-const EXCLUDED_FROM_CHAIN = new Set(["chain_hash", "id", "created_at"]);
+/**
+ * Columns always excluded from chain serialization regardless of table.
+ * These are DB-generated fields never present in the caller-supplied record.
+ */
+const ALWAYS_EXCLUDED_FROM_CHAIN = new Set([
+  "chain_hash",
+  "id",
+  // Auto-generated timestamps (DEFAULT now())
+  "created_at",
+  "registered_at",
+  "requested_at",
+  "attested_at",
+  "sent_at",
+  "recorded_at",
+  "last_run_at",
+  "applied_at",
+]);
+
+/**
+ * Per-table additional excluded columns: nullable optional fields that are NOT
+ * set at initial INSERT time. Including these would cause chain breaks when they
+ * are later populated, since verifyChain reads NULL for them at INSERT time but
+ * the actual value at verify time.
+ *
+ * Rule: only add a column here if it is nullable, has no DEFAULT, and is set
+ * by a separate UPDATE or a later INSERT (not at the initial row creation time).
+ */
+const TABLE_EXTRA_EXCLUDED: Record<string, ReadonlySet<string>> = {
+  notification_events: new Set(["sender_pseudonym"]),
+  connection_requests: new Set([
+    "conversation_id",        // set after conversation is created from this request
+    "escalation_expires_at",  // set when escalation is triggered
+    "rejection_reason",       // set on rejection
+    "via_alias_id",           // set when request came via an alias
+  ]),
+  conversation_seals: new Set(["close_reason_code"]),
+};
+
+function isExcluded(tableName: string, column: string): boolean {
+  if (ALWAYS_EXCLUDED_FROM_CHAIN.has(column)) return true;
+  return TABLE_EXTRA_EXCLUDED[tableName]?.has(column) ?? false;
+}
 
 /**
  * Serialize record contents deterministically for chain hashing.
  * Keys are sorted lexicographically; DB-generated fields are excluded.
- * Values are stringified using JSON.stringify for determinism.
+ *
+ * Type normalization: string values that are valid integers are coerced to
+ * JavaScript numbers before serialization. The pg driver returns BIGINT/BIGSERIAL
+ * columns as strings; application code uses JavaScript numbers. Normalizing
+ * string-integers to numbers makes serialization identical at INSERT time
+ * (application supplies numbers) and at chain-verification time (pg returns strings).
  */
-export function serializeRecord(record: Record<string, unknown>): string {
+export function serializeRecord(record: Record<string, unknown>, tableName?: string): string {
   const keys = Object.keys(record)
-    .filter((k) => !EXCLUDED_FROM_CHAIN.has(k))
+    .filter((k) => !isExcluded(tableName ?? "", k))
     .sort();
   const obj: Record<string, unknown> = {};
   for (const k of keys) {
-    obj[k] = record[k];
+    const v = record[k];
+    if (typeof v === "string" && /^-?\d+$/.test(v)) {
+      // Normalize pg BIGINT strings to numbers so serialization matches INSERT time.
+      // pg returns BIGINT/BIGSERIAL as strings; application code uses JS numbers.
+      obj[k] = Number(v);
+    } else {
+      obj[k] = v;
+    }
   }
   return JSON.stringify(obj);
 }
@@ -106,7 +161,7 @@ export function verifyChain(
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!;
     const storedHash = row["chain_hash"] as string;
-    const serialized = serializeRecord(row);
+    const serialized = serializeRecord(row, tableName);
     const recomputed = computeChainHash(serialized, previousHash);
 
     if (recomputed !== storedHash) {

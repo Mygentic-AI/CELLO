@@ -47,7 +47,7 @@
  *     pnpm --filter @cello/directory run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import {
@@ -441,6 +441,20 @@ afterAll(async () => {
   await servicePool?.end();
 });
 
+// Truncate MMR tables before each integration test so tests are fully isolated.
+// superuser truncate is required because cello_service cannot DELETE from append-only tables.
+// This is a test-infrastructure concern — not a production code concern.
+async function truncateMmrTables(): Promise<void> {
+  if (!superPool) return;
+  await superPool.query(`
+    TRUNCATE conversation_proof_leaf_checkpoints, conversation_seal_staging,
+             conversation_proof_mmr_nodes, conversation_proof_leaves,
+             directory_checkpoints RESTART IDENTITY CASCADE
+  `);
+}
+
+beforeEach(truncateMmrTables);
+
 describeIntegration("PERSIST-007 integration: mmr.leaf.appended observability", () => {
   it("mmr.leaf.appended: appendSeal emits mmr.leaf.appended at INFO with { sessionId, leafIndex, leafHash, correlationId }", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -823,7 +837,7 @@ async function getCheckpointRow(
   checkpointId: string,
 ): Promise<{ peak_hash: string; mmr_leaf_count: number; staged_seal_count: number } | null> {
   const res = await pool.query<{ peak_hash: string; mmr_leaf_count: number; staged_seal_count: number }>(
-    `SELECT peak_hash, mmr_leaf_count, staged_seal_count FROM directory_checkpoints WHERE checkpoint_id = $1`,
+    `SELECT peak_hash, mmr_leaf_count::int, staged_seal_count::int FROM directory_checkpoints WHERE checkpoint_id = $1`,
     [checkpointId],
   );
   return res.rows[0] ?? null;

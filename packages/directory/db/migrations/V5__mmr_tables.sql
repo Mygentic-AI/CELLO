@@ -19,7 +19,7 @@
 --      cello_service gets INSERT, SELECT, UPDATE, DELETE on this table only.
 --
 -- Leaf hash formula (SI-002):
---   leaf_hash = SHA-256(`${leaf_index}:${seal_merkle_root}:${recorded_at}`)
+--   leaf_hash = SHA-256(leaf_index || ':' || seal_merkle_root || ':' || recorded_at)
 --   Computed by application code — never from caller input.
 --
 -- References:
@@ -39,8 +39,11 @@ ALTER TABLE conversation_proof_leaves
   ADD COLUMN IF NOT EXISTS chain_hash     TEXT                 ;
 
 -- leaf_index must be unique across all leaves
-ALTER TABLE conversation_proof_leaves
-  ADD CONSTRAINT IF NOT EXISTS conversation_proof_leaves_leaf_index_unique UNIQUE (leaf_index);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'conversation_proof_leaves_leaf_index_unique') THEN
+    ALTER TABLE conversation_proof_leaves ADD CONSTRAINT conversation_proof_leaves_leaf_index_unique UNIQUE (leaf_index);
+  END IF;
+END $$;
 
 -- session_id index for proof lookups by session
 CREATE INDEX IF NOT EXISTS idx_cpl_session_id ON conversation_proof_leaves (session_id);
@@ -54,8 +57,11 @@ ALTER TABLE conversation_proof_mmr_nodes
   ADD COLUMN IF NOT EXISTS chain_hash     TEXT                 ;
 
 -- mmr_position must be unique
-ALTER TABLE conversation_proof_mmr_nodes
-  ADD CONSTRAINT IF NOT EXISTS cpmn_mmr_position_unique UNIQUE (mmr_position);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cpmn_mmr_position_unique') THEN
+    ALTER TABLE conversation_proof_mmr_nodes ADD CONSTRAINT cpmn_mmr_position_unique UNIQUE (mmr_position);
+  END IF;
+END $$;
 
 -- ─── directory_checkpoints — full column definitions ─────────────────────────
 
@@ -67,10 +73,13 @@ ALTER TABLE directory_checkpoints
   ADD COLUMN IF NOT EXISTS chain_hash     TEXT                 ;
 
 -- checkpoint_id must be unique
-ALTER TABLE directory_checkpoints
-  ADD CONSTRAINT IF NOT EXISTS directory_checkpoints_checkpoint_id_unique UNIQUE (checkpoint_id);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'directory_checkpoints_checkpoint_id_unique') THEN
+    ALTER TABLE directory_checkpoints ADD CONSTRAINT directory_checkpoints_checkpoint_id_unique UNIQUE (checkpoint_id);
+  END IF;
+END $$;
 
--- ─── conversation_seal_staging — new ephemeral table ─────────────────────────
+-- ─── conversation_seal_staging — ephemeral staging for in-progress checkpoints ─
 -- NOT append-only: rows have checkpoint_id stamped (UPDATE) then deleted after confirmation.
 -- cello_service gets full DML on this table — it is not a permanent record.
 
@@ -79,14 +88,19 @@ CREATE TABLE IF NOT EXISTS conversation_seal_staging (
   session_id       UUID        NOT NULL UNIQUE,
   seal_merkle_root TEXT        NOT NULL,
   recorded_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  checkpoint_id    UUID                                 -- NULL until checkpoint initiated
+  checkpoint_id    UUID                             -- NULL until checkpoint initiated
 );
 
--- Enable RLS for cello_service access control
 ALTER TABLE conversation_seal_staging ENABLE ROW LEVEL SECURITY;
 
--- Staging needs INSERT (new seals), SELECT (checkpoint initiation), UPDATE (checkpoint_id stamping),
--- DELETE (post-confirmation cleanup) — this table is NOT append-only.
-CREATE POLICY staging_service ON conversation_seal_staging TO cello_service USING (true) WITH CHECK (true);
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename = 'conversation_seal_staging' AND policyname = 'staging_service'
+  ) THEN
+    CREATE POLICY staging_service ON conversation_seal_staging TO cello_service USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
 GRANT INSERT, SELECT, UPDATE, DELETE ON conversation_seal_staging TO cello_service;
 GRANT USAGE ON SEQUENCE conversation_seal_staging_id_seq TO cello_service;

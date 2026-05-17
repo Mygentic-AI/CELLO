@@ -111,7 +111,7 @@ export class MmrStore {
         "SELECT chain_hash FROM conversation_proof_leaves ORDER BY id DESC LIMIT 1",
       );
       const prevLeafHash = prevLeafHashRow.rows[0]?.chain_hash ?? CHAIN_GENESIS;
-      const leafChainHash = computeChainHash(serializeRecord(leafRecord), prevLeafHash);
+      const leafChainHash = computeChainHash(serializeRecord(leafRecord, "conversation_proof_leaves"), prevLeafHash);
 
       await client.query(
         `INSERT INTO conversation_proof_leaves
@@ -140,7 +140,7 @@ export class MmrStore {
           "SELECT chain_hash FROM conversation_proof_mmr_nodes ORDER BY id DESC LIMIT 1",
         );
         const prevNodeHash = prevNodeHashRow.rows[0]?.chain_hash ?? CHAIN_GENESIS;
-        const nodeChainHash = computeChainHash(serializeRecord(nodeRecord), prevNodeHash);
+        const nodeChainHash = computeChainHash(serializeRecord(nodeRecord, "conversation_proof_mmr_nodes"), prevNodeHash);
 
         await client.query(
           `INSERT INTO conversation_proof_mmr_nodes (mmr_position, hash, height, chain_hash)
@@ -288,7 +288,7 @@ export class MmrStore {
         "SELECT chain_hash FROM directory_checkpoints ORDER BY id DESC LIMIT 1",
       );
       const prevCheckpointHash = prevCheckpointHashRow.rows[0]?.chain_hash ?? CHAIN_GENESIS;
-      checkpointChainHash = computeChainHash(serializeRecord(checkpointRecord), prevCheckpointHash);
+      checkpointChainHash = computeChainHash(serializeRecord(checkpointRecord, "directory_checkpoints"), prevCheckpointHash);
 
       // Atomically: INSERT checkpoint row + INSERT leaf→checkpoint associations + DELETE staging rows.
       // Wrapping all three in a single explicit transaction prevents orphaned staging rows if a crash
@@ -352,7 +352,7 @@ export class MmrStore {
       seal_merkle_root: string;
       recorded_at: Date;
     }>(
-      "SELECT leaf_index, mmr_position, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves WHERE session_id = $1",
+      "SELECT leaf_index::int, mmr_position::int, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves WHERE session_id = $1",
       [sessionId],
     );
 
@@ -372,7 +372,7 @@ export class MmrStore {
       peak_hash: string;
       mmr_leaf_count: number;
     }>(
-      `SELECT dc.checkpoint_id, dc.peak_hash, dc.mmr_leaf_count
+      `SELECT dc.checkpoint_id, dc.peak_hash, dc.mmr_leaf_count::int AS mmr_leaf_count
        FROM conversation_proof_leaves l
        JOIN conversation_proof_leaf_checkpoints lc ON lc.leaf_id = l.id
        JOIN directory_checkpoints dc ON dc.checkpoint_id = lc.checkpoint_id
@@ -399,7 +399,7 @@ export class MmrStore {
       seal_merkle_root: string;
       recorded_at: Date;
     }>(
-      "SELECT leaf_index, mmr_position, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves WHERE leaf_index < $1 ORDER BY leaf_index ASC",
+      "SELECT leaf_index::int, mmr_position::int, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves WHERE leaf_index < $1 ORDER BY leaf_index ASC",
       [checkpoint.mmr_leaf_count],
     );
 
@@ -420,7 +420,7 @@ export class MmrStore {
       hash: string;
       height: number;
     }>(
-      `SELECT n.mmr_position, n.hash, n.height
+      `SELECT n.mmr_position::int, n.hash, n.height::int
        FROM conversation_proof_mmr_nodes n
        WHERE n.mmr_position < (
          2 * $1 - bit_count($1::bit(64))::int
@@ -526,7 +526,7 @@ export class MmrStore {
       seal_merkle_root: string;
       recorded_at: Date;
     }>(
-      "SELECT leaf_index, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves WHERE leaf_index < $1 ORDER BY leaf_index ASC",
+      "SELECT leaf_index::int, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves WHERE leaf_index < $1 ORDER BY leaf_index ASC",
       [leafCount],
     );
 
@@ -552,7 +552,7 @@ export class MmrStore {
       seal_merkle_root: string;
       recorded_at: Date;
     }>(
-      "SELECT leaf_index, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves ORDER BY leaf_index ASC",
+      "SELECT leaf_index::int, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves ORDER BY leaf_index ASC",
     );
 
     let peaks: MmrPeak[] = [];

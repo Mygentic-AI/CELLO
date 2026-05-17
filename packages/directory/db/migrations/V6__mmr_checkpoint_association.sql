@@ -37,8 +37,14 @@ CREATE TABLE IF NOT EXISTS conversation_proof_leaf_checkpoints (
 CREATE INDEX IF NOT EXISTS idx_cplc_checkpoint_id ON conversation_proof_leaf_checkpoints (checkpoint_id);
 
 ALTER TABLE conversation_proof_leaf_checkpoints ENABLE ROW LEVEL SECURITY;
-CREATE POLICY insert_only ON conversation_proof_leaf_checkpoints FOR INSERT TO cello_service WITH CHECK (true);
-CREATE POLICY select_all  ON conversation_proof_leaf_checkpoints FOR SELECT TO cello_service USING (true);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'conversation_proof_leaf_checkpoints' AND policyname = 'insert_only') THEN
+    CREATE POLICY insert_only ON conversation_proof_leaf_checkpoints FOR INSERT TO cello_service WITH CHECK (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'conversation_proof_leaf_checkpoints' AND policyname = 'select_all') THEN
+    CREATE POLICY select_all ON conversation_proof_leaf_checkpoints FOR SELECT TO cello_service USING (true);
+  END IF;
+END $$;
 GRANT INSERT, SELECT ON conversation_proof_leaf_checkpoints TO cello_service;
 REVOKE UPDATE, DELETE ON conversation_proof_leaf_checkpoints FROM cello_service;
 GRANT USAGE ON SEQUENCE conversation_proof_leaf_checkpoints_id_seq TO cello_service;
