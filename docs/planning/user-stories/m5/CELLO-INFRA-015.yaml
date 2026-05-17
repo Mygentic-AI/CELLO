@@ -1,0 +1,238 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-015
+domain: Persistence
+milestone: M5
+actor: DIR
+priority: P1
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Directory Node,
+  I want notification delivery backed by the pending_notifications
+  database table so that SEAL_UNILATERAL notifications survive
+  directory restarts and are delivered reliably when the absent
+  party reconnects, regardless of which directory node they connect to.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a SEAL_UNILATERAL notification is queued for
+      an absent party"
+    action: "the directory writes one row to pending_notifications
+      with: notification_id UUID, recipient_agent_id, notification_type,
+      payload JSONB, created_at, delivered_at NULL; the row replicates
+      to all three directory nodes via logical replication; the
+      notification is not lost if the directory process restarts
+      before the absent party reconnects"
+
+  - trigger: "When the absent party connects to any directory node"
+    action: "the directory queries pending_notifications for all
+      undelivered rows where recipient_agent_id matches and
+      delivered_at IS NULL; it delivers each notification to the
+      agent over the established signaling stream; on delivery
+      acknowledgement from the agent, the directory sets
+      delivered_at = now() on that row"
+
+  - trigger: "When a notification is acknowledged by the recipient"
+    action: "the directory updates delivered_at on the
+      pending_notifications row; the row is retained permanently
+      for audit purposes — it is never deleted; subsequent
+      reconnects by the same agent return only rows where
+      delivered_at IS NULL"
+
+  - trigger: "When the absent party connects to a different
+      directory node than the one that queued the notification"
+    action: "the connecting node queries its own pending_notifications
+      table (which holds the replicated row); it delivers the
+      notification from its local replica; no cross-node RPC
+      is required for notification delivery — replication
+      makes the notification available on all nodes"
+
+  - trigger: "When CELLO_ENV=local"
+    action: "InMemoryNotificationQueue is used (M4 implementation);
+      the database-backed PgNotificationQueue is not instantiated;
+      the in-memory queue does not survive process restarts"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The pending_notifications table exists in the M4
+      schema (PERSIST-015)"
+    when: "the V8 migration is applied"
+    then: "pending_notifications has full columns: notification_id
+      UUID NOT NULL UNIQUE, recipient_agent_id TEXT NOT NULL,
+      notification_type TEXT NOT NULL, payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(), delivered_at
+      TIMESTAMPTZ NULL; an index exists on (recipient_agent_id,
+      delivered_at) for efficient undelivered query; RLS is enabled
+      with insert_only and select_all policies — verified by
+      querying information_schema.columns and pg_indexes from a
+      separate database connection"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "A SEAL_UNILATERAL notification is queued for agent B
+      while agent B is offline"
+    when: "the directory process is restarted"
+    then: "after restart, querying pending_notifications from a
+      separate database connection returns the notification row
+      with delivered_at IS NULL — the notification was not lost
+      during the restart"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A SEAL_UNILATERAL notification is written on node-1
+      (us-east-1) while agent B is offline"
+    when: "agent B reconnects to node-2 (eu-central-1)"
+    then: "node-2's pending_notifications table contains the
+      replicated notification row; node-2 delivers the notification
+      to agent B over the established stream; no RPC to node-1
+      is required — verified by stopping node-1 after the
+      notification is written and confirming delivery from node-2
+      as a separate OS process"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-004
+    given: "Agent B receives the SEAL_UNILATERAL notification
+      and sends an acknowledgement"
+    when: "the acknowledgement is processed by the directory"
+    then: "the pending_notifications row for that notification_id
+      has delivered_at set to a non-null timestamp; the row is
+      still present in the table (not deleted); a subsequent
+      reconnect by agent B returns no undelivered notifications
+      for that notification_id — verified by querying
+      pending_notifications from a separate database connection
+      after the acknowledgement"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "The NotificationQueue interface is defined in
+      packages/interfaces/ (M4)"
+    when: "PgNotificationQueue is inspected"
+    then: "it implements NotificationQueue with enqueue(agentId,
+      notification) and drainUndelivered(agentId) methods;
+      drainUndelivered returns only rows where delivered_at IS NULL;
+      acknowledge(notificationId) sets delivered_at without
+      deleting the row — verified by reading the implementation
+      and running unit tests"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-006
+    given: "Agent B has two pending notifications and reconnects"
+    when: "drainUndelivered is called for agent B's agent_id"
+    then: "both notifications are returned in created_at ASC
+      order; after both are acknowledged, a second call to
+      drainUndelivered returns an empty array — verified by
+      a unit test with a real Postgres connection (not an
+      in-memory stub)"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "CELLO_ENV=local"
+    when: "a notification is queued and the process restarts"
+    then: "the InMemoryNotificationQueue (M4) is used; the
+      notification is lost on restart; this is the documented
+      and expected behaviour for local development — verified
+      by asserting the composition root selects InMemoryNotificationQueue
+      when CELLO_ENV=local"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "pending_notifications rows shall never be deleted —
+      delivered_at is set on acknowledgement; the row is retained
+      permanently for audit purposes"
+    adversarial_condition: "even when the notification queue grows
+      large — the cello_service role has INSERT and SELECT only;
+      UPDATE is restricted to the delivered_at column via a
+      dedicated UPDATE policy; DELETE is explicitly revoked"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "A notification shall be delivered at most once
+      per recipient connection — drainUndelivered returns only
+      rows where delivered_at IS NULL; acknowledged notifications
+      are not re-delivered on subsequent reconnects"
+    adversarial_condition: "even when the agent reconnects
+      multiple times — the delivered_at filter ensures idempotent
+      delivery; the acknowledge call is idempotent (updating an
+      already-set delivered_at is a no-op)"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the absent party never reconnects after
+      a unilateral seal"
+    fallback: "the pending_notifications row remains with
+      delivered_at IS NULL permanently; no follow-up action is
+      required; the row is retained for audit; the session is
+      closed regardless of whether the notification is ever
+      delivered"
+    test_type: unit
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While the directory is restarted between
+      delivering the notification and receiving the acknowledgement"
+    fallback: "on the next reconnect by the agent, drainUndelivered
+      returns the same notification again (delivered_at IS still
+      NULL); the agent receives a duplicate notification and
+      must handle idempotent re-delivery; the directory sends
+      the notification again and waits for acknowledgement"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: notification.queued
+      level: info
+      trigger: "a notification is written to pending_notifications"
+      context_fields: [notificationId, recipientAgentId,
+        notificationType]
+      correlationId: false
+
+    - name: notification.delivered
+      level: info
+      trigger: "a notification is delivered and acknowledged
+        by the recipient"
+      context_fields: [notificationId, recipientAgentId,
+        notificationType, deliveryLatencyMs]
+      correlationId: false
+
+  error_events:
+    - name: notification.delivery.failed
+      level: warn
+      trigger: "directory fails to deliver a notification over
+        the established stream"
+      context_fields: [notificationId, recipientAgentId, reason]
+
+  alarms:
+    - condition: "pending_notifications rows with delivered_at
+        IS NULL and created_at older than 24 hours — indicates
+        an agent that has not reconnected after a unilateral seal"
+      fires_to: ops-warning
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Session Lifecycle"
+  discussion_logs:
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on:
+    - CELLO-PERSIST-015
+    - CELLO-INFRA-002
+  blocks: []
