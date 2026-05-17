@@ -13,7 +13,7 @@
  *     pnpm --filter @cello/directory run test
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import {
@@ -190,14 +190,10 @@ afterAll(async () => {
 });
 
 describeIntegration("PERSIST-004 integration: hash chain in Postgres", () => {
-  // beforeAll: clean the slate when this suite starts (runs once, doesn't bleed).
-  // afterEach: clean up after each test so the next test in this suite starts clean.
-  // Not using beforeEach because Vitest bleeds beforeEach across files in one worker.
-  beforeAll(async () => {
-    if (!superPool) return;
-    await superPool.query("TRUNCATE notification_events, conversation_seals RESTART IDENTITY CASCADE");
-  });
-  afterEach(async () => {
+  // Each integration test needs a clean chain — verifyChain reads ALL rows.
+  // With forks pool (pool: "forks" in vitest.config.ts), each file runs in its own
+  // child process so beforeEach here cannot bleed into other test files.
+  beforeEach(async () => {
     if (!superPool) return;
     await superPool.query("TRUNCATE notification_events, conversation_seals RESTART IDENTITY CASCADE");
   });

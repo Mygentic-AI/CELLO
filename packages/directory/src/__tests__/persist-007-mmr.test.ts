@@ -47,7 +47,7 @@
  *     pnpm --filter @cello/directory run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import {
@@ -458,11 +458,8 @@ async function truncateMmrTables(): Promise<void> {
 // it inside each describe block prevents cross-file contamination.
 function describeIntegrationIsolated(name: string, fn: () => void): void {
   describeIntegration(name, () => {
-    // beforeAll: clean the slate when this suite starts (runs once, doesn't bleed).
-    // afterEach: clean after each test for the next one in this suite.
-    // Not using beforeEach — Vitest bleeds beforeEach across files in one worker.
-    beforeAll(truncateMmrTables);
-    afterEach(truncateMmrTables);
+    // forks pool gives each file its own process — beforeEach here is file-local.
+    beforeEach(truncateMmrTables);
     fn();
   });
 }
