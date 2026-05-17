@@ -163,7 +163,7 @@ The story ID must appear in the commit message subject line.
 
 ## Step 7 — Code review
 
-Spawn the **`feature-dev:code-reviewer`** subagent to conduct the review. Pass it the full checklist below verbatim as the prompt — do not summarise or paraphrase it. The reviewer must read the story YAML and every implementation file; do not shortcut any step.
+Spawn the **`cello-sprint-reviewer`** subagent to conduct the review. Pass it the full checklist below verbatim as the prompt — do not summarise or paraphrase it. The reviewer must read the story YAML and every implementation file; do not shortcut any step.
 
 Wait for the reviewer to return. Fix every finding at every severity — blocking, high, medium, and low. No finding is optional. Re-run the gate sequence after fixing.
 
