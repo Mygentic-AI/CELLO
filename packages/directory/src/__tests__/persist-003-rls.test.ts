@@ -388,9 +388,9 @@ describeIntegration("PERSIST-003 AC-002: cello_service can INSERT into conversat
     try {
       await serviceClient.query(
         `INSERT INTO conversation_seals
-           (conversation_id, merkle_root, close_type, participant_count, seal_date)
-         VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date)`,
-        [conversationId, "a".repeat(64)],
+           (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
+         VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date, $3)`,
+        [conversationId, "a".repeat(64), "0".repeat(64)],
       );
     } finally {
       serviceClient.release();
@@ -420,9 +420,9 @@ describeIntegration(
       try {
         await superClient.query(
           `INSERT INTO conversation_seals
-             (conversation_id, merkle_root, close_type, participant_count, seal_date)
-           VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date)`,
-          [conversationId, "b".repeat(64)],
+             (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
+           VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date, $3)`,
+          [conversationId, "b".repeat(64), "0".repeat(64)],
         );
       } finally {
         superClient.release();
@@ -473,9 +473,9 @@ describeIntegration(
       try {
         await superClient.query(
           `INSERT INTO conversation_seals
-             (conversation_id, merkle_root, close_type, participant_count, seal_date)
-           VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date)`,
-          [conversationId, "d".repeat(64)],
+             (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
+           VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date, $3)`,
+          [conversationId, "d".repeat(64), "0".repeat(64)],
         );
       } finally {
         superClient.release();
@@ -590,9 +590,9 @@ describeIntegration("PERSIST-003 AC-006: cello_service SELECT succeeds and retur
     try {
       await superClient.query(
         `INSERT INTO conversation_seals
-           (conversation_id, merkle_root, close_type, participant_count, seal_date)
-         VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date)`,
-        [conversationId, "e".repeat(64)],
+           (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
+         VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date, $3)`,
+        [conversationId, "e".repeat(64), "0".repeat(64)],
       );
     } finally {
       superClient.release();

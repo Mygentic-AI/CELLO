@@ -32,7 +32,7 @@ const DATABASE_URL =
   process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../../..");
-const PKG_DIR = resolve(import.meta.dirname, "../../..");
+const PKG_DIR = resolve(import.meta.dirname, "../..");
 const tsxEsm = createRequire(import.meta.url).resolve("tsx/esm");
 
 // Skip entire suite if not in local environment
@@ -199,6 +199,7 @@ describeIntegration("PERSIST-002: Docker Compose + Flyway", () => {
       CELLO_ENV: "local",
       DATABASE_URL: "postgresql://postgres:dev@localhost:5433/cello_nonexistent_test_db",
       DEV_ENVELOPE_KEY: "0".repeat(64),
+      AUDIT_LOG_PATH: "/tmp/cello-test-audit.log",
       CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWTest",
     };
     let output = "";
