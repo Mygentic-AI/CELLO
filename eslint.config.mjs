@@ -30,6 +30,10 @@ export default [
             group: ["**/sqlcipher-client-store*"],
             message: "SQLCipherClientStore may only be imported from the composition root. Application code imports the ClientStore interface only.",
           },
+          {
+            group: ["**/encrypted-file-signing-key-provider*"],
+            message: "EncryptedFileSigningKeyProvider may only be imported from the composition root. Application code imports the SigningKeyProvider interface only.",
+          },
         ],
       }],
     },
@@ -37,6 +41,13 @@ export default [
   // Composition root is the one permitted importer of concrete adapters
   {
     files: ["packages/directory/src/bin/directory.ts"],
+    rules: {
+      "no-restricted-imports": "off",
+    },
+  },
+  // Test files may import adapters directly for integration testing
+  {
+    files: ["packages/*/src/__tests__/**/*.ts"],
     rules: {
       "no-restricted-imports": "off",
     },

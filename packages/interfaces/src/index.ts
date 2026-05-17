@@ -1,7 +1,10 @@
 export type { DirectoryStore, DirectoryNotification, SealNotarization } from "./directory-store.js";
 export type { Logger, LogLevel, LogContext } from "./logger.js";
 export type { EnvelopeKeyProvider } from "./envelope-key-provider.js";
+export type { SigningKeyProvider, SigningPublicKey, SigningSignature, SignOptions } from "./signing-key-provider.js";
+export { SigningKeyProviderError } from "./signing-key-provider.js";
 export type { ClientStore } from "./client-store.js";
+export type { CloudStorageProvider } from "./cloud-storage-provider.js";
 export type { RelayWal } from "./relay-wal.js";
 export type { JobScheduler, ScheduledJob } from "./job-scheduler.js";
 export type { SessionWal, Leaf } from "./session-wal.js";

@@ -20,11 +20,13 @@
   },
   "dependencies": {
     "@cello/crypto": "workspace:*",
+    "@cello/interfaces": "workspace:*",
     "@cello/protocol-types": "workspace:*",
     "@cello/transport": "workspace:*",
     "@journeyapps/sqlcipher": "^6.0.0",
     "@libp2p/interface": "^3.2.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@noble/curves": "^2.2.0",
     "cbor-x": "^1.6.0",
     "it-length-prefixed": "^10.0.1",
     "it-pipe": "^3.0.1",
@@ -33,7 +35,6 @@
   "devDependencies": {
     "@claude-flow/testing": "*",
     "@cello/directory": "workspace:*",
-    "@cello/interfaces": "workspace:*",
     "@cello/relay": "workspace:*",
     "@cello/test-fixtures": "workspace:*"
   }
