@@ -1,0 +1,267 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-013
+domain: Node Operations
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+  - relay
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO infrastructure operator,
+  I want RDS credentials rotated automatically every 30 days and
+  TLS certificates managed by ACM with auto-renewal,
+  so that credential exposure windows are bounded and expired
+  certificates never take the service offline.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When 30 days elapse since the last RDS credential
+      rotation for cello/{env}/directory/rds-credentials"
+    action: "Secrets Manager automatically rotates the password
+      for the cello_service RDS user using the AWS-managed
+      rotation Lambda for RDS; the new password is written to
+      Secrets Manager; ECS tasks pick up the new credential on
+      their next connection pool refresh without a task restart;
+      secrets.rotation.completed is logged at INFO with
+      { secretId, rotationDuration }"
+
+  - trigger: "When the RDS credential rotation Lambda runs"
+    action: "the Lambda connects to RDS using the admin credential
+      (cello/{env}/directory/rds-admin-credentials), updates the
+      cello_service user password, and verifies the new credential
+      works before completing the rotation; if the verification
+      fails, the rotation is rolled back and secrets.rotation.failed
+      is logged at ERROR"
+
+  - trigger: "When a TLS certificate on an ALB endpoint is within
+      60 days of expiry"
+    action: "ACM automatically renews the certificate; the renewed
+      certificate is deployed to the ALB without operator
+      intervention or service interruption; no manual certificate
+      rotation procedure exists"
+
+  - trigger: "When the directory or relay node private key requires
+      rotation (manual operator action)"
+    action: "the operator generates a new Ed25519 key pair,
+      stores the new private key in Secrets Manager under
+      cello/{env}/directory/node-private-key or
+      cello/{env}/relay/node-private-key, and performs a
+      coordinated ECS task restart; for relay nodes, a new
+      relayId is derived from the new key and registered with
+      the directory (SI-002 in INFRA-006: distinct identity per
+      relay); for directory nodes, the new public key must be
+      distributed to peers before the old tasks are stopped"
+    notes: "node private key rotation is a manual coordinated
+      operation — it is not automated because it requires
+      protocol-level coordination (peer key distribution for
+      directory nodes, new relay registration for relay nodes);
+      this story documents the procedure; automation is a
+      Consortium-phase concern"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The cello-secrets CloudFormation stack is deployed
+      with rotation enabled for rds-credentials"
+    when: "the Secrets Manager secret is inspected"
+    then: "the secret cello/{env}/directory/rds-credentials has
+      automatic rotation enabled with a 30-day rotation schedule;
+      a rotation Lambda ARN is associated with the secret —
+      verified by calling aws secretsmanager describe-secret
+      from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "An RDS credential rotation is triggered manually
+      (aws secretsmanager rotate-secret)"
+    when: "the rotation Lambda completes"
+    then: "the new credential in Secrets Manager authenticates
+      successfully against RDS; the old credential no longer
+      authenticates; secrets.rotation.completed is logged at INFO
+      with { secretId }; ECS tasks that refresh their connection
+      pool within 5 minutes reconnect successfully with the new
+      credential — verified by attempting RDS authentication with
+      both old and new credentials from a separate terminal after
+      rotation"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "The rotation Lambda fails to verify the new credential
+      after writing it"
+    when: "the rotation Lambda's verification step fails"
+    then: "Secrets Manager rolls back to the previous credential;
+      secrets.rotation.failed is logged at ERROR with { secretId,
+      reason }; the ops-critical alarm fires; existing ECS tasks
+      continue operating with the pre-rotation credential —
+      verified by simulating a verification failure and asserting
+      the old credential still works from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "An ACM certificate is associated with a directory ALB"
+    when: "the certificate's expiry date is inspected"
+    then: "the certificate was issued by ACM (not uploaded manually);
+      auto-renewal is enabled (ACM-issued certificates renew
+      automatically); the certificate's domain matches the ALB's
+      DNS name — verified by calling aws acm describe-certificate
+      from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "An ACM certificate renews automatically"
+    when: "the renewed certificate is deployed to the ALB"
+    then: "TLS connections to the ALB succeed without interruption;
+      no ECS task restart is required; no operator action is
+      required — verified by checking the certificate expiry before
+      and after renewal from a separate terminal while maintaining
+      continuous TLS connections"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "The node private keys (directory and relay) are in
+      Secrets Manager"
+    when: "the rotation schedule for node-private-key secrets
+      is inspected"
+    then: "automatic rotation is NOT enabled for node-private-key
+      secrets — rotation is manual and coordinated; the secret
+      has no rotation Lambda associated — verified by calling
+      aws secretsmanager describe-secret and asserting
+      RotationEnabled is false for node-private-key secrets"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-007
+    given: "The operator runbook for node private key rotation
+      is read"
+    when: "the procedure is followed"
+    then: "the runbook covers: (1) generate new Ed25519 key pair,
+      (2) for relay nodes — store new key in Secrets Manager,
+      restart ECS task, verify new relayId registered with
+      directory; (3) for directory nodes — distribute new public
+      key to all peer nodes, store new key in Secrets Manager,
+      perform rolling ECS task restart; the runbook is committed
+      to the repository at infra/runbooks/node-key-rotation.md —
+      verified by reading the file from the repository"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "RDS credentials shall rotate automatically every
+      30 days — no manual intervention is required for routine
+      rotation"
+    adversarial_condition: "even when the ECS tasks are under
+      load during rotation — the rotation Lambda updates the
+      credential in Secrets Manager and ECS tasks refresh their
+      connection pool without a restart; the rotation window
+      during which both old and new credentials are valid is
+      minimised by the AWS rotation Lambda"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "TLS certificates shall never be manually uploaded
+      to ACM or ALBs — all certificates are ACM-issued with
+      auto-renewal"
+    adversarial_condition: "even when a developer wants to use
+      a specific certificate authority — ACM-issued certificates
+      are required; custom certificate upload is not a supported
+      workflow"
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "The rds-admin-credentials secret used by the
+      rotation Lambda shall never be accessible to the ECS
+      directory task role"
+    adversarial_condition: "even when both secrets are in the
+      same AWS account — the ECS task role IAM policy allows
+      GetSecretValue only on cello/{env}/directory/rds-credentials
+      (the application credential); the admin credential is
+      accessible only to the rotation Lambda's execution role"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While ECS tasks fail to pick up rotated RDS
+      credentials within their connection pool refresh window"
+    fallback: "the task's connection pool retries with the new
+      credential from Secrets Manager on the next health check;
+      if tasks fail health checks after rotation, ECS restarts
+      them and they start fresh with the new credential; the
+      ops-critical alarm fires if task count drops below
+      desiredCount"
+    test_type: integration
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While an ACM certificate renewal fails (DNS
+      validation timeout)"
+    fallback: "ACM retries DNS validation automatically; if the
+      certificate expires before renewal succeeds, the ALB serves
+      the expired certificate and clients receive TLS warnings;
+      the CloudWatch alarm for certificate expiry fires at 60
+      days remaining — giving operators 60 days to resolve DNS
+      validation issues before expiry"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: secrets.rotation.completed
+      level: info
+      trigger: "Secrets Manager rotation Lambda completes
+        successfully"
+      context_fields: [secretId, rotationDuration]
+      correlationId: false
+
+    - name: secrets.certificate.renewed
+      level: info
+      trigger: "ACM certificate is renewed and deployed to ALB"
+      context_fields: [certificateArn, domain, newExpiryDate]
+      correlationId: false
+
+  error_events:
+    - name: secrets.rotation.failed
+      level: error
+      trigger: "rotation Lambda fails to verify new credential"
+      context_fields: [secretId, reason]
+
+    - name: secrets.certificate.expiry_warning
+      level: warn
+      trigger: "ACM certificate expiry is within 60 days"
+      context_fields: [certificateArn, domain, daysUntilExpiry]
+
+  alarms:
+    - condition: "secrets.rotation.failed fires at any time"
+      fires_to: ops-critical
+    - condition: "secrets.certificate.expiry_warning fires
+        with daysUntilExpiry < 30"
+      fires_to: ops-critical
+    - condition: "secrets.certificate.expiry_warning fires
+        with daysUntilExpiry < 60"
+      fires_to: ops-warning
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on:
+    - CELLO-INFRA-001
+  blocks: []
