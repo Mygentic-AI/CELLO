@@ -99,6 +99,7 @@ acceptance_criteria:
     when: "the Secrets Manager secrets are inspected"
     then: "the following secrets exist under cello/{env}/:
       cello/{env}/directory/rds-credentials,
+      cello/{env}/directory/rds-admin-credentials,
       cello/{env}/directory/node-private-key,
       cello/{env}/directory/kms-key-arn,
       cello/{env}/relay/node-private-key;
@@ -205,13 +206,15 @@ security_invariants:
 
   - id: SI-004
     statement: "VPC Peering connections shall carry only port 5432
-      (RDS replication) and the directory checkpoint protocol port
-      between peer VPCs; all other cross-VPC traffic shall be blocked
-      by security group rules"
+      (RDS logical replication) and port 4001 (directory inter-node
+      checkpoint signing protocol, libp2p) between peer VPCs; all
+      other cross-VPC traffic shall be blocked by security group rules"
     adversarial_condition: "even when a developer adds a permissive
       security group rule for debugging — the IaC security group
       definitions are the authoritative rules and must not contain
-      wildcard port ranges for peer CIDR ranges"
+      wildcard port ranges for peer CIDR ranges; port 4001 is the
+      designated inter-node protocol port; no other ports are
+      permitted between peer VPC CIDR ranges"
     test_type: integration
     component_under_test: directory
 

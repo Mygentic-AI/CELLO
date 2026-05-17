@@ -110,8 +110,8 @@ acceptance_criteria:
     given: "The in-memory buffer contains 10,000 entries and
       S3 remains unavailable"
     when: "ship(entry) is called for the 10,001st entry"
-    then: "audit.shipper.entries.dropped is logged at ERROR
-      with { droppedCount: 1, reason: 'buffer_full' };
+    then: "audit.shipper.buffer.overflow is logged at ERROR
+      with { droppedCount: 1, bufferedCount: 10000 };
       the ops-critical alarm fires; the buffer size does not
       exceed 10,000 entries — verified by inspecting the
       shipper's buffer size from a test process"
@@ -134,7 +134,7 @@ acceptance_criteria:
     when: "flush() is called during shutdown"
     then: "all 3 buffered entries are shipped to S3 before the
       process exits if S3 is available; audit.shipper.flushed
-      is logged at INFO with { flushedCount: 3 }; if S3 is
+      is logged at INFO with { entriesShipped: 3 }; if S3 is
       unavailable, the process logs audit.shipper.flush.failed
       at ERROR with { lostEntryCount: 3 } and exits — verified
       by inspecting S3 object count before and after a clean
@@ -176,15 +176,29 @@ security_invariants:
     test_type: unit
     component_under_test: directory
 
+  - id: SI-004
+    statement: "Sensitive values (K_server_X key shares, auth tokens,
+      node private key bytes) shall never appear in the pgaudit
+      parameters field of a shipped audit log entry"
+    adversarial_condition: "even when a database operation passes
+      key material as a SQL bind parameter — the application layer
+      must never pass raw key bytes as SQL parameters; key material
+      is held in memory and passed to the EnvelopeKeyProvider
+      interface, never interpolated into SQL strings; a shipped
+      audit entry containing key material would expose it to anyone
+      with S3 read access to the audit bucket"
+    test_type: unit
+    component_under_test: directory
+
 # ─── Degraded Behavior ──────────────────────────────────────
 degraded_behavior:
   - id: DB-001
     condition: "While S3 is unavailable for more than 5 minutes"
-    fallback: "audit.shipper.buffered continues to fire at WARN
+    fallback: "audit.shipper.degraded continues to fire at WARN
       on each retry attempt; the ops-critical alarm fires when
-      bufferedCount exceeds 10,000; the directory continues
-      serving requests normally — audit log shipping failure
-      does not halt the directory service"
+      audit.shipper.buffer.overflow fires (buffer at capacity);
+      the directory continues serving requests normally — audit
+      log shipping failure does not halt the directory service"
     test_type: integration
     component_under_test: directory
 
@@ -210,19 +224,26 @@ observability:
     - name: audit.shipper.flushed
       level: info
       trigger: "flush() ships all buffered entries on shutdown"
-      context_fields: [flushedCount, durationMs]
+      context_fields: [entriesShipped, durationMs]
+      correlationId: false
+
+    - name: audit.shipper.recovered
+      level: info
+      trigger: "S3 becomes reachable after a period of unavailability;
+        buffered entries are being shipped"
+      context_fields: [bufferedCount]
       correlationId: false
 
   error_events:
-    - name: audit.shipper.buffered
+    - name: audit.shipper.degraded
       level: warn
       trigger: "S3 unavailable; entries accumulating in buffer"
-      context_fields: [bufferedCount, oldestEntryAge]
+      context_fields: [reason, bufferedCount]
 
-    - name: audit.shipper.entries.dropped
+    - name: audit.shipper.buffer.overflow
       level: error
-      trigger: "buffer limit reached; oldest entries dropped"
-      context_fields: [droppedCount, reason]
+      trigger: "buffer capacity reached; oldest entries dropped"
+      context_fields: [droppedCount, bufferedCount]
 
     - name: audit.shipper.flush.failed
       level: error
@@ -230,8 +251,7 @@ observability:
       context_fields: [lostEntryCount]
 
   alarms:
-    - condition: "audit.shipper.buffered fires with
-        bufferedCount > 10000"
+    - condition: "audit.shipper.buffer.overflow fires at any time"
       fires_to: ops-critical
 
 # ─── References ─────────────────────────────────────────────
@@ -245,5 +265,6 @@ references:
   depends_on:
     - CELLO-INFRA-001
     - CELLO-PERSIST-002
+    - CELLO-PERSIST-006
   blocks:
     - CELLO-INFRA-E2E-001

@@ -31,9 +31,11 @@ behavior:
   - trigger: "When the relay pool manifest is loaded and verified"
     action: "the directory begins pinging each relay in the manifest
       on a 30-second interval; each ping is a lightweight HTTP GET
-      to the relay's health check endpoint; the relay responds with
-      HTTP 200 and { relayId, status: 'ok' }; the directory records
-      the relay's consecutive failure count and last known latency"
+      to the relay's health check endpoint at port 4000 inside the
+      VPC (GET http://{relay-private-ip}:4000/health); the relay
+      responds with HTTP 200 and { relayId, status: 'ok' }; the
+      directory records the relay's consecutive failure count and
+      last known latency"
 
   - trigger: "When a relay fails 3 consecutive health check pings"
     action: "the directory marks the relay as unavailable in its
@@ -159,6 +161,20 @@ acceptance_criteria:
       { currentVersion: 2, receivedVersion: 1 }; the existing
       manifest (version=2) remains active"
     test_type: unit
+    component_under_test: directory
+
+  - id: AC-009
+    given: "relay-X has a valid row in relay_registrations (public
+      key registered) but is NOT listed in the current signed relay
+      pool manifest; relay-X passes all health checks"
+    when: "a client requests session establishment"
+    then: "relay-X is never assigned to the session — only relays
+      present in the verified manifest are eligible for assignment;
+      relay registration alone is not sufficient; verified by
+      attempting session establishment and asserting the assigned
+      relayId is never relay-X's relayId across 20 consecutive
+      session requests from a separate client process"
+    test_type: integration
     component_under_test: directory
 
 # ─── Security Invariants ────────────────────────────────────

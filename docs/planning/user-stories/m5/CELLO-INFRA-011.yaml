@@ -207,5 +207,9 @@ references:
   milestone_outline: "docs/planning/user-stories/m5/outline.md"
   e2e_story: CELLO-INFRA-E2E-001
   depends_on:
+    - CELLO-INFRA-002
+    - CELLO-INFRA-003
     - CELLO-INFRA-004
+    - CELLO-INFRA-009
+    - CELLO-INFRA-010
   blocks: []

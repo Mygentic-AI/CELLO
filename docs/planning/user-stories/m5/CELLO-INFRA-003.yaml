@@ -26,14 +26,19 @@ behavior:
       sorts them deterministically (recorded_at ASC, conversation_id ASC),
       extends the MMR with the sorted batch, computes the checkpoint hash
       SHA-256(mmr_peaks_serialized || identity_merkle_root || checkpoint_id),
-      and broadcasts the checkpoint proposal to the other two nodes"
+      where mmr_peaks_serialized is a canonical JSON array of hex-encoded
+      peak hashes ordered by MMR position ascending —
+      e.g. '[\"aabb...\",\"ccdd...\"]' with no whitespace, keys omitted,
+      UTF-8 encoded; this format is the same on every honest node given
+      identical MMR state — and broadcasts the checkpoint proposal to the
+      other two nodes"
 
   - trigger: "When a non-coordinator node receives a checkpoint proposal"
     action: "the node independently verifies the checkpoint hash against
       its own local MMR state and identity_merkle_root; if the hash
       matches, the node signs it with its Ed25519 node signing key and
       returns the signature to the coordinator; if the hash does not
-      match, the node logs federation.checkpoint.hash_mismatch at ERROR
+      match, the node logs federation.checkpoint.proposal.hash_mismatch at ERROR
       and withholds its signature"
 
   - trigger: "When the coordinator collects 2 or more valid signatures
@@ -133,7 +138,7 @@ acceptance_criteria:
     given: "A non-coordinator node receives a checkpoint proposal"
     when: "the proposal's checkpoint_hash does not match the node's
       locally computed hash"
-    then: "the node withholds its signature; federation.checkpoint.hash_mismatch
+    then: "the node withholds its signature; federation.checkpoint.proposal.hash_mismatch
       is logged at ERROR with { nodeId, checkpointId, expectedHash,
       receivedHash }; the ops-critical alarm fires; if only one other
       node signs, the round fails to reach threshold and is skipped —
@@ -157,13 +162,16 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-008
-    given: "No checkpoint has been confirmed for 30 minutes"
-    when: "the ops-critical alarm condition is evaluated"
-    then: "the federation.checkpoint.gap alarm fires to ops-critical;
-      the alarm condition is: no federation.checkpoint.confirmed event
-      within 30 minutes — verified by suppressing checkpoint rounds
-      for 31 minutes and asserting the CloudWatch alarm transitions
-      to ALARM state"
+    given: "The checkpoint gap alarm threshold is configurable via
+      CHECKPOINT_GAP_ALARM_MINUTES (default 30); the test sets this
+      to 1 minute; no checkpoint has been confirmed for 1 minute"
+    when: "the alarm condition is evaluated"
+    then: "federation.checkpoint.gap is logged at ERROR with
+      { lastCheckpointId, lastCheckpointAt, gapMinutes }; the CloudWatch
+      alarm cello-checkpoint-gap transitions to ALARM state — verified by
+      calling aws cloudwatch describe-alarms from a separate terminal after
+      1 minute elapses with checkpointing suppressed; the production default
+      of 30 minutes is enforced when CHECKPOINT_GAP_ALARM_MINUTES is unset"
     test_type: integration
     component_under_test: directory
 
@@ -175,7 +183,11 @@ security_invariants:
     adversarial_condition: "even when the coordinator is the only
       responding node — the coordinator's own signature counts as one;
       a second signature from a different node_id is required; the
-      coordinator cannot sign twice under two different identities"
+      coordinator cannot sign twice under two different identities;
+      verified by: submitting two signatures for the same checkpoint_id
+      from the same node_id and asserting the checkpoint is not written
+      to directory_checkpoints (only 1 distinct node_id does not meet
+      threshold) — confirmed from a separate database connection"
     test_type: integration
     component_under_test: directory
 
@@ -220,7 +232,7 @@ degraded_behavior:
     condition: "While a node returns a hash mismatch on every round
       (persistent divergence)"
     fallback: "the round succeeds with 2-of-3 signatures from the two
-      agreeing nodes; federation.checkpoint.hash_mismatch continues to
+      agreeing nodes; federation.checkpoint.proposal.hash_mismatch continues to
       fire at ERROR for the diverging node; the ops-critical alarm fires;
       the diverging node is flagged for operator investigation —
       persistent divergence indicates tampering or data corruption on
@@ -258,7 +270,7 @@ observability:
       context_fields: [checkpointId, availableNodes, requiredThreshold,
         correlationId]
 
-    - name: federation.checkpoint.hash_mismatch
+    - name: federation.checkpoint.proposal.hash_mismatch
       level: error
       trigger: "a non-coordinator node's locally computed hash does not
         match the coordinator's proposal"
@@ -273,7 +285,7 @@ observability:
     - condition: "federation.checkpoint.gap fires (no confirmed checkpoint
         within 30 minutes)"
       fires_to: ops-critical
-    - condition: "federation.checkpoint.hash_mismatch fires at any time"
+    - condition: "federation.checkpoint.proposal.hash_mismatch fires at any time"
       fires_to: ops-critical
 
 # ─── References ─────────────────────────────────────────────

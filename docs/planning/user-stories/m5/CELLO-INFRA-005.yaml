@@ -114,6 +114,19 @@ acceptance_criteria:
     test_type: integration
     component_under_test: relay
 
+  - id: AC-007
+    given: "The relay service is running"
+    when: "GET /health is called on port 4000 (the relay health
+      check port)"
+    then: "the endpoint returns HTTP 200 with JSON body
+      { relayId, status: 'ok' } within 2 seconds; this endpoint
+      is used by the directory's relay pool health checks
+      (INFRA-009); the relay exposes it on port 4000 inside
+      the VPC — not on the public ALB — verified by calling the
+      endpoint from inside the VPC via a bastion or ECS exec"
+    test_type: integration
+    component_under_test: relay
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
@@ -122,8 +135,9 @@ security_invariants:
       output"
     adversarial_condition: "even when the relay encounters a startup
       error after loading the key from Secrets Manager — the error
-      handler logs relay.service.start.failed with { reason, relayId }
-      only, never with the key bytes"
+      handler logs relay.service.start.failed with { reason, region }
+      only (relayId is not available if key load failed), never with
+      the key bytes"
     test_type: integration
     component_under_test: relay
 

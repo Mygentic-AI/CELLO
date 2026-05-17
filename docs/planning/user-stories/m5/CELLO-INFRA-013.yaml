@@ -191,6 +191,21 @@ security_invariants:
     test_type: integration
     component_under_test: directory
 
+  - id: SI-004
+    statement: "Rotated RDS credentials shall be consumed via
+      Secrets Manager ARN reference at connection-pool refresh
+      time — never cached in an ECS task definition environment
+      variable at task launch"
+    adversarial_condition: "even when it would be simpler to
+      inject the password as an environment variable at deploy
+      time — an env-var injected at task launch is a snapshot of
+      the credential at that moment; it does not update when
+      Secrets Manager rotates the password after 30 days; the
+      connection pool must call GetSecretValue at refresh time
+      to pick up the rotated credential without a task restart"
+    test_type: integration
+    component_under_test: directory
+
 # ─── Degraded Behavior ──────────────────────────────────────
 degraded_behavior:
   - id: DB-001
@@ -229,7 +244,11 @@ observability:
 
     - name: secrets.certificate.renewed
       level: info
-      trigger: "ACM certificate is renewed and deployed to ALB"
+      trigger: "ACM certificate renewal is detected via an EventBridge
+        rule on ACM CertificateManager events; a Lambda function receives
+        the event and logs it to CloudWatch; the directory process itself
+        does not emit this event — it originates from the ACM EventBridge
+        integration defined in the cello-cloudwatch CloudFormation stack"
       context_fields: [certificateArn, domain, newExpiryDate]
       correlationId: false
 

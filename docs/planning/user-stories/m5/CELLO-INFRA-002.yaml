@@ -19,13 +19,17 @@ story: >
 
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
-  - trigger: "When the federation schema migration (V6) is applied"
+  - trigger: "When the federation schema migration (V9) is applied"
     action: "the sessions table is created with owning_node_id TEXT NOT NULL;
-      the directory_checkpoints stub is replaced with full columns
-      (checkpoint_id, mmr_leaf_count, mmr_peaks, identity_merkle_root,
-      checkpoint_hash, coordinator_node_id, created_at);
-      the checkpoint_node_signatures stub is replaced with full columns
-      (checkpoint_id, node_id, node_signature, signed_at)"
+      directory_checkpoints (which already has checkpoint_id UUID, mmr_leaf_count
+      BIGINT, peak_hash TEXT, staged_seal_count INT, chain_hash TEXT from V5)
+      gains three new columns via ALTER TABLE ADD COLUMN: mmr_peaks JSONB NOT NULL,
+      identity_merkle_root TEXT NOT NULL, coordinator_node_id TEXT NOT NULL;
+      the checkpoint_hash TEXT NOT NULL column is also added; the obsolete peak_hash
+      TEXT column is superseded by mmr_peaks but retained for backwards compatibility;
+      checkpoint_node_signatures (stub from V2) gains full columns via ALTER TABLE:
+      checkpoint_id UUID NOT NULL REFERENCES directory_checkpoints(checkpoint_id),
+      node_id TEXT NOT NULL, node_signature TEXT NOT NULL, signed_at TIMESTAMPTZ NOT NULL"
 
   - trigger: "When a session is established on a directory node"
     action: "the directory service writes a sessions row with
@@ -61,7 +65,7 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "The V6 federation schema migration has been applied"
+    given: "The V9 federation schema migration has been applied"
     when: "the sessions table is inspected"
     then: "the sessions table exists with columns: session_id UUID NOT NULL
       UNIQUE, owning_node_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL;
@@ -71,15 +75,15 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-002
-    given: "The V6 federation schema migration has been applied"
+    given: "The V9 federation schema migration has been applied"
     when: "the directory_checkpoints table schema is inspected"
-    then: "the table has columns: checkpoint_id BIGSERIAL PRIMARY KEY,
-      mmr_leaf_count BIGINT NOT NULL, mmr_peaks JSONB NOT NULL,
+    then: "the table has all columns from V5 (checkpoint_id UUID,
+      mmr_leaf_count BIGINT, peak_hash TEXT, staged_seal_count INT,
+      chain_hash TEXT) plus the V9 additions: mmr_peaks JSONB NOT NULL,
       identity_merkle_root TEXT NOT NULL, checkpoint_hash TEXT NOT NULL,
-      coordinator_node_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL;
-      the checkpoint_node_signatures table has columns:
-      id BIGSERIAL PRIMARY KEY, checkpoint_id BIGINT NOT NULL
-      REFERENCES directory_checkpoints(checkpoint_id),
+      coordinator_node_id TEXT NOT NULL; the checkpoint_node_signatures
+      table has columns: id BIGSERIAL PRIMARY KEY, checkpoint_id UUID
+      NOT NULL REFERENCES directory_checkpoints(checkpoint_id),
       node_id TEXT NOT NULL, node_signature TEXT NOT NULL,
       signed_at TIMESTAMPTZ NOT NULL — verified by querying
       information_schema.columns from a separate database connection"
@@ -103,7 +107,7 @@ acceptance_criteria:
     then: "node-2 holds a replica of the sessions row with
       owning_node_id = 'node-1'; node-2's directory service does not
       attempt to write any hash chain entries for this session — verified
-      by counting conversation_hash_entries rows for this session_id on
+      by counting conversation_seals rows for this session_id on
       node-2 before and after 30 seconds and asserting the count is
       unchanged (all writes come from node-1 via replication)"
     test_type: e2e
@@ -168,7 +172,11 @@ security_invariants:
       unreachable and a different node holds the replicated session row —
       the non-owning node's directory service checks owning_node_id
       against its own node_id before any chain write and rejects the
-      operation if they do not match"
+      operation if they do not match; verified by: stopping the owning
+      node for a session, then directly invoking the chain-write code
+      path on a non-owning node for that session_id, and asserting the
+      write is rejected with an ownership violation error and no row is
+      inserted — confirmed from a separate database connection"
     test_type: integration
     component_under_test: directory
 

@@ -78,11 +78,12 @@ acceptance_criteria:
       from all staging ECS tasks; it connects to the staging
       directory ALB endpoint over the network; it runs the
       following scenarios end-to-end:
-      (1) two agent session established,
-      (2) message exchange with Merkle verification,
-      (3) session seal with directory confirmation,
-      (4) relay failure simulation and reassignment,
-      (5) pre-seal reconciliation with one-sided delivery failure;
+      (1) two agent sessions established,
+      (2) FROST ceremony completes for both agents,
+      (3) message exchange with Merkle verification,
+      (4) session seal with directory confirmation,
+      (5) relay failure simulation and reassignment,
+      (6) pre-seal reconciliation with one-sided delivery failure;
       each scenario connects to staging via its ALB endpoint,
       not via shared memory — verified by asserting the smoke
       test process has no direct database access"
@@ -90,7 +91,7 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-003
-    given: "The smoke test suite passes all 5 scenarios"
+    given: "The smoke test suite passes all 6 scenarios"
     when: "the Production Deploy stage runs"
     then: "the production directory ECS services in us-east-1,
       eu-central-1, and ap-northeast-1 are each updated to the

@@ -35,11 +35,11 @@ behavior:
       delivered_at = now() on that row"
 
   - trigger: "When a notification is acknowledged by the recipient"
-    action: "the directory updates delivered_at on the
-      pending_notifications row; the row is retained permanently
-      for audit purposes — it is never deleted; subsequent
-      reconnects by the same agent return only rows where
-      delivered_at IS NULL"
+    action: "the directory deletes the pending_notifications row;
+      subsequent reconnects by the same agent find no row for that
+      notification_id; the row deletion is the canonical signal
+      that delivery is complete — consistent with PERSIST-015's
+      'append-only, deleted on acknowledgement' model"
 
   - trigger: "When the absent party connects to a different
       directory node than the one that queued the notification"
@@ -57,18 +57,21 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "The pending_notifications table exists in the M4
-      schema (PERSIST-015)"
-    when: "the V8 migration is applied"
-    then: "pending_notifications has full columns: notification_id
-      UUID NOT NULL UNIQUE, recipient_agent_id TEXT NOT NULL,
-      notification_type TEXT NOT NULL, payload JSONB NOT NULL,
+    given: "No pending_notifications table exists in M4 migrations
+      (PERSIST-015 described it as a future M5 table — it was not
+      created in any M4 migration file)"
+    when: "the V11 migration is applied"
+    then: "the pending_notifications table is created with columns:
+      notification_id UUID NOT NULL UNIQUE, recipient_agent_id TEXT
+      NOT NULL, notification_type TEXT NOT NULL, payload JSONB NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(), delivered_at
       TIMESTAMPTZ NULL; an index exists on (recipient_agent_id,
       delivered_at) for efficient undelivered query; RLS is enabled
-      with insert_only and select_all policies — verified by
-      querying information_schema.columns and pg_indexes from a
-      separate database connection"
+      with insert_only and select_all policies; cello_service has
+      INSERT and SELECT only — DELETE is explicitly revoked, making
+      the table append-only — verified by querying
+      information_schema.columns and pg_indexes from a separate
+      database connection"
     test_type: integration
     component_under_test: directory
 
@@ -101,12 +104,13 @@ acceptance_criteria:
       and sends an acknowledgement"
     when: "the acknowledgement is processed by the directory"
     then: "the pending_notifications row for that notification_id
-      has delivered_at set to a non-null timestamp; the row is
-      still present in the table (not deleted); a subsequent
-      reconnect by agent B returns no undelivered notifications
-      for that notification_id — verified by querying
+      is deleted from the table; a subsequent query for that
+      notification_id from a separate database connection returns
+      no row; a subsequent reconnect by agent B returns no
+      undelivered notifications — verified by querying
       pending_notifications from a separate database connection
-      after the acknowledgement"
+      after the acknowledgement and asserting the row count
+      decreased"
     test_type: integration
     component_under_test: directory
 
@@ -116,10 +120,11 @@ acceptance_criteria:
     when: "PgNotificationQueue is inspected"
     then: "it implements NotificationQueue with enqueue(agentId,
       notification) and drainUndelivered(agentId) methods;
-      drainUndelivered returns only rows where delivered_at IS NULL;
-      acknowledge(notificationId) sets delivered_at without
-      deleting the row — verified by reading the implementation
-      and running unit tests"
+      drainUndelivered returns all unacknowledged rows for that
+      agentId; acknowledge(notificationId) deletes the row —
+      consistent with PERSIST-015's 'deleted on acknowledgement'
+      model — verified by reading the implementation and running
+      unit tests"
     test_type: unit
     component_under_test: directory
 
@@ -148,13 +153,29 @@ acceptance_criteria:
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
-    statement: "pending_notifications rows shall never be deleted —
-      delivered_at is set on acknowledgement; the row is retained
-      permanently for audit purposes"
+    statement: "A pending_notifications row shall only be deleted
+      upon explicit acknowledgement from the recipient agent —
+      the directory service is the only caller of acknowledge();
+      no background cleanup or TTL process deletes unacknowledged rows"
     adversarial_condition: "even when the notification queue grows
-      large — the cello_service role has INSERT and SELECT only;
-      UPDATE is restricted to the delivered_at column via a
-      dedicated UPDATE policy; DELETE is explicitly revoked"
+      large — unacknowledged rows are never automatically deleted;
+      cello_service has INSERT, SELECT, and DELETE (DELETE is required
+      for acknowledged-row cleanup); no UPDATE is needed or permitted"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "The receiving agent shall validate a delivered
+      SEAL_UNILATERAL notification payload against its own local
+      session state before taking any action"
+    adversarial_condition: "even when the directory delivers a
+      well-formed notification — a compromised cello_service role
+      could INSERT a fabricated SEAL_UNILATERAL notification with
+      an arbitrary sessionId; the receiving agent verifies the
+      sealedRoot in the notification matches the root it would
+      compute from its own local Merkle state; a mismatch is logged
+      at WARN with session.unilateral.mismatch but no further
+      protocol action is taken — the session is already closed"
     test_type: integration
     component_under_test: directory
 
@@ -175,11 +196,11 @@ degraded_behavior:
   - id: DB-001
     condition: "While the absent party never reconnects after
       a unilateral seal"
-    fallback: "the pending_notifications row remains with
-      delivered_at IS NULL permanently; no follow-up action is
-      required; the row is retained for audit; the session is
-      closed regardless of whether the notification is ever
-      delivered"
+    fallback: "the pending_notifications row remains unacknowledged
+      indefinitely; no follow-up action is required; the session is
+      closed regardless of whether the notification is ever delivered;
+      the 24-hour ops-warning alarm gives operators visibility into
+      long-undelivered notifications"
     test_type: unit
     component_under_test: directory
 

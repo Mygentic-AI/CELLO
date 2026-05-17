@@ -64,7 +64,7 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "The V7 relay registration schema migration has been applied"
+    given: "The V10 relay registration schema migration has been applied"
     when: "the relay_registrations table is inspected"
     then: "the table has columns: id BIGSERIAL PRIMARY KEY,
       relay_id TEXT NOT NULL UNIQUE, public_key_hex TEXT NOT NULL,
@@ -181,9 +181,16 @@ security_invariants:
       only by authenticated relay nodes — unauthenticated callers
       cannot register a relay_id"
     adversarial_condition: "even when the relay_id and public_key_hex
-      are valid — the directory verifies that the caller's identity
-      matches the public_key_hex being registered before writing the
-      row; a caller cannot register a public key it does not control"
+      are valid — the authentication mechanism is: the relay signs the
+      registration request body (relay_id || public_key_hex || timestamp)
+      with its Ed25519 private key; the directory verifies this signature
+      against the public_key_hex submitted in the request; only a caller
+      that controls the private key corresponding to public_key_hex can
+      produce a valid signature; a caller submitting a public key it does
+      not control cannot produce a valid signature and is rejected with
+      RELAY_REGISTRATION_UNAUTHORIZED; verified by submitting a registration
+      request with a valid public_key_hex but a signature from a different
+      key and asserting the directory rejects it"
     test_type: integration
     component_under_test: directory
 
