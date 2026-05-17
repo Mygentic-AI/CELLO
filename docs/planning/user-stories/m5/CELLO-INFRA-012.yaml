@@ -1,0 +1,212 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-012
+domain: Node Operations
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO infrastructure operator,
+  I want AWS WAF on each directory ALB with rate limiting and managed
+  reputation rules, and AWS Shield Standard active on all ALBs,
+  so that connection floods and known malicious IPs are blocked at
+  the infrastructure layer before reaching the directory service process.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a source IP sends more than 1,000 requests
+      per 5-minute window to a directory ALB"
+    action: "the WAF rate-based rule blocks further requests from
+      that IP for the remainder of the 5-minute window; blocked
+      requests return HTTP 429; the block is logged in WAF logs
+      with the source IP and request count"
+
+  - trigger: "When a request arrives from an IP on the AWS managed
+      AWSManagedRulesAmazonIpReputationList"
+    action: "the WAF blocks the request and returns HTTP 403;
+      the block is logged in WAF logs with the matched rule name
+      and source IP"
+
+  - trigger: "When a volumetric DDoS attack targets a directory
+      ALB"
+    action: "AWS Shield Standard (enabled by default on ALBs)
+      provides automatic network-layer mitigation; no operator
+      action is required for L3/L4 attacks within Shield Standard
+      thresholds"
+
+  - trigger: "When a WAF rule blocks a request"
+    action: "the block is written to the WAF log group
+      /cello/{env}/waf in CloudWatch Logs; the log entry includes:
+      timestamp, sourceIp, ruleId, action, httpMethod, uri"
+
+  - trigger: "When geo-blocking is configured for a deployment"
+    action: "the WAF geo-match rule blocks requests from
+      configured country codes; geo-blocking is a deployment
+      parameter — it is off by default and enabled per-environment
+      via a CloudFormation parameter; it is not hardcoded"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The cello-waf CloudFormation stack is deployed in
+      all three regions"
+    when: "each directory ALB is inspected"
+    then: "a WAF WebACL is associated with each ALB; the WebACL
+      contains: a rate-based rule (1,000 requests per 5 minutes
+      per IP, action: BLOCK), AWSManagedRulesAmazonIpReputationList
+      (action: BLOCK), AWSManagedRulesCommonRuleSet (action: COUNT
+      in Phase 1 — observe before blocking); Shield Standard is
+      active on the ALB (enabled by default, no additional
+      configuration required) — verified by calling
+      aws wafv2 get-web-acl-for-resource for each ALB ARN from
+      a separate terminal in each region"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "A test process sends 1,001 requests to the directory
+      ALB from a single IP within a 5-minute window"
+    when: "the 1,001st request is sent"
+    then: "the request receives HTTP 429; subsequent requests
+      from the same IP within the window also receive HTTP 429;
+      the WAF log group /cello/{env}/waf contains entries with
+      action=BLOCK and ruleId matching the rate-based rule —
+      verified from a test process separate from the directory
+      service"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A request arrives with an X-Forwarded-For header
+      spoofing a known good IP but originating from an IP on the
+      AWSManagedRulesAmazonIpReputationList"
+    when: "WAF evaluates the request"
+    then: "the request is blocked with HTTP 403; the WAF log
+      entry shows the originating IP (not the spoofed header)
+      and the matched reputation rule — verified by checking the
+      WAF log group from a separate monitoring process"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "The cello-waf stack is deployed with
+      GeoBlockingEnabled=false (default)"
+    when: "a request arrives from any country"
+    then: "no geo-block rule fires; all requests are evaluated
+      only by the rate-based and reputation rules — verified by
+      calling aws wafv2 get-web-acl and asserting no GeoMatchStatement
+      rule is present"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-005
+    given: "The cello-waf stack is deployed with
+      GeoBlockingEnabled=true and BlockedCountries=CN,RU"
+    when: "the WAF WebACL is inspected"
+    then: "a GeoMatchStatement rule exists with country codes
+      CN and RU and action BLOCK; this is a CloudFormation
+      parameter — changing it does not require a Lambda redeployment
+      or code change — verified by calling aws wafv2 get-web-acl
+      from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "WAF is active on all three regional ALBs"
+    when: "the WAF log groups are inspected"
+    then: "WAF logs are written to /cello/{env}/waf in CloudWatch
+      Logs in each region; each log entry contains: timestamp,
+      sourceIp, ruleId, action, httpMethod, uri; log retention
+      is 90 days — verified by calling
+      aws logs describe-log-groups and aws logs get-log-events
+      from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "The AWSManagedRulesCommonRuleSet is in COUNT mode"
+    when: "a request matching a common rule is received"
+    then: "the request is not blocked; a COUNT action entry
+      appears in the WAF logs with the matched rule name; this
+      allows operators to observe rule hits before switching
+      to BLOCK mode in a future update — verified by sending
+      a request with a known common-rule pattern and checking
+      the WAF log group"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "Every directory ALB in every region shall have
+      a WAF WebACL associated — no ALB shall be reachable without
+      WAF protection"
+    adversarial_condition: "even when a new ALB is created during
+      a deployment — the cello-waf CloudFormation stack associates
+      the WebACL with the ALB ARN as a stack parameter; the
+      association is part of the IaC definition, not a manual
+      post-deployment step"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "WAF and Shield Standard shall never be disabled
+      in production — the CloudFormation stack does not have a
+      parameter to disable WAF association or remove the WebACL"
+    adversarial_condition: "even when an operator attempts to
+      temporarily disable WAF for debugging — the correct approach
+      is to switch a rule to COUNT mode, not to remove the WebACL
+      association"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While a WAF rule produces a high false-positive
+      rate (legitimate requests blocked)"
+    fallback: "the operator switches the offending rule from
+      BLOCK to COUNT mode via a CloudFormation parameter update;
+      the rule is investigated and tuned before switching back
+      to BLOCK; the rate-based rule and reputation list remain
+      active during the investigation"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: waf.request.blocked
+      level: info
+      trigger: "WAF blocks a request"
+      context_fields: [sourceIp, ruleId, action, httpMethod,
+        uri, region]
+      correlationId: false
+
+  error_events:
+    - name: waf.rate_limit.triggered
+      level: warn
+      trigger: "rate-based rule blocks a source IP"
+      context_fields: [sourceIp, requestCount, windowSeconds,
+        region]
+
+  alarms:
+    - condition: "WAF blocked request rate exceeds 1% of total
+        requests over 5 minutes (potential attack or misconfigured
+        rule)"
+      fires_to: ops-warning
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on:
+    - CELLO-INFRA-004
+  blocks: []
