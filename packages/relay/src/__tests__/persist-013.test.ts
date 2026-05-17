@@ -63,7 +63,12 @@ function makeLogger() {
     debug(event: string, context?: Record<string, unknown>) { calls.push({ level: "debug", event, context }); },
     info(event: string, context?: Record<string, unknown>)  { calls.push({ level: "info",  event, context }); },
     warn(event: string, context?: Record<string, unknown>)  { calls.push({ level: "warn",  event, context }); },
-    error(event: string, context?: Record<string, unknown>) { calls.push({ level: "error", event, context }); },
+    error(event: string, errorOrContext?: Error | Record<string, unknown>, context?: Record<string, unknown>) {
+      const ctx = errorOrContext instanceof Error
+        ? { error: errorOrContext.message, stack: errorOrContext.stack, ...context }
+        : errorOrContext;
+      calls.push({ level: "error", event, context: ctx });
+    },
   };
 }
 

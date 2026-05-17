@@ -5,7 +5,7 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/__tests__/**/*.test.ts"],
     poolOptions: {
-      threads: { maxThreads: 3 },
+      threads: { maxThreads: 1, minThreads: 1 },
     },
   },
 });

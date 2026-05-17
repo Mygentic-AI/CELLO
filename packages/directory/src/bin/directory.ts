@@ -31,6 +31,8 @@ import { NetworkRelayAdapter } from "../network-relay-adapter.js";
 import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler } from "@cello/interfaces/stubs";
 import { InMemoryShareStore } from "../share-store.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
+import { EncryptedPgShareStore } from "../encrypted-share-store.js";
+import { PersistentShareStore } from "../persistent-share-store.js";
 
 const env = process.env["CELLO_ENV"];
 const logger = new StdoutLogger();
@@ -157,20 +159,21 @@ if (env === "local" && pgPool) {
   logger.info("db.rls.verified", { tableCount: appendOnlyTables.length, env });
 }
 
-// envelopeKeyProvider/clientStore/relayWal/jobScheduler are instantiated here and
-// will be wired into createDirectoryNode in PERSIST-003+.
+// ─── PERSIST-005: EnvelopeKeyProvider + EncryptedPgShareStore ─────────────────
+// EnvelopeKeyProvider encrypts K_server_X shares at rest before any DB INSERT.
+// LocalEnvelopeKeyProvider uses AES-256-GCM with the key from DEV_ENVELOPE_KEY (CELLO_ENV=local).
+// KmsEnvelopeKeyProvider uses AWS KMS (CELLO_ENV=dev+, not yet implemented).
 const envelopeKeyProvider = (() => {
   if (env === "local") {
     const devKey = requireEnv("DEV_ENVELOPE_KEY");
-    const p = new LocalEnvelopeKeyProvider(devKey);
+    const p = new LocalEnvelopeKeyProvider(devKey, logger);
     logger.info("adapter.initialised", { adapterName: "EnvelopeKeyProvider", implementation: "LocalEnvelopeKeyProvider", env });
     return p;
   }
-  // dev+: KmsEnvelopeKeyProvider (PERSIST-005)
+  // dev+: KmsEnvelopeKeyProvider (future milestone)
   logger.error("adapter.init.failed", { adapterName: "EnvelopeKeyProvider", reason: `CELLO_ENV=${env} not yet supported` });
   process.exit(1);
 })();
-void envelopeKeyProvider; // wired in PERSIST-005
 
 void new LocalClientStore(); // wired in PERSIST-003+
 logger.info("adapter.initialised", { adapterName: "ClientStore", implementation: "LocalClientStore", env });
@@ -202,7 +205,22 @@ try {
   logger.info("adapter.initialised", { adapterName: "TransportKey", implementation: "generated", env });
 }
 
-const shareStore = new InMemoryShareStore();
+// ─── PERSIST-005: PersistentShareStore for K_server_X share persistence ───────
+// Combines InMemoryShareStore (FROST ceremony operations) with EncryptedPgShareStore
+// (encrypted PostgreSQL persistence). When shares are stored, they are:
+//   1. Cached in memory for immediate FROST signing
+//   2. Serialized to bytes and encrypted via EnvelopeKeyProvider
+//   3. Persisted to agent_key_shares table
+// If pgPool is unavailable (CELLO_ENV != local for M4), falls back to InMemoryShareStore only.
+const shareStore = pgPool
+  ? new PersistentShareStore(new EncryptedPgShareStore(pgPool, envelopeKeyProvider, logger), logger)
+  : new InMemoryShareStore();
+
+if (pgPool) {
+  logger.info("adapter.initialised", { adapterName: "ShareStore", implementation: "PersistentShareStore", env });
+} else {
+  logger.info("adapter.initialised", { adapterName: "ShareStore", implementation: "InMemoryShareStore", env });
+}
 
 // ─── Relay setup ──────────────────────────────────────────────────────────
 
