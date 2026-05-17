@@ -1,0 +1,268 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-006
+domain: Node Operations
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+  - relay
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Relay Node,
+  I want to register my Ed25519 public key with the directory at
+  startup and have that registration retrievable by any client via
+  relayId,
+  so that clients can verify relay ACK signatures, and new relays
+  can verify ACKs issued by predecessor relays during re-submission.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a relay node starts"
+    action: "the relay derives its relayId as the hex encoding of its
+      Ed25519 public key; it registers with the directory by sending
+      its relayId and public key bytes to the directory's relay
+      registration endpoint; the directory writes one row to the
+      relay_registrations table with relay_id, public_key_hex,
+      registered_at, region, and chain_hash; relay.registered is
+      logged at INFO with { relayId, region }"
+
+  - trigger: "When a relay node re-registers (restart with the same key)"
+    action: "the directory checks relay_registrations for an existing
+      row with the same relay_id; if one exists and the public_key_hex
+      matches, the registration is a no-op and relay.already.registered
+      is logged at INFO; if the public_key_hex differs for the same
+      relay_id, the directory rejects the registration with
+      RELAY_IDENTITY_CONFLICT and logs relay.registration.conflict
+      at ERROR"
+
+  - trigger: "When a client needs to verify a relay ACK signature"
+    action: "the client extracts the relayId from the ACK; it queries
+      the directory's relay registration endpoint with that relayId;
+      the directory returns the relay's registered public key; the
+      client verifies the ACK signature using
+      Ed25519.verify(public_key, SHA-256(hash_H || sequence_number
+      || timestamp || relayId), ACK.signature)"
+
+  - trigger: "When a new relay receives a re-submitted hash with an
+      ACK from a predecessor relay"
+    action: "the new relay extracts the relayId from the ACK; it
+      queries the directory for the predecessor relay's public key
+      using that relayId; if found, it verifies the ACK signature;
+      if the predecessor relay's public key is not found in the
+      directory, the new relay rejects the re-submission with
+      RELAY_PREDECESSOR_UNKNOWN"
+
+  - trigger: "When a relay_registrations row is written"
+    action: "the directory computes chain_hash =
+      SHA-256(record_contents || previous_chain_hash) consistent
+      with the M4 hash chain pattern; the relay_registrations table
+      is append-only with RLS enforcement identical to all other
+      M4 directory tables"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The V7 relay registration schema migration has been applied"
+    when: "the relay_registrations table is inspected"
+    then: "the table has columns: id BIGSERIAL PRIMARY KEY,
+      relay_id TEXT NOT NULL UNIQUE, public_key_hex TEXT NOT NULL,
+      region TEXT NOT NULL, registered_at TIMESTAMPTZ NOT NULL
+      DEFAULT now(), chain_hash TEXT; RLS is enabled with insert_only
+      and select_all policies; cello_service has INSERT and SELECT
+      only — verified by querying information_schema.columns and
+      pg_policies from a separate database connection"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "A relay node starts with its Ed25519 key loaded from
+      Secrets Manager"
+    when: "the relay registration endpoint is called"
+    then: "a row appears in relay_registrations with relay_id equal
+      to the hex encoding of the relay's public key and public_key_hex
+      equal to the same value; relay.registered is logged at INFO
+      with { relayId, region } in the relay's CloudWatch log group —
+      verified by querying relay_registrations from a separate database
+      connection and the log group from a separate monitoring process"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-003
+    given: "A relay node restarts with the same Ed25519 key"
+    when: "the relay registration endpoint is called again"
+    then: "relay_registrations still contains exactly one row for
+      that relay_id; relay.already.registered is logged at INFO;
+      no duplicate row is inserted — verified by counting rows for
+      that relay_id from a separate database connection before and
+      after the re-registration"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-004
+    given: "A relay has registered its public key with the directory;
+      a client has a relay ACK containing that relay's relayId"
+    when: "the client queries the directory relay registration endpoint
+      with the relayId"
+    then: "the directory returns the relay's public_key_hex; the
+      client verifies Ed25519.verify(public_key,
+      SHA-256(hash_H || sequence_number || timestamp || relayId),
+      ACK.signature) returns true — verified entirely within the
+      client process, using only the returned public key and the
+      ACK fields, with no shared memory with the relay process"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-005
+    given: "A new relay receives a hash re-submission with an ACK
+      from a predecessor relay whose relayId is registered in the
+      directory"
+    when: "the new relay verifies the predecessor ACK"
+    then: "the new relay fetches the predecessor's public key from
+      the directory using the ACK's relayId; it verifies the ACK
+      signature; if valid, it accepts the re-submission and issues
+      a new ACK — verified by running the new relay and predecessor
+      relay as separate OS processes with no shared memory"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-006
+    given: "A new relay receives a hash re-submission with an ACK
+      whose relayId is not found in the directory"
+    when: "the new relay attempts to look up the predecessor public key"
+    then: "the directory returns a 404 for that relayId; the new
+      relay rejects the re-submission with RELAY_PREDECESSOR_UNKNOWN;
+      relay.predecessor.unknown is logged at WARN with { relayId,
+      hashHex }; the hash remains in the client's pending queue —
+      verified from the client's perspective as a separate process"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-007
+    given: "A relay node attempts to register with a relayId that
+      already exists in relay_registrations but with a different
+      public_key_hex"
+    when: "the registration endpoint processes the request"
+    then: "the directory rejects the registration with
+      RELAY_IDENTITY_CONFLICT; relay.registration.conflict is logged
+      at ERROR with { relayId, region }; no row is inserted or
+      updated; the ops-critical alarm fires — verified by asserting
+      the row count for that relay_id is still 1 from a separate
+      database connection"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "relay_registrations is append-only — a registered
+      relay public key shall never be overwritten or deleted"
+    adversarial_condition: "even when a relay restarts with a new key
+      and the same relay_id — the directory rejects the registration
+      with RELAY_IDENTITY_CONFLICT rather than updating the existing
+      row; key rotation requires a new relay_id (new key pair)"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "A relay ACK shall only be accepted by a new relay
+      if the signature verifies against the predecessor relay's
+      registered public key in the directory"
+    adversarial_condition: "even when the ACK is well-formed and the
+      hash contents are correct — an unverifiable signature or an
+      unknown relayId causes rejection; there is no fallback to
+      accepting unverified ACKs"
+    test_type: integration
+    component_under_test: relay
+
+  - id: SI-003
+    statement: "The relay registration endpoint shall be callable
+      only by authenticated relay nodes — unauthenticated callers
+      cannot register a relay_id"
+    adversarial_condition: "even when the relay_id and public_key_hex
+      are valid — the directory verifies that the caller's identity
+      matches the public_key_hex being registered before writing the
+      row; a caller cannot register a public key it does not control"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the directory is temporarily unreachable when
+      a relay attempts to register at startup"
+    fallback: "the relay retries registration on a backoff schedule;
+      relay.registration.failed is logged at WARN with { reason,
+      attempt }; the relay does not accept sessions until registration
+      succeeds — an unregistered relay cannot issue verifiable ACKs"
+    test_type: integration
+    component_under_test: relay
+
+  - id: DB-002
+    condition: "While the directory is temporarily unreachable when
+      a client queries for a relay's public key"
+    fallback: "the client retries on backoff; if the directory remains
+      unreachable, the ACK verification is deferred; the hash remains
+      in the client's pending queue; relay.pubkey.lookup.failed is
+      logged at WARN with { relayId, reason }"
+    test_type: integration
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: relay.registered
+      level: info
+      trigger: "relay successfully registers its public key with
+        the directory"
+      context_fields: [relayId, region]
+      correlationId: false
+
+    - name: relay.already.registered
+      level: info
+      trigger: "relay re-registers with the same key (restart)"
+      context_fields: [relayId, region]
+      correlationId: false
+
+  error_events:
+    - name: relay.registration.conflict
+      level: error
+      trigger: "relay attempts to register with a relayId that has
+        a different public key already registered"
+      context_fields: [relayId, region]
+
+    - name: relay.registration.failed
+      level: warn
+      trigger: "relay cannot reach the directory for registration"
+      context_fields: [reason, attempt]
+
+    - name: relay.predecessor.unknown
+      level: warn
+      trigger: "new relay cannot find predecessor relay's public key
+        in the directory"
+      context_fields: [relayId, hashHex]
+
+    - name: relay.pubkey.lookup.failed
+      level: warn
+      trigger: "client cannot retrieve relay public key from directory"
+      context_fields: [relayId, reason]
+
+  alarms:
+    - condition: "relay.registration.conflict fires at any time"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations / Message Exchange"
+  discussion_logs:
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on:
+    - CELLO-INFRA-004
+    - CELLO-INFRA-005
+    - CELLO-PERSIST-012
+  blocks:
+    - CELLO-INFRA-009
