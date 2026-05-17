@@ -202,9 +202,11 @@ describe("PERSIST-007 unit: inclusion proof computation and verification", () =>
   it("AC-003: 1-leaf MMR proof for leaf 0 verifies against the single peak", () => {
     const sealMerkleRoot = "a".repeat(64);
     const recordedAt = "2026-01-01T00:00:00.000Z";
+    const checkpointId = "chk-ac003-1leaf";
     const r = appendLeafToMmr(0, sealMerkleRoot, recordedAt, []);
 
-    const leaves: MmrLeaf[] = [{ ...r.newLeaf, seal_merkle_root: sealMerkleRoot, recorded_at: recordedAt }];
+    // checkpoint_id must be set on the target leaf (Fix 6: guard against null)
+    const leaves: MmrLeaf[] = [{ ...r.newLeaf, seal_merkle_root: sealMerkleRoot, recorded_at: recordedAt, checkpoint_id: checkpointId }];
     const nodes: MmrNode[] = [...r.newNodes];
     const peakHash = r.newPeaks[0]!.hash;
 
@@ -212,6 +214,9 @@ describe("PERSIST-007 unit: inclusion proof computation and verification", () =>
     expect(proof).not.toBe(PROOF_NOT_YET_AVAILABLE);
 
     if (proof === PROOF_NOT_YET_AVAILABLE) throw new Error("Should not be unavailable");
+    // proof.peaks must carry the individual peak hashes (Fix 1)
+    expect(proof.peaks).toHaveLength(1);
+    expect(proof.peaks[0]).toBe(peakHash);
     const verified = verifyInclusionProof(proof, sealMerkleRoot, peakHash);
     expect(verified).toBe(true);
   });
@@ -239,6 +244,82 @@ describe("PERSIST-007 unit: inclusion proof computation and verification", () =>
     );
   });
 
+  it("Fix1: 3-leaf MMR (2 peaks) — verifyInclusionProof returns true for valid proof, false for tampered", () => {
+    // Build a 3-leaf MMR:
+    //   leaf 0 at pos 0, leaf 1 at pos 1, merge node (peak A) at pos 2 (height 1)
+    //   leaf 2 at pos 3 (peak B, height 0)
+    // Two peaks: [peak A (height 1, pos 2), peak B (height 0, pos 3)]
+    const checkpointId = "chk-fix1-3leaf";
+    const sealRoots = ["a".repeat(64), "b".repeat(64), "c".repeat(64)];
+    const timestamps = ["2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z", "2026-01-03T00:00:00.000Z"];
+
+    let peaks: MmrPeak[] = [];
+    const allLeaves: MmrLeaf[] = [];
+    const allNodes: MmrNode[] = [];
+
+    for (let i = 0; i < 3; i++) {
+      const r = appendLeafToMmr(i, sealRoots[i]!, timestamps[i]!, peaks);
+      allLeaves.push({ ...r.newLeaf, seal_merkle_root: sealRoots[i]!, recorded_at: timestamps[i]! });
+      allNodes.push(...r.newNodes);
+      peaks = r.newPeaks;
+    }
+
+    // 3-leaf MMR must have 2 peaks
+    expect(peaks).toHaveLength(2);
+
+    // Compute the bagged peak hash (matches #computePeakHash for multi-peak)
+    const baggedPeakHash = createHash("sha256")
+      .update(peaks[0]!.hash + peaks[1]!.hash)
+      .digest("hex");
+
+    // Mark leaf 2 as checkpointed (the one we'll prove)
+    allLeaves[2]!.checkpoint_id = checkpointId;
+
+    // Compute inclusion proof for leaf 2 (in peak B — second peak, index 1)
+    const proof = computeInclusionProof(2, allLeaves, allNodes, peaks, baggedPeakHash);
+    expect(proof).not.toBe(PROOF_NOT_YET_AVAILABLE);
+
+    if (proof === PROOF_NOT_YET_AVAILABLE) throw new Error("Should have proof");
+
+    // proof.peaks must carry both peak hashes
+    expect(proof.peaks).toHaveLength(2);
+    expect(proof.peaks[0]).toBe(peaks[0]!.hash);
+    expect(proof.peaks[1]).toBe(peaks[1]!.hash);
+    // Leaf 2 is the sole leaf under peak B (index 1), so sibling_hashes is empty
+    expect(proof.sibling_hashes).toHaveLength(0);
+    expect(proof.peak_index).toBe(1);
+
+    // Valid proof must verify
+    const verified = verifyInclusionProof(proof, sealRoots[2]!, baggedPeakHash);
+    expect(verified).toBe(true);
+
+    // Tampered leaf hash must fail
+    const tamperedProof = { ...proof, leaf_hash: "e".repeat(64) };
+    expect(verifyInclusionProof(tamperedProof, sealRoots[2]!, baggedPeakHash)).toBe(false);
+
+    // Tampered seal root must fail
+    expect(verifyInclusionProof(proof, "f".repeat(64), baggedPeakHash)).toBe(false);
+
+    // Now prove leaf 0 (inside peak A — first peak, index 0), which requires a sibling path
+    allLeaves[0]!.checkpoint_id = checkpointId;
+    const proof0 = computeInclusionProof(0, allLeaves, allNodes, peaks, baggedPeakHash);
+    expect(proof0).not.toBe(PROOF_NOT_YET_AVAILABLE);
+
+    if (proof0 === PROOF_NOT_YET_AVAILABLE) throw new Error("Should have proof for leaf 0");
+
+    // Leaf 0 requires 1 sibling step (leaf 1) to reach peak A
+    expect(proof0.sibling_hashes).toHaveLength(1);
+    expect(proof0.peak_index).toBe(0);
+    expect(proof0.peaks).toHaveLength(2);
+
+    const verified0 = verifyInclusionProof(proof0, sealRoots[0]!, baggedPeakHash);
+    expect(verified0).toBe(true);
+
+    // Tampered sibling must fail
+    const tamperedProof0 = { ...proof0, sibling_hashes: ["f".repeat(64)] };
+    expect(verifyInclusionProof(tamperedProof0, sealRoots[0]!, baggedPeakHash)).toBe(false);
+  });
+
 });
 
 // AC-006 unit test: exercises the mmr.checkpoint.confirmed log call through a stub pool
@@ -255,49 +336,54 @@ describe("PERSIST-007 unit: AC-006 mmr.checkpoint.confirmed log call", () => {
     // Build a minimal stub pool that satisfies every query() call in confirmCheckpoint(),
     // without making a real DB connection.
     //
-    // confirmCheckpoint query order:
-    //   1. SELECT peak_hash FROM directory_checkpoints WHERE checkpoint_id = $1  → 0 rows (not idempotent)
-    //   2. SELECT session_id, ... FROM conversation_seal_staging WHERE checkpoint_id = $1 → N rows
-    //   3. SELECT COUNT(*) AS count FROM conversation_proof_leaves → leafCount
-    //   4. SELECT leaf_index, leaf_hash, seal_merkle_root, recorded_at FROM ... (fetchCurrentPeaks via pool)
-    //      – sub-query for peaks reconstruction (fetchCurrentPeaksFromPool → fetchCurrentPeaks)
-    //   5. SELECT chain_hash FROM directory_checkpoints ORDER BY id DESC LIMIT 1 → 0 rows
-    //
-    // #fetchCurrentPeaksFromPool acquires a client from pool.connect(), so we also need
-    // a stubClient with a query() that returns the leaves for peak reconstruction.
+    // After Fix 2, confirmCheckpoint's query order is:
+    //   pool.query:
+    //     1. SELECT peak_hash FROM directory_checkpoints WHERE checkpoint_id = $1  → 0 rows (not idempotent)
+    //   client.query (inside transaction, after advisory lock):
+    //     2. BEGIN
+    //     3. SELECT pg_advisory_xact_lock(...)
+    //     4. SELECT session_id, ... FROM conversation_seal_staging WHERE checkpoint_id = $1 → N rows
+    //     5. SELECT COUNT(*) AS count FROM conversation_proof_leaves → leafCount
+    //     6. SELECT leaf_index, leaf_hash, ... FROM conversation_proof_leaves ORDER BY leaf_index ASC (fetchCurrentPeaks)
+    //     7. SELECT chain_hash FROM directory_checkpoints ORDER BY id DESC LIMIT 1 → 0 rows
+    //     8. INSERT INTO directory_checkpoints ...
+    //     9. INSERT INTO conversation_proof_leaf_checkpoints ...
+    //    10. DELETE FROM conversation_seal_staging WHERE checkpoint_id = $1
+    //    11. COMMIT
     const stubLeaves = [
       { leaf_index: 0, leaf_hash: "a".repeat(64), seal_merkle_root: "a".repeat(64), recorded_at: new Date("2026-01-01") },
       { leaf_index: 1, leaf_hash: "b".repeat(64), seal_merkle_root: "b".repeat(64), recorded_at: new Date("2026-01-02") },
     ];
 
     const stubPool = {
+      // Only the idempotency check runs on pool directly (outside transaction)
       query: vi.fn().mockImplementation(async (sql: string) => {
-        // 1. Checkpoint existence check
         if (sql.includes("SELECT peak_hash FROM directory_checkpoints WHERE checkpoint_id")) {
-          return { rows: [] };
-        }
-        // 2. Staging rows for this checkpoint
-        if (sql.includes("FROM conversation_seal_staging WHERE checkpoint_id")) {
-          return { rows: [
-            { session_id: "session-1", seal_merkle_root: "a".repeat(64), recorded_at: new Date() },
-            { session_id: "session-2", seal_merkle_root: "b".repeat(64), recorded_at: new Date() },
-          ]};
-        }
-        // 3. Leaf count
-        if (sql.includes("COUNT(*) AS count FROM conversation_proof_leaves")) {
-          return { rows: [{ count: String(leafCount) }] };
-        }
-        // 5. Previous checkpoint chain_hash
-        if (sql.includes("FROM directory_checkpoints ORDER BY id DESC LIMIT 1")) {
           return { rows: [] };
         }
         return { rows: [] };
       }),
       connect: vi.fn().mockResolvedValue({
-        // stubClient for #fetchCurrentPeaks and the transaction
+        // All transactional queries run on the client
         query: vi.fn().mockImplementation(async (sql: string) => {
+          // Staging rows (inside tx, after lock)
+          if (sql.includes("FROM conversation_seal_staging WHERE checkpoint_id")) {
+            return { rows: [
+              { session_id: "session-1", seal_merkle_root: "a".repeat(64), recorded_at: new Date() },
+              { session_id: "session-2", seal_merkle_root: "b".repeat(64), recorded_at: new Date() },
+            ]};
+          }
+          // Leaf count (inside tx, after lock)
+          if (sql.includes("COUNT(*) AS count FROM conversation_proof_leaves")) {
+            return { rows: [{ count: String(leafCount) }] };
+          }
+          // fetchCurrentPeaks — leaves in leaf_index order (inside tx, after lock)
           if (sql.includes("FROM conversation_proof_leaves ORDER BY leaf_index ASC")) {
             return { rows: stubLeaves };
+          }
+          // Previous checkpoint chain_hash (inside tx)
+          if (sql.includes("FROM directory_checkpoints ORDER BY id DESC LIMIT 1")) {
+            return { rows: [] };
           }
           // Transaction control and other inserts/deletes succeed silently
           return { rows: [] };
@@ -416,6 +502,44 @@ describeIntegration("PERSIST-007 integration: AC-003 inclusion proof for leaf 3 
       leaf_hash: "e".repeat(64),
     };
     expect(verifyInclusionProof(tamperedProof, sealMerkleRoots[3]!, peakHash)).toBe(false);
+  });
+});
+
+describeIntegration("PERSIST-007 integration: Fix4 — 3-leaf MMR proof has non-empty sibling_hashes", () => {
+  it("Fix4: getInclusionProof for leaf 0 in 3-leaf MMR returns proof with sibling_hashes", async () => {
+    // 3-leaf MMR: 2 peaks (height-1 subtree for leaves 0,1 and height-0 peak for leaf 2).
+    // Internal node for leaves 0,1 is at mmr_position 2 — which is HIGHER than any leaf position
+    // in the right half (leaf 2 is at position 3). The old position-based filter using
+    // MAX(leaf.mmr_position) would miss this internal node, leaving sibling_hashes empty
+    // and causing the proof walk to terminate at the wrong level.
+    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const store = new MmrStore(servicePool, logger);
+
+    const sessionIds: string[] = [];
+    const sealRoots: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const sessionId = randomUUID();
+      sessionIds.push(sessionId);
+      const sealMerkleRoot = createHash("sha256").update(`fix4-3leaf-seal-${i}`).digest("hex");
+      sealRoots.push(sealMerkleRoot);
+      await store.appendSeal(sessionId, sealMerkleRoot);
+    }
+
+    const checkpointId = await store.initiateCheckpoint();
+    const peakHash = await store.confirmCheckpoint(checkpointId);
+
+    // Leaf 0 falls under the height-1 subtree — it requires sibling leaf 1 to reach peak A.
+    const proof = await store.getInclusionProof(sessionIds[0]!, logger);
+    expect(proof).not.toBe(PROOF_NOT_YET_AVAILABLE);
+
+    if (proof === PROOF_NOT_YET_AVAILABLE) throw new Error("Should have proof for leaf 0");
+
+    // The sibling_hashes array must be non-empty (leaf 1's hash is needed to reach peak A).
+    expect(proof.sibling_hashes.length).toBeGreaterThan(0);
+
+    // Proof must verify correctly end-to-end
+    const verified = verifyInclusionProof(proof, sealRoots[0]!, peakHash);
+    expect(verified).toBe(true);
   });
 });
 

@@ -100,6 +100,14 @@ export interface ConversationInclusionProof {
   is_right_sibling: boolean[];
   /** Which peak (by index in the peaks array) this leaf falls under. */
   peak_index: number;
+  /**
+   * All peak hashes at checkpoint time, left-to-right.
+   * The verifier uses these to recompute the bagged peak hash:
+   *   bagged = SHA-256(peaks[0] || peaks[1] || ... || peaks[N-1])
+   * and compare against the stored checkpoint peak_hash.
+   * This is the standard "bagging the peaks" MMR pattern.
+   */
+  peaks: string[];
   /** The committed checkpoint_id this proof is against. */
   checkpoint_id: string;
 }
@@ -392,7 +400,14 @@ export function computeInclusionProof(
       // parent pos = currentPos + 1
       const leftSiblingPos = currentPos - subtreeNodeCount;
       const leftSiblingHash = nodeByPosition.get(leftSiblingPos);
-      if (leftSiblingHash) siblingHashes.push(leftSiblingHash);
+      // Fix 3: both arrays must stay in sync — if sibling is missing, the proof is incomplete.
+      if (!leftSiblingHash) {
+        if (logger) {
+          logger.warn("mmr.proof.unavailable", { sessionId: sessionId ?? null, leafIndex });
+        }
+        return PROOF_NOT_YET_AVAILABLE;
+      }
+      siblingHashes.push(leftSiblingHash);
       isRightSibling.push(true);
       // Move to parent
       currentPos = currentPos + 1;
@@ -401,7 +416,14 @@ export function computeInclusionProof(
       // parent pos = currentPos + subtreeNodeCount + 1
       const rightSiblingPos = currentPos + subtreeNodeCount;
       const rightSiblingHash = nodeByPosition.get(rightSiblingPos);
-      if (rightSiblingHash) siblingHashes.push(rightSiblingHash);
+      // Fix 3: both arrays must stay in sync — if sibling is missing, the proof is incomplete.
+      if (!rightSiblingHash) {
+        if (logger) {
+          logger.warn("mmr.proof.unavailable", { sessionId: sessionId ?? null, leafIndex });
+        }
+        return PROOF_NOT_YET_AVAILABLE;
+      }
+      siblingHashes.push(rightSiblingHash);
       isRightSibling.push(false);
       // Move to parent
       currentPos = currentPos + subtreeNodeCount + 1;
@@ -409,7 +431,14 @@ export function computeInclusionProof(
     currentHeight++;
   }
 
-  const checkpointId = leaf.checkpoint_id ?? "";
+  // Fix 6: explicit guard — a null checkpoint_id means the leaf is not yet committed.
+  if (!leaf.checkpoint_id) {
+    if (logger) {
+      logger.warn("mmr.proof.unavailable", { sessionId: sessionId ?? null, leafIndex });
+    }
+    return PROOF_NOT_YET_AVAILABLE;
+  }
+  const checkpointId = leaf.checkpoint_id;
 
   return {
     leaf_index: leafIndex,
@@ -418,6 +447,9 @@ export function computeInclusionProof(
     sibling_hashes: siblingHashes,
     is_right_sibling: isRightSibling,
     peak_index: peakIndex,
+    // Fix 1: carry the full list of individual peak hashes so the verifier can
+    // bag them and compare against the stored checkpoint peak_hash.
+    peaks: peaks.map((p) => p.hash),
     checkpoint_id: checkpointId,
   };
 }
@@ -479,19 +511,25 @@ function isRightChildNode(
 /**
  * Verify a ConversationInclusionProof against known seal data and the checkpoint peak hash.
  *
- * The verification algorithm:
+ * The verification algorithm uses the standard "bagging the peaks" MMR pattern:
  * 1. Recompute leaf_hash from the agent's known data (seal_merkle_root + leaf_index + recorded_at).
  *    This verifies that proof.leaf_hash matches the independently-known seal data.
  *    proof.recorded_at supplies the timestamp needed to recompute the hash.
- * 2. Walk sibling hashes upward from the verified leaf_hash to the peak, using the
+ * 2. Walk sibling hashes upward from the verified leaf_hash to the subtree root, using the
  *    direction bits in proof.is_right_sibling to determine hash ordering at each level.
- * 3. Compare computed peak hash to checkpointPeakHash.
+ * 3. Verify that the computed subtree root matches proof.peaks[proof.peak_index].
+ * 4. Bag the peaks: baggedHash = SHA-256(peaks[0] || peaks[1] || ... || peaks[N-1]).
+ *    For a single-peak MMR, the stored peak_hash equals the single peak hash (no bagging done).
+ * 5. Compare baggedHash to checkpointPeakHash.
+ *
+ * This two-step approach is required for correctness: comparing the subtree root directly
+ * to the stored bagged peak hash would always fail for multi-peak MMRs.
  *
  * Returns true iff all steps pass.
  *
- * @param proof - The inclusion proof to verify (must include recorded_at and is_right_sibling)
+ * @param proof - The inclusion proof to verify (must include peaks, recorded_at, is_right_sibling)
  * @param sealMerkleRoot - The agent's known seal Merkle root for this conversation
- * @param checkpointPeakHash - The peak hash from a confirmed checkpoint
+ * @param checkpointPeakHash - The peak hash from a confirmed checkpoint (bagged if multi-peak)
  */
 export function verifyInclusionProof(
   proof: ConversationInclusionProof,
@@ -505,23 +543,57 @@ export function verifyInclusionProof(
     return false;
   }
 
-  // Step 2: Walk from verified leaf_hash up to the peak using encoded direction bits.
+  // Step 2: Walk from verified leaf_hash up to the subtree root using encoded direction bits.
   // is_right_sibling[i] = true means the current node was the right child at level i,
   // so: parent_hash = SHA-256(sibling || current)
   // is_right_sibling[i] = false means the current node was the left child at level i,
   // so: parent_hash = SHA-256(current || sibling)
-  const currentHash = proof.leaf_hash;
+  const subtreeRoot = walkToSubtreeRoot(
+    proof.sibling_hashes,
+    proof.is_right_sibling,
+    0,
+    proof.leaf_hash,
+  );
+  if (subtreeRoot === null) return false;
 
-  if (proof.sibling_hashes.length === 0) {
-    // Single-node MMR: the leaf IS the peak.
-    return currentHash === checkpointPeakHash;
+  // Step 3: Verify the computed subtree root matches the expected peak for this leaf.
+  if (proof.peaks.length === 0) return false;
+  if (proof.peak_index < 0 || proof.peak_index >= proof.peaks.length) return false;
+  if (subtreeRoot !== proof.peaks[proof.peak_index]) {
+    return false;
   }
 
-  return walkToRoot(proof.sibling_hashes, proof.is_right_sibling, 0, currentHash, checkpointPeakHash);
+  // Step 4 + 5: Bag the peaks and compare to the stored checkpoint peak hash.
+  // For a single-peak MMR, #computePeakHash returns the peak hash directly (no bagging).
+  // For multi-peak, it returns SHA-256(peak0 || peak1 || ...).
+  const baggedHash = bagPeakHashes(proof.peaks);
+  return baggedHash === checkpointPeakHash;
 }
 
 /**
- * Walk the sibling hashes toward the root using encoded direction bits.
+ * Bag a list of peak hashes into a single commitment.
+ * Matches #computePeakHash in MmrStore — must stay in sync.
+ *
+ * Formula:
+ *   1 peak:  return peaks[0] directly (no wrapping hash)
+ *   N peaks: SHA-256(peaks[0] || peaks[1] || ... || peaks[N-1])
+ */
+function bagPeakHashes(peakHashes: string[]): string {
+  if (peakHashes.length === 0) return "0".repeat(64);
+  if (peakHashes.length === 1) return peakHashes[0]!;
+  const hasher = createHash("sha256");
+  for (const h of peakHashes) {
+    hasher.update(h);
+  }
+  return hasher.digest("hex");
+}
+
+/**
+ * Walk the sibling hashes upward from the leaf, computing the subtree root.
+ *
+ * Returns the computed subtree root hash, or null if the arrays are mismatched
+ * (which should not occur after Fix 3 — computeInclusionProof guarantees they
+ * are always pushed together).
  *
  * isRightSibling[i] = true means the current node was the right child at level i:
  *   parent_hash = SHA-256(sibling || current)
@@ -531,19 +603,22 @@ export function verifyInclusionProof(
  * Direction bits are set at proof construction time (computeInclusionProof), making
  * this deterministic O(N) rather than O(2^N) brute-force.
  */
-function walkToRoot(
+function walkToSubtreeRoot(
   siblings: string[],
   isRightSibling: boolean[],
   index: number,
   current: string,
-  targetRoot: string,
-): boolean {
+): string | null {
   if (index === siblings.length) {
-    return current === targetRoot;
+    return current;
   }
 
-  const sibling = siblings[index]!;
-  const isRight = isRightSibling[index] ?? false;
+  // Fix 3: explicit check — both arrays must be defined at this index.
+  const sibling = siblings[index];
+  const isRight = isRightSibling[index];
+  if (sibling === undefined || isRight === undefined) {
+    return null;
+  }
 
   // If current is the right child: parent = SHA-256(sibling || current)
   // If current is the left child:  parent = SHA-256(current || sibling)
@@ -551,5 +626,5 @@ function walkToRoot(
     ? computeNodeHash(sibling, current)
     : computeNodeHash(current, sibling);
 
-  return walkToRoot(siblings, isRightSibling, index + 1, parentHash, targetRoot);
+  return walkToSubtreeRoot(siblings, isRightSibling, index + 1, parentHash);
 }
