@@ -301,12 +301,12 @@ export function createMcpSessionServer(
   }
 
   function directoryReachable(): boolean {
-    // Best-effort: check whether any session has a non-empty directory_endpoint.
-    // In M1, a session with an active directory_endpoint indicates reachability.
-    const sessions = client.listSessions();
-    return sessions.some(
-      (s) => s.directory_endpoint && s.directory_endpoint.peer_id !== ""
-    );
+    // Check whether the libp2p node currently has an open connection to the directory peer.
+    // This is accurate: true means the signaling stream is (or was recently) live;
+    // false means the directory is genuinely unreachable right now.
+    const dirPeerId = client.getDirectoryPeerId();
+    if (!dirPeerId) return false;
+    return node.getConnections().some((c) => c.peerId === dirPeerId);
   }
 
   const server = new McpServer(
@@ -843,7 +843,7 @@ export function createMcpSessionServer(
     {
       description: "Send a connection request to a target agent. Blocks until the target responds (up to 5 minutes).",
       inputSchema: {
-        target_pubkey: z.string().describe("Target agent K_local pubkey as lowercase hex (64 chars)"),
+        target_pubkey: z.string().describe("Target agent's own_pubkey (Ed25519 identity key) as lowercase hex (64 chars). This is the value from cello_status().own_pubkey on the target agent — NOT their primary_pubkey."),
         include_endorsements: z.boolean().optional().describe("Include endorsements in the connection package"),
         include_attestations: z.boolean().optional().describe("Include attestations in the connection package"),
       },

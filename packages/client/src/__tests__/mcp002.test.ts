@@ -134,6 +134,7 @@ function makeStubClient(opts: StubClientOptions = {}): CelloClient {
     register: async () => ({ error: "not_implemented" }),
     // ─── MCP-003 additions ─────────────────────────────────────────────────
     getRegistrationState: () => null,
+    getDirectoryPeerId: () => null,
     setPolicy: () => {},
     getPolicy: () => ({ mode: "open" as const, review_mode: "deterministic" as const, requirements: [] }),
     hasConnection: () => null,

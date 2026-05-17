@@ -29,6 +29,14 @@ import {
 export class PgDirectoryStore implements DirectoryStore {
   readonly #pool: pg.Pool;
   readonly #logger: Logger;
+  // In-memory profile cache — two indexes for the two lookup patterns:
+  //   #profilesByLocalKey:   k_local_pubkey (own_pubkey) → profile
+  //   #profilesByPrimaryKey: primary_pubkey (FROST group key) → profile
+  // The connection pre-check (directory-node.ts line 1152) looks up by whatever
+  // target_pubkey the initiating agent supplies. Agents supply the target's k_local_pubkey
+  // (own_pubkey), but having both indexes means either key works robustly.
+  readonly #profilesByLocalKey = new Map<string, AgentProfile>();
+  readonly #profilesByPrimaryKey = new Map<string, AgentProfile>();
 
   constructor(pool: pg.Pool, logger: Logger) {
     configurePgTypes();
@@ -87,6 +95,11 @@ export class PgDirectoryStore implements DirectoryStore {
   // ─── Agent profiles ───────────────────────────────────────────────────────
 
   setProfile(profile: AgentProfile): void {
+    // Cache by both keys immediately — connection pre-check uses k_local_pubkey,
+    // but indexing by primary_pubkey too means either key works robustly.
+    this.#profilesByLocalKey.set(profile.k_local_pubkey, profile);
+    this.#profilesByPrimaryKey.set(profile.primary_pubkey, profile);
+    // Persist to Postgres (V9 migration adds agent_profiles table).
     this.#fire(this.#pool.query(
       `INSERT INTO agent_profiles
          (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status)
@@ -103,12 +116,12 @@ export class PgDirectoryStore implements DirectoryStore {
     ));
   }
 
-  getProfile(_kLocalPubkeyHex: string): AgentProfile | undefined {
-    return undefined; // full async read in PERSIST-003+
+  getProfile(pubkeyHex: string): AgentProfile | undefined {
+    return this.#profilesByLocalKey.get(pubkeyHex) ?? this.#profilesByPrimaryKey.get(pubkeyHex);
   }
 
-  hasProfile(_kLocalPubkeyHex: string): boolean {
-    return false; // backing store read in PERSIST-003+
+  hasProfile(pubkeyHex: string): boolean {
+    return this.#profilesByLocalKey.has(pubkeyHex) || this.#profilesByPrimaryKey.has(pubkeyHex);
   }
 
   hasPhoneStubHash(_phoneStubHashHex: string): boolean {

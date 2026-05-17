@@ -178,6 +178,7 @@ function makeStubClientMcp003(state: Mcp003StubState): CelloClient & {
     },
 
     // ─── MCP-003 base interface methods ──────────────────────────────────────
+    getDirectoryPeerId: () => null,
     getRegistrationState: () => {
       if (!state.registered || !state.agentId) return null;
       return {

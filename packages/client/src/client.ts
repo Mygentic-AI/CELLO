@@ -2984,6 +2984,11 @@ class CelloClientImpl implements CelloClient {
     return this.#connectionPolicy ?? { mode: "open", review_mode: "deterministic", requirements: [] };
   }
 
+  /** Return the configured directory peer ID, or null if no directory endpoint was provided. */
+  getDirectoryPeerId(): string | null {
+    return this.#directoryEndpoint?.peer_id ?? null;
+  }
+
   /**
    * Check if a connection exists with the given counterparty pubkey.
    * Returns the connection_id if found, null otherwise.

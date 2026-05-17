@@ -202,6 +202,12 @@ export interface CelloClient {
   getRegistrationState(): import("@cello/protocol-types").RegistrationState | null;
 
   /**
+   * Return the configured directory peer ID (from CELLO_DIRECTORY_MULTIADDR), or null.
+   * Used by directoryReachable() to check live libp2p connection state.
+   */
+  getDirectoryPeerId(): string | null;
+
+  /**
    * Set the connection policy for evaluating inbound connection requests.
    * Replaces any previously configured policy.
    * CELLO-MCP-003.
