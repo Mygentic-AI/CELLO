@@ -1,0 +1,282 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-002
+domain: Node Operations
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Directory Node cluster,
+  I want PostgreSQL logical replication configured between all three
+  regional RDS instances with session ownership enforced at the schema
+  level,
+  so that append-only records written on the owning node replicate to
+  the other two nodes, receiving nodes verify the hash chain on sync,
+  and no session's hash chain is ever written by more than one node.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the federation schema migration (V6) is applied"
+    action: "the sessions table is created with owning_node_id TEXT NOT NULL;
+      the directory_checkpoints stub is replaced with full columns
+      (checkpoint_id, mmr_leaf_count, mmr_peaks, identity_merkle_root,
+      checkpoint_hash, coordinator_node_id, created_at);
+      the checkpoint_node_signatures stub is replaced with full columns
+      (checkpoint_id, node_id, node_signature, signed_at)"
+
+  - trigger: "When a session is established on a directory node"
+    action: "the directory service writes a sessions row with
+      owning_node_id set to this node's node_id from its configuration;
+      the owning node is the sole writer for all hash chain entries
+      associated with that session; SELECT FOR UPDATE on the previous
+      chain row serializes concurrent inserts on the owning node"
+
+  - trigger: "When the owning node for an active session fails"
+    action: "the session fails; the client receives a connection error
+      and must re-establish the session; no other node attempts to write
+      hash chain entries for the failed session; the chain is frozen at
+      the last replicated entry"
+
+  - trigger: "When logical replication is configured on each RDS instance"
+    action: "a publication named cello_pub is created covering all
+      append-only tables; each node subscribes to cello_pub on the
+      other two nodes; replicated rows are verified against the hash
+      chain on arrival — if chain_hash does not match
+      SHA-256(record_contents || previous_chain_hash), the receiving
+      node logs federation.replication.chain_hash_mismatch at ERROR
+      and halts replication for that session's rows pending operator
+      investigation"
+
+  - trigger: "When a receiving node verifies an incoming replicated row"
+    action: "the node computes the expected chain_hash from the row's
+      record contents and the previous chain_hash it holds locally;
+      if they match, the row is accepted; if they do not match,
+      federation.replication.chain_hash_mismatch is logged at ERROR
+      with { nodeId, sessionId, leafIndex, expectedHash, receivedHash }
+      and the discrepancy is flagged for operator investigation"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The V6 federation schema migration has been applied"
+    when: "the sessions table is inspected"
+    then: "the sessions table exists with columns: session_id UUID NOT NULL
+      UNIQUE, owning_node_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL;
+      owning_node_id has a NOT NULL constraint — verified by querying
+      information_schema.columns from a separate database connection"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "The V6 federation schema migration has been applied"
+    when: "the directory_checkpoints table schema is inspected"
+    then: "the table has columns: checkpoint_id BIGSERIAL PRIMARY KEY,
+      mmr_leaf_count BIGINT NOT NULL, mmr_peaks JSONB NOT NULL,
+      identity_merkle_root TEXT NOT NULL, checkpoint_hash TEXT NOT NULL,
+      coordinator_node_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL;
+      the checkpoint_node_signatures table has columns:
+      id BIGSERIAL PRIMARY KEY, checkpoint_id BIGINT NOT NULL
+      REFERENCES directory_checkpoints(checkpoint_id),
+      node_id TEXT NOT NULL, node_signature TEXT NOT NULL,
+      signed_at TIMESTAMPTZ NOT NULL — verified by querying
+      information_schema.columns from a separate database connection"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "Logical replication is configured between node-1 (us-east-1)
+      and node-2 (eu-central-1) as separate RDS instances"
+    when: "a conversation_seals row is inserted on node-1"
+    then: "the same row appears on node-2 within 5 seconds, with an
+      identical chain_hash — verified by querying node-2's
+      conversation_seals from a separate process that connects directly
+      to node-2's RDS endpoint, not via shared memory with node-1"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-004
+    given: "A session is established on node-1 with owning_node_id = 'node-1'"
+    when: "the sessions row is queried from node-2 after replication"
+    then: "node-2 holds a replica of the sessions row with
+      owning_node_id = 'node-1'; node-2's directory service does not
+      attempt to write any hash chain entries for this session — verified
+      by counting conversation_hash_entries rows for this session_id on
+      node-2 before and after 30 seconds and asserting the count is
+      unchanged (all writes come from node-1 via replication)"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A receiving node has replicated a conversation_seals row
+      from the owning node"
+    when: "the receiving node's chain hash verification runs"
+    then: "the receiving node computes SHA-256(record_contents ||
+      previous_chain_hash) and asserts it equals the row's chain_hash;
+      if they match, federation.replication.verified is logged at INFO
+      with { nodeId, sessionId, chainHash }; this verification is
+      performed in a separate process from the owning node — verified
+      by asserting the INFO log event appears in node-2's logs after
+      the row replicates from node-1"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-006
+    given: "A receiving node receives a replicated row with a tampered
+      chain_hash (simulated by directly modifying the chain_hash column
+      on the publishing node before replication)"
+    when: "the receiving node's chain hash verification runs"
+    then: "federation.replication.chain_hash_mismatch is logged at ERROR
+      with { nodeId, sessionId, leafIndex, expectedHash, receivedHash };
+      the discrepancy is visible in the receiving node's CloudWatch log
+      group from a separate monitoring process — verified by querying
+      the log group from a process separate from all directory nodes"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "The owning node for a session fails (ECS task stopped)"
+    when: "the chain entry count for that session is queried from the
+      two remaining nodes 60 seconds after the owning node stops"
+    then: "the chain entry count on both remaining nodes equals the
+      count at the moment the owning node stopped — no new entries were
+      written; federation.session.owner_unavailable is logged at WARN
+      with { sessionId, owningNodeId } on both remaining nodes — verified
+      by querying each node's RDS instance from separate processes with
+      no shared memory"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-008
+    given: "All three nodes are running and replicating"
+    when: "pg_stat_replication is queried on each node"
+    then: "each node shows two active replication slots (one per peer)
+      with state = 'streaming' and write_lag, flush_lag, replay_lag all
+      under 10 seconds — verified by querying pg_stat_replication from
+      a separate database connection on each node"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "No node shall write hash chain entries for a session
+      whose owning_node_id is a different node"
+    adversarial_condition: "even when the owning node is temporarily
+      unreachable and a different node holds the replicated session row —
+      the non-owning node's directory service checks owning_node_id
+      against its own node_id before any chain write and rejects the
+      operation if they do not match"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "Replication slots shall be named and scoped to
+      cello replication only — no other publisher or subscriber shall
+      share a slot name"
+    adversarial_condition: "even when a developer creates a debugging
+      replication slot with a conflicting name — the IaC slot naming
+      convention uses cello_{env}_{source_region}_{target_region} as
+      the slot name, which is unique per environment and region pair"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "The replication user shall have REPLICATION privilege
+      only — no INSERT, UPDATE, DELETE, or DDL on any table"
+    adversarial_condition: "even when the cello_replication role is
+      compromised — it can read the WAL stream but cannot modify any
+      table or schema directly"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While replication lag exceeds 10 seconds on any slot"
+    fallback: "federation.replication.lagging is logged at WARN with
+      { nodeId, slotName, lagSeconds }; the ops-warning alarm fires;
+      the owning node continues accepting writes; replication catches
+      up automatically when the network recovers; no operator action
+      is required unless lag persists beyond 5 minutes"
+    test_type: integration
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While a chain hash mismatch is detected on a replicated
+      row"
+    fallback: "federation.replication.chain_hash_mismatch is logged at
+      ERROR with { nodeId, sessionId, leafIndex, expectedHash,
+      receivedHash }; the ops-critical alarm fires; the receiving node
+      halts replication for that session's rows and flags the session
+      for operator investigation; normal replication for other sessions
+      continues unaffected"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: federation.replication.verified
+      level: info
+      trigger: "a receiving node verifies an incoming replicated row's
+        chain hash successfully"
+      context_fields: [nodeId, sessionId, leafIndex, chainHash, durationMs]
+      correlationId: false
+
+    - name: federation.replication.slot.active
+      level: info
+      trigger: "a replication slot transitions to streaming state"
+      context_fields: [nodeId, slotName, peerNodeId]
+      correlationId: false
+
+    - name: federation.session.owner_unavailable
+      level: warn
+      trigger: "a node detects that the owning node for a session is
+        unreachable"
+      context_fields: [sessionId, owningNodeId, detectingNodeId]
+      correlationId: false
+
+  error_events:
+    - name: federation.replication.chain_hash_mismatch
+      level: error
+      trigger: "a receiving node detects a chain hash mismatch on a
+        replicated row"
+      context_fields: [nodeId, sessionId, leafIndex, expectedHash,
+        receivedHash]
+
+    - name: federation.replication.lagging
+      level: warn
+      trigger: "replication lag on any slot exceeds 10 seconds"
+      context_fields: [nodeId, slotName, lagSeconds]
+
+    - name: federation.replication.slot.inactive
+      level: error
+      trigger: "a replication slot transitions out of streaming state"
+      context_fields: [nodeId, slotName, peerNodeId, state]
+
+  alarms:
+    - condition: "federation.replication.chain_hash_mismatch fires at
+        any time"
+      fires_to: ops-critical
+    - condition: "federation.replication.slot.inactive fires at any time"
+      fires_to: ops-critical
+    - condition: "federation.replication.lagging fires and persists
+        for more than 5 minutes"
+      fires_to: ops-warning
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations / Session Lifecycle / Persistence"
+  discussion_logs:
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+    - "2026-04-11_1700_persistence-layer-design"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on:
+    - CELLO-INFRA-001
+  blocks:
+    - CELLO-INFRA-003
