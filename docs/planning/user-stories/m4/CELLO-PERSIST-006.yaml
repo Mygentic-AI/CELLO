@@ -104,7 +104,9 @@ acceptance_criteria:
     given: "The AuditLogShipper interface is defined"
     when: "a developer reads the interface"
     then: "it exposes exactly two methods: ship(entry: AuditLogEntry):
-      Promise<void> and flush(): Promise<void> — nothing more; the interface
+      Promise<void> and flush(): Promise<number> — nothing more; flush()
+      returns the count of entries successfully shipped so callers can log
+      entriesShipped in the audit.shipper.flushed event; the interface
       is narrow by design"
     test_type: unit
     component_under_test: directory
@@ -176,6 +178,17 @@ observability:
     - name: audit.ship.failed
       level: error
       trigger: "a single ship() call fails after all retries exhausted"
+      context_fields: [reason, entryTimestamp]
+
+    - name: audit.shipper.recovered
+      level: info
+      trigger: "shipper exits degraded mode after retry queue drains to zero"
+      context_fields: [retriedCount]
+
+    - name: audit.ship.retry.exhausted
+      level: error
+      trigger: "flush() exhausts maxRetries (3) for a single entry with no
+        success — entry is dropped and the permanent failure is recorded"
       context_fields: [reason, entryTimestamp]
 
   alarms:
