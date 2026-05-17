@@ -78,6 +78,9 @@ importers:
       '@cello/crypto':
         specifier: workspace:*
         version: link:../crypto
+      '@cello/interfaces':
+        specifier: workspace:*
+        version: link:../interfaces
       '@cello/protocol-types':
         specifier: workspace:*
         version: link:../protocol-types
@@ -93,6 +96,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.2)
+      '@noble/curves':
+        specifier: ^2.2.0
+        version: 2.2.0
       cbor-x:
         specifier: ^1.6.0
         version: 1.6.4
@@ -109,9 +115,6 @@ importers:
       '@cello/directory':
         specifier: workspace:*
         version: link:../directory
-      '@cello/interfaces':
-        specifier: workspace:*
-        version: link:../interfaces
       '@cello/relay':
         specifier: workspace:*
         version: link:../relay
