@@ -1,0 +1,281 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-007
+domain: Node Operations
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+  - relay
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO infrastructure operator,
+  I want a CI/CD pipeline in us-east-1 with a Lambda router that
+  triggers per-package CodePipelines on path-matched GitHub pushes,
+  so that a commit touching packages/directory/ builds and tests only
+  the directory package, while a commit touching packages/crypto/
+  triggers all downstream pipelines.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a push is made to the main branch of
+      Mygentic-AI/CELLO"
+    action: "GitHub delivers a push webhook payload to the
+      github-webhook-receiver Lambda in us-east-1; the Lambda
+      verifies the HMAC-SHA256 signature against the shared webhook
+      secret from Secrets Manager and puts the verified payload on
+      the cello-github-events EventBridge bus; unverified payloads
+      are rejected with HTTP 401 and not forwarded"
+
+  - trigger: "When the cello-github-events EventBridge bus receives
+      a push payload"
+    action: "the cello-pipeline-filter Lambda reads the
+      commit.modified, commit.added, and commit.removed file paths
+      from the payload; it looks up matching pipelines from the
+      data-driven JSON mappings in infra/pipeline-mappings.json;
+      it calls codepipeline:StartPipelineExecution for each matched
+      pipeline; if a root config file (tsconfig.base.json,
+      pnpm-workspace.yaml, package.json) is changed, all 8 CELLO
+      package pipelines are triggered"
+
+  - trigger: "When a per-package CodePipeline is triggered"
+    action: "the pipeline runs three stages in order: Source
+      (CodeStar connection to Mygentic-AI/CELLO main branch),
+      Build (CodeBuild runs pnpm install, lint, typecheck, test,
+      docker build, ECR push), and — for packages/directory and
+      packages/relay only — a Deploy stage added by INFRA-008;
+      the Build stage output artifact includes the Docker image
+      digest pushed to ECR"
+
+  - trigger: "When the CodeBuild build stage runs"
+    action: "CodeBuild uses aws/codebuild/standard:7.0 on Node.js 24;
+      it runs: pnpm install --frozen-lockfile, pnpm run lint,
+      pnpm run typecheck, pnpm run test (full Vitest suite), docker
+      build and push to ECR cello-{package}-{env}; the image is
+      tagged with the Git commit SHA; build failure at any step
+      fails the pipeline execution"
+
+  - trigger: "When infra/pipeline-mappings.json is updated
+      (new package added or mapping changed)"
+    action: "the updated mappings file is committed to the repo;
+      the cello-pipeline-filter Lambda reads the file from the
+      CodePipeline source artifact at invocation time — no Lambda
+      redeployment is required to add a new pipeline mapping"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The CELLO CI/CD CloudFormation stacks are deployed
+      in us-east-1"
+    when: "the Lambda functions and pipelines are inspected"
+    then: "the following exist in us-east-1: github-webhook-receiver
+      Lambda, cello-pipeline-filter Lambda, cello-github-events
+      EventBridge bus, 8 CodePipelines (cello-crypto-pipeline,
+      cello-protocol-types-pipeline, cello-transport-pipeline,
+      cello-client-pipeline, cello-adapter-claude-code-pipeline,
+      cello-directory-pipeline, cello-relay-pipeline,
+      cello-e2e-tests-pipeline), S3 artifacts bucket
+      cello-codepipeline-artifacts-us-east-1; none of these
+      resources exist in eu-west-1 under CELLO naming — verified
+      by aws lambda list-functions and aws codepipeline list-pipelines
+      in both regions from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "A push to main touches only packages/directory/"
+    when: "the cello-pipeline-filter Lambda processes the payload"
+    then: "only cello-directory-pipeline is triggered; the other
+      7 pipelines are not triggered — verified by checking
+      CodePipeline execution history for all 8 pipelines from a
+      separate terminal immediately after the push"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A push to main touches packages/crypto/"
+    when: "the cello-pipeline-filter Lambda processes the payload"
+    then: "all 8 CELLO package pipelines are triggered (crypto is
+      a shared dependency); the trigger occurs within 60 seconds
+      of the push — verified by checking execution history across
+      all 8 pipelines from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "A push to main touches tsconfig.base.json"
+    when: "the cello-pipeline-filter Lambda processes the payload"
+    then: "all 8 CELLO package pipelines are triggered; no
+      cello-agent pipelines in eu-west-1 are triggered — verified
+      by checking eu-west-1 CodePipeline execution history and
+      asserting no new executions were started for cello-agent
+      pipelines"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A GitHub webhook payload arrives at the
+      github-webhook-receiver Lambda with an invalid HMAC signature"
+    when: "the Lambda processes the request"
+    then: "the Lambda returns HTTP 401; the payload is not forwarded
+      to the EventBridge bus; no pipeline is triggered; the rejection
+      is logged at WARN with { reason: 'invalid_signature' } —
+      verified by sending a tampered payload via curl from a
+      separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "The cello-directory-pipeline Build stage runs for a
+      packages/directory/ commit"
+    when: "the CodeBuild stage completes successfully"
+    then: "an image tagged with the Git commit SHA is present in
+      the cello-directory-{env} ECR repository; the image digest
+      is recorded in the build output artifact; the build ran
+      pnpm run lint, pnpm run typecheck, and pnpm run test before
+      the docker build — verified by inspecting the CodeBuild
+      build log from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "infra/pipeline-mappings.json is updated to add a new
+      package mapping and committed to main"
+    when: "the next push to main touches the new package path"
+    then: "the new pipeline is triggered without any Lambda
+      redeployment — the mappings file is read from the source
+      artifact at invocation time; verified by adding a test
+      mapping, committing, pushing, and confirming the new pipeline
+      executes"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "The CodeBuild build stage runs pnpm run test for
+      packages/directory/"
+    when: "the test suite includes integration tests requiring
+      a Postgres container"
+    then: "the build succeeds without a VPC-attached CodeBuild
+      project; integration tests that require a live database run
+      against a Docker-in-Docker Postgres container started in
+      the CodeBuild environment via docker-compose up -d — verified
+      by asserting no VPC configuration is present on the
+      cello-directory-build CodeBuild project"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The CELLO CI/CD infrastructure in us-east-1 shall
+      share no IAM roles, Lambda functions, S3 buckets, or EventBridge
+      buses with cello-agent's CI/CD infrastructure in eu-west-1"
+    adversarial_condition: "even when reusing an existing role would
+      save setup time — shared infrastructure creates a blast radius
+      where a CELLO change can silently break cello-agent; all CELLO
+      CI/CD resources use the cello- prefix and exist only in us-east-1"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "The github-webhook-receiver Lambda shall reject any
+      payload whose HMAC-SHA256 signature does not verify against
+      the shared webhook secret"
+    adversarial_condition: "even when the payload is otherwise
+      well-formed — an unverified payload must never reach the
+      EventBridge bus or trigger any pipeline"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "The cello-pipeline-filter Lambda role shall have
+      codepipeline:StartPipelineExecution only on the 8 named CELLO
+      pipeline ARNs — no wildcard pipeline resource"
+    adversarial_condition: "even when adding a new pipeline — the
+      IAM policy resource list is updated explicitly; wildcard
+      pipeline access could allow triggering unrelated pipelines"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While a CodeBuild build stage fails (lint, typecheck,
+      test, or docker build)"
+    fallback: "the pipeline execution ends with FAILED status;
+      no image is pushed to ECR; no deploy stage runs; pipeline.build.failed
+      is logged with { pipeline, commitSha, failedStep }; the developer
+      fixes the issue and pushes a new commit to trigger a fresh
+      execution"
+    test_type: integration
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While the cello-pipeline-filter Lambda fails to
+      start a pipeline execution (CodePipeline API error)"
+    fallback: "the Lambda logs the error and continues attempting
+      to start other matched pipelines; a single pipeline start
+      failure does not block other pipelines in the same push event;
+      pipeline.trigger.failed is logged at ERROR with { pipeline,
+      reason }"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: pipeline.webhook.received
+      level: info
+      trigger: "github-webhook-receiver receives and verifies a
+        push payload"
+      context_fields: [repository, branch, commitSha, changedFileCount]
+      correlationId: false
+
+    - name: pipeline.triggered
+      level: info
+      trigger: "cello-pipeline-filter triggers a CodePipeline
+        execution"
+      context_fields: [pipeline, commitSha, matchedPath,
+        executionId]
+      correlationId: false
+
+    - name: pipeline.build.succeeded
+      level: info
+      trigger: "CodeBuild build stage completes successfully"
+      context_fields: [pipeline, commitSha, imageDigest, durationMs]
+      correlationId: false
+
+  error_events:
+    - name: pipeline.webhook.rejected
+      level: warn
+      trigger: "webhook payload fails HMAC verification"
+      context_fields: [reason, sourceIp]
+
+    - name: pipeline.trigger.failed
+      level: error
+      trigger: "Lambda fails to start a CodePipeline execution"
+      context_fields: [pipeline, reason]
+
+    - name: pipeline.build.failed
+      level: error
+      trigger: "CodeBuild build stage fails"
+      context_fields: [pipeline, commitSha, failedStep, reason]
+
+  alarms:
+    - condition: "pipeline.build.failed fires more than 3 times
+        in 1 hour for the same pipeline"
+      fires_to: ops-warning
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on:
+    - CELLO-INFRA-001
+  blocks:
+    - CELLO-INFRA-008
