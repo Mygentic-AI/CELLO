@@ -343,4 +343,17 @@ export class FileSessionWal implements SessionWal {
 
     this.#logger.info("relay.wal.deleted", { sessionId });
   }
+
+  /**
+   * PERSIST-014: Retrieve leaves for gap-fill reconciliation.
+   * Reconstructs the WAL and filters to leaves with sequence_number > fromSeq AND <= toSeq.
+   * SI-001: Only serves leaves above the last agreed sequence number.
+   */
+  async getLeaves(sessionId: string, fromSeq: number, toSeq: number): Promise<Leaf[] | typeof RELAY_SESSION_UNRECOVERABLE> {
+    const allLeaves = await this.reconstruct(sessionId);
+    if (allLeaves === RELAY_SESSION_UNRECOVERABLE) {
+      return RELAY_SESSION_UNRECOVERABLE;
+    }
+    return allLeaves.filter((l) => l.sequence_number > fromSeq && l.sequence_number <= toSeq);
+  }
 }

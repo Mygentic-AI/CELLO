@@ -225,7 +225,9 @@ export function encodeDisclosureResponseInbound(frame: DisclosureResponseInbound
 
 import type { RegisterRequest, DkgComplete, ConnectionRequest, ConnectionResponse, DisclosureRequest, DisclosureResponse } from "@cello/protocol-types";
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse;
+import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilateral, SealUnilateralTooEarly, SealUnilateralConfirmed, SealUnilateralNotification } from "./directory-types.js";
+
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -329,7 +331,74 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     return { type: "dkg_complete" as const, primary_pubkey };
   }
 
+  if (o["type"] === "seal_attempt") {
+    const session_id = toUint8Array(o["session_id"]);
+    const reported_root = toUint8Array(o["reported_root"]);
+    const reported_seq = typeof o["reported_seq"] === "number" ? o["reported_seq"] : null;
+    if (!session_id || session_id.length !== 16) return null;
+    if (!reported_root || reported_root.length !== 32) return null;
+    if (reported_seq === null) return null;
+    return { type: "seal_attempt", session_id, reported_root, reported_seq };
+  }
+
+  if (o["type"] === "seal_unilateral") {
+    const session_id = toUint8Array(o["session_id"]);
+    const reported_root = toUint8Array(o["reported_root"]);
+    const reported_seq = typeof o["reported_seq"] === "number" ? o["reported_seq"] : null;
+    if (!session_id || session_id.length !== 16) return null;
+    if (!reported_root || reported_root.length !== 32) return null;
+    if (reported_seq === null) return null;
+    return { type: "seal_unilateral", session_id, reported_root, reported_seq };
+  }
+
   return null;
+}
+
+// ─── PERSIST-014: Seal attempt response encoders ─────────────────────────────
+
+export function encodeSealRejectedTreeMismatch(frame: SealRejectedTreeMismatch): Uint8Array {
+  return ENC.encode({
+    type: frame.type,
+    session_id: frame.session_id,
+    party_a_sequence: frame.party_a_sequence,
+    party_b_sequence: frame.party_b_sequence,
+  });
+}
+
+export function encodeSealAttemptAck(frame: SealAttemptAck): Uint8Array {
+  return ENC.encode({
+    type: frame.type,
+    session_id: frame.session_id,
+  });
+}
+
+// ─── PERSIST-015: Unilateral seal response encoders ──────────────────────────
+
+export function encodeSealUnilateralTooEarly(frame: SealUnilateralTooEarly): Uint8Array {
+  return ENC.encode({
+    type: frame.type,
+    session_id: frame.session_id,
+    remaining_seconds: frame.remaining_seconds,
+  });
+}
+
+export function encodeSealUnilateralConfirmed(frame: SealUnilateralConfirmed): Uint8Array {
+  return ENC.encode({
+    type: frame.type,
+    session_id: frame.session_id,
+    sealed_root: frame.sealed_root,
+    sealed_at: frame.sealed_at,
+  });
+}
+
+export function encodeSealUnilateralNotification(frame: SealUnilateralNotification): Uint8Array {
+  return ENC.encode({
+    type: frame.type,
+    session_id: frame.session_id,
+    sealed_root: frame.sealed_root,
+    sealed_at: frame.sealed_at,
+    seal_type: frame.seal_type,
+  });
 }
 
 // ─── Decode outbound frames (for test helpers) ────────────────────────────────

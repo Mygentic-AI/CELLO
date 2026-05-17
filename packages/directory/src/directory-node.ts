@@ -146,6 +146,11 @@ import {
   encodeConnectionInsufficient,
   encodeDisclosureRequestInbound,
   encodeDisclosureResponseInbound,
+  encodeSealRejectedTreeMismatch,
+  encodeSealAttemptAck,
+  encodeSealUnilateralTooEarly,
+  encodeSealUnilateralConfirmed,
+  encodeSealUnilateralNotification,
   decodeInboundSignalingFrame,
 } from "./directory-frames.js";
 import { ed25519_FROST } from "@noble/curves/ed25519.js";
@@ -236,6 +241,8 @@ export interface DirectoryNodeOptions {
   packageCborInterceptor?: (cbor: Uint8Array) => Uint8Array;
   /** Structured logger injected at the composition root */
   logger?: Logger;
+  /** PERSIST-015: seconds after last activity before unilateral seal is allowed. Default: 600. */
+  deliveryGraceSeconds?: number;
 }
 
 export class CelloDirectoryNode {
@@ -301,6 +308,22 @@ export class CelloDirectoryNode {
   // which arrives on the same signaling stream loop.
   readonly #pendingDkgComplete = new Map<string, (primaryPubkey: string) => void>();
 
+  // PERSIST-014: pending seal attempts — session_id_hex → { partyHex, reported_root, reported_seq }[]
+  readonly #pendingSealAttempts = new Map<string, Array<{
+    partyHex: string;
+    reported_root: Uint8Array;
+    reported_seq: number;
+  }>>();
+
+  // PERSIST-015: delivery grace period (seconds) before unilateral seal is allowed
+  readonly #deliveryGraceSeconds: number;
+  // PERSIST-015: session_id_hex → last activity timestamp (ms) — updated on session creation and seal attempts
+  readonly #sessionLastActivity = new Map<string, number>();
+  // PERSIST-015: session_id_hex → unilateral seal record
+  readonly #unilateralSeals = new Map<string, { sealed_root: Uint8Array; sealed_at: number; submitter_hex: string }>();
+  // PERSIST-015: pubkey_hex → pending notifications for absent party
+  readonly #pendingNotifications = new Map<string, Array<{ type: "seal_unilateral_notification"; session_id: Uint8Array; sealed_root: Uint8Array; sealed_at: number }>>();
+
   // session_id_hex → seal-pending state: waiting for seal_frost_signature from initiator — SESSION-005
   readonly #pendingFrostSeals = new Map<string, {
     initiatorHex: string;
@@ -348,6 +371,7 @@ export class CelloDirectoryNode {
     this.#requireRegistration = opts.requireRegistration ?? false;
     this.#requireConnectionGate = opts.requireConnectionGate ?? false;
     this.#packageCborInterceptor = opts.packageCborInterceptor;
+    this.#deliveryGraceSeconds = opts.deliveryGraceSeconds ?? 600;
   }
 
   async start(): Promise<void> {
@@ -735,6 +759,18 @@ export class CelloDirectoryNode {
             } catch { break; }
           }
 
+          // PERSIST-015 AC-003: deliver queued unilateral seal notifications (absent party reconnected)
+          const unilateralNotifs = this.#pendingNotifications.get(authedPubkeyHex) ?? [];
+          this.#pendingNotifications.delete(authedPubkeyHex);
+          for (const notif of unilateralNotifs) {
+            try {
+              this.#sendFrame(stream, encodeSealUnilateralNotification({
+                ...notif,
+                seal_type: "UNILATERAL",
+              }));
+            } catch { break; }
+          }
+
           // CONNREQ-002 DB-001: deliver queued pending connection requests (target reconnected)
           const pendingConnRequests = this.#store.dequeuePendingConnectionRequests(authedPubkeyHex);
           for (const pending of pendingConnRequests) {
@@ -826,6 +862,12 @@ export class CelloDirectoryNode {
         } else if (parsed.type === "disclosure_response") {
           // CONNREQ-002 Round 2: sender responds to disclosure request
           void this.#processDisclosureResponse(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "seal_attempt") {
+          // PERSIST-014: process seal attempt
+          this.#processSealAttempt(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "seal_unilateral") {
+          // PERSIST-015: process unilateral seal request
+          this.#processSealUnilateral(stream, authedPubkeyHex!, parsed);
         } else {
           // Unknown frame type for authenticated state — ignore
         }
@@ -1477,6 +1519,8 @@ export class CelloDirectoryNode {
         targetGotAssignment: false,
         fullyEstablished: false,
       });
+      // PERSIST-015: record session creation time as initial last_activity_at
+      this.#sessionLastActivity.set(sessionIdHex, this.#clock.now());
 
       // OBS-001 AC-008: assignment issued
       protocolLog("SESS", `Assignment issued — session ${truncHex(sessionIdHex)}`);
@@ -1504,6 +1548,152 @@ export class CelloDirectoryNode {
   }
 
   // ─── Seal processing ─────────────────────────────────────────────────────────
+
+  /**
+   * PERSIST-014: Process a seal_attempt frame from a client.
+   * Collects both parties' reported roots and sequences. When both arrive:
+   * - If roots match → send seal_attempt_ack to both (seal proceeds via normal flow)
+   * - If roots differ → send SEAL_REJECTED_TREE_MISMATCH to both with sequence numbers
+   */
+  #processSealAttempt(
+    stream: import("@libp2p/interface").Stream,
+    senderHex: string,
+    frame: import("./directory-types.js").SealAttempt,
+  ): void {
+    const sessionIdHex = Buffer.from(frame.session_id).toString("hex");
+    // PERSIST-015: update last activity on seal attempt
+    this.#sessionLastActivity.set(sessionIdHex, this.#clock.now());
+
+    let attempts = this.#pendingSealAttempts.get(sessionIdHex);
+    if (!attempts) {
+      attempts = [];
+      this.#pendingSealAttempts.set(sessionIdHex, attempts);
+    }
+
+    // Prevent duplicate attempts from same party
+    if (attempts.some((a) => a.partyHex === senderHex)) {
+      return;
+    }
+
+    attempts.push({
+      partyHex: senderHex,
+      reported_root: frame.reported_root,
+      reported_seq: frame.reported_seq,
+    });
+
+    // Need both parties before comparing
+    if (attempts.length < 2) return;
+
+    const [attemptA, attemptB] = attempts;
+    this.#pendingSealAttempts.delete(sessionIdHex);
+
+    // Compare reported roots
+    const rootsMatch = Buffer.from(attemptA.reported_root).equals(Buffer.from(attemptB.reported_root));
+
+    if (rootsMatch) {
+      // AC-007: roots match → confirm seal proceeds (send ack to both)
+      const ackFrame = { type: "seal_attempt_ack" as const, session_id: frame.session_id };
+      const ackBytes = encodeSealAttemptAck(ackFrame);
+      // Send to both parties
+      const streamA = this.#streams.get(attemptA.partyHex);
+      const streamB = this.#streams.get(attemptB.partyHex);
+      if (streamA) { try { this.#sendFrame(streamA, ackBytes); } catch { /* */ } }
+      if (streamB) { try { this.#sendFrame(streamB, ackBytes); } catch { /* */ } }
+    } else {
+      // PERSIST-014 AC-001: tree mismatch — notify both parties with sequence numbers
+      const mismatchFrame = {
+        type: "seal_rejected_tree_mismatch" as const,
+        session_id: frame.session_id,
+        party_a_sequence: attemptA.reported_seq,
+        party_b_sequence: attemptB.reported_seq,
+      };
+      const mismatchBytes = encodeSealRejectedTreeMismatch(mismatchFrame);
+      // Send to both parties
+      const streamA = this.#streams.get(attemptA.partyHex);
+      const streamB = this.#streams.get(attemptB.partyHex);
+      if (streamA) { try { this.#sendFrame(streamA, mismatchBytes); } catch { /* */ } }
+      if (streamB) { try { this.#sendFrame(streamB, mismatchBytes); } catch { /* */ } }
+    }
+  }
+
+  /**
+   * PERSIST-015: Process a unilateral seal request from a client.
+   * Validates that delivery_grace_seconds has elapsed since last activity,
+   * then seals on the submitter's root and records the counterparty as ABSENT.
+   */
+  #processSealUnilateral(
+    stream: import("@libp2p/interface").Stream,
+    senderHex: string,
+    frame: import("./directory-types.js").SealUnilateral,
+  ): void {
+    const sessionIdHex = Buffer.from(frame.session_id).toString("hex");
+
+    // SI-002: reject if session already has a unilateral seal
+    if (this.#unilateralSeals.has(sessionIdHex)) {
+      return; // Already sealed — ignore duplicate
+    }
+
+    // SI-001: compute elapsed time from directory's own records
+    const lastActivity = this.#sessionLastActivity.get(sessionIdHex);
+    const now = this.#clock.now();
+    const elapsedMs = lastActivity != null ? now - lastActivity : 0;
+    const graceMs = this.#deliveryGraceSeconds * 1000;
+
+    if (elapsedMs < graceMs) {
+      // AC-002: too early — reject with remaining time
+      const remainingSeconds = Math.ceil((graceMs - elapsedMs) / 1000);
+      const tooEarlyFrame = encodeSealUnilateralTooEarly({
+        type: "seal_unilateral_too_early",
+        session_id: frame.session_id,
+        remaining_seconds: remainingSeconds,
+      });
+      try { this.#sendFrame(stream, tooEarlyFrame); } catch { /* */ }
+      return;
+    }
+
+    // Seal is allowed — record the unilateral seal
+    const sealedAt = now;
+    this.#unilateralSeals.set(sessionIdHex, {
+      sealed_root: frame.reported_root,
+      sealed_at: sealedAt,
+      submitter_hex: senderHex,
+    });
+
+    // Determine the absent party from the pending sessions record
+    const pendingSession = this.#pendingSessions.get(sessionIdHex);
+    let absentPartyHex: string | null = null;
+    if (pendingSession) {
+      absentPartyHex = pendingSession.initiatorHex === senderHex
+        ? pendingSession.targetHex
+        : pendingSession.initiatorHex;
+    }
+
+    // AC-003: Queue notification for absent party (delivered on reconnect)
+    if (absentPartyHex) {
+      let notifications = this.#pendingNotifications.get(absentPartyHex);
+      if (!notifications) {
+        notifications = [];
+        this.#pendingNotifications.set(absentPartyHex, notifications);
+      }
+      notifications.push({
+        type: "seal_unilateral_notification",
+        session_id: frame.session_id,
+        sealed_root: frame.reported_root,
+        sealed_at: sealedAt,
+      });
+    }
+
+    // Send confirmation to the submitting party
+    const confirmFrame = encodeSealUnilateralConfirmed({
+      type: "seal_unilateral_confirmed",
+      session_id: frame.session_id,
+      sealed_root: frame.reported_root,
+      sealed_at: sealedAt,
+    });
+    try { this.#sendFrame(stream, confirmFrame); } catch { /* */ }
+
+    protocolLog("SEAL", `Unilateral seal — session ${truncHex(sessionIdHex)}, submitter ${truncHex(senderHex)}`);
+  }
 
   /**
    * Process a seal submission from the relay.
@@ -2004,6 +2194,11 @@ export interface CreateDirectoryNodeOptions {
   packageCborInterceptor?: (cbor: Uint8Array) => Uint8Array;
   /** Structured logger injected at the composition root */
   logger?: Logger;
+  /**
+   * PERSIST-015: grace period in seconds before a unilateral seal is accepted.
+   * Default: 600 (10 minutes).
+   */
+  deliveryGraceSeconds?: number;
 }
 
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{

@@ -154,6 +154,80 @@ export type {
   DisclosureResponseInbound,
 } from "@cello/protocol-types";
 
+// ─── PERSIST-014: Seal attempt frames ────────────────────────────────────────
+
+/**
+ * seal_attempt: client → directory, to report local Merkle state before sealing.
+ * Each party submits independently; directory compares and either proceeds or rejects.
+ */
+export interface SealAttempt {
+  type: "seal_attempt";
+  session_id: Uint8Array;     // 16 bytes
+  reported_root: Uint8Array;  // 32-byte local Merkle root
+  reported_seq: number;       // highest global sequence number in local tree
+}
+
+/**
+ * SEAL_REJECTED_TREE_MISMATCH: directory → both parties, when seal attempts have differing roots.
+ */
+export interface SealRejectedTreeMismatch {
+  type: "seal_rejected_tree_mismatch";
+  session_id: Uint8Array;
+  party_a_sequence: number;
+  party_b_sequence: number;
+}
+
+/**
+ * seal_attempt_ack: directory → client, confirming the seal attempt was received.
+ * If both parties submitted matching roots, the normal seal flow proceeds.
+ */
+export interface SealAttemptAck {
+  type: "seal_attempt_ack";
+  session_id: Uint8Array;
+}
+
+// ─── PERSIST-015: Unilateral seal types ──────────────────────────────────────
+
+/**
+ * seal_unilateral: client → directory, requesting a unilateral seal after delivery_grace_seconds.
+ */
+export interface SealUnilateral {
+  type: "seal_unilateral";
+  session_id: Uint8Array;     // 16 bytes
+  reported_root: Uint8Array;  // 32-byte local Merkle root
+  reported_seq: number;       // highest global sequence number in local tree
+}
+
+/**
+ * seal_unilateral_too_early: directory → client, when grace period hasn't elapsed.
+ */
+export interface SealUnilateralTooEarly {
+  type: "seal_unilateral_too_early";
+  session_id: Uint8Array;
+  remaining_seconds: number;
+}
+
+/**
+ * seal_unilateral_confirmed: directory → submitting client, when unilateral seal succeeds.
+ */
+export interface SealUnilateralConfirmed {
+  type: "seal_unilateral_confirmed";
+  session_id: Uint8Array;
+  sealed_root: Uint8Array;   // 32-byte sealed Merkle root
+  sealed_at: number;         // Unix timestamp ms
+}
+
+/**
+ * seal_unilateral_notification: directory → absent party, delivered on reconnect.
+ */
+export interface SealUnilateralNotification {
+  type: "seal_unilateral_notification";
+  session_id: Uint8Array;
+  sealed_root: Uint8Array;
+  sealed_at: number;
+  seal_type: "UNILATERAL";
+}
+
 // ─── Internal directory session state ─────────────────────────────────────────
 // SealNotarization is a storage-only type — defined in @cello/interfaces, imported where needed.
 export type { SealNotarization } from "@cello/interfaces";

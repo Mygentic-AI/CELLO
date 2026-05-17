@@ -71,4 +71,15 @@ export interface SessionWal {
    * Idempotent — no error if the WAL does not exist.
    */
   delete(sessionId: string): Promise<void>;
+
+  /**
+   * PERSIST-014: Retrieve leaves for gap-fill reconciliation.
+   * Returns leaves with sequence_number strictly greater than fromSeq
+   * and less than or equal to toSeq.
+   *
+   * SI-001: Only serves leaves above the last agreed sequence number.
+   * Returns RELAY_SESSION_UNRECOVERABLE if the WAL is corrupt or unavailable.
+   * Returns [] if no leaves match the range.
+   */
+  getLeaves(sessionId: string, fromSeq: number, toSeq: number): Promise<Leaf[] | typeof RELAY_SESSION_UNRECOVERABLE>;
 }

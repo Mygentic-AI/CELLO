@@ -15,6 +15,9 @@ import type {
   HashSubmitAck,
   HashSubmitError,
   LeafDeliver,
+  GapFillRequest,
+  GapFillResponse,
+  GapFillError,
 } from "./relay-types.js";
 
 const ENC = new Encoder({ tagUint8Array: false });
@@ -52,9 +55,28 @@ export function encodeLeafDeliver(frame: LeafDeliver): Uint8Array {
   });
 }
 
+// ─── PERSIST-014: Gap-fill encode ────────────────────────────────────────────
+
+export function encodeGapFillResponse(frame: GapFillResponse): Uint8Array {
+  return ENC.encode({
+    type: frame.type,
+    leaves: frame.leaves.map((l) => ({
+      sequence_number: l.sequence_number,
+      sender_pubkey: l.sender_pubkey,
+      content_hash: l.content_hash,
+      sender_signature: l.sender_signature,
+      prev_root: l.prev_root,
+    })),
+  });
+}
+
+export function encodeGapFillError(frame: GapFillError): Uint8Array {
+  return ENC.encode({ type: frame.type, reason: frame.reason });
+}
+
 // ─── Decode ───────────────────────────────────────────────────────────────────
 
-export type InboundRelayFrame = RelayAuthResponse | HashSubmit;
+export type InboundRelayFrame = RelayAuthResponse | HashSubmit | GapFillRequest;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -91,6 +113,15 @@ export function decodeInboundFrame(bytes: Uint8Array): InboundRelayFrame | null 
     if (!structure1_cbor || structure1_cbor.length === 0) return null;
     if (!sender_signature || sender_signature.length !== 64) return null;
     return { type: "hash_submit", session_id, leaf_kind, structure1_cbor, sender_signature };
+  }
+
+  if (o["type"] === "gap_fill_request") {
+    const session_id = toUint8Array(o["session_id"]);
+    const from_seq = typeof o["from_seq"] === "number" ? o["from_seq"] : null;
+    const to_seq = typeof o["to_seq"] === "number" ? o["to_seq"] : null;
+    if (!session_id || session_id.length !== 16) return null;
+    if (from_seq === null || to_seq === null) return null;
+    return { type: "gap_fill_request", session_id, from_seq, to_seq };
   }
 
   return null;
