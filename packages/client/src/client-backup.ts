@@ -31,7 +31,6 @@
 
 import { randomBytes, createCipheriv, createDecipheriv, createHash } from "node:crypto";
 import { readFile, writeFile, rename, unlink } from "node:fs/promises";
-import { existsSync } from "node:fs";
 import type { CloudStorageProvider, Logger } from "@cello/interfaces";
 import { deriveBackupKey } from "./backup-key-derivation.js";
 
@@ -55,7 +54,10 @@ export const BACKUP_WARNING =
 
 /** Backup metadata stored in the local ClientStore. */
 interface BackupMetadata {
-  /** Unix millisecond timestamp of when the backup completed. */
+  /**
+   * Unix millisecond timestamp of when the backup completed (upload success).
+   * This is NOT the backup initiation time — it records completion time.
+   */
   timestamp: number;
   /** Cloud storage destination identifier (e.g. the storage key URL). */
   destinationUrl: string;
@@ -227,56 +229,57 @@ export class ClientBackup {
    *   9. Log client.backup.restore.completed.
    */
   async restore(): Promise<void> {
+    // AC-005: no cloud storage destination configured
+    if (this.#cloudStorage === null) {
+      this.#logger.warn("client.backup.restore.not.configured", { agentId: this.#agentId });
+      throw new Error("Cloud storage not configured; cannot restore backup");
+    }
+
     const startMs = Date.now();
     const tempPath = this.#dbPath + ".restore-tmp";
 
     // Derive backup_key — never stored, never logged (SI-001)
     const backupKey = deriveBackupKey(this.#identityKey, this.#agentId);
 
-    let blob: Uint8Array;
+    let blob: Uint8Array | undefined;
     const storageKey = `backup/${this.#agentId}/db.enc`;
+    let alreadyLogged = false;
 
     try {
-      const downloaded = await this.#cloudStorage!.download(storageKey);
+      // Download and verify
+      const downloaded = await this.#cloudStorage.download(storageKey);
       if (downloaded === undefined) {
         const reason = "backup_not_found";
         this.#logger.error("client.backup.restore.failed", { reason, agentId: this.#agentId });
-        backupKey.fill(0);
+        alreadyLogged = true;
         throw new Error(`Backup not found at ${storageKey}`);
       }
       blob = downloaded;
-    } catch (err: unknown) {
-      backupKey.fill(0);
-      // Re-throw errors that are not already logged backup errors
-      if (!(err instanceof Error && err.message.startsWith("Backup not found"))) {
-        const reason = err instanceof Error ? err.message : String(err);
+
+      // Verify checksum against stored metadata (SI-003)
+      const actualChecksum = createHash("sha256").update(blob).digest("hex");
+      const storedMeta = await this.#readMetadata();
+
+      // SI-003: For new-device restores, we compute checksum but have no stored metadata to compare.
+      // Proceed with restore but log the condition for observability.
+      if (storedMeta === undefined) {
+        this.#logger.warn("client.backup.restore.no.metadata", {
+          agentId: this.#agentId,
+          checksumComputed: actualChecksum,
+        });
+      } else if (storedMeta.checksum !== actualChecksum) {
+        // SI-001: no key material in error context
         this.#logger.error("client.backup.restore.failed", {
-          reason,
+          reason: "checksum_mismatch",
           agentId: this.#agentId,
         });
+        alreadyLogged = true;
+        // SI-003: temp file was not written yet; local DB untouched
+        throw new Error("checksum_mismatch");
       }
-      throw err;
-    }
 
-    // Verify checksum against stored metadata (SI-003)
-    const actualChecksum = createHash("sha256").update(blob).digest("hex");
-    const storedMeta = await this.#readMetadata();
-
-    if (storedMeta !== undefined && storedMeta.checksum !== actualChecksum) {
-      // SI-001: no key material in error context
-      this.#logger.error("client.backup.restore.failed", {
-        reason: "checksum_mismatch",
-        agentId: this.#agentId,
-      });
-      backupKey.fill(0);
-      // SI-003: temp file was not written yet; local DB untouched
-      throw new Error("checksum_mismatch");
-    }
-
-    // Decrypt with AES-256-GCM
-    // Wire format: [nonce(12)] [tag(16)] [encrypted_plaintext]
-    let plaintext: Buffer;
-    try {
+      // Decrypt with AES-256-GCM
+      // Wire format: [nonce(12)] [tag(16)] [encrypted_plaintext]
       const buf = Buffer.from(blob);
       const nonce = buf.subarray(0, NONCE_BYTES);
       const tag = buf.subarray(NONCE_BYTES, NONCE_BYTES + TAG_BYTES);
@@ -284,43 +287,35 @@ export class ClientBackup {
 
       const decipher = createDecipheriv("aes-256-gcm", backupKey, nonce);
       decipher.setAuthTag(tag);
-      plaintext = Buffer.concat([decipher.update(encryptedBody), decipher.final()]);
-    } catch (err: unknown) {
-      const reason = err instanceof Error ? err.message : String(err);
-      this.#logger.error("client.backup.restore.failed", {
-        reason: "decrypt_failed",
-        agentId: this.#agentId,
-      });
-      backupKey.fill(0);
-      // SI-003: temp file was not written yet; local DB untouched
-      throw new Error(`decrypt_failed: ${reason}`);
-    } finally {
-      // Zero backup_key immediately after decryption attempt (SI-001)
-      backupKey.fill(0);
-    }
+      const plaintext = Buffer.concat([decipher.update(encryptedBody), decipher.final()]);
 
-    // SI-003: write to temp path first, then atomically rename
-    // If write fails mid-way, the live DB is untouched
-    try {
+      // SI-003: write to temp path first, then atomically rename
+      // If write fails mid-way, the live DB is untouched
       await writeFile(tempPath, plaintext);
       await rename(tempPath, this.#dbPath);
+
+      const durationMs = Date.now() - startMs;
+      this.#logger.info("client.backup.restore.completed", {
+        agentId: this.#agentId,
+        sourceUrl: storageKey,
+        durationMs,
+      });
     } catch (err: unknown) {
-      const reason = err instanceof Error ? err.message : String(err);
-      this.#logger.error("client.backup.restore.failed", { reason, agentId: this.#agentId });
-      // Attempt to clean up the temp file if it exists
-      if (existsSync(tempPath)) {
-        await unlink(tempPath).catch(() => {});
+      // Log errors if not already logged
+      if (!alreadyLogged) {
+        const reason = err instanceof Error ? err.message : String(err);
+        this.#logger.error("client.backup.restore.failed", {
+          reason,
+          agentId: this.#agentId,
+        });
       }
+      // Attempt to clean up the temp file if it exists (ignore if already gone)
+      await unlink(tempPath).catch(() => {});
       throw err;
+    } finally {
+      // Zero backup_key on all paths (SI-001)
+      backupKey.fill(0);
     }
-
-    const durationMs = Date.now() - startMs;
-
-    this.#logger.info("client.backup.restore.completed", {
-      agentId: this.#agentId,
-      sourceUrl: storageKey,
-      durationMs,
-    });
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────────
