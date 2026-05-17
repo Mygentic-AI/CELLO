@@ -35,6 +35,7 @@ import { InMemoryShareStore } from "../share-store.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { EncryptedPgShareStore } from "../encrypted-share-store.js";
 import { PersistentShareStore } from "../persistent-share-store.js";
+import { MmrStore } from "../mmr-store.js";
 
 const env = process.env["CELLO_ENV"];
 const logger = new StdoutLogger();
@@ -174,6 +175,19 @@ if (env === "local" && pgPool) {
   }
 
   logger.info("db.rls.verified", { tableCount: appendOnlyTables.length, env });
+}
+
+// ─── DB-001: Incomplete checkpoint recovery ──────────────────────────────────
+// On startup, detect any partially-written checkpoints and re-run confirmCheckpoint
+// to complete them idempotently.
+if (env === "local" && pgPool) {
+  const mmrStore = new MmrStore(pgPool, logger);
+  const orphanedIds = await mmrStore.detectIncompleteCheckpoints(logger);
+  for (const checkpointId of orphanedIds) {
+    logger.info("mmr.checkpoint.recovery.started", { checkpointId, env });
+    await mmrStore.confirmCheckpoint(checkpointId);
+    logger.info("mmr.checkpoint.recovery.completed", { checkpointId, env });
+  }
 }
 
 // ─── PERSIST-005: EnvelopeKeyProvider + EncryptedPgShareStore ─────────────────
