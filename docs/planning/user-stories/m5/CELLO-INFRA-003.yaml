@@ -1,0 +1,292 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-003
+domain: Node Operations
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Directory Node cluster,
+  I want checkpoint cross-signing run every 10 minutes with a 2-of-3
+  threshold and deterministic coordinator failover,
+  so that the MMR state is periodically committed with cryptographic
+  proof that at least two independent nodes agreed on the same state,
+  and checkpointing continues even when the primary coordinator is
+  unavailable.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the checkpoint interval elapses (every 10 minutes)
+      and this node has the lowest available node_id"
+    action: "this node acts as coordinator: it collects all rows from
+      conversation_seal_staging accumulated since the last checkpoint,
+      sorts them deterministically (recorded_at ASC, conversation_id ASC),
+      extends the MMR with the sorted batch, computes the checkpoint hash
+      SHA-256(mmr_peaks_serialized || identity_merkle_root || checkpoint_id),
+      and broadcasts the checkpoint proposal to the other two nodes"
+
+  - trigger: "When a non-coordinator node receives a checkpoint proposal"
+    action: "the node independently verifies the checkpoint hash against
+      its own local MMR state and identity_merkle_root; if the hash
+      matches, the node signs it with its Ed25519 node signing key and
+      returns the signature to the coordinator; if the hash does not
+      match, the node logs federation.checkpoint.hash_mismatch at ERROR
+      and withholds its signature"
+
+  - trigger: "When the coordinator collects 2 or more valid signatures
+      within the 30-second round timeout"
+    action: "the coordinator writes one row to directory_checkpoints with
+      the confirmed checkpoint hash, mmr_peaks, mmr_leaf_count,
+      identity_merkle_root, and coordinator_node_id; it writes one row
+      to checkpoint_node_signatures per signing node; it clears
+      conversation_seal_staging of all rows included in this batch;
+      the checkpoint replicates to all nodes via logical replication"
+
+  - trigger: "When the coordinator receives fewer than 2 valid signatures
+      within the 30-second round timeout"
+    action: "the round is abandoned; federation.checkpoint.skipped is
+      logged at WARN with { checkpointId, availableNodes,
+      requiredThreshold }; conversation_seal_staging is not cleared;
+      the next round is attempted at the next 10-minute interval"
+
+  - trigger: "When a non-coordinator node does not observe a new row
+      in directory_checkpoints within checkpoint_interval + 60s"
+    action: "the node with the next-lowest available node_id assumes
+      the coordinator role for this round and initiates the checkpoint
+      protocol; no gossip or heartbeat protocol is used — detection
+      is a read on the replicated directory_checkpoints table"
+
+  - trigger: "When the conversation_seal_staging table is cleared
+      after a confirmed checkpoint"
+    action: "only rows with staging_id values included in the confirmed
+      batch are deleted; any rows inserted during the checkpoint round
+      itself are retained for the next batch"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Three directory nodes running with logical replication;
+      5 conversation seals accumulated in conversation_seal_staging
+      since the last checkpoint"
+    when: "the checkpoint interval elapses"
+    then: "within 2 minutes a new row appears in directory_checkpoints
+      on all three nodes; the row's checkpoint_hash equals
+      SHA-256(mmr_peaks_serialized || identity_merkle_root ||
+      checkpoint_id) — verified by recomputing the hash independently
+      in a process separate from all three directory nodes using the
+      row's stored fields and asserting equality; mmr_leaf_count
+      equals the previous mmr_leaf_count plus the number of seals
+      in the batch"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-002
+    given: "A checkpoint round completes"
+    when: "checkpoint_node_signatures is queried"
+    then: "exactly 2 or 3 rows exist for that checkpoint_id, each
+      with a distinct node_id and a valid Ed25519 signature over
+      the checkpoint_hash — verified by fetching each node's registered
+      public key and running Ed25519 signature verification in a process
+      separate from all directory nodes"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A checkpoint round completes with 5 seals in the batch"
+    when: "conversation_seal_staging is queried immediately after"
+    then: "the 5 staging rows included in the batch are no longer
+      present; any rows inserted into conversation_seal_staging during
+      the round are still present — verified by inserting a canary
+      row during the round and asserting it survives the clearing"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "Two nodes with the same seal batch independently sort it"
+    when: "the sort order is compared"
+    then: "both nodes produce an identical ordered list for any batch
+      containing seals with distinct recorded_at values and for any
+      batch containing seals with identical recorded_at values
+      (tiebroken by conversation_id UUID ascending) — verified by
+      running the sort function with an identical input on two separate
+      processes and asserting output equality"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-005
+    given: "The coordinator node (lowest node_id) is stopped before
+      the checkpoint interval elapses; two nodes remain running"
+    when: "checkpoint_interval + 60s elapses from the last confirmed
+      checkpoint"
+    then: "the node with the next-lowest available node_id initiates
+      a checkpoint round as coordinator; a new directory_checkpoints
+      row appears with coordinator_node_id set to that node's node_id
+      and 2 valid signatures — verified by querying both remaining
+      nodes' RDS instances from separate processes"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-006
+    given: "A non-coordinator node receives a checkpoint proposal"
+    when: "the proposal's checkpoint_hash does not match the node's
+      locally computed hash"
+    then: "the node withholds its signature; federation.checkpoint.hash_mismatch
+      is logged at ERROR with { nodeId, checkpointId, expectedHash,
+      receivedHash }; the ops-critical alarm fires; if only one other
+      node signs, the round fails to reach threshold and is skipped —
+      verified by providing a corrupted proposal to one non-coordinator
+      node and asserting the round is abandoned with
+      federation.checkpoint.skipped logged"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "A checkpoint round fails to collect 2 signatures within
+      the 30-second timeout"
+    when: "the round times out"
+    then: "federation.checkpoint.skipped is logged at WARN with
+      { checkpointId, availableNodes, requiredThreshold };
+      conversation_seal_staging is not cleared; the next round is
+      attempted at the next 10-minute interval; no partial
+      directory_checkpoints row is written — verified by asserting
+      no new row in directory_checkpoints from a separate process"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "No checkpoint has been confirmed for 30 minutes"
+    when: "the ops-critical alarm condition is evaluated"
+    then: "the federation.checkpoint.gap alarm fires to ops-critical;
+      the alarm condition is: no federation.checkpoint.confirmed event
+      within 30 minutes — verified by suppressing checkpoint rounds
+      for 31 minutes and asserting the CloudWatch alarm transitions
+      to ALARM state"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "A checkpoint shall never be confirmed with fewer than
+      2 valid Ed25519 signatures from distinct node_ids"
+    adversarial_condition: "even when the coordinator is the only
+      responding node — the coordinator's own signature counts as one;
+      a second signature from a different node_id is required; the
+      coordinator cannot sign twice under two different identities"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "conversation_seal_staging shall never be cleared
+      unless the checkpoint that includes those rows has been confirmed
+      with threshold signatures and the directory_checkpoints row is
+      committed"
+    adversarial_condition: "even when the coordinator crashes between
+      writing the checkpoint row and clearing the staging table —
+      on restart, the coordinator detects the uncommitted clear and
+      retries; the staging rows are not lost"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "The deterministic sort (recorded_at ASC, conversation_id
+      ASC) shall be the only permitted ordering for MMR batch construction;
+      no other sort order shall produce a valid checkpoint hash"
+    adversarial_condition: "even when a node attempts to construct a
+      checkpoint with a different ordering — the resulting checkpoint_hash
+      will not match any honest node's independently computed hash, and
+      honest nodes will withhold their signatures"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While only one node is reachable (two nodes down)"
+    fallback: "the surviving node cannot reach the 2-of-3 threshold;
+      every checkpoint round is skipped; federation.checkpoint.skipped
+      is logged at WARN on each attempt; the ops-critical alarm fires
+      after 30 minutes without a confirmed checkpoint; conversation
+      seals continue to accumulate in conversation_seal_staging;
+      no data is lost — the batch will be included in the next
+      successful checkpoint when nodes recover"
+    test_type: integration
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While a node returns a hash mismatch on every round
+      (persistent divergence)"
+    fallback: "the round succeeds with 2-of-3 signatures from the two
+      agreeing nodes; federation.checkpoint.hash_mismatch continues to
+      fire at ERROR for the diverging node; the ops-critical alarm fires;
+      the diverging node is flagged for operator investigation —
+      persistent divergence indicates tampering or data corruption on
+      that node"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: federation.checkpoint.round.initiated
+      level: info
+      trigger: "coordinator initiates a checkpoint round"
+      context_fields: [checkpointId, coordinatorNodeId, batchSize,
+        correlationId]
+      correlationId: true
+
+    - name: federation.checkpoint.confirmed
+      level: info
+      trigger: "a checkpoint is confirmed with threshold signatures"
+      context_fields: [checkpointId, mmrLeafCount, signingNodes,
+        durationMs, correlationId]
+      correlationId: true
+
+    - name: federation.checkpoint.signature.received
+      level: info
+      trigger: "coordinator receives a valid signature from a peer node"
+      context_fields: [checkpointId, signingNodeId, correlationId]
+      correlationId: true
+
+  error_events:
+    - name: federation.checkpoint.skipped
+      level: warn
+      trigger: "a checkpoint round fails to reach 2-of-3 threshold"
+      context_fields: [checkpointId, availableNodes, requiredThreshold,
+        correlationId]
+
+    - name: federation.checkpoint.hash_mismatch
+      level: error
+      trigger: "a non-coordinator node's locally computed hash does not
+        match the coordinator's proposal"
+      context_fields: [nodeId, checkpointId, expectedHash, receivedHash]
+
+    - name: federation.checkpoint.gap
+      level: error
+      trigger: "no checkpoint confirmed within 30 minutes"
+      context_fields: [lastCheckpointId, lastCheckpointAt, gapMinutes]
+
+  alarms:
+    - condition: "federation.checkpoint.gap fires (no confirmed checkpoint
+        within 30 minutes)"
+      fires_to: ops-critical
+    - condition: "federation.checkpoint.hash_mismatch fires at any time"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations / Session Lifecycle / Persistence"
+  discussion_logs:
+    - "2026-04-13_1400_meta-merkle-tree-design"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on:
+    - CELLO-INFRA-001
+    - CELLO-INFRA-002
+  blocks:
+    - CELLO-INFRA-E2E-001
