@@ -68,6 +68,9 @@ const TABLE_EXTRA_EXCLUDED: Record<string, ReadonlySet<string>> = {
     "via_alias_id",           // set when request came via an alias
   ]),
   conversation_seals: new Set(["close_reason_code"]),
+  conversation_proof_leaves: new Set([
+    "checkpoint_id",          // NULL at INSERT; set via join table at checkpoint confirmation
+  ]),
 };
 
 function isExcluded(tableName: string, column: string): boolean {
@@ -93,9 +96,19 @@ export function serializeRecord(record: Record<string, unknown>, tableName?: str
   for (const k of keys) {
     const v = record[k];
     if (typeof v === "string" && /^-?\d+$/.test(v)) {
-      // Normalize pg BIGINT strings to numbers so serialization matches INSERT time.
-      // pg returns BIGINT/BIGSERIAL as strings; application code uses JS numbers.
+      // Normalize pg BIGINT strings to numbers — pg returns BIGINT/BIGSERIAL as
+      // strings; application code supplies JS numbers at INSERT time.
       obj[k] = Number(v);
+    } else if (v instanceof Date) {
+      // Normalize Date objects to UTC ISO string — pg returns DATE/TIMESTAMP columns
+      // as JS Date objects. toISOString() gives a canonical UTC representation.
+      obj[k] = v.toISOString();
+    } else if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
+      // Normalize bare YYYY-MM-DD date strings to UTC midnight ISO — production
+      // callers should always pass Date objects, but tests may pass strings.
+      // Matches what pg returns for a DATE column when read back as a Date object
+      // set to UTC midnight.
+      obj[k] = new Date(`${v}T00:00:00.000Z`).toISOString();
     } else {
       obj[k] = v;
     }

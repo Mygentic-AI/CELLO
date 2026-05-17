@@ -326,9 +326,10 @@ describeIntegration("PERSIST-008 integration: AC-001 per-pseudonym stats", () =>
     const pseudoB = `ac001-b-${randomUUID()}`;
     const pseudoC = `ac001-c-${randomUUID()}`;
 
-    const date1 = new Date("2026-01-01");
-    const date2 = new Date("2026-01-02");
-    const date3 = new Date("2026-01-03");
+    // Use UTC midnight strings to avoid local timezone converting e.g. "2026-01-03" to 2026-01-02T22:00:00Z.
+    const date1 = new Date("2026-01-01T00:00:00Z");
+    const date2 = new Date("2026-01-02T00:00:00Z");
+    const date3 = new Date("2026-01-03T00:00:00Z");
 
     // pseudoA: 2 conversations with pseudoB (clean), 1 with pseudoC (flagged)
     await insertSealedConversation(servicePool, [pseudoA, pseudoB], { [pseudoA]: "CLEAN", [pseudoB]: "CLEAN" }, date1);
@@ -358,7 +359,12 @@ describeIntegration("PERSIST-008 integration: AC-001 per-pseudonym stats", () =>
     expect(Number(statsA.unique_counterparty_count)).toBe(2);
     expect(Number(statsA.clean_count)).toBe(2);
     expect(Number(statsA.flagged_count)).toBe(1);
-    expect(new Date(statsA.last_activity).toISOString().substring(0, 10)).toBe("2026-01-03");
+    // last_activity is TIMESTAMPTZ. Normalize to UTC date string for comparison —
+    // pg may return it as a Date object or a string depending on the connection's type parsers.
+    const lastActivityDate = statsA.last_activity instanceof Date
+      ? statsA.last_activity.toISOString().substring(0, 10)
+      : new Date(statsA.last_activity as string).toISOString().substring(0, 10);
+    expect(lastActivityDate).toBe("2026-01-03");
 
     // Verify pseudoB stats
     const resB = await superPool.query<{ conversation_count: number; unique_counterparty_count: number }>(

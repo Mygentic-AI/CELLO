@@ -7,14 +7,7 @@
  */
 
 import pg from "pg";
-
-// Return DATE and TIMESTAMP columns as strings rather than JavaScript Date objects.
-// This ensures that values read back from the DB match the string form passed at
-// INSERT time (e.g. "2026-01-01"), preventing timezone-induced hash chain mismatches.
-// Type OIDs: 1082 = DATE, 1114 = TIMESTAMP, 1184 = TIMESTAMPTZ
-pg.types.setTypeParser(1082, (val: string) => val); // DATE → string
-pg.types.setTypeParser(1114, (val: string) => val); // TIMESTAMP → string
-pg.types.setTypeParser(1184, (val: string) => val); // TIMESTAMPTZ → string
+import { configurePgTypes } from "../pg-type-config.js";
 import type {
   DirectoryStore,
   DirectoryNotification,
@@ -38,6 +31,7 @@ export class PgDirectoryStore implements DirectoryStore {
   readonly #logger: Logger;
 
   constructor(pool: pg.Pool, logger: Logger) {
+    configurePgTypes();
     this.#pool = pool;
     this.#logger = logger;
   }

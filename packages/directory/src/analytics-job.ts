@@ -61,6 +61,7 @@
 
 import pg from "pg";
 import type { Logger } from "@cello/interfaces";
+import { configurePgTypes } from "./pg-type-config.js";
 
 // ─── Graph data structures for in-memory analysis ────────────────────────────
 
@@ -93,6 +94,7 @@ export class AnalyticsJob {
   readonly #logger: Logger;
 
   constructor(readPool: pg.Pool, writePool: pg.Pool, logger: Logger) {
+    configurePgTypes();
     this.#readPool = readPool;
     this.#writePool = writePool;
     this.#logger = logger;
