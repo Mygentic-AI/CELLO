@@ -31,6 +31,7 @@ import { NetworkRelayAdapter } from "../network-relay-adapter.js";
 import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler } from "@cello/interfaces/stubs";
 import { InMemoryShareStore } from "../share-store.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
+import { MmrStore } from "../mmr-store.js";
 
 const env = process.env["CELLO_ENV"];
 const logger = new StdoutLogger();
@@ -155,6 +156,20 @@ if (env === "local" && pgPool) {
   }
 
   logger.info("db.rls.verified", { tableCount: appendOnlyTables.length, env });
+}
+
+// ─── DB-001: Incomplete checkpoint recovery ──────────────────────────────────
+// On startup, detect any partially-written checkpoints (staging rows with a
+// checkpoint_id that has no corresponding row in directory_checkpoints) and
+// re-run confirmCheckpoint to complete them idempotently.
+if (env === "local" && pgPool) {
+  const mmrStore = new MmrStore(pgPool, logger);
+  const orphanedIds = await mmrStore.detectIncompleteCheckpoints(logger);
+  for (const checkpointId of orphanedIds) {
+    logger.info("mmr.checkpoint.recovery.started", { checkpointId, env });
+    await mmrStore.confirmCheckpoint(checkpointId);
+    logger.info("mmr.checkpoint.recovery.completed", { checkpointId, env });
+  }
 }
 
 // envelopeKeyProvider/clientStore/relayWal/jobScheduler are instantiated here and

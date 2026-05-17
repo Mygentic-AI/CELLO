@@ -75,6 +75,13 @@ export class MmrStore {
 
       // Advisory lock: prevent concurrent MMR appends from forking the chain.
       // hashtext('mmr_append') gives a stable int4 lock key.
+      //
+      // Note on lock granularity: a single lock key covers both conversation_proof_leaves
+      // and conversation_proof_mmr_nodes, departing from the per-table convention in
+      // PERSIST-004. This is intentional: appending a leaf and its derived internal nodes
+      // must be atomic — two concurrent appends that each hold their own table lock would
+      // still interleave and fork the MMR. One lock key covering both tables is the correct
+      // scope for this operation.
       await client.query("SELECT pg_advisory_xact_lock(hashtext('mmr_append'))");
 
       // Step 1: Get current leaf count (this becomes the new leaf_index)
@@ -210,7 +217,7 @@ export class MmrStore {
       return existing.rows[0]!.peak_hash;
     }
 
-    // Fetch staging rows for this checkpoint
+    // Fetch staging rows for this checkpoint before opening the transaction
     const stagingRes = await this.#pool.query<{ session_id: string; seal_merkle_root: string; recorded_at: Date }>(
       "SELECT session_id, seal_merkle_root, recorded_at FROM conversation_seal_staging WHERE checkpoint_id = $1",
       [checkpointId],
@@ -227,7 +234,7 @@ export class MmrStore {
     const peaks = await this.#fetchCurrentPeaksFromPool();
     const peakHash = this.#computePeakHash(peaks);
 
-    // Insert the checkpoint row with chain_hash
+    // Build the checkpoint row chain_hash before the transaction
     const checkpointRecord: Record<string, unknown> = {
       checkpoint_id: checkpointId,
       mmr_leaf_count: leafCount,
@@ -241,33 +248,50 @@ export class MmrStore {
     const prevCheckpointHash = prevCheckpointHashRow.rows[0]?.chain_hash ?? CHAIN_GENESIS;
     const checkpointChainHash = computeChainHash(serializeRecord(checkpointRecord), prevCheckpointHash);
 
-    await this.#pool.query(
-      `INSERT INTO directory_checkpoints
-         (checkpoint_id, mmr_leaf_count, peak_hash, staged_seal_count, chain_hash)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (checkpoint_id) DO NOTHING`,
-      [checkpointId, leafCount, peakHash, stagedSealCount, checkpointChainHash],
-    );
+    // Atomically: INSERT checkpoint row + INSERT leaf→checkpoint associations + DELETE staging rows.
+    // Wrapping all three in a single explicit transaction prevents orphaned staging rows if a crash
+    // occurs between the INSERT and the DELETE (DB-001 idempotency depends on this atomicity).
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
 
-    // Update leaves to set checkpoint_id
-    const sessionIds = stagingRes.rows.map((r) => r.session_id);
-    if (sessionIds.length > 0) {
-      // Note: UPDATE on conversation_proof_leaves for checkpoint_id is allowed
-      // because checkpoint_id starts as NULL (set at staging time) and is set once.
-      // We use superuser-level access here via the pool (cello_service has SELECT + INSERT only
-      // on this table, but we need to set checkpoint_id after commit). We achieve this by
-      // tracking checkpoint association through the staging table — the leaf's checkpoint_id
-      // is set atomically in the staging transaction.
-      // Actually, conversation_proof_leaves is append-only (RLS insert_only). We cannot UPDATE it.
-      // The checkpoint association is stored in conversation_seal_staging, and the directory
-      // reads the association through a JOIN when building proofs.
+      await client.query(
+        `INSERT INTO directory_checkpoints
+           (checkpoint_id, mmr_leaf_count, peak_hash, staged_seal_count, chain_hash)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (checkpoint_id) DO NOTHING`,
+        [checkpointId, leafCount, peakHash, stagedSealCount, checkpointChainHash],
+      );
+
+      // Insert into the checkpoint association join table for each leaf in this checkpoint.
+      // conversation_proof_leaves is append-only (RLS: INSERT + SELECT only — no UPDATE).
+      // Checkpoint association is recorded in conversation_proof_leaf_checkpoints instead,
+      // which satisfies SI-003: each leaf can appear in at most one checkpoint (UNIQUE on leaf_id).
+      const sessionIds = stagingRes.rows.map((r) => r.session_id);
+      if (sessionIds.length > 0) {
+        await client.query(
+          `INSERT INTO conversation_proof_leaf_checkpoints (leaf_id, checkpoint_id)
+           SELECT l.id, $1
+           FROM conversation_proof_leaves l
+           WHERE l.session_id = ANY($2)
+           ON CONFLICT (leaf_id) DO NOTHING`,
+          [checkpointId, sessionIds],
+        );
+      }
+
+      // Delete staging rows for this checkpoint
+      await client.query(
+        "DELETE FROM conversation_seal_staging WHERE checkpoint_id = $1",
+        [checkpointId],
+      );
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => { /* ignore rollback errors */ });
+      throw err;
+    } finally {
+      client.release();
     }
-
-    // Delete staging rows for this checkpoint
-    await this.#pool.query(
-      "DELETE FROM conversation_seal_staging WHERE checkpoint_id = $1",
-      [checkpointId],
-    );
 
     // Log mmr.checkpoint.confirmed
     this.#logger.info("mmr.checkpoint.confirmed", {
@@ -308,20 +332,21 @@ export class MmrStore {
     const leafRow = leafRes.rows[0]!;
     const leafIndex = leafRow.leaf_index;
 
-    // Check if this session has been checkpointed
-    // A session is checkpointed if: it was in staging WITH a checkpoint_id that has been confirmed
-    // AND the staging row has been deleted (meaning confirmCheckpoint ran successfully).
-    // Since we delete staging rows on confirm, we check the directory_checkpoints table
-    // by looking for the latest checkpoint that includes this leaf's leaf_index.
-
-    // The leaf is committed to a checkpoint if there exists a checkpoint confirmed after the leaf was added.
-    // We find the earliest checkpoint whose mmr_leaf_count >= leafIndex + 1.
-    const checkpointRes = await this.#pool.query<{ checkpoint_id: string; peak_hash: string }>(
-      `SELECT checkpoint_id, peak_hash FROM directory_checkpoints
-       WHERE mmr_leaf_count >= $1
-       ORDER BY mmr_leaf_count ASC, id ASC
+    // Check if this session has been checkpointed via the join table.
+    // A leaf is committed to a checkpoint when a row exists in conversation_proof_leaf_checkpoints
+    // linking the leaf's id to a confirmed checkpoint_id in directory_checkpoints.
+    const checkpointRes = await this.#pool.query<{
+      checkpoint_id: string;
+      peak_hash: string;
+      mmr_leaf_count: number;
+    }>(
+      `SELECT dc.checkpoint_id, dc.peak_hash, dc.mmr_leaf_count
+       FROM conversation_proof_leaves l
+       JOIN conversation_proof_leaf_checkpoints lc ON lc.leaf_id = l.id
+       JOIN directory_checkpoints dc ON dc.checkpoint_id = lc.checkpoint_id
+       WHERE l.session_id = $1
        LIMIT 1`,
-      [leafIndex + 1],
+      [sessionId],
     );
 
     if (checkpointRes.rows.length === 0) {
@@ -332,20 +357,33 @@ export class MmrStore {
 
     const checkpoint = checkpointRes.rows[0]!;
 
-    // Fetch all leaves and nodes for proof computation
+    // Fetch only the leaves and nodes that existed at checkpoint time.
+    // Using checkpoint.mmr_leaf_count ensures the proof is anchored to the checkpoint state,
+    // not the current (potentially larger) MMR state.
     const allLeaves = await this.#pool.query<{
       leaf_index: number;
       mmr_position: number;
       leaf_hash: string;
       seal_merkle_root: string;
       recorded_at: Date;
-    }>("SELECT leaf_index, mmr_position, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves ORDER BY leaf_index ASC");
+    }>(
+      "SELECT leaf_index, mmr_position, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves WHERE leaf_index < $1 ORDER BY leaf_index ASC",
+      [checkpoint.mmr_leaf_count],
+    );
 
     const allNodes = await this.#pool.query<{
       mmr_position: number;
       hash: string;
       height: number;
-    }>("SELECT mmr_position, hash, height FROM conversation_proof_mmr_nodes ORDER BY mmr_position ASC");
+    }>(
+      `SELECT n.mmr_position, n.hash, n.height
+       FROM conversation_proof_mmr_nodes n
+       WHERE n.mmr_position <= (
+         SELECT MAX(mmr_position) FROM conversation_proof_leaves WHERE leaf_index < $1
+       )
+       ORDER BY n.mmr_position ASC`,
+      [checkpoint.mmr_leaf_count],
+    );
 
     const leaves = allLeaves.rows.map((r) => ({
       leaf_index: r.leaf_index,
@@ -353,7 +391,8 @@ export class MmrStore {
       leaf_hash: r.leaf_hash,
       seal_merkle_root: r.seal_merkle_root,
       recorded_at: r.recorded_at.toISOString(),
-      checkpoint_id: checkpoint.checkpoint_id,
+      // Only set checkpoint_id on the target leaf; others are not part of this proof
+      checkpoint_id: r.leaf_index === leafIndex ? checkpoint.checkpoint_id : null,
     }));
 
     const nodes = allNodes.rows.map((r) => ({
@@ -362,8 +401,10 @@ export class MmrStore {
       height: r.height,
     }));
 
-    // Reconstruct peaks from the current MMR state
-    const peaks = await this.#fetchCurrentPeaksFromPool();
+    // Reconstruct peaks from the checkpoint-time MMR state (mmr_leaf_count leaves).
+    // Using current state would produce wrong peaks if new leaves were appended after
+    // this checkpoint was confirmed.
+    const peaks = await this.#fetchPeaksAtLeafCount(checkpoint.mmr_leaf_count);
 
     return computeInclusionProof(
       leafIndex,
@@ -448,6 +489,35 @@ export class MmrStore {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Reconstruct the MMR peak set as it was when exactly `leafCount` leaves had been appended.
+   * Used by getInclusionProof to anchor proofs to checkpoint state rather than current state.
+   */
+  async #fetchPeaksAtLeafCount(leafCount: number): Promise<MmrPeak[]> {
+    const leavesRes = await this.#pool.query<{
+      leaf_index: number;
+      leaf_hash: string;
+      seal_merkle_root: string;
+      recorded_at: Date;
+    }>(
+      "SELECT leaf_index, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves WHERE leaf_index < $1 ORDER BY leaf_index ASC",
+      [leafCount],
+    );
+
+    let peaks: MmrPeak[] = [];
+    for (const leaf of leavesRes.rows) {
+      const r = appendLeafToMmr(
+        leaf.leaf_index,
+        leaf.seal_merkle_root,
+        leaf.recorded_at.toISOString(),
+        peaks,
+      );
+      peaks = r.newPeaks;
+    }
+
+    return peaks;
   }
 
   async #fetchCurrentPeaks(client: pg.PoolClient): Promise<MmrPeak[]> {

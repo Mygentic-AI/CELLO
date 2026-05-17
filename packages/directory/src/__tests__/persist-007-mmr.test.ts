@@ -98,21 +98,21 @@ describe("PERSIST-007 unit: MMR leaf hash computation", () => {
 
 describe("PERSIST-007 unit: MMR position computation", () => {
   it("leaf 0 is at MMR position 0", () => {
-    expect(computeMmrPosition(0, 0)).toBe(0);
+    expect(computeMmrPosition(0)).toBe(0);
   });
 
   it("leaf 1 is at MMR position 1", () => {
-    expect(computeMmrPosition(1, 0)).toBe(1);
+    expect(computeMmrPosition(1)).toBe(1);
   });
 
   it("leaf 2 is at MMR position 3", () => {
     // After 2 leaves, the internal merge node for leaves 0,1 is at position 2,
     // so leaf 2 is at position 3.
-    expect(computeMmrPosition(2, 0)).toBe(3);
+    expect(computeMmrPosition(2)).toBe(3);
   });
 
   it("leaf 3 is at MMR position 4", () => {
-    expect(computeMmrPosition(3, 0)).toBe(4);
+    expect(computeMmrPosition(3)).toBe(4);
   });
 });
 
@@ -239,24 +239,6 @@ describe("PERSIST-007 unit: inclusion proof computation and verification", () =>
     );
   });
 
-  it("AC-006: mmr.checkpoint.confirmed logged at INFO with required fields", () => {
-    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-    // Simulate what MmrStore.confirmCheckpoint would call
-    // We test the log event directly via MmrStore's pure methods
-    const checkpointId = randomUUID();
-    const leafCount = 5;
-    const peakHash = "d".repeat(64);
-    const stagedSealCount = 5;
-
-    // The log call we verify in MmrStore.confirmCheckpoint
-    logger.info("mmr.checkpoint.confirmed", { checkpointId, leafCount, peakHash, stagedSealCount });
-
-    expect(logger.info).toHaveBeenCalledWith(
-      "mmr.checkpoint.confirmed",
-      expect.objectContaining({ checkpointId, leafCount, peakHash, stagedSealCount }),
-    );
-  });
 });
 
 // ─── Integration tests — require CELLO_ENV=local + running Postgres ──────────
@@ -284,6 +266,30 @@ afterAll(async () => {
   if (!isLocal) return;
   await superPool?.end();
   await servicePool?.end();
+});
+
+describeIntegration("PERSIST-007 integration: mmr.leaf.appended observability", () => {
+  it("mmr.leaf.appended: appendSeal emits mmr.leaf.appended at INFO with { sessionId, leafIndex, leafHash, correlationId }", async () => {
+    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const store = new MmrStore(servicePool, logger);
+
+    const sessionId = randomUUID();
+    const sealMerkleRoot = createHash("sha256").update("leaf-appended-obs-test").digest("hex");
+    const correlationId = randomUUID();
+
+    const { leafIndex, leafHash } = await store.appendSeal(sessionId, sealMerkleRoot, correlationId);
+
+    // mmr.leaf.appended must be logged at INFO with all four required context fields
+    expect(logger.info).toHaveBeenCalledWith(
+      "mmr.leaf.appended",
+      expect.objectContaining({
+        sessionId,
+        leafIndex,
+        leafHash,
+        correlationId,
+      }),
+    );
+  });
 });
 
 describeIntegration("PERSIST-007 integration: AC-003 inclusion proof for leaf 3 in 8-leaf MMR", () => {
@@ -364,7 +370,7 @@ describeIntegration("PERSIST-007 integration: AC-004 checkpoint clears staging, 
     const checkpointRow = await getCheckpointRow(servicePool, checkpointId);
     expect(checkpointRow).not.toBeNull();
     expect(checkpointRow!.peak_hash).toBe(peakHash);
-    expect(checkpointRow!.leaf_count).toBeGreaterThanOrEqual(5);
+    expect(checkpointRow!.mmr_leaf_count).toBeGreaterThanOrEqual(5);
 
     // mmr.checkpoint.confirmed was logged
     expect(logger.info).toHaveBeenCalledWith(
@@ -415,6 +421,39 @@ describeIntegration("PERSIST-007 integration: AC-005 concurrent seals during che
     const postSealsWithCheckpoint = await getRowsInStagingForCheckpoint(servicePool, checkpointId);
     // Should be 0 — the pre-initiation ones were cleared, post-initiation ones have no checkpoint_id
     expect(postSealsWithCheckpoint).toBe(0);
+  });
+});
+
+describeIntegration("PERSIST-007 integration: AC-006 mmr.checkpoint.confirmed observability", () => {
+  it("AC-006: MmrStore.confirmCheckpoint emits mmr.checkpoint.confirmed at INFO with required fields", async () => {
+    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const store = new MmrStore(servicePool, logger);
+
+    // Append 3 seals and confirm a checkpoint so confirmCheckpoint actually runs
+    for (let i = 0; i < 3; i++) {
+      const sessionId = randomUUID();
+      await store.appendSeal(sessionId, createHash("sha256").update(`ac006-seal-${i}`).digest("hex"));
+    }
+
+    const checkpointId = await store.initiateCheckpoint();
+    const peakHash = await store.confirmCheckpoint(checkpointId);
+
+    // confirmCheckpoint must log mmr.checkpoint.confirmed with all required context fields
+    expect(logger.info).toHaveBeenCalledWith(
+      "mmr.checkpoint.confirmed",
+      expect.objectContaining({
+        checkpointId,
+        peakHash,
+        stagedSealCount: 3,
+      }),
+    );
+
+    // leafCount must be a positive integer
+    const calls = (logger.info as ReturnType<typeof vi.fn>).mock.calls;
+    const confirmedCall = calls.find((c) => c[0] === "mmr.checkpoint.confirmed");
+    expect(confirmedCall).toBeDefined();
+    expect(typeof confirmedCall![1].leafCount).toBe("number");
+    expect(confirmedCall![1].leafCount).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -571,9 +610,9 @@ async function getRowsInStagingWithoutCheckpoint(pool: pg.Pool, sessionIds: stri
 async function getCheckpointRow(
   pool: pg.Pool,
   checkpointId: string,
-): Promise<{ peak_hash: string; leaf_count: number; staged_seal_count: number } | null> {
-  const res = await pool.query<{ peak_hash: string; leaf_count: number; staged_seal_count: number }>(
-    `SELECT peak_hash, leaf_count, staged_seal_count FROM directory_checkpoints WHERE checkpoint_id = $1`,
+): Promise<{ peak_hash: string; mmr_leaf_count: number; staged_seal_count: number } | null> {
+  const res = await pool.query<{ peak_hash: string; mmr_leaf_count: number; staged_seal_count: number }>(
+    `SELECT peak_hash, mmr_leaf_count, staged_seal_count FROM directory_checkpoints WHERE checkpoint_id = $1`,
     [checkpointId],
   );
   return res.rows[0] ?? null;
@@ -583,8 +622,13 @@ async function getLeafBySessionId(
   pool: pg.Pool,
   sessionId: string,
 ): Promise<{ checkpoint_id: string | null } | null> {
+  // Checkpoint association is stored in the join table, not on the leaf row itself
+  // (conversation_proof_leaves is append-only — UPDATE is not permitted).
   const res = await pool.query<{ checkpoint_id: string | null }>(
-    `SELECT checkpoint_id FROM conversation_proof_leaves WHERE session_id = $1`,
+    `SELECT lc.checkpoint_id
+     FROM conversation_proof_leaves l
+     LEFT JOIN conversation_proof_leaf_checkpoints lc ON lc.leaf_id = l.id
+     WHERE l.session_id = $1`,
     [sessionId],
   );
   return res.rows[0] ?? null;

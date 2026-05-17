@@ -89,8 +89,15 @@ export interface ConversationInclusionProof {
   leaf_index: number;
   /** SHA-256(leaf_index + ":" + seal_merkle_root + ":" + recorded_at). */
   leaf_hash: string;
+  /** The ISO timestamp of the seal — needed by the verifier to recompute leaf_hash. */
+  recorded_at: string;
   /** Sibling hashes from the leaf up to its peak (in order from leaf upward). */
   sibling_hashes: string[];
+  /**
+   * Direction bits: true = current node is right child at this level.
+   * Encoded at proof construction time to avoid O(2^N) brute-force in walkToRoot.
+   */
+  is_right_sibling: boolean[];
   /** Which peak (by index in the peaks array) this leaf falls under. */
   peak_index: number;
   /** The committed checkpoint_id this proof is against. */
@@ -152,9 +159,8 @@ export function computeNodeHash(leftHash: string, rightHash: string): string {
  *   N=4: pos = 7  (pos 0,1,2,3,4,5,6 = l0,l1,n01,l2,n01_2,l3,n_all; l4 at 7)
  *
  * @param leafIndex - The 0-based leaf index
- * @param _reserved - Reserved for future use (e.g., offset in a checkpoint batch)
  */
-export function computeMmrPosition(leafIndex: number, _reserved: number): number {
+export function computeMmrPosition(leafIndex: number): number {
   // Count the number of 1-bits in leafIndex (popcount)
   let n = leafIndex;
   let popcount = 0;
@@ -190,7 +196,7 @@ export function appendLeafToMmr(
   currentPeaks: MmrPeak[],
 ): AppendLeafResult {
   const leafHash = computeLeafHash(leafIndex, sealMerkleRoot, recordedAt);
-  const leafPosition = computeMmrPosition(leafIndex, 0);
+  const leafPosition = computeMmrPosition(leafIndex);
 
   const newLeaf: MmrLeaf = {
     leaf_index: leafIndex,
@@ -329,37 +335,76 @@ export function computeInclusionProof(
 
   const peak = peaks[peakIndex]!;
 
-  // Walk from the leaf up to the peak, collecting sibling hashes
-  // At each level, compute sibling's position and collect its hash
+  // Walk from the leaf up to the peak, collecting sibling hashes and encoding direction bits.
+  // Direction bits (is_right_sibling[i] = true means the current node is the right child at level i)
+  // are encoded at construction time so verifyInclusionProof uses them deterministically,
+  // avoiding O(2^N) brute-force branching.
+  const isRightSibling: boolean[] = [];
   currentPos = leaf.mmr_position;
   currentHeight = 0;
 
   while (currentPos !== peak.position) {
-    // Determine if current node is left or right child
-    // In the MMR, a right child at height h is always immediately right of its sibling
-    // The parent is at position = rightChild.position + 1
-    // Left child of parent at height h+1 is at parent.position - 2^h
-    const subtreeSize = (1 << currentHeight); // number of nodes in a subtree of this height
+    // Determine if current node is left or right child.
+    // In an MMR:
+    //   - A subtree of height h has 2^h leaves and (2^(h+1) - 1) total nodes.
+    //   - subtreeSize = (2^(h+1) - 1) = total nodes in a perfect subtree of height h.
+    //   - For height h: a right child at position P has its left sibling at P - subtreeSize.
+    //     The parent is at P + 1.
+    //   - For a left child at position P: its right sibling is at P + subtreeSize.
+    //     The parent is at P + subtreeSize + 1 = P + 2*subtreeSize - 1 + 1... wait.
+    //
+    // Correct formula (height h means subtree covers 2^h leaves, 2^(h+1)-1 nodes):
+    //   subtreeSize = (1 << (currentHeight + 1)) - 1  — total nodes in a subtree of height h
+    //   For a right child at pos P: left sibling pos = P - subtreeSize (the entire left subtree)
+    //     parent pos = P + 1
+    //   For a left child at pos P: right sibling pos = P + subtreeSize
+    //     parent pos = P + subtreeSize + 1
+    //
+    // However, for height 0 (leaves), subtreeSize = 1 (just the leaf itself).
+    //   Right child at P: left sibling = P - 1, parent = P + 1. Correct.
+    //   Left child at P: right sibling = P + 1, parent = P + 2. Correct.
+    //
+    // For height 1 (internal nodes covering 2 leaves, 3 total nodes):
+    //   subtreeSize = 3
+    //   Right child at P: left sibling = P - 3, parent = P + 1. Correct.
+    //   Left child at P: right sibling = P + 3, parent = P + 4.
+    //
+    // But in our walk, at height h the "current node" is the current level's hash.
+    // The subtreeSize at the current level is (1 << (currentHeight + 1)) - 1 BUT
+    // we're considering the node as part of the parent's tree.
+    // At height 0 (leaf): a subtree of a single leaf has 1 node. When computing
+    // its sibling at height 0: subtreeSize = 1 (one leaf = one node).
+    //
+    // General rule: at currentHeight h, a node covers a subtree of (2^(h+1) - 1) nodes.
+    // The formula for sibling:
+    //   rightSiblingOffset = (1 << (currentHeight + 1)) - 1  (= 2*subtreeSize where subtreeSize = 2^h leaves... confusing)
+    //
+    // Simplest: subtreeNodeCount = (1 << (currentHeight + 1)) - 1
+    //   isRight: left sibling at currentPos - subtreeNodeCount, parent at currentPos + 1
+    //   isLeft:  right sibling at currentPos + subtreeNodeCount, parent at currentPos + subtreeNodeCount + 1
+    const subtreeNodeCount = (1 << (currentHeight + 1)) - 1;
     const isRightChild = currentHeight === 0
       ? isRightChildLeaf(currentPos, leaves, nodes)
-      : isRightChildNode(currentPos, currentHeight, nodeByPosition, subtreeSize);
+      : isRightChildNode(currentPos, currentHeight, nodeByPosition, subtreeNodeCount);
 
     if (isRightChild) {
-      // Sibling is to the left: sibling position = currentPos - (2*subtreeSize - 1) - 1
-      // Actually: for a right child at pos P, the left sibling is at P - 2*subtreeSize + 1 - 1
-      // = P - 2*subtreeSize
-      const leftSiblingPos = currentPos - 2 * subtreeSize;
+      // Sibling is to the left: left sibling pos = currentPos - subtreeNodeCount
+      // parent pos = currentPos + 1
+      const leftSiblingPos = currentPos - subtreeNodeCount;
       const leftSiblingHash = nodeByPosition.get(leftSiblingPos);
       if (leftSiblingHash) siblingHashes.push(leftSiblingHash);
+      isRightSibling.push(true);
       // Move to parent
-      currentPos = currentPos + 1; // parent of right child is at right+1
+      currentPos = currentPos + 1;
     } else {
-      // Sibling is to the right: sibling position = currentPos + 2*subtreeSize - 1
-      const rightSiblingPos = currentPos + 2 * subtreeSize - 1;
+      // Sibling is to the right: right sibling pos = currentPos + subtreeNodeCount
+      // parent pos = currentPos + subtreeNodeCount + 1
+      const rightSiblingPos = currentPos + subtreeNodeCount;
       const rightSiblingHash = nodeByPosition.get(rightSiblingPos);
       if (rightSiblingHash) siblingHashes.push(rightSiblingHash);
+      isRightSibling.push(false);
       // Move to parent
-      currentPos = currentPos + 2 * subtreeSize;
+      currentPos = currentPos + subtreeNodeCount + 1;
     }
     currentHeight++;
   }
@@ -369,7 +414,9 @@ export function computeInclusionProof(
   return {
     leaf_index: leafIndex,
     leaf_hash: leaf.leaf_hash,
+    recorded_at: leaf.recorded_at,
     sibling_hashes: siblingHashes,
+    is_right_sibling: isRightSibling,
     peak_index: peakIndex,
     checkpoint_id: checkpointId,
   };
@@ -411,20 +458,19 @@ function isRightChildLeaf(
 
 /**
  * Determine if an internal node at (pos, height) is the right child of its parent.
+ *
+ * At height h, a node covers a subtree with subtreeNodeCount = (2^(h+1) - 1) nodes.
+ * If this node is a right child, its left sibling is at pos - subtreeNodeCount.
  */
 function isRightChildNode(
   pos: number,
   height: number,
   nodeByPosition: Map<number, string>,
-  subtreeSize: number,
+  subtreeNodeCount: number,
 ): boolean {
-  // For an internal node at height h, the left sibling's position is pos - (2*subtreeSize - 1) - 1 + 1
-  // = pos - 2*(subtreeSize) + 1 - 1
-  // Actually: a right child at height h has its left sibling at pos - (2*subtreeSize - 1)
-  // where subtreeSize = 2^h - 1 (nodes in a subtree of height h-1)
-  // This is because: left child is at pos - rightChildSubtreeSize
   if (height <= 0) return false;
-  const leftSiblingPos = pos - (2 * subtreeSize - 1);
+  // A right child at pos P has its left sibling at pos - subtreeNodeCount
+  const leftSiblingPos = pos - subtreeNodeCount;
   return nodeByPosition.has(leftSiblingPos);
 }
 
@@ -433,18 +479,17 @@ function isRightChildNode(
 /**
  * Verify a ConversationInclusionProof against known seal data and the checkpoint peak hash.
  *
- * The 5-step verification algorithm from the design doc:
- * 1. Recompute leaf_hash from known data (seal_merkle_root + leaf_index + recorded_at).
- *    This is NOT in the proof — the verifier provides the seal data independently.
- *    For tests, we supply sealMerkleRoot; in production, the agent has the conversation seal.
- *    (recorded_at is embedded in the leaf_hash formula — we use the leaf_hash from the proof
- *     and verify it matches our recomputed hash.)
- * 2. Walk sibling hashes upward from leaf to peak.
- * 3. Compare computed peak hash to the checkpoint peak hash.
+ * The verification algorithm:
+ * 1. Recompute leaf_hash from the agent's known data (seal_merkle_root + leaf_index + recorded_at).
+ *    This verifies that proof.leaf_hash matches the independently-known seal data.
+ *    proof.recorded_at supplies the timestamp needed to recompute the hash.
+ * 2. Walk sibling hashes upward from the verified leaf_hash to the peak, using the
+ *    direction bits in proof.is_right_sibling to determine hash ordering at each level.
+ * 3. Compare computed peak hash to checkpointPeakHash.
  *
  * Returns true iff all steps pass.
  *
- * @param proof - The inclusion proof to verify
+ * @param proof - The inclusion proof to verify (must include recorded_at and is_right_sibling)
  * @param sealMerkleRoot - The agent's known seal Merkle root for this conversation
  * @param checkpointPeakHash - The peak hash from a confirmed checkpoint
  */
@@ -453,33 +498,42 @@ export function verifyInclusionProof(
   sealMerkleRoot: string,
   checkpointPeakHash: string,
 ): boolean {
-  // Step 1: Verify the leaf_hash in the proof is consistent with the sibling path.
-  // We walk the sibling_hashes upward starting from proof.leaf_hash.
-  // The final computed hash must equal checkpointPeakHash.
+  // Step 1: Recompute leaf_hash from known data and verify it matches the proof.
+  // This ensures the proof is anchored to actual seal data, not an arbitrary hash.
+  const expectedLeafHash = computeLeafHash(proof.leaf_index, sealMerkleRoot, proof.recorded_at);
+  if (expectedLeafHash !== proof.leaf_hash) {
+    return false;
+  }
 
-  // If the proof has no siblings (single-leaf MMR), the leaf IS the peak.
-  let currentHash = proof.leaf_hash;
+  // Step 2: Walk from verified leaf_hash up to the peak using encoded direction bits.
+  // is_right_sibling[i] = true means the current node was the right child at level i,
+  // so: parent_hash = SHA-256(sibling || current)
+  // is_right_sibling[i] = false means the current node was the left child at level i,
+  // so: parent_hash = SHA-256(current || sibling)
+  const currentHash = proof.leaf_hash;
 
-  // We need to reconstruct the path. The direction (left/right) at each level
-  // is encoded by the sibling_hashes order.
-  // For simplicity in the single-node implementation, we try both orderings at each step
-  // and accept the one that reaches the checkpoint peak.
-  // This is correct because the verifier has the checkpoint peak as the ground truth.
   if (proof.sibling_hashes.length === 0) {
+    // Single-node MMR: the leaf IS the peak.
     return currentHash === checkpointPeakHash;
   }
 
-  // Walk up the path, trying to reach the peak hash
-  return walkToRoot(proof.sibling_hashes, 0, proof.leaf_hash, checkpointPeakHash);
+  return walkToRoot(proof.sibling_hashes, proof.is_right_sibling, 0, currentHash, checkpointPeakHash);
 }
 
 /**
- * Recursive helper: walk the sibling hashes toward the root.
- * At each step, tries both orderings (current || sibling and sibling || current)
- * because the verifier doesn't store direction bits independently.
+ * Walk the sibling hashes toward the root using encoded direction bits.
+ *
+ * isRightSibling[i] = true means the current node was the right child at level i:
+ *   parent_hash = SHA-256(sibling || current)
+ * isRightSibling[i] = false means the current node was the left child:
+ *   parent_hash = SHA-256(current || sibling)
+ *
+ * Direction bits are set at proof construction time (computeInclusionProof), making
+ * this deterministic O(N) rather than O(2^N) brute-force.
  */
 function walkToRoot(
   siblings: string[],
+  isRightSibling: boolean[],
   index: number,
   current: string,
   targetRoot: string,
@@ -489,11 +543,13 @@ function walkToRoot(
   }
 
   const sibling = siblings[index]!;
-  // Try: current is left child
-  const hashAsLeft = computeNodeHash(current, sibling);
-  if (walkToRoot(siblings, index + 1, hashAsLeft, targetRoot)) return true;
+  const isRight = isRightSibling[index] ?? false;
 
-  // Try: current is right child
-  const hashAsRight = computeNodeHash(sibling, current);
-  return walkToRoot(siblings, index + 1, hashAsRight, targetRoot);
+  // If current is the right child: parent = SHA-256(sibling || current)
+  // If current is the left child:  parent = SHA-256(current || sibling)
+  const parentHash = isRight
+    ? computeNodeHash(sibling, current)
+    : computeNodeHash(current, sibling);
+
+  return walkToRoot(siblings, isRightSibling, index + 1, parentHash, targetRoot);
 }
