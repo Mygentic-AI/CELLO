@@ -107,9 +107,9 @@ export class EncryptedPgShareStore {
     try {
       ciphertext = await this.#provider.encrypt(shareBytes, keyId);
     } catch (err: unknown) {
-      const reason = err instanceof Error ? err.message : String(err);
+      const error = err instanceof Error ? err : new Error(String(err));
       // SI-001: log keyId and agentId only — never the plaintext share bytes
-      this.#logger.error("key.encrypted.failed", { keyId, agentId, reason });
+      this.#logger.error("key.encrypted.failed", error, { keyId, agentId });
       throw err;
     }
 
@@ -118,8 +118,9 @@ export class EncryptedPgShareStore {
     const expectedLen = plaintextLen + OVERHEAD_BYTES;
     if (ciphertext.length === 0 || ciphertext.length !== expectedLen) {
       const reason = `expected ${expectedLen} bytes (${plaintextLen} + ${OVERHEAD_BYTES} overhead), got ${ciphertext.length}`;
-      this.#logger.error("key.encrypted.failed", { keyId, agentId, reason });
-      throw new Error(`ciphertext structural check failed: ${reason}`);
+      const structuralError = new Error(`ciphertext structural check failed: ${reason}`);
+      this.#logger.error("key.encrypted.failed", structuralError, { keyId, agentId });
+      throw structuralError;
     }
 
     // Step 3: INSERT into agent_key_shares
@@ -175,8 +176,8 @@ export class EncryptedPgShareStore {
     try {
       plaintext = await this.#provider.decrypt(ciphertext, keyId);
     } catch (err: unknown) {
-      const reason = err instanceof Error ? err.message : String(err);
-      this.#logger.error("key.decrypted.failed", { keyId, agentId, reason });
+      const error = err instanceof Error ? err : new Error(String(err));
+      this.#logger.error("key.decrypted.failed", error, { keyId, agentId });
       throw err;
     }
 

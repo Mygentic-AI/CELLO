@@ -41,6 +41,7 @@
 
 import type { LocalShare, ShareStore } from "./share-store.js";
 import type { EncryptedPgShareStore } from "./encrypted-share-store.js";
+import type { Logger } from "@cello/interfaces";
 import { InMemoryShareStore } from "./share-store.js";
 
 /**
@@ -68,10 +69,12 @@ import { InMemoryShareStore } from "./share-store.js";
 export class PersistentShareStore implements ShareStore {
   readonly #memory: InMemoryShareStore;
   readonly #encrypted: EncryptedPgShareStore;
+  readonly #logger: Logger;
 
-  constructor(encryptedStore: EncryptedPgShareStore) {
+  constructor(encryptedStore: EncryptedPgShareStore, logger: Logger) {
     this.#memory = new InMemoryShareStore();
     this.#encrypted = encryptedStore;
+    this.#logger = logger;
   }
 
   getShare(agentPubkey: string, epochId: string): LocalShare | undefined {
@@ -99,7 +102,18 @@ export class PersistentShareStore implements ShareStore {
     // For M4, we'll fire-and-forget the persistence call.
     // A future story will add async storeShare() to the ShareStore interface.
     const secretBytes = this.#serializeSecret(share);
-    void this.#encrypted.storeShare(agentPubkey, epochId, secretBytes);
+    void this.#encrypted.storeShare(agentPubkey, epochId, secretBytes).catch(
+      (err: unknown) => {
+        const error = err instanceof Error ? err : new Error(String(err));
+        // adapter.write.failed — canonical event for rejected fire-and-forget writes
+        // (pipeline discussion log 2026-05-16_0753)
+        this.#logger.error("adapter.write.failed", error, {
+          adapterName: "EncryptedPgShareStore",
+          agentPubkey,
+          epochId,
+        });
+      },
+    );
   }
 
   /**

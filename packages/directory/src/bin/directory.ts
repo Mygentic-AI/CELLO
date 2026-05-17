@@ -213,7 +213,7 @@ try {
 //   3. Persisted to agent_key_shares table
 // If pgPool is unavailable (CELLO_ENV != local for M4), falls back to InMemoryShareStore only.
 const shareStore = pgPool
-  ? new PersistentShareStore(new EncryptedPgShareStore(pgPool, envelopeKeyProvider, logger))
+  ? new PersistentShareStore(new EncryptedPgShareStore(pgPool, envelopeKeyProvider, logger), logger)
   : new InMemoryShareStore();
 
 if (pgPool) {

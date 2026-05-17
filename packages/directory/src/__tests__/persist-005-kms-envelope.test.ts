@@ -256,10 +256,14 @@ describe("PERSIST-005 SI-001: encryption error — no plaintext bytes in error o
       store.storeShare(agentId, "epoch:1", shareBytes),
     ).rejects.toThrow();
 
-    // The error log must include key.encrypted.failed with agentId
+    // keyId is derived as `${agentId}:${epochId}` by EncryptedPgShareStore
+    const keyId = `${agentId}:epoch:1`;
+
+    // The error log must include key.encrypted.failed with both keyId and agentId (SI-001 + AC-005)
     expect(logger.error).toHaveBeenCalledWith(
       "key.encrypted.failed",
-      expect.objectContaining({ agentId }),
+      expect.any(Error),
+      expect.objectContaining({ keyId, agentId }),
     );
 
     // The plaintext share must never appear in any log call
@@ -402,7 +406,7 @@ describeIntegration("PERSIST-005 AC-002: encrypted_share in agent_key_shares != 
 });
 
 describeIntegration("PERSIST-005 AC-003: retrieve and decrypt returns original plaintext", () => {
-  it("AC-003: decrypted bytes equal the original plaintext exactly", async () => {
+  it("AC-003: decrypted bytes equal the original plaintext exactly and key.decrypted is logged with { keyId, agentId }", async () => {
     const KEY_HEX = process.env["DEV_ENVELOPE_KEY"] ?? randomBytes(32).toString("hex");
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const provider = new LocalEnvelopeKeyProvider(KEY_HEX, logger);
@@ -412,6 +416,8 @@ describeIntegration("PERSIST-005 AC-003: retrieve and decrypt returns original p
     const agentId = `test-agent-${randomBytes(4).toString("hex")}`;
     const epochId = "epoch:1";
     const shareBytes = randomBytes(32);
+    // keyId is derived as `${agentId}:${epochId}` by EncryptedPgShareStore
+    const keyId = `${agentId}:${epochId}`;
 
     await store.storeShare(agentId, epochId, shareBytes);
 
@@ -421,6 +427,12 @@ describeIntegration("PERSIST-005 AC-003: retrieve and decrypt returns original p
     expect(decrypted).not.toBeNull();
     expect(Buffer.from(decrypted!).toString("hex")).toBe(
       Buffer.from(shareBytes).toString("hex"),
+    );
+
+    // AC-003: key.decrypted must be logged at INFO with { keyId, agentId }
+    expect(storeLogger.info).toHaveBeenCalledWith(
+      "key.decrypted",
+      expect.objectContaining({ keyId, agentId }),
     );
   });
 });
@@ -437,13 +449,15 @@ describeIntegration("PERSIST-005 AC-005: key.encrypted logged with { keyId, agen
     const epochId = "epoch:1";
     const shareBytes = randomBytes(32);
     const shareHex = Buffer.from(shareBytes).toString("hex");
+    // keyId is derived as `${agentId}:${epochId}` by EncryptedPgShareStore
+    const keyId = `${agentId}:${epochId}`;
 
     await store.storeShare(agentId, epochId, shareBytes);
 
-    // key.encrypted must be logged with keyId and agentId
+    // key.encrypted must be logged with both keyId and agentId (AC-005 requires both fields)
     expect(storeLogger.info).toHaveBeenCalledWith(
       "key.encrypted",
-      expect.objectContaining({ agentId }),
+      expect.objectContaining({ keyId, agentId }),
     );
 
     // The plaintext share must not appear in any log call (store logger or provider logger)
