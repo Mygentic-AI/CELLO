@@ -17,7 +17,7 @@ The M4 `dev` environment is the first time CELLO touches real AWS infrastructure
 
 **Decision: us-east-1.**
 
-M5 produces a three-region topology (us-east-1, eu-west-1, me-central-1). M4's `dev` environment is the us-east-1 node established early. Consistency with M5's primary region avoids a region migration between milestones.
+M5 produces a three-region topology (us-east-1, eu-central-1, ap-northeast-1 — Tier 1 regions covering Americas, Europe, and Asia-Pacific). M4's `dev` environment is the us-east-1 node established early. Consistency with M5's primary region avoids a region migration between milestones.
 
 ---
 
@@ -66,7 +66,7 @@ s3:PutObject
 
 No `*` resources. No `kms:Encrypt` on the task role — the KMS master key encrypts K_server_X shares at node startup (unwrap), not per-operation. The `EnvelopeKeyProvider` performs encryption in-process using the unwrapped key; KMS is only called once at startup to decrypt (unwrap) the master key.
 
-**Separate task roles per service.** The relay task role does not have KMS or Secrets Manager access — relay nodes hold no secrets at M4.
+**Separate task roles per service.** The relay task role does not have KMS access at M4. At M5 the relay task role gains `secretsmanager:GetSecretValue` on `cello/{env}/relay/node-private-key` — the relay's Ed25519 signing key for relay ACKs (INFRA-005/INFRA-006).
 
 ---
 
@@ -156,9 +156,14 @@ All templates accept `Environment` as a parameter (`dev` | `staging` | `producti
 ## What M5 Adds
 
 M5 does not replace any of the above. It adds:
-- Two more regions (eu-west-1, me-central-1) using the same templates with different parameter sets
-- Federation (logical replication between the three RDS instances)
+- Two more regions (eu-central-1, ap-northeast-1) using the same IaC templates with different parameter sets
+- VPC Peering — 3 connections (us-east-1↔eu-central-1, eu-central-1↔ap-northeast-1, us-east-1↔ap-northeast-1); carries both RDS logical replication and checkpoint cross-signing traffic; no NAT Gateway required
+- Federation (logical replication between the three RDS instances over VPC Peering)
 - ALB in the public subnet (already wired at M4, just not fronting anything yet)
 - WAF on the ALB
+- VPC Interface Endpoints for ECR, Secrets Manager, KMS, CloudWatch Logs (private subnet → AWS services without NAT Gateway); S3 Gateway Endpoint for audit logs and relay manifest bucket
+- Relay signing key in Secrets Manager (`cello/{env}/relay/node-private-key`) and updated relay task role
+- `cello-relay-manifest` S3 bucket per environment for the signed relay pool manifest
+- Flyway migrations run at ECS task startup (not in CodeBuild); migration failure = health check failure = ECS keeps previous task running
 
 The M4 `dev` environment becomes the us-east-1 node in the M5 three-node topology without infrastructure replacement.
