@@ -14,6 +14,15 @@ import type {
   Logger,
 } from "@cello/interfaces";
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello/protocol-types";
+import {
+  computeChainHash,
+  serializeRecord,
+  verifyChain,
+  CHAIN_GENESIS,
+  HASH_CHAINED_TABLES,
+  type ChainVerificationResult,
+  type HashChainedTable,
+} from "../hash-chain.js";
 
 
 export class PgDirectoryStore implements DirectoryStore {
@@ -135,5 +144,92 @@ export class PgDirectoryStore implements DirectoryStore {
 
   dequeuePendingConnectionRequests(_targetPubkey: string): PendingConnectionRequest[] {
     return []; // backing store read in PERSIST-003+
+  }
+
+  // ─── PERSIST-004: Hash chain methods ─────────────────────────────────────
+
+  /**
+   * Insert a row into a hash-chained table, computing and including the chain_hash.
+   * Uses pg_advisory_xact_lock to serialize concurrent inserts.
+   *
+   * WHY advisory locks instead of SELECT FOR UPDATE:
+   * The cello_service role has only INSERT+SELECT privileges (RLS policy from PERSIST-003).
+   * FOR UPDATE requires UPDATE privilege, which cello_service does not have.
+   * pg_advisory_xact_lock provides table-level serialization using only SELECT privilege,
+   * and is automatically released at COMMIT/ROLLBACK.
+   *
+   * SI-002: chain_hash is always computed internally — never accepted from external callers.
+   * SI-003: Advisory lock prevents forked chains under concurrent writes.
+   *
+   * @param tableName - The target hash-chained table
+   * @param record - Record fields (chain_hash field is ignored if present — always recomputed)
+   * @param columns - Column names in insertion order (must include chain_hash)
+   * @param values - Corresponding values (chain_hash slot will be overwritten)
+   * @param chainHashIndex - Index of chain_hash in the columns/values arrays
+   */
+  async insertWithChain(
+    tableName: HashChainedTable,
+    record: Record<string, unknown>,
+    columns: string[],
+    values: unknown[],
+    chainHashIndex: number,
+  ): Promise<string> {
+    // Runtime guard: tableName flows into SQL via template literal — verify it is in
+    // the known-safe set even though TypeScript constrains it at compile time.
+    if (!(HASH_CHAINED_TABLES as readonly string[]).includes(tableName)) {
+      throw new Error(`insertWithChain: unknown table '${tableName}'`);
+    }
+
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      // AC-006/SI-003: Advisory lock serializes concurrent chain extensions.
+      // hashtext(tableName) produces a stable int4 lock key per table.
+      // The lock is held for the transaction duration — released at COMMIT/ROLLBACK.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [tableName]);
+
+      const lastRow = await client.query<{ chain_hash: string }>(
+        `SELECT chain_hash FROM ${tableName} ORDER BY id DESC LIMIT 1`,
+      );
+
+      const previousHash = lastRow.rows[0]?.chain_hash ?? CHAIN_GENESIS;
+      const serialized = serializeRecord(record);
+      const chainHash = computeChainHash(serialized, previousHash);
+
+      // Clone values to avoid mutating the caller's array
+      const insertValues = [...values];
+      insertValues[chainHashIndex] = chainHash;
+
+      const placeholders = insertValues.map((_, i) => `$${i + 1}`).join(", ");
+      await client.query(
+        `INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders})`,
+        insertValues,
+      );
+
+      await client.query("COMMIT");
+      return chainHash;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => { /* ignore rollback errors */ });
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Verify the hash chain for a given table.
+   * Fetches all rows ordered by id, recomputes all chain_hashes from genesis,
+   * reports any divergence.
+   *
+   * AC-003: clean chain → { valid: true }
+   * AC-004: tampered row → break at that position
+   * AC-005: deleted row → chain recomputation detects the gap
+   */
+  async verifyChain(tableName: HashChainedTable): Promise<ChainVerificationResult> {
+    const result = await this.#pool.query<Record<string, unknown>>(
+      `SELECT * FROM ${tableName} ORDER BY id ASC`,
+    );
+    return verifyChain(result.rows, this.#logger, tableName);
   }
 }
