@@ -207,9 +207,7 @@ For every SI in the story:
 
 ### Review verdict
 
-If any **blocking** or **high** finding exists: fix it, re-run the gate sequence, and re-run the review. Repeat until clean.
-
-Report your review findings before committing (even if all are low/medium) so the main conversation has a record.
+Fix every finding at every severity — blocking, high, medium, and low. Re-run the gate sequence after fixing. Re-run the reviewer if any blocking or high findings existed. Repeat until the reviewer returns no blocking or high findings. Do not stop and report back — fix everything, then proceed to Step 8.
 
 ---
 
