@@ -1,0 +1,268 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-INFRA-008
+domain: Node Operations
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+  - relay
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO infrastructure operator,
+  I want a staging environment that gates every production deployment
+  on a passing live smoke test,
+  so that a broken image is caught against real federated infrastructure
+  before it reaches production, and the same image digest that passed
+  staging is the one deployed to production.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the CodeBuild build stage completes successfully
+      for cello-directory-pipeline or cello-relay-pipeline"
+    action: "the pipeline proceeds to a Staging Deploy stage that
+      updates the staging ECS service (cello-directory-staging or
+      cello-relay-staging) with the new image digest built in the
+      same pipeline execution; the staging deploy waits for the ECS
+      service to reach a stable state before proceeding"
+
+  - trigger: "When the staging ECS service reaches a stable state"
+    action: "the pipeline proceeds to a Smoke Test stage; a
+      CodeBuild project runs the live multi-process smoke test suite
+      against the staging environment endpoints; the smoke test
+      connects to staging as a separate OS process with no shared
+      memory with the staging ECS tasks"
+
+  - trigger: "When the smoke test suite passes"
+    action: "the pipeline proceeds to the Production Deploy stage;
+      the same image digest from the Build stage is deployed to
+      production ECS services sequentially (us-east-1, eu-central-1,
+      ap-northeast-1); no new image build occurs after the smoke
+      test passes"
+
+  - trigger: "When the smoke test suite fails"
+    action: "the pipeline execution ends with FAILED status;
+      the Production Deploy stage does not run; the production
+      ECS services continue running the previous image;
+      pipeline.staging.smoke_test.failed is logged at ERROR with
+      { pipelineExecutionId, failedScenario, reason }"
+
+  - trigger: "When the staging environment is in Phase 1
+      (through ~M8)"
+    action: "the dev environment serves as the staging gate —
+      there is no separate staging tier; the Build stage deploys
+      to dev ECS services and the smoke test runs against dev
+      endpoints; production deploy is gated on the same passing
+      smoke test"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A cello-directory-pipeline execution completes the
+      Build stage with image digest sha256:abc123"
+    when: "the Staging Deploy stage runs"
+    then: "the staging directory ECS service is updated to image
+      digest sha256:abc123; the service reaches stable state before
+      the Smoke Test stage begins — verified by checking the ECS
+      service's active task definition image URI from a separate
+      terminal during the pipeline execution"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "The staging ECS service is running the new image and
+      the Smoke Test stage begins"
+    when: "the smoke test CodeBuild project runs"
+    then: "the smoke test process runs as a separate OS process
+      from all staging ECS tasks; it connects to the staging
+      directory ALB endpoint over the network; it runs the
+      following scenarios end-to-end:
+      (1) two agent session established,
+      (2) message exchange with Merkle verification,
+      (3) session seal with directory confirmation,
+      (4) relay failure simulation and reassignment,
+      (5) pre-seal reconciliation with one-sided delivery failure;
+      each scenario connects to staging via its ALB endpoint,
+      not via shared memory — verified by asserting the smoke
+      test process has no direct database access"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-003
+    given: "The smoke test suite passes all 5 scenarios"
+    when: "the Production Deploy stage runs"
+    then: "the production directory ECS services in us-east-1,
+      eu-central-1, and ap-northeast-1 are each updated to the
+      same image digest sha256:abc123 that was built in the Build
+      stage and tested in the Smoke Test stage; no new docker
+      build runs after the smoke test — verified by comparing the
+      ECR image digest on the staging and all three production
+      ECS services from a separate terminal after the pipeline
+      completes"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-004
+    given: "The smoke test suite fails scenario (3) — session seal
+      returns an error from the staging directory"
+    when: "the Smoke Test stage completes with failure"
+    then: "the pipeline execution status is FAILED; the Production
+      Deploy stage action shows as Skipped or not started;
+      pipeline.staging.smoke_test.failed is logged at ERROR with
+      { pipelineExecutionId, failedScenario: 'session_seal',
+      reason }; the production ECS services continue running the
+      previous image — verified by checking CodePipeline execution
+      history and ECS task definition revisions from a separate
+      terminal"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-005
+    given: "The staging environment (dev in Phase 1) is unhealthy —
+      the staging ECS service fails to reach stable state after
+      the Staging Deploy"
+    when: "the Staging Deploy stage times out"
+    then: "the pipeline execution ends with FAILED status at the
+      Staging Deploy stage; the Smoke Test stage and Production
+      Deploy stage do not run; no production traffic is affected —
+      verified by stopping the staging ECS service and triggering
+      a pipeline execution"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "The smoke test CodeBuild project is inspected"
+    when: "its VPC configuration is checked"
+    then: "no VPC configuration is present on the smoke test
+      CodeBuild project; it connects to staging endpoints over
+      the public ALB URLs; it does not require direct database
+      access or VPC-level connectivity — verified by calling
+      aws codebuild batch-get-projects from a separate terminal
+      and asserting vpcConfig is absent"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "The Production Deploy stage runs sequentially across
+      three regions"
+    when: "eu-central-1 deploy is about to start"
+    then: "aws ecs wait services-stable has completed for
+      us-east-1 before eu-central-1 deploy action begins;
+      if us-east-1 fails to reach stable state within 10 minutes,
+      the pipeline halts and eu-central-1 and ap-northeast-1 are
+      not updated — verified by inspecting CodePipeline stage
+      transition timestamps from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The Production Deploy stage shall never execute
+      in a pipeline execution where the Smoke Test stage did not
+      complete with a passing status"
+    adversarial_condition: "even when the smoke test stage is
+      manually retried or the pipeline is restarted from a later
+      stage — the Production Deploy stage has a RunOrder dependency
+      on the Smoke Test stage; CodePipeline enforces sequential
+      stage execution"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "The image digest deployed to production shall be
+      identical to the digest that passed the staging smoke test
+      in the same pipeline execution"
+    adversarial_condition: "even when a newer image is available
+      in ECR at production deploy time — the pipeline passes the
+      Build stage output artifact digest through to the Production
+      Deploy stage; no image resolution occurs at deploy time"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the staging environment is permanently broken
+      (blocking all production deployments)"
+    fallback: "the operator investigates and fixes the staging
+      environment before any production deploy proceeds; there is
+      no bypass mechanism — a broken staging gate is an incident
+      requiring resolution, not a prompt to skip the gate"
+    test_type: unit
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While the smoke test is flaky (passes on retry)"
+    fallback: "the operator manually retries the failed pipeline
+      execution from the Smoke Test stage; if the test passes on
+      retry, the Production Deploy proceeds with the original
+      image digest; flaky smoke tests are treated as bugs in the
+      smoke test suite requiring investigation"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: pipeline.staging.deployed
+      level: info
+      trigger: "staging ECS service reaches stable state after
+        new image deployment"
+      context_fields: [pipeline, commitSha, imageDigest, durationMs]
+      correlationId: false
+
+    - name: pipeline.staging.smoke_test.passed
+      level: info
+      trigger: "all smoke test scenarios pass"
+      context_fields: [pipelineExecutionId, durationMs, scenariosRun]
+      correlationId: false
+
+    - name: pipeline.production.deployed
+      level: info
+      trigger: "production ECS service in a region reaches stable
+        state after deploy"
+      context_fields: [pipeline, region, commitSha, imageDigest,
+        durationMs]
+      correlationId: false
+
+  error_events:
+    - name: pipeline.staging.smoke_test.failed
+      level: error
+      trigger: "smoke test suite fails; production deploy blocked"
+      context_fields: [pipelineExecutionId, failedScenario, reason]
+
+    - name: pipeline.staging.deploy.failed
+      level: error
+      trigger: "staging ECS service fails to reach stable state"
+      context_fields: [pipeline, commitSha, reason]
+
+    - name: pipeline.production.deploy.failed
+      level: error
+      trigger: "production ECS service fails to reach stable state
+        in a region"
+      context_fields: [pipeline, region, commitSha, reason]
+
+  alarms:
+    - condition: "pipeline.staging.smoke_test.failed fires at
+        any time"
+      fires_to: ops-warning
+    - condition: "pipeline.production.deploy.failed fires at
+        any time"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  e2e_story: CELLO-INFRA-E2E-001
+  depends_on:
+    - CELLO-INFRA-004
+    - CELLO-INFRA-005
+    - CELLO-INFRA-007
+  blocks:
+    - CELLO-INFRA-E2E-001
