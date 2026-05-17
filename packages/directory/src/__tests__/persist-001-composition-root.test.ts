@@ -53,8 +53,9 @@ describe("AC-004: composition root exits 1 on missing config", () => {
   });
 
   it("exits 1 when CELLO_ENV=local and DATABASE_URL is absent", () => {
-    // Pass DATABASE_URL: undefined so runBin's spread clears it even if set in process.env
-    const result = runBin({ CELLO_ENV: "local", CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooW", DATABASE_URL: undefined });
+    // Pass DATABASE_URL: undefined so runBin's spread clears it even if set in process.env.
+    // AUDIT_LOG_PATH is set so the binary reaches the DATABASE_URL check (PERSIST-006 check runs first).
+    const result = runBin({ CELLO_ENV: "local", CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooW", AUDIT_LOG_PATH: "/tmp/audit.jsonl", DATABASE_URL: undefined });
     expect(result.code).toBe(1);
     const out = result.stdout + result.stderr;
     expect(out).toContain("DATABASE_URL");
@@ -70,6 +71,7 @@ describe("AC-004: composition root exits 1 on missing config", () => {
     const result = runBin({
       CELLO_ENV: "local",
       DATABASE_URL: "postgresql://postgres:dev@localhost:5433/cello_dev",
+      AUDIT_LOG_PATH: "/tmp/audit.jsonl",
       CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooW",
       DEV_ENVELOPE_KEY: undefined,
     });
@@ -98,15 +100,17 @@ describeIntegration("AC-002: CELLO_ENV=local startup — all adapters initialise
       CELLO_ENV: "local",
       DATABASE_URL: process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5433/cello_dev",
       DEV_ENVELOPE_KEY: process.env["DEV_ENVELOPE_KEY"] ?? "0".repeat(64),
+      AUDIT_LOG_PATH: "/tmp/cello-audit-persist001.jsonl",
       CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWTest",
     });
     const out = result.stdout + result.stderr;
-    // Five adapters log adapter.initialised (Logger is the sink — it cannot log its own creation)
+    // Six adapters log adapter.initialised (Logger is the sink — it cannot log its own creation)
     expect(out).toContain("PgDirectoryStore");
     expect(out).toContain("EnvelopeKeyProvider");
     expect(out).toContain("ClientStore");
     expect(out).toContain("RelayWal");
     expect(out).toContain("JobScheduler");
+    expect(out).toContain("AuditLogShipper");
     // No AWS endpoint calls — only localhost Postgres is permitted
     expect(out).not.toContain("amazonaws.com");
   });
@@ -116,6 +120,7 @@ describeIntegration("AC-002: CELLO_ENV=local startup — all adapters initialise
       CELLO_ENV: "local",
       DATABASE_URL: "postgresql://postgres:dev@localhost:5433/cello_nonexistent_test_db",
       DEV_ENVELOPE_KEY: "0".repeat(64),
+      AUDIT_LOG_PATH: "/tmp/cello-audit-persist001.jsonl",
       CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWTest",
     });
     expect(result.code).toBe(1);

@@ -9,3 +9,4 @@ export type { RelayWal } from "./relay-wal.js";
 export type { JobScheduler, ScheduledJob } from "./job-scheduler.js";
 export type { SessionWal, Leaf } from "./session-wal.js";
 export { RELAY_SESSION_UNRECOVERABLE } from "./session-wal.js";
+export type { AuditLogShipper, AuditLogEntry } from "./audit-log-shipper.js";

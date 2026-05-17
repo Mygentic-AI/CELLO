@@ -14,6 +14,7 @@
  *   CELLO_ENV                          — required: local | dev | staging | production
  *   DATABASE_URL                       — required for CELLO_ENV=local
  *   DEV_ENVELOPE_KEY                   — required for CELLO_ENV=local (64-char hex)
+ *   AUDIT_LOG_PATH                     — required for CELLO_ENV=local; path to pgaudit log sink
  *   CELLO_DIRECTORY_KEY_FILE           — path to persisted directory signing keypair
  *   CELLO_DIRECTORY_TRANSPORT_KEY_FILE — path to persisted libp2p transport key
  *   CELLO_DIRECTORY_LISTEN_ADDR        — libp2p listen address (default: /ip4/0.0.0.0/tcp/4000)
@@ -28,7 +29,8 @@ import pg from "pg";
 import { FileKeyProvider } from "@cello/crypto";
 import { createDirectoryNode } from "../directory-node.js";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
-import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler } from "@cello/interfaces/stubs";
+import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper } from "@cello/interfaces/stubs";
+import type { AuditLogShipper } from "@cello/interfaces";
 import { InMemoryShareStore } from "../share-store.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 
@@ -63,6 +65,21 @@ if (env !== "local" && env !== "dev" && env !== "staging" && env !== "production
   logger.error("adapter.config.missing", { missingKey: "CELLO_ENV", env, reason: "unrecognised value" });
   process.exit(1);
 }
+
+// ─── PERSIST-006: AuditLogShipper instantiation ───────────────────────────
+// Must be instantiated before the database pool so that if AUDIT_LOG_PATH is
+// missing the process exits 1 with adapter.config.missing before any DB work.
+const auditLogShipper: AuditLogShipper = (() => {
+  if (env === "local") {
+    const auditLogPath = requireEnv("AUDIT_LOG_PATH");
+    const s = new LocalAuditLogShipper(auditLogPath);
+    logger.info("adapter.initialised", { adapterName: "AuditLogShipper", implementation: "LocalAuditLogShipper", env });
+    return s;
+  }
+  // dev+: S3AuditLogShipper (not yet implemented — PERSIST-006 follow-up)
+  logger.error("adapter.init.failed", { adapterName: "AuditLogShipper", reason: `CELLO_ENV=${env} not yet supported` });
+  process.exit(1);
+})();
 
 // ─── Adapter instantiation ────────────────────────────────────────────────
 
@@ -256,8 +273,13 @@ for (const addr of result.node.listenAddresses()) {
 }
 
 const shutdown = () => {
+  const startMs = Date.now();
   result.stop()
     .then(() => pgPool?.end())
+    .then(() => auditLogShipper.flush())
+    .then(() => {
+      logger.info("audit.shipper.flushed", { entriesShipped: 0, durationMs: Date.now() - startMs });
+    })
     .catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error("adapter.init.failed", { adapterName: "shutdown", reason: msg });
