@@ -119,60 +119,30 @@ export type StoreTables = (typeof STORE_TABLES)[number];
  *   2. For each declared column in BIGINT_COLUMNS[tableName]:
  *      - If the value is a string (as returned by pg driver), apply parseInt(value, 10).
  *      - If the value is already a number, leave it unchanged.
- *   3. DOES NOT throw for tables in BIGINT_COLUMNS that have undeclared columns —
- *      the TypeError path is for reading BIGINT-shaped strings from tables that ARE in
- *      BIGINT_COLUMNS but where the column is missing from the declaration.
+ *   3. Columns NOT in the declared set are returned as-is, regardless of their string content.
+ *      The AC-005 static gate (CI) is the enforcement mechanism for undeclared BIGINT columns —
+ *      a runtime regex heuristic would incorrectly fire on all-digit TEXT columns
+ *      (e.g., a phone_hash or payload value that happens to be all digits).
  *
- * SI-001: if a BIGINT column is read back from a table in BIGINT_COLUMNS but the column is
- * NOT declared in the per-table list, and the value is a BIGINT-shaped string (pure digits),
- * throw a TypeError naming the table and column and log adapter.bigint.type.error.
- * This prevents silent string propagation into security-critical comparisons.
+ * Exported so integration tests can call deserializeRow directly to verify BIGINT coercion
+ * in read paths that are not already exercised by PgDirectoryStore method return values.
  */
-function deserializeRow(
-  row: Record<string, unknown>,
+export function deserializeRow<T extends Record<string, unknown>>(
   tableName: string,
-  logger: Logger,
-  correlationId?: string,
-): Record<string, unknown> {
-  const declared = BIGINT_COLUMNS[tableName];
-  // If the table has NO entry in BIGINT_COLUMNS, check each numeric-string value:
-  // Any column that looks like a BIGINT (pure digits, 10+ chars OR a number that overflows float64)
-  // indicates the BIGINT_COLUMNS map is incomplete.
-  // The SI-001 guard: if a column value is a pure-digit string AND the table IS in BIGINT_COLUMNS
-  // but the column is NOT declared, throw TypeError.
-  const result: Record<string, unknown> = { ...row };
-
-  if (!declared) {
-    // Table not in BIGINT_COLUMNS at all — pass through; AC-005 gate catches this in CI.
-    return result;
-  }
-
-  const declaredSet = new Set(declared);
-
+  row: Record<string, unknown>,
+): T {
+  const bigintCols = new Set(BIGINT_COLUMNS[tableName] ?? []);
+  const result: Record<string, unknown> = {};
   for (const [col, value] of Object.entries(row)) {
-    if (typeof value === "string" && /^\d+$/.test(value)) {
-      if (declaredSet.has(col)) {
-        // Declared BIGINT column — convert to number
-        result[col] = parseInt(value, 10);
-      } else {
-        // Undeclared BIGINT column in a table that IS in BIGINT_COLUMNS — throw TypeError (SI-001)
-        // Log adapter.bigint.type.error before throwing so the on-call engineer has context.
-        logger.error("adapter.bigint.type.error", {
-          tableName,
-          columnName: col,
-          value,
-          correlationId,
-        });
-        throw new TypeError(
-          `[PERSIST-021 SI-001] BIGINT column '${col}' in table '${tableName}' is not declared in BIGINT_COLUMNS. ` +
-          `This indicates a migration added a new BIGINT column without updating BIGINT_COLUMNS. ` +
-          `Add '${col}' to BIGINT_COLUMNS['${tableName}'] to fix this error.`,
-        );
-      }
+    if (bigintCols.has(col)) {
+      // Declared BIGINT column — coerce string to number (pg driver returns BIGINT as string)
+      result[col] = typeof value === "string" ? parseInt(value, 10) : value;
+    } else {
+      // Not a declared BIGINT column — leave as-is
+      result[col] = value;
     }
   }
-
-  return result;
+  return result as T;
 }
 
 
@@ -274,7 +244,7 @@ export class PgDirectoryStore implements DirectoryStore {
 
     // Attempt 1
     try {
-      await this.insertWithChain("seal_notarizations", record, columns, values, chainHashIndex, externalClient);
+      await this.insertWithChain("seal_notarizations", record, columns, values, chainHashIndex, externalClient, correlationId);
       this.#logger.info("notarization.recorded", {
         sessionId: sessionIdHex,
         sealedRoot: sealedRootHex,
@@ -293,7 +263,7 @@ export class PgDirectoryStore implements DirectoryStore {
 
     // Attempt 2 (retry)
     try {
-      await this.insertWithChain("seal_notarizations", record, columns, values, chainHashIndex, externalClient);
+      await this.insertWithChain("seal_notarizations", record, columns, values, chainHashIndex, externalClient, correlationId);
       this.#logger.info("notarization.recorded", {
         sessionId: sessionIdHex,
         sealedRoot: sealedRootHex,
@@ -322,14 +292,7 @@ export class PgDirectoryStore implements DirectoryStore {
    * PERSIST-018 AC-006: does not throw and does not log an error on absence.
    */
   async getNotarization(sessionIdHex: string): Promise<SealNotarization | undefined> {
-    const result = await this.#pool.query<{
-      session_id: Buffer;
-      sealed_root: Buffer;
-      participant_a_pubkey: Buffer;
-      participant_b_pubkey: Buffer;
-      close_timestamp: string;
-      frost_signature: Buffer;
-    }>(
+    const result = await this.#pool.query<Record<string, unknown>>(
       `SELECT session_id, sealed_root, participant_a_pubkey, participant_b_pubkey,
               close_timestamp, frost_signature
        FROM seal_notarizations
@@ -339,13 +302,20 @@ export class PgDirectoryStore implements DirectoryStore {
 
     if (result.rows.length === 0) return undefined;
 
-    const row = result.rows[0]!;
+    const row = deserializeRow<{
+      session_id: Buffer;
+      sealed_root: Buffer;
+      participant_a_pubkey: Buffer;
+      participant_b_pubkey: Buffer;
+      close_timestamp: number;
+      frost_signature: Buffer;
+    }>("seal_notarizations", result.rows[0]!);
     return {
       session_id: new Uint8Array(row.session_id),
       sealed_root: new Uint8Array(row.sealed_root),
       participant_a_pubkey: new Uint8Array(row.participant_a_pubkey),
       participant_b_pubkey: new Uint8Array(row.participant_b_pubkey),
-      close_timestamp: Number(row.close_timestamp),
+      close_timestamp: row.close_timestamp,
       frost_signature: new Uint8Array(row.frost_signature),
     };
   }
@@ -579,24 +549,24 @@ export class PgDirectoryStore implements DirectoryStore {
    * Returns null if not found. Does not throw on missing record (AC-008).
    */
   async getConnection(connectionId: string): Promise<ConnectionRecord | null> {
-    const result = await this.#pool.query<{
-      connection_id: string;
-      participant_a: string;
-      participant_b: string;
-      established_at: string;
-      status: string;
-    }>(
+    const result = await this.#pool.query<Record<string, unknown>>(
       `SELECT connection_id, participant_a, participant_b, established_at, status
        FROM connections WHERE connection_id = $1`,
       [connectionId],
     );
     if (result.rows.length === 0) return null;
-    const row = result.rows[0]!;
+    const row = deserializeRow<{
+      connection_id: string;
+      participant_a: string;
+      participant_b: string;
+      established_at: number;
+      status: string;
+    }>("connections", result.rows[0]!);
     return {
       connection_id: row.connection_id,
       participant_a: row.participant_a,
       participant_b: row.participant_b,
-      established_at: Number(row.established_at),
+      established_at: row.established_at,
       status: row.status as "active",
     };
   }
@@ -790,10 +760,10 @@ export class PgDirectoryStore implements DirectoryStore {
     const result = await this.#pool.query<Record<string, unknown>>(
       `SELECT * FROM ${tableName} ORDER BY id ASC`,
     );
-    // PERSIST-021: deserialize each row so BIGINT columns are numbers (SI-001 enforcement).
-    // If a BIGINT column is missing from BIGINT_COLUMNS, deserializeRow throws a TypeError.
+    // PERSIST-021: deserialize each row so BIGINT columns are numbers.
+    // AC-005 static gate in CI catches any undeclared BIGINT column before it reaches production.
     const deserializedRows = result.rows.map((row) =>
-      deserializeRow(row, tableName, this.#logger),
+      deserializeRow(tableName, row),
     );
     return verifyChain(deserializedRows, this.#logger, tableName);
   }

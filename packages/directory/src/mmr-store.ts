@@ -42,6 +42,24 @@ import {
 // can import it from the canonical location without a second import of @cello/interfaces.
 export type { SealStagingStatus };
 
+/**
+ * Convert a TIMESTAMPTZ value to a canonical ISO-8601 string.
+ *
+ * The pg driver returns TIMESTAMPTZ as a JS Date object by default, but
+ * configurePgTypes() (called by PgDirectoryStore) overrides this to return
+ * raw Postgres format strings (e.g. "2026-05-18 15:01:15.378+00").
+ * MmrStore.appendSeal inserts recorded_at as new Date().toISOString() (T-format),
+ * and the leaf hash is computed from that string. When reading back for proof
+ * or peak re-computation, we must normalise to the same format used at insert
+ * time — otherwise the hash will differ and proof verification fails.
+ *
+ * new Date(value).toISOString() normalises both pg Date and pg string to
+ * the canonical "YYYY-MM-DDTHH:mm:ss.sssZ" format, matching the insert-time value.
+ */
+function toIsoString(value: Date | string): string {
+  return new Date(value).toISOString();
+}
+
 export class MmrStore implements CheckpointStatusProvider {
   readonly #pool: pg.Pool;
   readonly #logger: Logger;
@@ -282,7 +300,7 @@ export class MmrStore implements CheckpointStatusProvider {
       // Fetch staging rows INSIDE the transaction (after lock is held).
       // Include correlation_id (PERSIST-017 schema addition) so mmr.session.checkpointed
       // can thread the seal-ceremony correlationId through the checkpoint event.
-      const stagingRes = await client.query<{ session_id: string; seal_merkle_root: string; recorded_at: Date; correlation_id: string | null }>(
+      const stagingRes = await client.query<{ session_id: string; seal_merkle_root: string; recorded_at: Date | string; correlation_id: string | null }>(
         "SELECT session_id, seal_merkle_root, recorded_at, correlation_id FROM conversation_seal_staging WHERE checkpoint_id = $1",
         [checkpointId],
       );
@@ -417,7 +435,7 @@ export class MmrStore implements CheckpointStatusProvider {
       mmr_position: number;
       leaf_hash: string;
       seal_merkle_root: string;
-      recorded_at: Date;
+      recorded_at: Date | string;
     }>(
       "SELECT leaf_index::int, mmr_position::int, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves WHERE session_id = $1",
       [sessionId],
@@ -464,7 +482,7 @@ export class MmrStore implements CheckpointStatusProvider {
       mmr_position: number;
       leaf_hash: string;
       seal_merkle_root: string;
-      recorded_at: Date;
+      recorded_at: Date | string;
     }>(
       "SELECT leaf_index::int, mmr_position::int, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves WHERE leaf_index < $1 ORDER BY leaf_index ASC",
       [checkpoint.mmr_leaf_count],
@@ -501,7 +519,7 @@ export class MmrStore implements CheckpointStatusProvider {
       mmr_position: r.mmr_position,
       leaf_hash: r.leaf_hash,
       seal_merkle_root: r.seal_merkle_root,
-      recorded_at: r.recorded_at.toISOString(),
+      recorded_at: toIsoString(r.recorded_at),
       // Only set checkpoint_id on the target leaf; others are not part of this proof
       checkpoint_id: r.leaf_index === leafIndex ? checkpoint.checkpoint_id : null,
     }));
@@ -629,13 +647,13 @@ export class MmrStore implements CheckpointStatusProvider {
     }
 
     // Not confirmed — check staging table for pending status
-    const stagingRes = await this.#pool.query<{ recorded_at: Date }>(
+    const stagingRes = await this.#pool.query<{ recorded_at: Date | string }>(
       "SELECT recorded_at FROM conversation_seal_staging WHERE session_id = $1 LIMIT 1",
       [sessionId],
     );
 
     if (stagingRes.rows.length > 0) {
-      const stagedAt = stagingRes.rows[0]!.recorded_at.getTime();
+      const stagedAt = new Date(stagingRes.rows[0]!.recorded_at).getTime();
       return { status: "pending", staged_at: stagedAt };
     }
 
@@ -654,7 +672,7 @@ export class MmrStore implements CheckpointStatusProvider {
       leaf_index: number;
       leaf_hash: string;
       seal_merkle_root: string;
-      recorded_at: Date;
+      recorded_at: Date | string;
     }>(
       "SELECT leaf_index::int, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves WHERE leaf_index < $1 ORDER BY leaf_index ASC",
       [leafCount],
@@ -665,7 +683,7 @@ export class MmrStore implements CheckpointStatusProvider {
       const r = appendLeafToMmr(
         leaf.leaf_index,
         leaf.seal_merkle_root,
-        leaf.recorded_at.toISOString(),
+        toIsoString(leaf.recorded_at),
         peaks,
       );
       peaks = r.newPeaks;
@@ -680,7 +698,7 @@ export class MmrStore implements CheckpointStatusProvider {
       leaf_index: number;
       leaf_hash: string;
       seal_merkle_root: string;
-      recorded_at: Date;
+      recorded_at: Date | string;
     }>(
       "SELECT leaf_index::int, leaf_hash, seal_merkle_root, recorded_at FROM conversation_proof_leaves ORDER BY leaf_index ASC",
     );
@@ -690,7 +708,7 @@ export class MmrStore implements CheckpointStatusProvider {
       const r = appendLeafToMmr(
         leaf.leaf_index,
         leaf.seal_merkle_root,
-        leaf.recorded_at.toISOString(),
+        toIsoString(leaf.recorded_at),
         peaks,
       );
       peaks = r.newPeaks;
