@@ -6,22 +6,20 @@
  *   1. cello_service cannot DELETE rows from any append-only table
  *   2. cello_service cannot TRUNCATE any append-only table
  *   3. cello_service cannot DROP the pgaudit extension
- *   4. cello_service cannot modify pg_catalog or pg_authid (system tables)
- *   5. The superuser (postgres) CAN perform these operations (confirming RLS is
- *      the constraint, not a misconfiguration that blocks everyone)
- *
- * Note: pgaudit writes to the Postgres log stream (stdout/file), not to a
- * queryable table. SI-007 is verified by confirming cello_service cannot alter
- * the pgaudit configuration or delete from append-only business tables that
- * pgaudit is monitoring.
+ *   4. cello_service cannot ALTER SYSTEM to change pgaudit settings
+ *   5. cello_service cannot UPDATE append-only tables
+ *   6. The superuser (postgres) CAN delete (confirming RLS is role-specific)
  *
  * Usage:
  *   DATABASE_URL="postgresql://postgres:dev@localhost:5433/cello_dev" \
  *   node packages/e2e-tests/scripts/test-pgaudit-immutable.mjs
  */
 
+import { resolve, join } from "node:path";
 import { randomBytes } from "node:crypto";
-import pg from "pg";
+import { createRequire } from "node:module";
+const _require = createRequire(import.meta.url);
+const pg = _require(join(resolve(import.meta.dirname, "../../.."), "packages/directory/node_modules/pg"));
 
 function log(msg) { console.log(`[pgaudit-immutable] ${msg}`); }
 function fail(msg) { console.error(`[pgaudit-immutable] FAIL: ${msg}`); process.exit(1); }
@@ -35,6 +33,7 @@ const SERVICE_URL = DATABASE_URL.replace(
   "//cello_service:cello_service_dev@",
 );
 
+// Tables that must be append-only — cello_service can INSERT and SELECT but not mutate
 const APPEND_ONLY_TABLES = [
   "agent_registrations",
   "agent_profiles",
@@ -44,19 +43,17 @@ const APPEND_ONLY_TABLES = [
   "connections",
   "notification_queue",
   "pending_connection_requests",
+  "notification_events",
 ];
 
-async function assertPermissionDenied(pool, sql, args = [], label = "") {
+async function assertPermissionDenied(pool, sql, args, label) {
   try {
-    await pool.query(sql, args);
+    await pool.query(sql, args ?? []);
     fail(`${label}: expected permission denied but query succeeded`);
   } catch (err) {
-    const msg = err.message || String(err);
-    if (
-      !msg.toLowerCase().includes("permission denied") &&
-      !msg.toLowerCase().includes("insufficient privilege")
-    ) {
-      fail(`${label}: expected permission denied, got: ${msg}`);
+    const msg = (err.message || String(err)).toLowerCase();
+    if (!msg.includes("permission denied") && !msg.includes("insufficient privilege")) {
+      fail(`${label}: expected permission denied, got: ${err.message}`);
     }
     pass(`${label}: permission denied as expected`);
   }
@@ -76,23 +73,10 @@ async function main() {
     fail(`Cannot connect to Postgres: ${err.message}`);
   }
 
-  // ── Setup: insert a test row via superuser for DELETE/TRUNCATE tests ──
-  log("Setup: inserting a test agent_registration row via superuser");
-  const agentId = `si007-test-${randomBytes(8).toString("hex")}`;
-  await superPool.query(
-    `INSERT INTO agent_registrations (agent_id, primary_pubkey, registered_at, chain_hash)
-     VALUES ($1, $2, now(), $3)`,
-    [
-      agentId,
-      Buffer.from(randomBytes(32)).toString("hex"),
-      Buffer.from(randomBytes(32)).toString("hex"),
-    ],
-  );
-  log(`Inserted test row for agent_id=${agentId}`);
-
   // ── Case 1: cello_service cannot DELETE from append-only tables ──
   log("Case 1: cello_service DELETE on append-only tables → permission denied");
   for (const table of APPEND_ONLY_TABLES) {
+    // WHERE false means no rows match — we're testing the permission, not needing existing rows
     await assertPermissionDenied(
       servicePool,
       `DELETE FROM ${table} WHERE false`,
@@ -121,7 +105,7 @@ async function main() {
     "DROP EXTENSION pgaudit as cello_service",
   );
 
-  // ── Case 4: cello_service cannot ALTER pgaudit settings ──
+  // ── Case 4: cello_service cannot ALTER SYSTEM to change pgaudit settings ──
   log("Case 4: cello_service cannot ALTER SYSTEM to change pgaudit.log");
   await assertPermissionDenied(
     servicePool,
@@ -130,7 +114,7 @@ async function main() {
     "ALTER SYSTEM pgaudit.log as cello_service",
   );
 
-  // ── Case 5: cello_service cannot UPDATE on append-only tables ──
+  // ── Case 5: cello_service cannot UPDATE append-only tables ──
   log("Case 5: cello_service UPDATE on append-only tables → permission denied");
   for (const table of APPEND_ONLY_TABLES) {
     await assertPermissionDenied(
@@ -141,16 +125,26 @@ async function main() {
     );
   }
 
-  // ── Positive control: superuser CAN delete the test row ──
-  log("Positive control: superuser can DELETE test row (confirming RLS is role-specific)");
-  const deleteResult = await superPool.query(
-    `DELETE FROM agent_registrations WHERE agent_id = $1`,
-    [agentId],
+  // ── Positive control: superuser CAN insert and delete ──
+  log("Positive control: superuser can INSERT and DELETE notification_events (confirms RLS is role-specific)");
+  const notifUuid = (() => {
+    const h = randomBytes(16).toString("hex");
+    return [h.slice(0,8), h.slice(8,12), h.slice(12,16), h.slice(16,20), h.slice(20,32)].join("-");
+  })();
+  await superPool.query(
+    `INSERT INTO notification_events
+       (notification_id, recipient_pseudonym, notification_type, payload_hash, chain_hash)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [notifUuid, "si007-control", "SYSTEM", "aabbcc", "00".repeat(32)],
   );
-  if (deleteResult.rowCount === 0) {
-    fail("Superuser DELETE did not remove the test row — something is wrong with setup");
+  const del = await superPool.query(
+    `DELETE FROM notification_events WHERE notification_id = $1`,
+    [notifUuid],
+  );
+  if (del.rowCount === 0) {
+    fail("Superuser DELETE did not remove the control row");
   }
-  pass("Superuser can DELETE (RLS is role-specific, not global lockout)");
+  pass("Superuser can INSERT and DELETE (RLS is role-specific, not global lockout)");
 
   await superPool.end();
   await servicePool.end();

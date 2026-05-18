@@ -17,9 +17,12 @@
  * Requires: running Postgres at DATABASE_URL
  */
 
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
 import { randomBytes } from "node:crypto";
-import pg from "pg";
+import { createRequire } from "node:module";
+const _require = createRequire(import.meta.url);
+// pg lives in packages/directory/node_modules — not at repo root
+const pg = _require(join(resolve(import.meta.dirname, "../../.."), "packages/directory/node_modules/pg"));
 
 function log(msg) { console.log(`[kms-failure] ${msg}`); }
 function fail(msg) { console.error(`[kms-failure] FAIL: ${msg}`); process.exit(1); }
