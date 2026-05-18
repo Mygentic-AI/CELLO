@@ -30,7 +30,7 @@ export class InMemoryDirectoryStore implements DirectoryStore {
   // CONNREQ-002: target_pubkey → queued pending connection requests (up to 32)
   readonly #pendingConnectionRequests = new Map<string, PendingConnectionRequest[]>();
 
-  async recordNotarization(notarization: SealNotarization): Promise<void> {
+  async recordNotarization(notarization: SealNotarization, _opts?: { correlationId?: string; client?: unknown }): Promise<void> {
     const key = Buffer.from(notarization.session_id).toString("hex");
     this.#notarizations.set(key, notarization);
   }

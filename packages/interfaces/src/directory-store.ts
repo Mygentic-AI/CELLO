@@ -39,8 +39,12 @@ export interface DirectoryStore {
    *
    * @param opts.correlationId - The seal-ceremony correlationId minted at ceremony
    *   initiation. Threaded through all observability events in this flow.
+   * @param opts.client - Optional pre-acquired PoolClient for transactional writes.
+   *   When provided, the store uses this client instead of acquiring from the pool,
+   *   enabling atomic multi-table writes (e.g. conversation_seals + seal_notarizations
+   *   in a single transaction). SI-002 requires this capability.
    */
-  recordNotarization(notarization: SealNotarization, opts?: { correlationId?: string }): Promise<void>;
+  recordNotarization(notarization: SealNotarization, opts?: { correlationId?: string; client?: unknown }): Promise<void>;
 
   /**
    * Retrieve a notarization by session_id hex.

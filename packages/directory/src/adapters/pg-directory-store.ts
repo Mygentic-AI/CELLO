@@ -77,11 +77,12 @@ export class PgDirectoryStore implements DirectoryStore {
    */
   async recordNotarization(
     notarization: SealNotarization,
-    opts?: { correlationId?: string },
+    opts?: { correlationId?: string; client?: pg.PoolClient },
   ): Promise<void> {
     const sessionIdHex = Buffer.from(notarization.session_id).toString("hex");
     const sealedRootHex = Buffer.from(notarization.sealed_root).toString("hex");
     const correlationId = opts?.correlationId;
+    const externalClient = opts?.client;
 
     // Build the record for chain serialization — exactly the fields stored in the table,
     // minus chain_hash (computed server-side) and id (BIGSERIAL, DB-generated).
@@ -123,7 +124,7 @@ export class PgDirectoryStore implements DirectoryStore {
 
     // Attempt 1
     try {
-      await this.insertWithChain("seal_notarizations", record, columns, values, chainHashIndex);
+      await this.insertWithChain("seal_notarizations", record, columns, values, chainHashIndex, externalClient);
       this.#logger.info("notarization.recorded", {
         sessionId: sessionIdHex,
         sealedRoot: sealedRootHex,
@@ -142,7 +143,7 @@ export class PgDirectoryStore implements DirectoryStore {
 
     // Attempt 2 (retry)
     try {
-      await this.insertWithChain("seal_notarizations", record, columns, values, chainHashIndex);
+      await this.insertWithChain("seal_notarizations", record, columns, values, chainHashIndex, externalClient);
       this.#logger.info("notarization.recorded", {
         sessionId: sessionIdHex,
         sealedRoot: sealedRootHex,
@@ -310,6 +311,7 @@ export class PgDirectoryStore implements DirectoryStore {
     columns: string[],
     values: unknown[],
     chainHashIndex: number,
+    externalClient?: pg.PoolClient,
   ): Promise<string> {
     // Runtime guard: tableName flows into SQL via template literal — verify it is in
     // the known-safe set even though TypeScript constrains it at compile time.
@@ -330,9 +332,12 @@ export class PgDirectoryStore implements DirectoryStore {
       }
     }
 
-    const client = await this.#pool.connect();
+    // When an external client is provided, the caller owns the transaction lifecycle
+    // (BEGIN/COMMIT/ROLLBACK). We only execute the chain logic within their transaction.
+    const ownsTransaction = !externalClient;
+    const client = externalClient ?? await this.#pool.connect();
     try {
-      await client.query("BEGIN");
+      if (ownsTransaction) await client.query("BEGIN");
 
       // AC-006/SI-003: Advisory lock serializes concurrent chain extensions.
       // hashtext(tableName) produces a stable int4 lock key per table.
@@ -357,13 +362,13 @@ export class PgDirectoryStore implements DirectoryStore {
         insertValues,
       );
 
-      await client.query("COMMIT");
+      if (ownsTransaction) await client.query("COMMIT");
       return chainHash;
     } catch (err) {
-      await client.query("ROLLBACK").catch(() => { /* ignore rollback errors */ });
+      if (ownsTransaction) await client.query("ROLLBACK").catch(() => { /* ignore rollback errors */ });
       throw err;
     } finally {
-      client.release();
+      if (ownsTransaction) client.release();
     }
   }
 

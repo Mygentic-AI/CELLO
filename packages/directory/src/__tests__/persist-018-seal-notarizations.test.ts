@@ -418,6 +418,10 @@ describeIntegration("PERSIST-018 AC-006: getNotarization for absent session_id r
 // ─── AC-007: notarization.recorded logged on success ─────────────────────────
 
 describeIntegration("PERSIST-018 AC-007: notarization.recorded logged at INFO with correlationId", () => {
+  // Store-layer verification: confirms the store logs correlationId as supplied.
+  // Full end-to-end correlation (verifying the correlationId originates from frost.ceremony.*
+  // events in directory-node.ts) spans PERSIST-007's integration scope. Finding 1 fixes ensure
+  // directory-node.ts threads sessionIdHex as correlationId to both seal paths.
   it("AC-007: notarization.recorded is logged at INFO with { sessionId, sealedRoot, correlationId }; correlationId matches the supplied value", async () => {
     const logger: Logger = {
       debug: vi.fn(), info: vi.fn(), warn: vi.fn(),
@@ -463,11 +467,18 @@ describeIntegration("PERSIST-018 AC-008: notarization.write.failed logged on bot
     const notarization = makeSealNotarization();
     const sessionIdHex = Buffer.from(notarization.session_id).toString("hex");
 
+    // Capture frost_signature before the failed write to verify it is not lost/mutated
+    const originalFrostSigHex = Buffer.from(notarization.frost_signature).toString("hex");
+
     // recordNotarization should handle the failure gracefully, not throw
     // (it returns an error to the caller via rejection)
     await expect(
       store.recordNotarization(notarization, { correlationId: "corr-ac008" }),
     ).rejects.toBeDefined();
+
+    // AC-008: "the in-memory FROST signature is not lost" — verify the original
+    // notarization object's frost_signature field is preserved (not mutated/destroyed)
+    expect(Buffer.from(notarization.frost_signature).toString("hex")).toBe(originalFrostSigHex);
 
     // notarization.write.failed must be logged at ERROR with attempt: 1 and attempt: 2
     expect(logger.error).toHaveBeenCalledWith(
