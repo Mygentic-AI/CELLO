@@ -416,3 +416,4 @@ After extraction, the shared packages publish as `@cello/*` on npm. The infrastr
 - [[server-infrastructure|Server Infrastructure Requirements]] — server-side requirements
 - [[2026-04-14_1100_cello-mcp-server-tool-surface|CELLO MCP Server Tool Surface]] — the 33 MCP tools; M0 implements a minimal peer-to-peer subset
 - [[cello-initial-design|CELLO Initial Design]] — original architecture and vision
+- [[portal-features|CELLO Portal Features]] — feature inventory and story coverage status for the operator portal; ground truth for the design sprint

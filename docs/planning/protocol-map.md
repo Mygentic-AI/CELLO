@@ -281,6 +281,7 @@ All 12 design problems are closed. All 12 open decisions are resolved. The proto
 - [[00-synthesis|Protocol Review — Synthesis]]
 - [[day-0-agent-driven-development-plan|Day-0 Development Plan]]
 - [[frontend|CELLO Frontend Requirements]] — complete requirements for portal, mobile app, and desktop app, with all conflicts and gaps identified
+- [[portal-features|CELLO Portal Features]] — feature inventory and story coverage status for the operator portal; ground truth for the design sprint
 - [[2026-04-16_1400_companion-device-architecture|Companion Device Architecture]] — companion device P2P connection, human injection, and local persistence model
 - [[agent-client|CELLO Agent Client Requirements]] — complete requirements for the locally-running CELLO client: identity and key management, P2P transport, Merkle operations, prompt injection defense, connection management, trust data custody, persistence, companion device API, and MCP tool surface
 - [[2026-04-17_1000_trust-signal-pickup-queue|Trust Signal Pickup Queue]] — async oracle handoff; encrypted pickup queue using identity_key bridges the gap when the agent client is offline during trust enrichment
