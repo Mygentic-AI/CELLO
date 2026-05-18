@@ -192,7 +192,7 @@ describe("CONNREQ-002 — Directory-side connection request handling", () => {
     const store = new InMemoryDirectoryStore();
     const connectionId = Buffer.from(randomBytes(16)).toString("hex");
     expect(connectionId.length).toBe(32); // 16 bytes = 32 hex chars
-    await store.createConnection(connectionId, "aaa", "bbb", Date.now());
+    await store.createConnection(connectionId, "aaa", "bbb", Date.now(), "test-correlation-id");
     const record = await store.getConnection(connectionId);
     expect(record).not.toBeNull();
     expect(record!.connection_id).toBe(connectionId);
@@ -215,7 +215,7 @@ describe("CONNREQ-002 — Directory-side connection request handling", () => {
   it("CONNREQ-002: hasConnection returns connection_id for established pair (symmetric)", async () => {
     const store = new InMemoryDirectoryStore();
     const connectionId = Buffer.from(randomBytes(16)).toString("hex");
-    await store.createConnection(connectionId, "aaaa", "bbbb", Date.now());
+    await store.createConnection(connectionId, "aaaa", "bbbb", Date.now(), "test-correlation-id");
     await expect(store.hasConnection("aaaa", "bbbb")).resolves.toEqual({ connection_id: connectionId });
     await expect(store.hasConnection("bbbb", "aaaa")).resolves.toEqual({ connection_id: connectionId }); // symmetric
     await expect(store.hasConnection("aaaa", "cccc")).resolves.toBeNull();
@@ -394,7 +394,7 @@ describe("CONNREQ-002 — Directory-side connection request handling", () => {
 
     // Manually inject an existing connection between A and B in the store
     const existingConnectionId = Buffer.from(randomBytes(16)).toString("hex");
-    await store.createConnection(existingConnectionId, clientPubkeyHex, targetPubkeyHex, Date.now());
+    await store.createConnection(existingConnectionId, clientPubkeyHex, targetPubkeyHex, Date.now(), "test-correlation-id");
 
     // Register peer_info for A
     sendFrame(streamA, CBOR_ENC.encode({
@@ -586,7 +586,7 @@ describe("SESSION-006 — Directory-side session gate", () => {
     // A has a connection with C (not B) — inject a connection between A and a different target
     const otherTargetHex = Buffer.from(randomBytes(32)).toString("hex");
     const connectionIdAC = Buffer.from(randomBytes(16)).toString("hex");
-    await store.createConnection(connectionIdAC, clientPubkeyHex, otherTargetHex, Date.now());
+    await store.createConnection(connectionIdAC, clientPubkeyHex, otherTargetHex, Date.now(), "test-correlation-id");
 
     // Send session_request with connection_id that belongs to A-C, not A-B
     sendFrame(streamA, CBOR_ENC.encode({

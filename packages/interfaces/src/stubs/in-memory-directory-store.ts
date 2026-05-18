@@ -78,7 +78,7 @@ export class InMemoryDirectoryStore implements DirectoryStore {
 
   // ─── CONNREQ-002: Connection record methods ───────────────────────────────
 
-  async createConnection(connectionId: string, participantA: string, participantB: string, establishedAt: number, _correlationId?: string): Promise<void> {
+  async createConnection(connectionId: string, participantA: string, participantB: string, establishedAt: number, _correlationId: string): Promise<void> {
     const record: ConnectionRecord = {
       connection_id: connectionId,
       participant_a: participantA,

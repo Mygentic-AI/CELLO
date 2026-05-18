@@ -298,7 +298,7 @@ describeIntegration(
       expect(priorResult).toBeNull();
 
       // Write
-      await store.createConnection(connectionId, participantA, participantB, establishedAt);
+      await store.createConnection(connectionId, participantA, participantB, establishedAt, randomUUID());
 
       // Read back — hasConnection must return real data from the database
       const result = await store.hasConnection(participantA, participantB);
@@ -329,7 +329,7 @@ describeIntegration(
       const store = new PgDirectoryStore(servicePool, logger);
 
       await insertMatchingConnectionRequest(connectionId);
-      await store.createConnection(connectionId, participantA, participantB, establishedAt);
+      await store.createConnection(connectionId, participantA, participantB, establishedAt, randomUUID());
 
       // Forward lookup
       const fwdResult = await store.hasConnection(participantA, participantB);
@@ -372,7 +372,7 @@ describeIntegration(
       const logger1 = makeLogger();
       const store1 = new PgDirectoryStore(servicePool, logger1);
       await insertMatchingConnectionRequest(connectionId);
-      await store1.createConnection(connectionId, participantA, participantB, establishedAt);
+      await store1.createConnection(connectionId, participantA, participantB, establishedAt, randomUUID());
 
       // Simulate restart: new instance, same pool (no in-memory state)
       const logger2 = makeLogger();
@@ -408,8 +408,8 @@ describeIntegration(
 
       await insertMatchingConnectionRequest(id1);
       await insertMatchingConnectionRequest(id2);
-      await store.createConnection(id1, aKey, bKey, now);
-      await store.createConnection(id2, cKey, dKey, now + 1);
+      await store.createConnection(id1, aKey, bKey, now, randomUUID());
+      await store.createConnection(id2, cKey, dKey, now + 1, randomUUID());
 
       // Fresh verifier instance
       const verifyLogger = makeLogger();
@@ -447,7 +447,7 @@ describeIntegration(
       const store = new PgDirectoryStore(servicePool, logger);
 
       await insertMatchingConnectionRequest(connectionId);
-      await store.createConnection(connectionId, participantA, participantB, Date.now());
+      await store.createConnection(connectionId, participantA, participantB, Date.now(), randomUUID());
 
       // Direct UPDATE via service role — must fail
       let updateErrorMessage = "";
@@ -537,7 +537,7 @@ describeIntegration(
       const store = new PgDirectoryStore(servicePool, logger);
 
       await insertMatchingConnectionRequest(connectionId);
-      await store.createConnection(connectionId, participantA, participantB, establishedAt);
+      await store.createConnection(connectionId, participantA, participantB, establishedAt, randomUUID());
 
       const result = await store.getConnection(connectionId);
       expect(result).not.toBeNull();
@@ -574,7 +574,7 @@ describeIntegration(
       // This must reject without inserting
       let caughtError: Error | undefined;
       try {
-        await store.createConnection(arbitraryId, participantA, participantB, Date.now());
+        await store.createConnection(arbitraryId, participantA, participantB, Date.now(), randomUUID());
       } catch (err) {
         caughtError = err as Error;
       }
@@ -588,6 +588,54 @@ describeIntegration(
         [arbitraryId],
       );
       expect(rowResult.rows[0]?.count).toBe("0");
+    });
+
+    // ── SI-001 (negative): rejected connection request must not produce a connection ──
+
+    it("SI-001 (negative): createConnection() rejects a connection_id whose connection_request has outcome != ACCEPTED", async () => {
+      /*
+       * SI-001 extended: even if a connection_requests row exists, the outcome must be
+       * 'ACCEPTED'. A rejected or pending request must not allow a connection record to be created.
+       */
+      const rejectedId = randomUUID();
+      const participantA = randomBytes(32).toString("hex");
+      const participantB = randomBytes(32).toString("hex");
+      const logger = makeLogger();
+      const store = new PgDirectoryStore(servicePool, logger);
+
+      // Insert a connection_requests row with outcome = 'REJECTED' (not 'ACCEPTED')
+      await superPool.query(
+        `INSERT INTO connection_requests (request_id, requester_pseudonym, target_pseudonym, outcome, chain_hash)
+         VALUES ($1::uuid, $2, $3, 'REJECTED', $4)
+         ON CONFLICT (request_id) DO NOTHING`,
+        [
+          rejectedId,
+          `req_${rejectedId.slice(0, 8)}`,
+          `tgt_${rejectedId.slice(0, 8)}`,
+          CHAIN_GENESIS,
+        ],
+      );
+
+      // This must reject — outcome is not ACCEPTED
+      let caughtError: Error | undefined;
+      try {
+        await store.createConnection(rejectedId, participantA, participantB, Date.now(), randomUUID());
+      } catch (err) {
+        caughtError = err as Error;
+      }
+
+      expect(caughtError).toBeDefined();
+      expect(caughtError?.message).toMatch(/SI-001/);
+
+      // Verify no row was inserted
+      const rowResult = await superPool.query<{ count: string }>(
+        `SELECT COUNT(*) as count FROM connections WHERE connection_id = $1`,
+        [rejectedId],
+      );
+      expect(rowResult.rows[0]?.count).toBe("0");
+
+      // Clean up
+      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1::uuid", [rejectedId]);
     });
 
     // ── SI-002: chain_hash computed server-side ────────────────────────────────
@@ -619,7 +667,7 @@ describeIntegration(
       // Truncate connections to ensure clean chain (genesis start)
       await superPool.query("DELETE FROM connections");
 
-      await store.createConnection(connectionId, participantA, participantB, establishedAt);
+      await store.createConnection(connectionId, participantA, participantB, establishedAt, randomUUID());
 
       // Read back the stored chain_hash
       const row = await superPool.query<{ chain_hash: string; connection_id: string; participant_a: string; participant_b: string; established_at: string; status: string }>(
@@ -664,7 +712,7 @@ describeIntegration(
 
       const logger = makeLogger();
       const store = new PgDirectoryStore(servicePool, logger);
-      await store.createConnection(connectionId, participantA, participantB, Date.now());
+      await store.createConnection(connectionId, participantA, participantB, Date.now(), randomUUID());
 
       // Superuser tampers with participant_a
       await superPool.query(

@@ -150,17 +150,18 @@ export class PgDirectoryStore implements DirectoryStore {
     participantA: string,
     participantB: string,
     establishedAt: number,
-    correlationId?: string,
+    correlationId: string,
   ): Promise<void> {
-    // SI-001: validate connection_id against connection_requests.
+    // SI-001: validate connection_id against connection_requests with outcome = 'ACCEPTED'.
     // The connection_id issued by CONNREQ-002 matches the request_id in connection_requests.
+    // Only accepted requests may produce a connection record — rejected/pending/expired must not.
     const reqCheck = await this.#pool.query<{ count: string }>(
-      `SELECT COUNT(*) as count FROM connection_requests WHERE request_id = $1::uuid`,
+      `SELECT COUNT(*) as count FROM connection_requests WHERE request_id = $1::uuid AND outcome = 'ACCEPTED'`,
       [connectionId],
     );
     if ((reqCheck.rows[0]?.count ?? "0") === "0") {
       throw new Error(
-        `createConnection: connection_id '${connectionId}' has no matching row in connection_requests (SI-001)`,
+        `createConnection: connection_id '${connectionId}' has no matching accepted row in connection_requests (SI-001)`,
       );
     }
 
@@ -205,7 +206,7 @@ export class PgDirectoryStore implements DirectoryStore {
       connectionId,
       participantA,
       participantB,
-      correlationId: correlationId ?? "",
+      correlationId,
     });
   }
 
@@ -262,7 +263,7 @@ export class PgDirectoryStore implements DirectoryStore {
       participant_a: row.participant_a,
       participant_b: row.participant_b,
       established_at: Number(row.established_at),
-      status: "active",
+      status: row.status as "active",
     };
   }
 

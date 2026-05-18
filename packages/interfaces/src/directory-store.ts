@@ -83,7 +83,7 @@ export interface DirectoryStore {
    * The Postgres implementation validates connection_id against connection_requests before
    * writing. Throws if no matching pending request is found (SI-001).
    */
-  createConnection(connectionId: string, participantA: string, participantB: string, establishedAt: number, correlationId?: string): Promise<void>;
+  createConnection(connectionId: string, participantA: string, participantB: string, establishedAt: number, correlationId: string): Promise<void>;
 
   /**
    * Check if an active connection exists between pubkeyA and pubkeyB.
