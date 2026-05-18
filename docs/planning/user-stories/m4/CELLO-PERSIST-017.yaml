@@ -7,6 +7,7 @@ priority: P0
 components:
   - directory
   - client
+  - adapter-claude-code  # cello_close_session, cello_get_sealed_receipt, cello_get_inclusion_proof MCP tools
 
 # ─── Intent ─────────────────────────────────────────────────
 story: >
@@ -67,55 +68,74 @@ behavior:
       directory queries"
 
   - trigger: "When the MMR checkpoint runs and commits a staged sealed_root"
-    action: "the directory shall update the session's mmr_peak field and
-      any listening clients shall be notifiable via cello_await_checkpoint"
+    action: "the directory shall update the session's mmr_peak field in the
+      database and emit the mmr.session.checkpointed log event; client
+      notification (polling or push) is out of scope for this story —
+      clients poll cello_get_sealed_receipt or cello_get_inclusion_proof
+      to discover the confirmed state"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
     given: "Agent A calls cello_close_session and the FROST ceremony
-      completes, but no MMR checkpoint has run yet for this session"
+      completes, but no MMR checkpoint has run yet for this session;
+      the directory's SealNotarization handler is called to notarize
+      the seal and returns checkpoint_status based on querying
+      conversation_seal_staging for the staged_root — the client's
+      seal handler reads this field from the SealNotarization response
+      and surfaces it in the cello_close_session return value"
     when: "cello_close_session returns"
     then: "the response includes status: 'sealed', sealed_root: <hex>,
-      and checkpoint_status: 'pending'; session_mmr_peak is null
-      (this field is session-scoped — it reflects whether this session's
-      sealed_root has been committed to a checkpoint peak, not the global
-      MMR peak); the agent knows the FROST receipt is valid but the
-      inclusion proof is not yet available"
+      and checkpoint_status: 'pending'; session_mmr_peak is null;
+      verified by asserting the directory's SealNotarization handler
+      was invoked (confirmed via mmr.checkpoint.pending log event
+      emitted by the directory) — a test that stubs the SealNotarization
+      response without calling the real directory does NOT satisfy this AC"
     test_type: integration
     component_under_test: client
 
   - id: AC-002
     given: "A session has been sealed and the sealed_root is staged in
-      conversation_seal_staging"
+      conversation_seal_staging; the test uses a real directory (not a stub)
+      so the checkpoint_status field is read from the actual database row"
     when: "the client calls cello_get_sealed_receipt"
     then: "the response includes checkpoint_status: 'pending' and a
       staged_at Unix epoch milliseconds timestamp indicating when the
       seal was committed to staging (not ISO 8601 — all protocol
       timestamps are Unix milliseconds); attestation_self is 'PENDING'
-      with a human-readable reason: 'MMR checkpoint not yet written'"
+      with a human-readable reason: 'MMR checkpoint not yet written';
+      verified by confirming conversation_seal_staging contains the
+      staged_root row (via the directory's log event or a direct query)
+      — a hardcoded response returning checkpoint_status: 'pending' does
+      NOT satisfy this AC"
     test_type: integration
     component_under_test: client
 
   - id: AC-003
-    given: "A session has been sealed but the MMR checkpoint has not run"
+    given: "A session has been sealed but the MMR checkpoint has not run;
+      the test uses a real directory so staged_at is read from the actual
+      conversation_seal_staging row — not a hardcoded stub response"
     when: "the client calls cello_get_inclusion_proof for this session"
     then: "the tool returns { status: 'pending', staged_at: <unix_ms>,
       message: 'sealed_root staged; inclusion proof available after next
       MMR checkpoint' } — not an error; the agent can retry later;
       staged_at is Unix epoch milliseconds (not ISO 8601) to match the
-      rest of the protocol timestamp format"
+      rest of the protocol timestamp format; a stub returning { status: 'pending' }
+      unconditionally does NOT satisfy this AC — staged_at must originate
+      from a real database row in conversation_seal_staging"
     test_type: integration
     component_under_test: client
 
   - id: AC-003a
     given: "A session is active (not yet sealed — cello_close_session has
-      not been called)"
+      not been called); the test uses a real directory so the absence of a
+      sealed_root is determined by querying the database, not by a stub"
     when: "the client calls cello_get_inclusion_proof for this session"
     then: "the tool returns an error (not a pending response): the session
       has no sealed_root and therefore no inclusion proof can exist;
       the error clearly distinguishes 'not yet sealed' from 'sealed but
-      pending checkpoint'"
+      pending checkpoint'; verified by asserting the directory was contacted
+      (no stub that hardcodes an error response satisfies this AC)"
     test_type: integration
     component_under_test: client
 
@@ -125,40 +145,59 @@ acceptance_criteria:
     when: "the client calls cello_get_inclusion_proof"
     then: "the tool returns { status: 'confirmed', leaf_index: N,
       checkpoint_peak_hash: <hex>, sibling_hashes: [<hex>, ...],
-      checkpoint_id: <uuid> }; a third party with only the
-      checkpoint_peak_hash can independently verify inclusion by
-      recomputing the Merkle path — verified by running the verification
-      algorithm in a separate process with no directory connection"
+      checkpoint_id: <uuid> }; verified using real nodes with no mocks —
+      two CELLO clients and a real directory in separate OS processes;
+      a third-party verifier process (no shared memory, no directory
+      connection, no network access) receives only checkpoint_peak_hash
+      and sibling_hashes and executes the MMR path-recomputation algorithm,
+      asserting the result equals checkpoint_peak_hash; the test fails if
+      the verification algorithm is not invoked or completes without the
+      directory being unreachable from the verifier process"
     test_type: e2e
     component_under_test: directory
 
   - id: AC-005a
-    given: "A session's sealed_root has been committed to the MMR checkpoint"
+    given: "A session's sealed_root has been committed to the MMR checkpoint;
+      the test triggers the checkpoint via the real JobScheduler analytics
+      entry point (not by setting a flag) and waits for mmr.session.checkpointed
+      to be emitted before calling cello_close_session"
     when: "the client calls cello_close_session on a session that was
       previously sealed (idempotent call)"
     then: "the response includes checkpoint_status: 'confirmed',
-      session_mmr_peak: <hex> (the checkpoint peak hash), and leaf_index: N"
+      session_mmr_peak: <hex> (the checkpoint peak hash), and leaf_index: N;
+      verified by asserting mmr.session.checkpointed was logged by the
+      directory before this call was made — confirming the checkpoint ran
+      via the real code path"
     test_type: integration
     component_under_test: client
 
   - id: AC-005b
-    given: "A session's sealed_root has been committed to the MMR checkpoint"
+    given: "A session's sealed_root has been committed to the MMR checkpoint;
+      the checkpoint was triggered via the real JobScheduler analytics
+      entry point and mmr.session.checkpointed was emitted by the directory"
     when: "the client calls cello_get_sealed_receipt for that session"
     then: "the response includes checkpoint_status: 'confirmed',
-      session_mmr_peak: <hex> (the checkpoint peak hash), and leaf_index: N"
+      session_mmr_peak: <hex> (the checkpoint peak hash), and leaf_index: N;
+      verified by asserting the confirmed checkpoint state was read from
+      the directory's database (not from in-memory state) — confirmed
+      via mmr.session.checkpointed log event prior to this call"
     test_type: integration
     component_under_test: client
 
   - id: AC-006
     given: "A session's sealed_root is staged in conversation_seal_staging
       but no checkpoint has run yet"
-    when: "the test polls cello_get_sealed_receipt, then triggers a
-      checkpoint, then polls cello_get_sealed_receipt again"
+    when: "the test polls cello_get_sealed_receipt, then triggers the
+      checkpoint by calling the JobScheduler's analytics job entry point
+      directly (not by setting a flag) — simulating the same code path
+      used in production — then polls cello_get_sealed_receipt again"
     then: "the test shall first assert checkpoint_status: 'pending' in the
-      initial response, then trigger a checkpoint, then assert
+      initial response; then trigger a checkpoint; then assert
       checkpoint_status: 'confirmed' in the subsequent response —
-      both states must be observed in sequence; a test that only
-      checks the final confirmed state does not satisfy this AC"
+      both states must be observed in sequence; the checkpoint trigger
+      is verified by asserting mmr.session.checkpointed was emitted by
+      the directory between the two polls; a test that only checks the
+      final confirmed state does not satisfy this AC"
     test_type: integration
     component_under_test: directory
 
@@ -170,19 +209,26 @@ security_invariants:
       peak hash and the proof path — no further directory query required"
     adversarial_condition: "even when the directory is offline after
       the proof is retrieved"
+    verification: "A separate test process is spawned with no network
+      access and no shared memory with the directory. It receives only
+      checkpoint_peak_hash and sibling_hashes. It executes the MMR
+      path-recomputation algorithm and asserts the result equals
+      checkpoint_peak_hash. The test fails if the verification algorithm
+      is not invoked, or if the verifier process can reach the directory
+      (confirming the directory was taken offline before verification ran)."
     test_type: e2e
     component_under_test: directory
 
   - id: SI-002
     statement: "cello_get_inclusion_proof shall never return a proof
       for a session whose sealed_root is not yet in a confirmed checkpoint"
-    adversarial_condition: "even when the directory has an in-memory proof
-      cache from a prior checkpoint and the session's staged_root is not yet
-      committed to the database — the implementation must query the database
-      to determine checkpoint membership, not rely on in-memory state; this
-      is testable by populating the in-memory cache with a prior checkpoint
-      and asserting the proof is denied for a session whose staged_root is
-      absent from the checkpoints table"
+    adversarial_condition: "even if any future in-memory caching layer is
+      added to the directory — the proof-eligibility check must always
+      resolve against the committed checkpoints table row, not against
+      any in-memory representation; tested by asserting the directory's
+      DirectoryStore proof-eligibility method is called (via log event or
+      spy) during cello_get_inclusion_proof, confirming the check is
+      database-backed and not bypassed by any local state"
     test_type: integration
     component_under_test: directory
 
@@ -191,16 +237,19 @@ degraded_behavior:
   - id: DB-001
     condition: "While the MMR checkpoint has not run within a configurable
       max_staging_age (default: 1 hour)"
-    fallback: "the directory triggers a forced checkpoint flush for all
-      staged sealed_roots; agents polling cello_get_sealed_receipt will
-      see checkpoint_status transition from 'pending' to 'confirmed'
-      within max_staging_age"
+    fallback: "the overdue detector — a scheduled check registered with
+      JobScheduler in the directory's composition root, running on the
+      same cadence as the analytics job — calls MmrCheckpointService.forceFlush
+      for all staged sealed_roots older than max_staging_age; agents polling
+      cello_get_sealed_receipt will see checkpoint_status transition from
+      'pending' to 'confirmed' within max_staging_age"
     acceptance_criteria: "given a staged sealed_root older than max_staging_age,
-      when the overdue detection fires, then a forced checkpoint is triggered
-      and the session's checkpoint_status transitions to 'confirmed' within
-      the flush window — verified by setting max_staging_age to a short test
-      value, inserting a staged seal, waiting for overdue detection, and
-      asserting checkpoint_status: 'confirmed' within the flush window"
+      when the JobScheduler overdue check fires (triggered directly via the
+      JobScheduler entry point in the test), then mmr.checkpoint.overdue is
+      emitted, a forced checkpoint is triggered, mmr.session.checkpointed
+      is emitted per session, and the session's checkpoint_status transitions
+      to 'confirmed' — verified by asserting both log events were emitted and
+      cello_get_sealed_receipt returns checkpoint_status: 'confirmed'"
 
   - id: DB-002
     condition: "While the client is offline when the checkpoint runs"
@@ -229,6 +278,16 @@ observability:
         aggregate fields {checkpointId, leafCount, peakHash, stagedSealCount}"
       context_fields: [sessionId, checkpointId, leafIndex, peakHash, correlationId]
       correlationId: true
+      correlationId_source: "The correlationId is the seal-ceremony correlationId
+        persisted in conversation_seal_staging.correlation_id at seal time
+        (this column is added to the staging schema as part of this story).
+        The checkpoint job reads it from the staging row and threads it into
+        this event. If the column is absent, the checkpoint job logs without
+        a correlationId — this is a blocking gap, not a graceful degradation."
+      schema_change: "conversation_seal_staging gains a correlation_id column
+        (nullable text) as part of this story; the SealNotarization handler
+        writes the active correlationId into this column; the checkpoint job
+        reads it when emitting mmr.session.checkpointed"
 
   error_events:
     - name: mmr.checkpoint.overdue
@@ -265,5 +324,7 @@ references:
   live_session: "docs/planning/milestone-writeups/live-session-e2e-proofs/agent-conversation-database-bugs-and-protocol-gaps-m4-2026-05-18.md"
   depends_on:
     - CELLO-PERSIST-003  # RLS schema — prerequisite for SI-002 (database query discipline) and AC-004 (RLS governs proof table access)
+    - CELLO-PERSIST-004  # hash chain on INSERT — required for proof ledger integrity (AC-004, SI-001)
     - CELLO-PERSIST-007  # MMR single-node construction
+    - CELLO-PERSIST-008  # JobScheduler / analytics cron — required for forced checkpoint flush (DB-001) and overdue detection
     - CELLO-PERSIST-009  # SQLCipher (client storage)

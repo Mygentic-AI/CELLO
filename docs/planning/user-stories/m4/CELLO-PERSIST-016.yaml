@@ -51,11 +51,12 @@ acceptance_criteria:
     given: "The PgDirectoryStore source file contains SQL strings referencing
       table names via INSERT INTO, SELECT FROM, UPDATE, DELETE FROM"
     when: "the static analysis test runs"
-    then: "all table names are extracted from SQL strings in
-      PgDirectoryStore; each table name is cross-referenced against
-      CREATE TABLE statements in packages/directory/db/migrations/*.sql;
-      the test fails with a clear list of any referenced tables not found
-      in any migration file"
+    then: "the Vitest test file packages/directory/src/__tests__/schema-completeness.test.ts
+      reads the PgDirectoryStore source file via Node.js fs.readFileSync;
+      all table names are extracted from SQL strings in PgDirectoryStore;
+      each table name is cross-referenced against CREATE TABLE statements
+      in packages/directory/db/migrations/*.sql; the test fails with a
+      clear list of any referenced tables not found in any migration file"
     test_type: unit
     component_under_test: directory
 
@@ -63,11 +64,14 @@ acceptance_criteria:
     given: "CELLO_ENV=local and a running Postgres instance with all
       Flyway migrations applied"
     when: "the integration test runs"
-    then: "for each table referenced by PgDirectoryStore, a SELECT from
-      information_schema.tables confirms the table exists; the test fails
-      with a list of any missing tables; if CELLO_ENV != local or Postgres
-      is unreachable, the test skips (not fails) with a clear skip message
-      so CI does not block on missing infrastructure"
+    then: "the test opens a live TCP connection to localhost:5432 via the
+      real pg npm package (no mock or in-memory substitute is wired for
+      this test); for each table referenced by PgDirectoryStore, a SELECT
+      from information_schema.tables confirms the table exists; the test
+      fails with a list of any missing tables; if CELLO_ENV != local the
+      test skips with a clear skip message; if CELLO_ENV=local and the
+      pg.connect() call fails (connection refused), the test fails — not
+      skips — because the developer explicitly requested a live check"
     test_type: integration
     component_under_test: directory
 
@@ -85,8 +89,11 @@ acceptance_criteria:
   - id: AC-004
     given: "All tables referenced by PgDirectoryStore have corresponding
       CREATE TABLE statements in migration files AND exist in the live database"
-    when: "both tests run"
-    then: "both tests pass — no false positives for correctly-migrated tables"
+    when: "the integration test runs (CELLO_ENV=local, Postgres reachable)"
+    then: "the integration test passes and records the exact set of verified
+      table names in its output (e.g. 'verified N tables: [agent_profiles, ...]')
+      — a verifiable assertion that the full expected set was checked, not
+      merely that no error was thrown"
     test_type: integration
     component_under_test: directory
 
@@ -98,7 +105,10 @@ acceptance_criteria:
       set of tables found in migration files; the test fails with a clear list
       of any HASH_CHAINED_TABLES entry that has no corresponding CREATE TABLE
       in any migration file — ensuring the constant and the migration set
-      cannot silently diverge"
+      cannot silently diverge; HASH_CHAINED_TABLES is a constant defined at
+      the top of packages/directory/src/__tests__/schema-completeness.test.ts
+      and is the developer's responsibility to update when a new table receives
+      hash-chain enforcement"
     test_type: unit
     component_under_test: directory
 
@@ -111,8 +121,12 @@ security_invariants:
       statically-expressible table references; dynamic table names
       constructed via template literals must be registered in the
       KNOWN_DYNAMIC_TABLES allowlist in the test file"
-    adversarial_condition: "even when a developer adds a new table
-      reference to PgDirectoryStore without writing a migration"
+    adversarial_condition: "even when an attacker (or developer) merges
+      a change to PgDirectoryStore that references a non-existent table
+      — at runtime this causes silent adapter.write.failed events with
+      no protocol-visible signal, meaning data writes are dropped without
+      any observable error; the static analysis test acts as the CI gate
+      that catches this before deployment"
     test_type: unit
     component_under_test: directory
 
@@ -144,7 +158,27 @@ degraded_behavior:
 # in the canonical event taxonomy in
 # docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
 # See the notes section below for the full description.
-observability: {}
+#
+# Runtime failure mode: when a fire() write fails at runtime due to a
+# missing table, the existing adapter.write.failed event fires. This story
+# requires that event to carry a tableName context field so operators can
+# distinguish a missing-table failure from a connection failure or a
+# constraint violation. The existing adapter.write.failed alarm threshold
+# (defined in the monitoring baseline) covers this failure mode — no new
+# alarm is introduced by PERSIST-016.
+observability:
+  runtime_events:
+    - name: adapter.write.failed
+      level: error
+      trigger: "a PgDirectoryStore fire() write fails due to a missing table at runtime"
+      context_fields: [adapterName, reason, tableName]
+      # tableName is required — without it, operators cannot distinguish
+      # a missing-table failure from a connection failure or constraint violation
+      correlationId: false
+      note: "This event is defined in the existing taxonomy. PERSIST-016
+        requires that tableName be present in the context when reason is
+        table_not_found. No new alarm is added — the existing adapter.write.failed
+        alarm threshold covers this failure mode."
 
 # ─── Implementation notes ────────────────────────────────────
 notes: >
@@ -207,8 +241,9 @@ references:
   depends_on:
     - CELLO-PERSIST-001
     - CELLO-PERSIST-002
+    - CELLO-PERSIST-003  # RLS/append-only schema — migration files it defines are part of the set this story validates
   blocks:
     - CELLO-PERSIST-018
     - CELLO-PERSIST-019
     - CELLO-PERSIST-020
-    - CELLO-PERSIST-021
+    - CELLO-PERSIST-021  # pending_connection_requests migration — story not yet written; ID reserved
