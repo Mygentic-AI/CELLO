@@ -52,8 +52,19 @@ ALTER TABLE connections
   ALTER COLUMN chain_hash     DROP DEFAULT;
 
 -- Unique constraint on connection_id (logical primary key)
-ALTER TABLE connections
-  ADD CONSTRAINT connections_connection_id_unique UNIQUE (connection_id);
+-- Guard: only add if it doesn't already exist (idempotent for databases where V10 pre-applied this)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'connections_connection_id_unique'
+      AND conrelid = 'connections'::regclass
+  ) THEN
+    ALTER TABLE connections
+      ADD CONSTRAINT connections_connection_id_unique UNIQUE (connection_id);
+  END IF;
+END
+$$;
 
 -- ─── Composite indexes for symmetric hasConnection() queries ─────────────────
 
