@@ -39,7 +39,7 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     return this.#notarizations.get(sessionIdHex);
   }
 
-  enqueueNotification(pubkeyHex: string, event: DirectoryNotification): void {
+  enqueueNotification(pubkeyHex: string, event: DirectoryNotification, _correlationId?: string): void {
     let queue = this.#notificationQueues.get(pubkeyHex);
     if (!queue) {
       queue = [];
@@ -51,10 +51,10 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     queue.push(event);
   }
 
-  drainNotifications(pubkeyHex: string): DirectoryNotification[] {
+  drainNotifications(pubkeyHex: string, _correlationId: string): Promise<DirectoryNotification[]> {
     const queue = this.#notificationQueues.get(pubkeyHex);
-    if (!queue || queue.length === 0) return [];
-    return queue.splice(0);
+    if (!queue || queue.length === 0) return Promise.resolve([]);
+    return Promise.resolve(queue.splice(0));
   }
 
   // ─── REG-001: Profile methods ─────────────────────────────────────────────
@@ -119,9 +119,9 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     return true;
   }
 
-  dequeuePendingConnectionRequests(targetPubkey: string): PendingConnectionRequest[] {
+  dequeuePendingConnectionRequests(targetPubkey: string, _correlationId: string): Promise<PendingConnectionRequest[]> {
     const queue = this.#pendingConnectionRequests.get(targetPubkey);
-    if (!queue || queue.length === 0) return [];
-    return queue.splice(0);
+    if (!queue || queue.length === 0) return Promise.resolve([]);
+    return Promise.resolve(queue.splice(0));
   }
 }

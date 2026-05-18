@@ -221,7 +221,7 @@ describe("CONNREQ-002 — Directory-side connection request handling", () => {
     await expect(store.hasConnection("aaaa", "cccc")).resolves.toBeNull();
   });
 
-  it("CONNREQ-002-DB-001: pendingConnectionRequests queue stores up to 32, drops oldest on overflow", () => {
+  it("CONNREQ-002-DB-001: pendingConnectionRequests queue stores up to 32, drops oldest on overflow", async () => {
     const store = new InMemoryDirectoryStore();
     // Fill queue with 32 entries
     for (let i = 0; i < 32; i++) {
@@ -239,7 +239,7 @@ describe("CONNREQ-002 — Directory-side connection request handling", () => {
       queued_at: Date.now() + 100,
     });
     expect(firstResult).toBe(false); // dropped one
-    const dequeued = store.dequeuePendingConnectionRequests("target-A");
+    const dequeued = await store.dequeuePendingConnectionRequests("target-A", "test-correlation");
     expect(dequeued.length).toBe(32); // still 32 total
     // The oldest (req-0) was dropped; req-1 is now first
     expect(dequeued[0].connection_request_id).toBe("req-1");
@@ -247,9 +247,9 @@ describe("CONNREQ-002 — Directory-side connection request handling", () => {
     expect(dequeued[31].connection_request_id).toBe("req-overflow");
   });
 
-  it("CONNREQ-002-DB-001: dequeuePendingConnectionRequests returns empty array if none queued", () => {
+  it("CONNREQ-002-DB-001: dequeuePendingConnectionRequests returns empty array if none queued", async () => {
     const store = new InMemoryDirectoryStore();
-    const result = store.dequeuePendingConnectionRequests("nonexistent-target");
+    const result = await store.dequeuePendingConnectionRequests("nonexistent-target", "test-correlation");
     expect(result).toEqual([]);
   });
 

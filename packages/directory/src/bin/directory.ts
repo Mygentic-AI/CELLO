@@ -37,6 +37,7 @@ import { EncryptedPgShareStore } from "../encrypted-share-store.js";
 import { PersistentShareStore } from "../persistent-share-store.js";
 import { MmrStore } from "../mmr-store.js";
 import { AnalyticsJob } from "../analytics-job.js";
+import { PendingConnectionRequestTtlSweep } from "../pending-connection-request-ttl-sweep.js";
 
 const env = process.env["CELLO_ENV"];
 const logger = new StdoutLogger();
@@ -234,6 +235,18 @@ if (env === "local" && pgPool) {
   });
 
   logger.info("adapter.initialised", { adapterName: "AnalyticsJob", triggeredBy: "scheduler", env });
+
+  // ─── PERSIST-019: PendingConnectionRequestTtlSweep wiring ────────────────
+  // Runs periodically to delete pending_connection_requests rows older than 24h.
+  // Without this registration, expired requests accumulate in the queue forever.
+  scheduler.onJob("pending_connection_requests_ttl", async (_job) => {
+    await new PendingConnectionRequestTtlSweep(pgPool!, logger).run();
+  });
+
+  // Schedule the first TTL sweep run 5 minutes after startup.
+  await scheduler.schedule("pending_connection_requests_ttl", Date.now() + 5 * 60 * 1000, { type: "pending_connection_requests_ttl" });
+
+  logger.info("adapter.initialised", { adapterName: "PendingConnectionRequestTtlSweep", triggeredBy: "scheduler", env });
 }
 
 // ─── Key loading ──────────────────────────────────────────────────────────
