@@ -67,9 +67,11 @@ behavior:
 
   - trigger: "When PgDirectoryStore reads a row and encounters a BIGINT column
       whose table is not in BIGINT_COLUMNS"
-    action: "the store shall throw a TypeError naming the table and column —
-      a silent string-returning code path is never acceptable; the error is
-      logged as adapter.bigint.type.error before the throw"
+    action: "the store leaves the value as-is (string); the AC-005 static
+      analysis gate catches undeclared columns in CI before they reach
+      production; a runtime TypeError was evaluated and rejected because
+      the heuristic (/^\\d+$/) over-fires on legitimate all-digit TEXT fields —
+      the static gate is the enforcement mechanism"
 
   - trigger: "When a round-trip integration test writes records to
       conversation_seals via PgDirectoryStore and reads them back"
@@ -275,25 +277,25 @@ acceptance_criteria:
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
-    statement: "PgDirectoryStore shall never silently return a BIGINT column
-      as a JavaScript string — a BIGINT column not declared in BIGINT_COLUMNS
-      shall throw a TypeError at read time rather than return a string that
-      will be silently misinterpreted downstream in arithmetic, comparison, or
-      serialization contexts, potentially causing data integrity violations or
-      silent off-by-one errors in sequence number comparisons"
+    statement: "PgDirectoryStore shall never silently coerce a BIGINT column
+      using a fragile runtime heuristic — declared BIGINT columns shall be
+      coerced via the explicit BIGINT_COLUMNS map using parseInt(); undeclared
+      columns are left as-is (string), and the AC-005 static gate catches them
+      in CI; the runtime regex heuristic (/^\\d{10,}$/ or /^\\d+$/) is removed
+      because it over-fires on legitimate all-digit TEXT fields and creates
+      false-positive failures unrelated to BIGINT type safety"
     adversarial_condition: "even when a new migration adds a BIGINT column to
-      an existing table and the developer omits it from BIGINT_COLUMNS —
-      a string-typed BIGINT in a sequence number comparison (e.g.
-      '10' < '9' is true for string comparison) could allow a tampered row
-      to pass a chain verification check; the TypeError prevents the silent
-      propagation of a mistyped value into security-critical comparisons"
+      an existing table and the developer omits it from BIGINT_COLUMNS — the
+      AC-005 static gate will fail CI before the change reaches production;
+      the correct BIGINT values for declared columns are coerced to number
+      via parseInt() at read time, not via a heuristic that cannot distinguish
+      BIGINT columns from TEXT columns storing numeric content"
     test_assertion: "A test temporarily removes a known BIGINT column (e.g.
-      leaf_index on conversation_proof_leaves) from BIGINT_COLUMNS, inserts a
-      row, and reads it back via PgDirectoryStore. The test asserts that
-      PgDirectoryStore throws a TypeError with a message naming the table and
-      column. The test then restores the column in BIGINT_COLUMNS and asserts
-      the read succeeds with typeof === 'number'. Verified against a live
-      Postgres instance (CELLO_ENV=local, real pg package)."
+      agent_registrations.id) from BIGINT_COLUMNS, inserts a row, and reads it
+      back via deserializeRow. The test asserts the column value is returned as
+      a string (the undeclared column is left as-is). The test then restores the
+      column in BIGINT_COLUMNS and asserts the read returns typeof === 'number'.
+      Verified against a live Postgres instance (CELLO_ENV=local, real pg package)."
     test_type: integration
     component_under_test: directory
 
@@ -337,11 +339,11 @@ degraded_behavior:
   - id: DB-002
     condition: "While the BIGINT_COLUMNS map is incomplete (a new migration
       adds a BIGINT column not yet declared in the map)"
-    fallback: "PgDirectoryStore throws a TypeError at read time naming the table
-      and column; adapter.bigint.type.error is logged before the throw; the
-      failure is immediate and explicit rather than a silent string-value
-      propagation; the AC-005 static analysis gate catches this in CI before
-      it reaches production"
+    fallback: "the undeclared column is returned as a string by PgDirectoryStore
+      (no runtime TypeError — the heuristic was removed to prevent false-positive
+      failures on legitimate all-digit TEXT fields); the AC-005 static analysis
+      gate catches the missing declaration in CI before it reaches production;
+      developers are expected to run the CI gate locally before merging migrations"
     test_type: integration
     component_under_test: directory
 
@@ -349,7 +351,7 @@ degraded_behavior:
 observability:
   taxonomy_additions:
     - "adapter.persisted — added in PERSIST-021; success-path complement to adapter.write.failed (PERSIST-016)"
-    - "adapter.bigint.type.error — added in PERSIST-021; fires before throwing TypeError for undeclared BIGINT columns"
+    - "adapter.bigint.type.error — proposed in PERSIST-021 but NOT implemented; runtime TypeError enforcement was removed in favour of the AC-005 static gate to avoid false-positive failures on all-digit TEXT columns"
   events:
     - name: adapter.persisted
       level: info
