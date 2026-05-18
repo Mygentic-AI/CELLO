@@ -65,7 +65,8 @@ acceptance_criteria:
     when: "the integration test runs"
     then: "for each table referenced by PgDirectoryStore, a SELECT from
       information_schema.tables confirms the table exists; the test fails
-      with a list of any missing tables"
+      with a list of any missing tables; when CELLO_ENV != local or Postgres
+      is unreachable, the test skips (not fails) with a descriptive skip message"
     test_type: integration
     component_under_test: directory
 
@@ -74,7 +75,9 @@ acceptance_criteria:
       but has no migration file"
     when: "the static analysis test runs"
     then: "the test fails and names the missing table — the developer
-      cannot merge code that references a table without a migration"
+      cannot merge code that references a table without a migration;
+      this test is in the standard pnpm run test suite for @cello/directory
+      and therefore runs in CI on every push, enforcing the merge gate"
     test_type: unit
     component_under_test: directory
 
@@ -91,7 +94,10 @@ security_invariants:
   - id: SI-001
     statement: "No PgDirectoryStore SQL operation shall silently fail
       due to a missing table — adapter.write.failed must be detectable
-      at test time, not only at runtime"
+      at test time, not only at runtime; this guarantee holds for
+      statically-expressible table references; dynamic table names
+      (template literals) must be registered in the test's known-tables
+      allowlist to be covered"
     adversarial_condition: "even when a developer adds a new table
       reference to PgDirectoryStore without writing a migration"
     test_type: unit
@@ -104,22 +110,27 @@ degraded_behavior:
       (e.g. dynamic table name via template literal)"
     fallback: "the test logs a warning identifying the unparseable
       SQL string and fails — dynamic table names require explicit
-      registration in a known-tables allowlist in the test"
+      registration in a known-tables allowlist in the test; the
+      allowlist is a KNOWN_DYNAMIC_TABLES constant in the test file
+      listing all tables referenced via dynamic queries (currently:
+      the HASH_CHAINED_TABLES constant values), checked against the
+      full set of migrated tables"
+
+  - id: DB-002
+    condition: "CELLO_ENV != local or Postgres is unreachable when
+      the integration test runs"
+    fallback: "the integration test (AC-002, AC-004) skips with a
+      descriptive skip message — e.g. 'skipped: CELLO_ENV=dev, local
+      Postgres required'; the static analysis test (AC-001, AC-003)
+      is unaffected and continues to run in all environments"
 
 # ─── Observability ──────────────────────────────────────────
 observability:
-  events:
-    - name: schema.completeness.verified
-      level: info
-      trigger: "all referenced tables confirmed present in migrations and database"
-      context_fields: [tableCount, migrationCount]
-      correlationId: false
-
-  error_events:
-    - name: schema.completeness.failed
-      level: error
-      trigger: "one or more referenced tables missing from migrations or database"
-      context_fields: [missingTables, checkedTableCount]
+  # This story produces no production Logger events. The schema completeness
+  # test runs in the test suite, not in production code. Test output events
+  # (schema.completeness.verified, schema.completeness.failed) are described
+  # in the notes section below and are registered in the canonical event
+  # taxonomy as test-output events, not production Logger calls.
 
 # ─── Implementation notes ────────────────────────────────────
 notes: >
@@ -133,18 +144,35 @@ notes: >
   5. Fail if any table is unaccounted for
 
   The integration test (AC-002, AC-004) should:
-  1. Connect to Postgres as superuser
-  2. Query information_schema.tables WHERE table_schema = 'public'
-  3. For each table referenced by PgDirectoryStore, assert it exists
-  4. Fail with a list of missing tables if any are absent
+  1. Skip immediately if CELLO_ENV != local or Postgres is unreachable
+  2. Connect to Postgres as superuser
+  3. Query information_schema.tables WHERE table_schema = 'public'
+  4. For each table referenced by PgDirectoryStore, assert it exists
+  5. Fail with a list of missing tables if any are absent
 
   Tables currently referenced by PgDirectoryStore that need migrations
   (as of M4 post-live-session audit):
-  - seal_notarizations (PERSIST-017)
-  - notification_queue (PERSIST-018)
-  - connections (PERSIST-019)
-  - pending_connection_requests (PERSIST-020)
+  - seal_notarizations (PERSIST-018)
+  - notification_queue (PERSIST-019)
+  - connections / pending_connection_requests (PERSIST-020)
   (agent_profiles already addressed by V9 migration)
+  Note: PERSIST-017 is already taken (MMR checkpoint visibility story).
+  The four missing table migrations are addressed by PERSIST-018 through 020.
+
+  Test-output events (not production Logger calls — emitted as test result
+  metadata, not via the Logger interface):
+
+  schema.completeness.verified
+    trigger: all referenced tables confirmed present in migrations and database
+    context_fields: [tableCount, migrationCount]
+
+  schema.completeness.failed
+    trigger: one or more referenced tables missing from migrations or database
+    context_fields: [missingTables, checkedTableCount]
+
+  These are registered in the canonical event taxonomy in
+  2026-05-16_0753_development-pipeline-and-local-iteration.md with a
+  note that they are test-output events.
 
 # ─── References ─────────────────────────────────────────────
 references:
@@ -156,7 +184,6 @@ references:
     - CELLO-PERSIST-001
     - CELLO-PERSIST-002
   blocks:
-    - CELLO-PERSIST-017
     - CELLO-PERSIST-018
     - CELLO-PERSIST-019
     - CELLO-PERSIST-020
