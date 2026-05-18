@@ -101,17 +101,15 @@ async function main() {
     break; // We'll use the raw SQL path below
   }
 
-  // ── Raw SQL path: insert 5 rows with correct chain, then tamper row 3 ──
-  log("Using raw SQL to insert 5 notification_events rows with correct SHA-256 chain");
+  // ── Raw SQL path: clear table, insert 5 rows with correct chain, then tamper row 3 ──
+  log("Clearing notification_events to ensure a clean chain baseline");
+  await superPool.query(`DELETE FROM notification_events`);
+
+  log("Inserting 5 notification_events rows with correct SHA-256 chain");
 
   const { createHash } = await import("node:crypto");
   const CHAIN_GENESIS = "0000000000000000000000000000000000000000000000000000000000000000";
-
-  // Fetch current chain tip for notification_events
-  const tipResult = await superPool.query(
-    `SELECT chain_hash FROM notification_events ORDER BY id DESC LIMIT 1`,
-  );
-  let prevHash = tipResult.rows.length > 0 ? tipResult.rows[0].chain_hash : CHAIN_GENESIS;
+  let prevHash = CHAIN_GENESIS;
 
   const rowData = [];
   for (let i = 0; i < 5; i++) {
@@ -161,16 +159,12 @@ async function main() {
   log(`Inserted 5 rows (ids: ${rowData.map((r) => r.id).join(", ")})`);
 
   // ── Verify chain is valid before tamper ──
-  // Note: verifyChain reads ALL rows from the table, so there may be pre-existing rows.
-  // We verify only that before our tamper, the chain is consistent.
   log("Verifying chain before tamper");
   const beforeResult = await store.verifyChain("notification_events");
   if (!beforeResult.valid) {
-    // Pre-existing rows from other tests may have broken chains — skip pre-tamper check
-    log(`WARNING: chain has existing break at ${beforeResult.breakAt} before our tamper — likely pre-existing test data`);
-  } else {
-    pass("Chain valid before tamper");
+    fail(`Chain invalid before tamper (breakAtSequence=${beforeResult.breakAtSequence}) — setup failed`);
   }
+  pass("Chain valid before tamper");
 
   // ── Tamper: superuser UPDATE the 3rd of our inserted rows ──
   const tamperRow = rowData[2]; // 3rd row (0-indexed: 2)
@@ -190,26 +184,22 @@ async function main() {
     fail("verifyChain() returned valid=true after superuser tamper — tamper was not detected");
   }
 
-  if (afterResult.breakAt === undefined) {
-    fail("verifyChain() returned valid=false but no breakAt index");
+  if (afterResult.breakAtSequence === undefined) {
+    fail("verifyChain() returned valid=false but no breakAtSequence");
   }
 
-  log(`Chain break detected: { valid: false, breakAt: ${afterResult.breakAt} }`);
+  log(`Chain break detected: { valid: false, breakAtSequence: ${afterResult.breakAtSequence} }`);
 
-  // Confirm breakAt is at or before the tampered row's position in the full table
-  const orderedResult = await superPool.query(
-    `SELECT id FROM notification_events ORDER BY id ASC`,
-  );
-  const orderedIds = orderedResult.rows.map((r) => Number(r.id));
-  const tamperIndex = orderedIds.indexOf(Number(tamperRow.id));
-
-  if (afterResult.breakAt > tamperIndex) {
+  // breakAtSequence is 1-based (sequence number of the first broken row).
+  // Our tampered row is rowData[2] (3rd inserted row = sequence 3 in a clean table).
+  const expectedBreakSeq = 3; // row index 2, sequence 3
+  if (afterResult.breakAtSequence > expectedBreakSeq) {
     fail(
-      `breakAt=${afterResult.breakAt} is AFTER tampered row index ${tamperIndex} — tamper was missed`,
+      `breakAtSequence=${afterResult.breakAtSequence} is after tampered row at sequence ${expectedBreakSeq} — tamper was missed`,
     );
   }
 
-  pass(`SI-005: verifyChain() detected tamper; breakAt=${afterResult.breakAt} ≤ tamper position=${tamperIndex}`);
+  pass(`SI-005: verifyChain() detected tamper; breakAtSequence=${afterResult.breakAtSequence} ≤ tamper position=${expectedBreakSeq}`);
 
   // ── Cleanup: delete our test rows via superuser ──
   for (const row of rowData) {
