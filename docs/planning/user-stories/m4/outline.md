@@ -379,3 +379,71 @@ Once PERSIST-001 and PERSIST-002 are done, the directory track, client track, an
 - [[2026-05-16_0900_m4-infrastructure-decisions|M4 Cloud Infrastructure Decisions]] — VPC topology, RDS access, IAM scoping, Secrets Manager naming convention, KMS, S3 audit bucket, IaC templates
 - [[server-infrastructure|CELLO Server Infrastructure Requirements]] — PostgreSQL RLS, hash chain, KMS, pgaudit, federation (M5)
 - [[agent-client|CELLO Agent Client Requirements]] — SQLCipher, key provider abstraction, backup, hash queue, signed relay ACK storage
+
+---
+
+## What Actually Happened — Implementation History (2026-05-18)
+
+This section records what went wrong during M4 implementation and how it was resolved. The original outline was written before coding began and did not anticipate several class of problems that only surface against a real database.
+
+### The live session that broke everything
+
+All 21 component stories (PERSIST-001 through PERSIST-015) were implemented and passed Vitest. The first live multi-process agent-to-agent session was then run against Docker Compose + real Postgres. It failed immediately with four distinct errors:
+
+1. **Four missing Flyway migrations.** `seal_notarizations`, `notification_queue`, `pending_connection_requests`, and `connections` were all referenced by `PgDirectoryStore` but had never had real schema migrations written. PERSIST-003's RLS schema migration (V2) included stub table definitions with only `id` and `created_at`, and the later component stories (PERSIST-013 through PERSIST-015) had added full column definitions to `PgDirectoryStore` methods without writing migrations for the new columns. The tables existed in the stub form but had none of the columns the code expected.
+
+2. **BIGINT-as-string type coercion.** The `pg` driver returns `BIGINT` and `BIGSERIAL` columns as JavaScript strings, not numbers. The in-process tests used in-memory stubs that returned numbers natively, so this was invisible. The live session triggered `TypeError: expected number, got string` in multiple places across `pg-directory-store.ts`.
+
+3. **MMR checkpoint visibility gap.** `cello_close_session` returned no `checkpoint_status` field. After a seal, the agent had no way to tell whether the inclusion proof was ready or still pending. This field was specified in the protocol but never wired through the MCP layer.
+
+4. **`pending_connection_requests.request_id` type mismatch.** The column was declared `UUID` in the migration but the application stored a 32-character hex string (not a valid UUID). This caused a PostgreSQL type error on `createConnection()`.
+
+### How each was fixed
+
+**Missing migrations (PERSIST-016 through PERSIST-020):**
+
+PERSIST-016 added a CI gate (`schema-completeness.test.ts`) that statically verifies every table referenced by `PgDirectoryStore` has a corresponding Flyway migration. This gate now runs on every PR and will catch future drift.
+
+PERSIST-017 through PERSIST-020 added the missing migrations using a two-step Flyway pattern (required because V10 had already created stub tables):
+```sql
+-- Step 1: create stub if not exists
+CREATE TABLE IF NOT EXISTS table_name (id BIGSERIAL PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT now());
+-- Step 2: add each missing column
+ALTER TABLE table_name ADD COLUMN IF NOT EXISTS column_name TYPE;
+```
+
+PERSIST-020 also changed `connection_requests.request_id` from `UUID` to `TEXT` via a V14 migration, resolving the type mismatch.
+
+**BIGINT type coercion (PERSIST-021):**
+
+A `BIGINT_COLUMNS` map was added to `pg-directory-store.ts` that declares, per table, which columns are `BIGINT` or `BIGSERIAL`. A `deserializeRow()` function coerces only the declared columns via `parseInt()`, leaving all others as-is. A static analysis gate (AC-005 in PERSIST-021) parses all Flyway migration SQL files and compares their `BIGINT`/`BIGSERIAL` column declarations against the map — the test fails if any column is missing. An alternative of throwing a `TypeError` at runtime for any all-digit string was evaluated and rejected: the `/^\d+$/` regex fires on legitimate TEXT columns that happen to contain only digits (e.g., phone numbers, numeric IDs stored as TEXT). The static gate is the enforcement mechanism.
+
+**MMR checkpoint visibility (PERSIST-017):**
+
+`cello_close_session` was updated to return `checkpoint_status: "pending"` immediately after a seal, with a `staged_at` timestamp. `cello_get_inclusion_proof` was updated to return `checkpoint_status: "pending"` with an `eta` when the checkpoint has not yet been confirmed, or `checkpoint_status: "confirmed"` with the full proof when it has. `MmrCheckpointService.recoverOrphanedCheckpoints()` was added to recover seals that were staged but never checkpointed (e.g., after a directory restart).
+
+### What the in-process tests missed
+
+Every single one of these bugs was invisible to Vitest because all tests used `InMemoryDirectoryStore` rather than `PgDirectoryStore`. The stub returned correct types, had no schema, and had no concept of migration version. The tests passed green while the production path had never been exercised.
+
+This is the exact failure mode the `/cello-story` skill warns against: *"Would this AC pass if the two participants were in different OS processes on different machines with no shared memory? If no, the AC is underspecified."*
+
+The fix is structural: PERSIST-021 added real-Postgres round-trip integration tests for all `PgDirectoryStore` methods, using the actual Docker Compose database. The `describeIntegration()` guard skips when `CELLO_ENV !== 'local'` so CI that lacks a database doesn't break, but fails (not skips) when `CELLO_ENV=local` and the database is unreachable.
+
+### Migration version conflicts resolved
+
+During the merge sequence of PERSIST-016 through PERSIST-021, two version numbering conflicts arose:
+
+- **Duplicate V11:** PERSIST-017 used `V11__staging_correlation_id.sql` and PERSIST-020 used `V11__connections_full_schema.sql`. Both exist on `main`. This is a known issue that must be resolved before any fresh database migration run. One file must be renumbered (e.g., PERSIST-020's to V15) via a new migration or a manual Flyway baseline.
+
+- **Duplicate V12:** PERSIST-018 and PERSIST-020 both initially used V12. Resolved by renumbering PERSIST-020's migration to V14 before merge.
+
+### E2E test gap — scripts vs. protocol manual tests
+
+PERSIST-E2E-001 has two categories of ACs:
+
+**Scriptable (no agent conversation required):** WAL crash recovery (AC-002), WAL corruption fallback (DB-001), SQLCipher wrong-key rejection (AC-006 / SI-003), KMS failure blocks INSERT (SI-006), hash chain tamper detection (SI-005), pgaudit immutability (SI-007). These are covered by standalone scripts in `packages/e2e-tests/scripts/`.
+
+**Requires live multi-process agent conversation:** AC-001 (10 messages persisted with correct chain), AC-003 (gap-fill reconciliation), AC-004/AC-005 (unilateral seal with process termination), AC-009/AC-009a (MMR inclusion proof, checkpoint_status pending window). These require running the protocol manually between two real agent processes and verifying outcomes in the database.
+
+The scripts should be run first to clear the mechanical invariants before the protocol walkthrough begins.
