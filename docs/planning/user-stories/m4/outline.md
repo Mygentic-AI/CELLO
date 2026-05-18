@@ -322,6 +322,19 @@ All five scenarios as live multi-process smoke tests — not in-process Vitest.
 | PERSIST-014 | Gap-fill reconciliation (Case 1) — directory detects tree mismatch, behind party requests missing leaves, retry succeeds | PERSIST-013 |
 | PERSIST-015 | Unilateral seal (Case 2) — after timeout A seals unilaterally; B receives notification on reconnect | PERSIST-013 |
 
+### Post-Live-Session Stories (added 2026-05-18)
+
+These stories were added after the first live M4 agent-to-agent session revealed four missing migrations and a gap in the MMR checkpoint visibility flow. See [[2026-05-18_0600_missing-table-investigations]] and [[agent-conversation-database-bugs-and-protocol-gaps-m4-2026-05-18]].
+
+| ID | Title | Depends on |
+|---|---|---|
+| PERSIST-016 | Schema completeness test — CI gate that fails if any table referenced by PgDirectoryStore lacks a Flyway migration | PERSIST-001, PERSIST-002, PERSIST-003 |
+| PERSIST-017 | MMR checkpoint visibility — `checkpoint_status` on `cello_close_session`; `cello_get_inclusion_proof` returns pending/eta | PERSIST-003, PERSIST-004, PERSIST-007, PERSIST-008, PERSIST-009 |
+| PERSIST-018 | `seal_notarizations` migration — FROST threshold signature durably stored; `getNotarization()` returns real data | PERSIST-001, PERSIST-002, PERSIST-003, PERSIST-004, PERSIST-007 |
+| PERSIST-019 | `notification_queue` + `pending_connection_requests` migrations — offline delivery queues; `drainNotifications()` and `dequeuePendingConnectionRequests()` return real data | PERSIST-001, PERSIST-002, PERSIST-003, PERSIST-008 |
+| PERSIST-020 | `connections` migration — connection records survive directory restarts; `hasConnection()` returns real data | PERSIST-001, PERSIST-002, PERSIST-003, PERSIST-004 |
+| PERSIST-021 | `PgDirectoryStore` adapter boundary audit — real-Postgres round-trip integration tests for all existing store methods; BIGINT column type map hardening | PERSIST-003, PERSIST-004, PERSIST-016 |
+
 ### Dependency Order
 
 ```
@@ -341,7 +354,15 @@ PERSIST-001 (interfaces)
               ├── PERSIST-014 (gap-fill reconciliation)
               └── PERSIST-015 (unilateral seal)
 
-PERSIST-E2E-001 requires all of 003–015
+Post-live-session additions (all in directory track):
+PERSIST-016 (schema completeness CI gate) → unblocks PERSIST-018, 019, 020, 021
+PERSIST-017 (MMR checkpoint visibility) ← depends on PERSIST-003, 004, 007, 008, 009
+PERSIST-018 (seal_notarizations) ← depends on PERSIST-016, 007
+PERSIST-019 (notification_queue + pending_connection_requests) ← depends on PERSIST-016, 008
+PERSIST-020 (connections) ← depends on PERSIST-016
+PERSIST-021 (adapter boundary audit) ← depends on PERSIST-016; blocks PERSIST-E2E-001
+
+PERSIST-E2E-001 requires all of 003–015 plus 016–021
 ```
 
 Once PERSIST-001 and PERSIST-002 are done, the directory track, client track, and relay track are independent and can run as parallel agents.

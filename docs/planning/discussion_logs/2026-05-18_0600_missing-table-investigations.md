@@ -157,3 +157,18 @@ pending_connection_requests (
 | `pending_connection_requests` | Delivery queue | No | No | `dequeuePendingConnectionRequests()` returns [] | Offline agent connection |
 
 All four tables should be implemented as M4 stories (PERSIST-018 through PERSIST-021), since they were part of the M4 persistence design from the start — the implementations were just stubbed out and the migrations never written.
+
+---
+
+## Addendum — Story Assignment Correction (2026-05-18)
+
+The story assignments above were written during the initial investigation before the MMR checkpoint visibility gap (PERSIST-017) was identified in the live session conversation. The final story assignments shifted:
+
+| Table | This log originally assigned to | Actual story |
+|---|---|---|
+| `seal_notarizations` | PERSIST-017 | **PERSIST-018** |
+| `notification_queue` | PERSIST-018 | **PERSIST-019** |
+| `connections` | PERSIST-019 | **PERSIST-020** |
+| `pending_connection_requests` | PERSIST-020 | **PERSIST-021** |
+
+PERSIST-017 was instead assigned to the MMR checkpoint visibility gap — `cello_close_session` returning `checkpoint_pending` status and `cello_get_inclusion_proof` returning a pending/eta response. That gap was discovered during the live session conversation (see [[agent-conversation-database-bugs-and-protocol-gaps-m4-2026-05-18]]) and was prioritised over the missing-table stories because it affects the protocol's core third-party verifiability promise.

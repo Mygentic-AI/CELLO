@@ -153,6 +153,26 @@ acceptance_criteria:
     test_type: e2e
     component_under_test: directory
 
+  - id: AC-009a
+    given: "A conversation has been sealed via the FROST ceremony; the
+      directory has NOT yet run a checkpoint; Agent A and Agent B are
+      separate OS processes with no shared memory with the directory"
+    when: "Agent A calls cello_get_sealed_receipt immediately after
+      cello_close_session returns"
+    then: "the response includes checkpoint_status: 'pending' and a
+      staged_at Unix epoch milliseconds timestamp; the FROST receipt is
+      valid but the inclusion proof is not yet available; verified using
+      real nodes with no mocks — the directory has not had a checkpoint
+      triggered between seal and this call"
+    test_type: e2e
+    component_under_test: directory
+    notes: "This AC closes the loop on the checkpoint latency gap discovered
+      in the live M4 session (see agent-conversation-database-bugs-and-protocol-gaps-m4-2026-05-18).
+      AC-009 validates the confirmed end-state; AC-009a validates the pending
+      window that precedes it. Both states must be observable in the E2E test
+      suite — a test that only asserts 'confirmed' does not prove the pending
+      window is handled correctly."
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
@@ -329,6 +349,12 @@ references:
     - CELLO-PERSIST-013
     - CELLO-PERSIST-014
     - CELLO-PERSIST-015
+    - CELLO-PERSIST-016  # schema completeness CI gate — must pass before E2E runs
+    - CELLO-PERSIST-017  # MMR checkpoint visibility — AC-009 and AC-009a require checkpoint_status field
+    - CELLO-PERSIST-018  # seal_notarizations — AC-009 requires getNotarization() to return real data
+    - CELLO-PERSIST-019  # notification_queue + pending_connection_requests — AC-005 requires real delivery
+    - CELLO-PERSIST-020  # connections — directory restart recovery required for full E2E scenario
+    - CELLO-PERSIST-021  # adapter boundary audit — all store methods verified against real Postgres
   component_stories:
     - CELLO-PERSIST-001  # interfaces bootstrap
     - CELLO-PERSIST-002  # docker + flyway (includes pgaudit container activation)
@@ -345,3 +371,9 @@ references:
     - CELLO-PERSIST-013  # relay WAL
     - CELLO-PERSIST-014  # gap-fill reconciliation
     - CELLO-PERSIST-015  # unilateral seal
+    - CELLO-PERSIST-016  # schema completeness CI gate
+    - CELLO-PERSIST-017  # MMR checkpoint visibility
+    - CELLO-PERSIST-018  # seal_notarizations migration
+    - CELLO-PERSIST-019  # notification_queue + pending_connection_requests migrations
+    - CELLO-PERSIST-020  # connections migration
+    - CELLO-PERSIST-021  # adapter boundary audit
