@@ -1,0 +1,207 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-021
+domain: Persistence
+milestone: M4
+actor: CLIENT
+priority: P0
+components:
+  - directory
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want to know when my sealed conversation has been included in the
+  global MMR checkpoint so I can obtain a third-party-verifiable inclusion
+  proof — and I want cello_close_session to surface checkpoint_pending
+  status when the FROST seal is complete but the MMR has not yet committed
+  my sealed_root,
+  so that agents are not left with a sealed conversation they cannot prove
+  to any third party.
+
+# ─── Background ─────────────────────────────────────────────
+background: >
+  Discovered during the first live M4 agent-to-agent session (2026-05-18).
+  When Agent A called cello_close_session, the response contained
+  mmr_peak: null and sealed_root: 9e31a4fe... The FROST signature was
+  complete — both parties hold a cryptographically valid receipt. But
+  no third party can verify it: the sealed_root is staged in
+  conversation_seal_staging, waiting for the next MMR checkpoint to run.
+
+  The checkpoint runs on the analytics JobScheduler cadence — currently
+  opportunistic with no SLA. Agents have no way to know when their
+  inclusion proof becomes available. cello_get_sealed_receipt returns
+  attestation_self: PENDING with no indication of when that changes.
+
+  This gap means the FROST seal closes the conversation between the two
+  parties, but the protocol's promise — that a sealed conversation is
+  independently verifiable by anyone — is not fulfilled until the checkpoint
+  runs. The window is unbounded and invisible.
+
+  Agent B's description of the fix during the live session:
+  "cello_close_session should return checkpoint_pending status, and
+  cello_get_inclusion_proof should return either the proof or a
+  pending/eta response. Without this, the FROST seal is a receipt only
+  you can read, not a proof the protocol can assert to the world."
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When cello_close_session completes the FROST seal ceremony"
+    action: "the response shall include a checkpoint_status field:
+      'confirmed' if the MMR checkpoint has already committed the
+      sealed_root, or 'pending' if the sealed_root is staged but not
+      yet checkpointed"
+
+  - trigger: "When the client calls cello_get_inclusion_proof after seal
+      but before the MMR checkpoint has run"
+    action: "the tool shall return { status: 'pending', staged_at: <timestamp> }
+      rather than an error — the sealed_root is staged and the proof
+      will be available once the checkpoint runs"
+
+  - trigger: "When the client calls cello_get_inclusion_proof after the
+      MMR checkpoint has committed the sealed_root"
+    action: "the tool shall return the full MMR inclusion proof including
+      the checkpoint peak hash, leaf index, and sibling path — sufficient
+      for a third party to independently verify inclusion without further
+      directory queries"
+
+  - trigger: "When the MMR checkpoint runs and commits a staged sealed_root"
+    action: "the directory shall update the session's mmr_peak field and
+      any listening clients shall be notifiable via cello_await_checkpoint"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Agent A calls cello_close_session and the FROST ceremony
+      completes, but no MMR checkpoint has run yet for this session"
+    when: "cello_close_session returns"
+    then: "the response includes status: 'sealed', sealed_root: <hex>,
+      and checkpoint_status: 'pending'; mmr_peak is null; the agent
+      knows the FROST receipt is valid but the inclusion proof is not
+      yet available"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-002
+    given: "A session has been sealed and the sealed_root is staged in
+      conversation_seal_staging"
+    when: "the client calls cello_get_sealed_receipt"
+    then: "the response includes checkpoint_status: 'pending' and a
+      staged_at timestamp indicating when the seal was committed to staging;
+      attestation_self is 'PENDING' with a human-readable reason:
+      'MMR checkpoint not yet written'"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-003
+    given: "A session has been sealed but the MMR checkpoint has not run"
+    when: "the client calls cello_get_inclusion_proof for this session"
+    then: "the tool returns { status: 'pending', staged_at: <timestamp>,
+      message: 'sealed_root staged; inclusion proof available after next
+      MMR checkpoint' } — not an error; the agent can retry later"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-004
+    given: "A session has been sealed AND the MMR checkpoint has run,
+      committing the sealed_root to the global proof ledger"
+    when: "the client calls cello_get_inclusion_proof"
+    then: "the tool returns { status: 'confirmed', leaf_index: N,
+      checkpoint_peak_hash: <hex>, sibling_hashes: [<hex>, ...],
+      checkpoint_id: <uuid> }; a third party with only the
+      checkpoint_peak_hash can independently verify inclusion by
+      recomputing the Merkle path — verified by running the verification
+      algorithm in a separate process with no directory connection"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A session's sealed_root has been committed to the MMR checkpoint"
+    when: "the client calls cello_close_session on a session that was
+      previously sealed (idempotent call) OR calls cello_get_sealed_receipt"
+    then: "the response includes checkpoint_status: 'confirmed',
+      mmr_peak: <hex> (the checkpoint peak hash), and leaf_index: N"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-006
+    given: "A checkpoint has just been confirmed by the directory"
+    when: "any agent that has a staged sealed_root in that checkpoint
+      calls cello_get_sealed_receipt"
+    then: "the response now shows checkpoint_status: 'confirmed';
+      the transition from 'pending' to 'confirmed' is detectable by
+      polling cello_get_sealed_receipt"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The inclusion proof returned by cello_get_inclusion_proof
+      shall be verifiable by a third party using only the checkpoint
+      peak hash and the proof path — no further directory query required"
+    adversarial_condition: "even when the directory is offline after
+      the proof is retrieved"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "cello_get_inclusion_proof shall never return a proof
+      for a session whose sealed_root is not yet in a confirmed checkpoint"
+    adversarial_condition: "even when the staged_root hash matches a
+      known checkpoint peak hash by coincidence"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the MMR checkpoint has not run within a configurable
+      max_staging_age (default: 1 hour)"
+    fallback: "the directory triggers a forced checkpoint flush for all
+      staged sealed_roots; agents polling cello_get_sealed_receipt will
+      see checkpoint_status transition from 'pending' to 'confirmed'
+      within max_staging_age"
+
+  - id: DB-002
+    condition: "While the client is offline when the checkpoint runs"
+    fallback: "the proof remains queryable via cello_get_inclusion_proof
+      indefinitely — the client can retrieve it on reconnect"
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: mmr.checkpoint.pending
+      level: info
+      trigger: "cello_close_session returns with checkpoint_status: pending"
+      context_fields: [sessionId, sealedRoot, stagedAt]
+      correlationId: false
+
+    - name: mmr.checkpoint.confirmed
+      level: info
+      trigger: "checkpoint confirmed for a previously-pending session"
+      context_fields: [sessionId, checkpointId, leafIndex, peakHash]
+      correlationId: false
+
+  error_events:
+    - name: mmr.checkpoint.overdue
+      level: warn
+      trigger: "staged sealed_root has been pending longer than max_staging_age"
+      context_fields: [sessionId, stagedAt, maxStagingAgeMs]
+
+  alarms:
+    - condition: "mmr.checkpoint.overdue fires"
+      fires_to: ops-warning
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations / Session Lifecycle / Persistence"
+  discussion_logs:
+    - "2026-05-18_0600_missing-table-investigations"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  live_session: "docs/planning/milestone-writeups/live-session-e2e-proofs/agent-conversation-database-bugs-and-protocol-gaps-m4-2026-05-18.md"
+  depends_on:
+    - CELLO-PERSIST-007  # MMR single-node construction
+    - CELLO-PERSIST-009  # SQLCipher (client storage)

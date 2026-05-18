@@ -1,0 +1,162 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-016
+domain: Persistence
+milestone: M4
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Directory Node,
+  I want a schema completeness test that fails if any table referenced
+  by PgDirectoryStore is missing from the Flyway migration set,
+  so that silent adapter.write.failed errors caused by missing migrations
+  are caught at test time rather than discovered during live sessions.
+
+# ─── Background ─────────────────────────────────────────────
+background: >
+  During M4 live testing, three tables referenced by PgDirectoryStore
+  (agent_profiles, notification_queue, connections) had no corresponding
+  Flyway migrations. PgDirectoryStore uses fire-and-forget writes (#fire),
+  so missing tables produced silent adapter.write.failed log events at
+  runtime — no exception was raised, no test failed, and no CI gate caught
+  the gap. The problem was only discovered during a live two-agent session.
+
+  A fourth table (pending_connection_requests) was also missing.
+  Seal_notarizations was also missing.
+
+  This story adds a static analysis test and an integration test that
+  together guarantee every table referenced by PgDirectoryStore has a
+  corresponding Flyway migration AND exists in the live database schema.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the schema completeness test runs"
+    action: "it shall extract every table name from PgDirectoryStore SQL
+      strings, cross-reference against the Flyway migration files, and
+      fail with a list of missing tables if any referenced table has no
+      corresponding CREATE TABLE statement in any migration file"
+
+  - trigger: "When the schema completeness integration test runs against
+      a live Postgres instance (CELLO_ENV=local)"
+    action: "it shall query information_schema.tables for every table
+      referenced by PgDirectoryStore and fail if any table does not exist
+      in the database"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The PgDirectoryStore source file contains SQL strings referencing
+      table names via INSERT INTO, SELECT FROM, UPDATE, DELETE FROM"
+    when: "the static analysis test runs"
+    then: "all table names are extracted from SQL strings in
+      PgDirectoryStore; each table name is cross-referenced against
+      CREATE TABLE statements in packages/directory/db/migrations/*.sql;
+      the test fails with a clear list of any referenced tables not found
+      in any migration file"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-002
+    given: "CELLO_ENV=local and a running Postgres instance with all
+      Flyway migrations applied"
+    when: "the integration test runs"
+    then: "for each table referenced by PgDirectoryStore, a SELECT from
+      information_schema.tables confirms the table exists; the test fails
+      with a list of any missing tables"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A new table is referenced in a PgDirectoryStore SQL string
+      but has no migration file"
+    when: "the static analysis test runs"
+    then: "the test fails and names the missing table — the developer
+      cannot merge code that references a table without a migration"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-004
+    given: "All tables referenced by PgDirectoryStore have corresponding
+      CREATE TABLE statements in migration files AND exist in the live database"
+    when: "both tests run"
+    then: "both tests pass — no false positives for correctly-migrated tables"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "No PgDirectoryStore SQL operation shall silently fail
+      due to a missing table — adapter.write.failed must be detectable
+      at test time, not only at runtime"
+    adversarial_condition: "even when a developer adds a new table
+      reference to PgDirectoryStore without writing a migration"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the static analysis cannot parse a SQL string
+      (e.g. dynamic table name via template literal)"
+    fallback: "the test logs a warning identifying the unparseable
+      SQL string and fails — dynamic table names require explicit
+      registration in a known-tables allowlist in the test"
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: schema.completeness.verified
+      level: info
+      trigger: "all referenced tables confirmed present in migrations and database"
+      context_fields: [tableCount, migrationCount]
+      correlationId: false
+
+  error_events:
+    - name: schema.completeness.failed
+      level: error
+      trigger: "one or more referenced tables missing from migrations or database"
+      context_fields: [missingTables, checkedTableCount]
+
+# ─── Implementation notes ────────────────────────────────────
+notes: >
+  The static analysis test (AC-001, AC-003) should:
+  1. Read pg-directory-store.ts source
+  2. Extract all string literals containing "INSERT INTO", "SELECT.*FROM",
+     "UPDATE", "DELETE FROM" and parse the table name that follows
+  3. Read all .sql files in packages/directory/db/migrations/
+  4. For each referenced table, check that at least one migration contains
+     "CREATE TABLE" with that table name
+  5. Fail if any table is unaccounted for
+
+  The integration test (AC-002, AC-004) should:
+  1. Connect to Postgres as superuser
+  2. Query information_schema.tables WHERE table_schema = 'public'
+  3. For each table referenced by PgDirectoryStore, assert it exists
+  4. Fail with a list of missing tables if any are absent
+
+  Tables currently referenced by PgDirectoryStore that need migrations
+  (as of M4 post-live-session audit):
+  - seal_notarizations (PERSIST-017)
+  - notification_queue (PERSIST-018)
+  - connections (PERSIST-019)
+  - pending_connection_requests (PERSIST-020)
+  (agent_profiles already addressed by V9 migration)
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations / Directory"
+  discussion_logs:
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  depends_on:
+    - CELLO-PERSIST-001
+    - CELLO-PERSIST-002
+  blocks:
+    - CELLO-PERSIST-017
+    - CELLO-PERSIST-018
+    - CELLO-PERSIST-019
+    - CELLO-PERSIST-020
