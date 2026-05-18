@@ -83,23 +83,23 @@ export class PgDirectoryStore implements DirectoryStore {
     // Pseudocode:
     //   INSERT INTO notification_queue (pubkey_hex, payload) VALUES ($1, $2)
     //   ON SUCCESS: logger.info("notification.queued", { pubkeyHex, notificationType, correlationId })
-    //   ON FAILURE: logger.error("notification.enqueue.failed", { pubkeyHex, notificationType, reason })
+    //   ON FAILURE: logger.error("notification.enqueue.failed", err, { pubkeyHex, notificationType, reason })
     void this.#pool.query(
       `INSERT INTO notification_queue (pubkey_hex, payload)
        VALUES ($1, $2)`,
       [pubkeyHex, JSON.stringify(event)],
     ).then(() => {
-      const logContext: Record<string, unknown> = {
+      // correlationId is always included — if undefined, CloudWatch records null rather
+      // than silently omitting the field (AC spec requires correlationId as a required field).
+      this.#logger.info("notification.queued", {
         pubkeyHex,
         notificationType: event.type,
-      };
-      if (correlationId !== undefined) {
-        logContext.correlationId = correlationId;
-      }
-      this.#logger.info("notification.queued", logContext);
+        correlationId,
+      });
     }).catch((err: unknown) => {
       const reason = err instanceof Error ? err.message : String(err);
-      this.#logger.error("notification.enqueue.failed", {
+      // Use 3-arg logger form so the Error stack trace is preserved in CloudWatch.
+      this.#logger.error("notification.enqueue.failed", err as Error, {
         pubkeyHex,
         notificationType: event.type,
         reason,

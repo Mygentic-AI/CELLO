@@ -4,9 +4,18 @@
 -- (deleted) when drained. Neither requires a chain_hash column. Both require
 -- INSERT, SELECT, and DELETE for cello_service. No UPDATE policy exists.
 --
--- This migration is idempotent: it creates the tables if they do not exist (they may
--- have been created by a parallel worktree migration), and ensures the correct policy
--- names and RLS predicates are in place regardless of what was applied previously.
+-- This migration follows the two-step pattern established by PERSIST-016 (V10):
+--
+--   Step 1: CREATE TABLE IF NOT EXISTS (id, created_at) — no-op if V10 stub already applied.
+--   Step 2: ALTER TABLE ADD COLUMN IF NOT EXISTS <col> — idempotent for each data column.
+--
+-- V10 (PERSIST-016) created notification_queue and pending_connection_requests as minimal
+-- stubs (id BIGSERIAL PRIMARY KEY, created_at TIMESTAMPTZ) and explicitly documented:
+--   "The PERSIST-018/019/020 migrations add the actual column definitions via
+--    ALTER TABLE ... ADD COLUMN IF NOT EXISTS"
+--
+-- V10 also only granted INSERT + SELECT (no DELETE). This migration adds DELETE grants
+-- and replaces the coarse V10 RLS policies with the authoritative fine-grained ones.
 --
 -- notification_queue:
 --   Holds DirectoryNotifications (SessionAbandoned, SessionSealed, SessionSealRejected,
@@ -30,18 +39,25 @@
 
 -- ─── notification_queue ───────────────────────────────────────────────────────
 
+-- Step 1: create stub if it does not exist (no-op when V10 is already applied)
 CREATE TABLE IF NOT EXISTS notification_queue (
-  id          BIGSERIAL    PRIMARY KEY,
-  pubkey_hex  TEXT         NOT NULL,
-  payload     JSONB        NOT NULL,
-  created_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+  id         BIGSERIAL    PRIMARY KEY,
+  created_at TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
+
+-- Step 2: add data columns idempotently (no-op when already present)
+ALTER TABLE notification_queue ADD COLUMN IF NOT EXISTS pubkey_hex TEXT NOT NULL DEFAULT '';
+ALTER TABLE notification_queue ADD COLUMN IF NOT EXISTS payload    JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- Remove temporary defaults — all new rows must supply real values
+ALTER TABLE notification_queue ALTER COLUMN pubkey_hex DROP DEFAULT;
+ALTER TABLE notification_queue ALTER COLUMN payload    DROP DEFAULT;
 
 CREATE INDEX IF NOT EXISTS idx_notification_queue_pubkey ON notification_queue (pubkey_hex);
 
 ALTER TABLE notification_queue ENABLE ROW LEVEL SECURITY;
 
--- Ensure correct policy set: drop any stale policies from parallel worktree migrations,
+-- Ensure correct policy set: drop any stale policies from V10 or parallel worktree migrations,
 -- then create the authoritative ones.
 DO $$ BEGIN
   DROP POLICY IF EXISTS select_all ON notification_queue;
@@ -75,18 +91,25 @@ END $$;
 
 -- ─── pending_connection_requests ──────────────────────────────────────────────
 
+-- Step 1: create stub if it does not exist (no-op when V10 is already applied)
 CREATE TABLE IF NOT EXISTS pending_connection_requests (
-  id             BIGSERIAL    PRIMARY KEY,
-  target_pubkey  TEXT         NOT NULL,
-  payload        JSONB        NOT NULL,
-  created_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
+  id         BIGSERIAL    PRIMARY KEY,
+  created_at TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
+
+-- Step 2: add data columns idempotently (no-op when already present)
+ALTER TABLE pending_connection_requests ADD COLUMN IF NOT EXISTS target_pubkey TEXT NOT NULL DEFAULT '';
+ALTER TABLE pending_connection_requests ADD COLUMN IF NOT EXISTS payload       JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- Remove temporary defaults — all new rows must supply real values
+ALTER TABLE pending_connection_requests ALTER COLUMN target_pubkey DROP DEFAULT;
+ALTER TABLE pending_connection_requests ALTER COLUMN payload       DROP DEFAULT;
 
 CREATE INDEX IF NOT EXISTS idx_pending_conn_req_target ON pending_connection_requests (target_pubkey);
 
 ALTER TABLE pending_connection_requests ENABLE ROW LEVEL SECURITY;
 
--- Ensure correct policy set: drop any stale policies from parallel worktree migrations.
+-- Ensure correct policy set: drop any stale policies from V10 or parallel worktree migrations.
 DO $$ BEGIN
   DROP POLICY IF EXISTS delete_own ON pending_connection_requests;
   DROP POLICY IF EXISTS insert_only ON pending_connection_requests;
