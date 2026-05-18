@@ -4,6 +4,9 @@
  *
  * Used only by the composition root (bin/directory.ts). Never imported from application code.
  * PERSIST-001 SI-002: not exported from packages/directory index.ts.
+ *
+ * PERSIST-021: BIGINT_COLUMNS and STORE_TABLES are exported for use by the static analysis
+ * gate tests (AC-005 and AC-006) and by the deserialization path (SI-001).
  */
 
 import pg from "pg";
@@ -24,6 +27,153 @@ import {
   type ChainVerificationResult,
   type HashChainedTable,
 } from "../hash-chain.js";
+
+/**
+ * PERSIST-021: Per-table BIGINT/BIGSERIAL column declarations.
+ *
+ * Pseudocode for deserialization at read time:
+ *   1. When a row is fetched from table T, consult BIGINT_COLUMNS[T].
+ *   2. For each declared column C in BIGINT_COLUMNS[T], apply parseInt(row[C], 10).
+ *   3. If the column T is NOT in BIGINT_COLUMNS and any column value is a BIGINT-shaped
+ *      string (pure digits, large number), throw a TypeError naming T and C, and log
+ *      adapter.bigint.type.error before throwing.
+ *
+ * Source of truth: Flyway migration files in packages/directory/db/migrations/
+ *   V2__directory_schema.sql   — agent_registrations id BIGSERIAL
+ *   V5__mmr_tables.sql         — conversation_proof_leaves leaf_index, mmr_position;
+ *                                conversation_proof_mmr_nodes mmr_position;
+ *                                directory_checkpoints mmr_leaf_count
+ *   V7__analytics_tables.sql   — analytics tables (not in STORE_TABLES)
+ *   V10__missing_table_stubs.sql — seal_notarizations, notification_queue,
+ *                                  pending_connection_requests, connections (id BIGSERIAL)
+ *   V11__connections_full_schema.sql — connections established_at BIGINT
+ *   V12__seal_notarizations.sql — seal_notarizations close_timestamp BIGINT
+ *
+ * AC-005 static analysis gate: parsed by persist-021-adapter-boundary-audit.test.ts to
+ * assert no BIGINT/BIGSERIAL column in STORE_TABLES-owned tables is absent from this map.
+ *
+ * Exported so the AC-005 gate test can import and inspect it directly.
+ */
+export const BIGINT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  // Tables with BIGSERIAL id column (read back in SELECT *)
+  agent_registrations: ["id"],
+  // agent_profiles: id BIGSERIAL, registered_at BIGINT (Unix ms timestamp) — V9 migration
+  agent_profiles: ["id", "registered_at"],
+  conversation_seals: ["id"],
+  conversation_attestations: ["id"],
+  conversation_participation: ["id"],
+  notification_events: ["id"],
+  seal_notarizations: ["id", "close_timestamp"],
+  connection_requests: ["id"],
+  connections: ["id", "established_at"],
+  notification_queue: ["id"],
+  pending_connection_requests: ["id"],
+  // MMR tables with additional BIGINT columns
+  conversation_proof_leaves: ["id", "leaf_index", "mmr_position"],
+  conversation_proof_mmr_nodes: ["id", "mmr_position"],
+  directory_checkpoints: ["id", "mmr_leaf_count"],
+} as const;
+
+/**
+ * PERSIST-021: All table names that PgDirectoryStore writes to.
+ *
+ * This list is the authoritative scope boundary for AC-005 and AC-006 static analysis gates:
+ *   - AC-005: each table in STORE_TABLES must have all BIGINT columns declared in BIGINT_COLUMNS
+ *   - AC-006: each table in STORE_TABLES must have integration test coverage (write + read)
+ *
+ * Tables NOT in this list (tables owned by other domain migrations, such as CONNREQ tables)
+ * are excluded from AC-005 and AC-006 diffs.
+ *
+ * Scope: Persistence domain (PERSIST-* stories). CONNREQ-domain tables that PgDirectoryStore
+ * may read (e.g. connection_requests for SI-001 validation) are included because PgDirectoryStore
+ * writes to them via insertWithChain.
+ *
+ * Exported so AC-006 gate test can import and iterate over it.
+ */
+export const STORE_TABLES = [
+  "agent_registrations",
+  "agent_profiles",
+  "conversation_seals",
+  "conversation_attestations",
+  "conversation_participation",
+  "notification_events",
+  "seal_notarizations",
+  "connection_requests",
+  "connections",
+  "notification_queue",
+  "pending_connection_requests",
+  "conversation_proof_leaves",
+  "conversation_proof_mmr_nodes",
+  "directory_checkpoints",
+] as const;
+
+export type StoreTables = (typeof STORE_TABLES)[number];
+
+/**
+ * PERSIST-021: Deserialize a row from a named table, converting BIGINT columns to
+ * JavaScript numbers using the BIGINT_COLUMNS declaration map.
+ *
+ * Pseudocode:
+ *   1. Look up BIGINT_COLUMNS[tableName]. If not found, return row as-is (no BIGINT columns
+ *      declared for this table — a string will propagate and be caught by AC-005 gate in CI).
+ *   2. For each declared column in BIGINT_COLUMNS[tableName]:
+ *      - If the value is a string (as returned by pg driver), apply parseInt(value, 10).
+ *      - If the value is already a number, leave it unchanged.
+ *   3. DOES NOT throw for tables in BIGINT_COLUMNS that have undeclared columns —
+ *      the TypeError path is for reading BIGINT-shaped strings from tables that ARE in
+ *      BIGINT_COLUMNS but where the column is missing from the declaration.
+ *
+ * SI-001: if a BIGINT column is read back from a table in BIGINT_COLUMNS but the column is
+ * NOT declared in the per-table list, and the value is a BIGINT-shaped string (pure digits),
+ * throw a TypeError naming the table and column and log adapter.bigint.type.error.
+ * This prevents silent string propagation into security-critical comparisons.
+ */
+function deserializeRow(
+  row: Record<string, unknown>,
+  tableName: string,
+  logger: Logger,
+  correlationId?: string,
+): Record<string, unknown> {
+  const declared = BIGINT_COLUMNS[tableName];
+  // If the table has NO entry in BIGINT_COLUMNS, check each numeric-string value:
+  // Any column that looks like a BIGINT (pure digits, 10+ chars OR a number that overflows float64)
+  // indicates the BIGINT_COLUMNS map is incomplete.
+  // The SI-001 guard: if a column value is a pure-digit string AND the table IS in BIGINT_COLUMNS
+  // but the column is NOT declared, throw TypeError.
+  const result: Record<string, unknown> = { ...row };
+
+  if (!declared) {
+    // Table not in BIGINT_COLUMNS at all — pass through; AC-005 gate catches this in CI.
+    return result;
+  }
+
+  const declaredSet = new Set(declared);
+
+  for (const [col, value] of Object.entries(row)) {
+    if (typeof value === "string" && /^\d+$/.test(value)) {
+      if (declaredSet.has(col)) {
+        // Declared BIGINT column — convert to number
+        result[col] = parseInt(value, 10);
+      } else {
+        // Undeclared BIGINT column in a table that IS in BIGINT_COLUMNS — throw TypeError (SI-001)
+        // Log adapter.bigint.type.error before throwing so the on-call engineer has context.
+        logger.error("adapter.bigint.type.error", {
+          tableName,
+          columnName: col,
+          value,
+          correlationId,
+        });
+        throw new TypeError(
+          `[PERSIST-021 SI-001] BIGINT column '${col}' in table '${tableName}' is not declared in BIGINT_COLUMNS. ` +
+          `This indicates a migration added a new BIGINT column without updating BIGINT_COLUMNS. ` +
+          `Add '${col}' to BIGINT_COLUMNS['${tableName}'] to fix this error.`,
+        );
+      }
+    }
+  }
+
+  return result;
+}
 
 
 export class PgDirectoryStore implements DirectoryStore {
@@ -524,6 +674,10 @@ export class PgDirectoryStore implements DirectoryStore {
    * pg_advisory_xact_lock provides table-level serialization using only SELECT privilege,
    * and is automatically released at COMMIT/ROLLBACK.
    *
+   * PERSIST-021 AC-009: After each successful INSERT, logs adapter.persisted at INFO with
+   * { tableName, rowCount: 1, durationMs, correlationId }.
+   * correlationId is threaded from calling context; omitted if not present.
+   *
    * SI-002: chain_hash is always computed internally — never accepted from external callers.
    * SI-003: Advisory lock prevents forked chains under concurrent writes.
    *
@@ -532,6 +686,8 @@ export class PgDirectoryStore implements DirectoryStore {
    * @param columns - Column names in insertion order (must include chain_hash)
    * @param values - Corresponding values (chain_hash slot will be overwritten)
    * @param chainHashIndex - Index of chain_hash in the columns/values arrays
+   * @param externalClient - Optional: use an external PoolClient (caller owns transaction lifecycle)
+   * @param correlationId - Optional: correlation ID for adapter.persisted observability event
    */
   async insertWithChain(
     tableName: HashChainedTable,
@@ -540,6 +696,7 @@ export class PgDirectoryStore implements DirectoryStore {
     values: unknown[],
     chainHashIndex: number,
     externalClient?: pg.PoolClient,
+    correlationId?: string,
   ): Promise<string> {
     // Runtime guard: tableName flows into SQL via template literal — verify it is in
     // the known-safe set even though TypeScript constrains it at compile time.
@@ -559,6 +716,9 @@ export class PgDirectoryStore implements DirectoryStore {
         );
       }
     }
+
+    // PERSIST-021 AC-009: track start time for durationMs calculation
+    const insertStartMs = Date.now();
 
     // When an external client is provided, the caller owns the transaction lifecycle
     // (BEGIN/COMMIT/ROLLBACK). We only execute the chain logic within their transaction.
@@ -591,6 +751,17 @@ export class PgDirectoryStore implements DirectoryStore {
       );
 
       if (ownsTransaction) await client.query("COMMIT");
+
+      // PERSIST-021 AC-009: log adapter.persisted at INFO after successful INSERT.
+      // durationMs is wall-clock time from start of insertWithChain to commit confirmation.
+      // correlationId is omitted when not present — not minted at the adapter layer (per story spec).
+      const durationMs = Date.now() - insertStartMs;
+      const persistedCtx: Record<string, unknown> = { tableName, rowCount: 1, durationMs };
+      if (correlationId !== undefined) {
+        persistedCtx["correlationId"] = correlationId;
+      }
+      this.#logger.info("adapter.persisted", persistedCtx);
+
       return chainHash;
     } catch (err) {
       if (ownsTransaction) await client.query("ROLLBACK").catch(() => { /* ignore rollback errors */ });
@@ -605,6 +776,12 @@ export class PgDirectoryStore implements DirectoryStore {
    * Fetches all rows ordered by id, recomputes all chain_hashes from genesis,
    * reports any divergence.
    *
+   * PERSIST-021: rows are deserialized via deserializeRow before being passed to
+   * verifyChain, so BIGINT columns are consistently typed as numbers. This also
+   * enforces SI-001: a BIGINT column not declared in BIGINT_COLUMNS causes a
+   * TypeError to be thrown here, rather than a silent string propagation into
+   * chain verification computations.
+   *
    * AC-003: clean chain → { valid: true }
    * AC-004: tampered row → break at that position
    * AC-005: deleted row → chain recomputation detects the gap
@@ -613,6 +790,11 @@ export class PgDirectoryStore implements DirectoryStore {
     const result = await this.#pool.query<Record<string, unknown>>(
       `SELECT * FROM ${tableName} ORDER BY id ASC`,
     );
-    return verifyChain(result.rows, this.#logger, tableName);
+    // PERSIST-021: deserialize each row so BIGINT columns are numbers (SI-001 enforcement).
+    // If a BIGINT column is missing from BIGINT_COLUMNS, deserializeRow throws a TypeError.
+    const deserializedRows = result.rows.map((row) =>
+      deserializeRow(row, tableName, this.#logger),
+    );
+    return verifyChain(deserializedRows, this.#logger, tableName);
   }
 }
