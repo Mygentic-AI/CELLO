@@ -52,7 +52,12 @@ async function assertPermissionDenied(pool, sql, args, label) {
     fail(`${label}: expected permission denied but query succeeded`);
   } catch (err) {
     const msg = (err.message || String(err)).toLowerCase();
-    if (!msg.includes("permission denied") && !msg.includes("insufficient privilege")) {
+    if (
+      !msg.includes("permission denied") &&
+      !msg.includes("insufficient privilege") &&
+      !msg.includes("must be owner") &&
+      !msg.includes("must be superuser")
+    ) {
       fail(`${label}: expected permission denied, got: ${err.message}`);
     }
     pass(`${label}: permission denied as expected`);
