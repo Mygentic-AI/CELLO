@@ -207,13 +207,12 @@ notes: >
   Tables currently referenced by PgDirectoryStore that need migrations
   (as of M4 post-live-session audit):
   - seal_notarizations (PERSIST-018)
-  - notification_queue (PERSIST-019)
+  - notification_queue + pending_connection_requests (PERSIST-019)
   - connections (PERSIST-020)
-  - pending_connection_requests (PERSIST-021)
   (agent_profiles already addressed by V9 migration)
   Note: PERSIST-017 is the MMR checkpoint story (cello_get_inclusion_proof /
-  checkpoint_pending status); PERSIST-018 through PERSIST-021 are the four
-  missing-table migration stories.
+  checkpoint_pending status); PERSIST-018/019/020 are the three missing-table
+  migration stories; PERSIST-021 is the adapter boundary audit story.
 
   Test-output observability events (not production Logger events):
   These events are emitted by the test runner for diagnostic output and are
@@ -246,4 +245,4 @@ references:
     - CELLO-PERSIST-018
     - CELLO-PERSIST-019
     - CELLO-PERSIST-020
-    - CELLO-PERSIST-021  # pending_connection_requests migration — story not yet written; ID reserved
+    - CELLO-PERSIST-021  # adapter boundary audit — BIGINT_COLUMNS map + CI coverage gates

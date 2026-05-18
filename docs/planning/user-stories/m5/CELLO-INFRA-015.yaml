@@ -60,7 +60,7 @@ acceptance_criteria:
     given: "No pending_notifications table exists in M4 migrations
       (PERSIST-015 described it as a future M5 table — it was not
       created in any M4 migration file)"
-    when: "the V11 migration is applied"
+    when: "the V12 migration is applied"
     then: "the pending_notifications table is created with columns:
       notification_id UUID NOT NULL UNIQUE, recipient_agent_id TEXT
       NOT NULL, notification_type TEXT NOT NULL, payload JSONB NOT NULL,
@@ -152,13 +152,13 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-008-idempotency
-    given: "The V11 pending_notifications schema migration has been
-      applied once to a database that already has V1–V10 applied"
+    given: "The V12 pending_notifications schema migration has been
+      applied once to a database that already has V1–V11 applied"
     when: "flyway migrate is run a second time against the same database"
     then: "flyway exits 0 with no new rows in flyway_schema_history;
       the CREATE TABLE for pending_notifications uses IF NOT EXISTS;
-      the CREATE INDEX uses IF NOT EXISTS; running V11 twice is safe —
-      verified by applying V11 twice and asserting flyway_schema_history
+      the CREATE INDEX uses IF NOT EXISTS; running V12 twice is safe —
+      verified by applying V12 twice and asserting flyway_schema_history
       row count does not change on the second run"
     test_type: integration
     component_under_test: directory
@@ -231,12 +231,18 @@ degraded_behavior:
 # ─── Observability ──────────────────────────────────────────
 observability:
   events:
-    - name: notification.queued
+    - name: pending_notification.queued
       level: info
       trigger: "a notification is written to pending_notifications"
       context_fields: [notificationId, recipientAgentId,
         notificationType]
       correlationId: false
+      notes: "Distinct from notification.queued (PERSIST-019), which is
+        emitted by the general DirectoryNotification queue (notification_queue
+        table) with fields [pubkeyHex, notificationType, correlationId].
+        These are different tables, different implementations, and different
+        field shapes — using the same event name would break any alert or
+        dashboard that watches notification.queued."
 
     - name: notification.delivered
       level: info

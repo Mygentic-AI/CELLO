@@ -194,6 +194,24 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
+  - id: AC-009-store-tables
+    given: "INFRA-003 introduces writeCheckpointSignature() — the first
+      PgDirectoryStore method that writes to checkpoint_node_signatures;
+      no M4 story added this table to STORE_TABLES because no M4 story
+      wrote to it (V2 created it as a stub with id BIGSERIAL PRIMARY KEY
+      only)"
+    when: "writeCheckpointSignature() is implemented"
+    then: "checkpoint_node_signatures is added to STORE_TABLES in
+      PgDirectoryStore; checkpoint_node_signatures.id (BIGSERIAL) is
+      declared in BIGINT_COLUMNS — the PERSIST-021 AC-005 static analysis
+      gate fails CI if either is absent; a round-trip integration test
+      writes a checkpoint_node_signatures row via PgDirectoryStore and
+      reads it back from a fresh store instance (CELLO_ENV=local, real
+      Postgres — no stub); the fresh PgDirectoryStore instance having no
+      cache is itself the evidence that the result came from a live SELECT"
+    test_type: integration
+    component_under_test: directory
+
   - id: AC-010-canonical-tbs
     given: "The checkpoint hash formula is SHA-256(mmr_peaks_serialized
       || identity_merkle_root || checkpoint_id) where mmr_peaks_serialized
