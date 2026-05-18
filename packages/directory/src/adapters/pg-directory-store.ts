@@ -34,9 +34,8 @@ import {
  * Pseudocode for deserialization at read time:
  *   1. When a row is fetched from table T, consult BIGINT_COLUMNS[T].
  *   2. For each declared column C in BIGINT_COLUMNS[T], apply parseInt(row[C], 10).
- *   3. If the column T is NOT in BIGINT_COLUMNS and any column value is a BIGINT-shaped
- *      string (pure digits, large number), throw a TypeError naming T and C, and log
- *      adapter.bigint.type.error before throwing.
+ *   3. If a column is NOT declared in BIGINT_COLUMNS[T], leave its value as-is.
+ *      The AC-005 static gate enforces completeness of BIGINT_COLUMNS in CI.
  *
  * Source of truth: Flyway migration files in packages/directory/db/migrations/
  *   V2__directory_schema.sql   — agent_registrations id BIGSERIAL
@@ -747,10 +746,9 @@ export class PgDirectoryStore implements DirectoryStore {
    * reports any divergence.
    *
    * PERSIST-021: rows are deserialized via deserializeRow before being passed to
-   * verifyChain, so BIGINT columns are consistently typed as numbers. This also
-   * enforces SI-001: a BIGINT column not declared in BIGINT_COLUMNS causes a
-   * TypeError to be thrown here, rather than a silent string propagation into
-   * chain verification computations.
+   * verifyChain, so declared BIGINT columns are consistently typed as numbers.
+   * Undeclared columns are left as-is (string); the AC-005 static gate enforces
+   * completeness of BIGINT_COLUMNS in CI before changes reach production.
    *
    * AC-003: clean chain → { valid: true }
    * AC-004: tampered row → break at that position
