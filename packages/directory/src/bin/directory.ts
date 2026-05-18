@@ -36,6 +36,7 @@ import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { EncryptedPgShareStore } from "../encrypted-share-store.js";
 import { PersistentShareStore } from "../persistent-share-store.js";
 import { MmrStore } from "../mmr-store.js";
+import { MmrCheckpointService } from "../mmr-checkpoint-service.js";
 import { AnalyticsJob } from "../analytics-job.js";
 
 const env = process.env["CELLO_ENV"];
@@ -178,11 +179,17 @@ if (env === "local" && pgPool) {
   logger.info("db.rls.verified", { tableCount: appendOnlyTables.length, env });
 }
 
-// ─── DB-001: Incomplete checkpoint recovery ──────────────────────────────────
-// On startup, detect any partially-written checkpoints and re-run confirmCheckpoint
-// to complete them idempotently.
+// ─── PERSIST-017: MmrStore + MmrCheckpointService instantiation ─────────────
+// mmrStore is used for both startup recovery (DB-001) and the mmr_checkpoint
+// job handler registered with the scheduler below.
+let mmrCheckpointService: MmrCheckpointService | undefined;
 if (env === "local" && pgPool) {
   const mmrStore = new MmrStore(pgPool, logger);
+  mmrCheckpointService = new MmrCheckpointService(mmrStore, pgPool, logger);
+  logger.info("adapter.initialised", { adapterName: "MmrCheckpointService", implementation: "MmrCheckpointService", env });
+
+  // DB-001: On startup, detect any partially-written checkpoints and re-run
+  // confirmCheckpoint to complete them idempotently.
   const orphanedIds = await mmrStore.detectIncompleteCheckpoints(logger);
   for (const checkpointId of orphanedIds) {
     logger.info("mmr.checkpoint.recovery.started", { checkpointId, env });
@@ -234,6 +241,20 @@ if (env === "local" && pgPool) {
   });
 
   logger.info("adapter.initialised", { adapterName: "AnalyticsJob", triggeredBy: "scheduler", env });
+
+  // ─── PERSIST-017: mmr_checkpoint job handler ──────────────────────────────
+  // Triggers MmrCheckpointService.runCheckpoint() for all staged seals.
+  // Also checks for overdue staged seals and forces a flush.
+  if (mmrCheckpointService) {
+    scheduler.onJob("mmr_checkpoint", async () => {
+      await mmrCheckpointService!.runCheckpoint();
+      const overdueIds = await mmrCheckpointService!.checkOverdue();
+      if (overdueIds.length > 0) {
+        await mmrCheckpointService!.forceFlush(overdueIds);
+      }
+    });
+    logger.info("adapter.initialised", { adapterName: "MmrCheckpointJob", triggeredBy: "scheduler", env });
+  }
 }
 
 // ─── Key loading ──────────────────────────────────────────────────────────

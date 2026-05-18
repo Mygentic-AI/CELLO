@@ -84,6 +84,7 @@ import { MmrStore } from "../mmr-store.js";
 import { MmrCheckpointService } from "../mmr-checkpoint-service.js";
 import { verifyInclusionProof, PROOF_NOT_YET_AVAILABLE } from "../mmr.js";
 import type { Logger } from "@cello/interfaces";
+import { LocalJobScheduler } from "@cello/interfaces/stubs";
 
 /** Tolerance for comparing timestamps across clock boundaries (DB vs local clock). */
 const CLOCK_SKEW_TOLERANCE_MS = 1000;
@@ -633,7 +634,7 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-005 confirmed status af
 // ─── AC-006: pending → confirmed transition via MmrCheckpointService ─────────
 
 describeIntegrationIsolated("PERSIST-017 integration: AC-006 pending to confirmed transition", () => {
-  it("AC-006: poll pending → trigger checkpoint via MmrCheckpointService → poll confirmed", async () => {
+  it("AC-006: poll pending → trigger checkpoint via JobScheduler mmr_checkpoint handler → poll confirmed", async () => {
     const logger = createMockLogger();
     const store = new MmrStore(servicePool, logger);
 
@@ -647,9 +648,25 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-006 pending to confirme
     const pendingStatus = await store.getSealStagingStatus(sessionId);
     expect(pendingStatus.status).toBe("pending");
 
-    // Trigger checkpoint via MmrCheckpointService.runCheckpoint (real code path, same as production)
+    // AC-006: trigger checkpoint via the JobScheduler mmr_checkpoint entry point —
+    // the same code path used in production (matching the composition root wiring in
+    // packages/directory/src/bin/directory.ts).
+    // Register the handler with a LocalJobScheduler (as the composition root does),
+    // then schedule a job at runAt=0 and await the setTimeout(0) tick.
     const service = new MmrCheckpointService(store, servicePool, logger);
-    await service.runCheckpoint();
+    const scheduler = new LocalJobScheduler();
+    scheduler.onJob("mmr_checkpoint", async () => {
+      await service.runCheckpoint();
+      const overdueIds = await service.checkOverdue();
+      if (overdueIds.length > 0) {
+        await service.forceFlush(overdueIds);
+      }
+    });
+
+    // Trigger: schedule a job with runAt in the past so delay=0.
+    await scheduler.schedule("test-mmr-checkpoint", Date.now() - 1, { type: "mmr_checkpoint" });
+    // Yield to the event loop so the setTimeout(0) fires the registered handler.
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
 
     // mmr.session.checkpointed must have been emitted between the two polls
     const checkpointedCalls = filterLogCalls(logger.info, "mmr.session.checkpointed");

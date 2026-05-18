@@ -24,6 +24,7 @@
   "dependencies": {
     "@cello/client": "workspace:*",
     "@cello/crypto": "workspace:*",
+    "@cello/interfaces": "workspace:*",
     "@cello/transport": "workspace:*",
     "@libp2p/peer-id": "^6.0.8",
     "@modelcontextprotocol/sdk": "^1.29.0",
