@@ -1,0 +1,299 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-019
+domain: Persistence
+milestone: M4
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Directory Node,
+  I want notification_queue and pending_connection_requests tables with
+  Flyway migrations so that DirectoryNotifications and connection requests
+  destined for offline agents survive directory restarts and are delivered
+  on reconnect,
+  so that drainNotifications() and dequeuePendingConnectionRequests() stop
+  returning empty arrays and offline agents receive events they missed.
+
+# ─── Background ─────────────────────────────────────────────
+background: >
+  Discovered during the first live M4 agent-to-agent session (2026-05-18).
+  Two separate fire-and-forget writes produced silent adapter.write.failed
+  events: one to notification_queue and one to pending_connection_requests.
+  Neither table had a Flyway migration.
+
+  notification_queue holds DirectoryNotifications (SessionAbandoned,
+  SessionSealed, SessionSealRejected, SealVerified, ConnectionEstablished)
+  queued for offline agents. When an agent reconnects, drainNotifications()
+  dequeues all pending items. Without this table, the PERSIST-015 AC-005
+  guarantee ("absent party receives SEAL_UNILATERAL notification on reconnect")
+  does not hold in production — the unit tests passed only because they used
+  in-memory state.
+
+  pending_connection_requests holds connection requests from A to B when B
+  is offline at request time. When B reconnects, dequeuePendingConnectionRequests()
+  delivers them. Without this table, any connection request sent while the
+  target is offline is silently lost.
+
+  Both tables are ephemeral delivery queues, not audit records. They are
+  mutable — rows are consumed (deleted) when drained. Neither requires a
+  chain_hash column. Both require INSERT, SELECT, and DELETE for cello_service.
+
+  pending_connection_requests requires a TTL: requests older than 24 hours
+  are stale and must be purged. notification_queue does not have a fixed TTL
+  but rows are deleted immediately on drain.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When Flyway migrations are applied to a fresh database"
+    action: "notification_queue shall exist with columns: id (BIGSERIAL PRIMARY
+      KEY), pubkey_hex (TEXT NOT NULL), payload (JSONB NOT NULL), created_at
+      (TIMESTAMPTZ DEFAULT now()); an index shall exist on pubkey_hex;
+      RLS shall be enabled with INSERT, SELECT, and DELETE policies for
+      cello_service; no UPDATE policy shall exist for cello_service"
+
+  - trigger: "When Flyway migrations are applied to a fresh database"
+    action: "pending_connection_requests shall exist with columns: id (BIGSERIAL
+      PRIMARY KEY), target_pubkey (TEXT NOT NULL), payload (JSONB NOT NULL),
+      created_at (TIMESTAMPTZ DEFAULT now()); an index shall exist on
+      target_pubkey; RLS shall be enabled with INSERT, SELECT, and DELETE
+      policies for cello_service; no UPDATE policy shall exist for
+      cello_service"
+
+  - trigger: "When the directory needs to deliver a DirectoryNotification to
+      an agent that is currently offline"
+    action: "the directory shall INSERT one row into notification_queue with
+      the target agent's pubkey_hex and the JSON-serialized notification payload;
+      the notification is retained until the agent reconnects"
+
+  - trigger: "When an agent reconnects to the directory"
+    action: "the directory shall SELECT all rows from notification_queue WHERE
+      pubkey_hex = reconnecting_agent_pubkey ORDER BY id ASC, deserialize each
+      payload, DELETE the rows in the same transaction, and return the
+      notifications to the calling agent via drainNotifications()"
+
+  - trigger: "When Agent A sends a connection request to Agent B and B is
+      currently offline"
+    action: "the directory shall INSERT one row into pending_connection_requests
+      with B's target_pubkey and the JSON-serialized connection request payload"
+
+  - trigger: "When Agent B reconnects to the directory"
+    action: "the directory shall SELECT all rows from pending_connection_requests
+      WHERE target_pubkey = B_pubkey AND created_at > now() - INTERVAL '24 hours'
+      ORDER BY id ASC, DELETE those rows in the same transaction, and deliver
+      them to B via dequeuePendingConnectionRequests()"
+
+  - trigger: "When the directory's TTL sweep runs"
+    action: "the directory shall DELETE all rows from pending_connection_requests
+      WHERE created_at < now() - INTERVAL '24 hours' and log
+      queue.pending_connection_requests.expired at INFO with { purgedCount }"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Flyway migrations have been applied to a local Postgres container
+      (CELLO_ENV=local)"
+    when: "information_schema.tables is queried"
+    then: "notification_queue exists in schema public with all required
+      columns and index on pubkey_hex; relrowsecurity=true; policies for
+      cello_service include insert_only, select_all, and delete_own;
+      no GRANT UPDATE for cello_service; pending_connection_requests exists
+      with the same policy structure and index on target_pubkey"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "An agent is offline; the directory calls enqueueNotification()
+      with a ConnectionEstablished DirectoryNotification for that agent
+      (CELLO_ENV=local)"
+    when: "the agent later calls drainNotifications(pubkeyHex)"
+    then: "drainNotifications() returns the ConnectionEstablished notification;
+      the row is deleted from notification_queue; a subsequent call to
+      drainNotifications() for the same agent returns an empty array"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "Three notifications have been enqueued for agent A in order:
+      ConnectionEstablished, SessionSealed, SealVerified (CELLO_ENV=local)"
+    when: "drainNotifications(agentAPubkey) is called"
+    then: "the returned array contains all three notifications in insertion
+      order (FIFO); all three rows are deleted in the same database transaction
+      as the SELECT — no notification is double-delivered if two drain calls
+      race"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "Agent B is offline; Agent A calls queuePendingConnectionRequest()
+      targeting B (CELLO_ENV=local)"
+    when: "B calls dequeuePendingConnectionRequests(bPubkey)"
+    then: "dequeuePendingConnectionRequests() returns the queued request;
+      the row is deleted from pending_connection_requests; a subsequent call
+      returns an empty array"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A pending_connection_requests row has created_at older than 24
+      hours (CELLO_ENV=local)"
+    when: "dequeuePendingConnectionRequests() is called for the target agent"
+    then: "the expired row is NOT returned — stale connection requests are
+      not delivered; the row is deleted by the query's age filter; a fresh
+      row (created_at < 24h) for the same agent IS returned"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "pending_connection_requests contains rows older than 24 hours
+      (CELLO_ENV=local)"
+    when: "the TTL sweep runs"
+    then: "all rows with created_at < now() - 24h are deleted;
+      queue.pending_connection_requests.expired is logged at INFO with
+      { purgedCount } equal to the number of deleted rows; rows newer than
+      24h are not deleted"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "The cello_service role is connected to cello_dev"
+    when: "cello_service attempts UPDATE notification_queue"
+    then: "PostgreSQL rejects the operation with 'ERROR: permission denied
+      for table notification_queue'; rows are unchanged — delivery queues
+      are INSERT-then-DELETE, never UPDATE"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "enqueueNotification() is called"
+    when: "the INSERT commits successfully"
+    then: "notification.queued is logged at INFO with
+      { pubkeyHex, notificationType, correlationId }"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-009
+    given: "drainNotifications() is called and returns one or more items"
+    when: "the SELECT and DELETE commit successfully"
+    then: "notification.drained is logged at INFO with
+      { pubkeyHex, count, correlationId }"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "drainNotifications() and dequeuePendingConnectionRequests()
+      shall perform the SELECT and DELETE in a single database transaction —
+      a notification or connection request shall never be delivered twice
+      even when two concurrent calls race for the same agent's queue"
+    adversarial_condition: "even when two concurrent reconnect handlers race
+      to drain the same agent's queue — the transaction-level atomicity of
+      SELECT + DELETE prevents double delivery; tested by two concurrent
+      drainNotifications() calls for the same pubkeyHex with a single queued
+      notification, asserting exactly one caller receives the item"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "Notification payloads shall never contain private key material —
+      only protocol-layer fields (sessionId, sealedRoot, connectionId, etc.);
+      any field that would expose K_local, K_server_X shares, or frost_signature
+      is a blocking violation"
+    adversarial_condition: "even when a DirectoryNotification type is extended
+      with new fields — payload serialization must be reviewed for key material"
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "An agent shall only be able to drain notifications addressed
+      to their own pubkey_hex — cross-agent notification access is impossible
+      under the RLS SELECT policy, which is WHERE pubkey_hex = $1 with $1
+      bound to the authenticated agent's pubkey; the RLS policy row filter
+      is the enforcement mechanism, not application-layer filtering"
+    adversarial_condition: "even when application-layer filtering is bypassed —
+      RLS prevents the SELECT from returning rows for any pubkey_hex other than
+      the authenticated agent's; verified by asserting that a cello_service
+      connection parameterized with agent A's pubkey cannot retrieve rows
+      inserted with agent B's pubkey"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the Postgres write fails when enqueueNotification() is
+      called (e.g. transient connection error)"
+    fallback: "the directory logs notification.enqueue.failed at ERROR with
+      { pubkeyHex, notificationType, reason }; the notification is not lost
+      from the calling code path — the caller decides whether to retry; for
+      fire-and-forget callers (e.g. connection establishment handler), the
+      notification is not retried but the primary operation (connection
+      establishment) is not rolled back"
+
+  - id: DB-002
+    condition: "While CELLO_ENV is not local or Postgres is unreachable when
+      integration tests run"
+    fallback: "all integration ACs in this story skip (not fail) with a clear
+      skip message including which environment variable is missing or which
+      connection failed; the static analysis test (migration file existence,
+      PERSIST-016) still runs in all environments"
+
+  - id: DB-003
+    condition: "While notification_queue accumulates rows faster than they
+      are drained (e.g. an agent is offline for a long period)"
+    fallback: "the directory continues accepting notifications; no cap is
+      enforced in M4; queue depth is observable via notification.queued and
+      notification.drained events; a production capacity review is deferred
+      to M5 when multi-node deployment adds queue-per-node concerns"
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: notification.queued
+      level: info
+      trigger: "enqueueNotification() commits a notification to
+        notification_queue"
+      context_fields: [pubkeyHex, notificationType, correlationId]
+      correlationId: true
+
+    - name: notification.drained
+      level: info
+      trigger: "drainNotifications() commits the SELECT+DELETE transaction
+        and returns notifications to the caller"
+      context_fields: [pubkeyHex, count, correlationId]
+      correlationId: true
+
+    - name: queue.pending_connection_requests.expired
+      level: info
+      trigger: "TTL sweep deletes rows older than 24 hours from
+        pending_connection_requests"
+      context_fields: [purgedCount]
+      correlationId: false
+
+  error_events:
+    - name: notification.enqueue.failed
+      level: error
+      trigger: "enqueueNotification() INSERT fails"
+      context_fields: [pubkeyHex, notificationType, reason]
+
+  alarms:
+    - condition: "notification.enqueue.failed fires more than 5 times in
+        1 minute"
+      fires_to: ops-warning
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations / Directory / Notification Delivery"
+  discussion_logs:
+    - "2026-05-18_0600_missing-table-investigations"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  depends_on:
+    - CELLO-PERSIST-001
+    - CELLO-PERSIST-002
+  blocked_by:
+    - CELLO-PERSIST-016

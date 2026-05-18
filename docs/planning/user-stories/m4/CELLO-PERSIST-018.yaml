@@ -1,0 +1,233 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PERSIST-018
+domain: Persistence
+milestone: M4
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the Directory Node,
+  I want a seal_notarizations table with a Flyway migration, RLS, and a
+  hash chain so that the FROST threshold signature for each sealed session
+  is durably stored and independently retrievable,
+  so that getNotarization() returns real data instead of undefined and any
+  third party can verify the FROST co-signature without querying application
+  state.
+
+# ─── Background ─────────────────────────────────────────────
+background: >
+  Discovered during the first live M4 agent-to-agent session (2026-05-18).
+  After [SEAL] Sealed was logged, recordNotarization() wrote to
+  seal_notarizations — a table that had no Flyway migration. The INSERT
+  produced a silent adapter.write.failed log event. getNotarization()
+  continued to return undefined because no row was ever committed.
+
+  conversation_seals (PERSIST-007) already holds the sealed Merkle root
+  and the bilateral seal metadata. seal_notarizations adds the FROST
+  threshold signature that co-signs the seal ceremony. Together, the two
+  tables allow a third party to verify both the Merkle integrity (via
+  sealed_root in conversation_seals) and the FROST threshold co-signature
+  (via frost_signature in seal_notarizations) without any further
+  directory query.
+
+  A session can only be sealed once, so this table is append-only with a
+  UNIQUE constraint on session_id. chain_hash enforcement (PERSIST-004)
+  applies — this is a tamper-evident audit record.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When Flyway migrations are applied to a fresh database"
+    action: "the seal_notarizations table shall exist with columns
+      session_id (BYTEA PRIMARY KEY), sealed_root (BYTEA NOT NULL),
+      participant_a_pubkey (BYTEA NOT NULL), participant_b_pubkey (BYTEA NOT NULL),
+      close_timestamp (BIGINT NOT NULL), frost_signature (BYTEA NOT NULL),
+      chain_hash (BYTEA NOT NULL); RLS shall be enabled with INSERT and
+      SELECT policies for cello_service; no UPDATE or DELETE policy shall
+      exist for cello_service"
+
+  - trigger: "When the directory calls recordNotarization() after the FROST
+      seal ceremony completes"
+    action: "the directory shall INSERT one row into seal_notarizations
+      containing the session_id, sealed_root, participant pubkeys,
+      close_timestamp, and frost_signature; it shall compute and store
+      chain_hash per the hash chain protocol (PERSIST-004)"
+
+  - trigger: "When the directory calls getNotarization(sessionId)"
+    action: "the directory shall SELECT the row from seal_notarizations
+      matching session_id and return the full SealNotarization record;
+      if no row exists, it shall return undefined"
+
+  - trigger: "When the cello_service role attempts an UPDATE or DELETE on
+      seal_notarizations"
+    action: "PostgreSQL shall reject the operation with permission denied —
+      seal notarizations are permanent once written"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Flyway migrations have been applied to a local Postgres container
+      (CELLO_ENV=local)"
+    when: "information_schema.tables is queried"
+    then: "seal_notarizations exists in schema public with all required
+      columns; relrowsecurity=true; exactly two policies for cello_service
+      (insert_only, select_all); no GRANT UPDATE or DELETE for cello_service"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "The seal_notarizations table exists and is empty (CELLO_ENV=local)"
+    when: "recordNotarization() is called with a valid SealNotarization"
+    then: "the row is persisted; getNotarization(sessionId) returns the
+      same SealNotarization with matching session_id, sealed_root,
+      participant_a_pubkey, participant_b_pubkey, close_timestamp, and
+      frost_signature; getNotarization() no longer returns undefined"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A SealNotarization has been persisted"
+    when: "recordNotarization() is called again with the same session_id"
+    then: "the INSERT fails with a unique constraint violation; the existing
+      row is unchanged; the directory logs notarization.duplicate.rejected
+      at WARN with { sessionId } — a session can only be sealed once"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "A row has been inserted into seal_notarizations by cello_service"
+    when: "cello_service attempts UPDATE seal_notarizations"
+    then: "PostgreSQL rejects the operation with 'ERROR: permission denied
+      for table seal_notarizations'; the row is unchanged"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "Two rows exist in seal_notarizations"
+    when: "the chain verification pass (PERSIST-004) is run against
+      seal_notarizations"
+    then: "the verifier reports 0 chain breaks — the chain_hash column
+      extends correctly from the genesis value through both rows"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "getNotarization() is called for a session_id that has no
+      corresponding row in seal_notarizations"
+    when: "the query executes"
+    then: "getNotarization() returns undefined — it does not throw and
+      does not log an error; absence of a notarization is not itself an
+      error condition"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "recordNotarization() is called"
+    when: "the INSERT commits successfully"
+    then: "notarization.recorded is logged at INFO with
+      { sessionId, sealedRoot, correlationId }"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The frost_signature field in seal_notarizations shall never
+      be accepted from an external caller — it must originate from the FROST
+      ceremony coordinated by the directory service; the chain_hash is also
+      computed server-side and never accepted from an external caller"
+    adversarial_condition: "even when an API caller includes frost_signature
+      or chain_hash fields in a request payload — the directory service
+      ignores both and computes them internally"
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "A session's SealNotarization shall be written atomically with
+      the FROST ceremony completion — it shall not be possible to have a
+      sealed session with no corresponding notarization row, nor a notarization
+      row whose session_id does not correspond to a sealed session"
+    adversarial_condition: "even when the directory crashes between completing
+      the FROST ceremony and committing the notarization row — on restart the
+      directory detects the orphaned seal and re-attempts the notarization
+      write before resuming normal operations"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-003
+    statement: "The chain_hash sequence in seal_notarizations shall not be
+      forgeable — any modification of a persisted notarization row causes the
+      hash chain verification to fail at that row"
+    adversarial_condition: "even when a database superuser modifies a
+      frost_signature or sealed_root value directly — the chain verification
+      pass detects the break and fires db.chain.break.detected"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the Postgres write fails transiently after the FROST
+      ceremony has completed (e.g. connection pool exhausted)"
+    fallback: "the directory logs notarization.write.failed at ERROR with
+      { sessionId, reason }; the FROST signature is not lost — it is
+      held in memory and the write is retried once; if the retry also fails,
+      notarization.write.failed fires again with attempt: 2 and the operator
+      is alerted; the session remains sealed regardless of the notarization
+      write outcome — the write is a durability concern, not a seal validity
+      concern"
+
+  - id: DB-002
+    condition: "While CELLO_ENV is not local or Postgres is unreachable when
+      integration tests run"
+    fallback: "all integration ACs in this story skip (not fail) with a clear
+      skip message; the static analysis test (migration file existence) still
+      runs in all environments"
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: notarization.recorded
+      level: info
+      trigger: "recordNotarization() commits successfully to seal_notarizations"
+      context_fields: [sessionId, sealedRoot, correlationId]
+      correlationId: true
+      # correlationId is required: this event fires at the terminal step of
+      # the FROST seal ceremony, which carries a session-scoped correlationId
+      # minted at ceremony initiation; breaking the correlation chain here
+      # makes seal debugging impossible.
+
+  error_events:
+    - name: notarization.write.failed
+      level: error
+      trigger: "recordNotarization() INSERT fails (transient or permanent)"
+      context_fields: [sessionId, reason, attempt]
+
+    - name: notarization.duplicate.rejected
+      level: warn
+      trigger: "recordNotarization() called for a session_id that already
+        has a row — unique constraint violation"
+      context_fields: [sessionId]
+
+  alarms:
+    - condition: "notarization.write.failed fires with attempt: 2 (all
+        retries exhausted)"
+      fires_to: ops-critical
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations / Session Lifecycle / Persistence"
+  discussion_logs:
+    - "2026-05-18_0600_missing-table-investigations"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m4/outline.md"
+  e2e_story: CELLO-PERSIST-E2E-001
+  depends_on:
+    - CELLO-PERSIST-001
+    - CELLO-PERSIST-002
+    - CELLO-PERSIST-003
+    - CELLO-PERSIST-004
+  blocked_by:
+    - CELLO-PERSIST-016
