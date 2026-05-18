@@ -444,6 +444,37 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-003 pending inclusion p
   });
 });
 
+// ─── SI-002: getInclusionProof never returns proof for unconfirmed session ───
+
+describeIntegrationIsolated("PERSIST-017 integration: SI-002 proof-eligibility resolved against committed DB", () => {
+  it("SI-002: getInclusionProof returns PROOF_NOT_YET_AVAILABLE for staged-but-unconfirmed session; mmr.proof.unavailable logged", async () => {
+    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const store = new MmrStore(servicePool, logger);
+
+    const sessionId = randomUUID();
+    const sealedRoot = createHash("sha256").update("si-002-test").digest("hex");
+
+    // Seal the session (stages in conversation_seal_staging)
+    await store.appendSeal(sessionId, sealedRoot);
+
+    // Initiate checkpoint but do NOT confirm — row has checkpoint_id stamped but
+    // no directory_checkpoints row exists. This simulates the edge case where an
+    // in-memory caching layer might think the session is confirmed (checkpoint_id
+    // is non-null in staging) but the committed checkpoints table disagrees.
+    await store.initiateCheckpoint();
+
+    // getInclusionProof must resolve against directory_checkpoints (SI-002)
+    const proof = await store.getInclusionProof(sessionId, logger);
+    expect(proof).toBe(PROOF_NOT_YET_AVAILABLE);
+
+    // mmr.proof.unavailable must be logged (confirms the DB query path was hit)
+    const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls;
+    const unavailableCall = warnCalls.find((c: unknown[]) => c[0] === "mmr.proof.unavailable");
+    expect(unavailableCall).toBeDefined();
+    expect((unavailableCall![1] as Record<string, unknown>).sessionId).toBe(sessionId);
+  });
+});
+
 // ─── AC-005a + AC-005b: confirmed after checkpoint ────────────────────────────
 
 describeIntegrationIsolated("PERSIST-017 integration: AC-005 confirmed status after checkpoint", () => {

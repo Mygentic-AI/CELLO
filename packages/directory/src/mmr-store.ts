@@ -166,7 +166,7 @@ export class MmrStore {
       }
 
       // Step 6: Insert into staging with correlation_id (PERSIST-017 schema addition)
-      // correlation_id column was added by V10__staging_correlation_id.sql migration.
+      // correlation_id column was added by V11__staging_correlation_id.sql migration.
       await client.query(
         `INSERT INTO conversation_seal_staging (session_id, seal_merkle_root, recorded_at, correlation_id)
          VALUES ($1, $2, $3, $4)
