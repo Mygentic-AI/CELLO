@@ -861,7 +861,7 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-006 pending to confirme
 // ─── DB-001: overdue detector triggers forced flush ───────────────────────────
 
 describeIntegrationIsolated("PERSIST-017 integration: DB-001 overdue detector forces checkpoint flush", () => {
-  it("DB-001: staged row older than max_staging_age triggers forced flush; mmr.checkpoint.overdue + mmr.session.checkpointed emitted", async () => {
+  it("DB-001: staged row older than max_staging_age triggers forced flush via JobScheduler entry point; mmr.checkpoint.overdue + mmr.session.checkpointed emitted", async () => {
     const logger = createMockLogger();
     const store = new MmrStore(servicePool, logger);
 
@@ -882,9 +882,22 @@ describeIntegrationIsolated("PERSIST-017 integration: DB-001 overdue detector fo
     const maxStagingAgeMs = 60 * 60 * 1000;
     const service = new MmrCheckpointService(store, servicePool, logger, maxStagingAgeMs);
 
-    // checkOverdue must detect the aged row and trigger forceFlush
-    const overdueIds = await service.checkOverdue();
-    expect(overdueIds).toContain(sessionId);
+    // DB-001: trigger overdue detection and forced flush via the real JobScheduler entry
+    // point — the same code path used in production (matching the composition root wiring
+    // in packages/directory/src/bin/directory.ts). Register the handler with a
+    // LocalJobScheduler, schedule a job at runAt=0, and await the setTimeout(0) tick.
+    const scheduler = new LocalJobScheduler();
+    scheduler.onJob("mmr_checkpoint", async () => {
+      const overdueIds = await service.checkOverdue();
+      if (overdueIds.length > 0) {
+        await service.forceFlush(overdueIds);
+      }
+    });
+
+    // Trigger: schedule a job with runAt in the past so delay=0.
+    await scheduler.schedule("test-db-001-overdue", Date.now() - 1, { type: "mmr_checkpoint" });
+    // Yield to the event loop so the setTimeout(0) fires the registered handler.
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
 
     // mmr.checkpoint.overdue must have been logged at WARN
     const overdueCalls = filterLogCalls(logger.warn, "mmr.checkpoint.overdue");
@@ -893,9 +906,6 @@ describeIntegrationIsolated("PERSIST-017 integration: DB-001 overdue detector fo
     expect(overdueCall).toBeDefined();
     expect(overdueCall![1]).toMatchObject({ maxStagingAgeMs });
 
-    // forceFlush triggers a checkpoint for the overdue staged seals
-    await service.forceFlush(overdueIds);
-
     // mmr.session.checkpointed must have been emitted for the forced flush
     const checkpointedCalls = filterLogCalls(logger.info, "mmr.session.checkpointed");
     expect(checkpointedCalls.length).toBeGreaterThanOrEqual(1);
@@ -903,5 +913,63 @@ describeIntegrationIsolated("PERSIST-017 integration: DB-001 overdue detector fo
     // After forced flush: status must be confirmed
     const afterStatus = await store.getSealStagingStatus(sessionId);
     expect(afterStatus.status).toBe("confirmed");
+  });
+});
+
+// ─── Startup recovery: recoverOrphanedCheckpoints unit test ──────────────────
+
+describe("PERSIST-017 unit: MmrCheckpointService.recoverOrphanedCheckpoints emits recovery events", () => {
+  it("startup recovery: mmr.checkpoint.recovery.started and mmr.checkpoint.recovery.completed emitted per orphaned checkpoint", async () => {
+    const logger = createMockLogger();
+
+    const orphanedCheckpointId = randomUUID();
+
+    // Stub MmrStore: only confirmCheckpoint is called during recovery.
+    // The pool is not used by recoverOrphanedCheckpoints directly.
+    const stubConfirmCheckpoint = vi.fn().mockResolvedValue("a".repeat(64));
+    const stubPool = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      connect: vi.fn(),
+    } as unknown as pg.Pool;
+    const stubStore = {
+      confirmCheckpoint: stubConfirmCheckpoint,
+    } as unknown as MmrStore;
+
+    const service = new MmrCheckpointService(stubStore, stubPool, logger);
+    await service.recoverOrphanedCheckpoints([orphanedCheckpointId]);
+
+    // mmr.checkpoint.recovery.started must be emitted before confirmCheckpoint
+    const startedCalls = filterLogCalls(logger.info, "mmr.checkpoint.recovery.started");
+    expect(startedCalls.length).toBe(1);
+    expect(startedCalls[0]![1]).toMatchObject({ checkpointId: orphanedCheckpointId, pendingCount: 1 });
+
+    // confirmCheckpoint must have been called with the orphaned ID
+    expect(stubConfirmCheckpoint).toHaveBeenCalledWith(orphanedCheckpointId);
+
+    // mmr.checkpoint.recovery.completed must be emitted after confirmCheckpoint
+    const completedCalls = filterLogCalls(logger.info, "mmr.checkpoint.recovery.completed");
+    expect(completedCalls.length).toBe(1);
+    expect(completedCalls[0]![1]).toMatchObject({ checkpointId: orphanedCheckpointId, recoveredCount: 1 });
+  });
+
+  it("startup recovery: no events emitted and no errors when orphaned list is empty", async () => {
+    const logger = createMockLogger();
+
+    const stubPool = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      connect: vi.fn(),
+    } as unknown as pg.Pool;
+    const stubStore = {
+      confirmCheckpoint: vi.fn(),
+    } as unknown as MmrStore;
+
+    const service = new MmrCheckpointService(stubStore, stubPool, logger);
+    await service.recoverOrphanedCheckpoints([]);
+
+    // No recovery events should be emitted for an empty list
+    const startedCalls = filterLogCalls(logger.info, "mmr.checkpoint.recovery.started");
+    const completedCalls = filterLogCalls(logger.info, "mmr.checkpoint.recovery.completed");
+    expect(startedCalls.length).toBe(0);
+    expect(completedCalls.length).toBe(0);
   });
 });

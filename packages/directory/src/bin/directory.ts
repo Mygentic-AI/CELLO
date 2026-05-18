@@ -193,11 +193,7 @@ if (env === "local" && pgPool) {
   // DB-001: On startup, detect any partially-written checkpoints and re-run
   // confirmCheckpoint to complete them idempotently.
   const orphanedIds = await mmrStore.detectIncompleteCheckpoints(logger);
-  for (const checkpointId of orphanedIds) {
-    logger.info("mmr.checkpoint.recovery.started", { checkpointId, env });
-    await mmrStore.confirmCheckpoint(checkpointId);
-    logger.info("mmr.checkpoint.recovery.completed", { checkpointId, env });
-  }
+  await mmrCheckpointService.recoverOrphanedCheckpoints(orphanedIds);
 }
 
 // ─── PERSIST-005: EnvelopeKeyProvider + EncryptedPgShareStore ─────────────────

@@ -130,4 +130,27 @@ export class MmrCheckpointService {
     // confirm commits them and emits mmr.session.checkpointed per-session.
     await this.runCheckpoint();
   }
+
+  /**
+   * Recover orphaned checkpoints on startup.
+   *
+   * Called during directory startup with the list of checkpoint IDs that were initiated
+   * (conversation_seal_staging.checkpoint_id IS NOT NULL) but never committed to
+   * directory_checkpoints. Re-runs confirmCheckpoint idempotently for each.
+   *
+   * Emits:
+   *   mmr.checkpoint.recovery.started  { checkpointId, pendingCount } — INFO
+   *   mmr.checkpoint.recovery.completed { checkpointId, recoveredCount } — INFO
+   *
+   * @param orphanedCheckpointIds — checkpoint IDs returned by MmrStore.detectIncompleteCheckpoints()
+   */
+  async recoverOrphanedCheckpoints(orphanedCheckpointIds: string[]): Promise<void> {
+    const pendingCount = orphanedCheckpointIds.length;
+
+    for (const checkpointId of orphanedCheckpointIds) {
+      this.#logger.info("mmr.checkpoint.recovery.started", { checkpointId, pendingCount });
+      await this.#store.confirmCheckpoint(checkpointId);
+      this.#logger.info("mmr.checkpoint.recovery.completed", { checkpointId, recoveredCount: 1 });
+    }
+  }
 }
