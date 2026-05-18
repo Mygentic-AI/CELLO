@@ -85,11 +85,34 @@ import { MmrCheckpointService } from "../mmr-checkpoint-service.js";
 import { verifyInclusionProof, PROOF_NOT_YET_AVAILABLE } from "../mmr.js";
 import type { Logger } from "@cello/interfaces";
 
+/** Tolerance for comparing timestamps across clock boundaries (DB vs local clock). */
+const CLOCK_SKEW_TOLERANCE_MS = 1000;
+
+/** Create a logger with typed mock functions for cleaner assertions. */
+function createMockLogger(): Logger & {
+  debug: ReturnType<typeof vi.fn>;
+  info: ReturnType<typeof vi.fn>;
+  warn: ReturnType<typeof vi.fn>;
+  error: ReturnType<typeof vi.fn>;
+} {
+  return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+}
+
+/** Find a log call by event name from a mock function's call history. */
+function findLogCall(mockFn: ReturnType<typeof vi.fn>, eventName: string): [string, Record<string, unknown>] | undefined {
+  return mockFn.mock.calls.find((c: unknown[]) => c[0] === eventName) as [string, Record<string, unknown>] | undefined;
+}
+
+/** Filter log calls by event name from a mock function's call history. */
+function filterLogCalls(mockFn: ReturnType<typeof vi.fn>, eventName: string): Array<[string, Record<string, unknown>]> {
+  return mockFn.mock.calls.filter((c: unknown[]) => c[0] === eventName) as Array<[string, Record<string, unknown>]>;
+}
+
 // ─── Unit tests: mmr.checkpoint.pending log call ──────────────────────────────
 
 describe("PERSIST-017 unit: mmr.checkpoint.pending emitted by MmrStore.appendSeal", () => {
   it("AC-001 unit: appendSeal emits mmr.checkpoint.pending at INFO with { sessionId, sealedRoot, stagedAt, correlationId }", async () => {
-    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const logger = createMockLogger();
 
     const sessionId = "unit-session-pending";
     const sealedRoot = "a".repeat(64);
@@ -130,8 +153,7 @@ describe("PERSIST-017 unit: mmr.checkpoint.pending emitted by MmrStore.appendSea
     await store.appendSeal(sessionId, sealedRoot, correlationId);
 
     // mmr.checkpoint.pending must have been logged at INFO
-    const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls;
-    const pendingCall = infoCalls.find((c: unknown[]) => c[0] === "mmr.checkpoint.pending");
+    const pendingCall = findLogCall(logger.info, "mmr.checkpoint.pending");
     expect(pendingCall).toBeDefined();
     expect(pendingCall![1]).toMatchObject({
       sessionId,
@@ -148,7 +170,7 @@ describe("PERSIST-017 unit: mmr.checkpoint.pending emitted by MmrStore.appendSea
 
 describe("PERSIST-017 unit: mmr.session.checkpointed emitted per-session by confirmCheckpoint", () => {
   it("AC-006 unit: confirmCheckpoint emits mmr.session.checkpointed once per staged session", async () => {
-    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const logger = createMockLogger();
 
     const checkpointId = "test-checkpoint-017-per-session";
     const sessionId1 = "session-1-017";
@@ -190,9 +212,9 @@ describe("PERSIST-017 unit: mmr.session.checkpointed emitted per-session by conf
           if (sql.includes("FROM directory_checkpoints ORDER BY id DESC LIMIT 1")) {
             return { rows: [] };
           }
-          // leaf→checkpoint association: return leaf IDs for session_ids
-          if (sql.includes("FROM conversation_proof_leaves l") && sql.includes("WHERE l.session_id = ANY")) {
-            return { rows: [{ id: 1, session_id: sessionId1 }, { id: 2, session_id: sessionId2 }] };
+          // leaf→checkpoint association and leaf_index lookup for per-session events
+          if (sql.includes("FROM conversation_proof_leaves") && sql.includes("WHERE session_id = ANY")) {
+            return { rows: [{ session_id: sessionId1, leaf_index: 0 }, { session_id: sessionId2, leaf_index: 1 }] };
           }
           return { rows: [] };
         }),
@@ -204,18 +226,17 @@ describe("PERSIST-017 unit: mmr.session.checkpointed emitted per-session by conf
     const peakHash = await store.confirmCheckpoint(checkpointId);
 
     // mmr.session.checkpointed must be logged once per staged session
-    const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls;
-    const checkpointedCalls = infoCalls.filter((c: unknown[]) => c[0] === "mmr.session.checkpointed");
+    const checkpointedCalls = filterLogCalls(logger.info, "mmr.session.checkpointed");
     expect(checkpointedCalls).toHaveLength(2);
 
     // Each call must include sessionId, checkpointId, leafIndex, peakHash, correlationId
-    const sessionsLogged = checkpointedCalls.map((c: unknown[]) => (c[1] as Record<string, unknown>).sessionId);
+    const sessionsLogged = checkpointedCalls.map((c) => c[1].sessionId);
     expect(sessionsLogged).toContain(sessionId1);
     expect(sessionsLogged).toContain(sessionId2);
 
     // Verify all required context fields are present
     for (const call of checkpointedCalls) {
-      const ctx = call[1] as Record<string, unknown>;
+      const ctx = call[1];
       expect(typeof ctx["checkpointId"]).toBe("string");
       expect(typeof ctx["leafIndex"]).toBe("number");
       expect(ctx["peakHash"]).toBe(peakHash);
@@ -228,7 +249,7 @@ describe("PERSIST-017 unit: mmr.session.checkpointed emitted per-session by conf
 
 describe("PERSIST-017 unit: mmr.checkpoint.overdue emitted by MmrCheckpointService", () => {
   it("DB-001 unit: checkOverdue emits mmr.checkpoint.overdue at WARN for aged staged rows", async () => {
-    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const logger = createMockLogger();
 
     const sessionId = "overdue-session-017";
     const maxStagingAgeMs = 60_000; // 1 minute
@@ -257,17 +278,83 @@ describe("PERSIST-017 unit: mmr.checkpoint.overdue emitted by MmrCheckpointServi
     const overdueSessionIds = await service.checkOverdue();
 
     // mmr.checkpoint.overdue must have been logged at WARN per session
-    const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls;
-    const overdueCalls = warnCalls.filter((c: unknown[]) => c[0] === "mmr.checkpoint.overdue");
+    const overdueCalls = filterLogCalls(logger.warn, "mmr.checkpoint.overdue");
     expect(overdueCalls).toHaveLength(1);
     expect(overdueCalls[0]![1]).toMatchObject({
       sessionId,
       maxStagingAgeMs,
     });
-    expect(typeof (overdueCalls[0]![1] as Record<string, unknown>).stagedAt).toBe("number");
+    expect(typeof overdueCalls[0]![1].stagedAt).toBe("number");
 
     // Returns the overdue session IDs
     expect(overdueSessionIds).toContain(sessionId);
+  });
+});
+
+// ─── Unit test: null correlationId in staging (Finding 3 — data integrity) ────
+
+describe("PERSIST-017 unit: mmr.checkpoint.correlationId.missing warning on null correlation_id", () => {
+  it("confirmCheckpoint logs mmr.checkpoint.correlationId.missing when staging row has null correlation_id", async () => {
+    const logger = createMockLogger();
+
+    const checkpointId = "test-checkpoint-null-corr";
+    const sessionId = "session-null-corr";
+
+    // Stub pool: staging row with null correlation_id (simulates legacy/corrupt data)
+    const stubPool = {
+      query: vi.fn().mockImplementation(async (sql: string) => {
+        if (sql.includes("SELECT peak_hash FROM directory_checkpoints WHERE checkpoint_id")) {
+          return { rows: [] };
+        }
+        return { rows: [] };
+      }),
+      connect: vi.fn().mockResolvedValue({
+        query: vi.fn().mockImplementation(async (sql: string) => {
+          if (sql.includes("FROM conversation_seal_staging WHERE checkpoint_id")) {
+            return {
+              rows: [
+                { session_id: sessionId, seal_merkle_root: "c".repeat(64), recorded_at: new Date(), correlation_id: null },
+              ],
+            };
+          }
+          if (sql.includes("COUNT(*) AS count FROM conversation_proof_leaves")) {
+            return { rows: [{ count: "1" }] };
+          }
+          if (sql.includes("FROM conversation_proof_leaves ORDER BY leaf_index ASC")) {
+            return { rows: [{ leaf_index: 0, leaf_hash: "c".repeat(64), seal_merkle_root: "c".repeat(64), recorded_at: new Date("2026-01-01") }] };
+          }
+          if (sql.includes("FROM directory_checkpoints ORDER BY id DESC LIMIT 1")) {
+            return { rows: [] };
+          }
+          // leaf_index lookup for per-session events
+          if (sql.includes("FROM conversation_proof_leaves") && sql.includes("WHERE session_id = ANY")) {
+            return { rows: [{ session_id: sessionId, leaf_index: 0 }] };
+          }
+          return { rows: [] };
+        }),
+        release: vi.fn(),
+      }),
+    } as unknown as pg.Pool;
+
+    const store = new MmrStore(stubPool, logger);
+    const peakHash = await store.confirmCheckpoint(checkpointId);
+
+    // Checkpoint must still succeed (not blocked by missing correlationId)
+    expect(typeof peakHash).toBe("string");
+    expect(peakHash.length).toBe(64);
+
+    // mmr.checkpoint.correlationId.missing must be logged at WARN
+    const missingCall = findLogCall(logger.warn, "mmr.checkpoint.correlationId.missing");
+    expect(missingCall).toBeDefined();
+    expect(missingCall![1]).toMatchObject({
+      sessionId,
+      checkpointId,
+    });
+
+    // mmr.session.checkpointed must still be emitted (with null correlationId)
+    const checkpointedCalls = filterLogCalls(logger.info, "mmr.session.checkpointed");
+    expect(checkpointedCalls).toHaveLength(1);
+    expect(checkpointedCalls[0]![1].correlationId).toBeNull();
   });
 });
 
@@ -331,7 +418,7 @@ function describeIntegrationIsolated(name: string, fn: () => void): void {
 
 describeIntegrationIsolated("PERSIST-017 integration: AC-001 staging status after seal", () => {
   it("AC-001: appendSeal stores correlation_id in staging; getSealStagingStatus returns pending with staged_at", async () => {
-    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const logger = createMockLogger();
     const store = new MmrStore(servicePool, logger);
 
     const sessionId = randomUUID();
@@ -350,19 +437,18 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-001 staging status afte
     }
 
     // mmr.checkpoint.pending must have been logged at INFO with all required fields
-    const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls;
-    const pendingCall = infoCalls.find((c: unknown[]) => c[0] === "mmr.checkpoint.pending");
+    const pendingCall = findLogCall(logger.info, "mmr.checkpoint.pending");
     expect(pendingCall).toBeDefined();
     expect(pendingCall![1]).toMatchObject({
       sessionId,
       sealedRoot,
       correlationId,
     });
-    expect(typeof (pendingCall![1] as Record<string, unknown>).stagedAt).toBe("number");
+    expect(typeof pendingCall![1].stagedAt).toBe("number");
 
     // Verify correlation_id was persisted in staging (AC-001 requires the directory
     // SealNotarization handler wrote it — confirmed via the log event carrying correlationId)
-    expect((pendingCall![1] as Record<string, unknown>).correlationId).toBe(correlationId);
+    expect(pendingCall![1].correlationId).toBe(correlationId);
   });
 });
 
@@ -370,22 +456,23 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-001 staging status afte
 
 describeIntegrationIsolated("PERSIST-017 integration: AC-002 staged_at is real Unix ms from DB", () => {
   it("AC-002: staged_at is a Unix epoch milliseconds timestamp from conversation_seal_staging — not hardcoded", async () => {
-    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const logger = createMockLogger();
     const store = new MmrStore(servicePool, logger);
 
     const sessionId = randomUUID();
     const sealedRoot = createHash("sha256").update("ac-002-test").digest("hex");
+    const correlationId = randomUUID();
 
     const beforeAppend = Date.now();
-    await store.appendSeal(sessionId, sealedRoot);
+    await store.appendSeal(sessionId, sealedRoot, correlationId);
     const afterAppend = Date.now();
 
     const status = await store.getSealStagingStatus(sessionId);
     expect(status.status).toBe("pending");
     if (status.status === "pending") {
       // staged_at must be within the time window of the appendSeal call
-      expect(status.staged_at).toBeGreaterThanOrEqual(beforeAppend - 1000); // allow 1s clock skew
-      expect(status.staged_at).toBeLessThanOrEqual(afterAppend + 1000);
+      expect(status.staged_at).toBeGreaterThanOrEqual(beforeAppend - CLOCK_SKEW_TOLERANCE_MS);
+      expect(status.staged_at).toBeLessThanOrEqual(afterAppend + CLOCK_SKEW_TOLERANCE_MS);
     }
 
     // Confirm staging row exists in the actual DB
@@ -402,7 +489,7 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-002 staged_at is real U
 
 describeIntegrationIsolated("PERSIST-017 integration: AC-003a not_staged error for unsealed session", () => {
   it("AC-003a: getSealStagingStatus returns not_staged for a session that was never sealed", async () => {
-    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const logger = createMockLogger();
     const store = new MmrStore(servicePool, logger);
 
     const neverSealedSessionId = randomUUID();
@@ -417,14 +504,15 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-003a not_staged error f
 
 describeIntegrationIsolated("PERSIST-017 integration: AC-003 pending inclusion proof status with real staged_at", () => {
   it("AC-003: getSealStagingStatus returns pending; staged_at is Unix ms from conversation_seal_staging", async () => {
-    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const logger = createMockLogger();
     const store = new MmrStore(servicePool, logger);
 
     const sessionId = randomUUID();
     const sealedRoot = createHash("sha256").update("ac-003-test").digest("hex");
+    const correlationId = randomUUID();
 
     // Append without confirming checkpoint
-    await store.appendSeal(sessionId, sealedRoot);
+    await store.appendSeal(sessionId, sealedRoot, correlationId);
 
     const status = await store.getSealStagingStatus(sessionId);
     expect(status.status).toBe("pending");
@@ -438,8 +526,7 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-003 pending inclusion p
     // SI-002: getInclusionProof must return PROOF_NOT_YET_AVAILABLE for unconfirmed sessions
     const proof = await store.getInclusionProof(sessionId, logger);
     expect(proof).toBe(PROOF_NOT_YET_AVAILABLE);
-    const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls;
-    const unavailableCalls = warnCalls.filter((c: unknown[]) => c[0] === "mmr.proof.unavailable");
+    const unavailableCalls = filterLogCalls(logger.warn, "mmr.proof.unavailable");
     expect(unavailableCalls.length).toBeGreaterThanOrEqual(1);
   });
 });
@@ -448,14 +535,15 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-003 pending inclusion p
 
 describeIntegrationIsolated("PERSIST-017 integration: SI-002 proof-eligibility resolved against committed DB", () => {
   it("SI-002: getInclusionProof returns PROOF_NOT_YET_AVAILABLE for staged-but-unconfirmed session; mmr.proof.unavailable logged", async () => {
-    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const logger = createMockLogger();
     const store = new MmrStore(servicePool, logger);
 
     const sessionId = randomUUID();
     const sealedRoot = createHash("sha256").update("si-002-test").digest("hex");
+    const correlationId = randomUUID();
 
     // Seal the session (stages in conversation_seal_staging)
-    await store.appendSeal(sessionId, sealedRoot);
+    await store.appendSeal(sessionId, sealedRoot, correlationId);
 
     // Initiate checkpoint but do NOT confirm — row has checkpoint_id stamped but
     // no directory_checkpoints row exists. This simulates the edge case where an
@@ -468,10 +556,9 @@ describeIntegrationIsolated("PERSIST-017 integration: SI-002 proof-eligibility r
     expect(proof).toBe(PROOF_NOT_YET_AVAILABLE);
 
     // mmr.proof.unavailable must be logged (confirms the DB query path was hit)
-    const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls;
-    const unavailableCall = warnCalls.find((c: unknown[]) => c[0] === "mmr.proof.unavailable");
+    const unavailableCall = findLogCall(logger.warn, "mmr.proof.unavailable");
     expect(unavailableCall).toBeDefined();
-    expect((unavailableCall![1] as Record<string, unknown>).sessionId).toBe(sessionId);
+    expect(unavailableCall![1].sessionId).toBe(sessionId);
   });
 });
 
@@ -479,13 +566,14 @@ describeIntegrationIsolated("PERSIST-017 integration: SI-002 proof-eligibility r
 
 describeIntegrationIsolated("PERSIST-017 integration: AC-005 confirmed status after checkpoint", () => {
   it("AC-005a: getSealStagingStatus returns confirmed after checkpoint runs", async () => {
-    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const logger = createMockLogger();
     const store = new MmrStore(servicePool, logger);
 
     const sessionId = randomUUID();
     const sealedRoot = createHash("sha256").update("ac-005a-test").digest("hex");
+    const correlationId = randomUUID();
 
-    await store.appendSeal(sessionId, sealedRoot);
+    await store.appendSeal(sessionId, sealedRoot, correlationId);
 
     // Status before checkpoint: pending
     const beforeStatus = await store.getSealStagingStatus(sessionId);
@@ -507,32 +595,30 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-005 confirmed status af
   });
 
   it("AC-005b: getInclusionProof returns full proof after checkpoint with mmr.session.checkpointed log", async () => {
-    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const logger = createMockLogger();
     const store = new MmrStore(servicePool, logger);
 
     const sessionId = randomUUID();
     const sealedRoot = createHash("sha256").update("ac-005b-test").digest("hex");
+    const correlationId = randomUUID();
 
-    await store.appendSeal(sessionId, sealedRoot);
+    await store.appendSeal(sessionId, sealedRoot, correlationId);
 
     // Run checkpoint
     const checkpointId = await store.initiateCheckpoint();
     const peakHash = await store.confirmCheckpoint(checkpointId);
 
     // mmr.session.checkpointed must be logged per-session
-    const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls;
-    const checkpointedCalls = infoCalls.filter((c: unknown[]) => c[0] === "mmr.session.checkpointed");
+    const checkpointedCalls = filterLogCalls(logger.info, "mmr.session.checkpointed");
     expect(checkpointedCalls.length).toBeGreaterThanOrEqual(1);
-    const sessionCall = checkpointedCalls.find(
-      (c: unknown[]) => (c[1] as Record<string, unknown>).sessionId === sessionId
-    );
+    const sessionCall = checkpointedCalls.find((c) => c[1].sessionId === sessionId);
     expect(sessionCall).toBeDefined();
     expect(sessionCall![1]).toMatchObject({
       sessionId,
       checkpointId,
       peakHash,
     });
-    expect(typeof (sessionCall![1] as Record<string, unknown>).leafIndex).toBe("number");
+    expect(typeof sessionCall![1].leafIndex).toBe("number");
 
     // Full inclusion proof must now be available
     const proof = await store.getInclusionProof(sessionId, logger);
@@ -548,13 +634,14 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-005 confirmed status af
 
 describeIntegrationIsolated("PERSIST-017 integration: AC-006 pending to confirmed transition", () => {
   it("AC-006: poll pending → trigger checkpoint via MmrCheckpointService → poll confirmed", async () => {
-    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const logger = createMockLogger();
     const store = new MmrStore(servicePool, logger);
 
     const sessionId = randomUUID();
     const sealedRoot = createHash("sha256").update("ac-006-transition").digest("hex");
+    const correlationId = randomUUID();
 
-    await store.appendSeal(sessionId, sealedRoot);
+    await store.appendSeal(sessionId, sealedRoot, correlationId);
 
     // Poll 1: must be pending
     const pendingStatus = await store.getSealStagingStatus(sessionId);
@@ -565,12 +652,9 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-006 pending to confirme
     await service.runCheckpoint();
 
     // mmr.session.checkpointed must have been emitted between the two polls
-    const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls;
-    const checkpointedCalls = infoCalls.filter((c: unknown[]) => c[0] === "mmr.session.checkpointed");
+    const checkpointedCalls = filterLogCalls(logger.info, "mmr.session.checkpointed");
     expect(checkpointedCalls.length).toBeGreaterThanOrEqual(1);
-    const sessionCheckpointCall = checkpointedCalls.find(
-      (c: unknown[]) => (c[1] as Record<string, unknown>).sessionId === sessionId
-    );
+    const sessionCheckpointCall = checkpointedCalls.find((c) => c[1].sessionId === sessionId);
     expect(sessionCheckpointCall).toBeDefined();
 
     // Poll 2: must be confirmed
@@ -583,13 +667,14 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-006 pending to confirme
 
 describeIntegrationIsolated("PERSIST-017 integration: DB-001 overdue detector forces checkpoint flush", () => {
   it("DB-001: staged row older than max_staging_age triggers forced flush; mmr.checkpoint.overdue + mmr.session.checkpointed emitted", async () => {
-    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const logger = createMockLogger();
     const store = new MmrStore(servicePool, logger);
 
     const sessionId = randomUUID();
     const sealedRoot = createHash("sha256").update("db-001-overdue").digest("hex");
+    const correlationId = randomUUID();
 
-    await store.appendSeal(sessionId, sealedRoot);
+    await store.appendSeal(sessionId, sealedRoot, correlationId);
 
     // Backdate the staging row to simulate an overdue staged seal
     // (overdue = older than max_staging_age)
@@ -607,12 +692,9 @@ describeIntegrationIsolated("PERSIST-017 integration: DB-001 overdue detector fo
     expect(overdueIds).toContain(sessionId);
 
     // mmr.checkpoint.overdue must have been logged at WARN
-    const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls;
-    const overdueCalls = warnCalls.filter((c: unknown[]) => c[0] === "mmr.checkpoint.overdue");
+    const overdueCalls = filterLogCalls(logger.warn, "mmr.checkpoint.overdue");
     expect(overdueCalls.length).toBeGreaterThanOrEqual(1);
-    const overdueCall = overdueCalls.find(
-      (c: unknown[]) => (c[1] as Record<string, unknown>).sessionId === sessionId
-    );
+    const overdueCall = overdueCalls.find((c) => c[1].sessionId === sessionId);
     expect(overdueCall).toBeDefined();
     expect(overdueCall![1]).toMatchObject({ maxStagingAgeMs });
 
@@ -620,8 +702,7 @@ describeIntegrationIsolated("PERSIST-017 integration: DB-001 overdue detector fo
     await service.forceFlush(overdueIds);
 
     // mmr.session.checkpointed must have been emitted for the forced flush
-    const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls;
-    const checkpointedCalls = infoCalls.filter((c: unknown[]) => c[0] === "mmr.session.checkpointed");
+    const checkpointedCalls = filterLogCalls(logger.info, "mmr.session.checkpointed");
     expect(checkpointedCalls.length).toBeGreaterThanOrEqual(1);
 
     // After forced flush: status must be confirmed

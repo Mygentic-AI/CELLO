@@ -72,18 +72,19 @@ export class MmrStore {
    *   5. Insert any new internal nodes into conversation_proof_mmr_nodes with chain_hash.
    *   6. Insert a row into conversation_seal_staging.
    *   7. Log mmr.leaf.appended at INFO.
+   *   8. Log mmr.checkpoint.pending at INFO (PERSIST-017).
    *
    * SI-002: leaf_hash is computed from sealMerkleRoot here — never from caller input.
    * AC-002: uses advisory lock to prevent concurrent appends from forking the chain.
    *
    * @param sessionId - UUID of the session/conversation being sealed
    * @param sealMerkleRoot - The sealed conversation root hash (hex, 64 chars)
-   * @param correlationId - Optional correlation ID for the async flow
+   * @param correlationId - Correlation ID for the async flow (required for observability tracing)
    */
   async appendSeal(
     sessionId: string,
     sealMerkleRoot: string,
-    correlationId?: string,
+    correlationId: string,
   ): Promise<{ leafIndex: number; leafHash: string }> {
     const client = await this.#pool.connect();
     try {
@@ -171,7 +172,7 @@ export class MmrStore {
         `INSERT INTO conversation_seal_staging (session_id, seal_merkle_root, recorded_at, correlation_id)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (session_id) DO NOTHING`,
-        [sessionId, sealMerkleRoot, recordedAt, correlationId ?? null],
+        [sessionId, sealMerkleRoot, recordedAt, correlationId],
       );
 
       await client.query("COMMIT");
@@ -181,7 +182,7 @@ export class MmrStore {
         sessionId,
         leafIndex,
         leafHash: result.newLeaf.leaf_hash,
-        correlationId: correlationId ?? null,
+        correlationId,
       });
 
       // Step 8: Log mmr.checkpoint.pending (PERSIST-017)
@@ -192,7 +193,7 @@ export class MmrStore {
         sessionId,
         sealedRoot: sealMerkleRoot,
         stagedAt,
-        correlationId: correlationId ?? null,
+        correlationId,
       });
 
       return { leafIndex, leafHash: result.newLeaf.leaf_hash };
@@ -358,6 +359,44 @@ export class MmrStore {
         [checkpointId],
       );
 
+      // PERSIST-017: emit per-session events INSIDE the transaction, before COMMIT.
+      // Design choice: if the process crashes between COMMIT and event emission, events
+      // are permanently lost with no recovery path. For financial trust infrastructure,
+      // we accept that a logging failure inside the transaction will cause a rollback
+      // (the checkpoint can be re-attempted) rather than silently dropping events after
+      // a committed checkpoint.
+      if (stagingRowsForEvents.length > 0) {
+        // Look up leaf_index for each session — query within the same transaction
+        // to see the consistent snapshot.
+        const eventSessionIds = stagingRowsForEvents.map((r) => r.session_id);
+        const leafRes = await client.query<{ session_id: string; leaf_index: number }>(
+          "SELECT session_id::text, leaf_index::int FROM conversation_proof_leaves WHERE session_id = ANY($1)",
+          [eventSessionIds],
+        );
+        const leafIndexBySession = new Map<string, number>(
+          leafRes.rows.map((r) => [r.session_id, r.leaf_index]),
+        );
+
+        for (const row of stagingRowsForEvents) {
+          const leafIndex = leafIndexBySession.get(row.session_id) ?? -1;
+          if (row.correlation_id === null) {
+            // Data integrity issue: correlation_id should always be present (appendSeal requires it).
+            // A null value indicates legacy/corrupt data. Log a warning but do not block the checkpoint.
+            this.#logger.warn("mmr.checkpoint.correlationId.missing", {
+              sessionId: row.session_id,
+              checkpointId,
+            });
+          }
+          this.#logger.info("mmr.session.checkpointed", {
+            sessionId: row.session_id,
+            checkpointId,
+            leafIndex,
+            peakHash,
+            correlationId: row.correlation_id,
+          });
+        }
+      }
+
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK").catch(() => { /* ignore rollback errors */ });
@@ -367,18 +406,9 @@ export class MmrStore {
     }
 
     // Log mmr.checkpoint.confirmed (aggregate checkpoint-level event)
+    // Emitted after COMMIT because it summarizes the committed state — losing this event
+    // on crash is acceptable since the checkpoint row itself is the source of truth.
     this.#emitCheckpointConfirmed(checkpointId, leafCount!, peakHash!, stagedSealCount!);
-
-    // PERSIST-017: emit mmr.session.checkpointed per-session so operators can trace
-    // the specific sessions that entered this checkpoint. correlationId is threaded from
-    // the seal ceremony via conversation_seal_staging.correlation_id.
-    if (stagingRowsForEvents.length > 0) {
-      await this.#emitSessionCheckpointedEvents(
-        checkpointId,
-        peakHash!,
-        stagingRowsForEvents,
-      );
-    }
 
     return peakHash!;
   }
@@ -619,41 +649,6 @@ export class MmrStore {
   }
 
   // ─── Private helpers ───────────────────────────────────────────────────────
-
-  /**
-   * Emit mmr.session.checkpointed once per session that entered this checkpoint.
-   * Reads leaf_index for each session from conversation_proof_leaves to include it in the event.
-   *
-   * PERSIST-017: correlationId is the seal-ceremony correlationId persisted in
-   * conversation_seal_staging.correlation_id at seal time. Threaded into the event
-   * so operators can correlate seal → checkpoint in a single trace.
-   */
-  async #emitSessionCheckpointedEvents(
-    checkpointId: string,
-    peakHash: string,
-    stagingRows: Array<{ session_id: string; correlation_id: string | null }>,
-  ): Promise<void> {
-    // Look up leaf_index for each session in a single query
-    const sessionIds = stagingRows.map((r) => r.session_id);
-    const leafRes = await this.#pool.query<{ session_id: string; leaf_index: number }>(
-      "SELECT session_id::text, leaf_index::int FROM conversation_proof_leaves WHERE session_id = ANY($1)",
-      [sessionIds],
-    );
-    const leafIndexBySession = new Map<string, number>(
-      leafRes.rows.map((r) => [r.session_id, r.leaf_index]),
-    );
-
-    for (const row of stagingRows) {
-      const leafIndex = leafIndexBySession.get(row.session_id) ?? -1;
-      this.#logger.info("mmr.session.checkpointed", {
-        sessionId: row.session_id,
-        checkpointId,
-        leafIndex,
-        peakHash,
-        correlationId: row.correlation_id ?? null,
-      });
-    }
-  }
 
   /**
    * Reconstruct the MMR peak set as it was when exactly `leafCount` leaves had been appended.
