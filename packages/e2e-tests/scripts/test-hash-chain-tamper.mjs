@@ -101,20 +101,21 @@ async function main() {
     break; // We'll use the raw SQL path below
   }
 
+  // Import the canonical chain helpers from the directory package dist
+  const { serializeRecord, computeChainHash, CHAIN_GENESIS } = await import(
+    `${repoRoot}/packages/directory/dist/hash-chain.js`
+  );
+
   // ── Raw SQL path: clear table, insert 5 rows with correct chain, then tamper row 3 ──
   log("Clearing notification_events to ensure a clean chain baseline");
   await superPool.query(`DELETE FROM notification_events`);
 
   log("Inserting 5 notification_events rows with correct SHA-256 chain");
-
-  const { createHash } = await import("node:crypto");
-  const CHAIN_GENESIS = "0000000000000000000000000000000000000000000000000000000000000000";
   let prevHash = CHAIN_GENESIS;
 
   const rowData = [];
   for (let i = 0; i < 5; i++) {
     const notifId = randomBytes(16).toString("hex");
-    // Pad to UUID format for the uuid column
     const notifUuid = [
       notifId.slice(0, 8),
       notifId.slice(8, 12),
@@ -125,21 +126,17 @@ async function main() {
     const recipientPseudonym = `${prefix}-${i}`;
     const payloadHash = randomBytes(32).toString("hex");
 
-    // Serialize record in the same order PgDirectoryStore uses for the chain:
-    // The chain includes all non-chain_hash columns in INSERT order.
-    // From insertWithChain: serialize the 'record' array (values without chain_hash).
-    // For notification_events this is the values passed before the chain_hash placeholder.
-    // We approximate: hash over JSON of the stable fields.
-    const recordStr = JSON.stringify({
+    // Build the record exactly as insertWithChain would see it (excluding chain_hash, id, and
+    // auto-generated timestamps). serializeRecord handles key sorting and type normalization.
+    const record = {
       notification_id: notifUuid,
       recipient_pseudonym: recipientPseudonym,
       notification_type: "SYSTEM",
       payload_hash: payloadHash,
-    });
-    const chainHash = createHash("sha256")
-      .update(Buffer.from(recordStr, "utf8"))
-      .update(Buffer.from(prevHash, "hex"))
-      .digest("hex");
+      // sender_pseudonym is excluded per TABLE_EXTRA_EXCLUDED in hash-chain.ts
+    };
+    const serialized = serializeRecord(record, "notification_events");
+    const chainHash = computeChainHash(serialized, prevHash);
 
     await superPool.query(
       `INSERT INTO notification_events
