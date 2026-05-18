@@ -50,14 +50,17 @@ Paste as one line:
 CELLO_ENV=local DATABASE_URL=postgresql://postgres:dev@localhost:5433/cello_dev DEV_ENVELOPE_KEY=86e903357804be102cf6f55e1b86ed342e01a6f50835272200ac970d0d094ac7 AUDIT_LOG_PATH=/tmp/cello-audit.jsonl CELLO_RELAY_MULTIADDR=/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWCNZbpMm5cAxTn2zAsaWKde1izAPqRdnsXSXBkXFFSv3N NODE_ENV=test pnpm --filter @cello/directory run start
 ```
 
-Expected output includes (not necessarily in this order — several more lines appear between them):
+Expected output (key lines — several more adapter lines appear between them):
 ```
 adapter.initialised  adapterName: PgDirectoryStore
 adapter.initialised  adapterName: MmrCheckpointService
 adapter.initialised  adapterName: EnvelopeKeyProvider
 adapter.initialised  adapterName: ShareStore  implementation: PersistentShareStore
+adapter.initialised  adapterName: DirectoryNode  pubkey: 2357394bbe85dd...
 adapter.initialised  adapterName: ListenAddr  /ip4/127.0.0.1/tcp/4000/p2p/12D3KooWA4CNABsa1fjVWtS57Q5X8uSsAYXsLXPyMGYs9JEXqB9N
 ```
+
+**If you see `migration.out.of.date`:** run `pnpm --filter @cello/directory run db:migrate` before starting the directory. If Flyway reports checksum mismatches, run `docker compose run --rm flyway repair` first, then migrate again.
 
 **Every directory restart clears all in-memory registrations.** Both agents must call `cello_register()` again after any restart.
 
