@@ -5,7 +5,7 @@
  *
  * AC-001: connections table exists after Flyway migrations with all required columns
  *   (connection_id TEXT UNIQUE, participant_a TEXT, participant_b TEXT,
- *   established_at BIGINT, status TEXT DEFAULT 'active', chain_hash BYTEA),
+ *   established_at BIGINT, status TEXT DEFAULT 'active', chain_hash TEXT),
  *   relrowsecurity=true, exactly two RLS policies for cello_service (insert_only, select_all),
  *   no UPDATE or DELETE privilege, two composite indexes (participant_a,participant_b) and
  *   (participant_b,participant_a).
@@ -74,12 +74,21 @@
 
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import pg from "pg";
-import { randomUUID, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { computeChainHash, serializeRecord, CHAIN_GENESIS } from "../hash-chain.js";
 import type { Logger } from "@cello/interfaces";
 
 // ─── Test environment setup ───────────────────────────────────────────────────
+
+/**
+ * Generate a 32-character lowercase hex ID — the same format used by directory-node.ts
+ * (Buffer.from(randomBytes(16)).toString("hex")). Using this format in tests proves the
+ * production path works end-to-end, since connection_requests.request_id is TEXT (not UUID).
+ */
+function makeHexId(): string {
+  return Buffer.from(randomBytes(16)).toString("hex");
+}
 
 const isLocal = process.env["CELLO_ENV"] === "local";
 const DATABASE_URL =
@@ -140,14 +149,18 @@ async function cleanupConnections(connectionIds: string[]): Promise<void> {
  *
  * Callers must therefore pass the same `connectionId` used here as the `correlationId`
  * argument to createConnection() so the lookup finds this row.
+ *
+ * connection_requests.request_id is TEXT (V12 migration) — no ::uuid cast needed.
+ * connectionId here is a 32-char hex string (makeHexId()), matching the format that
+ * directory-node.ts actually generates at runtime.
  */
 async function insertMatchingConnectionRequest(connectionId: string): Promise<void> {
-  // connection_requests has request_id UUID UNIQUE, so we use the connectionId as request_id.
+  // request_id is TEXT NOT NULL UNIQUE after V12 migration.
   // requester_pseudonym and target_pseudonym are required TEXT fields.
   // outcome must be one of 'ACCEPTED', 'REJECTED', 'EXPIRED', 'PENDING_ESCALATION'.
   await superPool.query(
     `INSERT INTO connection_requests (request_id, requester_pseudonym, target_pseudonym, outcome, chain_hash)
-     VALUES ($1::uuid, $2, $3, 'ACCEPTED', $4)
+     VALUES ($1, $2, $3, 'ACCEPTED', $4)
      ON CONFLICT (request_id) DO NOTHING`,
     [
       connectionId,
@@ -181,7 +194,7 @@ describeIntegration(
        *   - cello_service has no UPDATE or DELETE privilege (information_schema.role_table_grants)
        *   - composite indexes on (participant_a, participant_b) and (participant_b, participant_a)
        *   - required columns: connection_id TEXT, participant_a TEXT, participant_b TEXT,
-       *       established_at BIGINT, status TEXT, chain_hash (TEXT or BYTEA)
+       *       established_at BIGINT, status TEXT, chain_hash TEXT (not BYTEA)
        */
       let client: pg.PoolClient;
       try {
@@ -229,6 +242,14 @@ describeIntegration(
         // status must have a default of 'active'
         const statusRow = colResult.rows.find((r) => r.column_name === "status");
         expect(statusRow?.column_default).toMatch(/active/);
+
+        // chain_hash must be TEXT (not BYTEA) — matches V11 migration and PERSIST-004 pattern
+        // All hash-chained tables in this project use TEXT for chain_hash (hex-encoded SHA-256).
+        const chainHashColResult = await client.query<{ data_type: string }>(
+          `SELECT data_type FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'connections' AND column_name = 'chain_hash'`,
+        );
+        expect(chainHashColResult.rows[0]?.data_type).toBe("text");
 
         // 4. Policies: exactly 2 for cello_service after SET ROLE
         await client.query("SET ROLE cello_service");
@@ -288,7 +309,7 @@ describeIntegration(
        *   - hasConnection(A,B) returns the persisted record with matching fields
        *   - the record contains connection_id, participant_a, participant_b, established_at, status
        */
-      const connectionId = randomUUID();
+      const connectionId = makeHexId();
       const participantA = randomBytes(32).toString("hex");
       const participantB = randomBytes(32).toString("hex");
       const establishedAt = Date.now();
@@ -321,7 +342,7 @@ describeIntegration(
 
       // Clean up
       await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1::uuid", [connectionId]);
+      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
     });
 
     // ── AC-003: Symmetric lookup ───────────────────────────────────────────────
@@ -335,7 +356,7 @@ describeIntegration(
        *   3. Asserting the returned record has participant_a=A and participant_b=B (unchanged —
        *      not swapped/normalized by the application layer)
        */
-      const connectionId = randomUUID();
+      const connectionId = makeHexId();
       const participantA = randomBytes(32).toString("hex");
       const participantB = randomBytes(32).toString("hex");
       const establishedAt = Date.now();
@@ -364,7 +385,7 @@ describeIntegration(
 
       // Clean up
       await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1::uuid", [connectionId]);
+      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
     });
 
     // ── AC-004: Restart survival ───────────────────────────────────────────────
@@ -377,7 +398,7 @@ describeIntegration(
        *
        * The test asserts the connection_id matches the pre-restart record.
        */
-      const connectionId = randomUUID();
+      const connectionId = makeHexId();
       const participantA = randomBytes(32).toString("hex");
       const participantB = randomBytes(32).toString("hex");
       const establishedAt = Date.now();
@@ -398,7 +419,7 @@ describeIntegration(
 
       // Clean up
       await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1::uuid", [connectionId]);
+      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
     });
 
     // ── AC-005: Hash chain verification ───────────────────────────────────────
@@ -415,8 +436,8 @@ describeIntegration(
       // Finding 4 fix: delete stale rows so chain verification starts from genesis.
       await superPool.query("DELETE FROM connections");
 
-      const id1 = randomUUID();
-      const id2 = randomUUID();
+      const id1 = makeHexId();
+      const id2 = makeHexId();
       const aKey = randomBytes(32).toString("hex");
       const bKey = randomBytes(32).toString("hex");
       const cKey = randomBytes(32).toString("hex");
@@ -441,7 +462,7 @@ describeIntegration(
       // Clean up
       await cleanupConnections([id1, id2]);
       await superPool.query(
-        "DELETE FROM connection_requests WHERE request_id IN ($1::uuid, $2::uuid)",
+        "DELETE FROM connection_requests WHERE request_id IN ($1, $2)",
         [id1, id2],
       );
     });
@@ -461,7 +482,7 @@ describeIntegration(
        *
        * Test asserts: operation fails AND row count is unchanged after the attempt.
        */
-      const connectionId = randomUUID();
+      const connectionId = makeHexId();
       const participantA = randomBytes(32).toString("hex");
       const participantB = randomBytes(32).toString("hex");
       const logger = makeLogger();
@@ -493,7 +514,7 @@ describeIntegration(
 
       // Clean up
       await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1::uuid", [connectionId]);
+      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
     });
 
     // ── AC-007: Observability — connection.persisted logged ───────────────────
@@ -503,7 +524,7 @@ describeIntegration(
        * AC-007: after a successful INSERT, the logger must receive an info call
        * with event name 'connection.persisted' and all required context fields.
        */
-      const connectionId = randomUUID();
+      const connectionId = makeHexId();
       const participantA = randomBytes(32).toString("hex");
       const participantB = randomBytes(32).toString("hex");
       // correlationId = connectionId because insertMatchingConnectionRequest inserts request_id = connectionId.
@@ -528,7 +549,7 @@ describeIntegration(
 
       // Clean up
       await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1::uuid", [connectionId]);
+      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
     });
 
     // ── AC-008: getConnection with unknown ID returns null ────────────────────
@@ -541,7 +562,7 @@ describeIntegration(
       const logger = makeLogger();
       const store = new PgDirectoryStore(servicePool, logger);
 
-      const unknownId = randomUUID();
+      const unknownId = makeHexId();
       const result = await store.getConnection(unknownId);
       expect(result).toBeNull();
 
@@ -552,7 +573,7 @@ describeIntegration(
     // ── AC-008 extended: getConnection with known ID returns the record ────────
 
     it("AC-008 (extended): getConnection(knownId) returns the connection record", async () => {
-      const connectionId = randomUUID();
+      const connectionId = makeHexId();
       const participantA = randomBytes(32).toString("hex");
       const participantB = randomBytes(32).toString("hex");
       const establishedAt = Date.now();
@@ -571,7 +592,7 @@ describeIntegration(
 
       // Clean up
       await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1::uuid", [connectionId]);
+      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
     });
 
     // ── SI-001: connection_id must match a pending connection_requests row ─────
@@ -588,7 +609,7 @@ describeIntegration(
        * Verification: row count in connections remains 0 for this connection_id
        * after the rejected call.
        */
-      const arbitraryId = randomUUID(); // never inserted into connection_requests
+      const arbitraryId = makeHexId(); // never inserted into connection_requests
       const participantA = randomBytes(32).toString("hex");
       const participantB = randomBytes(32).toString("hex");
       const logger = makeLogger();
@@ -622,7 +643,7 @@ describeIntegration(
        * SI-001 extended: even if a connection_requests row exists, the outcome must be
        * 'ACCEPTED'. A rejected or pending request must not allow a connection record to be created.
        */
-      const rejectedId = randomUUID();
+      const rejectedId = makeHexId();
       const participantA = randomBytes(32).toString("hex");
       const participantB = randomBytes(32).toString("hex");
       const logger = makeLogger();
@@ -631,7 +652,7 @@ describeIntegration(
       // Insert a connection_requests row with outcome = 'REJECTED' (not 'ACCEPTED')
       await superPool.query(
         `INSERT INTO connection_requests (request_id, requester_pseudonym, target_pseudonym, outcome, chain_hash)
-         VALUES ($1::uuid, $2, $3, 'REJECTED', $4)
+         VALUES ($1, $2, $3, 'REJECTED', $4)
          ON CONFLICT (request_id) DO NOTHING`,
         [
           rejectedId,
@@ -661,7 +682,7 @@ describeIntegration(
       expect(rowResult.rows[0]?.count).toBe("0");
 
       // Clean up
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1::uuid", [rejectedId]);
+      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [rejectedId]);
     });
 
     // ── SI-002: chain_hash computed server-side ────────────────────────────────
@@ -680,7 +701,7 @@ describeIntegration(
        *      using computeChainHash(serializeRecord(record), CHAIN_GENESIS) (first row)
        *   4. Asserting equality — the stored value matches the server-computed value
        */
-      const connectionId = randomUUID();
+      const connectionId = makeHexId();
       const participantA = randomBytes(32).toString("hex");
       const participantB = randomBytes(32).toString("hex");
       const establishedAt = Date.now();
@@ -719,7 +740,7 @@ describeIntegration(
 
       // Clean up
       await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1::uuid", [connectionId]);
+      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
     });
 
     // ── SI-003: Superuser tamper detected ─────────────────────────────────────
@@ -731,7 +752,7 @@ describeIntegration(
        *
        * Adversarial condition: database superuser modifies participant_a directly.
        */
-      const connectionId = randomUUID();
+      const connectionId = makeHexId();
       const participantA = randomBytes(32).toString("hex");
       const participantB = randomBytes(32).toString("hex");
 
@@ -763,7 +784,7 @@ describeIntegration(
 
       // Clean up
       await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1::uuid", [connectionId]);
+      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
     });
   },
 );

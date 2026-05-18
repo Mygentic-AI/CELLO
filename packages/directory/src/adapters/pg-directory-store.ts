@@ -158,7 +158,7 @@ export class PgDirectoryStore implements DirectoryStore {
     // minted connection identifier and will never match request_id in connection_requests.
     // Only accepted requests may produce a connection record — rejected/pending/expired must not.
     const reqCheck = await this.#pool.query<{ count: string }>(
-      `SELECT COUNT(*) as count FROM connection_requests WHERE request_id = $1::uuid AND outcome = 'ACCEPTED'`,
+      `SELECT COUNT(*) as count FROM connection_requests WHERE request_id = $1 AND outcome = 'ACCEPTED'`,
       [correlationId],
     );
     if ((reqCheck.rows[0]?.count ?? "0") === "0") {
