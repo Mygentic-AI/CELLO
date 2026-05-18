@@ -104,7 +104,7 @@ acceptance_criteria:
     then: "notification_queue exists in schema public with all required
       columns and index on pubkey_hex; relrowsecurity=true confirmed via
       pg_catalog.pg_class; policies for cello_service include insert_only,
-      select_all, and delete_by_pubkey (WHERE pubkey_hex = current_setting
+      select_by_pubkey, and delete_by_pubkey (WHERE pubkey_hex = current_setting
       ('app.current_pubkey')) confirmed via pg_catalog.pg_policy (query
       issued after SET ROLE cello_service); cello_service has no UPDATE
       privilege confirmed via information_schema.role_table_grants;
