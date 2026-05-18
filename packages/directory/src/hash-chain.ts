@@ -212,6 +212,7 @@ export const HASH_CHAINED_TABLES = [
   "conversation_attestations",
   "conversation_participation",
   "notification_events",
+  "seal_notarizations",
 ] as const;
 
 export type HashChainedTable = (typeof HASH_CHAINED_TABLES)[number];

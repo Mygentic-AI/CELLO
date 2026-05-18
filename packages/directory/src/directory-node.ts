@@ -333,6 +333,7 @@ export class CelloDirectoryNode {
     leafCount: number;
     timestamp: number;
     tbs: Uint8Array;
+    correlationId: string;
   }>();
 
   // session_id_hex → provisional session (relay registered, frames may not yet be delivered)
@@ -1868,7 +1869,7 @@ export class CelloDirectoryNode {
         close_timestamp,
         frost_signature: notarizationSig,
       };
-      this.#store.recordNotarization(notarization);
+      void this.#store.recordNotarization(notarization, { correlationId: sessionIdHex }).catch(() => { /* logged inside */ });
       // OBS-001 AC-009: sealed (single-key path)
       protocolLog("SEAL", `Sealed — session ${truncHex(sessionIdHex)}, root ${truncHex(Buffer.from(recomputedRoot).toString("hex"))}`);
       const sealedEvent: SessionSealed = {
@@ -1902,6 +1903,7 @@ export class CelloDirectoryNode {
       leafCount,
       timestamp: close_timestamp,
       tbs,
+      correlationId: sessionIdHex,
     });
 
     // OBS-001 AC-009: FROST seal ceremony log
@@ -1979,7 +1981,7 @@ export class CelloDirectoryNode {
       close_timestamp: pending.timestamp,
       frost_signature: new Uint8Array(frame.frost_signature),
     };
-    this.#store.recordNotarization(notarization);
+    void this.#store.recordNotarization(notarization, { correlationId: pending.correlationId }).catch(() => { /* logged inside */ });
 
     // Confirm relay (destroys relay per-session state — AC-008)
     void this.#relay.confirmSeal(frame.session_id);

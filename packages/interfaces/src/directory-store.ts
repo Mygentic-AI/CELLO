@@ -29,11 +29,30 @@ export interface SealNotarization {
 export type DirectoryNotification = SessionAbandoned | SessionSealed | SessionSealRejected | SealVerified | ConnectionEstablished;
 
 export interface DirectoryStore {
-  /** Store a completed SealNotarization. */
-  recordNotarization(notarization: SealNotarization): void;
+  /**
+   * Store a completed SealNotarization.
+   *
+   * PERSIST-018: async — writes to Postgres with one retry on transient failure.
+   * Logs notarization.recorded at INFO on success.
+   * Logs notarization.write.failed at ERROR on each failure attempt.
+   * Logs notarization.duplicate.rejected at WARN on unique constraint violation.
+   *
+   * @param opts.correlationId - The seal-ceremony correlationId minted at ceremony
+   *   initiation. Threaded through all observability events in this flow.
+   * @param opts.client - Optional pre-acquired PoolClient for transactional writes.
+   *   When provided, the store uses this client instead of acquiring from the pool,
+   *   enabling atomic multi-table writes (e.g. conversation_seals + seal_notarizations
+   *   in a single transaction). SI-002 requires this capability.
+   */
+  recordNotarization(notarization: SealNotarization, opts?: { correlationId?: string; client?: unknown }): Promise<void>;
 
-  /** Retrieve a notarization by session_id hex. */
-  getNotarization(sessionIdHex: string): SealNotarization | undefined;
+  /**
+   * Retrieve a notarization by session_id hex.
+   *
+   * PERSIST-018: async — queries Postgres. Returns undefined if no row exists.
+   * Does not throw and does not log an error on absence.
+   */
+  getNotarization(sessionIdHex: string): Promise<SealNotarization | undefined>;
 
   /**
    * Enqueue a notification event for a pubkey that has no active signaling stream.
