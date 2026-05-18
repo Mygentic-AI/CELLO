@@ -76,9 +76,11 @@ acceptance_criteria:
       completes, but no MMR checkpoint has run yet for this session"
     when: "cello_close_session returns"
     then: "the response includes status: 'sealed', sealed_root: <hex>,
-      and checkpoint_status: 'pending'; mmr_peak is null; the agent
-      knows the FROST receipt is valid but the inclusion proof is not
-      yet available"
+      and checkpoint_status: 'pending'; session_mmr_peak is null
+      (this field is session-scoped — it reflects whether this session's
+      sealed_root has been committed to a checkpoint peak, not the global
+      MMR peak); the agent knows the FROST receipt is valid but the
+      inclusion proof is not yet available"
     test_type: integration
     component_under_test: client
 
@@ -87,18 +89,32 @@ acceptance_criteria:
       conversation_seal_staging"
     when: "the client calls cello_get_sealed_receipt"
     then: "the response includes checkpoint_status: 'pending' and a
-      staged_at timestamp indicating when the seal was committed to staging;
-      attestation_self is 'PENDING' with a human-readable reason:
-      'MMR checkpoint not yet written'"
+      staged_at Unix epoch milliseconds timestamp indicating when the
+      seal was committed to staging (not ISO 8601 — all protocol
+      timestamps are Unix milliseconds); attestation_self is 'PENDING'
+      with a human-readable reason: 'MMR checkpoint not yet written'"
     test_type: integration
     component_under_test: client
 
   - id: AC-003
     given: "A session has been sealed but the MMR checkpoint has not run"
     when: "the client calls cello_get_inclusion_proof for this session"
-    then: "the tool returns { status: 'pending', staged_at: <timestamp>,
+    then: "the tool returns { status: 'pending', staged_at: <unix_ms>,
       message: 'sealed_root staged; inclusion proof available after next
-      MMR checkpoint' } — not an error; the agent can retry later"
+      MMR checkpoint' } — not an error; the agent can retry later;
+      staged_at is Unix epoch milliseconds (not ISO 8601) to match the
+      rest of the protocol timestamp format"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-003a
+    given: "A session is active (not yet sealed — cello_close_session has
+      not been called)"
+    when: "the client calls cello_get_inclusion_proof for this session"
+    then: "the tool returns an error (not a pending response): the session
+      has no sealed_root and therefore no inclusion proof can exist;
+      the error clearly distinguishes 'not yet sealed' from 'sealed but
+      pending checkpoint'"
     test_type: integration
     component_under_test: client
 
@@ -115,22 +131,33 @@ acceptance_criteria:
     test_type: e2e
     component_under_test: directory
 
-  - id: AC-005
+  - id: AC-005a
     given: "A session's sealed_root has been committed to the MMR checkpoint"
     when: "the client calls cello_close_session on a session that was
-      previously sealed (idempotent call) OR calls cello_get_sealed_receipt"
+      previously sealed (idempotent call)"
     then: "the response includes checkpoint_status: 'confirmed',
-      mmr_peak: <hex> (the checkpoint peak hash), and leaf_index: N"
+      session_mmr_peak: <hex> (the checkpoint peak hash), and leaf_index: N"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-005b
+    given: "A session's sealed_root has been committed to the MMR checkpoint"
+    when: "the client calls cello_get_sealed_receipt for that session"
+    then: "the response includes checkpoint_status: 'confirmed',
+      session_mmr_peak: <hex> (the checkpoint peak hash), and leaf_index: N"
     test_type: integration
     component_under_test: client
 
   - id: AC-006
-    given: "A checkpoint has just been confirmed by the directory"
-    when: "any agent that has a staged sealed_root in that checkpoint
-      calls cello_get_sealed_receipt"
-    then: "the response now shows checkpoint_status: 'confirmed';
-      the transition from 'pending' to 'confirmed' is detectable by
-      polling cello_get_sealed_receipt"
+    given: "A session's sealed_root is staged in conversation_seal_staging
+      but no checkpoint has run yet"
+    when: "the test polls cello_get_sealed_receipt, then triggers a
+      checkpoint, then polls cello_get_sealed_receipt again"
+    then: "the test shall first assert checkpoint_status: 'pending' in the
+      initial response, then trigger a checkpoint, then assert
+      checkpoint_status: 'confirmed' in the subsequent response —
+      both states must be observed in sequence; a test that only
+      checks the final confirmed state does not satisfy this AC"
     test_type: integration
     component_under_test: directory
 
@@ -148,8 +175,13 @@ security_invariants:
   - id: SI-002
     statement: "cello_get_inclusion_proof shall never return a proof
       for a session whose sealed_root is not yet in a confirmed checkpoint"
-    adversarial_condition: "even when the staged_root hash matches a
-      known checkpoint peak hash by coincidence"
+    adversarial_condition: "even when the directory has an in-memory proof
+      cache from a prior checkpoint and the session's staged_root is not yet
+      committed to the database — the implementation must query the database
+      to determine checkpoint membership, not rely on in-memory state; this
+      is testable by populating the in-memory cache with a prior checkpoint
+      and asserting the proof is denied for a session whose staged_root is
+      absent from the checkpoints table"
     test_type: integration
     component_under_test: directory
 
@@ -162,6 +194,12 @@ degraded_behavior:
       staged sealed_roots; agents polling cello_get_sealed_receipt will
       see checkpoint_status transition from 'pending' to 'confirmed'
       within max_staging_age"
+    acceptance_criteria: "given a staged sealed_root older than max_staging_age,
+      when the overdue detection fires, then a forced checkpoint is triggered
+      and the session's checkpoint_status transitions to 'confirmed' within
+      the flush window — verified by setting max_staging_age to a short test
+      value, inserting a staged seal, waiting for overdue detection, and
+      asserting checkpoint_status: 'confirmed' within the flush window"
 
   - id: DB-002
     condition: "While the client is offline when the checkpoint runs"
@@ -174,24 +212,46 @@ observability:
     - name: mmr.checkpoint.pending
       level: info
       trigger: "cello_close_session returns with checkpoint_status: pending"
-      context_fields: [sessionId, sealedRoot, stagedAt]
-      correlationId: false
+      context_fields: [sessionId, sealedRoot, stagedAt, correlationId]
+      correlationId: true
+      # correlationId is required: this event fires at the terminal step of
+      # a FROST seal ceremony, which has a session-scoped correlationId
+      # threaded from ceremony initiation. Breaking the correlation chain
+      # here makes debugging seal-to-checkpoint transitions impossible.
 
-    - name: mmr.checkpoint.confirmed
+    - name: mmr.session.checkpointed
       level: info
-      trigger: "checkpoint confirmed for a previously-pending session"
-      context_fields: [sessionId, checkpointId, leafIndex, peakHash]
-      correlationId: false
+      trigger: "a session's sealed_root enters a confirmed checkpoint —
+        fires per-session when the checkpoint run commits this session's
+        staged_root; distinct from mmr.checkpoint.confirmed (PERSIST-007)
+        which fires once per checkpoint at the checkpoint level with
+        aggregate fields {checkpointId, leafCount, peakHash, stagedSealCount}"
+      context_fields: [sessionId, checkpointId, leafIndex, peakHash, correlationId]
+      correlationId: true
 
   error_events:
     - name: mmr.checkpoint.overdue
       level: warn
       trigger: "staged sealed_root has been pending longer than max_staging_age"
       context_fields: [sessionId, stagedAt, maxStagingAgeMs]
+      correlationId: false
+      # correlationId is false: the overdue detection fires from a scheduler
+      # context (no session correlationId in scope at trigger time)
 
   alarms:
     - condition: "mmr.checkpoint.overdue fires"
       fires_to: ops-warning
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes:
+  - "All staged_at timestamps are Unix epoch milliseconds throughout this
+    story — not ISO 8601 strings. This matches the rest of the protocol's
+    timestamp format (Structure 1 TBS, Structure 2 TBS, etc.)."
+  - "PERSIST-E2E-001 AC-009 should eventually be extended to assert the
+    pre-checkpoint pending state: first call cello_get_sealed_receipt after
+    seal but before triggering the checkpoint, assert checkpoint_status:
+    'pending', then trigger the checkpoint and assert 'confirmed'. The current
+    AC-009 only validates the confirmed end-state."
 
 # ─── References ─────────────────────────────────────────────
 references:
@@ -203,5 +263,6 @@ references:
   e2e_story: CELLO-PERSIST-E2E-001
   live_session: "docs/planning/milestone-writeups/live-session-e2e-proofs/agent-conversation-database-bugs-and-protocol-gaps-m4-2026-05-18.md"
   depends_on:
+    - CELLO-PERSIST-003  # RLS schema — prerequisite for SI-002 (database query discipline) and AC-004 (RLS governs proof table access)
     - CELLO-PERSIST-007  # MMR single-node construction
     - CELLO-PERSIST-009  # SQLCipher (client storage)
