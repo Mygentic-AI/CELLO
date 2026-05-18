@@ -33,7 +33,9 @@ const SERVICE_URL = DATABASE_URL.replace(
   "//cello_service:cello_service_dev@",
 );
 
-// Tables that must be append-only — cello_service can INSERT and SELECT but not mutate
+// Tables that must be append-only — cello_service can INSERT and SELECT but not mutate.
+// notification_queue and pending_connection_requests are intentionally excluded: they are
+// drain queues with a DELETE policy for cello_service (rows are consumed, not archived).
 const APPEND_ONLY_TABLES = [
   "agent_registrations",
   "agent_profiles",
@@ -41,8 +43,6 @@ const APPEND_ONLY_TABLES = [
   "conversation_attestations",
   "seal_notarizations",
   "connections",
-  "notification_queue",
-  "pending_connection_requests",
   "notification_events",
 ];
 
