@@ -54,9 +54,10 @@ behavior:
 
   - trigger: "When the client calls cello_get_inclusion_proof after seal
       but before the MMR checkpoint has run"
-    action: "the tool shall return { status: 'pending', staged_at: <timestamp> }
-      rather than an error — the sealed_root is staged and the proof
-      will be available once the checkpoint runs"
+    action: "the tool shall return { status: 'pending', staged_at: <unix_ms> }
+      rather than an error — staged_at is Unix epoch milliseconds; the
+      sealed_root is staged and the proof will be available once the
+      checkpoint runs"
 
   - trigger: "When the client calls cello_get_inclusion_proof after the
       MMR checkpoint has committed the sealed_root"
