@@ -31,16 +31,16 @@
  *   is logged at ERROR with { sessionId, reason, attempt: 1 } on the first failure and
  *   { attempt: 2 } on the retry failure.
  *
- * SI-001: A SealNotarization with a crafted frost_signature (all-zeros) is passed to
- *   recordNotarization(); after the write, the stored frost_signature matches the value
- *   from the notarization argument (SI-001 here means: the store does NOT recompute or
- *   replace frost_signature — it stores exactly what was passed; chain_hash is computed
- *   server-side and NOT accepted from the caller).
+ * SI-001: chain_hash is always computed server-side by PgDirectoryStore — never accepted
+ *   from the caller. A SealNotarization with a crafted frost_signature (all-zeros) is
+ *   passed to recordNotarization(); the test asserts: (a) frost_signature is stored
+ *   exactly as supplied (all-zeros) — PgDirectoryStore does not recompute or replace it;
+ *   (b) chain_hash is a valid server-computed SHA-256 hex value (non-zero, 64 hex chars).
  *
- *   Note: the story SI-001 states "frost_signature must originate from the FROST ceremony"
- *   which is enforced by directory-node.ts controlling the call site — not by
- *   PgDirectoryStore recomputing the signature. PgDirectoryStore stores whatever it
- *   receives. The invariant is: chain_hash is always computed server-side.
+ *   frost_signature source enforcement is structural: only processSeal() and
+ *   processSealFrostSignature() in directory-node.ts call recordNotarization(), and those
+ *   methods supply frost_signature from the FROST ceremony result. PgDirectoryStore stores
+ *   whatever its caller provides; the constraint is at the call site, not the store layer.
  *
  * SI-002: recordNotarization() and conversation_seals are written in the same transaction;
  *   connection loss after the first INSERT but before the second rolls both back.
@@ -496,9 +496,14 @@ describeIntegration("PERSIST-018 AC-008: notarization.write.failed logged on bot
 });
 
 // ─── SI-001: chain_hash is computed server-side; frost_signature stored as-is ──
+// SI-001 scope: PgDirectoryStore always computes chain_hash server-side (never accepts it
+// from the caller). frost_signature is stored exactly as supplied — enforcement that it
+// originates from the FROST ceremony is structural at directory-node.ts: only
+// processSeal()/processSealFrostSignature() call recordNotarization(), and those methods
+// supply frost_signature from the FROST ceremony result.
 
-describeIntegration("PERSIST-018 SI-001: chain_hash is always computed server-side", () => {
-  it("SI-001: crafted frost_signature (all-zeros) is stored as-is; chain_hash is server-computed", async () => {
+describeIntegration("PERSIST-018 SI-001: chain_hash is always server-computed; frost_signature source enforcement is structural at directory-node.ts", () => {
+  it("SI-001: chain_hash is server-computed (not caller-supplied); frost_signature is stored as-is from caller — source enforcement is structural at directory-node.ts call site", async () => {
     const logger: Logger = {
       debug: vi.fn(), info: vi.fn(), warn: vi.fn(),
       error: vi.fn() as Logger["error"],
