@@ -263,6 +263,7 @@ import type { KeyProvider } from "@cello/crypto";
 import type { SignalRequirement } from "./connection-policy.js";
 import { buildPseudonymBinding, encodeConnectionPackage } from "@cello/protocol-types";
 import type { ConnectionPackage } from "@cello/protocol-types";
+import type { CheckpointStatusProvider } from "@cello/interfaces";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -289,7 +290,9 @@ export function createMcpSessionServer(
   node: CelloNode,
   client: CelloClient,
   keyProvider: KeyProvider,
+  opts?: { checkpointStatusProvider?: CheckpointStatusProvider },
 ): McpServer {
+  const checkpointStatusProvider = opts?.checkpointStatusProvider;
   const startedAt = Date.now();
 
   // FIFO queue of inbound session assignment events.
@@ -544,6 +547,20 @@ export function createMcpSessionServer(
           });
         }
         if (record.status === "sealed") {
+          // PERSIST-017: include checkpoint_status if CheckpointStatusProvider is wired in.
+          let checkpointFields: Record<string, unknown> = {};
+          if (checkpointStatusProvider) {
+            const stagingStatus = await checkpointStatusProvider.getSealStagingStatus(session_id);
+            if (stagingStatus.status === "pending") {
+              checkpointFields = { checkpoint_status: "pending", staged_at: stagingStatus.staged_at };
+            } else if (stagingStatus.status === "confirmed") {
+              checkpointFields = {
+                checkpoint_status: "confirmed",
+                session_mmr_peak: stagingStatus.checkpoint_peak_hash,
+                leaf_index: stagingStatus.leaf_index,
+              };
+            }
+          }
           return jsonText({
             status: "sealed",
             sealed_root: record.sealed_root ? toHex(record.sealed_root) : null,
@@ -553,6 +570,7 @@ export function createMcpSessionServer(
             close_timestamp: record.close_timestamp ?? Date.now(),
             reason: null,
             mmr_peak: null,
+            ...checkpointFields,
           });
         }
         if (record.status === "seal_rejected") {
@@ -709,6 +727,27 @@ export function createMcpSessionServer(
         ? toHex(record.directory_signature)
         : "";
 
+      // PERSIST-017: include checkpoint_status if CheckpointStatusProvider is wired in.
+      let checkpointFields: Record<string, unknown> = {};
+      if (checkpointStatusProvider) {
+        const stagingStatus = await checkpointStatusProvider.getSealStagingStatus(session_id);
+        if (stagingStatus.status === "pending") {
+          checkpointFields = {
+            checkpoint_status: "pending",
+            staged_at: stagingStatus.staged_at,
+            attestation_self: "PENDING",
+            attestation_self_reason: "MMR checkpoint not yet written",
+          };
+        } else if (stagingStatus.status === "confirmed") {
+          checkpointFields = {
+            checkpoint_status: "confirmed",
+            session_mmr_peak: stagingStatus.checkpoint_peak_hash,
+            leaf_index: stagingStatus.leaf_index,
+            checkpoint_id: stagingStatus.checkpoint_id,
+          };
+        }
+      }
+
       return jsonText({
         session_id,
         sealed_root: record.sealed_root ? toHex(record.sealed_root) : null,
@@ -721,6 +760,7 @@ export function createMcpSessionServer(
         attestation_counterparty: "PENDING",
         leaf_count: record.local_tree_leaves.length,
         directory_signature: dirSigHex,
+        ...checkpointFields,
       });
     },
   );
@@ -742,6 +782,30 @@ export function createMcpSessionServer(
       },
     },
     async ({ session_id, leaf_index }) => {
+      // PERSIST-017: if CheckpointStatusProvider is wired in, check MMR checkpoint status first.
+      // Returns the pending/confirmed/error response based on staging table state.
+      if (checkpointStatusProvider) {
+        const stagingStatus = await checkpointStatusProvider.getSealStagingStatus(session_id);
+        if (stagingStatus.status === "pending") {
+          return jsonText({
+            status: "pending",
+            staged_at: stagingStatus.staged_at,
+            message: "sealed_root staged; inclusion proof available after next MMR checkpoint",
+          });
+        }
+        if (stagingStatus.status === "confirmed") {
+          return jsonText({
+            status: "confirmed",
+            leaf_index: stagingStatus.leaf_index,
+            checkpoint_peak_hash: stagingStatus.checkpoint_peak_hash,
+            checkpoint_id: stagingStatus.checkpoint_id,
+            sibling_hashes: stagingStatus.sibling_hashes,
+          });
+        }
+        // not_staged: session was never sealed — error distinguishes from 'pending'
+        return jsonText({ status: "error", reason: "not_yet_sealed" });
+      }
+
       const record = client.listSessions().find(
         (s) => toHex(s.session_id) === session_id
       );

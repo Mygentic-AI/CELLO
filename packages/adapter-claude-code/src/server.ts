@@ -88,6 +88,7 @@ import { z } from "zod";
 import type { CelloClient, SessionAssignmentEvent } from "@cello/client";
 import type { CelloNode } from "@cello/transport";
 import type { KeyProvider } from "@cello/crypto";
+import type { CheckpointStatusProvider } from "@cello/interfaces";
 import { pushSessionRequestNotification } from "./notifications.js";
 
 // ─── InboundSessionEvent ─────────────────────────────────────────────────────
@@ -111,7 +112,9 @@ export function createMcpServer(
   node: CelloNode,
   client: CelloClient,
   keyProvider: KeyProvider,
+  opts?: { checkpointStatusProvider?: CheckpointStatusProvider },
 ): McpServer {
+  const checkpointStatusProvider = opts?.checkpointStatusProvider;
   const startedAt = Date.now();
 
   // ─── Session event queue ─────────────────────────────────────────────────
@@ -293,6 +296,24 @@ export function createMcpServer(
     async ({ session_id }) => {
       if (client == null) return CLIENT_NOT_INITIALIZED;
       client.closeSession(session_id);
+
+      // PERSIST-017: include checkpoint_status if CheckpointStatusProvider is wired in.
+      // When not provided (M1 stubs, tests without DB), return closed: true only.
+      if (checkpointStatusProvider) {
+        const stagingStatus = await checkpointStatusProvider.getSealStagingStatus(session_id);
+        if (stagingStatus.status === "pending") {
+          return jsonText({ closed: true, checkpoint_status: "pending", staged_at: stagingStatus.staged_at });
+        }
+        if (stagingStatus.status === "confirmed") {
+          return jsonText({
+            closed: true,
+            checkpoint_status: "confirmed",
+            session_mmr_peak: stagingStatus.checkpoint_peak_hash,
+            leaf_index: stagingStatus.leaf_index,
+          });
+        }
+      }
+
       return jsonText({ closed: true });
     }
   );
@@ -317,36 +338,82 @@ export function createMcpServer(
   );
 
   // ── cello_get_sealed_receipt ──────────────────────────────────────────────
-  // Stubbed in M1 — SESSION-003 implements the real seal ceremony.
+  // PERSIST-017: returns checkpoint_status when CheckpointStatusProvider is wired.
+  // Falls back to the M1 stub response when no provider is configured.
 
   server.registerTool(
     "cello_get_sealed_receipt",
     {
       description:
-        "Retrieve the FROST-signed sealed receipt for a closed session. Not yet available in M1.",
+        "Retrieve the sealed receipt and MMR checkpoint status for a closed session.",
       inputSchema: {
         session_id: z.string().describe("Session ID hex"),
       },
     },
-    async () => {
+    async ({ session_id }) => {
+      if (checkpointStatusProvider) {
+        const stagingStatus = await checkpointStatusProvider.getSealStagingStatus(session_id);
+        if (stagingStatus.status === "pending") {
+          return jsonText({
+            available: true,
+            checkpoint_status: "pending",
+            staged_at: stagingStatus.staged_at,
+            attestation_self: "PENDING",
+            attestation_self_reason: "MMR checkpoint not yet written",
+          });
+        }
+        if (stagingStatus.status === "confirmed") {
+          return jsonText({
+            available: true,
+            checkpoint_status: "confirmed",
+            session_mmr_peak: stagingStatus.checkpoint_peak_hash,
+            leaf_index: stagingStatus.leaf_index,
+            checkpoint_id: stagingStatus.checkpoint_id,
+          });
+        }
+        // not_staged: session was never sealed
+        return jsonText({ available: false, reason: "not_yet_sealed" });
+      }
       return jsonText({ available: false, reason: "not_yet_sealed" });
     }
   );
 
   // ── cello_get_inclusion_proof ─────────────────────────────────────────────
-  // Stubbed in M1 — requires sealed tree from SESSION-003.
+  // PERSIST-017: returns pending/confirmed status when CheckpointStatusProvider is wired.
+  // Falls back to the M1 stub response when no provider is configured.
 
   server.registerTool(
     "cello_get_inclusion_proof",
     {
       description:
-        "Retrieve a Merkle inclusion proof for a specific message in a sealed session. Not yet available in M1.",
+        "Retrieve the MMR inclusion proof status for a sealed session.",
       inputSchema: {
         session_id: z.string().describe("Session ID hex"),
         content_hash: z.string().describe("Content hash hex of the message"),
       },
     },
-    async () => {
+    async ({ session_id }) => {
+      if (checkpointStatusProvider) {
+        const stagingStatus = await checkpointStatusProvider.getSealStagingStatus(session_id);
+        if (stagingStatus.status === "pending") {
+          return jsonText({
+            status: "pending",
+            staged_at: stagingStatus.staged_at,
+            message: "sealed_root staged; inclusion proof available after next MMR checkpoint",
+          });
+        }
+        if (stagingStatus.status === "confirmed") {
+          return jsonText({
+            status: "confirmed",
+            leaf_index: stagingStatus.leaf_index,
+            checkpoint_peak_hash: stagingStatus.checkpoint_peak_hash,
+            checkpoint_id: stagingStatus.checkpoint_id,
+            sibling_hashes: stagingStatus.sibling_hashes,
+          });
+        }
+        // not_staged: session was never sealed — error distinguishes from 'pending'
+        return jsonText({ status: "error", reason: "not_yet_sealed" });
+      }
       return jsonText({ available: false, reason: "not_yet_sealed" });
     }
   );

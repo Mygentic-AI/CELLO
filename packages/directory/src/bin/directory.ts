@@ -36,6 +36,7 @@ import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { EncryptedPgShareStore } from "../encrypted-share-store.js";
 import { PersistentShareStore } from "../persistent-share-store.js";
 import { MmrStore } from "../mmr-store.js";
+import { MmrCheckpointService } from "../mmr-checkpoint-service.js";
 import { AnalyticsJob } from "../analytics-job.js";
 import { PendingConnectionRequestTtlSweep } from "../pending-connection-request-ttl-sweep.js";
 
@@ -179,17 +180,21 @@ if (env === "local" && pgPool) {
   logger.info("db.rls.verified", { tableCount: appendOnlyTables.length, env });
 }
 
-// ─── DB-001: Incomplete checkpoint recovery ──────────────────────────────────
-// On startup, detect any partially-written checkpoints and re-run confirmCheckpoint
-// to complete them idempotently.
+// ─── PERSIST-017: MmrStore + MmrCheckpointService instantiation ─────────────
+// mmrStore is hoisted so it can be passed to createDirectoryNode below.
+// It is used for: startup recovery (DB-001), the mmr_checkpoint job handler,
+// and appendSeal() calls inside CelloDirectoryNode's seal handlers.
+let mmrStore: MmrStore | undefined;
+let mmrCheckpointService: MmrCheckpointService | undefined;
 if (env === "local" && pgPool) {
-  const mmrStore = new MmrStore(pgPool, logger);
+  mmrStore = new MmrStore(pgPool, logger);
+  mmrCheckpointService = new MmrCheckpointService(mmrStore, pgPool, logger);
+  logger.info("adapter.initialised", { adapterName: "MmrCheckpointService", implementation: "MmrCheckpointService", env });
+
+  // DB-001: On startup, detect any partially-written checkpoints and re-run
+  // confirmCheckpoint to complete them idempotently.
   const orphanedIds = await mmrStore.detectIncompleteCheckpoints(logger);
-  for (const checkpointId of orphanedIds) {
-    logger.info("mmr.checkpoint.recovery.started", { checkpointId, env });
-    await mmrStore.confirmCheckpoint(checkpointId);
-    logger.info("mmr.checkpoint.recovery.completed", { checkpointId, env });
-  }
+  await mmrCheckpointService.recoverOrphanedCheckpoints(orphanedIds);
 }
 
 // ─── PERSIST-005: EnvelopeKeyProvider + EncryptedPgShareStore ─────────────────
@@ -247,6 +252,20 @@ if (env === "local" && pgPool) {
   await scheduler.schedule("pending_connection_requests_ttl", Date.now() + 5 * 60 * 1000, { type: "pending_connection_requests_ttl" });
 
   logger.info("adapter.initialised", { adapterName: "PendingConnectionRequestTtlSweep", triggeredBy: "scheduler", env });
+
+  // ─── PERSIST-017: mmr_checkpoint job handler ──────────────────────────────
+  // Triggers MmrCheckpointService.runCheckpoint() for all staged seals.
+  // Also checks for overdue staged seals and forces a flush.
+  if (mmrCheckpointService) {
+    scheduler.onJob("mmr_checkpoint", async () => {
+      await mmrCheckpointService!.runCheckpoint();
+      const overdueIds = await mmrCheckpointService!.checkOverdue();
+      if (overdueIds.length > 0) {
+        await mmrCheckpointService!.forceFlush(overdueIds);
+      }
+    });
+    logger.info("adapter.initialised", { adapterName: "MmrCheckpointJob", triggeredBy: "scheduler", env });
+  }
 }
 
 // ─── Key loading ──────────────────────────────────────────────────────────
@@ -319,6 +338,7 @@ try {
     store,
     shareStore,
     transportPrivateKey,
+    mmrStore,
   });
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);

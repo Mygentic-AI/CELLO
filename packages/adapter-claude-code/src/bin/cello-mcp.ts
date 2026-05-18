@@ -134,7 +134,11 @@ if (primaryPubkey) {
   client.setPrimaryPubkey(primaryPubkey);
 }
 
-// Create server with single identity
+// Create server with single identity.
+// PERSIST-017: checkpointStatusProvider is not available in the cello-mcp binary
+// (the client binary has no access to the directory's MmrStore). The provider is
+// wired in directory-facing deployments via the server.ts composition root.
+// Passing undefined is a safe fallback — the tools return M1 stub responses.
 const server = createMcpSessionServer(node, client, kp);
 mcpServer = server;
 

@@ -501,7 +501,7 @@ describeIntegrationIsolated("PERSIST-007 integration: AC-003 inclusion proof for
       sessionIds.push(sessionId);
       const sealMerkleRoot = createHash("sha256").update(`seal-${i}`).digest("hex");
       sealMerkleRoots.push(sealMerkleRoot);
-      await store.appendSeal(sessionId, sealMerkleRoot);
+      await store.appendSeal(sessionId, sealMerkleRoot, randomUUID());
     }
 
     // Confirm a checkpoint for all 8 seals
@@ -545,7 +545,7 @@ describeIntegrationIsolated("PERSIST-007 integration: Fix4 — 3-leaf MMR proof 
       sessionIds.push(sessionId);
       const sealMerkleRoot = createHash("sha256").update(`fix4-3leaf-seal-${i}`).digest("hex");
       sealRoots.push(sealMerkleRoot);
-      await store.appendSeal(sessionId, sealMerkleRoot);
+      await store.appendSeal(sessionId, sealMerkleRoot, randomUUID());
     }
 
     const checkpointId = await store.initiateCheckpoint();
@@ -580,7 +580,7 @@ describeIntegrationIsolated("PERSIST-007 integration: AC-004 checkpoint clears s
       const sessionId = randomUUID();
       sessionIds.push(sessionId);
       const sealMerkleRoot = createHash("sha256").update(`ac004-seal-${i}`).digest("hex");
-      await store.appendSeal(sessionId, sealMerkleRoot);
+      await store.appendSeal(sessionId, sealMerkleRoot, randomUUID());
     }
 
     // Verify staging has 5 new rows
@@ -624,7 +624,7 @@ describeIntegrationIsolated("PERSIST-007 integration: AC-005 concurrent seals du
     for (let i = 0; i < 3; i++) {
       const sessionId = randomUUID();
       preSealIds.push(sessionId);
-      await store.appendSeal(sessionId, createHash("sha256").update(`ac005-pre-${i}`).digest("hex"));
+      await store.appendSeal(sessionId, createHash("sha256").update(`ac005-pre-${i}`).digest("hex"), randomUUID());
     }
 
     // Initiate checkpoint — this marks those 3 seals with the checkpoint_id
@@ -635,7 +635,7 @@ describeIntegrationIsolated("PERSIST-007 integration: AC-005 concurrent seals du
     for (let i = 0; i < 2; i++) {
       const sessionId = randomUUID();
       postSealIds.push(sessionId);
-      await store.appendSeal(sessionId, createHash("sha256").update(`ac005-post-${i}`).digest("hex"));
+      await store.appendSeal(sessionId, createHash("sha256").update(`ac005-post-${i}`).digest("hex"), randomUUID());
     }
 
     // Confirm the checkpoint
@@ -666,7 +666,7 @@ describeIntegrationIsolated("PERSIST-007 integration: AC-006 mmr.checkpoint.conf
     // Append 3 seals and confirm a checkpoint so confirmCheckpoint actually runs
     for (let i = 0; i < 3; i++) {
       const sessionId = randomUUID();
-      await store.appendSeal(sessionId, createHash("sha256").update(`ac006-seal-${i}`).digest("hex"));
+      await store.appendSeal(sessionId, createHash("sha256").update(`ac006-seal-${i}`).digest("hex"), randomUUID());
     }
 
     const checkpointId = await store.initiateCheckpoint();
@@ -699,7 +699,7 @@ describeIntegrationIsolated("PERSIST-007 integration: AC-007 chain verification 
     for (let i = 0; i < 100; i++) {
       const sessionId = randomUUID();
       const sealMerkleRoot = createHash("sha256").update(`ac007-seal-${i}`).digest("hex");
-      await store.appendSeal(sessionId, sealMerkleRoot);
+      await store.appendSeal(sessionId, sealMerkleRoot, randomUUID());
     }
 
     // Verify hash chains on both tables
@@ -718,7 +718,7 @@ describeIntegrationIsolated("PERSIST-007 integration: SI-001 proof unavailable f
 
     // Append a seal without confirming a checkpoint
     const sessionId = randomUUID();
-    await store.appendSeal(sessionId, createHash("sha256").update("si001-seal").digest("hex"));
+    await store.appendSeal(sessionId, createHash("sha256").update("si001-seal").digest("hex"), randomUUID());
 
     // Request proof immediately — no checkpoint confirmed yet for this leaf
     const result = await store.getInclusionProof(sessionId, logger);
@@ -742,8 +742,8 @@ describeIntegrationIsolated("PERSIST-007 integration: SI-003 no leaf in >1 check
     // Append 2 seals for checkpoint N
     const sessionId1 = randomUUID();
     const sessionId2 = randomUUID();
-    await store.appendSeal(sessionId1, createHash("sha256").update("si003-seal-1").digest("hex"));
-    await store.appendSeal(sessionId2, createHash("sha256").update("si003-seal-2").digest("hex"));
+    await store.appendSeal(sessionId1, createHash("sha256").update("si003-seal-1").digest("hex"), randomUUID());
+    await store.appendSeal(sessionId2, createHash("sha256").update("si003-seal-2").digest("hex"), randomUUID());
 
     // Confirm checkpoint N — assigns and clears these 2 seals
     const checkpointId1 = await store.initiateCheckpoint();
@@ -751,7 +751,7 @@ describeIntegrationIsolated("PERSIST-007 integration: SI-003 no leaf in >1 check
 
     // Append 1 more seal for checkpoint N+1
     const sessionId3 = randomUUID();
-    await store.appendSeal(sessionId3, createHash("sha256").update("si003-seal-3").digest("hex"));
+    await store.appendSeal(sessionId3, createHash("sha256").update("si003-seal-3").digest("hex"), randomUUID());
 
     // Confirm checkpoint N+1
     const checkpointId2 = await store.initiateCheckpoint();
@@ -780,8 +780,8 @@ describeIntegrationIsolated("PERSIST-007 integration: DB-001 incomplete checkpoi
     // Append 2 seals and initiate a checkpoint
     const sessionId1 = randomUUID();
     const sessionId2 = randomUUID();
-    await store.appendSeal(sessionId1, createHash("sha256").update("db001-seal-1").digest("hex"));
-    await store.appendSeal(sessionId2, createHash("sha256").update("db001-seal-2").digest("hex"));
+    await store.appendSeal(sessionId1, createHash("sha256").update("db001-seal-1").digest("hex"), randomUUID());
+    await store.appendSeal(sessionId2, createHash("sha256").update("db001-seal-2").digest("hex"), randomUUID());
     const orphanedCheckpointId = await store.initiateCheckpoint();
 
     // Simulate crash: the checkpoint row was never written to directory_checkpoints.

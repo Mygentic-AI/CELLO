@@ -12,15 +12,17 @@
  * from @cello/directory's public index.
  *
  * Observability events emitted:
- *   mmr.leaf.appended      — INFO   { sessionId, leafIndex, leafHash, correlationId }
- *   mmr.checkpoint.confirmed — INFO { checkpointId, leafCount, peakHash, stagedSealCount }
+ *   mmr.leaf.appended        — INFO   { sessionId, leafIndex, leafHash, correlationId }
+ *   mmr.checkpoint.pending   — INFO   { sessionId, sealedRoot, stagedAt, correlationId }
+ *   mmr.session.checkpointed — INFO   { sessionId, checkpointId, leafIndex, peakHash, correlationId }
+ *   mmr.checkpoint.confirmed — INFO   { checkpointId, leafCount, peakHash, stagedSealCount }
  *   mmr.checkpoint.incomplete — ERROR { checkpointId, stagedSealCount }
- *   mmr.proof.unavailable  — WARN  { sessionId, leafIndex }
+ *   mmr.proof.unavailable    — WARN   { sessionId, leafIndex }
  */
 
 import pg from "pg";
 import { randomUUID, createHash } from "node:crypto";
-import type { Logger } from "@cello/interfaces";
+import type { Logger, CheckpointStatusProvider, SealStagingStatus } from "@cello/interfaces";
 import {
   appendLeafToMmr,
   computeInclusionProof,
@@ -36,7 +38,11 @@ import {
   type ChainVerificationResult,
 } from "./hash-chain.js";
 
-export class MmrStore {
+// Re-export SealStagingStatus so that callers within @cello/directory (e.g. tests)
+// can import it from the canonical location without a second import of @cello/interfaces.
+export type { SealStagingStatus };
+
+export class MmrStore implements CheckpointStatusProvider {
   readonly #pool: pg.Pool;
   readonly #logger: Logger;
 
@@ -56,18 +62,19 @@ export class MmrStore {
    *   5. Insert any new internal nodes into conversation_proof_mmr_nodes with chain_hash.
    *   6. Insert a row into conversation_seal_staging.
    *   7. Log mmr.leaf.appended at INFO.
+   *   8. Log mmr.checkpoint.pending at INFO (PERSIST-017).
    *
    * SI-002: leaf_hash is computed from sealMerkleRoot here — never from caller input.
    * AC-002: uses advisory lock to prevent concurrent appends from forking the chain.
    *
    * @param sessionId - UUID of the session/conversation being sealed
    * @param sealMerkleRoot - The sealed conversation root hash (hex, 64 chars)
-   * @param correlationId - Optional correlation ID for the async flow
+   * @param correlationId - Correlation ID for the async flow (required for observability tracing)
    */
   async appendSeal(
     sessionId: string,
     sealMerkleRoot: string,
-    correlationId?: string,
+    correlationId: string,
   ): Promise<{ leafIndex: number; leafHash: string }> {
     const client = await this.#pool.connect();
     try {
@@ -149,12 +156,13 @@ export class MmrStore {
         );
       }
 
-      // Step 6: Insert into staging (no checkpoint_id yet)
+      // Step 6: Insert into staging with correlation_id (PERSIST-017 schema addition)
+      // correlation_id column was added by V11__staging_correlation_id.sql migration.
       await client.query(
-        `INSERT INTO conversation_seal_staging (session_id, seal_merkle_root, recorded_at)
-         VALUES ($1, $2, $3)
+        `INSERT INTO conversation_seal_staging (session_id, seal_merkle_root, recorded_at, correlation_id)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT (session_id) DO NOTHING`,
-        [sessionId, sealMerkleRoot, recordedAt],
+        [sessionId, sealMerkleRoot, recordedAt, correlationId],
       );
 
       await client.query("COMMIT");
@@ -164,7 +172,18 @@ export class MmrStore {
         sessionId,
         leafIndex,
         leafHash: result.newLeaf.leaf_hash,
-        correlationId: correlationId ?? null,
+        correlationId,
+      });
+
+      // Step 8: Log mmr.checkpoint.pending (PERSIST-017)
+      // Fires whenever a seal is staged but no checkpoint has yet committed it.
+      // stagedAt is Unix epoch milliseconds — matches the rest of the protocol timestamp format.
+      const stagedAt = new Date(recordedAt).getTime();
+      this.#logger.info("mmr.checkpoint.pending", {
+        sessionId,
+        sealedRoot: sealMerkleRoot,
+        stagedAt,
+        correlationId,
       });
 
       return { leafIndex, leafHash: result.newLeaf.leaf_hash };
@@ -251,6 +270,8 @@ export class MmrStore {
     let stagedSealCount: number;
     let sessionIds: string[];
     let checkpointChainHash: string;
+    // PERSIST-017: capture staging rows with correlation_id for post-commit per-session events
+    let stagingRowsForEvents: Array<{ session_id: string; correlation_id: string | null }> = [];
 
     try {
       await client.query("BEGIN");
@@ -259,12 +280,18 @@ export class MmrStore {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('mmr_append'))");
 
       // Fetch staging rows INSIDE the transaction (after lock is held).
-      const stagingRes = await client.query<{ session_id: string; seal_merkle_root: string; recorded_at: Date }>(
-        "SELECT session_id, seal_merkle_root, recorded_at FROM conversation_seal_staging WHERE checkpoint_id = $1",
+      // Include correlation_id (PERSIST-017 schema addition) so mmr.session.checkpointed
+      // can thread the seal-ceremony correlationId through the checkpoint event.
+      const stagingRes = await client.query<{ session_id: string; seal_merkle_root: string; recorded_at: Date; correlation_id: string | null }>(
+        "SELECT session_id, seal_merkle_root, recorded_at, correlation_id FROM conversation_seal_staging WHERE checkpoint_id = $1",
         [checkpointId],
       );
       stagedSealCount = stagingRes.rows.length;
       sessionIds = stagingRes.rows.map((r) => r.session_id);
+      stagingRowsForEvents = stagingRes.rows.map((r) => ({
+        session_id: r.session_id,
+        correlation_id: r.correlation_id ?? null,
+      }));
 
       // Get total leaf count INSIDE the transaction (after lock is held).
       const leafCountRes = await client.query<{ count: string }>(
@@ -322,6 +349,44 @@ export class MmrStore {
         [checkpointId],
       );
 
+      // PERSIST-017: emit per-session events INSIDE the transaction, before COMMIT.
+      // Design choice: if the process crashes between COMMIT and event emission, events
+      // are permanently lost with no recovery path. For financial trust infrastructure,
+      // we accept that a logging failure inside the transaction will cause a rollback
+      // (the checkpoint can be re-attempted) rather than silently dropping events after
+      // a committed checkpoint.
+      if (stagingRowsForEvents.length > 0) {
+        // Look up leaf_index for each session — query within the same transaction
+        // to see the consistent snapshot.
+        const eventSessionIds = stagingRowsForEvents.map((r) => r.session_id);
+        const leafRes = await client.query<{ session_id: string; leaf_index: number }>(
+          "SELECT session_id::text, leaf_index::int FROM conversation_proof_leaves WHERE session_id = ANY($1)",
+          [eventSessionIds],
+        );
+        const leafIndexBySession = new Map<string, number>(
+          leafRes.rows.map((r) => [r.session_id, r.leaf_index]),
+        );
+
+        for (const row of stagingRowsForEvents) {
+          const leafIndex = leafIndexBySession.get(row.session_id) ?? -1;
+          if (row.correlation_id === null) {
+            // Data integrity issue: correlation_id should always be present (appendSeal requires it).
+            // A null value indicates legacy/corrupt data. Log a warning but do not block the checkpoint.
+            this.#logger.warn("mmr.checkpoint.correlationId.missing", {
+              sessionId: row.session_id,
+              checkpointId,
+            });
+          }
+          this.#logger.info("mmr.session.checkpointed", {
+            sessionId: row.session_id,
+            checkpointId,
+            leafIndex,
+            peakHash,
+            correlationId: row.correlation_id,
+          });
+        }
+      }
+
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK").catch(() => { /* ignore rollback errors */ });
@@ -330,7 +395,9 @@ export class MmrStore {
       client.release();
     }
 
-    // Log mmr.checkpoint.confirmed
+    // Log mmr.checkpoint.confirmed (aggregate checkpoint-level event)
+    // Emitted after COMMIT because it summarizes the committed state — losing this event
+    // on crash is acceptable since the checkpoint row itself is the source of truth.
     this.#emitCheckpointConfirmed(checkpointId, leafCount!, peakHash!, stagedSealCount!);
 
     return peakHash!;
@@ -511,6 +578,69 @@ export class MmrStore {
       "SELECT * FROM conversation_proof_mmr_nodes ORDER BY id ASC",
     );
     return verifyChain(res.rows, this.#logger, "conversation_proof_mmr_nodes");
+  }
+
+  /**
+   * Return the checkpoint visibility status for a session's sealed_root.
+   *
+   * PERSIST-017: Used by cello_close_session, cello_get_sealed_receipt, and
+   * cello_get_inclusion_proof to determine whether the sealed_root is still staged
+   * (pending checkpoint) or has been committed to a confirmed checkpoint.
+   *
+   * Returns:
+   *   { status: 'pending',   staged_at: <Unix ms> }       — staged, no checkpoint yet
+   *   { status: 'confirmed', leaf_index, checkpoint_peak_hash, checkpoint_id } — committed
+   *   { status: 'not_staged' }                             — session has no staging row
+   *
+   * SI-002: the confirmed check resolves against the committed directory_checkpoints table
+   * row (via the join table), never against in-memory state.
+   */
+  async getSealStagingStatus(sessionId: string): Promise<SealStagingStatus> {
+    // Check confirmed state first (fast path for sessions already checkpointed).
+    // A session is confirmed when a row exists in conversation_proof_leaf_checkpoints
+    // linking this session's leaf to a row in directory_checkpoints.
+    const confirmedRes = await this.#pool.query<{
+      checkpoint_id: string;
+      peak_hash: string;
+      leaf_index: number;
+    }>(
+      `SELECT dc.checkpoint_id, dc.peak_hash, l.leaf_index::int AS leaf_index
+       FROM conversation_proof_leaves l
+       JOIN conversation_proof_leaf_checkpoints lc ON lc.leaf_id = l.id
+       JOIN directory_checkpoints dc ON dc.checkpoint_id = lc.checkpoint_id
+       WHERE l.session_id = $1
+       LIMIT 1`,
+      [sessionId],
+    );
+
+    if (confirmedRes.rows.length > 0) {
+      const row = confirmedRes.rows[0]!;
+      // Compute sibling_hashes via the inclusion proof (required by AC-004).
+      // getInclusionProof uses the same committed checkpoints table row — SI-002 is not relaxed.
+      const proof = await this.getInclusionProof(sessionId, this.#logger);
+      const siblingHashes = proof !== PROOF_NOT_YET_AVAILABLE ? proof.sibling_hashes : [];
+      return {
+        status: "confirmed",
+        leaf_index: row.leaf_index,
+        checkpoint_peak_hash: row.peak_hash,
+        checkpoint_id: row.checkpoint_id,
+        sibling_hashes: siblingHashes,
+      };
+    }
+
+    // Not confirmed — check staging table for pending status
+    const stagingRes = await this.#pool.query<{ recorded_at: Date }>(
+      "SELECT recorded_at FROM conversation_seal_staging WHERE session_id = $1 LIMIT 1",
+      [sessionId],
+    );
+
+    if (stagingRes.rows.length > 0) {
+      const stagedAt = stagingRes.rows[0]!.recorded_at.getTime();
+      return { status: "pending", staged_at: stagedAt };
+    }
+
+    // No staging row — session was never sealed (or staging was deleted before confirmation)
+    return { status: "not_staged" };
   }
 
   // ─── Private helpers ───────────────────────────────────────────────────────

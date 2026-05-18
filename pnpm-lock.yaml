@@ -44,6 +44,9 @@ importers:
       '@cello/crypto':
         specifier: workspace:*
         version: link:../crypto
+      '@cello/interfaces':
+        specifier: workspace:*
+        version: link:../interfaces
       '@cello/transport':
         specifier: workspace:*
         version: link:../transport
