@@ -100,9 +100,8 @@ export interface DirectoryStore {
   getConnection(connectionId: string): ConnectionRecord | null;
 
   /**
-   * Queue a pending connection request for an offline target.
-   * At most 32 per target; drops the oldest when full.
-   * Returns false if the queue was at capacity and oldest was dropped.
+   * Enqueue a notification for delivery. Returns true on success.
+   * No queue capacity limit is enforced in M4 (see DB-003).
    */
   queuePendingConnectionRequest(targetPubkey: string, request: PendingConnectionRequest): boolean;
 

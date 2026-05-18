@@ -139,14 +139,16 @@ export class PgDirectoryStore implements DirectoryStore {
       (row) => row.payload as DirectoryNotification,
     );
 
-    const logContext: Record<string, unknown> = {
-      pubkeyHex,
-      count: notifications.length,
-    };
-    if (correlationId !== undefined) {
-      logContext.correlationId = correlationId;
+    if (notifications.length > 0) {
+      const logContext: Record<string, unknown> = {
+        pubkeyHex,
+        count: notifications.length,
+      };
+      if (correlationId !== undefined) {
+        logContext.correlationId = correlationId;
+      }
+      this.#logger.info("notification.drained", logContext);
     }
-    this.#logger.info("notification.drained", logContext);
 
     return notifications;
   }

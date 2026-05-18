@@ -65,7 +65,7 @@ importers:
         version: link:../relay
       '@claude-flow/testing':
         specifier: '*'
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
+        version: 3.0.0-alpha.1(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
       cbor-x:
         specifier: ^1.6.0
         version: 1.6.4
@@ -123,7 +123,7 @@ importers:
         version: link:../test-fixtures
       '@claude-flow/testing':
         specifier: '*'
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
+        version: 3.0.0-alpha.1(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
 
   packages/crypto:
     dependencies:
@@ -175,7 +175,7 @@ importers:
         version: link:../relay
       '@claude-flow/testing':
         specifier: '*'
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
+        version: 3.0.0-alpha.1(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.2)
@@ -214,7 +214,7 @@ importers:
         version: link:../transport
       '@claude-flow/testing':
         specifier: '*'
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
+        version: 3.0.0-alpha.1(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.2)
@@ -249,7 +249,7 @@ importers:
         version: link:../test-fixtures
       '@claude-flow/testing':
         specifier: '*'
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
+        version: 3.0.0-alpha.1(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
       '@types/node':
         specifier: ^25.6.2
         version: 25.6.2
@@ -307,7 +307,7 @@ importers:
     devDependencies:
       '@claude-flow/testing':
         specifier: '*'
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
+        version: 3.0.0-alpha.1(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
 
   packages/test-fixtures:
     dependencies:
@@ -317,7 +317,7 @@ importers:
     devDependencies:
       '@claude-flow/testing':
         specifier: '*'
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
+        version: 3.0.0-alpha.1(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
       '@types/node':
         specifier: ^25.6.2
         version: 25.6.2
@@ -434,6 +434,14 @@ packages:
   '@claude-flow/swarm@3.0.0-alpha.1':
     resolution: {integrity: sha512-irccvAUKK9LkXvnMMagCE4a7l7OCXFPCmd/sxv8BG7aSEEqlWNqyw4FLzNhd/BEiYFcG3qAnASanoC6sncgLPg==}
 
+  '@claude-flow/testing@3.0.0-alpha.1':
+    resolution: {integrity: sha512-jwQvfw6O5NWBDhhJrUxQ1mHwNY4T/X0rJCMf0D8rXEH25HVyxH9N1gd904sV61h+NdG+ZUZY9Nh1/sJURMZqEA==}
+    peerDependencies:
+      '@claude-flow/memory': ^3.0.0-alpha.1
+      '@claude-flow/shared': ^3.0.0-alpha.1
+      '@claude-flow/swarm': ^3.0.0-alpha.1
+      vitest: '>=1.0.0'
+
   '@claude-flow/testing@3.0.0-alpha.2':
     resolution: {integrity: sha512-hbXcfJQIyl8y91k/Rodq2jvu3EfVniWY4i12K7+NlRzjrIaFoms9jVNCpC6+Q+edT6fjlTn6rfQsI4jRRJ00Jg==}
     peerDependencies:
@@ -441,14 +449,6 @@ packages:
       '@claude-flow/shared': ^3.0.0-alpha.1
       '@claude-flow/swarm': ^3.0.0-alpha.1
       vitest: '>=1.0.0'
-
-  '@claude-flow/testing@3.0.0-alpha.6':
-    resolution: {integrity: sha512-RB4TLhEUat3XfNgbkAXjzN/6MSx8YHLlnK94gKJZVyKAycX6aW3mkr6m+I4A/DoAWCaL6MkU//3oZsasLOdIrQ==}
-    peerDependencies:
-      '@claude-flow/memory': ^3.0.0-alpha.2
-      '@claude-flow/shared': ^3.0.0-alpha.1
-      '@claude-flow/swarm': ^3.0.0-alpha.1
-      vitest: '>=4.0.16'
 
   '@dnsquery/dns-packet@6.1.1':
     resolution: {integrity: sha512-WXTuFvL3G+74SchFAtz3FgIYVOe196ycvGsMgvSH/8Goptb1qpIQtIuM4SOK9G9lhMWYpHxnXyy544ZhluFOew==}
@@ -3423,14 +3423,14 @@ snapshots:
 
   '@claude-flow/swarm@3.0.0-alpha.1': {}
 
-  '@claude-flow/testing@3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))':
+  '@claude-flow/testing@3.0.0-alpha.1(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))':
     dependencies:
       '@claude-flow/memory': 3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2)
       '@claude-flow/shared': 3.0.0-alpha.1
       '@claude-flow/swarm': 3.0.0-alpha.1
       vitest: 3.2.4(@types/node@25.6.2)(tsx@4.22.0)
 
-  '@claude-flow/testing@3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))':
+  '@claude-flow/testing@3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))':
     dependencies:
       '@claude-flow/memory': 3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2)
       '@claude-flow/shared': 3.0.0-alpha.1
