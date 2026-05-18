@@ -116,6 +116,10 @@ export interface RegisterSuccess {
 export interface RegisterError {
   type: "register_error";
   reason: RegisterErrorReason;
+  /** Only set when reason === "already_registered" — allows client to reconstruct state */
+  agent_id?: string;
+  primary_pubkey?: string;
+  ml_dsa_pubkey?: string;
 }
 
 export type RegisterErrorReason =

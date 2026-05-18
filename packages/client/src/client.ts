@@ -2821,6 +2821,25 @@ class CelloClientImpl implements CelloClient {
 
     if (responseWithTimeout["type"] !== "register_success") {
       const reason = (responseWithTimeout["reason"] as string | undefined) ?? "unknown";
+      // already_registered: directory persisted the profile from a prior session.
+      // Reconstruct RegistrationState from the profile data included in the error frame
+      // so the agent can continue without a new DKG ceremony.
+      if (
+        reason === "already_registered" &&
+        responseWithTimeout["agent_id"] &&
+        responseWithTimeout["primary_pubkey"]
+      ) {
+        const state: RegistrationState = {
+          agent_id: responseWithTimeout["agent_id"] as string,
+          primary_pubkey: responseWithTimeout["primary_pubkey"] as string,
+          ml_dsa_pubkey: (responseWithTimeout["ml_dsa_pubkey"] as string | undefined) ?? mlDsaPubkeyHex,
+          registered_at: Date.now(),
+          status: "active",
+        };
+        this.#registrationState = state;
+        this.#mlDsaProvider = mlDsaProvider;
+        return state;
+      }
       return { error: reason };
     }
 

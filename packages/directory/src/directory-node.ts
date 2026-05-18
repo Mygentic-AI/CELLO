@@ -1040,8 +1040,16 @@ export class CelloDirectoryNode {
     }
 
     // Step 2: Check if pubkey already registered
-    if (this.#store.hasProfile(frame.k_local_pubkey)) {
-      this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "already_registered" }));
+    // Include profile data so the client can reconstruct RegistrationState without a new DKG.
+    const existingProfile = this.#store.getProfile(frame.k_local_pubkey);
+    if (existingProfile) {
+      this.#sendFrame(stream, encodeRegisterError({
+        type: "register_error",
+        reason: "already_registered",
+        agent_id: existingProfile.agent_id,
+        primary_pubkey: existingProfile.primary_pubkey,
+        ml_dsa_pubkey: existingProfile.ml_dsa_pubkey,
+      }));
       return;
     }
 
