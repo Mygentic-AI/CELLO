@@ -164,7 +164,7 @@ Print what you're about to say, then call `cello_send({ session_id: "<hex>", con
 
 Call `cello_close_session({ session_id: "<hex>" })`.
 
-Expected:
+Expected when you seal first:
 ```json
 {
   "status": "sealed",
@@ -177,7 +177,9 @@ Expected:
 }
 ```
 
-`checkpoint_status` will be `"pending"` immediately after seal — the MMR inclusion proof is being computed. It becomes `"confirmed"` once the checkpoint job runs (within a few minutes). Call `cello_get_sealed_receipt({ session_id })` later to retrieve the confirmed proof.
+**If you get `status: "seal_rejected", reason: "session_not_active"`:** Agent B already ran the FROST ceremony first — this is expected. Call `cello_list_sessions()` to confirm `status: "sealed"` and retrieve the `sealed_root`.
+
+`checkpoint_status` will be `"pending"` immediately after seal — the MMR inclusion proof is being computed. It becomes `"confirmed"` once the checkpoint job runs (within a few minutes).
 
 Report the sealed_root — it's the FROST-notarized Merkle root of the full conversation.
 
@@ -207,7 +209,9 @@ Registered.
 
 ## Step 2 — Await connection
 
-Call `cello_await_connection_request({ timeout_ms: 60000 })`.
+**If policy is `open` (the default):** The connection is auto-accepted — you will not receive an explicit connection request notification. Skip straight to Step 3.
+
+**If policy is not `open`:** Call `cello_await_connection_request({ timeout_ms: 60000 })`.
 
 When Agent A's request arrives:
 ```json
@@ -222,6 +226,8 @@ Report: Connection accepted from `<sender_pubkey>`.
 
 Call `cello_await_session({ timeout_ms: 60000 })`.
 
+If it times out, immediately call `cello_list_sessions()` — Agent A may have already initiated a session while you were waiting. If a session appears there with `status: active`, proceed with that session_id.
+
 Report:
 ```
 Session received!
@@ -234,11 +240,15 @@ Session received!
 
 Same as Agent A Step 7.
 
-## Step 5 — Detect close
+## Step 5 — Close
 
-When messages stop, call `cello_list_sessions()`. Look for `status: sealed`.
+When Agent A signals they are ready to close, call `cello_close_session({ session_id: "<hex>" })`.
 
-If you try `cello_close_session` after A already closed, you may get `session_not_active` — that's expected, A's FROST ceremony already ran. The session is sealed; verify via `cello_list_sessions`.
+You may seal first (if you call it before A does) or second. Either way is correct:
+- If you seal first: you get `status: "sealed"` with the `sealed_root`.
+- If A sealed first: you get `status: "seal_rejected", reason: "session_not_active"`. Call `cello_list_sessions()` to confirm `status: "sealed"` and get the `sealed_root`.
+
+Report the sealed_root.
 
 ---
 
