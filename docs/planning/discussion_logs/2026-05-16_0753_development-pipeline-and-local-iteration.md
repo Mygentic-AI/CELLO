@@ -161,8 +161,8 @@ logger.info("session.started", { userId, sessionId, principalType })
 - `analytics.job.completed` — level: info; context fields: `{ runId, durationMs, pseudonymCount, edgeCount }`; fired on successful run completion; added in PERSIST-008
 - `analytics.job.failed` — level: error; context fields: `{ runId, reason, phase }`; fired when any phase fails; the write transaction is rolled back before this event fires; added in PERSIST-008
 - `analytics.job.stale` — level: warn; context fields: `{ lastSuccessfulRunAt }`; fired by `checkStale()` when no successful run has been recorded in over 24 hours; added in PERSIST-008
-- `schema.completeness.verified` — **test-output event, not a production Logger call**; emitted as test result metadata when all referenced tables are confirmed present in migrations and database; context fields: `{ tableCount, migrationCount }`; added in PERSIST-016
-- `schema.completeness.failed` — **test-output event, not a production Logger call**; emitted as test result metadata when one or more referenced tables are missing from migrations or database; context fields: `{ missingTables, checkedTableCount }`; added in PERSIST-016
+- `schema.completeness.verified` — level: info; context fields: `{ tableCount, migrationCount }`; correlationId: false; **test-output event only** — emitted by the schema completeness test runner when all referenced tables are confirmed present in migrations and database; does not fire through the production Logger interface; added in PERSIST-016
+- `schema.completeness.failed` — level: error; context fields: `{ missingTables, checkedTableCount }`; correlationId: false; **test-output event only** — emitted by the schema completeness test runner when one or more referenced tables are missing from migrations or database; does not fire through the production Logger interface; added in PERSIST-016
 
 ---
 
