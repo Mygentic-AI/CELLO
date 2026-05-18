@@ -44,10 +44,12 @@ export class PgDirectoryStore implements DirectoryStore {
     this.#logger = logger;
   }
 
-  #fire(query: Promise<unknown>): void {
+  // PERSIST-016 observability: tableName is required so operators can distinguish a
+  // missing-table failure from a connection failure or a constraint violation.
+  #fire(query: Promise<unknown>, tableName: string): void {
     void query.catch((err: unknown) => {
       const reason = err instanceof Error ? err.message : String(err);
-      this.#logger.error("adapter.write.failed", { adapterName: "PgDirectoryStore", reason });
+      this.#logger.error("adapter.write.failed", { adapterName: "PgDirectoryStore", reason, tableName });
     });
   }
 
@@ -68,7 +70,7 @@ export class PgDirectoryStore implements DirectoryStore {
         notarization.close_timestamp,
         Buffer.from(notarization.frost_signature),
       ],
-    ));
+    ), "seal_notarizations");
   }
 
   getNotarization(_sessionIdHex: string): SealNotarization | undefined {
@@ -84,7 +86,7 @@ export class PgDirectoryStore implements DirectoryStore {
       `INSERT INTO notification_queue (pubkey_hex, payload)
        VALUES ($1, $2)`,
       [pubkeyHex, JSON.stringify(event)],
-    ));
+    ), "notification_queue");
   }
 
   drainNotifications(_pubkeyHex: string): DirectoryNotification[] {
@@ -113,7 +115,7 @@ export class PgDirectoryStore implements DirectoryStore {
         profile.registered_at,
         profile.status,
       ],
-    ));
+    ), "agent_profiles");
   }
 
   getProfile(pubkeyHex: string): AgentProfile | undefined {
@@ -137,7 +139,7 @@ export class PgDirectoryStore implements DirectoryStore {
        VALUES ($1,$2,$3,$4,'active')
        ON CONFLICT (connection_id) DO NOTHING`,
       [connectionId, participantA, participantB, establishedAt],
-    ));
+    ), "connections");
   }
 
   hasConnection(_pubkeyA: string, _pubkeyB: string): { connection_id: string } | null {
@@ -153,7 +155,7 @@ export class PgDirectoryStore implements DirectoryStore {
       `INSERT INTO pending_connection_requests (target_pubkey, payload)
        VALUES ($1, $2)`,
       [targetPubkey, JSON.stringify(request)],
-    ));
+    ), "pending_connection_requests");
     return true;
   }
 
