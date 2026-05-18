@@ -41,10 +41,11 @@ background: >
 behavior:
   - trigger: "When Flyway migrations are applied to a fresh database"
     action: "the seal_notarizations table shall exist with columns
-      session_id (BYTEA PRIMARY KEY), sealed_root (BYTEA NOT NULL),
-      participant_a_pubkey (BYTEA NOT NULL), participant_b_pubkey (BYTEA NOT NULL),
-      close_timestamp (BIGINT NOT NULL), frost_signature (BYTEA NOT NULL),
-      chain_hash (BYTEA NOT NULL); RLS shall be enabled with INSERT and
+      id (BIGSERIAL PRIMARY KEY), session_id (TEXT NOT NULL UNIQUE),
+      sealed_root (TEXT NOT NULL), participant_a_pubkey (TEXT NOT NULL),
+      participant_b_pubkey (TEXT NOT NULL), close_timestamp (BIGINT NOT NULL),
+      frost_signature (TEXT NOT NULL), chain_hash (TEXT NOT NULL);
+      RLS shall be enabled with INSERT and
       SELECT policies for cello_service; no UPDATE or DELETE policy shall
       exist for cello_service"
 
