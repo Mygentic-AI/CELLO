@@ -22,7 +22,7 @@
 
 import pg from "pg";
 import { randomUUID, createHash } from "node:crypto";
-import type { Logger } from "@cello/interfaces";
+import type { Logger, CheckpointStatusProvider, SealStagingStatus } from "@cello/interfaces";
 import {
   appendLeafToMmr,
   computeInclusionProof,
@@ -38,21 +38,11 @@ import {
   type ChainVerificationResult,
 } from "./hash-chain.js";
 
-// ─── PERSIST-017 types ────────────────────────────────────────────────────────
+// Re-export SealStagingStatus so that callers within @cello/directory (e.g. tests)
+// can import it from the canonical location without a second import of @cello/interfaces.
+export type { SealStagingStatus };
 
-/**
- * Return type for getSealStagingStatus().
- *
- * 'pending'   — sealed_root is in conversation_seal_staging, no checkpoint yet
- * 'confirmed' — sealed_root has been committed to a confirmed checkpoint
- * 'not_staged' — session has no staging row (never sealed or staging was corrupted)
- */
-export type SealStagingStatus =
-  | { status: "pending"; staged_at: number }   // staged_at: Unix epoch milliseconds
-  | { status: "confirmed"; leaf_index: number; checkpoint_peak_hash: string; checkpoint_id: string }
-  | { status: "not_staged" };
-
-export class MmrStore {
+export class MmrStore implements CheckpointStatusProvider {
   readonly #pool: pg.Pool;
   readonly #logger: Logger;
 
