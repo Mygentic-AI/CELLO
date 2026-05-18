@@ -715,7 +715,7 @@ describeIntegrationIsolated("PERSIST-017 integration: SI-002 proof-eligibility r
 // ─── AC-005a + AC-005b: confirmed after checkpoint ────────────────────────────
 
 describeIntegrationIsolated("PERSIST-017 integration: AC-005 confirmed status after checkpoint", () => {
-  it("AC-005a: getSealStagingStatus returns confirmed after checkpoint runs", async () => {
+  it("AC-005a: getSealStagingStatus returns confirmed after checkpoint runs via JobScheduler entry point", async () => {
     const logger = createMockLogger();
     const store = new MmrStore(servicePool, logger);
 
@@ -729,9 +729,21 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-005 confirmed status af
     const beforeStatus = await store.getSealStagingStatus(sessionId);
     expect(beforeStatus.status).toBe("pending");
 
-    // Run checkpoint via MmrStore (same code path as production)
-    const checkpointId = await store.initiateCheckpoint();
-    await store.confirmCheckpoint(checkpointId);
+    // AC-005a: trigger checkpoint via the real JobScheduler mmr_checkpoint entry point —
+    // the same code path used in production (matching the composition root wiring in
+    // packages/directory/src/bin/directory.ts). Register the handler with a
+    // LocalJobScheduler, schedule a job at runAt=0, and await the setTimeout(0) tick.
+    const service = new MmrCheckpointService(store, servicePool, logger);
+    const scheduler = new LocalJobScheduler();
+    scheduler.onJob("mmr_checkpoint", async () => {
+      await service.runCheckpoint();
+      const overdueIds = await service.checkOverdue();
+      if (overdueIds.length > 0) {
+        await service.forceFlush(overdueIds);
+      }
+    });
+    await scheduler.schedule("test-ac-005a-checkpoint", Date.now() - 1, { type: "mmr_checkpoint" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
 
     // Status after checkpoint: confirmed
     const afterStatus = await store.getSealStagingStatus(sessionId);
@@ -744,7 +756,7 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-005 confirmed status af
     }
   });
 
-  it("AC-005b: getInclusionProof returns full proof after checkpoint with mmr.session.checkpointed log", async () => {
+  it("AC-005b: getInclusionProof returns full proof after checkpoint via JobScheduler entry point with mmr.session.checkpointed log", async () => {
     const logger = createMockLogger();
     const store = new MmrStore(servicePool, logger);
 
@@ -754,15 +766,28 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-005 confirmed status af
 
     await store.appendSeal(sessionId, sealedRoot, correlationId);
 
-    // Run checkpoint
-    const checkpointId = await store.initiateCheckpoint();
-    const peakHash = await store.confirmCheckpoint(checkpointId);
+    // AC-005b: trigger checkpoint via the real JobScheduler mmr_checkpoint entry point —
+    // the same code path used in production. Register the handler with a
+    // LocalJobScheduler, schedule a job at runAt=0, and await the setTimeout(0) tick.
+    const service = new MmrCheckpointService(store, servicePool, logger);
+    const scheduler = new LocalJobScheduler();
+    scheduler.onJob("mmr_checkpoint", async () => {
+      await service.runCheckpoint();
+      const overdueIds = await service.checkOverdue();
+      if (overdueIds.length > 0) {
+        await service.forceFlush(overdueIds);
+      }
+    });
+    await scheduler.schedule("test-ac-005b-checkpoint", Date.now() - 1, { type: "mmr_checkpoint" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
 
     // mmr.session.checkpointed must be logged per-session
     const checkpointedCalls = filterLogCalls(logger.info, "mmr.session.checkpointed");
     expect(checkpointedCalls.length).toBeGreaterThanOrEqual(1);
     const sessionCall = checkpointedCalls.find((c) => c[1].sessionId === sessionId);
     expect(sessionCall).toBeDefined();
+    const checkpointId = sessionCall![1].checkpointId as string;
+    const peakHash = sessionCall![1].peakHash as string;
     expect(sessionCall![1]).toMatchObject({
       sessionId,
       checkpointId,

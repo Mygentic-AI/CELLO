@@ -172,6 +172,7 @@ logger.info("session.started", { userId, sessionId, principalType })
 - `mmr.checkpoint.correlationId.missing` — level: warn; context fields: `{ sessionId, checkpointId }`; fired by `MmrStore.confirmCheckpoint()` when a staging row has a null `correlation_id` column — indicates legacy or corrupt staging data; the checkpoint continues but the `mmr.session.checkpointed` event for that session will carry a null correlationId; added in PERSIST-017
 - `mmr.checkpoint.recovery.started` — level: info; context fields: `{ checkpointId, env }`; fired by the directory composition root at startup when an incomplete (orphaned) checkpoint is detected and re-execution begins; paired with `mmr.checkpoint.recovery.completed`; added in PERSIST-017
 - `mmr.checkpoint.recovery.completed` — level: info; context fields: `{ checkpointId, env }`; fired by the directory composition root at startup when an incomplete checkpoint has been successfully re-executed via `MmrStore.confirmCheckpoint()` (idempotent); added in PERSIST-017
+- `mmr.staging.failed` — level: warn; context fields: `{ sessionId, reason }`; fired when the fire-and-forget `appendSeal()` call in the seal path rejects; the session remains sealed (the FROST ceremony succeeded), but the MMR staging entry was not written — the sealed_root will not appear in any future checkpoint until the session is re-staged; added in PERSIST-017
 
 ---
 
