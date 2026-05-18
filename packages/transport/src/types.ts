@@ -114,6 +114,13 @@ export interface CelloNode {
   getConnections(): Array<{ peerId: string; encryption: string | undefined }>;
 
   /**
+   * Subscribe to peer connect/disconnect events for observability logging.
+   * Callback fires whenever a new libp2p connection is established or closed.
+   */
+  onPeerConnect(handler: (peerId: string) => void): void;
+  onPeerDisconnect(handler: (peerId: string) => void): void;
+
+  /**
    * Access the stored KeyProvider for higher-layer use (MSG-001 signing).
    * The transport layer itself never calls any methods on this object.
    */

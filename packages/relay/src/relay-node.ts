@@ -245,6 +245,17 @@ export class CelloRelayNode {
     const addrs = this.#node.listenAddresses();
     const addr = addrs.length > 0 ? addrs[0] : "(none)";
     protocolLog("RELAY", `Started — peer ${peerId}, relay ${addr}`);
+
+    // Log every peer connect/disconnect so operator can confirm relay↔directory
+    // and relay↔client connectivity without waiting for a session request.
+    this.#node.onPeerConnect((connectedPeerId) => {
+      const short = truncId(connectedPeerId);
+      protocolLog("RELAY", `Peer connected: ${short}`);
+    });
+    this.#node.onPeerDisconnect((disconnectedPeerId) => {
+      const short = truncId(disconnectedPeerId);
+      protocolLog("RELAY", `Peer disconnected: ${short}`);
+    });
   }
 
   // ─── /cello/directory-relay/1.0.0 handler (CELLO-NODE-004) ─────────────────

@@ -393,6 +393,20 @@ export class CelloDirectoryNode {
     const addrs = this.#node.listenAddresses();
     const addr = addrs.length > 0 ? addrs[0] : "(none)";
     protocolLog("DIR", `Started — peer ${peerId}, signaling ${addr}`);
+
+    // Log every peer connect/disconnect so operator can confirm directory↔relay
+    // and directory↔agent connectivity at a glance.
+    const relayPeerIdHex = this.#relayEndpoint.peer_id;
+    this.#node.onPeerConnect((connectedPeerId) => {
+      const short = truncId(connectedPeerId);
+      const label = connectedPeerId === relayPeerIdHex ? " (relay)" : "";
+      protocolLog("DIR", `Peer connected: ${short}${label}`);
+    });
+    this.#node.onPeerDisconnect((disconnectedPeerId) => {
+      const short = truncId(disconnectedPeerId);
+      const label = disconnectedPeerId === relayPeerIdHex ? " (relay)" : "";
+      protocolLog("DIR", `Peer disconnected: ${short}${label}`);
+    });
   }
 
   // ─── Relay admin stream handler (/cello/directory-relay/1.0.0) ───────────────

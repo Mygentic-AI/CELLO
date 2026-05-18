@@ -179,6 +179,18 @@ class CelloNodeImpl implements CelloNode {
       encryption: c.encryption,
     }));
   }
+
+  onPeerConnect(handler: (peerId: string) => void): void {
+    this.#libp2p.addEventListener("peer:connect", (evt) => {
+      handler(evt.detail.toString());
+    });
+  }
+
+  onPeerDisconnect(handler: (peerId: string) => void): void {
+    this.#libp2p.addEventListener("peer:disconnect", (evt) => {
+      handler(evt.detail.toString());
+    });
+  }
 }
 
 // ─── Error helpers ───────────────────────────────────────────────────────────
