@@ -133,8 +133,13 @@ async function cleanupConnections(connectionIds: string[]): Promise<void> {
 
 /**
  * Insert a matching connection_requests row so SI-001 validation passes.
- * The directory validates connection_id against connection_requests before
- * writing to connections. This helper creates that pre-requisite.
+ *
+ * The SI-001 check in createConnection() does:
+ *   SELECT COUNT(*) FROM connection_requests WHERE request_id = $1 AND outcome = 'ACCEPTED'
+ * where $1 = correlationId (the 5th argument to createConnection).
+ *
+ * Callers must therefore pass the same `connectionId` used here as the `correlationId`
+ * argument to createConnection() so the lookup finds this row.
  */
 async function insertMatchingConnectionRequest(connectionId: string): Promise<void> {
   // connection_requests has request_id UUID UNIQUE, so we use the connectionId as request_id.
@@ -297,13 +302,22 @@ describeIntegration(
       const priorResult = await store.hasConnection(participantA, participantB);
       expect(priorResult).toBeNull();
 
-      // Write
-      await store.createConnection(connectionId, participantA, participantB, establishedAt, randomUUID());
+      // Write — correlationId = connectionId so it matches request_id in connection_requests (SI-001)
+      await store.createConnection(connectionId, participantA, participantB, establishedAt, connectionId);
 
       // Read back — hasConnection must return real data from the database
       const result = await store.hasConnection(participantA, participantB);
       expect(result).not.toBeNull();
       expect(result?.connection_id).toBe(connectionId);
+
+      // AC-002 requires all 5 fields: connection_id, participant_a, participant_b, established_at, status
+      const fullRecord = await store.getConnection(connectionId);
+      expect(fullRecord).not.toBeNull();
+      expect(fullRecord?.connection_id).toBe(connectionId);
+      expect(fullRecord?.participant_a).toBe(participantA);
+      expect(fullRecord?.participant_b).toBe(participantB);
+      expect(fullRecord?.established_at).toBe(establishedAt);
+      expect(fullRecord?.status).toBe("active");
 
       // Clean up
       await cleanupConnections([connectionId]);
@@ -329,7 +343,7 @@ describeIntegration(
       const store = new PgDirectoryStore(servicePool, logger);
 
       await insertMatchingConnectionRequest(connectionId);
-      await store.createConnection(connectionId, participantA, participantB, establishedAt, randomUUID());
+      await store.createConnection(connectionId, participantA, participantB, establishedAt, connectionId);
 
       // Forward lookup
       const fwdResult = await store.hasConnection(participantA, participantB);
@@ -372,7 +386,7 @@ describeIntegration(
       const logger1 = makeLogger();
       const store1 = new PgDirectoryStore(servicePool, logger1);
       await insertMatchingConnectionRequest(connectionId);
-      await store1.createConnection(connectionId, participantA, participantB, establishedAt, randomUUID());
+      await store1.createConnection(connectionId, participantA, participantB, establishedAt, connectionId);
 
       // Simulate restart: new instance, same pool (no in-memory state)
       const logger2 = makeLogger();
@@ -394,7 +408,13 @@ describeIntegration(
        * AC-005: insert two connections via createConnection() (which uses insertWithChain),
        * then run verifyChain("connections") with a fresh PgDirectoryStore instance.
        * The fresh SELECT is itself the evidence — no prior state.
+       *
+       * Stale rows from other tests would cause chain recomputation to fail because
+       * the previous hash depends on insertion order. Clean slate before inserting.
        */
+      // Finding 4 fix: delete stale rows so chain verification starts from genesis.
+      await superPool.query("DELETE FROM connections");
+
       const id1 = randomUUID();
       const id2 = randomUUID();
       const aKey = randomBytes(32).toString("hex");
@@ -408,8 +428,9 @@ describeIntegration(
 
       await insertMatchingConnectionRequest(id1);
       await insertMatchingConnectionRequest(id2);
-      await store.createConnection(id1, aKey, bKey, now, randomUUID());
-      await store.createConnection(id2, cKey, dKey, now + 1, randomUUID());
+      // correlationId = id1 / id2 so it matches request_id in connection_requests (SI-001)
+      await store.createConnection(id1, aKey, bKey, now, id1);
+      await store.createConnection(id2, cKey, dKey, now + 1, id2);
 
       // Fresh verifier instance
       const verifyLogger = makeLogger();
@@ -447,7 +468,7 @@ describeIntegration(
       const store = new PgDirectoryStore(servicePool, logger);
 
       await insertMatchingConnectionRequest(connectionId);
-      await store.createConnection(connectionId, participantA, participantB, Date.now(), randomUUID());
+      await store.createConnection(connectionId, participantA, participantB, Date.now(), connectionId);
 
       // Direct UPDATE via service role — must fail
       let updateErrorMessage = "";
@@ -485,7 +506,9 @@ describeIntegration(
       const connectionId = randomUUID();
       const participantA = randomBytes(32).toString("hex");
       const participantB = randomBytes(32).toString("hex");
-      const correlationId = randomUUID();
+      // correlationId = connectionId because insertMatchingConnectionRequest inserts request_id = connectionId.
+      // SI-001 lookup checks request_id = correlationId, so they must match.
+      const correlationId = connectionId;
       const logger = makeLogger();
       const store = new PgDirectoryStore(servicePool, logger);
 
@@ -537,7 +560,7 @@ describeIntegration(
       const store = new PgDirectoryStore(servicePool, logger);
 
       await insertMatchingConnectionRequest(connectionId);
-      await store.createConnection(connectionId, participantA, participantB, establishedAt, randomUUID());
+      await store.createConnection(connectionId, participantA, participantB, establishedAt, connectionId);
 
       const result = await store.getConnection(connectionId);
       expect(result).not.toBeNull();
@@ -571,10 +594,12 @@ describeIntegration(
       const logger = makeLogger();
       const store = new PgDirectoryStore(servicePool, logger);
 
-      // This must reject without inserting
+      // This must reject without inserting.
+      // An adversarial caller passes arbitraryId as both connectionId and correlationId;
+      // neither exists in connection_requests so SI-001 rejects both.
       let caughtError: Error | undefined;
       try {
-        await store.createConnection(arbitraryId, participantA, participantB, Date.now(), randomUUID());
+        await store.createConnection(arbitraryId, participantA, participantB, Date.now(), arbitraryId);
       } catch (err) {
         caughtError = err as Error;
       }
@@ -616,10 +641,11 @@ describeIntegration(
         ],
       );
 
-      // This must reject — outcome is not ACCEPTED
+      // This must reject — outcome is not ACCEPTED.
+      // correlationId = rejectedId so SI-001 finds the row and checks its outcome.
       let caughtError: Error | undefined;
       try {
-        await store.createConnection(rejectedId, participantA, participantB, Date.now(), randomUUID());
+        await store.createConnection(rejectedId, participantA, participantB, Date.now(), rejectedId);
       } catch (err) {
         caughtError = err as Error;
       }
@@ -667,7 +693,8 @@ describeIntegration(
       // Truncate connections to ensure clean chain (genesis start)
       await superPool.query("DELETE FROM connections");
 
-      await store.createConnection(connectionId, participantA, participantB, establishedAt, randomUUID());
+      // correlationId = connectionId so SI-001 lookup finds the matching row in connection_requests
+      await store.createConnection(connectionId, participantA, participantB, establishedAt, connectionId);
 
       // Read back the stored chain_hash
       const row = await superPool.query<{ chain_hash: string; connection_id: string; participant_a: string; participant_b: string; established_at: string; status: string }>(
@@ -712,7 +739,8 @@ describeIntegration(
 
       const logger = makeLogger();
       const store = new PgDirectoryStore(servicePool, logger);
-      await store.createConnection(connectionId, participantA, participantB, Date.now(), randomUUID());
+      // correlationId = connectionId so SI-001 lookup finds the matching row in connection_requests
+      await store.createConnection(connectionId, participantA, participantB, Date.now(), connectionId);
 
       // Superuser tampers with participant_a
       await superPool.query(

@@ -152,12 +152,14 @@ export class PgDirectoryStore implements DirectoryStore {
     establishedAt: number,
     correlationId: string,
   ): Promise<void> {
-    // SI-001: validate connection_id against connection_requests with outcome = 'ACCEPTED'.
-    // The connection_id issued by CONNREQ-002 matches the request_id in connection_requests.
+    // SI-001: validate correlationId against connection_requests with outcome = 'ACCEPTED'.
+    // correlationId is the request_id from the originating connection_requests row — the
+    // identifier CONNREQ-002 issued when the request was accepted. connectionId is a freshly-
+    // minted connection identifier and will never match request_id in connection_requests.
     // Only accepted requests may produce a connection record — rejected/pending/expired must not.
     const reqCheck = await this.#pool.query<{ count: string }>(
       `SELECT COUNT(*) as count FROM connection_requests WHERE request_id = $1::uuid AND outcome = 'ACCEPTED'`,
-      [connectionId],
+      [correlationId],
     );
     if ((reqCheck.rows[0]?.count ?? "0") === "0") {
       throw new Error(

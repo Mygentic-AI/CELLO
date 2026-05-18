@@ -271,7 +271,7 @@ describe("E2E CONNREQ-002-AC-004: Round 2 — A provides but still unmet → con
     expect(respondResult.unmet_requirements).toBeDefined();
 
     // No connection record should have been created
-    const dirConn = fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
+    const dirConn = await fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
     expect(dirConn).toBeNull();
   }, 60_000);
 });
@@ -563,7 +563,7 @@ describe("E2E CONNREQ-002-AC-013: disclosure_response relay — A sends, directo
     expect(escapedB._evaluateCallCount).toBe(2);
 
     // Transport-path: directory store has connection record
-    const dirConn = fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
+    const dirConn = await fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
     expect(dirConn).not.toBeNull();
   }, 60_000);
 });
