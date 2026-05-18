@@ -156,4 +156,4 @@ pending_connection_requests (
 | `connections` | Audit record | Yes | Yes | `hasConnection()` returns null | Directory restart recovery |
 | `pending_connection_requests` | Delivery queue | No | No | `dequeuePendingConnectionRequests()` returns [] | Offline agent connection |
 
-All four tables should be implemented as M4 stories (PERSIST-017 through PERSIST-020), since they were part of the M4 persistence design from the start — the implementations were just stubbed out and the migrations never written.
+All four tables should be implemented as M4 stories (PERSIST-018 through PERSIST-021), since they were part of the M4 persistence design from the start — the implementations were just stubbed out and the migrations never written.
