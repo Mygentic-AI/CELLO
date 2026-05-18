@@ -282,3 +282,92 @@ M3's milestone close gate required a live two-process smoke test. M4 added the r
 - [[server-infrastructure]] — CELLO Server Infrastructure Requirements
 - [[agent-client]] — CELLO Agent Client Requirements
 - [[CONTEXT]] — canonical glossary
+
+---
+
+## Addendum — Post-Live-Session Recovery (2026-05-18)
+
+*Written after all 21 component stories merged and the non-protocol E2E scripts passed.*
+
+### What happened when the first live session ran
+
+After the original 15 stories merged and the test suite was green, the first live two-agent session was run against Docker Compose + real Postgres. It failed on four fronts simultaneously:
+
+**1. Four missing migrations.** `seal_notarizations`, `notification_queue`, `pending_connection_requests`, and `connections` were all referenced by `PgDirectoryStore` column access but had never received real Flyway migrations. PERSIST-003's V2 migration had created all tables as stubs (`id`, `created_at` only). The later stories (PERSIST-013 through PERSIST-015) added full column handling to the store methods without writing corresponding migrations. The columns simply did not exist in the live database.
+
+**2. BIGINT-as-string crashes.** The pg driver returns `BIGINT`/`BIGSERIAL` columns as JavaScript strings. The unit tests used in-memory stubs that returned numbers. In production, methods doing numeric comparisons or serializing BIGINT fields for hash chain computation silently received strings and either produced wrong results or threw `TypeError`.
+
+**3. MMR checkpoint visibility gap.** `cello_close_session` returned no `checkpoint_status` field. After a bilateral seal, neither agent had any way to know whether the MMR inclusion proof was pending or confirmed. The `checkpoint_status` field was specified in the protocol but never wired through the MCP layer.
+
+**4. `request_id` UUID vs TEXT mismatch.** `pending_connection_requests.request_id` was declared `UUID` in the migration but the application stored a 32-character hex string (`randomBytes(16).toString("hex")`), which is not a valid UUID format. PostgreSQL threw a type error on every `createConnection()` call.
+
+### The six recovery stories (PERSIST-016 through PERSIST-021)
+
+All six were written, implemented, reviewed, and merged between the live session failure and 2026-05-18 evening.
+
+**PERSIST-016 — Schema completeness CI gate.** A static analysis test (`schema-completeness.test.ts`) that parses all Flyway V*.sql migration files and compares their table definitions against the set of tables referenced by `PgDirectoryStore`. Fails if any table is missing a migration. Runs regardless of `CELLO_ENV` (pure file parsing, no database). This gate is what prevents the missing-migration class of bug from ever reaching a live session again.
+
+**PERSIST-017 — MMR checkpoint visibility.** Wired `checkpoint_status` into `cello_close_session` (returns `"pending"` immediately, `"confirmed"` after the checkpoint job runs) and `cello_get_inclusion_proof` (returns pending/eta or the full proof). Added `MmrCheckpointService.recoverOrphanedCheckpoints()` to handle seals staged but never checkpointed across directory restarts.
+
+**PERSIST-018 — `seal_notarizations` full migration.** Two-step Flyway pattern (CREATE stub IF NOT EXISTS, then ALTER TABLE ADD COLUMN IF NOT EXISTS per data column) required because V10 had already created the stub. `getNotarization()` now returns real data from the database.
+
+**PERSIST-019 — `notification_queue` + `pending_connection_requests` full migrations.** Same two-step pattern. `drainNotifications()` and `dequeuePendingConnectionRequests()` now return real data. Also wired `PendingConnectionRequestTtlSweep` into the directory composition root scheduler.
+
+**PERSIST-020 — `connections` full migration + `request_id` UUID→TEXT fix.** Full schema for the `connections` table. Separate V14 migration converting `connection_requests.request_id` from `UUID` to `TEXT` to match the hex string the application produces. `hasConnection()` now returns real data.
+
+**PERSIST-021 — `PgDirectoryStore` adapter boundary audit.** Addressed the BIGINT-as-string class of bug systematically. Added `BIGINT_COLUMNS` map (14 tables × their BIGINT/BIGSERIAL columns), `deserializeRow()` function that coerces only declared columns, and a static analysis gate (AC-005) that parses migration SQL and asserts the map is complete. An alternative of throwing a `TypeError` at runtime for any all-digit string was evaluated and rejected — `/^\d+$/` fires on legitimate TEXT columns that happen to contain only digits. The static gate enforces completeness without false positives. Also added `adapter.persisted` INFO log event from `insertWithChain` after every successful INSERT.
+
+### The two-step Flyway migration pattern
+
+Established as canonical for all stories that add columns to tables that V10 had already stubbed:
+
+```sql
+-- Step 1: create stub if not exists (no-op if V10 already ran)
+CREATE TABLE IF NOT EXISTS table_name (id BIGSERIAL PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT now());
+-- Step 2: add each missing column idempotently
+ALTER TABLE table_name ADD COLUMN IF NOT EXISTS column_name TYPE;
+```
+
+This pattern allows stories to be re-run on any database state — clean, partially migrated, or fully migrated — without error.
+
+### Migration version conflicts on main
+
+Two conflicts arose during the merge sequence:
+
+- **Duplicate V11:** PERSIST-017 created `V11__staging_correlation_id.sql` and PERSIST-020 created `V11__connections_full_schema.sql`. Both exist on `main`. Flyway accepted them on the running database because they were applied during the in-flux period. A fresh `flyway migrate` on a clean database will fail on the version conflict. One file must be renumbered (to V15) before the first clean-database deploy.
+
+- **Duplicate V12:** PERSIST-018 used V12 and PERSIST-020 initially also used V12. Resolved before merge by renumbering PERSIST-020's to V14.
+
+The duplicate V11 is a known outstanding issue as of milestone completion.
+
+### Non-protocol E2E scripts
+
+Six standalone scripts were written to cover the PERSIST-E2E-001 acceptance criteria that require real process lifecycle control and cannot be expressed as in-process Vitest tests. All six pass as of 2026-05-18:
+
+| Script | AC/SI | What it proves |
+|---|---|---|
+| `test-wal-crash-recovery.mjs` | AC-002 / SI-002 | WAL file written, `FileSessionWal.reconstruct()` returns all 6 leaves in order; WAL has no seal submission method |
+| `test-wal-corruption.mjs` | DB-001 | Corrupt checksum → `RELAY_SESSION_UNRECOVERABLE` + correct log events; truncated file → same; missing file → `[]` |
+| `test-sqlcipher-wrong-key.mjs` | AC-006 / SI-003 | Wrong key throws `SQLITE_NOTADB`; original data intact; copied file also rejects wrong key |
+| `test-kms-failure-blocks-insert.mjs` | SI-006 | Provider throws → no INSERT; wrong-length ciphertext → structural check → no INSERT; working provider → row inserted |
+| `test-hash-chain-tamper.mjs` | SI-005 | Superuser UPDATE on row 3; `verifyChain()` returns `{ valid: false, breakAtSequence: 3 }` |
+| `test-pgaudit-immutable.mjs` | SI-007 | `cello_service` gets permission denied on DELETE/TRUNCATE/UPDATE/DROP EXTENSION/ALTER SYSTEM for all append-only tables |
+
+Scripts live in `packages/e2e-tests/scripts/`. Run all with `node packages/e2e-tests/scripts/run-all.mjs` (requires Postgres running).
+
+### What remains for PERSIST-E2E-001
+
+The non-protocol scripts are done. What's left is the protocol walkthrough — scenarios that require running a real two-agent conversation and verifying outcomes in the database:
+
+- **AC-001** — 10 messages exchanged, `conversation_hash_entries` contains 10 rows with correct chain, queried from a separate process
+- **AC-003** — gap-fill: A sends 10 leaves, B receives only 8, directory returns `SEAL_REJECTED_TREE_MISMATCH`, B requests leaves 9–10 from relay WAL, both parties retry, seal succeeds
+- **AC-004 / AC-005** — unilateral seal: B's process is terminated, A waits out `delivery_grace_seconds`, seals unilaterally; a new B process starts and receives the notification
+- **AC-009 / AC-009a** — MMR inclusion proof: proof returned and verifies independently; `checkpoint_status: "pending"` observable immediately after seal before the checkpoint job runs
+
+The `cello-chat.md` command document has been updated with the corrected `cello_close_session` response shape (which now includes `checkpoint_status`, `staged_at`, `close_timestamp`, and `mmr_peak` in addition to `sealed_root`) and the correct directory startup output (which now includes `MmrCheckpointService`).
+
+### Test counts at addendum time (2026-05-18)
+
+The workspace test count has grown since the original 962. PERSIST-016 through PERSIST-021 added integration tests across 6 new test files. The non-protocol E2E scripts are standalone and not included in the Vitest count.
+
+M4 is effectively complete at the component level. The milestone close gate (PERSIST-E2E-001 protocol walkthrough) is the next and final step.
