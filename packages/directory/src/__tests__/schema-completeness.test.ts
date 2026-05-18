@@ -93,6 +93,7 @@ const KNOWN_DYNAMIC_TABLES: readonly string[] = [
   "conversation_attestations",
   "conversation_participation",
   "notification_events",
+  "seal_notarizations",
 ] as const;
 
 // ─── File paths ───────────────────────────────────────────────────────────────
