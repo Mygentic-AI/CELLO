@@ -89,11 +89,14 @@ export class PgDirectoryStore implements DirectoryStore {
        VALUES ($1, $2)`,
       [pubkeyHex, JSON.stringify(event)],
     ).then(() => {
-      this.#logger.info("notification.queued", {
+      const logContext: Record<string, unknown> = {
         pubkeyHex,
         notificationType: event.type,
-        correlationId,
-      });
+      };
+      if (correlationId !== undefined) {
+        logContext.correlationId = correlationId;
+      }
+      this.#logger.info("notification.queued", logContext);
     }).catch((err: unknown) => {
       const reason = err instanceof Error ? err.message : String(err);
       this.#logger.error("notification.enqueue.failed", {
@@ -136,20 +139,16 @@ export class PgDirectoryStore implements DirectoryStore {
       (row) => row.payload as DirectoryNotification,
     );
 
-    this.#logger.info("notification.drained", {
+    const logContext: Record<string, unknown> = {
       pubkeyHex,
       count: notifications.length,
-      correlationId,
-    });
+    };
+    if (correlationId !== undefined) {
+      logContext.correlationId = correlationId;
+    }
+    this.#logger.info("notification.drained", logContext);
 
     return notifications;
-  }
-
-  /**
-   * Alias for drainNotifications — kept for backward compat with any direct callers.
-   */
-  async drainNotificationsAsync(pubkeyHex: string, correlationId: string): Promise<DirectoryNotification[]> {
-    return this.drainNotifications(pubkeyHex, correlationId);
   }
 
   // ─── Agent profiles ───────────────────────────────────────────────────────
@@ -257,23 +256,16 @@ export class PgDirectoryStore implements DirectoryStore {
       (row) => row.payload as PendingConnectionRequest,
     );
 
-    this.#logger.info("queue.pending_connection_requests.drained", {
+    const logContext: Record<string, unknown> = {
       targetPubkey,
       count: requests.length,
-      correlationId,
-    });
+    };
+    if (correlationId !== undefined) {
+      logContext.correlationId = correlationId;
+    }
+    this.#logger.info("queue.pending_connection_requests.drained", logContext);
 
     return requests;
-  }
-
-  /**
-   * Alias for dequeuePendingConnectionRequests — kept for backward compat with test callers.
-   */
-  async dequeuePendingConnectionRequestsAsync(
-    targetPubkey: string,
-    correlationId: string,
-  ): Promise<PendingConnectionRequest[]> {
-    return this.dequeuePendingConnectionRequests(targetPubkey, correlationId);
   }
 
   // ─── PERSIST-004: Hash chain methods ─────────────────────────────────────

@@ -9,21 +9,21 @@
  *         cello_service has no UPDATE privilege on either table.
  *
  * AC-002: enqueueNotification(pubkeyHex, event) inserts one row into notification_queue.
- *         drainNotificationsAsync(pubkeyHex) returns that notification, verifies row is deleted
+ *         drainNotifications(pubkeyHex) returns that notification, verifies row is deleted
  *         (count=0 after drain), and a second drain returns [].
  *
- * AC-003: Three notifications enqueued for agent A in order → drainNotificationsAsync returns
+ * AC-003: Three notifications enqueued for agent A in order → drainNotifications returns
  *         all three in FIFO order (ordered by id ASC), all rows deleted in the same
  *         transaction.
  *
  * AC-004: queuePendingConnectionRequest(targetPubkey, request) inserts one row into
- *         pending_connection_requests. dequeuePendingConnectionRequestsAsync(targetPubkey)
+ *         pending_connection_requests. dequeuePendingConnectionRequests(targetPubkey)
  *         returns the request, deletes the row, and a second dequeue returns [].
  *         queue.pending_connection_requests.drained is logged at INFO with
  *         { targetPubkey, count, correlationId }.
  *
  * AC-005: A row with created_at > 24 hours old is NOT returned by
- *         dequeuePendingConnectionRequestsAsync(). The stale row is not deleted by dequeue
+ *         dequeuePendingConnectionRequests(). The stale row is not deleted by dequeue
  *         (row count stays 1 after call). A fresh row IS returned and its row deleted.
  *
  * AC-006: TTL sweep deletes all rows from pending_connection_requests with
@@ -36,10 +36,10 @@
  * AC-008: enqueueNotification() logs notification.queued at INFO with
  *         { pubkeyHex, notificationType, correlationId }.
  *
- * AC-009: drainNotificationsAsync() logs notification.drained at INFO with
+ * AC-009: drainNotifications() logs notification.drained at INFO with
  *         { pubkeyHex, count, correlationId }.
  *
- * SI-001: SELECT+DELETE in a single transaction — concurrent drainNotificationsAsync calls
+ * SI-001: SELECT+DELETE in a single transaction — concurrent drainNotifications calls
  *         for the same pubkeyHex with one queued notification: exactly one caller
  *         receives it, the other receives [].
  *
@@ -130,6 +130,27 @@ function makeConnectionEstablishedNotification(): DirectoryNotification {
     counterparty_pubkey: randomBytes(32).toString("hex"),
     connection_id: randomBytes(16).toString("hex"),
   };
+}
+
+// ─── Helper: poll for row existence (replaces brittle setTimeout waits) ────────
+
+async function waitForRow(
+  pool: pg.Pool,
+  table: string,
+  column: string,
+  value: string,
+  timeoutMs = 2000,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const { rows } = await pool.query(
+      `SELECT 1 FROM ${table} WHERE ${column} = $1 LIMIT 1`,
+      [value],
+    );
+    if (rows.length > 0) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`Timed out waiting for row in ${table}`);
 }
 
 // ─── SI-002 — Unit test: no private key material in notification payloads ─────
@@ -391,10 +412,10 @@ describeIntegration("PERSIST-019 AC-001: schema structure after Flyway migration
   });
 });
 
-// ─── AC-002: enqueueNotification → drainNotificationsAsync round-trip ─────────
+// ─── AC-002: enqueueNotification → drainNotifications round-trip ─────────
 
 describeIntegration("PERSIST-019 AC-002: enqueue + drain notification round-trip", () => {
-  it("AC-002: drainNotificationsAsync returns queued notification, deletes the row, second drain returns []", async () => {
+  it("AC-002: drainNotifications returns queued notification, deletes the row, second drain returns []", async () => {
     const logger = makeMockLogger();
     const store = new PgDirectoryStore(superPool, logger);
 
@@ -403,10 +424,10 @@ describeIntegration("PERSIST-019 AC-002: enqueue + drain notification round-trip
 
     store.enqueueNotification(pubkeyHex, notification);
 
-    // Wait for async INSERT to complete
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    // Wait for fire-and-forget INSERT to land in Postgres
+    await waitForRow(superPool, "notification_queue", "pubkey_hex", pubkeyHex);
 
-    const drained = await store.drainNotificationsAsync(pubkeyHex, randomUUID());
+    const drained = await store.drainNotifications(pubkeyHex, randomUUID());
     expect(drained).toHaveLength(1);
     expect(drained[0]).toMatchObject({ type: "connection_established" });
 
@@ -418,7 +439,7 @@ describeIntegration("PERSIST-019 AC-002: enqueue + drain notification round-trip
     expect(parseInt(countResult.rows[0]!.count, 10)).toBe(0);
 
     // Second drain returns empty
-    const drained2 = await store.drainNotificationsAsync(pubkeyHex, randomUUID());
+    const drained2 = await store.drainNotifications(pubkeyHex, randomUUID());
     expect(drained2).toHaveLength(0);
   });
 });
@@ -471,7 +492,7 @@ describeIntegration("PERSIST-019 AC-003: FIFO ordering and transactional delete"
       [pubkeyHex, JSON.stringify(n3)],
     );
 
-    const drained = await store.drainNotificationsAsync(pubkeyHex, correlationId);
+    const drained = await store.drainNotifications(pubkeyHex, correlationId);
     expect(drained).toHaveLength(3);
     expect(drained[0]).toMatchObject({ type: "connection_established" });
     expect(drained[1]).toMatchObject({ type: "session_sealed" });
@@ -486,7 +507,7 @@ describeIntegration("PERSIST-019 AC-003: FIFO ordering and transactional delete"
   });
 });
 
-// ─── AC-004: queuePendingConnectionRequest → dequeuePendingConnectionRequestsAsync ─
+// ─── AC-004: queuePendingConnectionRequest → dequeuePendingConnectionRequests ─
 
 describeIntegration("PERSIST-019 AC-004: queue + dequeue pending connection request", () => {
   it("AC-004: dequeue returns queued request, deletes row, logs drained event", async () => {
@@ -499,10 +520,10 @@ describeIntegration("PERSIST-019 AC-004: queue + dequeue pending connection requ
 
     store.queuePendingConnectionRequest(targetPubkey, request);
 
-    // Wait for async INSERT
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    // Wait for fire-and-forget INSERT to land in Postgres
+    await waitForRow(superPool, "pending_connection_requests", "target_pubkey", targetPubkey);
 
-    const dequeued = await store.dequeuePendingConnectionRequestsAsync(targetPubkey, correlationId);
+    const dequeued = await store.dequeuePendingConnectionRequests(targetPubkey, correlationId);
     expect(dequeued).toHaveLength(1);
     expect(dequeued[0]!.connection_request_id).toBe(request.connection_request_id);
 
@@ -514,7 +535,7 @@ describeIntegration("PERSIST-019 AC-004: queue + dequeue pending connection requ
     expect(parseInt(countResult.rows[0]!.count, 10)).toBe(0);
 
     // Second dequeue returns empty
-    const dequeued2 = await store.dequeuePendingConnectionRequestsAsync(targetPubkey, correlationId);
+    const dequeued2 = await store.dequeuePendingConnectionRequests(targetPubkey, correlationId);
     expect(dequeued2).toHaveLength(0);
 
     // Verify queue.pending_connection_requests.drained logged with required fields
@@ -561,7 +582,7 @@ describeIntegration("PERSIST-019 AC-005: expired pending requests not returned b
 
     const logger = makeMockLogger();
     const store = new PgDirectoryStore(superPool, logger);
-    const dequeued = await store.dequeuePendingConnectionRequestsAsync(targetPubkey, randomUUID());
+    const dequeued = await store.dequeuePendingConnectionRequests(targetPubkey, randomUUID());
 
     // Only the fresh request is returned
     expect(dequeued).toHaveLength(1);
@@ -646,7 +667,7 @@ describeIntegration("PERSIST-019 AC-007: UPDATE notification_queue is denied for
     // Attempt UPDATE as cello_service — must be rejected with permission denied
     await expect(
       servicePool.query(
-        `UPDATE notification_queue SET pubkey_hex = $1 WHERE pubkey_hex = $1`,
+        `UPDATE notification_queue SET payload = '{"type":"hacked"}'::jsonb WHERE pubkey_hex = $1`,
         [pubkeyHex],
       ),
     ).rejects.toMatchObject({
@@ -657,6 +678,33 @@ describeIntegration("PERSIST-019 AC-007: UPDATE notification_queue is denied for
     const countResult = await superPool.query<{ count: string }>(
       `SELECT COUNT(*) AS count FROM notification_queue WHERE pubkey_hex = $1`,
       [pubkeyHex],
+    );
+    expect(parseInt(countResult.rows[0]!.count, 10)).toBe(1);
+  });
+
+  it("AC-007: cello_service UPDATE pending_connection_requests raises permission denied", async () => {
+    // Insert a row as superuser
+    const targetPubkey = randomBytes(32).toString("hex");
+    const req = makePendingConnectionRequest();
+    await superPool.query(
+      `INSERT INTO pending_connection_requests (target_pubkey, payload) VALUES ($1, $2::jsonb)`,
+      [targetPubkey, JSON.stringify(req)],
+    );
+
+    // Attempt UPDATE as cello_service — must be rejected with permission denied
+    await expect(
+      servicePool.query(
+        `UPDATE pending_connection_requests SET payload = '{"type":"hacked"}'::jsonb WHERE target_pubkey = $1`,
+        [targetPubkey],
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/permission denied/i),
+    });
+
+    // Row remains unchanged
+    const countResult = await superPool.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM pending_connection_requests WHERE target_pubkey = $1`,
+      [targetPubkey],
     );
     expect(parseInt(countResult.rows[0]!.count, 10)).toBe(1);
   });
@@ -675,8 +723,8 @@ describeIntegration("PERSIST-019 AC-008: notification.queued logged on INSERT", 
 
     store.enqueueNotification(pubkeyHex, notification, correlationId);
 
-    // Wait for async INSERT + log to complete
-    await new Promise<void>((resolve) => setTimeout(resolve, 150));
+    // Wait for fire-and-forget INSERT to land in Postgres (log happens in .then())
+    await waitForRow(superPool, "notification_queue", "pubkey_hex", pubkeyHex);
 
     const queuedEvent = logger.infoEvents.find((e) => e.event === "notification.queued");
     expect(queuedEvent, "notification.queued was not logged").toBeDefined();
@@ -691,7 +739,7 @@ describeIntegration("PERSIST-019 AC-008: notification.queued logged on INSERT", 
 // ─── AC-009: notification.drained logged on successful drain ─────────────────
 
 describeIntegration("PERSIST-019 AC-009: notification.drained logged on drain", () => {
-  it("AC-009: drainNotificationsAsync logs notification.drained with { pubkeyHex, count, correlationId }", async () => {
+  it("AC-009: drainNotifications logs notification.drained with { pubkeyHex, count, correlationId }", async () => {
     const logger = makeMockLogger();
     const store = new PgDirectoryStore(superPool, logger);
 
@@ -700,9 +748,9 @@ describeIntegration("PERSIST-019 AC-009: notification.drained logged on drain", 
     const correlationId = randomUUID();
 
     store.enqueueNotification(pubkeyHex, notification);
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    await waitForRow(superPool, "notification_queue", "pubkey_hex", pubkeyHex);
 
-    await store.drainNotificationsAsync(pubkeyHex, correlationId);
+    await store.drainNotifications(pubkeyHex, correlationId);
 
     const drainedEvent = logger.infoEvents.find((e) => e.event === "notification.drained");
     expect(drainedEvent, "notification.drained was not logged").toBeDefined();
@@ -717,7 +765,7 @@ describeIntegration("PERSIST-019 AC-009: notification.drained logged on drain", 
 // ─── SI-001: Concurrent drain — exactly one caller receives the notification ──
 
 describeIntegration("PERSIST-019 SI-001: concurrent drain — no double delivery", () => {
-  it("SI-001: two concurrent drainNotificationsAsync calls — exactly one gets the notification", async () => {
+  it("SI-001: two concurrent drainNotifications calls — exactly one gets the notification", async () => {
     const logger = makeMockLogger();
     const store = new PgDirectoryStore(superPool, logger);
 
@@ -725,13 +773,13 @@ describeIntegration("PERSIST-019 SI-001: concurrent drain — no double delivery
     const notification = makeConnectionEstablishedNotification();
 
     store.enqueueNotification(pubkeyHex, notification);
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    await waitForRow(superPool, "notification_queue", "pubkey_hex", pubkeyHex);
 
     // Launch two concurrent drains — SI-001: transaction-level atomicity prevents double delivery
     const correlationId = randomUUID();
     const [result1, result2] = await Promise.all([
-      store.drainNotificationsAsync(pubkeyHex, correlationId),
-      store.drainNotificationsAsync(pubkeyHex, correlationId),
+      store.drainNotifications(pubkeyHex, correlationId),
+      store.drainNotifications(pubkeyHex, correlationId),
     ]);
 
     // Exactly one caller receives the notification; the other receives []
