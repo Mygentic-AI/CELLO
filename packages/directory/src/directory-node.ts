@@ -1279,6 +1279,13 @@ export class CelloDirectoryNode {
     if (frame.verdict === "accept") {
       // Generate connection_id (16-byte CSPRNG per FIPS 180-4)
       const connectionId = Buffer.from(randomBytes(16)).toString("hex");
+      // SI-001: record the accepted request before createConnection so the
+      // PgDirectoryStore guard finds a matching ACCEPTED row.
+      await this.#store.recordAcceptedConnectionRequest(
+        pending.requestId,
+        pending.senderHex,
+        pending.targetHex,
+      );
       // createConnection validates connection_id against connection_requests and logs connection.persisted.
       // pending.requestId is the correlationId minted when the connection request was received.
       await this.#store.createConnection(connectionId, pending.senderHex, pending.targetHex, this.#clock.now(), pending.requestId);

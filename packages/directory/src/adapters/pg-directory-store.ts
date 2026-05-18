@@ -431,6 +431,23 @@ export class PgDirectoryStore implements DirectoryStore {
 
   // ─── Connection records (PERSIST-020) ────────────────────────────────────
 
+  async recordAcceptedConnectionRequest(
+    requestId: string,
+    requesterPseudonym: string,
+    targetPseudonym: string,
+  ): Promise<void> {
+    const record: Record<string, unknown> = {
+      request_id: requestId,
+      requester_pseudonym: requesterPseudonym,
+      target_pseudonym: targetPseudonym,
+      outcome: "ACCEPTED",
+    };
+    const columns = ["request_id", "requester_pseudonym", "target_pseudonym", "outcome", "chain_hash"];
+    const values = [requestId, requesterPseudonym, targetPseudonym, "ACCEPTED"];
+    const chainHashIndex = 4;
+    await this.insertWithChain("connection_requests", record, columns, values, chainHashIndex);
+  }
+
   /**
    * Persist a new connection record with hash chain enforcement.
    *

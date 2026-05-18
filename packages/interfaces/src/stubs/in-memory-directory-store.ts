@@ -78,6 +78,10 @@ export class InMemoryDirectoryStore implements DirectoryStore {
 
   // ─── CONNREQ-002: Connection record methods ───────────────────────────────
 
+  async recordAcceptedConnectionRequest(_requestId: string, _requesterPseudonym: string, _targetPseudonym: string): Promise<void> {
+    // In-memory stub: no persistence needed; SI-001 guard only applies to PgDirectoryStore.
+  }
+
   async createConnection(connectionId: string, participantA: string, participantB: string, establishedAt: number, _correlationId: string): Promise<void> {
     const record: ConnectionRecord = {
       connection_id: connectionId,

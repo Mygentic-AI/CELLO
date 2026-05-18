@@ -99,6 +99,14 @@ export interface DirectoryStore {
   // ─── CONNREQ-002: Connection record methods ───────────────────────────────
 
   /**
+   * Record an accepted connection request in connection_requests.
+   * Must be called before createConnection — the SI-001 guard in the Postgres
+   * implementation validates that a matching ACCEPTED row exists.
+   * Called by directory-node.ts when a connection_response { verdict: 'accept' } arrives.
+   */
+  recordAcceptedConnectionRequest(requestId: string, requesterPseudonym: string, targetPseudonym: string): Promise<void>;
+
+  /**
    * Create a connection record for A–B. Indexed by both pubkeys and by connection_id.
    * CONNREQ-002: called only after directory receives connection_response { verdict: 'accept' }.
    *
