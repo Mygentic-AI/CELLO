@@ -55,28 +55,148 @@ export class PgDirectoryStore implements DirectoryStore {
 
   // ─── SealNotarization ────────────────────────────────────────────────────
 
-  recordNotarization(notarization: SealNotarization): void {
-    this.#fire(this.#pool.query(
-      `INSERT INTO seal_notarizations
-         (session_id, sealed_root, participant_a_pubkey, participant_b_pubkey,
-          close_timestamp, frost_signature)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (session_id) DO NOTHING`,
-      [
-        Buffer.from(notarization.session_id),
-        Buffer.from(notarization.sealed_root),
-        Buffer.from(notarization.participant_a_pubkey),
-        Buffer.from(notarization.participant_b_pubkey),
-        notarization.close_timestamp,
-        Buffer.from(notarization.frost_signature),
-      ],
-    ), "seal_notarizations");
+  /**
+   * Pseudocode (PERSIST-018):
+   *
+   * 1. Convert notarization fields to Buffers for Postgres BYTEA columns.
+   * 2. Build the record object (without chain_hash — it is always computed).
+   * 3. Call insertWithChain() which:
+   *    a. Acquires a pg_advisory_xact_lock on "seal_notarizations"
+   *    b. Fetches the previous chain_hash (or CHAIN_GENESIS if table is empty)
+   *    c. Computes chain_hash = SHA-256(serialize(record) || previous_hash)
+   *    d. Issues the INSERT with the computed chain_hash
+   * 4. On success: log notarization.recorded at INFO with { sessionId, sealedRoot, correlationId }
+   * 5. On unique constraint violation (duplicate session_id):
+   *    log notarization.duplicate.rejected at WARN with { sessionId }; do not rethrow
+   * 6. On other error (attempt 1): log notarization.write.failed at ERROR; retry once
+   * 7. On retry failure (attempt 2): log notarization.write.failed at ERROR; rethrow
+   *
+   * SI-001: chain_hash is computed internally — never accepted from caller
+   * SI-001: frost_signature is stored as-is from the caller (it comes from the
+   *   FROST ceremony in directory-node.ts — this method never recomputes it)
+   */
+  async recordNotarization(
+    notarization: SealNotarization,
+    opts?: { correlationId?: string },
+  ): Promise<void> {
+    const sessionIdHex = Buffer.from(notarization.session_id).toString("hex");
+    const sealedRootHex = Buffer.from(notarization.sealed_root).toString("hex");
+    const correlationId = opts?.correlationId;
+
+    // Build the record for chain serialization — exactly the fields stored in the table,
+    // minus chain_hash (computed server-side) and id (BIGSERIAL, DB-generated).
+    // Buffer values are used for serialization consistency with what pg returns at verify time.
+    const sessionIdBuf = Buffer.from(notarization.session_id);
+    const sealedRootBuf = Buffer.from(notarization.sealed_root);
+    const participantABuf = Buffer.from(notarization.participant_a_pubkey);
+    const participantBBuf = Buffer.from(notarization.participant_b_pubkey);
+    const frostSigBuf = Buffer.from(notarization.frost_signature);
+
+    const record: Record<string, unknown> = {
+      session_id: sessionIdBuf,
+      sealed_root: sealedRootBuf,
+      participant_a_pubkey: participantABuf,
+      participant_b_pubkey: participantBBuf,
+      close_timestamp: notarization.close_timestamp,
+      frost_signature: frostSigBuf,
+    };
+
+    const columns = [
+      "session_id",
+      "sealed_root",
+      "participant_a_pubkey",
+      "participant_b_pubkey",
+      "close_timestamp",
+      "frost_signature",
+      "chain_hash",
+    ];
+    const values: unknown[] = [
+      sessionIdBuf,
+      sealedRootBuf,
+      participantABuf,
+      participantBBuf,
+      notarization.close_timestamp,
+      frostSigBuf,
+      "", // placeholder — overwritten by insertWithChain
+    ];
+    const chainHashIndex = 6;
+
+    // Attempt 1
+    try {
+      await this.insertWithChain("seal_notarizations", record, columns, values, chainHashIndex);
+      this.#logger.info("notarization.recorded", {
+        sessionId: sessionIdHex,
+        sealedRoot: sealedRootHex,
+        correlationId,
+      });
+      return;
+    } catch (err) {
+      // Unique constraint violation — duplicate session_id
+      if (this.#isUniqueViolation(err)) {
+        this.#logger.warn("notarization.duplicate.rejected", { sessionId: sessionIdHex });
+        return;
+      }
+      const reason = err instanceof Error ? err.message : String(err);
+      this.#logger.error("notarization.write.failed", { sessionId: sessionIdHex, reason, attempt: 1 });
+    }
+
+    // Attempt 2 (retry)
+    try {
+      await this.insertWithChain("seal_notarizations", record, columns, values, chainHashIndex);
+      this.#logger.info("notarization.recorded", {
+        sessionId: sessionIdHex,
+        sealedRoot: sealedRootHex,
+        correlationId,
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.#logger.error("notarization.write.failed", { sessionId: sessionIdHex, reason, attempt: 2 });
+      throw err;
+    }
   }
 
-  getNotarization(_sessionIdHex: string): SealNotarization | undefined {
-    // Synchronous interface — not yet used in M4 integration paths.
-    // PgDirectoryStore is wired for M4 AC-002 startup; full async reads come in PERSIST-003+.
-    return undefined;
+  /** Whether a Postgres error is a unique constraint violation (SQLSTATE 23505). */
+  #isUniqueViolation(err: unknown): boolean {
+    return (
+      err instanceof Error &&
+      "code" in err &&
+      (err as { code: string }).code === "23505"
+    );
+  }
+
+  /**
+   * Retrieve a SealNotarization by session_id (hex-encoded).
+   * Returns undefined if no row exists — absence is not an error.
+   *
+   * PERSIST-018 AC-006: does not throw and does not log an error on absence.
+   */
+  async getNotarization(sessionIdHex: string): Promise<SealNotarization | undefined> {
+    const result = await this.#pool.query<{
+      session_id: Buffer;
+      sealed_root: Buffer;
+      participant_a_pubkey: Buffer;
+      participant_b_pubkey: Buffer;
+      close_timestamp: string;
+      frost_signature: Buffer;
+    }>(
+      `SELECT session_id, sealed_root, participant_a_pubkey, participant_b_pubkey,
+              close_timestamp, frost_signature
+       FROM seal_notarizations
+       WHERE session_id = decode($1, 'hex')`,
+      [sessionIdHex],
+    );
+
+    if (result.rows.length === 0) return undefined;
+
+    const row = result.rows[0]!;
+    return {
+      session_id: new Uint8Array(row.session_id),
+      sealed_root: new Uint8Array(row.sealed_root),
+      participant_a_pubkey: new Uint8Array(row.participant_a_pubkey),
+      participant_b_pubkey: new Uint8Array(row.participant_b_pubkey),
+      close_timestamp: Number(row.close_timestamp),
+      frost_signature: new Uint8Array(row.frost_signature),
+    };
   }
 
   // ─── Notification queues ─────────────────────────────────────────────────

@@ -707,14 +707,14 @@ describe("SESSION-006 — Directory-side session gate", () => {
     const conn = store.hasConnection("any-pubkey", "other-pubkey");
     expect(conn).toBeNull(); // correct: no connection
     // The store's notarization methods are independent of connection state
-    expect(() => store.recordNotarization({
+    await expect(store.recordNotarization({
       session_id: new Uint8Array(16),
       sealed_root: new Uint8Array(32),
       participant_a_pubkey: new Uint8Array(32),
       participant_b_pubkey: new Uint8Array(32),
       close_timestamp: Date.now(),
       frost_signature: new Uint8Array(64),
-    })).not.toThrow();
+    })).resolves.toBeUndefined();
   });
 });
 

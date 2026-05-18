@@ -1868,7 +1868,7 @@ export class CelloDirectoryNode {
         close_timestamp,
         frost_signature: notarizationSig,
       };
-      this.#store.recordNotarization(notarization);
+      void this.#store.recordNotarization(notarization);
       // OBS-001 AC-009: sealed (single-key path)
       protocolLog("SEAL", `Sealed — session ${truncHex(sessionIdHex)}, root ${truncHex(Buffer.from(recomputedRoot).toString("hex"))}`);
       const sealedEvent: SessionSealed = {
@@ -1979,7 +1979,7 @@ export class CelloDirectoryNode {
       close_timestamp: pending.timestamp,
       frost_signature: new Uint8Array(frame.frost_signature),
     };
-    this.#store.recordNotarization(notarization);
+    void this.#store.recordNotarization(notarization);
 
     // Confirm relay (destroys relay per-session state — AC-008)
     void this.#relay.confirmSeal(frame.session_id);
