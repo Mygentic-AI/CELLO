@@ -78,7 +78,7 @@ export class InMemoryDirectoryStore implements DirectoryStore {
 
   // ─── CONNREQ-002: Connection record methods ───────────────────────────────
 
-  createConnection(connectionId: string, participantA: string, participantB: string, establishedAt: number): void {
+  async createConnection(connectionId: string, participantA: string, participantB: string, establishedAt: number, _correlationId?: string): Promise<void> {
     const record: ConnectionRecord = {
       connection_id: connectionId,
       participant_a: participantA,
@@ -91,7 +91,7 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     this.#connectionPairs.set(pairKey, connectionId);
   }
 
-  hasConnection(pubkeyA: string, pubkeyB: string): { connection_id: string } | null {
+  async hasConnection(pubkeyA: string, pubkeyB: string): Promise<{ connection_id: string } | null> {
     const pairKey = [pubkeyA, pubkeyB].sort().join(":");
     const connectionId = this.#connectionPairs.get(pairKey);
     if (!connectionId) return null;
@@ -100,7 +100,7 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     return { connection_id: connectionId };
   }
 
-  getConnection(connectionId: string): ConnectionRecord | null {
+  async getConnection(connectionId: string): Promise<ConnectionRecord | null> {
     return this.#connections.get(connectionId) ?? null;
   }
 

@@ -1170,7 +1170,7 @@ export class CelloDirectoryNode {
     }
 
     // Gate 3: no existing active connection
-    if (this.#store.hasConnection(senderHex, targetHex)) {
+    if (await this.#store.hasConnection(senderHex, targetHex)) {
       protocolLog("CONN", `Pre-check failed: already_connected (sender: ${truncHex(senderHex)})`);
       this.#sendFrame(stream, encodeConnectionRequestError({ type: "connection_request_error", reason: "already_connected" }));
       return;
@@ -1263,7 +1263,9 @@ export class CelloDirectoryNode {
     if (frame.verdict === "accept") {
       // Generate connection_id (16-byte CSPRNG per FIPS 180-4)
       const connectionId = Buffer.from(randomBytes(16)).toString("hex");
-      this.#store.createConnection(connectionId, pending.senderHex, pending.targetHex, this.#clock.now());
+      // createConnection validates connection_id against connection_requests and logs connection.persisted.
+      // pending.requestId is the correlationId minted when the connection request was received.
+      await this.#store.createConnection(connectionId, pending.senderHex, pending.targetHex, this.#clock.now(), pending.requestId);
 
       // OBS-001 AC-005: verdict accept + connection established
       protocolLog("CONN", `Verdict accept — ${truncHex(connectionId)}`);
@@ -1396,7 +1398,7 @@ export class CelloDirectoryNode {
         return;
       }
       // Verify active connection exists between initiator and target with this connection_id
-      const conn = this.#store.hasConnection(initiatorHex, targetHex);
+      const conn = await this.#store.hasConnection(initiatorHex, targetHex);
       if (!conn || conn.connection_id !== connectionId) {
         protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: no_connection`);
         this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "no_connection" }));

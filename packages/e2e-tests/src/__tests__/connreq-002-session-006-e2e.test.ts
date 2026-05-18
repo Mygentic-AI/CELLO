@@ -129,7 +129,7 @@ describe("E2E CONNREQ-002-AC-001: open policy — connection_established on both
     expect(bEstablishedId).toBe(result.connection_id);
 
     // Transport-path: directory store has the connection record
-    const dirConn = fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
+    const dirConn = await fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
     expect(dirConn).not.toBeNull();
     expect(dirConn!.connection_id).toBe(result.connection_id);
 
@@ -215,7 +215,7 @@ describe("E2E CONNREQ-002-AC-003: Round 2 disclosure flow — B requests more, A
     });
 
     // Transport-path: directory store has the record
-    const dirConn = fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
+    const dirConn = await fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
     expect(dirConn).not.toBeNull();
     expect(dirConn!.connection_id).toBe(respondResult.connection_id);
   }, 60_000);
@@ -305,10 +305,10 @@ describe("E2E CONNREQ-002-SI-005: second connection_request when already connect
     expect(secondResult.reason).toBe("already_connected");
 
     // Transport-path: still only one connection record in directory store
-    const dirConnAB = fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
+    const dirConnAB = await fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
     expect(dirConnAB).not.toBeNull();
     // Connection was not duplicated
-    expect(fix.dirStore.getConnection(dirConnAB!.connection_id)).not.toBeNull();
+    expect(await fix.dirStore.getConnection(dirConnAB!.connection_id)).not.toBeNull();
   }, 45_000);
 });
 
@@ -429,7 +429,7 @@ describe("E2E SESSION-006-AC-008: strangers-to-conversation — full end-to-end 
     expect(bConnectionId).toBe(connResult.connection_id);
 
     // Directory store has the record
-    const dirConn = fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
+    const dirConn = await fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
     expect(dirConn).not.toBeNull();
     expect(dirConn!.connection_id).toBe(connResult.connection_id);
 
