@@ -77,19 +77,79 @@ export class PgDirectoryStore implements DirectoryStore {
     return undefined;
   }
 
-  // ─── Notification queues ─────────────────────────────────────────────────
+  // ─── Notification queues (PERSIST-019) ───────────────────────────────────
 
-  enqueueNotification(pubkeyHex: string, event: DirectoryNotification): void {
-    this.#fire(this.#pool.query(
+  enqueueNotification(pubkeyHex: string, event: DirectoryNotification, correlationId?: string): void {
+    // Pseudocode:
+    //   INSERT INTO notification_queue (pubkey_hex, payload) VALUES ($1, $2)
+    //   ON SUCCESS: logger.info("notification.queued", { pubkeyHex, notificationType, correlationId })
+    //   ON FAILURE: logger.error("notification.enqueue.failed", { pubkeyHex, notificationType, reason })
+    void this.#pool.query(
       `INSERT INTO notification_queue (pubkey_hex, payload)
        VALUES ($1, $2)`,
       [pubkeyHex, JSON.stringify(event)],
-    ));
+    ).then(() => {
+      this.#logger.info("notification.queued", {
+        pubkeyHex,
+        notificationType: event.type,
+        correlationId,
+      });
+    }).catch((err: unknown) => {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.#logger.error("notification.enqueue.failed", {
+        pubkeyHex,
+        notificationType: event.type,
+        reason,
+      });
+    });
   }
 
-  drainNotifications(_pubkeyHex: string): DirectoryNotification[] {
-    // Synchronous drain is in-memory only in M4; Postgres-backed drain comes in PERSIST-003+.
-    return [];
+  /**
+   * PERSIST-019: Drain all notifications for a pubkey from Postgres in a single atomic operation.
+   * Implements the DirectoryStore interface (now async for real Postgres support).
+   *
+   * Pseudocode (SI-001: single atomic statement prevents double delivery):
+   *   WITH drained AS (
+   *     DELETE FROM notification_queue WHERE pubkey_hex = $1
+   *     RETURNING id, payload
+   *   )
+   *   SELECT id, payload FROM drained ORDER BY id ASC
+   *
+   * The DELETE+RETURNING CTE is atomic — concurrent callers race to delete, but
+   * only one DELETE wins; the second sees 0 rows (already deleted by the first).
+   * No advisory lock needed — PostgreSQL MVCC handles this natively.
+   *
+   * AC-008/AC-009: logs notification.queued/notification.drained events.
+   * SI-001: atomic SELECT+DELETE prevents double delivery.
+   */
+  async drainNotifications(pubkeyHex: string, correlationId: string): Promise<DirectoryNotification[]> {
+    const result = await this.#pool.query<{ id: string; payload: unknown }>(
+      `WITH drained AS (
+         DELETE FROM notification_queue WHERE pubkey_hex = $1
+         RETURNING id, payload
+       )
+       SELECT id, payload FROM drained ORDER BY id ASC`,
+      [pubkeyHex],
+    );
+
+    const notifications: DirectoryNotification[] = result.rows.map(
+      (row) => row.payload as DirectoryNotification,
+    );
+
+    this.#logger.info("notification.drained", {
+      pubkeyHex,
+      count: notifications.length,
+      correlationId,
+    });
+
+    return notifications;
+  }
+
+  /**
+   * Alias for drainNotifications — kept for backward compat with any direct callers.
+   */
+  async drainNotificationsAsync(pubkeyHex: string, correlationId: string): Promise<DirectoryNotification[]> {
+    return this.drainNotifications(pubkeyHex, correlationId);
   }
 
   // ─── Agent profiles ───────────────────────────────────────────────────────
@@ -157,8 +217,63 @@ export class PgDirectoryStore implements DirectoryStore {
     return true;
   }
 
-  dequeuePendingConnectionRequests(_targetPubkey: string): PendingConnectionRequest[] {
-    return []; // backing store read in PERSIST-003+
+  /**
+   * PERSIST-019: Dequeue all pending connection requests for a target pubkey.
+   * Implements the DirectoryStore interface (now async for real Postgres support).
+   *
+   * Pseudocode:
+   *   Only returns rows where created_at > now() - INTERVAL '24 hours' (AC-005).
+   *   Deletes returned rows in a single atomic CTE (SI-001: prevents double delivery).
+   *   Stale rows (older than 24h) are NOT deleted by this method — they are
+   *   removed only by the TTL sweep (PendingConnectionRequestTtlSweep, AC-006).
+   *
+   *   WITH drained AS (
+   *     DELETE FROM pending_connection_requests
+   *     WHERE target_pubkey = $1
+   *       AND created_at > now() - INTERVAL '24 hours'
+   *     RETURNING id, payload
+   *   )
+   *   SELECT id, payload FROM drained ORDER BY id ASC
+   *
+   * Logs queue.pending_connection_requests.drained at INFO with
+   * { targetPubkey, count, correlationId }.
+   */
+  async dequeuePendingConnectionRequests(
+    targetPubkey: string,
+    correlationId: string,
+  ): Promise<PendingConnectionRequest[]> {
+    const result = await this.#pool.query<{ id: string; payload: unknown }>(
+      `WITH drained AS (
+         DELETE FROM pending_connection_requests
+         WHERE target_pubkey = $1
+           AND created_at > now() - INTERVAL '24 hours'
+         RETURNING id, payload
+       )
+       SELECT id, payload FROM drained ORDER BY id ASC`,
+      [targetPubkey],
+    );
+
+    const requests: PendingConnectionRequest[] = result.rows.map(
+      (row) => row.payload as PendingConnectionRequest,
+    );
+
+    this.#logger.info("queue.pending_connection_requests.drained", {
+      targetPubkey,
+      count: requests.length,
+      correlationId,
+    });
+
+    return requests;
+  }
+
+  /**
+   * Alias for dequeuePendingConnectionRequests — kept for backward compat with test callers.
+   */
+  async dequeuePendingConnectionRequestsAsync(
+    targetPubkey: string,
+    correlationId: string,
+  ): Promise<PendingConnectionRequest[]> {
+    return this.dequeuePendingConnectionRequests(targetPubkey, correlationId);
   }
 
   // ─── PERSIST-004: Hash chain methods ─────────────────────────────────────

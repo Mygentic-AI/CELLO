@@ -38,13 +38,18 @@ export interface DirectoryStore {
   /**
    * Enqueue a notification event for a pubkey that has no active signaling stream.
    * Drops oldest if at the 256-event bound.
+   * PERSIST-019: correlationId is optional; when provided it appears in the
+   * notification.queued log event for traceability.
    */
-  enqueueNotification(pubkeyHex: string, event: DirectoryNotification): void;
+  enqueueNotification(pubkeyHex: string, event: DirectoryNotification, correlationId?: string): void;
 
   /**
    * Drain the pending notification queue for a pubkey. Returns [] if none.
+   * PERSIST-019: async so PgDirectoryStore can do a real SELECT+DELETE in a single
+   * transaction (SI-001: prevents double delivery under concurrent reconnects).
+   * correlationId appears in the notification.drained log event.
    */
-  drainNotifications(pubkeyHex: string): DirectoryNotification[];
+  drainNotifications(pubkeyHex: string, correlationId: string): Promise<DirectoryNotification[]>;
 
   // ─── REG-001: Agent profile methods ──────────────────────────────────────
 
@@ -103,7 +108,9 @@ export interface DirectoryStore {
 
   /**
    * Dequeue and return all pending connection requests for a target (in arrival order).
-   * Returns [] if none queued.
+   * Returns [] if none queued. Only returns requests within the 24-hour TTL.
+   * PERSIST-019: async so PgDirectoryStore can SELECT+DELETE in a single transaction
+   * (SI-001). correlationId appears in queue.pending_connection_requests.drained event.
    */
-  dequeuePendingConnectionRequests(targetPubkey: string): PendingConnectionRequest[];
+  dequeuePendingConnectionRequests(targetPubkey: string, correlationId: string): Promise<PendingConnectionRequest[]>;
 }

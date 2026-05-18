@@ -754,8 +754,11 @@ export class CelloDirectoryNode {
 
           authed = true;
 
-          // Flush any queued notifications
-          const queued = this.#store.drainNotifications(authedPubkeyHex);
+          // PERSIST-019: correlationId for tracing the reconnect drain flow
+          const reconnectCorrelationId = Buffer.from(randomBytes(16)).toString("hex");
+
+          // Flush any queued notifications (PERSIST-019: real Postgres drain, atomic SELECT+DELETE)
+          const queued = await this.#store.drainNotifications(authedPubkeyHex, reconnectCorrelationId);
 
           for (const evt of queued) {
             try {
@@ -786,7 +789,8 @@ export class CelloDirectoryNode {
           }
 
           // CONNREQ-002 DB-001: deliver queued pending connection requests (target reconnected)
-          const pendingConnRequests = this.#store.dequeuePendingConnectionRequests(authedPubkeyHex);
+          // PERSIST-019: real Postgres dequeue with 24h TTL filter, atomic SELECT+DELETE
+          const pendingConnRequests = await this.#store.dequeuePendingConnectionRequests(authedPubkeyHex, reconnectCorrelationId);
           for (const pending of pendingConnRequests) {
             try {
               this.#sendFrame(stream, encodeConnectionRequestInbound(pending.frame));
