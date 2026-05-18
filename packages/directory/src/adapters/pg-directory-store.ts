@@ -251,24 +251,145 @@ export class PgDirectoryStore implements DirectoryStore {
     return false; // backing store read in PERSIST-003+
   }
 
-  // ─── Connection records ──────────────────────────────────────────────────
+  // ─── Connection records (PERSIST-020) ────────────────────────────────────
 
-  createConnection(connectionId: string, participantA: string, participantB: string, establishedAt: number): void {
-    this.#fire(this.#pool.query(
-      `INSERT INTO connections
-         (connection_id, participant_a, participant_b, established_at, status)
-       VALUES ($1,$2,$3,$4,'active')
-       ON CONFLICT (connection_id) DO NOTHING`,
-      [connectionId, participantA, participantB, establishedAt],
-    ), "connections");
+  /**
+   * Persist a new connection record with hash chain enforcement.
+   *
+   * Pseudocode:
+   *   1. SI-001: Validate connection_id against connection_requests table.
+   *      If no matching pending request exists → throw (reject before any INSERT).
+   *   2. Compute chain_hash via insertWithChain (acquires advisory lock, fetches prev hash).
+   *   3. INSERT into connections with all fields including computed chain_hash.
+   *   4. Log connection.persisted at INFO with { connectionId, participantA, participantB, correlationId }.
+   *   5. On failure: log connection.persist.failed at ERROR with { connectionId, reason, attempt }.
+   *      Retry once. If retry fails, log again with attempt: 2.
+   *
+   * SI-001: connection_id is validated against connection_requests before INSERT.
+   * SI-002: chain_hash is computed server-side inside insertWithChain; never accepted from caller.
+   */
+  async createConnection(
+    connectionId: string,
+    participantA: string,
+    participantB: string,
+    establishedAt: number,
+    correlationId: string,
+  ): Promise<void> {
+    // SI-001: validate correlationId against connection_requests with outcome = 'ACCEPTED'.
+    // correlationId is the request_id from the originating connection_requests row — the
+    // identifier CONNREQ-002 issued when the request was accepted. connectionId is a freshly-
+    // minted connection identifier and will never match request_id in connection_requests.
+    // Only accepted requests may produce a connection record — rejected/pending/expired must not.
+    const reqCheck = await this.#pool.query<{ count: string }>(
+      `SELECT COUNT(*) as count FROM connection_requests WHERE request_id = $1 AND outcome = 'ACCEPTED'`,
+      [correlationId],
+    );
+    if ((reqCheck.rows[0]?.count ?? "0") === "0") {
+      throw new Error(
+        `createConnection: connection_id '${connectionId}' has no matching accepted row in connection_requests (SI-001)`,
+      );
+    }
+
+    const record: Record<string, unknown> = {
+      connection_id: connectionId,
+      participant_a: participantA,
+      participant_b: participantB,
+      established_at: establishedAt,
+      status: "active",
+    };
+    const columns = [
+      "connection_id",
+      "participant_a",
+      "participant_b",
+      "established_at",
+      "status",
+      "chain_hash",
+    ];
+    const values: unknown[] = [connectionId, participantA, participantB, establishedAt, "active", ""];
+    const chainHashIndex = 5;
+
+    // Attempt 1
+    let attempt = 1;
+    try {
+      await this.insertWithChain("connections", record, columns, values, chainHashIndex);
+    } catch (err) {
+      const reason1 = err instanceof Error ? err.message : String(err);
+      this.#logger.error("connection.persist.failed", { connectionId, reason: reason1, attempt });
+      // Retry once (attempt 2)
+      attempt = 2;
+      try {
+        await this.insertWithChain("connections", record, columns, values, chainHashIndex);
+      } catch (err2) {
+        const reason2 = err2 instanceof Error ? err2.message : String(err2);
+        this.#logger.error("connection.persist.failed", { connectionId, reason: reason2, attempt });
+        throw err2;
+      }
+    }
+
+    // Observability: connection.persisted at INFO (AC-007)
+    this.#logger.info("connection.persisted", {
+      connectionId,
+      participantA,
+      participantB,
+      correlationId,
+    });
   }
 
-  hasConnection(_pubkeyA: string, _pubkeyB: string): { connection_id: string } | null {
-    return null; // backing store read in PERSIST-003+
+  /**
+   * Check if an active connection exists between pubkeyA and pubkeyB.
+   * Uses an OR query over both composite indexes — symmetric without application-layer normalization.
+   *
+   * Pseudocode:
+   *   SELECT connection_id, participant_a, participant_b, established_at, status
+   *   FROM connections
+   *   WHERE (participant_a = $1 AND participant_b = $2)
+   *      OR (participant_a = $2 AND participant_b = $1)
+   *   LIMIT 1
+   */
+  async hasConnection(pubkeyA: string, pubkeyB: string): Promise<{ connection_id: string } | null> {
+    const result = await this.#pool.query<{
+      connection_id: string;
+      participant_a: string;
+      participant_b: string;
+      established_at: string;
+      status: string;
+    }>(
+      `SELECT connection_id, participant_a, participant_b, established_at, status
+       FROM connections
+       WHERE (participant_a = $1 AND participant_b = $2)
+          OR (participant_a = $2 AND participant_b = $1)
+       LIMIT 1`,
+      [pubkeyA, pubkeyB],
+    );
+    if (result.rows.length === 0) return null;
+    return { connection_id: result.rows[0]!.connection_id };
   }
 
-  getConnection(_connectionId: string): ConnectionRecord | null {
-    return null; // backing store read in PERSIST-003+
+  /**
+   * Retrieve a connection record by connection_id hex.
+   * Returns null if not found. Does not throw on missing record (AC-008).
+   */
+  async getConnection(connectionId: string): Promise<ConnectionRecord | null> {
+    const result = await this.#pool.query<{
+      connection_id: string;
+      participant_a: string;
+      participant_b: string;
+      established_at: string;
+      status: string;
+    }>(
+      `SELECT connection_id, participant_a, participant_b, established_at, status
+       FROM connections WHERE connection_id = $1`,
+      [connectionId],
+    );
+    if (result.rows.length === 0) return null;
+    const row = result.rows[0]!;
+    return {
+      connection_id: row.connection_id,
+      participant_a: row.participant_a,
+      participant_b: row.participant_b,
+      established_at: Number(row.established_at),
+      status: row.status as "active",
+    };
   }
 
   queuePendingConnectionRequest(targetPubkey: string, request: PendingConnectionRequest): boolean {

@@ -188,12 +188,12 @@ describe("CONNREQ-002 — Directory-side connection request handling", () => {
   });
 
   // ── AC-015 / SI-004: connection_id is 16-byte CSPRNG, no collisions ─────────
-  it("CONNREQ-002-AC-015: InMemoryDirectoryStore createConnection stores 16-byte hex connection_id", () => {
+  it("CONNREQ-002-AC-015: InMemoryDirectoryStore createConnection stores 16-byte hex connection_id", async () => {
     const store = new InMemoryDirectoryStore();
     const connectionId = Buffer.from(randomBytes(16)).toString("hex");
     expect(connectionId.length).toBe(32); // 16 bytes = 32 hex chars
-    store.createConnection(connectionId, "aaa", "bbb", Date.now());
-    const record = store.getConnection(connectionId);
+    await store.createConnection(connectionId, "aaa", "bbb", Date.now(), "test-correlation-id");
+    const record = await store.getConnection(connectionId);
     expect(record).not.toBeNull();
     expect(record!.connection_id).toBe(connectionId);
     expect(record!.participant_a).toBe("aaa");
@@ -212,13 +212,13 @@ describe("CONNREQ-002 — Directory-side connection request handling", () => {
     expect(ids.size).toBe(256);
   });
 
-  it("CONNREQ-002: hasConnection returns connection_id for established pair (symmetric)", () => {
+  it("CONNREQ-002: hasConnection returns connection_id for established pair (symmetric)", async () => {
     const store = new InMemoryDirectoryStore();
     const connectionId = Buffer.from(randomBytes(16)).toString("hex");
-    store.createConnection(connectionId, "aaaa", "bbbb", Date.now());
-    expect(store.hasConnection("aaaa", "bbbb")).toEqual({ connection_id: connectionId });
-    expect(store.hasConnection("bbbb", "aaaa")).toEqual({ connection_id: connectionId }); // symmetric
-    expect(store.hasConnection("aaaa", "cccc")).toBeNull();
+    await store.createConnection(connectionId, "aaaa", "bbbb", Date.now(), "test-correlation-id");
+    await expect(store.hasConnection("aaaa", "bbbb")).resolves.toEqual({ connection_id: connectionId });
+    await expect(store.hasConnection("bbbb", "aaaa")).resolves.toEqual({ connection_id: connectionId }); // symmetric
+    await expect(store.hasConnection("aaaa", "cccc")).resolves.toBeNull();
   });
 
   it("CONNREQ-002-DB-001: pendingConnectionRequests queue stores up to 32, drops oldest on overflow", () => {
@@ -394,7 +394,7 @@ describe("CONNREQ-002 — Directory-side connection request handling", () => {
 
     // Manually inject an existing connection between A and B in the store
     const existingConnectionId = Buffer.from(randomBytes(16)).toString("hex");
-    store.createConnection(existingConnectionId, clientPubkeyHex, targetPubkeyHex, Date.now());
+    await store.createConnection(existingConnectionId, clientPubkeyHex, targetPubkeyHex, Date.now(), "test-correlation-id");
 
     // Register peer_info for A
     sendFrame(streamA, CBOR_ENC.encode({
@@ -415,7 +415,7 @@ describe("CONNREQ-002 — Directory-side connection request handling", () => {
     expect(frame["reason"]).toBe("already_connected");
 
     // No duplicate connection should be created
-    const connections = store.hasConnection(clientPubkeyHex, targetPubkeyHex);
+    const connections = await store.hasConnection(clientPubkeyHex, targetPubkeyHex);
     expect(connections!.connection_id).toBe(existingConnectionId); // still the original
   });
 });
@@ -586,7 +586,7 @@ describe("SESSION-006 — Directory-side session gate", () => {
     // A has a connection with C (not B) — inject a connection between A and a different target
     const otherTargetHex = Buffer.from(randomBytes(32)).toString("hex");
     const connectionIdAC = Buffer.from(randomBytes(16)).toString("hex");
-    store.createConnection(connectionIdAC, clientPubkeyHex, otherTargetHex, Date.now());
+    await store.createConnection(connectionIdAC, clientPubkeyHex, otherTargetHex, Date.now(), "test-correlation-id");
 
     // Send session_request with connection_id that belongs to A-C, not A-B
     sendFrame(streamA, CBOR_ENC.encode({
@@ -704,7 +704,7 @@ describe("SESSION-006 — Directory-side session gate", () => {
     // Unit assertion: the gate logic is only in #processSessionRequest
     // The store having no connection does not affect recordNotarization or seal processing.
     const store = new InMemoryDirectoryStore();
-    const conn = store.hasConnection("any-pubkey", "other-pubkey");
+    const conn = await store.hasConnection("any-pubkey", "other-pubkey");
     expect(conn).toBeNull(); // correct: no connection
     // The store's notarization methods are independent of connection state
     await expect(store.recordNotarization({
@@ -721,15 +721,15 @@ describe("SESSION-006 — Directory-side session gate", () => {
 // ─── CONNREQ-002 SI-002: no connection without explicit accept verdict ─────────
 
 describe("CONNREQ-002-SI-002: Directory never creates connection without explicit accept", () => {
-  it("store.hasConnection returns null before createConnection is called", () => {
+  it("store.hasConnection returns null before createConnection is called", async () => {
     const store = new InMemoryDirectoryStore();
-    const result = store.hasConnection("pubkey-A", "pubkey-B");
+    const result = await store.hasConnection("pubkey-A", "pubkey-B");
     expect(result).toBeNull();
   });
 
-  it("store.getConnection returns null for non-existent connection_id", () => {
+  it("store.getConnection returns null for non-existent connection_id", async () => {
     const store = new InMemoryDirectoryStore();
-    const result = store.getConnection("nonexistent-id");
+    const result = await store.getConnection("nonexistent-id");
     expect(result).toBeNull();
   });
 });

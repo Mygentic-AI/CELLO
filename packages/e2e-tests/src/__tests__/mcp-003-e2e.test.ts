@@ -145,7 +145,7 @@ describe("AC-003: cello_request_connection with open deterministic policy → ac
     expect(connEntry!.status).toBe("active");
 
     // Transport-path: directory store has connection record
-    const dirConn = fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
+    const dirConn = await fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
     expect(dirConn).not.toBeNull();
     expect(dirConn!.connection_id).toBe(connectionId);
   }, 45_000);
@@ -311,7 +311,7 @@ describe("AC-005: cello_respond_to_disclosure_request + B accepts → { result: 
     expect(aRespondResult.connection_id).toBe(connectionId);
 
     // Transport-path: directory store has the connection record
-    const dirConn = fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
+    const dirConn = await fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
     expect(dirConn).not.toBeNull();
     expect(dirConn!.connection_id).toBe(connectionId);
   }, 60_000);

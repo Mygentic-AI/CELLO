@@ -44,7 +44,7 @@ behavior:
     action: "the connections table shall exist with columns: connection_id
       (TEXT PRIMARY KEY), participant_a (TEXT NOT NULL), participant_b
       (TEXT NOT NULL), established_at (BIGINT NOT NULL), status (TEXT NOT NULL
-      DEFAULT 'active'), chain_hash (BYTEA NOT NULL); composite indexes shall
+      DEFAULT 'active'), chain_hash (TEXT NOT NULL); composite indexes shall
       exist on (participant_a, participant_b) and on (participant_b, participant_a)
       to support symmetric hasConnection() queries; RLS shall be enabled with
       INSERT and SELECT policies for cello_service; no UPDATE or DELETE policy

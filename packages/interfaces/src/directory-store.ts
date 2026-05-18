@@ -96,22 +96,31 @@ export interface DirectoryStore {
   /**
    * Create a connection record for A–B. Indexed by both pubkeys and by connection_id.
    * CONNREQ-002: called only after directory receives connection_response { verdict: 'accept' }.
+   *
+   * PERSIST-020: correlationId is the connection-request-scoped ID threaded through the
+   * connection acceptance flow. Required for connection.persisted observability event.
+   * The Postgres implementation validates connection_id against connection_requests before
+   * writing. Throws if no matching pending request is found (SI-001).
    */
-  createConnection(connectionId: string, participantA: string, participantB: string, establishedAt: number): void;
+  createConnection(connectionId: string, participantA: string, participantB: string, establishedAt: number, correlationId: string): Promise<void>;
 
   /**
    * Check if an active connection exists between pubkeyA and pubkeyB.
-   * Returns { connection_id } if found, null if not.
-   * O(1) lookup on the connection index.
+   * Returns the connection record if found, null if not.
+   * O(1) lookup on both composite indexes (forward + reverse).
    * SESSION-006: used by session_request handler to verify connection exists.
+   *
+   * PERSIST-020: returns Promise to support Postgres-backed implementations.
    */
-  hasConnection(pubkeyA: string, pubkeyB: string): { connection_id: string } | null;
+  hasConnection(pubkeyA: string, pubkeyB: string): Promise<{ connection_id: string } | null>;
 
   /**
    * Retrieve a connection record by connection_id hex.
-   * Returns null if not found.
+   * Returns null if not found. Does not throw on missing record.
+   *
+   * PERSIST-020: returns Promise to support Postgres-backed implementations.
    */
-  getConnection(connectionId: string): ConnectionRecord | null;
+  getConnection(connectionId: string): Promise<ConnectionRecord | null>;
 
   /**
    * Queue a pending connection request for an offline target.

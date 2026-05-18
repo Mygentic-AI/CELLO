@@ -204,6 +204,8 @@ export function verifyChain(
 /**
  * Hash-chained tables that support the chain mechanism in M4.
  * These are the "active" tables with full column definitions.
+ *
+ * PERSIST-020: connections added — established connection records are tamper-evident.
  */
 export const HASH_CHAINED_TABLES = [
   "agent_registrations",
@@ -213,6 +215,7 @@ export const HASH_CHAINED_TABLES = [
   "conversation_participation",
   "notification_events",
   "seal_notarizations",
+  "connections",
 ] as const;
 
 export type HashChainedTable = (typeof HASH_CHAINED_TABLES)[number];
