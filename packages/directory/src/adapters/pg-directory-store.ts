@@ -122,7 +122,7 @@ export class PgDirectoryStore implements DirectoryStore {
    * only one DELETE wins; the second sees 0 rows (already deleted by the first).
    * No advisory lock needed — PostgreSQL MVCC handles this natively.
    *
-   * AC-008/AC-009: logs notification.queued/notification.drained events.
+   * AC-009: logs notification.drained when items are returned.
    * SI-001: atomic SELECT+DELETE prevents double delivery.
    */
   async drainNotifications(pubkeyHex: string, correlationId: string): Promise<DirectoryNotification[]> {
@@ -140,14 +140,12 @@ export class PgDirectoryStore implements DirectoryStore {
     );
 
     if (notifications.length > 0) {
-      const logContext: Record<string, unknown> = {
+      // AC-009: only logged when count > 0 per AC-009 trigger condition
+      this.#logger.info("notification.drained", {
         pubkeyHex,
         count: notifications.length,
-      };
-      if (correlationId !== undefined) {
-        logContext.correlationId = correlationId;
-      }
-      this.#logger.info("notification.drained", logContext);
+        correlationId,
+      });
     }
 
     return notifications;
@@ -258,14 +256,14 @@ export class PgDirectoryStore implements DirectoryStore {
       (row) => row.payload as PendingConnectionRequest,
     );
 
-    const logContext: Record<string, unknown> = {
-      targetPubkey,
-      count: requests.length,
-    };
-    if (correlationId !== undefined) {
-      logContext.correlationId = correlationId;
+    if (requests.length > 0) {
+      // AC-009 (pending_connection_requests): only logged when count > 0 per AC-009 trigger condition
+      this.#logger.info("queue.pending_connection_requests.drained", {
+        targetPubkey,
+        count: requests.length,
+        correlationId,
+      });
     }
-    this.#logger.info("queue.pending_connection_requests.drained", logContext);
 
     return requests;
   }

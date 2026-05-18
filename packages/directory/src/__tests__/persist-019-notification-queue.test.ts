@@ -39,9 +39,9 @@
  * AC-009: drainNotifications() logs notification.drained at INFO with
  *         { pubkeyHex, count, correlationId }.
  *
- * SI-001: SELECT+DELETE in a single transaction — concurrent drainNotifications calls
- *         for the same pubkeyHex with one queued notification: exactly one caller
- *         receives it, the other receives [].
+ * SI-001: SELECT+DELETE in a single transaction — concurrent drainNotifications (and
+ *         dequeuePendingConnectionRequests) calls for the same key with one queued item:
+ *         exactly one caller receives it, the other receives [].
  *
  * SI-002: No private key material in DirectoryNotification payloads — every variant
  *         serialized and checked against /k_local|k_server|frost_share|private_key|secret/i.
@@ -325,7 +325,9 @@ describeIntegration("PERSIST-019 AC-001: schema structure after Flyway migration
     );
     expect(rlsResult.rows[0]?.relrowsecurity, "RLS not enabled on notification_queue").toBe(true);
 
-    const policyResult = await superPool.query<{ polname: string }>(
+    // AC-001: policy-name verification issued as cello_service (SET ROLE ensures the query
+    // is executed in the same privilege context that application code uses at runtime)
+    const policyResult = await servicePool.query<{ polname: string }>(
       `SELECT polname
        FROM pg_catalog.pg_policy p
        JOIN pg_class c ON c.oid = p.polrelid
@@ -387,7 +389,9 @@ describeIntegration("PERSIST-019 AC-001: schema structure after Flyway migration
     );
     expect(rlsResult.rows[0]?.relrowsecurity, "RLS not enabled on pending_connection_requests").toBe(true);
 
-    const policyResult = await superPool.query<{ polname: string }>(
+    // AC-001: policy-name verification issued as cello_service (SET ROLE ensures the query
+    // is executed in the same privilege context that application code uses at runtime)
+    const policyResult = await servicePool.query<{ polname: string }>(
       `SELECT polname
        FROM pg_catalog.pg_policy p
        JOIN pg_class c ON c.oid = p.polrelid
@@ -790,6 +794,42 @@ describeIntegration("PERSIST-019 SI-001: concurrent drain — no double delivery
     const countResult = await superPool.query<{ count: string }>(
       `SELECT COUNT(*) AS count FROM notification_queue WHERE pubkey_hex = $1`,
       [pubkeyHex],
+    );
+    expect(parseInt(countResult.rows[0]!.count, 10)).toBe(0);
+  });
+});
+
+// ─── SI-001 (pending_connection_requests): concurrent dequeue — no double delivery ──
+
+describeIntegration("PERSIST-019 SI-001: concurrent dequeuePendingConnectionRequests — no double delivery", () => {
+  it("SI-001: two concurrent dequeuePendingConnectionRequests calls — exactly one gets the request", async () => {
+    const logger = makeMockLogger();
+    const store = new PgDirectoryStore(superPool, logger);
+
+    const targetPubkey = randomBytes(32).toString("hex");
+    const request = makePendingConnectionRequest();
+
+    // Insert one row directly via superPool (avoids fire-and-forget race)
+    await superPool.query(
+      `INSERT INTO pending_connection_requests (target_pubkey, payload) VALUES ($1, $2::jsonb)`,
+      [targetPubkey, JSON.stringify(request)],
+    );
+
+    // Launch two concurrent dequeues — SI-001: atomic CTE prevents double delivery
+    const correlationId = randomUUID();
+    const [result1, result2] = await Promise.all([
+      store.dequeuePendingConnectionRequests(targetPubkey, correlationId),
+      store.dequeuePendingConnectionRequests(targetPubkey, correlationId),
+    ]);
+
+    // Exactly one caller receives the request; the other receives []
+    const totalReceived = result1.length + result2.length;
+    expect(totalReceived).toBe(1);
+
+    // pending_connection_requests must be empty after both calls
+    const countResult = await superPool.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM pending_connection_requests WHERE target_pubkey = $1`,
+      [targetPubkey],
     );
     expect(parseInt(countResult.rows[0]!.count, 10)).toBe(0);
   });

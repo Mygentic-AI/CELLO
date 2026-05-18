@@ -920,10 +920,10 @@ export class CelloDirectoryNode {
                 try {
                   this.#sendFrame(counterpartyStream, encodeSessionAbandoned(abandonedFrame));
                 } catch {
-                  this.#store.enqueueNotification(counterpartyHex, abandonedFrame);
+                  this.#store.enqueueNotification(counterpartyHex, abandonedFrame, sessionIdHex);
                 }
               } else {
-                this.#store.enqueueNotification(counterpartyHex, abandonedFrame);
+                this.#store.enqueueNotification(counterpartyHex, abandonedFrame, sessionIdHex);
               }
             }
           }
@@ -1285,7 +1285,7 @@ export class CelloDirectoryNode {
         connection_id: connectionId,
       };
       // Queue for sender (delivered on next auth). Client deduplicates via connection_id.
-      this.#store.enqueueNotification(pending.senderHex, toSender);
+      this.#store.enqueueNotification(pending.senderHex, toSender, connectionId);
       // Also attempt immediate delivery if stream appears live.
       if (senderStream) {
         try { this.#sendFrame(senderStream, encodeConnectionEstablished(toSender)); } catch {}
@@ -1883,8 +1883,8 @@ export class CelloDirectoryNode {
         directory_signature: notarizationSig,
         close_timestamp,
       };
-      this.#deliverOrEnqueue(participants[0] ?? "", sealedEvent);
-      if (participants.length >= 2) this.#deliverOrEnqueue(participants[1], sealedEvent);
+      this.#deliverOrEnqueue(participants[0] ?? "", sealedEvent, sessionIdHex);
+      if (participants.length >= 2) this.#deliverOrEnqueue(participants[1], sealedEvent, sessionIdHex);
       return { ok: true };
     }
 
@@ -1917,11 +1917,11 @@ export class CelloDirectoryNode {
       try {
         this.#sendFrame(initiatorStream, encodeSealVerified(sealVerifiedEvent));
       } catch {
-        this.#store.enqueueNotification(initiatorHex, sealVerifiedEvent);
+        this.#store.enqueueNotification(initiatorHex, sealVerifiedEvent, sessionIdHex);
       }
     } else {
       // DB-003: initiator not connected — enqueue for delivery when they reconnect.
-      this.#store.enqueueNotification(initiatorHex, sealVerifiedEvent);
+      this.#store.enqueueNotification(initiatorHex, sealVerifiedEvent, sessionIdHex);
     }
 
     return { ok: true };
@@ -1966,8 +1966,8 @@ export class CelloDirectoryNode {
         session_id: frame.session_id,
         reason: "seal_signature_invalid",
       };
-      this.#deliverOrEnqueue(pending.participantAHex, rejectedEvent);
-      if (pending.participantBHex) this.#deliverOrEnqueue(pending.participantBHex, rejectedEvent);
+      this.#deliverOrEnqueue(pending.participantAHex, rejectedEvent, sessionIdHex);
+      if (pending.participantBHex) this.#deliverOrEnqueue(pending.participantBHex, rejectedEvent, sessionIdHex);
       void this.#relay.rejectSeal(frame.session_id, "seal_signature_invalid");
       return;
     }
@@ -2002,24 +2002,24 @@ export class CelloDirectoryNode {
       close_timestamp: pending.timestamp,
       leaf_count: pending.leafCount,
     };
-    this.#deliverOrEnqueue(pending.participantAHex, sealedEvent);
-    if (pending.participantBHex) this.#deliverOrEnqueue(pending.participantBHex, sealedEvent);
+    this.#deliverOrEnqueue(pending.participantAHex, sealedEvent, sessionIdHex);
+    if (pending.participantBHex) this.#deliverOrEnqueue(pending.participantBHex, sealedEvent, sessionIdHex);
   }
 
-  #notifySealRejected(_sessionIdHex: string, sessionId: Uint8Array, reason: import("./directory-types.js").SealRejectionReason): void {
+  #notifySealRejected(sessionIdHex: string, sessionId: Uint8Array, reason: import("./directory-types.js").SealRejectionReason): void {
     const rejectedEvent: SessionSealRejected = { type: "session_seal_rejected", session_id: sessionId, reason };
     // M1: broadcast to all authenticated streams — clients ignore events for sessions they don't own.
-    // Future: look up session participants by _sessionIdHex for targeted delivery.
+    // Future: look up session participants by sessionIdHex for targeted delivery.
     for (const [pubkeyHex, stream] of this.#streams) {
       try {
         this.#sendFrame(stream, encodeSessionSealRejected(rejectedEvent));
       } catch {
-        this.#store.enqueueNotification(pubkeyHex, rejectedEvent);
+        this.#store.enqueueNotification(pubkeyHex, rejectedEvent, sessionIdHex);
       }
     }
   }
 
-  #deliverOrEnqueue(pubkeyHex: string, event: SessionSealed | SessionSealRejected): void {
+  #deliverOrEnqueue(pubkeyHex: string, event: SessionSealed | SessionSealRejected, correlationId: string): void {
     const stream = this.#streams.get(pubkeyHex);
     if (stream) {
       try {
@@ -2035,7 +2035,7 @@ export class CelloDirectoryNode {
         this.#streams.delete(pubkeyHex);
       }
     }
-    if (pubkeyHex) this.#store.enqueueNotification(pubkeyHex, event);
+    if (pubkeyHex) this.#store.enqueueNotification(pubkeyHex, event, correlationId);
   }
 
   /**
