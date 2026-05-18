@@ -74,10 +74,26 @@ import { HASH_CHAINED_TABLES } from "../hash-chain.js";
  * (${tableName}) in PgDirectoryStore. Any dynamic SQL pattern not resolvable
  * to one of these table names causes the static analysis test to fail (DB-001, SI-001).
  *
- * Update this constant whenever a new table receives hash-chain enforcement
- * (i.e., whenever HASH_CHAINED_TABLES in hash-chain.ts is extended).
+ * This list is manually maintained and intentionally independent of HASH_CHAINED_TABLES.
+ * If it were derived from HASH_CHAINED_TABLES, a developer adding a non-hash-chained
+ * dynamic table reference to PgDirectoryStore would bypass the gate silently.
+ *
+ * Update this constant when:
+ *   1. A new table is added to HASH_CHAINED_TABLES (always — insertWithChain and
+ *      verifyChain use ${tableName} for all hash-chained tables).
+ *   2. A new non-hash-chained table is referenced via a template literal in
+ *      PgDirectoryStore (rare — most dynamic references go through insertWithChain).
+ *
+ * Current values must match HASH_CHAINED_TABLES exactly — the SI-001 test enforces this.
  */
-const KNOWN_DYNAMIC_TABLES: readonly string[] = [...HASH_CHAINED_TABLES] as const;
+const KNOWN_DYNAMIC_TABLES: readonly string[] = [
+  "agent_registrations",
+  "connection_requests",
+  "conversation_seals",
+  "conversation_attestations",
+  "conversation_participation",
+  "notification_events",
+] as const;
 
 // ─── File paths ───────────────────────────────────────────────────────────────
 
@@ -91,6 +107,9 @@ const MIGRATIONS_DIR = resolve(PKG_DIR, "db/migrations");
  * Extract all backtick-delimited template literal strings from a TypeScript source file.
  * Returns the raw template literal content (without surrounding backticks).
  * Handles multiline template literals correctly.
+ *
+ * Limitation: does not handle nested template literals (e.g. `outer ${`inner`}`).
+ * PgDirectoryStore uses no nested template literals so this is not a current concern.
  */
 function extractTemplateLiterals(source: string): string[] {
   const results: string[] = [];
@@ -126,6 +145,10 @@ function extractTemplateLiterals(source: string): string[] {
  *   UPDATE <name>
  *   DELETE FROM <name>
  * Returns null if no table name found via static pattern.
+ *
+ * Limitation: for SELECT queries, only the first identifier after FROM is returned.
+ * JOIN targets and subquery table references are not detected. PgDirectoryStore has
+ * no static multi-table queries so this is not a current concern.
  */
 function parseStaticTableName(sql: string): string | null {
   // Normalize whitespace for regex matching
@@ -237,14 +260,17 @@ function extractStoreTableNames(source: string): {
       // We recognize the pattern "... FROM ${tableName}" or "INSERT INTO ${tableName}"
       // as the valid dynamic pattern for insertWithChain / verifyChain.
       // Any other dynamic pattern is an unknown and causes a test failure.
-      const isKnownPattern =
-        /(?:FROM|INTO|UPDATE)\s+\$\{[^}]+\}/.test(lit) ||
-        /INSERT\s+INTO\s+\$\{[^}]+\}/.test(lit);
+      // Valid dynamic pattern: the table variable follows FROM, INTO, or UPDATE.
+      // The table names themselves are validated via KNOWN_DYNAMIC_TABLES (SI-001 test).
+      // Note: this check validates SQL structure only — it does not verify the variable
+      // resolves to a table in KNOWN_DYNAMIC_TABLES. The SI-001 test handles that by
+      // asserting KNOWN_DYNAMIC_TABLES covers every table HASH_CHAINED_TABLES declares,
+      // and all dynamic references in PgDirectoryStore go through insertWithChain/verifyChain
+      // which are typed to accept only HashChainedTable values.
+      const isKnownPattern = /(?:FROM|INTO|UPDATE)\s+\$\{[^}]+\}/.test(lit);
       if (!isKnownPattern) {
         dynamicErrors.push(lit.slice(0, 120));
       }
-      // Known pattern: the table names come from KNOWN_DYNAMIC_TABLES (checked in AC-001)
-      // No static table name to add here — covered by the dynamic table allowlist
     } else {
       // Static SQL — extract the table name
       const name = parseStaticTableName(lit);
@@ -306,7 +332,8 @@ describe("PERSIST-016: schema completeness — static analysis", () => {
     }
 
     // schema.completeness.verified (test-output event — not production Logger)
-    const migrationCount = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).length;
+    // migrationTables.size reflects all CREATE TABLE entries; use it to avoid a second readdirSync
+    const migrationCount = migrationTables.size;
     console.info(
       `[PERSIST-016 schema.completeness.verified] ` +
       `tableCount: ${staticTables.size}, migrationCount: ${migrationCount}`,
@@ -430,7 +457,7 @@ describeIntegration(
         existingTables = new Set(result.rows.map((r) => r.table_name));
       } finally {
         client.release();
-        await pool.end();
+        await pool.end().catch(() => { /* ignore — pool cleanup errors don't affect test results */ });
       }
 
       const missingFromDb: string[] = [];

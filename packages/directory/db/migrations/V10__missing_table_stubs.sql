@@ -6,10 +6,9 @@
 -- completeness test passes and the CI gate is unblocked.
 --
 -- Full column definitions for each table are added in subsequent stories:
---   seal_notarizations          → PERSIST-018
---   notification_queue          → PERSIST-019
---   pending_connection_requests → PERSIST-019
---   connections                 → PERSIST-020
+--   seal_notarizations                       → PERSIST-018
+--   notification_queue + pending_connection_requests → PERSIST-019
+--   connections                              → PERSIST-020
 --
 -- RLS pattern (same as all other append-only tables in this schema):
 --   INSERT + SELECT for cello_service; no UPDATE or DELETE.
