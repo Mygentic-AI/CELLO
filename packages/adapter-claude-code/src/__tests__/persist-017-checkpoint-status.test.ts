@@ -160,6 +160,7 @@ describe("PERSIST-017 adapter: AC-005a cello_close_session returns checkpoint_st
       leaf_index: 3,
       checkpoint_peak_hash: peakHash,
       checkpoint_id: "checkpoint-uuid-ac005a",
+      sibling_hashes: [],
     });
     const server = createMcpServer(node, stubClient, kp, { checkpointStatusProvider: confirmedProvider });
     const [st, ct] = InMemoryTransport.createLinkedPair();
@@ -230,6 +231,7 @@ describe("PERSIST-017 adapter: AC-005b cello_get_sealed_receipt returns checkpoi
       leaf_index: 7,
       checkpoint_peak_hash: peakHash,
       checkpoint_id: "checkpoint-uuid-ac005b",
+      sibling_hashes: [],
     });
     const server = createMcpServer(node, stubClient, kp, { checkpointStatusProvider: confirmedProvider });
     const [st, ct] = InMemoryTransport.createLinkedPair();

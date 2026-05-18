@@ -21,7 +21,7 @@
  */
 export type SealStagingStatus =
   | { status: "pending"; staged_at: number }          // staged_at: Unix epoch milliseconds
-  | { status: "confirmed"; leaf_index: number; checkpoint_peak_hash: string; checkpoint_id: string }
+  | { status: "confirmed"; leaf_index: number; checkpoint_peak_hash: string; checkpoint_id: string; sibling_hashes: string[] }
   | { status: "not_staged" };
 
 export interface CheckpointStatusProvider {

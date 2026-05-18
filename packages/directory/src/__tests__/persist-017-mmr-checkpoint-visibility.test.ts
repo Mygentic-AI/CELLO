@@ -78,13 +78,94 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi, test } from "vitest";
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID, createHash, randomBytes } from "node:crypto";
+import { Encoder } from "cbor-x";
 import pg from "pg";
+import { generateKeypair, buildMerkleTree, merkleRoot } from "@cello/crypto";
+import { buildStructure2, encodeStructure2 } from "@cello/protocol-types";
 import { MmrStore } from "../mmr-store.js";
 import { MmrCheckpointService } from "../mmr-checkpoint-service.js";
 import { verifyInclusionProof, PROOF_NOT_YET_AVAILABLE } from "../mmr.js";
+import { createDirectoryNode } from "../directory-node.js";
+import type { RelayAdapter } from "../directory-node.js";
 import type { Logger } from "@cello/interfaces";
 import { LocalJobScheduler } from "@cello/interfaces/stubs";
+
+const CBOR_ENC_TEST = new Encoder({ tagUint8Array: false });
+
+/** Build a minimal valid RelaySealData for processSeal() integration tests.
+ * The two participants each provide one SEAL ctrl leaf to satisfy verifySealLeaves.
+ * Single-key path (no primaryPubkey registered) so processSeal() completes synchronously.
+ */
+async function buildMinimalSealData(
+  keyA: ReturnType<typeof generateKeypair>,
+  keyB: ReturnType<typeof generateKeypair>,
+  sessionId: Uint8Array,
+): Promise<{ sealData: import("../directory-types.js").RelaySealData; sealedRootHex: string }> {
+  const pubkeyA = new Uint8Array(await keyA.getPublicKey());
+  const pubkeyB = new Uint8Array(await keyB.getPublicKey());
+
+  const contentHash = new Uint8Array(randomBytes(32));
+  const tsMs = Date.now();
+  const timestamp = tsMs > 0xffffffff ? BigInt(tsMs) : tsMs;
+  const timestamp1 = (tsMs + 1) > 0xffffffff ? BigInt(tsMs + 1) : tsMs + 1;
+  const timestamp2 = (tsMs + 2) > 0xffffffff ? BigInt(tsMs + 2) : tsMs + 2;
+
+  const s1Tbs = CBOR_ENC_TEST.encode([1, contentHash, pubkeyA, sessionId, 0, timestamp]);
+  const s1Sig = new Uint8Array(await keyA.sign(s1Tbs));
+  const s1TbsB = CBOR_ENC_TEST.encode([1, contentHash, pubkeyB, sessionId, 1, timestamp1]);
+  const s1SigB = new Uint8Array(await keyB.sign(s1TbsB));
+
+  const genesisPrevRoot = new Uint8Array(32);
+  const s2ResultA = buildStructure2(1, pubkeyA, contentHash, s1Sig, genesisPrevRoot);
+  if (!s2ResultA.ok) throw new Error("buildStructure2 failed A");
+  const s2CborA = encodeStructure2(s2ResultA.structure2);
+
+  const prevRoot2 = merkleRoot(buildMerkleTree([{ kind: "msg", data: s2CborA }]));
+  const s2ResultB = buildStructure2(2, pubkeyB, contentHash, s1SigB, prevRoot2);
+  if (!s2ResultB.ok) throw new Error("buildStructure2 failed B");
+  const s2CborB = encodeStructure2(s2ResultB.structure2);
+
+  const s1TbsA2 = CBOR_ENC_TEST.encode([1, contentHash, pubkeyA, sessionId, 2, timestamp2]);
+  const s1SigA2 = new Uint8Array(await keyA.sign(s1TbsA2));
+  const prevRoot3 = merkleRoot(buildMerkleTree([
+    { kind: "msg", data: s2CborA },
+    { kind: "ctrl", data: s2CborB },
+  ]));
+  const s2ResultA2 = buildStructure2(3, pubkeyA, contentHash, s1SigA2, prevRoot3);
+  if (!s2ResultA2.ok) throw new Error("buildStructure2 failed A2");
+  const s2CborA2 = encodeStructure2(s2ResultA2.structure2);
+
+  const finalRoot = merkleRoot(buildMerkleTree([
+    { kind: "msg", data: s2CborA },
+    { kind: "ctrl", data: s2CborB },
+    { kind: "ctrl", data: s2CborA2 },
+  ]));
+
+  return {
+    sealData: {
+      leaves: [
+        { kind: "msg", s2: s2ResultA.structure2, structure1_cbor: s1Tbs },
+        { kind: "ctrl", s2: s2ResultB.structure2, structure1_cbor: s1TbsB },
+        { kind: "ctrl", s2: s2ResultA2.structure2, structure1_cbor: s1TbsA2 },
+      ],
+      seq_count: 3,
+      merkle_root: finalRoot,
+    },
+    sealedRootHex: Buffer.from(finalRoot).toString("hex"),
+  };
+}
+
+/** Minimal in-memory relay stub sufficient for createDirectoryNode. */
+function makeStubRelay(): RelayAdapter {
+  return {
+    async recordAssignment() { return { ok: true as const }; },
+    async discardSession() {},
+    async submitForSeal() { return { ok: false as const, reason: "not_used_in_test" }; },
+    async confirmSeal() {},
+    async rejectSeal() {},
+  };
+}
 
 /** Tolerance for comparing timestamps across clock boundaries (DB vs local clock). */
 const CLOCK_SKEW_TOLERANCE_MS = 1000;
@@ -532,6 +613,74 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-003 pending inclusion p
   });
 });
 
+// ─── AC-001/002/003 via CelloDirectoryNode.processSeal() real code path ─────────
+// Exercises the production seal path: CelloDirectoryNode.processSeal() → appendSeal().
+// The SealNotarization handler (processSeal) must call mmrStore.appendSeal() after
+// recordNotarization — verified by asserting getSealStagingStatus returns pending
+// and mmr.checkpoint.pending is emitted (confirming the directory's handler was invoked).
+
+describeIntegrationIsolated("PERSIST-017 integration: AC-001 via processSeal() — real directory seal path", () => {
+  it("AC-001/002/003 via processSeal: CelloDirectoryNode.processSeal() calls mmrStore.appendSeal(); getSealStagingStatus returns pending", async () => {
+    const logger = createMockLogger();
+    const mmrStore = new MmrStore(servicePool, logger);
+
+    // Generate directory key and participant keys
+    const dirKey = generateKeypair();
+    const keyA = generateKeypair();
+    const keyB = generateKeypair();
+
+    // Create a CelloDirectoryNode with the real MmrStore injected
+    const dirNode = await createDirectoryNode({
+      keyProvider: dirKey,
+      relay: makeStubRelay(),
+      relayEndpoint: { peer_id: "12D3KooWRelay017Test", multiaddrs: ["/ip4/127.0.0.1/tcp/9997"] },
+      mmrStore,
+    });
+
+    // Build a valid session ID and seal data
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sessionIdHex = Buffer.from(sessionId).toString("hex");
+
+    const { sealData, sealedRootHex } = await buildMinimalSealData(keyA, keyB, sessionId);
+
+    // Call processSeal() directly — this is the production code path the relay invokes.
+    // No primaryPubkey is registered, so the single-key path is taken synchronously.
+    const sealResult = await dirNode.directory.processSeal(sessionId, sealData);
+    expect(sealResult.ok).toBe(true);
+
+    await dirNode.stop();
+
+    // Allow the fire-and-forget appendSeal promise to resolve
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    // AC-001: mmr.checkpoint.pending must have been logged by the directory (via MmrStore.appendSeal)
+    const pendingCall = findLogCall(logger.info, "mmr.checkpoint.pending");
+    expect(pendingCall).toBeDefined();
+    expect(pendingCall![1]).toMatchObject({
+      sessionId: sessionIdHex,
+      sealedRoot: sealedRootHex,
+    });
+    expect(typeof pendingCall![1].stagedAt).toBe("number");
+    expect(pendingCall![1].correlationId).toBe(sessionIdHex);
+
+    // AC-002: getSealStagingStatus returns pending with real staged_at from DB
+    const status = await mmrStore.getSealStagingStatus(sessionIdHex);
+    expect(status.status).toBe("pending");
+    if (status.status === "pending") {
+      expect(typeof status.staged_at).toBe("number");
+      expect(status.staged_at).toBeGreaterThan(0);
+    }
+
+    // AC-003: staging row exists in conversation_seal_staging
+    const stagingRow = await servicePool.query(
+      "SELECT session_id, seal_merkle_root FROM conversation_seal_staging WHERE session_id = $1",
+      [sessionIdHex],
+    );
+    expect(stagingRow.rows).toHaveLength(1);
+    expect(stagingRow.rows[0]!.seal_merkle_root).toBe(sealedRootHex);
+  }, 15_000);
+});
+
 // ─── SI-002: getInclusionProof never returns proof for unconfirmed session ───
 
 describeIntegrationIsolated("PERSIST-017 integration: SI-002 proof-eligibility resolved against committed DB", () => {
@@ -620,6 +769,8 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-005 confirmed status af
       peakHash,
     });
     expect(typeof sessionCall![1].leafIndex).toBe("number");
+    // Medium-3: verify the correlationId VALUE flows end-to-end from seal time to checkpoint event
+    expect(sessionCall![1].correlationId).toBe(correlationId);
 
     // Full inclusion proof must now be available
     const proof = await store.getInclusionProof(sessionId, logger);
@@ -673,6 +824,8 @@ describeIntegrationIsolated("PERSIST-017 integration: AC-006 pending to confirme
     expect(checkpointedCalls.length).toBeGreaterThanOrEqual(1);
     const sessionCheckpointCall = checkpointedCalls.find((c) => c[1].sessionId === sessionId);
     expect(sessionCheckpointCall).toBeDefined();
+    // Medium-3: verify the correlationId VALUE flows end-to-end from seal time to checkpoint event
+    expect(sessionCheckpointCall![1].correlationId).toBe(correlationId);
 
     // Poll 2: must be confirmed
     const confirmedStatus = await store.getSealStagingStatus(sessionId);

@@ -408,6 +408,7 @@ export function createMcpServer(
             leaf_index: stagingStatus.leaf_index,
             checkpoint_peak_hash: stagingStatus.checkpoint_peak_hash,
             checkpoint_id: stagingStatus.checkpoint_id,
+            sibling_hashes: stagingStatus.sibling_hashes,
           });
         }
         // not_staged: session was never sealed — error distinguishes from 'pending'

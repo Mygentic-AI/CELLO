@@ -615,11 +615,16 @@ export class MmrStore implements CheckpointStatusProvider {
 
     if (confirmedRes.rows.length > 0) {
       const row = confirmedRes.rows[0]!;
+      // Compute sibling_hashes via the inclusion proof (required by AC-004).
+      // getInclusionProof uses the same committed checkpoints table row — SI-002 is not relaxed.
+      const proof = await this.getInclusionProof(sessionId, this.#logger);
+      const siblingHashes = proof !== PROOF_NOT_YET_AVAILABLE ? proof.sibling_hashes : [];
       return {
         status: "confirmed",
         leaf_index: row.leaf_index,
         checkpoint_peak_hash: row.peak_hash,
         checkpoint_id: row.checkpoint_id,
+        sibling_hashes: siblingHashes,
       };
     }
 

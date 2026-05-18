@@ -167,6 +167,7 @@ import {
   encodeFrostDkgRound3Response,
 } from "./frost-dkg-frames.js";
 import { protocolLog, truncId, truncHex } from "./protocol-log.js";
+import type { MmrStore } from "./mmr-store.js";
 
 export const SIGNALING_PROTOCOL_ID = "/cello/signaling/1.0.0";
 const AUTH_DOMAIN = "CELLO-DIR-AUTH-v1";
@@ -243,6 +244,13 @@ export interface DirectoryNodeOptions {
   logger?: Logger;
   /** PERSIST-015: seconds after last activity before unilateral seal is allowed. Default: 600. */
   deliveryGraceSeconds?: number;
+  /**
+   * PERSIST-017: MmrStore for appending sealed sessions to the MMR staging table.
+   * When provided, appendSeal() is called after every successful SealNotarization
+   * (both single-key and FROST paths). Fire-and-forget with catch — MMR staging
+   * failure does not block session closure.
+   */
+  mmrStore?: MmrStore;
 }
 
 export class CelloDirectoryNode {
@@ -255,6 +263,8 @@ export class CelloDirectoryNode {
   readonly #clock: TimeSource;
   readonly #frostHandler: FrostDirectoryHandler;
   readonly #logger: Logger | undefined;
+  // PERSIST-017: MmrStore for appending seals to the MMR staging table after notarization
+  readonly #mmrStore: MmrStore | undefined;
 
   // REG-001: forceDkgFailure — test injection for below-threshold DKG simulation
   readonly #forceDkgFailure: boolean;
@@ -372,6 +382,7 @@ export class CelloDirectoryNode {
     this.#requireConnectionGate = opts.requireConnectionGate ?? false;
     this.#packageCborInterceptor = opts.packageCborInterceptor;
     this.#deliveryGraceSeconds = opts.deliveryGraceSeconds ?? 600;
+    this.#mmrStore = opts.mmrStore;
   }
 
   async start(): Promise<void> {
@@ -1869,6 +1880,16 @@ export class CelloDirectoryNode {
         frost_signature: notarizationSig,
       };
       this.#store.recordNotarization(notarization);
+      // PERSIST-017: stage sealed_root in MMR staging table (fire-and-forget).
+      // MMR staging failure must not block session closure — the seal is already notarized.
+      // correlationId is sessionIdHex (consistent with the pattern used in recordNotarization call sites).
+      if (this.#mmrStore) {
+        const sealedRootHex = Buffer.from(recomputedRoot).toString("hex");
+        this.#mmrStore.appendSeal(sessionIdHex, sealedRootHex, sessionIdHex).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.#logger?.warn("mmr.staging.failed", { sessionId: sessionIdHex, reason: msg });
+        });
+      }
       // OBS-001 AC-009: sealed (single-key path)
       protocolLog("SEAL", `Sealed — session ${truncHex(sessionIdHex)}, root ${truncHex(Buffer.from(recomputedRoot).toString("hex"))}`);
       const sealedEvent: SessionSealed = {
@@ -1980,6 +2001,17 @@ export class CelloDirectoryNode {
       frost_signature: new Uint8Array(frame.frost_signature),
     };
     this.#store.recordNotarization(notarization);
+
+    // PERSIST-017: stage sealed_root in MMR staging table (fire-and-forget).
+    // MMR staging failure must not block session closure — the seal is already notarized.
+    // correlationId is sessionIdHex (consistent with the pattern used in recordNotarization call sites).
+    if (this.#mmrStore) {
+      const sealedRootHex = Buffer.from(pending.sealedRoot).toString("hex");
+      this.#mmrStore.appendSeal(sessionIdHex, sealedRootHex, sessionIdHex).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.#logger?.warn("mmr.staging.failed", { sessionId: sessionIdHex, reason: msg });
+      });
+    }
 
     // Confirm relay (destroys relay per-session state — AC-008)
     void this.#relay.confirmSeal(frame.session_id);
@@ -2237,6 +2269,11 @@ export interface CreateDirectoryNodeOptions {
    * Default: 600 (10 minutes).
    */
   deliveryGraceSeconds?: number;
+  /**
+   * PERSIST-017: MmrStore for appending sealed sessions to the MMR staging table.
+   * When provided, appendSeal() is called after every successful SealNotarization.
+   */
+  mmrStore?: MmrStore;
 }
 
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{
@@ -2268,6 +2305,7 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     packageCborInterceptor: opts.packageCborInterceptor,
     logger: opts.logger,
     deliveryGraceSeconds: opts.deliveryGraceSeconds,
+    mmrStore: opts.mmrStore,
   });
   await directory.start();
 

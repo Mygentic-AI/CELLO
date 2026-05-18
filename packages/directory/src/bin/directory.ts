@@ -180,11 +180,13 @@ if (env === "local" && pgPool) {
 }
 
 // ─── PERSIST-017: MmrStore + MmrCheckpointService instantiation ─────────────
-// mmrStore is used for both startup recovery (DB-001) and the mmr_checkpoint
-// job handler registered with the scheduler below.
+// mmrStore is hoisted so it can be passed to createDirectoryNode below.
+// It is used for: startup recovery (DB-001), the mmr_checkpoint job handler,
+// and appendSeal() calls inside CelloDirectoryNode's seal handlers.
+let mmrStore: MmrStore | undefined;
 let mmrCheckpointService: MmrCheckpointService | undefined;
 if (env === "local" && pgPool) {
-  const mmrStore = new MmrStore(pgPool, logger);
+  mmrStore = new MmrStore(pgPool, logger);
   mmrCheckpointService = new MmrCheckpointService(mmrStore, pgPool, logger);
   logger.info("adapter.initialised", { adapterName: "MmrCheckpointService", implementation: "MmrCheckpointService", env });
 
@@ -327,6 +329,7 @@ try {
     store,
     shareStore,
     transportPrivateKey,
+    mmrStore,
   });
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
