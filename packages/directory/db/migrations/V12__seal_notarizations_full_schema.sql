@@ -34,6 +34,11 @@
 --   - PERSIST-004 hash chain protocol
 --   - PERSIST-007 conversation_seals table
 
+-- Note: PERSIST-018 story YAML spec says "session_id BYTEA PRIMARY KEY" and "chain_hash BYTEA NOT NULL"
+-- but the implementation uses id BIGSERIAL as PK (required for ORDER BY id in hash chain verification)
+-- and chain_hash TEXT (consistent with all other hash-chained tables). The story YAML has a minor
+-- spec error; the implementation is correct.
+
 ALTER TABLE seal_notarizations ADD COLUMN IF NOT EXISTS session_id           BYTEA  NOT NULL DEFAULT '\x00';
 ALTER TABLE seal_notarizations ADD COLUMN IF NOT EXISTS sealed_root          BYTEA  NOT NULL DEFAULT '\x00';
 ALTER TABLE seal_notarizations ADD COLUMN IF NOT EXISTS participant_a_pubkey BYTEA  NOT NULL DEFAULT '\x00';

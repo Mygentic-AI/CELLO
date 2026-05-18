@@ -418,11 +418,12 @@ describeIntegration("PERSIST-018 AC-006: getNotarization for absent session_id r
 // ─── AC-007: notarization.recorded logged on success ─────────────────────────
 
 describeIntegration("PERSIST-018 AC-007: notarization.recorded logged at INFO with correlationId", () => {
-  // Store-layer verification: confirms the store logs correlationId as supplied.
-  // Full end-to-end correlation (verifying the correlationId originates from frost.ceremony.*
-  // events in directory-node.ts) spans PERSIST-007's integration scope. Finding 1 fixes ensure
-  // directory-node.ts threads sessionIdHex as correlationId to both seal paths.
-  it("AC-007: notarization.recorded is logged at INFO with { sessionId, sealedRoot, correlationId }; correlationId matches the supplied value", async () => {
+  // Store-layer verification: confirms the store logs correlationId as supplied and that
+  // the EXACT value is preserved. Full end-to-end correlation (verifying the correlationId
+  // originates from frost.ceremony.* events in directory-node.ts) is at the directory-node
+  // integration level — that scope spans PERSIST-007. Here we verify the store threads the
+  // exact correlationId value the caller provides.
+  it("AC-007: notarization.recorded is logged at INFO with { sessionId, sealedRoot, correlationId }; correlationId matches the exact supplied value", async () => {
     const logger: Logger = {
       debug: vi.fn(), info: vi.fn(), warn: vi.fn(),
       error: vi.fn() as Logger["error"],
@@ -437,14 +438,16 @@ describeIntegration("PERSIST-018 AC-007: notarization.recorded logged at INFO wi
 
     await store.recordNotarization(notarization, { correlationId });
 
-    expect(logger.info).toHaveBeenCalledWith(
-      "notarization.recorded",
-      expect.objectContaining({
-        sessionId: sessionIdHex,
-        sealedRoot: sealedRootHex,
-        correlationId,
-      }),
-    );
+    // Find the specific notarization.recorded call
+    const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls as [string, Record<string, unknown>][];
+    const recordedCall = infoCalls.find(([event]) => event === "notarization.recorded")?.[1];
+    expect(recordedCall).toBeDefined();
+
+    // Exact value assertions — not just objectContaining — so a wrong value is caught
+    expect(recordedCall!["sessionId"]).toBe(sessionIdHex);
+    expect(recordedCall!["sealedRoot"]).toBe(sealedRootHex);
+    // AC-007: correlationId matches the exact value minted at the start of the seal flow
+    expect(recordedCall!["correlationId"]).toBe(correlationId);
 
     await pool.end();
   });
@@ -480,14 +483,14 @@ describeIntegration("PERSIST-018 AC-008: notarization.write.failed logged on bot
     // notarization object's frost_signature field is preserved (not mutated/destroyed)
     expect(Buffer.from(notarization.frost_signature).toString("hex")).toBe(originalFrostSigHex);
 
-    // notarization.write.failed must be logged at ERROR with attempt: 1 and attempt: 2
+    // notarization.write.failed must be logged at ERROR with { sessionId, reason, attempt }
     expect(logger.error).toHaveBeenCalledWith(
       "notarization.write.failed",
-      expect.objectContaining({ sessionId: sessionIdHex, attempt: 1 }),
+      expect.objectContaining({ sessionId: sessionIdHex, reason: expect.any(String), attempt: 1 }),
     );
     expect(logger.error).toHaveBeenCalledWith(
       "notarization.write.failed",
-      expect.objectContaining({ sessionId: sessionIdHex, attempt: 2 }),
+      expect.objectContaining({ sessionId: sessionIdHex, reason: expect.any(String), attempt: 2 }),
     );
   });
 });
@@ -537,21 +540,31 @@ describeIntegration("PERSIST-018 SI-001: chain_hash is always computed server-si
 // ─── SI-002: atomic transaction — both writes roll back on connection loss ─────
 
 describeIntegration("PERSIST-018 SI-002: atomic transaction with conversation_seals", () => {
-  it("SI-002: connection loss after conversation_seals INSERT but before seal_notarizations INSERT rolls back both", async () => {
+  it("SI-002: opts.client path — both conversation_seals and seal_notarizations roll back atomically when the caller's transaction is rolled back", async () => {
+    // This test exercises the opts.client transactional code path in insertWithChain.
+    // When recordNotarization receives an external client, it participates in the caller's
+    // transaction rather than managing its own BEGIN/COMMIT/ROLLBACK. Rolling back the
+    // caller's transaction must roll back both the conversation_seals insert (done manually
+    // here to simulate directory-node.ts) and the seal_notarizations insert (done by
+    // recordNotarization via opts.client).
+    const logger: Logger = {
+      debug: vi.fn(), info: vi.fn(), warn: vi.fn(),
+      error: vi.fn() as Logger["error"],
+    };
     const pool = new pg.Pool({ connectionString: toServiceUrl(DATABASE_URL) });
+    const store = new PgDirectoryStore(pool, logger);
 
     const conversationId = `00000000-0000-0000-0000-${randomBytes(6).toString("hex")}`;
-    const sessionId = randomBytes(16);
-    const sessionIdHex = sessionId.toString("hex");
+    const notarization = makeSealNotarization();
+    const sessionIdHex = Buffer.from(notarization.session_id).toString("hex");
 
-    // Simulate: wrap both writes in a transaction, then force a rollback before COMMIT
-    // by using a client and calling end() before COMMIT.
+    // Acquire a dedicated client to control the transaction lifecycle
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
 
-      // First write: conversation_seals (chain_hash required — use a placeholder; this
-      // will be rolled back so the value doesn't matter for chain integrity)
+      // First write: conversation_seals — simulates directory-node.ts seal handler step 1.
+      // chain_hash placeholder value is fine — this row will be rolled back.
       await client.query(
         `INSERT INTO conversation_seals
            (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
@@ -559,14 +572,18 @@ describeIntegration("PERSIST-018 SI-002: atomic transaction with conversation_se
         [conversationId, "a".repeat(64)],
       );
 
-      // Simulate connection loss before the second write by releasing without COMMIT
-      // (equivalent to a broken connection — the transaction rolls back)
+      // Second write: seal_notarizations — passing opts.client so recordNotarization
+      // joins the caller's open transaction. This exercises the externalClient branch in
+      // insertWithChain (ownsTransaction=false → no internal BEGIN/COMMIT/ROLLBACK).
+      await store.recordNotarization(notarization, { client, correlationId: "si002-corr" });
+
+      // Simulate connection loss before COMMIT — rolls back both INSERTs atomically
       await client.query("ROLLBACK");
     } finally {
       client.release();
     }
 
-    // Both tables should have 0 rows for these IDs
+    // Both tables must have 0 rows — the rollback covered the entire transaction
     const sealCount = await superPool.query<{ count: string }>(
       `SELECT COUNT(*) AS count FROM conversation_seals WHERE conversation_id = $1`,
       [conversationId],
