@@ -69,65 +69,105 @@ behavior:
 acceptance_criteria:
   - id: AC-001
     given: "Flyway migrations have been applied to a local Postgres container
-      (CELLO_ENV=local)"
+      (CELLO_ENV=local); the test opens a live TCP connection to localhost:5432
+      via the real pg package (no mock or in-memory substitute); if CELLO_ENV=local
+      and pg.connect() fails, the test fails — not skips"
     when: "information_schema.tables is queried"
     then: "seal_notarizations exists in schema public with all required
-      columns; relrowsecurity=true; exactly two policies for cello_service
-      (insert_only, select_all); no GRANT UPDATE or DELETE for cello_service"
+      columns; relrowsecurity=true confirmed via pg_catalog.pg_class;
+      exactly two policies visible to cello_service (insert_only, select_all)
+      confirmed via pg_catalog.pg_policy WHERE tablename='seal_notarizations'
+      (query issued after SET ROLE cello_service); cello_service has no
+      UPDATE or DELETE privilege confirmed via information_schema.role_table_grants"
     test_type: integration
     component_under_test: directory
 
   - id: AC-002
-    given: "The seal_notarizations table exists and is empty (CELLO_ENV=local)"
+    given: "The seal_notarizations table exists and is empty (CELLO_ENV=local);
+      the test uses a real Postgres instance — a stub returning a canned row
+      does NOT satisfy this AC"
     when: "recordNotarization() is called with a valid SealNotarization"
     then: "the row is persisted; getNotarization(sessionId) returns the
       same SealNotarization with matching session_id, sealed_root,
       participant_a_pubkey, participant_b_pubkey, close_timestamp, and
-      frost_signature; getNotarization() no longer returns undefined"
+      frost_signature; chain_hash is present, non-null, and equals the
+      server-computed value — verified by the test recomputing the expected
+      chain_hash from the record contents and the genesis chain_hash and
+      asserting equality; getNotarization() no longer returns undefined;
+      the INSERT and SELECT both executed against a live connection"
     test_type: integration
     component_under_test: directory
 
   - id: AC-003
-    given: "A SealNotarization has been persisted"
+    given: "A SealNotarization has been persisted in a real Postgres instance
+      (CELLO_ENV=local)"
     when: "recordNotarization() is called again with the same session_id"
     then: "the INSERT fails with a unique constraint violation; the existing
       row is unchanged; the directory logs notarization.duplicate.rejected
-      at WARN with { sessionId } — a session can only be sealed once"
+      at WARN with { sessionId } — a session can only be sealed once;
+      verified by asserting the row count in seal_notarizations remains 1"
     test_type: integration
     component_under_test: directory
 
   - id: AC-004
-    given: "A row has been inserted into seal_notarizations by cello_service"
+    given: "A row has been inserted into seal_notarizations by cello_service
+      in a real Postgres instance (CELLO_ENV=local)"
     when: "cello_service attempts UPDATE seal_notarizations"
     then: "PostgreSQL rejects the operation with 'ERROR: permission denied
-      for table seal_notarizations'; the row is unchanged"
+      for table seal_notarizations'; the row is unchanged; the rejection
+      originates from the RLS policy, not from application-layer guarding"
     test_type: integration
     component_under_test: directory
 
   - id: AC-005
-    given: "Two rows exist in seal_notarizations"
-    when: "the chain verification pass (PERSIST-004) is run against
-      seal_notarizations"
+    given: "Two rows exist in seal_notarizations in a real Postgres instance
+      (CELLO_ENV=local)"
+    when: "the chain verifier fetches all rows from seal_notarizations via
+      a live SELECT issued to the real Postgres instance (ordered by ctid)
+      and recomputes each chain_hash from scratch"
     then: "the verifier reports 0 chain breaks — the chain_hash column
-      extends correctly from the genesis value through both rows"
+      extends correctly from the genesis value through both rows;
+      the verifier did not operate on cached rows — the fresh SELECT is
+      itself the evidence (no prior in-memory state exists since the test
+      instantiates a fresh verifier)"
     test_type: integration
     component_under_test: directory
 
   - id: AC-006
     given: "getNotarization() is called for a session_id that has no
-      corresponding row in seal_notarizations"
+      corresponding row in seal_notarizations (CELLO_ENV=local, real Postgres)"
     when: "the query executes"
     then: "getNotarization() returns undefined — it does not throw and
       does not log an error; absence of a notarization is not itself an
-      error condition"
+      error condition; verified by asserting the SELECT was issued to
+      the real database (not short-circuited)"
     test_type: integration
     component_under_test: directory
 
   - id: AC-007
-    given: "recordNotarization() is called"
+    given: "recordNotarization() is called against a real Postgres instance
+      (CELLO_ENV=local)"
     when: "the INSERT commits successfully"
     then: "notarization.recorded is logged at INFO with
-      { sessionId, sealedRoot, correlationId }"
+      { sessionId, sealedRoot, correlationId }; correlationId is the
+      seal-ceremony correlationId minted at seal initiation — not a freshly
+      generated ID; verified by asserting the logged correlationId matches
+      the correlationId used in the preceding frost.ceremony.* events for
+      the same sessionId"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "recordNotarization() is called but the Postgres connection fails
+      transiently on the first attempt (CELLO_ENV=local; simulated by closing
+      the connection pool before the first INSERT)"
+    when: "the retry fires on the second attempt and also fails"
+    then: "notarization.write.failed is logged at ERROR with
+      { sessionId, reason, attempt: 1 } after the first failure and
+      { sessionId, reason, attempt: 2 } after the retry failure; the alarm
+      fires to ops-critical; the in-memory FROST signature is not lost —
+      the directory returns an error to the caller rather than discarding
+      the signature silently"
     test_type: integration
     component_under_test: directory
 
@@ -141,18 +181,32 @@ security_invariants:
     adversarial_condition: "even when an API caller includes frost_signature
       or chain_hash fields in a request payload — the directory service
       ignores both and computes them internally"
-    test_type: unit
+    test_assertion: "A unit test passes a SealNotarization DTO with a crafted
+      frost_signature (all-zeros bytes) and a crafted chain_hash to the
+      recordNotarization() call site; the test then reads the persisted row
+      from the live database (CELLO_ENV=local) and asserts that the stored
+      frost_signature matches the FROST ceremony output value (not the
+      crafted all-zeros value) and chain_hash matches the server-computed value"
+    test_type: integration
     component_under_test: directory
 
   - id: SI-002
     statement: "A session's SealNotarization shall be written atomically with
-      the FROST ceremony completion — it shall not be possible to have a
-      sealed session with no corresponding notarization row, nor a notarization
-      row whose session_id does not correspond to a sealed session"
-    adversarial_condition: "even when the directory crashes between completing
-      the FROST ceremony and committing the notarization row — on restart the
-      directory detects the orphaned seal and re-attempts the notarization
-      write before resuming normal operations"
+      the FROST ceremony completion — the recordNotarization() call is issued
+      within the same transaction scope as the conversation_seals write
+      (PERSIST-007); it shall not be possible to have a confirmed sealed session
+      row with no corresponding notarization row due to a partial write"
+    adversarial_condition: "even when the Postgres connection is lost after
+      the conversation_seals row is written but before the seal_notarizations
+      INSERT commits — the outer transaction rolls back both writes, leaving
+      no orphaned seal; crash recovery and orphan detection are deferred to
+      a future milestone and are out of scope for PERSIST-018"
+    test_assertion: "An integration test wraps recordNotarization() and the
+      conversation_seals write in a transaction, then simulates connection loss
+      (pg.Client.end() before COMMIT) after the conversation_seals INSERT but
+      before the seal_notarizations INSERT; the test reconnects and asserts that
+      conversation_seals has 0 rows for that sessionId AND seal_notarizations
+      has 0 rows for that sessionId — both writes were rolled back atomically"
     test_type: integration
     component_under_test: directory
 
@@ -188,6 +242,12 @@ degraded_behavior:
 
 # ─── Observability ──────────────────────────────────────────
 observability:
+  taxonomy_additions:
+    - "notarization.recorded — added in PERSIST-018"
+    - "notarization.write.failed — added in PERSIST-018"
+    - "notarization.duplicate.rejected — added in PERSIST-018"
+    # db.chain.break.detected is defined in PERSIST-004 observability section;
+    # PERSIST-018 references it in SI-003 but does not own it.
   events:
     - name: notarization.recorded
       level: info
@@ -229,5 +289,6 @@ references:
     - CELLO-PERSIST-002
     - CELLO-PERSIST-003
     - CELLO-PERSIST-004
+    - CELLO-PERSIST-007  # conversation_seals table — SI-002 atomic write spans both tables
   blocked_by:
     - CELLO-PERSIST-016

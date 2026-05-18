@@ -85,7 +85,10 @@ behavior:
       ORDER BY id ASC, DELETE those rows in the same transaction, and deliver
       them to B via dequeuePendingConnectionRequests()"
 
-  - trigger: "When the directory's TTL sweep runs"
+  - trigger: "When the directory's TTL sweep runs (registered as a JobScheduler
+      handler in the directory composition root, running on a configurable
+      schedule, default every 5 minutes, consistent with the JobScheduler
+      pattern established in PERSIST-008)"
     action: "the directory shall DELETE all rows from pending_connection_requests
       WHERE created_at < now() - INTERVAL '24 hours' and log
       queue.pending_connection_requests.expired at INFO with { purgedCount }"
@@ -94,80 +97,106 @@ behavior:
 acceptance_criteria:
   - id: AC-001
     given: "Flyway migrations have been applied to a local Postgres container
-      (CELLO_ENV=local)"
+      (CELLO_ENV=local); the test opens a live TCP connection to localhost:5432
+      via the real pg package (no mock or in-memory substitute); if CELLO_ENV=local
+      and pg.connect() fails, the test fails — not skips"
     when: "information_schema.tables is queried"
     then: "notification_queue exists in schema public with all required
-      columns and index on pubkey_hex; relrowsecurity=true; policies for
-      cello_service include insert_only, select_all, and delete_own;
-      no GRANT UPDATE for cello_service; pending_connection_requests exists
-      with the same policy structure and index on target_pubkey"
+      columns and index on pubkey_hex; relrowsecurity=true confirmed via
+      pg_catalog.pg_class; policies for cello_service include insert_only,
+      select_all, and delete_by_pubkey (WHERE pubkey_hex = current_setting
+      ('app.current_pubkey')) confirmed via pg_catalog.pg_policy (query
+      issued after SET ROLE cello_service); cello_service has no UPDATE
+      privilege confirmed via information_schema.role_table_grants;
+      pending_connection_requests exists with the same policy structure and
+      index on target_pubkey"
     test_type: integration
     component_under_test: directory
 
   - id: AC-002
     given: "An agent is offline; the directory calls enqueueNotification()
       with a ConnectionEstablished DirectoryNotification for that agent
-      (CELLO_ENV=local)"
+      (CELLO_ENV=local, real Postgres — a stub returning a canned array
+      does NOT satisfy this AC)"
     when: "the agent later calls drainNotifications(pubkeyHex)"
     then: "drainNotifications() returns the ConnectionEstablished notification;
-      the row is deleted from notification_queue; a subsequent call to
-      drainNotifications() for the same agent returns an empty array"
+      the row is deleted from notification_queue (verified by asserting row count
+      is 0 after drain); a subsequent call to drainNotifications() for the same
+      agent returns an empty array"
     test_type: integration
     component_under_test: directory
 
   - id: AC-003
     given: "Three notifications have been enqueued for agent A in order:
-      ConnectionEstablished, SessionSealed, SealVerified (CELLO_ENV=local)"
+      ConnectionEstablished, SessionSealed, SealVerified (CELLO_ENV=local,
+      real Postgres)"
     when: "drainNotifications(agentAPubkey) is called"
     then: "the returned array contains all three notifications in insertion
-      order (FIFO); all three rows are deleted in the same database transaction
-      as the SELECT — no notification is double-delivered if two drain calls
-      race"
+      order (FIFO — ordered by id ASC); all three rows are deleted in the same
+      database transaction as the SELECT (verified by asserting notification_queue
+      row count is 0 after drain); no notification is double-delivered if two
+      drain calls race — the atomicity guarantee comes from the database
+      transaction, not from application-layer locking; the concurrent-access
+      guarantee is verified by the SI-001 integration test — see SI-001"
     test_type: integration
     component_under_test: directory
 
   - id: AC-004
     given: "Agent B is offline; Agent A calls queuePendingConnectionRequest()
-      targeting B (CELLO_ENV=local)"
+      targeting B (CELLO_ENV=local, real Postgres)"
     when: "B calls dequeuePendingConnectionRequests(bPubkey)"
     then: "dequeuePendingConnectionRequests() returns the queued request;
-      the row is deleted from pending_connection_requests; a subsequent call
-      returns an empty array"
+      the row is deleted from pending_connection_requests (verified by asserting
+      row count is 0 after dequeue); a subsequent call returns an empty array;
+      queue.pending_connection_requests.drained is logged at INFO with
+      { targetPubkey, count: 1, correlationId }; verified by asserting the
+      INSERT and DELETE both executed against the live database — a stub
+      returning a hardcoded request does NOT satisfy this AC"
     test_type: integration
     component_under_test: directory
 
   - id: AC-005
     given: "A pending_connection_requests row has created_at older than 24
-      hours (CELLO_ENV=local)"
+      hours (CELLO_ENV=local, real Postgres — the row is inserted with a
+      backdated created_at to simulate expiry)"
     when: "dequeuePendingConnectionRequests() is called for the target agent"
     then: "the expired row is NOT returned — stale connection requests are
-      not delivered; the row is deleted by the query's age filter; a fresh
-      row (created_at < 24h) for the same agent IS returned"
+      not delivered; the row is filtered by the query's age filter (not deleted
+      by this call); the expired row remains in pending_connection_requests
+      after the call (verified by asserting its row count is 1 before the call
+      and 1 after — it is not deleted by dequeuePendingConnectionRequests());
+      it will be removed only by the TTL sweep (AC-006); a fresh row
+      (created_at within 24h) for the same agent IS returned and its row is
+      deleted in the same transaction"
     test_type: integration
     component_under_test: directory
 
   - id: AC-006
     given: "pending_connection_requests contains rows older than 24 hours
-      (CELLO_ENV=local)"
-    when: "the TTL sweep runs"
-    then: "all rows with created_at < now() - 24h are deleted;
-      queue.pending_connection_requests.expired is logged at INFO with
-      { purgedCount } equal to the number of deleted rows; rows newer than
-      24h are not deleted"
+      (CELLO_ENV=local, real Postgres — rows inserted with backdated created_at)"
+    when: "the TTL sweep runs (triggered directly via the TTL sweep entry point)"
+    then: "all rows with created_at < now() - 24h are deleted (verified by
+      asserting those rows no longer exist in the database); rows newer than
+      24h are not deleted; queue.pending_connection_requests.expired is logged
+      at INFO with { purgedCount } equal to the number of deleted rows; see AC-003
+      for the concurrent-access atomicity guarantee (SI-001)"
     test_type: integration
     component_under_test: directory
 
   - id: AC-007
-    given: "The cello_service role is connected to cello_dev"
+    given: "The cello_service role is connected to cello_dev (CELLO_ENV=local,
+      real Postgres)"
     when: "cello_service attempts UPDATE notification_queue"
     then: "PostgreSQL rejects the operation with 'ERROR: permission denied
       for table notification_queue'; rows are unchanged — delivery queues
-      are INSERT-then-DELETE, never UPDATE"
+      are INSERT-then-DELETE, never UPDATE; the rejection originates from
+      the RLS policy, not from application-layer guarding"
     test_type: integration
     component_under_test: directory
 
   - id: AC-008
-    given: "enqueueNotification() is called"
+    given: "enqueueNotification() is called against a real Postgres instance
+      (CELLO_ENV=local)"
     when: "the INSERT commits successfully"
     then: "notification.queued is logged at INFO with
       { pubkeyHex, notificationType, correlationId }"
@@ -175,7 +204,8 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-009
-    given: "drainNotifications() is called and returns one or more items"
+    given: "drainNotifications() is called and returns one or more items
+      from a real Postgres instance (CELLO_ENV=local)"
     when: "the SELECT and DELETE commit successfully"
     then: "notification.drained is logged at INFO with
       { pubkeyHex, count, correlationId }"
@@ -204,20 +234,28 @@ security_invariants:
       is a blocking violation"
     adversarial_condition: "even when a DirectoryNotification type is extended
       with new fields — payload serialization must be reviewed for key material"
+    test_assertion: "A unit test serializes every DirectoryNotification variant
+      (ConnectionEstablished, SessionSealed, SessionSealRejected, SealVerified,
+      SessionAbandoned) and asserts that no serialized field name or value
+      matches the patterns /k_local|k_server|frost_share|private_key|secret/i;
+      the test fails if a new variant is added without passing this assertion"
     test_type: unit
     component_under_test: directory
 
   - id: SI-003
     statement: "An agent shall only be able to drain notifications addressed
       to their own pubkey_hex — cross-agent notification access is impossible
-      under the RLS SELECT policy, which is WHERE pubkey_hex = $1 with $1
-      bound to the authenticated agent's pubkey; the RLS policy row filter
-      is the enforcement mechanism, not application-layer filtering"
+      under the RLS SELECT policy, which is WHERE pubkey_hex = current_setting
+      ('app.current_pubkey'); the RLS policy row filter is the enforcement
+      mechanism, not application-layer filtering"
     adversarial_condition: "even when application-layer filtering is bypassed —
       RLS prevents the SELECT from returning rows for any pubkey_hex other than
-      the authenticated agent's; verified by asserting that a cello_service
-      connection parameterized with agent A's pubkey cannot retrieve rows
-      inserted with agent B's pubkey"
+      the authenticated agent's; verified by a direct pg.query() connection as
+      cello_service that runs SET app.current_pubkey = agentA_pubkey, then
+      executes SELECT * FROM notification_queue without any application-layer
+      WHERE clause, and asserts 0 rows are returned when only agentB rows
+      exist — confirming the RLS WHERE filter is in the policy, not in
+      application code"
     test_type: integration
     component_under_test: directory
 
@@ -234,11 +272,13 @@ degraded_behavior:
       establishment) is not rolled back"
 
   - id: DB-002
-    condition: "While CELLO_ENV is not local or Postgres is unreachable when
-      integration tests run"
+    condition: "While CELLO_ENV is not local (test is running in a non-local
+      environment without Postgres)"
     fallback: "all integration ACs in this story skip (not fail) with a clear
-      skip message including which environment variable is missing or which
-      connection failed; the static analysis test (migration file existence,
+      skip message; if CELLO_ENV=local and the Postgres connection fails
+      (connection refused), the tests fail — not skip — because the developer
+      explicitly requested a live check (consistent with AC-001's explicit
+      failure guard); the static analysis test (migration file existence,
       PERSIST-016) still runs in all environments"
 
   - id: DB-003
@@ -264,6 +304,13 @@ observability:
       trigger: "drainNotifications() commits the SELECT+DELETE transaction
         and returns notifications to the caller"
       context_fields: [pubkeyHex, count, correlationId]
+      correlationId: true
+
+    - name: queue.pending_connection_requests.drained
+      level: info
+      trigger: "dequeuePendingConnectionRequests() commits the SELECT+DELETE
+        transaction and returns requests to the caller"
+      context_fields: [targetPubkey, count, correlationId]
       correlationId: true
 
     - name: queue.pending_connection_requests.expired
@@ -295,5 +342,9 @@ references:
   depends_on:
     - CELLO-PERSIST-001
     - CELLO-PERSIST-002
+    - CELLO-PERSIST-003  # RLS role setup — cello_service policies on both tables require the role created in PERSIST-003
+    - CELLO-PERSIST-008  # JobScheduler — TTL sweep is registered as a JobScheduler handler
+  fulfills:
+    - CELLO-PERSIST-015 AC-005  # PERSIST-015 AC-005 ("absent party receives SEAL_UNILATERAL on reconnect") is not fully satisfied until this story's notification_queue migration is implemented
   blocked_by:
     - CELLO-PERSIST-016

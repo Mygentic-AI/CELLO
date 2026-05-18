@@ -83,62 +83,94 @@ behavior:
 acceptance_criteria:
   - id: AC-001
     given: "Flyway migrations have been applied to a local Postgres container
-      (CELLO_ENV=local)"
+      (CELLO_ENV=local); the test opens a live TCP connection to localhost:5432
+      via the real pg package (no mock or in-memory substitute); if CELLO_ENV=local
+      and pg.connect() fails, the test fails — not skips"
     when: "information_schema.tables is queried"
     then: "connections exists in schema public with all required columns;
-      relrowsecurity=true; exactly two policies for cello_service (insert_only,
-      select_all); no GRANT UPDATE or DELETE for cello_service; indexes exist
-      on (participant_a, participant_b) and (participant_b, participant_a)"
+      relrowsecurity=true confirmed via pg_catalog.pg_class; exactly two
+      policies visible to cello_service (insert_only, select_all) confirmed
+      via pg_catalog.pg_policy WHERE tablename='connections' (query issued
+      after SET ROLE cello_service); cello_service has no UPDATE or DELETE
+      privilege confirmed via information_schema.role_table_grants; indexes
+      exist on (participant_a, participant_b) and (participant_b, participant_a)"
     test_type: integration
     component_under_test: directory
 
   - id: AC-002
-    given: "The connections table is empty (CELLO_ENV=local)"
+    given: "The connections table is empty (CELLO_ENV=local, real Postgres —
+      a stub returning a canned row does NOT satisfy this AC; each test runs
+      inside a transaction that rolls back at completion to maintain isolation)"
     when: "a connection record is written via the directory store"
     then: "hasConnection(participantA, participantB) returns the connection
       record; hasConnection() no longer returns null after a write; the
       persisted row contains the correct connection_id, participant_a,
-      participant_b, established_at, and status 'active'"
+      participant_b, established_at, and status 'active'; verified by asserting
+      the round-trip value was read back from the live database"
     test_type: integration
     component_under_test: directory
 
   - id: AC-003
     given: "A connection record has been written with participant_a=A and
-      participant_b=B (CELLO_ENV=local)"
+      participant_b=B (CELLO_ENV=local, real Postgres)"
     when: "hasConnection(B, A) is called (reversed argument order)"
     then: "the same connection record is returned — hasConnection() is
-      symmetric regardless of which agent initiated the original request"
+      symmetric regardless of which agent initiated the original request;
+      the implementation uses an OR query on both index orderings (not
+      application-layer normalization); verified by inspecting the migration
+      SQL to confirm both composite indexes are created AND by asserting the
+      returned record's participant_a/participant_b values are unchanged from
+      insertion (not swapped/normalized)"
     test_type: integration
     component_under_test: directory
 
   - id: AC-004
-    given: "A connection record exists in the connections table (CELLO_ENV=local)"
+    given: "A connection record exists in the connections table (CELLO_ENV=local,
+      real Postgres)"
     when: "the directory process is restarted (simulated by clearing all
-      in-memory state and re-instantiating PgDirectoryStore)"
+      in-memory state and re-instantiating PgDirectoryStore with the same
+      database connection)"
     then: "hasConnection(participantA, participantB) returns the persisted
       record — connection state survives the restart; the test asserts the
-      connection record's connection_id matches the pre-restart record"
+      connection record's connection_id matches the pre-restart record;
+      the fresh PgDirectoryStore instance has no in-memory state at
+      construction — re-instantiation is itself the evidence that the result
+      came from a live SELECT, since a fresh instance has no cache to serve
+      from"
     test_type: integration
     component_under_test: directory
 
   - id: AC-005
-    given: "Two connection records exist in connections (CELLO_ENV=local)"
+    given: "Two connection records exist in connections (CELLO_ENV=local,
+      real Postgres)"
     when: "the chain verification pass (PERSIST-004) is run against connections"
     then: "the verifier reports 0 chain breaks — the chain_hash column
-      extends correctly from the genesis value through both rows"
+      extends correctly from the genesis value through both rows;
+      the test instantiates a fresh verifier (no prior state) so the
+      fresh SELECT to the live database is itself the evidence — no
+      in-memory state exists to serve from"
     test_type: integration
     component_under_test: directory
 
   - id: AC-006
-    given: "A row has been inserted into connections by cello_service"
+    given: "A row has been inserted into connections by cello_service
+      (CELLO_ENV=local, real Postgres)"
     when: "cello_service attempts UPDATE connections"
-    then: "PostgreSQL rejects the operation with 'ERROR: permission denied
-      for table connections'; the row is unchanged"
+    then: "PostgreSQL rejects the operation; the row is unchanged; because
+      no UPDATE policy exists for cello_service, the rejection error is either
+      'ERROR: permission denied for table connections' (if cello_service has no
+      UPDATE grant) or 'ERROR: new row violates row-level security policy for
+      table connections' (if cello_service has the grant but no permissive
+      UPDATE policy exists); either rejection is acceptable — the test asserts
+      the operation fails AND the row count is unchanged; the rejection must NOT
+      originate from application-layer guarding (verified by issuing the UPDATE
+      directly via pg.query() as cello_service, bypassing application code)"
     test_type: integration
     component_under_test: directory
 
   - id: AC-007
-    given: "A connection is written via the directory store"
+    given: "A connection is written via the directory store against a real
+      Postgres instance (CELLO_ENV=local)"
     when: "the INSERT commits successfully"
     then: "connection.persisted is logged at INFO with
       { connectionId, participantA, participantB, correlationId }"
@@ -147,10 +179,12 @@ acceptance_criteria:
 
   - id: AC-008
     given: "getConnection(connectionId) is called for a connection_id that
-      has no corresponding row"
+      has no corresponding row (CELLO_ENV=local, real Postgres)"
     when: "the query executes"
     then: "getConnection() returns null — it does not throw; absence of a
-      connection record is not itself an error"
+      connection record is not itself an error; the fresh PgDirectoryStore
+      instance has no in-memory cache, so a null result from a fresh instance
+      against a known-empty table confirms the SELECT reached the real database"
     test_type: integration
     component_under_test: directory
 
@@ -162,8 +196,15 @@ security_invariants:
       connection for a request that was rejected or never accepted;
       connection_id must match the connection_id issued by CONNREQ-002"
     adversarial_condition: "even when an API caller submits a connection_id
-      that was not issued by the directory — the directory validates the
-      connection_id against its own records before writing the connections row"
+      that was not issued by the directory — the connection acceptance handler
+      in PgDirectoryStore validates the connection_id against its own
+      connection_requests records before calling the INSERT; if no matching
+      pending request is found, the write is rejected before any database write
+      occurs; tested by asserting that submitting an arbitrary connection_id
+      with no matching request row returns an error and no row is inserted into
+      the connections table (verified by asserting row count remains 0);
+      NOTE: the connection_requests table is created by the CONNREQ domain
+      migrations (M3) — PERSIST-020 depends on those migrations being present"
     test_type: integration
     component_under_test: directory
 
@@ -209,6 +250,11 @@ degraded_behavior:
 
 # ─── Observability ──────────────────────────────────────────
 observability:
+  taxonomy_additions:
+    - "connection.persisted — added in PERSIST-020"
+    - "connection.persist.failed — added in PERSIST-020"
+    # db.chain.break.detected is defined in PERSIST-004 observability section;
+    # PERSIST-020 references it in SI-003 but does not own it.
   events:
     - name: connection.persisted
       level: info
