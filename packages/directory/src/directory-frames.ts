@@ -158,7 +158,11 @@ export function encodeRegisterSuccess(frame: RegisterSuccess): Uint8Array {
 }
 
 export function encodeRegisterError(frame: RegisterError): Uint8Array {
-  return ENC.encode({ type: frame.type, reason: frame.reason });
+  const obj: Record<string, unknown> = { type: frame.type, reason: frame.reason };
+  if (frame.agent_id !== undefined) obj["agent_id"] = frame.agent_id;
+  if (frame.primary_pubkey !== undefined) obj["primary_pubkey"] = frame.primary_pubkey;
+  if (frame.ml_dsa_pubkey !== undefined) obj["ml_dsa_pubkey"] = frame.ml_dsa_pubkey;
+  return ENC.encode(obj);
 }
 
 export function encodeDkgReady(frame: DkgReady): Uint8Array {
