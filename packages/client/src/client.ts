@@ -2760,6 +2760,26 @@ class CelloClientImpl implements CelloClient {
 
     if (dkgReadyFrame["type"] !== "dkg_ready") {
       const reason = (dkgReadyFrame["reason"] as string | undefined) ?? "unknown";
+      // already_registered: directory skips dkg_ready and sends register_error directly.
+      // Reconstruct RegistrationState from profile fields in the error frame.
+      if (
+        reason === "already_registered" &&
+        dkgReadyFrame["agent_id"] &&
+        dkgReadyFrame["primary_pubkey"]
+      ) {
+        const state: RegistrationState = {
+          agent_id: dkgReadyFrame["agent_id"] as string,
+          primary_pubkey: dkgReadyFrame["primary_pubkey"] as string,
+          ml_dsa_pubkey: (dkgReadyFrame["ml_dsa_pubkey"] as string | undefined) ?? mlDsaPubkeyHex,
+          // registered_at is set to now — the already_registered frame does not carry the
+          // original timestamp. Callers must not treat this as the canonical registration time.
+          registered_at: Date.now(),
+          status: "active",
+        };
+        this.#registrationState = state;
+        this.#mlDsaProvider = mlDsaProvider;
+        return state;
+      }
       return { error: reason };
     }
 
@@ -4198,6 +4218,13 @@ class CelloClientImpl implements CelloClient {
           }
         } else if (frame["type"] === "register_success" || frame["type"] === "register_error") {
           // REG-001: route registration response to pending register() caller.
+          // already_registered arrives before dkg_ready (directory skips DKG entirely).
+          // Route to both resolvers so register() unblocks regardless of which stage it is at.
+          const dkgResolve = this.#pendingDkgReadyResolve;
+          if (dkgResolve) {
+            this.#pendingDkgReadyResolve = null;
+            dkgResolve(frame);
+          }
           const resolve = this.#pendingRegisterResolve;
           if (resolve) {
             this.#pendingRegisterResolve = null;
