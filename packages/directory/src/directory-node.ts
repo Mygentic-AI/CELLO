@@ -1193,10 +1193,16 @@ export class CelloDirectoryNode {
       return;
     }
 
-    // Gate 3: no existing active connection
-    if (await this.#store.hasConnection(senderHex, targetHex)) {
-      protocolLog("CONN", `Pre-check failed: already_connected (sender: ${truncHex(senderHex)})`);
-      this.#sendFrame(stream, encodeConnectionRequestError({ type: "connection_request_error", reason: "already_connected" }));
+    // Gate 3: no existing active connection.
+    // Include the connection_id so the client can hydrate and proceed without a new request.
+    const existingConn = await this.#store.hasConnection(senderHex, targetHex);
+    if (existingConn) {
+      protocolLog("CONN", `Pre-check failed: already_connected (sender: ${truncHex(senderHex)}, connection: ${truncHex(existingConn.connection_id)})`);
+      this.#sendFrame(stream, encodeConnectionRequestError({
+        type: "connection_request_error",
+        reason: "already_connected",
+        connection_id: existingConn.connection_id,
+      }));
       return;
     }
 

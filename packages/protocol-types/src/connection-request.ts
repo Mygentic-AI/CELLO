@@ -175,6 +175,8 @@ export interface ConnectionInsufficient {
 export interface ConnectionRequestError {
   type: "connection_request_error";
   reason: ConnectionRequestErrorReason;
+  /** Only set when reason === "already_connected" — the existing connection_id so the client can hydrate and proceed immediately */
+  connection_id?: string;
 }
 
 export type ConnectionRequestErrorReason =

@@ -3291,7 +3291,25 @@ class CelloClientImpl implements CelloClient {
     }
 
     if (type === "connection_request_error") {
-      return { result: "error", reason: (frame["reason"] as string) ?? "unknown" };
+      const reason = (frame["reason"] as string) ?? "unknown";
+      // already_connected: hydrate the existing connection so the caller can proceed.
+      if (reason === "already_connected" && frame["connection_id"]) {
+        const connectionId = frame["connection_id"] as string;
+        if (!this.#connections.has(connectionId)) {
+          const record: import("@cello/protocol-types").ClientConnectionRecord = {
+            connection_id: connectionId,
+            counterparty_pubkey: opts.target_pubkey,
+            counterparty_primary_pubkey: "",
+            counterparty_ml_dsa_pubkey: "",
+            established_at: Date.now(),
+            status: "active",
+          };
+          this.#connections.set(connectionId, record);
+          this.#connectionsByPeer.set(opts.target_pubkey, connectionId);
+        }
+        return { result: "established", connection_id: connectionId };
+      }
+      return { result: "error", reason };
     }
 
     if (type === "disclosure_request_inbound") {
