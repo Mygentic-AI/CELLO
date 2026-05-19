@@ -45,17 +45,20 @@ async function createTestDirectoryNode() {
 
 // ─── E2E tests (test.todo — require multi-process infrastructure) ────────────
 
-test.todo("AC-001: directory returns SEAL_REJECTED_TREE_MISMATCH when seal attempts have differing roots", () => {
-  /* milestone close gate */
-});
+// AC-001/003/007 require a network-layer leaf drop — two OS processes where
+// the relay actually stops delivering leaves to B mid-session so B's
+// next_expected_seq diverges from A's. In-process tests cannot create an
+// authentic mismatch because #drainReadyQueue advances next_expected_seq
+// automatically on leaf arrival, regardless of receiveMessage calls.
+// Implementation path: spawn a real relay process, a real directory process,
+// and two agent processes; inject a network partition on the relay's content
+// stream to B after leaf N-2; both agents submit seal_attempt; verify mismatch
+// response; B gap-fills from relay WAL (requires withWal: true); both re-seal.
+test.todo("AC-001: directory returns SEAL_REJECTED_TREE_MISMATCH when seal attempts have differing roots — requires spawned OS processes with real network leaf drop");
 
-test.todo("AC-003: behind party advances tree with gap-fill leaves and resubmits — directory accepts", () => {
-  /* milestone close gate */
-});
+test.todo("AC-003: behind party advances tree with gap-fill leaves and resubmits — seal succeeds — requires spawned OS processes with real network leaf drop");
 
-test.todo("AC-007: directory confirms seal immediately when both parties report matching roots", () => {
-  /* milestone close gate */
-});
+test.todo("AC-007: directory confirms seal immediately when both parties report matching roots — requires spawned OS processes to verify no false SEAL_REJECTED is emitted");
 
 // ─── Integration tests ───────────────────────────────────────────────────────
 

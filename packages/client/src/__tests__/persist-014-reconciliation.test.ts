@@ -20,17 +20,14 @@ import type { Leaf } from "@cello/interfaces";
 
 // ─── E2E tests (test.todo — require multi-process infrastructure) ────────────
 
-test.todo("AC-001: both parties receive SEAL_REJECTED_TREE_MISMATCH with correct sequence numbers", () => {
-  /* milestone close gate */
-});
+// AC-001/002/003 require a network-layer leaf drop (see persist-014-seal-mismatch.test.ts
+// for the full infrastructure note). These tests belong in packages/e2e-tests once
+// the spawned-process infrastructure exists.
+test.todo("AC-001: both parties receive SEAL_REJECTED_TREE_MISMATCH — requires spawned OS processes with real network leaf drop");
 
-test.todo("AC-002: behind party requests gap-fill leaves from relay and receives them", () => {
-  /* milestone close gate */
-});
+test.todo("AC-002: behind party requests gap-fill leaves from relay WAL and receives them — requires spawned OS processes");
 
-test.todo("AC-003: behind party advances tree and resubmits — seal succeeds", () => {
-  /* milestone close gate */
-});
+test.todo("AC-003: behind party advances tree with verified gap-fill leaves and resubmits — seal succeeds — requires spawned OS processes");
 
 // ─── Integration tests ───────────────────────────────────────────────────────
 

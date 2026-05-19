@@ -34,7 +34,8 @@ import {
 import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
 import { createNode } from "@cello/transport";
 import { createDirectoryNode } from "@cello/directory";
-import { InMemoryDirectoryStore } from "@cello/interfaces/stubs";
+import { InMemoryDirectoryStore, InMemorySessionWal } from "@cello/interfaces/stubs";
+import type { SessionWal } from "@cello/interfaces";
 import { NetworkRelayAdapter } from "@cello/directory/network-relay-adapter.js";
 import type { CelloDirectoryNode } from "@cello/directory";
 import { createRelayNode } from "@cello/relay";
@@ -76,6 +77,8 @@ export interface SessionFixtureResult {
   signerA: FrostThresholdSigner;
   /** FROST signer for B (only when opts.bootstrapB: true) */
   signerB?: FrostThresholdSigner;
+  /** Set when opts.withWal: true — the relay's in-memory WAL for gap-fill tests */
+  sessionWal?: SessionWal;
   stopAll: () => Promise<void>;
 }
 
@@ -108,6 +111,16 @@ export interface SessionFixtureOpts {
    * directory and relay. Default: false (in-process wiring).
    */
   networkRelay?: boolean;
+  /**
+   * Wire an InMemorySessionWal to the relay so gap-fill requests are served.
+   * Required for gap-fill reconciliation tests (PERSIST-014). Default: false.
+   */
+  withWal?: boolean;
+  /**
+   * deliveryGraceSeconds for the directory node (unilateral seal timeout).
+   * Default: directory node default (600s).
+   */
+  deliveryGraceSeconds?: number;
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -144,9 +157,13 @@ export async function createSessionFixture(
         },
       };
 
+  const noopLogger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+  const sessionWal = opts.withWal ? new InMemorySessionWal({ logger: noopLogger }) : undefined;
+
   const { relay: relayInstance, node: relayNode, stop: relayStop } = await createRelayNode({
     directoryPubkey: dirPubkey,
     directory: directoryAdapterShim,
+    sessionWal,
   });
   const relayPeerId = relayNode.getPeerId();
   const relayMultiaddrs = relayNode.listenAddresses();
@@ -176,6 +193,7 @@ export async function createSessionFixture(
     requireRegistration: opts.requireRegistration ?? false,
     requireConnectionGate: opts.requireConnectionGate ?? false,
     store: dirStore,
+    deliveryGraceSeconds: opts.deliveryGraceSeconds,
   });
 
   if (opts.networkRelay) {
@@ -324,6 +342,7 @@ export async function createSessionFixture(
     },
     signerA,
     signerB,
+    sessionWal,
     stopAll,
   };
 }
