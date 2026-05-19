@@ -333,6 +333,9 @@ export class CelloDirectoryNode {
   readonly #unilateralSeals = new Map<string, { sealed_root: Uint8Array; sealed_at: number; submitter_hex: string }>();
   // PERSIST-015: pubkey_hex → pending notifications for absent party
   readonly #pendingNotifications = new Map<string, Array<{ type: "seal_unilateral_notification"; session_id: Uint8Array; sealed_root: Uint8Array; sealed_at: number }>>();
+  // PERSIST-015: session participant map preserved beyond stream closure, so SEAL_UNILATERAL
+  // can identify the absent party after the stream cleanup has removed the pendingSessions entry.
+  readonly #sessionParticipants = new Map<string, { initiatorHex: string; targetHex: string }>();
 
   // session_id_hex → seal-pending state: waiting for seal_frost_signature from initiator — SESSION-005
   readonly #pendingFrostSeals = new Map<string, {
@@ -1581,6 +1584,8 @@ export class CelloDirectoryNode {
         targetGotAssignment: false,
         fullyEstablished: false,
       });
+      // PERSIST-015: preserve participants beyond stream closure for SEAL_UNILATERAL absent-party lookup
+      this.#sessionParticipants.set(sessionIdHex, { initiatorHex, targetHex });
       // PERSIST-015: record session creation time as initial last_activity_at
       this.#sessionLastActivity.set(sessionIdHex, this.#clock.now());
 
@@ -1732,13 +1737,18 @@ export class CelloDirectoryNode {
       submitter_hex: senderHex,
     });
 
-    // Determine the absent party from the pending sessions record
-    const pendingSession = this.#pendingSessions.get(sessionIdHex);
+    // Determine the absent party — use #sessionParticipants which persists beyond stream closure,
+    // since #pendingSessions is cleaned up when streams close (AC-011).
+    const participants = this.#sessionParticipants.get(sessionIdHex)
+      ?? (() => {
+        const p = this.#pendingSessions.get(sessionIdHex);
+        return p ? { initiatorHex: p.initiatorHex, targetHex: p.targetHex } : null;
+      })();
     let absentPartyHex: string | null = null;
-    if (pendingSession) {
-      absentPartyHex = pendingSession.initiatorHex === senderHex
-        ? pendingSession.targetHex
-        : pendingSession.initiatorHex;
+    if (participants) {
+      absentPartyHex = participants.initiatorHex === senderHex
+        ? participants.targetHex
+        : participants.initiatorHex;
     }
 
     // AC-003: Queue notification for absent party (delivered on reconnect)
@@ -1764,6 +1774,13 @@ export class CelloDirectoryNode {
       sealed_at: sealedAt,
     });
     try { this.#sendFrame(stream, confirmFrame); } catch { /* */ }
+
+    // Evict per-session maps to prevent unbounded growth in long-running ECS directory nodes.
+    // #unilateralSeals is retained briefly for SI-002 duplicate rejection; cleared here since
+    // the confirmation has been sent and no further seal attempts are valid for this session.
+    this.#sessionParticipants.delete(sessionIdHex);
+    this.#sessionLastActivity.delete(sessionIdHex);
+    this.#unilateralSeals.delete(sessionIdHex);
 
     this.#logger?.info("session.unilateral.sealed", {
       sessionId: sessionIdHex,

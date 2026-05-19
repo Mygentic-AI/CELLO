@@ -52,6 +52,8 @@ export interface AgentFixture {
   kp: ReturnType<typeof generateKeypair>;
   pubkey: Uint8Array;
   pubkeyHex: string;
+  /** Raw libp2p node — for tests that need to stop/restart the agent's transport */
+  node: Awaited<ReturnType<typeof import("@cello/transport").createNode>>;
   client: ReturnType<typeof createClient>;
   /** Set after register() is called (opts.register: true) */
   primaryPubkey?: string;
@@ -332,11 +334,13 @@ export async function createSessionFixture(
     relayMultiaddrs,
     agentA: {
       kp: kpA, pubkey: pubkeyA, pubkeyHex: pubkeyAHex,
+      node: nodeA,
       client: clientA, primaryPubkey: primaryPubkeyA,
       mcp: mcpA, notifications: notificationsA,
     },
     agentB: {
       kp: kpB, pubkey: pubkeyB, pubkeyHex: pubkeyBHex,
+      node: nodeB,
       client: clientB,
       mcp: mcpB, notifications: notificationsB,
     },

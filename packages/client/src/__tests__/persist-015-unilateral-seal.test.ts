@@ -10,20 +10,14 @@
  * - AC-003: Absent party receives notification on reconnect
  */
 
-import { describe, it, expect, test } from "vitest";
+import { describe, it, expect } from "vitest";
 import { randomBytes } from "node:crypto";
 import { buildMerkleTree, merkleRoot } from "@cello/crypto";
 import type { LeafInput } from "@cello/crypto";
 
 // ─── E2E tests (test.todo — require multi-process infrastructure) ────────────
 
-test.todo("AC-001: unilateral seal succeeds after delivery_grace_seconds via separate processes", () => {
-  /* milestone close gate */
-});
-
-test.todo("AC-003: absent party receives seal_unilateral_notification on reconnect", () => {
-  /* milestone close gate */
-});
+// AC-001 and AC-003 are covered by packages/e2e-tests/src/__tests__/persist-015-unilateral-seal-e2e.test.ts.
 
 // ─── Integration tests ───────────────────────────────────────────────────────
 

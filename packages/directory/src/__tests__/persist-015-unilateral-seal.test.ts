@@ -48,17 +48,14 @@ async function createTestDirectoryNode(opts?: { deliveryGraceSeconds?: number })
 
 // ─── E2E tests (test.todo — require multi-process infrastructure) ────────────
 
-test.todo("AC-001: unilateral seal writes conversation_seals row with seal_type=UNILATERAL", () => {
-  /* milestone close gate */
-});
+// AC-001 (unilateral seal succeeds) and AC-003 (B receives notification on reconnect)
+// are covered by packages/e2e-tests/src/__tests__/persist-015-unilateral-seal-e2e.test.ts.
+// Those tests also found and fixed two production bugs:
+//   1. Directory: #sessionParticipants map needed to persist participant info beyond stream closure
+//   2. Client: #handleSealUnilateralNotification creates stub session for reconnecting absent party
 
-test.todo("AC-003: absent party receives SEAL_UNILATERAL notification on reconnect", () => {
-  /* milestone close gate */
-});
-
-test.todo("AC-005: sealed session rejects new submissions with SESSION_SEALED", () => {
-  /* milestone close gate */
-});
+// AC-005 (sealed session rejects new submissions) requires a real relay to submit new hashes after seal.
+test.todo("AC-005: sealed session rejects new submissions with SESSION_SEALED — requires relay round-trip after seal");
 
 // ─── Integration tests ───────────────────────────────────────────────────────
 

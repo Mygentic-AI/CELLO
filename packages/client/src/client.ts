@@ -359,6 +359,8 @@ class CelloClientImpl implements CelloClient {
   #pendingRegisterResolve: ((frame: Record<string, unknown>) => void) | null = null;
   /** Pending resolver for dkg_ready from directory (part of register flow). */
   #pendingDkgReadyResolve: ((frame: Record<string, unknown>) => void) | null = null;
+  /** Pending resolver for seal_unilateral_confirmed / seal_unilateral_too_early (PERSIST-015). */
+  #pendingUnilateralSealResolve: ((frame: Record<string, unknown>) => void) | null = null;
 
   /** Optional path for persisting the ML-DSA keypair (FileMlDsaKeyProvider). REG-001 AC-010. */
   readonly #mlDsaKeyFile: string | undefined;
@@ -1053,6 +1055,72 @@ class CelloClientImpl implements CelloClient {
     return { ok: true };
   }
 
+  // PERSIST-015: send seal_unilateral to the directory after delivery_grace_seconds elapses.
+  async initiateUnilateralSeal(
+    sessionIdHex: string,
+  ): Promise<
+    | { ok: true; sealed_root: Uint8Array; sealed_at: number }
+    | { ok: false; reason: "too_early"; remaining_seconds: number }
+    | { ok: false; reason: string }
+  > {
+    const session = this.#sessions.get(sessionIdHex);
+    if (!session) return { ok: false, reason: "session_not_found" };
+    if (session.status !== "active" && session.status !== "sealing") {
+      return { ok: false, reason: "session_not_active" };
+    }
+
+    if (!this.#persistentSignalingStream) {
+      const opened = await this.#openPersistentSignalingStream();
+      if (!opened || !this.#persistentSignalingStream) {
+        return { ok: false, reason: "directory_unreachable" };
+      }
+    }
+
+    const localRoot = this.#computeLocalRoot(session) ?? session.genesis_prev_root;
+    const reportedSeq = session.next_expected_seq - 1;
+
+    const frame = CBOR_ENC.encode({
+      type: "seal_unilateral",
+      session_id: session.session_id,
+      reported_root: localRoot,
+      reported_seq: reportedSeq,
+    }) as Uint8Array;
+
+    this.#persistentSignalingStream.send(lp.encode.single(frame));
+
+    const UNILATERAL_TIMEOUT_MS = 15_000;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const responseFrame = await Promise.race<Record<string, unknown>>([
+      new Promise<Record<string, unknown>>((resolve) => {
+        this.#pendingUnilateralSealResolve = resolve;
+      }),
+      new Promise<Record<string, unknown>>((resolve) => {
+        timeoutHandle = setTimeout(() => {
+          this.#pendingUnilateralSealResolve = null;
+          resolve({ type: "seal_unilateral_error", reason: "timeout" });
+        }, UNILATERAL_TIMEOUT_MS);
+      }),
+    ]);
+    clearTimeout(timeoutHandle);
+
+    if (responseFrame["type"] === "seal_unilateral_confirmed") {
+      const sealedRootRaw = responseFrame["sealed_root"];
+      const sealedRoot = sealedRootRaw instanceof Uint8Array ? sealedRootRaw
+        : Buffer.isBuffer(sealedRootRaw) ? new Uint8Array(sealedRootRaw as Buffer)
+        : new Uint8Array(32);
+      const sealedAt = typeof responseFrame["sealed_at"] === "number" ? responseFrame["sealed_at"] : Date.now();
+      return { ok: true, sealed_root: sealedRoot, sealed_at: sealedAt };
+    }
+
+    if (responseFrame["type"] === "seal_unilateral_too_early") {
+      const remainingSeconds = typeof responseFrame["remaining_seconds"] === "number"
+        ? responseFrame["remaining_seconds"] : 0;
+      return { ok: false, reason: "too_early", remaining_seconds: remainingSeconds };
+    }
+
+    return { ok: false, reason: (responseFrame["reason"] as string | undefined) ?? "unknown" };
+  }
+
   async #submitSealLeaf(
     sessionIdHex: string,
     session: SessionRecord,
@@ -1655,8 +1723,14 @@ class CelloClientImpl implements CelloClient {
       correlationId,
     });
 
-    // Resolve seal-frost-timeout waiter
-    this.#sealFrostResolvers.get(sessionIdHex)?.();
+    // Resolve the FROST ceremony waiter only if a bilateral seal was in-flight for this session.
+    // The unilateral and FROST paths are mutually exclusive once the session seals — resolving an
+    // absent FROST waiter is harmless (map miss returns undefined), but resolving a present one
+    // spuriously would confuse the bilateral seal flow. Guard on whether the session was actually
+    // in sealing state via the FROST path before the unilateral confirmation arrived.
+    if (this.#sealInitiatedSessions.has(sessionIdHex)) {
+      this.#sealFrostResolvers.get(sessionIdHex)?.();
+    }
   }
 
   /**
@@ -1664,8 +1738,37 @@ class CelloClientImpl implements CelloClient {
    * The absent party receives this on reconnect — verifies sealed root against local state.
    */
   #handleSealUnilateralNotification(sessionIdHex: string, frame: Record<string, unknown>): void {
-    const session = this.#sessions.get(sessionIdHex);
-    if (!session) return;
+    let session = this.#sessions.get(sessionIdHex);
+    if (!session) {
+      // Absent party reconnecting after session was sealed without them — create a minimal
+      // sealed session record so the notification is observable via listSessions().
+      const sessionIdRaw = frame["session_id"];
+      const sessionId = sessionIdRaw instanceof Uint8Array ? sessionIdRaw
+        : Buffer.isBuffer(sessionIdRaw) ? new Uint8Array(sessionIdRaw as Buffer)
+        : Buffer.from(sessionIdHex, "hex");
+      // Build the stub as sealed from the start — no transient "active" state visible to readers.
+      // Fields like counterparty_pubkey and directory_pubkey are zeroed because the absent party
+      // does not have session state; #computeLocalRoot handles the empty-leaves case explicitly.
+      const stub: SessionRecord = {
+        session_id: sessionId,
+        counterparty_pubkey: new Uint8Array(32),
+        counterparty_peer_id: "",
+        counterparty_multiaddrs: [],
+        relay_endpoint: { peer_id: "", multiaddrs: [] },
+        directory_endpoint: { peer_id: "", multiaddrs: [] },
+        directory_pubkey: new Uint8Array(32),
+        genesis_prev_root: new Uint8Array(32),
+        last_seen_seq: 0,
+        last_sent_seq: 0,
+        status: "sealed",
+        seal_type: "unilateral",
+        local_tree_leaves: [],
+        next_expected_seq: 1,
+        desynchronized: false,
+      };
+      this.#sessions.set(sessionIdHex, stub);
+      session = stub;
+    }
 
     const sealedRootRaw = frame["sealed_root"];
     const sealedRoot = sealedRootRaw instanceof Uint8Array ? sealedRootRaw
@@ -4158,13 +4261,18 @@ class CelloClientImpl implements CelloClient {
             this.#handleSealRejectedTreeMismatch(sessionIdHex, frame);
           }
         } else if (frame["type"] === "seal_unilateral_confirmed") {
-          // PERSIST-015: unilateral seal confirmed — route to handler
+          // PERSIST-015: unilateral seal confirmed — route to pending initiateUnilateralSeal caller and handler
           const sessionIdRaw = frame["session_id"];
           const sessionId = sessionIdRaw instanceof Uint8Array ? sessionIdRaw
             : Buffer.isBuffer(sessionIdRaw) ? new Uint8Array(sessionIdRaw as Buffer) : null;
           if (sessionId) {
             const sessionIdHex = Buffer.from(sessionId).toString("hex");
             this.#handleSealUnilateralConfirmed(sessionIdHex, frame);
+          }
+          const unilateralResolve = this.#pendingUnilateralSealResolve;
+          if (unilateralResolve) {
+            this.#pendingUnilateralSealResolve = null;
+            unilateralResolve(frame);
           }
         } else if (frame["type"] === "seal_unilateral_notification") {
           // PERSIST-015: absent party receives unilateral seal notification
@@ -4184,6 +4292,11 @@ class CelloClientImpl implements CelloClient {
             const sessionIdHex = Buffer.from(sessionId).toString("hex");
             const remainingSeconds = typeof frame["remaining_seconds"] === "number" ? frame["remaining_seconds"] : 0;
             this.#logger.warn("session.unilateral.too.early", { sessionId: sessionIdHex, remainingSeconds });
+          }
+          const unilateralResolve = this.#pendingUnilateralSealResolve;
+          if (unilateralResolve) {
+            this.#pendingUnilateralSealResolve = null;
+            unilateralResolve(frame);
           }
         } else if (frame["type"] === "seal_verified") {
           // SESSION-005: route seal_verified to the FROST ceremony handler.
@@ -4535,6 +4648,12 @@ export function createClient(
   onDisclosureRequested(handler: (event: import("@cello/protocol-types").DisclosureRequestInbound) => void): void;
   /** CONNREQ-002: reconnect the persistent directory signaling stream. */
   reconnectDirectory(): Promise<boolean>;
+  /** PERSIST-015: send seal_unilateral to directory after delivery_grace_seconds. */
+  initiateUnilateralSeal(sessionIdHex: string): Promise<
+    | { ok: true; sealed_root: Uint8Array; sealed_at: number }
+    | { ok: false; reason: "too_early"; remaining_seconds: number }
+    | { ok: false; reason: string }
+  >;
   /** TEST-ONLY: inject a pending inbound connection request into state. */
   _injectPendingConnectionRequest(opts: { connection_request_id: string; from_pubkey: string; package_cbor: Uint8Array; round: number }): void;
   /** TEST-ONLY: evaluate call counter (only incremented when trackEvaluateCount=true). */
@@ -4587,6 +4706,12 @@ export function createClient(
     onConnectionEstablished(handler: (event: import("@cello/protocol-types").ConnectionEstablished) => void): void;
     onDisclosureRequested(handler: (event: import("@cello/protocol-types").DisclosureRequestInbound) => void): void;
     reconnectDirectory(): Promise<boolean>;
+    /** PERSIST-015: send seal_unilateral to directory after delivery_grace_seconds. */
+    initiateUnilateralSeal(sessionIdHex: string): Promise<
+      | { ok: true; sealed_root: Uint8Array; sealed_at: number }
+      | { ok: false; reason: "too_early"; remaining_seconds: number }
+      | { ok: false; reason: string }
+    >;
     _injectPendingConnectionRequest(opts: { connection_request_id: string; from_pubkey: string; package_cbor: Uint8Array; round: number }): void;
     _evaluateCallCount: number;
   };
