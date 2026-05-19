@@ -178,7 +178,9 @@ import type {
 } from "@cello/protocol-types";
 
 export function encodeConnectionRequestError(frame: ConnectionRequestError): Uint8Array {
-  return ENC.encode({ type: frame.type, reason: frame.reason });
+  const obj: Record<string, unknown> = { type: frame.type, reason: frame.reason };
+  if (frame.connection_id !== undefined) obj["connection_id"] = frame.connection_id;
+  return ENC.encode(obj);
 }
 
 export function encodeConnectionRequestInbound(frame: ConnectionRequestInbound): Uint8Array {
