@@ -434,7 +434,7 @@ The fix is structural: PERSIST-021 added real-Postgres round-trip integration te
 
 During the merge sequence of PERSIST-016 through PERSIST-021, two version numbering conflicts arose:
 
-- **Duplicate V11:** PERSIST-017 used `V11__staging_correlation_id.sql` and PERSIST-020 used `V11__connections_full_schema.sql`. Both exist on `main`. This is a known issue that must be resolved before any fresh database migration run. One file must be renumbered (e.g., PERSIST-020's to V15) via a new migration or a manual Flyway baseline.
+- **Duplicate V11 — RESOLVED:** PERSIST-017 used `V11__staging_correlation_id.sql` and PERSIST-020 originally used `V11__connections_full_schema.sql`. The PERSIST-020 file was renumbered to `V15__connections_full_schema.sql` during the merge sequence. As of 2026-05-19 the migration directory has no version conflicts. The running database has all 15 versions applied cleanly. A fresh `flyway migrate` against a clean database completes without error. *Note: the 2026-05-19 agent-to-agent review session flagged this as a hard blocker for PERSIST-E2E-001 — that assessment was accurate at the time it was written; the rename had already occurred on disk.*
 
 - **Duplicate V12:** PERSIST-018 and PERSIST-020 both initially used V12. Resolved by renumbering PERSIST-020's migration to V14 before merge.
 
