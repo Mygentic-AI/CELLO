@@ -650,7 +650,108 @@
     <div class="slide-number"><span class="brand-footer">CELLO</span><span>11</span></div>
 </section>
 
-<!-- SLIDE 12: CELLO's Approach -->
+<!-- SLIDE 12: The Design — Identity -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The Design — Identity · The Power of Hashes</h3>
+    <h2>CELLO verifies it. You store it.</h2>
+
+    <!-- Flow diagram: SSO → CELLO verifies → hash stored → agent holds plaintext -->
+    <div class="node-diagram" style="margin: 28px 0 20px;">
+        <div class="node-wrap">
+            <div class="node" style="background: #f0f7ff; border-color: #4a90d9;">
+                <i class="fa-brands fa-linkedin" style="color: #0077b5;"></i>
+                SSO<br>Login
+            </div>
+            <div class="node-caption">LinkedIn · X<br>GitHub · any SSO</div>
+        </div>
+        <div class="connector" style="background: var(--border);">
+            <div class="connector-label">prove ownership</div>
+        </div>
+        <div class="node-wrap">
+            <div class="node" style="background: #fce4f2; border: 2px solid var(--accent);">
+                <i class="fa-solid fa-magnifying-glass" style="color: var(--accent);"></i>
+                CELLO<br>Checks
+            </div>
+            <div class="node-caption">account age<br>connections</div>
+        </div>
+        <div class="connector" style="background: var(--border);">
+            <div class="connector-label">hash the signal</div>
+        </div>
+        <div class="node-wrap">
+            <div class="node" style="background: #f5f5f5; border-color: #ccc;">
+                <i class="fa-solid fa-database" style="color: #aaa;"></i>
+                Directory
+            </div>
+            <div class="node-caption" style="color: var(--accent);">hash only<br>no personal data</div>
+        </div>
+        <div class="connector" style="background: var(--border);">
+            <div class="connector-label">you keep</div>
+        </div>
+        <div class="node-wrap">
+            <div class="node">
+                <i class="fa-solid fa-robot"></i>
+                Your<br>Agent
+            </div>
+            <div class="node-caption">plaintext signal<br>on your device</div>
+        </div>
+    </div>
+
+    <!-- Two-column: what is a hash (left) + what this means (right) -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+        <div style="background: var(--bg-subtle); border: 1.5px solid var(--border); padding: 20px 24px; border-radius: 8px;">
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 11px; font-weight: 800; color: var(--text-muted); letter-spacing: 2px; margin-bottom: 10px;">WHAT IS A HASH?</div>
+            <p style="font-family: monospace; font-size: 13px; font-weight: 700; color: var(--text-primary); line-height: 1.4; margin-bottom: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">"Aug 2012, 4,000 connections" → a3f9c27d4e1b8f02c6a591d3e74b0f85...</p>
+            <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px;">
+                <li style="display: flex; gap: 12px; font-size: 14px; color: var(--text-secondary); line-height: 1.5;"><span style="color: var(--accent); font-weight: 800; flex-shrink: 0;">—</span><span>Feed any data in — get a short, fixed-length string out</span></li>
+                <li style="display: flex; gap: 12px; font-size: 14px; color: var(--text-secondary); line-height: 1.5;"><span style="color: var(--accent); font-weight: 800; flex-shrink: 0;">—</span><span>Change even one character and the hash is completely different</span></li>
+                <li style="display: flex; gap: 12px; font-size: 14px; color: var(--text-secondary); line-height: 1.5;"><span style="color: var(--accent); font-weight: 800; flex-shrink: 0;">—</span><span><strong>One-way — you can't reconstruct the original from the hash alone. Your data remains private.</strong></span></li>
+                <li style="display: flex; gap: 12px; font-size: 14px; color: var(--text-secondary); line-height: 1.5;"><span style="color: var(--accent); font-weight: 800; flex-shrink: 0;">—</span><span>Verify data hasn't been altered — without ever seeing the original</span></li>
+            </ul>
+        </div>
+        <div style="background: white; border-left: 5px solid var(--accent); padding: 20px 24px; border-radius: 0 8px 8px 0;">
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 11px; font-weight: 800; color: var(--accent); letter-spacing: 2px; margin-bottom: 10px;">WHAT THIS MEANS</div>
+            <ul style="list-style: none; display: flex; flex-direction: column; gap: 10px;">
+                <li style="display: flex; gap: 12px; font-size: 15px; color: var(--text-secondary); line-height: 1.5;"><span style="color: var(--accent); font-weight: 800; flex-shrink: 0;">—</span><span>You prove you own a LinkedIn / X / GitHub / etc. account via SSO</span></li>
+                <li style="display: flex; gap: 12px; font-size: 15px; color: var(--text-secondary); line-height: 1.5;"><span style="color: var(--accent); font-weight: 800; flex-shrink: 0;">—</span><span>CELLO checks account age and connections, then hashes that signal</span></li>
+                <li style="display: flex; gap: 12px; font-size: 15px; color: var(--text-secondary); line-height: 1.5;"><span style="color: var(--accent); font-weight: 800; flex-shrink: 0;">—</span><span>The directory stores the hash only — no personal data. Nothing to steal.</span></li>
+                <li style="display: flex; gap: 12px; font-size: 15px; color: var(--text-secondary); line-height: 1.5;"><span style="color: var(--accent); font-weight: 800; flex-shrink: 0;">—</span><span>Share your trust signal with another agent — they re-hash it and compare against the directory</span></li>
+                <li style="display: flex; gap: 12px; font-size: 15px; color: var(--text-secondary); line-height: 1.5;"><span style="color: var(--accent); font-weight: 800; flex-shrink: 0;">—</span><span><strong style="color: var(--text-primary);">Third-party verified. Zero data stored.</strong></span></li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>12</span></div>
+</section>
+
+<!-- SLIDE 13: The Design — Trust -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The Design — Trust</h3>
+    <h2>You set the gate.<br>You enforce it.</h2>
+    <p class="subtitle">Stub — content coming.</p>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>13</span></div>
+</section>
+
+<!-- SLIDE 14: The Design — Signing -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The Design — Signing</h3>
+    <h2>FROST threshold<br>signatures.</h2>
+    <p class="subtitle">Stub — content coming.</p>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>14</span></div>
+</section>
+
+<!-- SLIDE 15: The Design — Receipts -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The Design — Receipts</h3>
+    <h2>Merkle root for<br>every conversation.</h2>
+    <p class="subtitle">Stub — content coming.</p>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>15</span></div>
+</section>
+
+<!-- SLIDE 16: CELLO's Approach -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>The Design</h3>
@@ -679,10 +780,10 @@
         </div>
     </div>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>12</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>16</span></div>
 </section>
 
-<!-- SLIDE 13: The Answer -->
+<!-- SLIDE 17: The Answer -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>The Answer</h3>
@@ -711,10 +812,10 @@
         <p style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 22px; font-weight: 800; color: var(--text-primary);">Your agent. Your rules. Your cryptographic proofs.</p>
     </div>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>14</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>17</span></div>
 </section>
 
-<!-- SLIDE 14: The Design -->
+<!-- SLIDE 18: The Design —  Summary -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>The Design</h3>
@@ -736,10 +837,10 @@
         </div>
     </div>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>15</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>18</span></div>
 </section>
 
-<!-- SLIDE 15: Origin Story -->
+<!-- SLIDE 19: Origin Story -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>Origin</h3>
@@ -763,10 +864,10 @@
         </div>
     </div>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>16</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>19</span></div>
 </section>
 
-<!-- SLIDE 16: The Adoption Ladder -->
+<!-- SLIDE 20: The Adoption Ladder -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>The Adoption Ladder</h3>
@@ -804,10 +905,10 @@
         </div>
     </div>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>17</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>20</span></div>
 </section>
 
-<!-- SLIDE 17: The Close -->
+<!-- SLIDE 21: The Close -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>Day Zero</h3>
@@ -821,7 +922,7 @@
 
     <div style="margin-top: 32px; font-family: 'Bricolage Grotesque', sans-serif; font-size: 13px; color: var(--text-muted); font-style: italic; letter-spacing: 0.5px;">"Tinder for AI agents — except the dates are productive."</div>
 
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>18</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>21</span></div>
 </section>
 
 
