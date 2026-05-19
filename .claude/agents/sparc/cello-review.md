@@ -150,8 +150,21 @@ Confirm the implementation agent ran the full Phase C gate sequence:
 - [ ] Typecheck clean (`pnpm run typecheck`) — zero errors
 - [ ] Story ID present in commit message
 - [ ] **(M4+)** Observability implementation check passed (Step 4c)
+- [ ] **(M4+ stories touching Postgres)** Integration tests ran with `CELLO_ENV=local` — not skipped
+
+**Integration test verification (M4+ stories touching any Postgres-backed path):**
+
+If the story touches `PgDirectoryStore`, any Flyway migration, or any `DirectoryStore` method that reads/writes Postgres:
+
+1. Check the test output for `describeIntegration` blocks. If any appear as `skipped`, the gate was run without `CELLO_ENV=local` — this is **blocking**. The implementer must rerun with `CELLO_ENV=local DATABASE_URL=... pnpm --filter <package> run test -- ...`.
+2. Verify the integration tests actually passed (not just ran). A `describeIntegration` block that runs but fails is also blocking.
+3. **A test suite that reports 0 skipped but contains `describeIntegration` blocks is suspicious** — check that the blocks actually exist and ran; don't assume skipped=0 means integration tests executed.
 
 If any gate was skipped or failed, that is blocking regardless of test results.
+
+**Reactive fix check:**
+
+If any commit in this story's history touches production code outside a story-driven change (a hotfix, live-session fix, or quick patch), verify it has a corresponding test. A production code change with no test is a **blocking** finding. See the canonical examples: CONNREQ-002, REG-001, PERSIST-020 wiring fix, encodeConnectionRequestError field inclusion.
 
 ---
 

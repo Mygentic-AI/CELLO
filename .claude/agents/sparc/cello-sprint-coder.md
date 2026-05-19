@@ -102,16 +102,46 @@ Define or confirm TypeScript interfaces before writing implementation. Interface
 
 Run in this exact order. Every gate must be clean before proceeding to the next.
 
+**Step C-1: Unit tests (always)**
 ```bash
-# Always use 1 worker
 pnpm --filter <package> run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
+```
 
+**Step C-2: Integration tests (mandatory if story touches any Postgres-backed path)**
+
+Check whether the story touches `PgDirectoryStore`, any Flyway migration, `describeIntegration`, or any method on `DirectoryStore` that reads from or writes to Postgres. If yes, run:
+
+```bash
+CELLO_ENV=local DATABASE_URL=postgresql://postgres:dev@localhost:5433/cello_dev \
+  DEV_ENVELOPE_KEY=86e903357804be102cf6f55e1b86ed342e01a6f50835272200ac970d0d094ac7 \
+  AUDIT_LOG_PATH=/tmp/cello-audit.jsonl \
+  pnpm --filter <package> run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
+```
+
+**This is not optional.** A run without `CELLO_ENV=local` silently skips all `describeIntegration` blocks. If the test output contains any line matching `skipped` on a test that should be an integration test, the gate has not been executed — stop and rerun with the correct env vars.
+
+Docker Compose must be running before this step: `docker compose up -d` from the repo root.
+
+**Step C-3: Lint and typecheck**
+```bash
 pnpm run lint
-
 pnpm run typecheck
 ```
 
 If any gate fails, fix it before proceeding. Do not proceed to the review with a failing gate.
+
+---
+
+### Reactive fix rule (hotfixes and live-session fixes)
+
+Any production code change that is NOT driven by a story — a hotfix, a live-session bug fix, a quick patch during smoke testing — **must have a corresponding test before the commit lands on main**. No exceptions.
+
+The test must:
+- Be a real integration test if the fix touches a Postgres-backed path (use `describeIntegration`)
+- Actually exercise the failure condition that triggered the fix (not just assert the fixed code exists)
+- Be named after what it is testing, not after the commit that introduced it
+
+A fix with no test is a regression waiting to happen. The four session-survival fixes (CONNREQ-002, REG-001, PERSIST-020 wiring, encodeConnectionRequestError) are the canonical example of what this rule prevents.
 
 ---
 
