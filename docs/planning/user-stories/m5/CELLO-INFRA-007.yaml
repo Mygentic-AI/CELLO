@@ -51,10 +51,19 @@ behavior:
   - trigger: "When the CodeBuild build stage runs"
     action: "CodeBuild uses aws/codebuild/standard:7.0 on Node.js 24;
       it runs: pnpm install --frozen-lockfile, pnpm run lint,
-      pnpm run typecheck, pnpm run test (full Vitest suite), docker
-      build and push to ECR cello-{package}-{env}; the image is
-      tagged with the Git commit SHA; build failure at any step
-      fails the pipeline execution"
+      pnpm run typecheck, then the two-step test sequence: (1) unit
+      tests via pnpm run test -- --pool-options.threads.maxThreads=1
+      --pool-options.threads.minThreads=1; (2) for packages that touch
+      Postgres-backed paths, integration tests via docker compose up -d
+      followed by CELLO_ENV=local DATABASE_URL=postgresql://postgres:dev
+      @localhost:5432/cello_dev DEV_ENVELOPE_KEY={key}
+      AUDIT_LOG_PATH=/tmp/cello-audit.jsonl pnpm run test --
+      --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1;
+      a build that reports describeIntegration blocks as skipped (due to
+      missing CELLO_ENV=local) is treated as a build failure; docker build
+      and push to ECR cello-{package}-{env} follow; the image is tagged
+      with the Git commit SHA; build failure at any step fails the pipeline
+      execution"
 
   - trigger: "When infra/pipeline-mappings.json is updated
       (new package added or mapping changed)"
@@ -152,15 +161,20 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-008
-    given: "The CodeBuild build stage runs pnpm run test for
-      packages/directory/"
+    given: "The CodeBuild build stage runs tests for packages/directory/"
     when: "the test suite includes integration tests requiring
       a Postgres container"
-    then: "the build succeeds without a VPC-attached CodeBuild
-      project; integration tests that require a live database run
-      against a Docker-in-Docker Postgres container started in
-      the CodeBuild environment via docker-compose up -d — verified
-      by asserting no VPC configuration is present on the
+    then: "the build starts a Docker-in-Docker Postgres container via
+      docker compose up -d before running the integration test step;
+      the integration test step sets CELLO_ENV=local and
+      DATABASE_URL=postgresql://postgres:dev@localhost:5432/cello_dev;
+      no describeIntegration block appears as skipped in the build log —
+      any skipped block is treated as a build failure; the build succeeds
+      without a VPC-attached CodeBuild project (no NAT Gateway required);
+      the worker count is capped at 1 (--pool-options.threads.maxThreads=1)
+      to stay within CodeBuild memory limits — verified by inspecting the
+      CodeBuild build log from a separate terminal and asserting zero
+      skipped integration tests and no VPC configuration on the
       cello-directory-build CodeBuild project"
     test_type: integration
     component_under_test: directory

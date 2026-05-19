@@ -137,8 +137,9 @@ Folder-to-pipeline mappings are data-driven — a JSON config file in the repo, 
 1. `pnpm install`
 2. `pnpm run lint`
 3. `pnpm run typecheck`
-4. `pnpm run test` — full Vitest suite including integration tests
-5. Docker image build and push to ECR
+4. Unit tests: `pnpm run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1`
+5. Integration tests (packages with Postgres-backed paths only): `docker compose up -d` then `CELLO_ENV=local DATABASE_URL=postgresql://postgres:dev@localhost:5432/cello_dev DEV_ENVELOPE_KEY={key} AUDIT_LOG_PATH=/tmp/cello-audit.jsonl pnpm run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1`. A build where any `describeIntegration` block is reported as skipped is treated as a build failure — skipped integration tests mean `CELLO_ENV=local` was not set and the real test gate was not exercised.
+6. Docker image build and push to ECR
 
 **Database migrations — run at ECS task startup, not in CodeBuild.** The directory ECS task runs `flyway migrate` as its entrypoint before starting the directory service process. If migrations fail, the task fails its health check and ECS keeps the previous task running — clean rollback with no manual intervention. This eliminates the need for VPC-attached CodeBuild (which would require a NAT Gateway for outbound internet access). CodeBuild runs outside the VPC with standard internet access.
 
@@ -159,6 +160,17 @@ Folder-to-pipeline mappings are data-driven — a JSON config file in the repo, 
 ### Rollback
 
 Fix forward for a single developer. ECS maintains the previous task definition — manual rollback to the previous revision is available if a CloudWatch alarm fires within 10 minutes of deployment. Automated rollback is a Consortium-phase concern.
+
+### Reactive Fix Rule
+
+M5 is the first milestone with live AWS infrastructure. Live smoke tests will surface bugs that need immediate fixes. Any production code change made outside a story — a hotfix during smoke testing, a live-session fix, a quick patch — **must have a corresponding test before the commit lands on main**. No exceptions.
+
+The test must:
+- Be a real integration test if the fix touches a Postgres-backed path (use `describeIntegration` with `CELLO_ENV=local`)
+- Actually exercise the failure condition that triggered the fix, not just assert the fixed code exists
+- Be named after what it tests, not after the commit that introduced it
+
+A fix with no test is a regression waiting to happen when the next story touches the same path. The four M4 session-survival fixes (CONNREQ-002, REG-001, PERSIST-020 wiring, encodeConnectionRequestError) are the canonical example of what this rule prevents. The cello-sprint-reviewer's Step 6 treats an untested reactive fix as a blocking finding.
 
 ---
 
