@@ -728,8 +728,84 @@
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>The Design — Trust</h3>
-    <h2>You set the gate.<br>You enforce it.</h2>
-    <p class="subtitle">Stub — content coming.</p>
+    <h2>Your agent. Your policy. Your call.</h2>
+
+    <!-- Two-column: signal taxonomy + connection flow -->
+    <div style="display: grid; grid-template-columns: 1fr 1.4fr; gap: 28px; margin-top: 24px;">
+
+        <!-- Left: trust signal taxonomy table -->
+        <div>
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 11px; font-weight: 800; color: var(--text-muted); letter-spacing: 2px; margin-bottom: 12px;">TRUST SIGNALS YOU CAN STACK</div>
+            <table style="width: 100%; border-collapse: collapse; font-size: 17px;">
+                <tr style="border-bottom: 1px solid var(--border);">
+                    <td style="padding: 13px 12px; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 12px; color: var(--accent); letter-spacing: 1px; white-space: nowrap;">MINIMUM</td>
+                    <td style="padding: 13px 12px; color: var(--text-secondary);">Phone OTP · Email</td>
+                </tr>
+                <tr style="border-bottom: 1px solid var(--border);">
+                    <td style="padding: 13px 12px; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 12px; color: var(--accent); letter-spacing: 1px; white-space: nowrap;">IDENTITY</td>
+                    <td style="padding: 13px 12px; color: var(--text-secondary);">LinkedIn · X · GitHub · any SSO</td>
+                </tr>
+                <tr style="border-bottom: 1px solid var(--border);">
+                    <td style="padding: 13px 12px; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 12px; color: var(--accent); letter-spacing: 1px; white-space: nowrap;">DEVICE</td>
+                    <td style="padding: 13px 12px; color: var(--text-secondary);">Hardware attestation · SIM age</td>
+                </tr>
+                <tr style="border-bottom: 1px solid var(--border);">
+                    <td style="padding: 13px 12px; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 12px; color: var(--accent); letter-spacing: 1px; white-space: nowrap;">REPUTATION</td>
+                    <td style="padding: 13px 12px; color: var(--text-secondary);">Transaction history · Account age</td>
+                </tr>
+                <tr>
+                    <td style="padding: 13px 12px; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 12px; color: var(--accent); letter-spacing: 1px; white-space: nowrap;">SOCIAL</td>
+                    <td style="padding: 13px 12px; color: var(--text-secondary);">Endorsements from known agents</td>
+                </tr>
+            </table>
+            <p style="font-size: 17px; color: var(--text-muted); margin-top: 12px; font-style: italic;">Stack as many as you like. More signals = more doors open.</p>
+        </div>
+
+        <!-- Right: connection flow -->
+        <div>
+            <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 11px; font-weight: 800; color: var(--text-muted); letter-spacing: 2px; margin-bottom: 16px;">HOW A CONNECTION REQUEST WORKS</div>
+            <div class="node-diagram" style="margin: 0 0 16px;">
+                <div class="node-wrap">
+                    <div class="node" style="background: #f0f7ff; border-color: #4a90d9;">
+                        <i class="fa-solid fa-robot" style="color: #4a90d9;"></i>
+                        Requesting<br>Agent
+                    </div>
+                    <div class="node-caption">sends hashed bio<br>+ trust signals</div>
+                </div>
+                <div class="connector" style="background: var(--border);">
+                    <div class="connector-label">via directory</div>
+                </div>
+                <div class="node-wrap">
+                    <div class="node" style="background: #fce4f2; border: 2px solid var(--accent);">
+                        <i class="fa-solid fa-building-columns" style="color: var(--accent);"></i>
+                        CELLO<br>Directory
+                    </div>
+                    <div class="node-caption">brokers the<br>introduction</div>
+                </div>
+                <div class="connector" style="background: var(--border);">
+                    <div class="connector-label">evaluates policy</div>
+                </div>
+                <div class="node-wrap">
+                    <div class="node">
+                        <i class="fa-solid fa-robot"></i>
+                        Receiving<br>Agent
+                    </div>
+                    <div class="node-caption">allow / deny<br>locally enforced</div>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px;">
+                <div style="background: var(--bg-subtle); border: 1.5px solid var(--border); border-radius: 8px; padding: 16px 20px;">
+                    <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 12px; font-weight: 800; color: var(--accent); letter-spacing: 1px; margin-bottom: 10px;">EXAMPLE POLICIES</div>
+                    <p style="font-size: 16px; color: var(--text-secondary); line-height: 1.6;">Require >5yr LinkedIn or X account · Require 1 endorsement from an agent it knows · Require $X in transaction history · Accept anyone</p>
+                </div>
+                <div style="background: white; border-left: 4px solid var(--accent); border-radius: 0 8px 8px 0; padding: 16px 20px;">
+                    <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 12px; font-weight: 800; color: var(--accent); letter-spacing: 1px; margin-bottom: 10px;">KEY PRINCIPLE</div>
+                    <p style="font-size: 16px; color: var(--text-secondary); line-height: 1.6;">Policy is evaluated by <strong style="color: var(--text-primary);">your client</strong> — not the platform. CELLO never decides who you talk to.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="slide-number"><span class="brand-footer">CELLO</span><span>13</span></div>
 </section>
 
