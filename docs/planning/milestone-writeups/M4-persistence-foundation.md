@@ -334,11 +334,9 @@ This pattern allows stories to be re-run on any database state — clean, partia
 
 Two conflicts arose during the merge sequence:
 
-- **Duplicate V11:** PERSIST-017 created `V11__staging_correlation_id.sql` and PERSIST-020 created `V11__connections_full_schema.sql`. Both exist on `main`. Flyway accepted them on the running database because they were applied during the in-flux period. A fresh `flyway migrate` on a clean database will fail on the version conflict. One file must be renumbered (to V15) before the first clean-database deploy.
+- **Duplicate V11 — RESOLVED:** PERSIST-017 created `V11__staging_correlation_id.sql` and PERSIST-020 initially created `V11__connections_full_schema.sql`. The PERSIST-020 file was renumbered to `V15__connections_full_schema.sql` before merge. As of 2026-05-18 the migration directory has no version conflicts and a fresh `flyway migrate` on a clean database completes without error. All 15 versions are applied and accounted for.
 
-- **Duplicate V12:** PERSIST-018 used V12 and PERSIST-020 initially also used V12. Resolved before merge by renumbering PERSIST-020's to V14.
-
-The duplicate V11 is a known outstanding issue as of milestone completion.
+- **Duplicate V12 — RESOLVED:** PERSIST-018 used V12 and PERSIST-020 initially also used V12. Resolved before merge by renumbering PERSIST-020's to V14.
 
 ### Non-protocol E2E scripts
 
@@ -371,3 +369,63 @@ The `cello-chat.md` command document has been updated with the corrected `cello_
 The workspace test count has grown since the original 962. PERSIST-016 through PERSIST-021 added integration tests across 6 new test files. The non-protocol E2E scripts are standalone and not included in the Vitest count.
 
 M4 is effectively complete at the component level. The milestone close gate (PERSIST-E2E-001 protocol walkthrough) is the next and final step.
+
+---
+
+## Addendum — First Successful Live Session (2026-05-19)
+
+*Written after the first fully successful two-agent FROST-signed conversation over the M4 session layer.*
+
+### Additional bugs found during live session bring-up
+
+Before the conversation could run cleanly, four more bugs were found and fixed during session bring-up on 2026-05-19.
+
+**1. `connection_requests` never written to during live flow — SI-001 guard fired.**
+The `createConnection()` method in `PgDirectoryStore` has an SI-001 guard that validates a matching `ACCEPTED` row exists in `connection_requests` before inserting a `connections` row. This guard was correct by design — it prevents fabricated `connectionId` values from creating spurious connection records. However, no code in `directory-node.ts` ever inserted into `connection_requests` during the live connection flow. The table was only populated by test fixtures via direct SQL. Result: every real connection attempt crashed the directory with `"no matching accepted row in connection_requests (SI-001)"`.
+
+**Fix:** Added `recordAcceptedConnectionRequest()` to the `DirectoryStore` interface and implemented it in `PgDirectoryStore` (INSERT into `connection_requests` with `outcome='ACCEPTED'` via `insertWithChain`). Added a no-op stub in `InMemoryDirectoryStore`. Wired the call in `directory-node.ts` immediately before `createConnection()` when a `connection_response { verdict: 'accept' }` arrives.
+
+**2. Agents could not reconnect to directory without restarting it.**
+When a Claude Code session ends and a new one opens, the MCP server starts with a fresh `CelloClient` with no in-memory `RegistrationState`. The agent calls `cello_register()`, the client sends DKG round-1 to the directory, the directory finds the profile already in Postgres and returns `register_error { reason: "already_registered" }`. The client treated this as a fatal error. Agents were stuck — they couldn't register, couldn't proceed, and the directory had to be restarted to clear state. This defeated the entire purpose of M4 persistence.
+
+**Fix:** Extended `RegisterError` with optional `agent_id`, `primary_pubkey`, and `ml_dsa_pubkey` fields (only populated for `already_registered`). The directory now calls `getProfile()` instead of `hasProfile()` and includes the profile data in the error frame. The client treats `already_registered` with profile data as a success path — it reconstructs `RegistrationState` and proceeds. No DKG ceremony runs; the existing FROST shares remain valid.
+
+**3. `already_connected` left agents stranded with no connection ID.**
+When a session ends and a new one begins, the client has no in-memory connection state. `cello_request_connection()` sends a fresh request; the directory finds the persisted connection in Postgres and returns `already_connected`. The original response carried no `connection_id`, so the client couldn't hydrate its connection store. The agent knew a connection existed but had no ID to use for session initiation.
+
+**Fix (two parts):** Extended `ConnectionRequestError` with an optional `connection_id` field (only set for `already_connected`). Updated `encodeConnectionRequestError()` in `directory-frames.ts` to include `connection_id` in the serialized frame (the initial fix missed this encoder and the field was dropped on the wire). Updated the client to treat `already_connected` with a `connection_id` as a success path — it hydrates `#connections` and `#connectionsByPeer` and returns `{ result: "established", connection_id }`, the same shape as a fresh connection.
+
+**4. `cello-chat.md` instruction gaps.**
+Two rough edges in the operator instructions surfaced during the session:
+- Agent B with `open` policy never receives a connection request notification (auto-accept is silent). The original instructions had B waiting for `cello_await_connection_request`, which never fires with open policy. Fixed to skip Step 2 entirely with open policy and fall back to `cello_list_sessions` when `cello_await_session` times out.
+- When B seals first, A's `cello_close_session` returns `{ status: "seal_rejected", reason: "session_not_active" }`. The instructions now explicitly tell A to call `cello_list_sessions()` in this case to confirm the sealed state.
+
+### The conversation itself
+
+The first successful session ran on 2026-05-19. Two Claude agents — Agent A (`170138f0...`) and Agent B (`8b6dde20...`) — connected, established a FROST-signed session via the live directory, and conducted a 10-message exchange about the M4 write-up. 12 leaves committed (genesis + 10 message leaves + seal leaf). Sealed root: `04cba371...`. B sealed first; A confirmed via `cello_list_sessions`.
+
+The full session transcript is in [[agent-conversation-m4-writeup-review-2026-05-19]].
+
+### Issues the agents identified
+
+The agents read the M4 write-up as the topic of their conversation and surfaced two findings:
+
+**Finding 1: BIGINT coercion correctness is not tested dynamically.**
+PERSIST-021's static gate (AC-005) checks that `BIGINT_COLUMNS` is complete against the migration DDL. It does not verify round-trip behavior — no test sends a known BIGINT to real Postgres, reads it back, and asserts `typeof result === 'number'`. The BIGINT-as-string bug appeared twice in M4 (initial integration tests + first live session) under a "should" policy. The agents correctly noted this will resurface in M5 without intervention.
+
+**Status:** Real gap. Fixed in `/cello-story` — round-trip type test is now a mandatory AC for any story touching `deserializeRow()` or `BIGINT_COLUMNS`. Existing code still lacks this test; it must be written as part of the integration test pass before M4 fully closes.
+
+**Finding 2: Duplicate V11 migration as a hard blocker.**
+The agents flagged the duplicate V11 as a prerequisite for PERSIST-E2E-001 on a clean database, citing the Flyway version conflict. This was accurate based on the M4 writeup they read — the writeup described it as an outstanding issue.
+
+**Status:** Not a current issue. The rename to V15 happened the evening before (2026-05-18 18:58), before the agents had their conversation. The writeup was stale. Updated above to reflect the resolved state.
+
+### What remains for PERSIST-E2E-001 (updated)
+
+The non-protocol E2E scripts all pass. One successful multi-process conversation has completed. The remaining items for the milestone close gate:
+
+- **AC-001** — formally verify `conversation_hash_entries` contains the correct chain across 10 messages, queried from a separate process after seal. The live session proved the happy path works end-to-end; the formal AC requires an explicit verification step.
+- **AC-003** — gap-fill scenario: not yet run. Requires simulating B missing tail leaves.
+- **AC-004 / AC-005** — unilateral seal: not yet run. Requires terminating B's process and waiting out `delivery_grace_seconds`.
+- **AC-009 / AC-009a** — MMR inclusion proof: the live session produced `checkpoint_status: "pending"` (AC-009a confirmed observable). AC-009 requires a confirmed checkpoint and independent proof verification — not yet run.
+- **BIGINT round-trip type test** — must be written before the close gate is declared complete.
