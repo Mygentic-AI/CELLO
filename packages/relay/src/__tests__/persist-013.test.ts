@@ -267,30 +267,24 @@ describe("FileSessionWal", () => {
     expect(stats.size).toBeGreaterThan(0);
   });
 
-  // ─── AC-002: e2e crash+restart (SKIP — requires real relay process) ───────
-
-  describe.skip("AC-002 (e2e): crash + restart reconstruction", () => {
-    /**
-     * This test requires:
-     *   1. A real relay process (spawned via child_process.spawn)
-     *   2. Real libp2p network
-     *   3. Ability to SIGKILL the process and restart it
-     *   4. Agent clients that can detect the relay has restarted without re-submitting
-     *
-     * To run this test manually:
-     *   - Set CELLO_ENV=dev and WAL_DIR to a temp directory
-     *   - Spawn a relay with 2 connected agents
-     *   - Submit 6 hash_submit frames, capture ACKs 1-6
-     *   - SIGKILL the relay process
-     *   - Restart the relay (same WAL_DIR)
-     *   - Call reconstruct("sessionId") — expect leafCount=6
-     *   - Verify relay accepts sequence_number=7 without error
-     *   - Verify NO agent re-submission was required
-     */
-    it("relay reconstructs session with sequence_number=6 after crash, accepts seq=7", () => {
-      // Placeholder — see documentation above for what needs to run for this to pass
-    });
-  });
+  // ─── AC-002: e2e crash+restart ───────────────────────────────────────────
+  // FileSessionWal.reconstruct() correctness is covered by:
+  //   packages/e2e-tests/scripts/test-wal-crash-recovery.mjs
+  // That script verifies: WAL file write/read, reconstruct() returns correct leaf count and
+  // sequence order, SI-002 (WAL has no seal submission methods). Run via:
+  //   node packages/e2e-tests/scripts/test-wal-crash-recovery.mjs
+  //
+  // What the script does NOT cover (requires spawned relay process + SIGKILL):
+  //   - A live relay accepts hash_submit frames from real agents
+  //   - SIGKILL terminates the process mid-session
+  //   - Restarted relay reconstructs in-memory Merkle state from WAL
+  //   - Relay accepts the next sequence number without agent re-submission
+  //   - Seal completes successfully after reconstruction
+  //
+  // This full cycle requires child_process.spawn with a compiled relay binary,
+  // real libp2p agent clients, and cross-process sequence number verification.
+  // Implementation path: add to packages/e2e-tests/scripts/ as test-relay-crash-e2e.mjs
+  // using the same spawn pattern as test-wal-crash-recovery.mjs.
 
   // ─── AC-003: Corrupt entry 7 ─────────────────────────────────────────────
 
