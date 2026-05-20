@@ -162,6 +162,8 @@ Print what you're about to say, then call `cello_send({ session_id: "<hex>", con
 
 ## Step 8 — Close
 
+**The "ready to seal" message is the last message you send. After sending it, call `cello_close_session` immediately — do NOT call `cello_receive` again.** Waiting for a reply will always time out because B seals directly without sending a confirmation.
+
 Call `cello_close_session({ session_id: "<hex>" })`.
 
 Expected when you seal first:
@@ -242,7 +244,9 @@ Same as Agent A Step 7.
 
 ## Step 5 — Close
 
-When Agent A signals they are ready to close, call `cello_close_session({ session_id: "<hex>" })`.
+**When Agent A's message says they are ready to close, call `cello_close_session` immediately — do NOT send a reply message first.** Sending a reply before sealing creates an extra receive loop that leaves A waiting.
+
+Call `cello_close_session({ session_id: "<hex>" })`.
 
 You may seal first (if you call it before A does) or second. Either way is correct:
 - If you seal first: you get `status: "sealed"` with the `sealed_root`.
