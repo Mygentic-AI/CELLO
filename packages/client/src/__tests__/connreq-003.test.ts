@@ -221,11 +221,9 @@ async function makeThreeAgentFixture(
   const regA = await clientA.register("+1111111111");
   if ("error" in regA) throw new Error(`A reg failed: ${String(regA.error)}`);
 
-  const mlDsaB = await mlDsaKeygen();
   const regB = await clientB.register("+2222222222");
   if ("error" in regB) throw new Error(`B reg failed: ${String(regB.error)}`);
 
-  const mlDsaC = await mlDsaKeygen();
   const regC = await clientC.register("+3333333333");
   if ("error" in regC) throw new Error(`C reg failed: ${String(regC.error)}`);
 
@@ -234,17 +232,13 @@ async function makeThreeAgentFixture(
 
   const packageCborB = await buildMinimalPackageCbor(kpA, mlDsaA, regA.primary_pubkey);
   const packageCborC = await buildMinimalPackageCbor(kpA, mlDsaA, regA.primary_pubkey);
-  const packageCborA_for_B = await buildMinimalPackageCbor(kpB, mlDsaB, regB.primary_pubkey);
-  const packageCborA_for_C = await buildMinimalPackageCbor(kpC, mlDsaC, regC.primary_pubkey);
 
   return {
     clientA, clientB, clientC,
     kpA, kpB, kpC,
-    regA, regB, regC,
-    mlDsaA, mlDsaB, mlDsaC,
+    regA,
     pubkeyB, pubkeyC,
     packageCborB, packageCborC,
-    packageCborA_for_B, packageCborA_for_C,
   };
 }
 
