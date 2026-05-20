@@ -22,7 +22,11 @@ behavior:
       phone_stub_hash TEXT UNIQUE NOT NULL, email_stub_hash TEXT, created_at TIMESTAMPTZ,
       chain_hash TEXT NOT NULL) with RLS insert_only + select_all policies for
       cello_service, and add an account_id UUID column to agent_profiles with a
-      FK reference to user_accounts.account_id"
+      FK reference to user_accounts.account_id.
+      phone_stub_hash = SHA-256(phone_stub) per FIPS 180-4 — same convention as
+      agent_profiles.phone_stub_hash (see protocol-types/src/registration.ts SI-001).
+      chain_hash genesis value is CHAIN_GENESIS = SHA-256('CELLO_CHAIN_GENESIS') per
+      hash-chain.ts — insertWithChain handles this automatically for an empty table."
 
   - trigger: "When an agent_profile row is inserted via PgDirectoryStore"
     action: "the directory shall accept an optional account_id parameter; if provided,
@@ -175,5 +179,4 @@ references:
     - CELLO-M6-onboarding  # M6 registration ceremony creates user_accounts rows
     - CELLO-M7-portal      # M7 portal lists agents by account
     - CELLO-M8-trust-aggregation  # M8 aggregates signals across account agents
-  component_stories:
-    - CELLO-ACCOUNT-001  # this story — schema + PgDirectoryStore methods
+  component_stories: []
