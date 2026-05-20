@@ -1,5 +1,5 @@
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-INFRA-001
+id: CELLO-DEPLOY-001
 domain: Infrastructure
 actor: DEVELOPER
 priority: P0

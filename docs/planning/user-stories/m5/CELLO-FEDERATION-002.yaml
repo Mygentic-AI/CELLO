@@ -1,6 +1,6 @@
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-INFRA-003
-domain: Node Operations
+id: CELLO-FEDERATION-002
+domain: Federation
 milestone: M5
 actor: DIR
 priority: P0
@@ -355,9 +355,9 @@ references:
     - "2026-05-16_0753_development-pipeline-and-local-iteration"
     - "2026-05-16_0900_m4-infrastructure-decisions"
   milestone_outline: "docs/planning/user-stories/m5/outline.md"
-  e2e_story: CELLO-INFRA-E2E-001
+  e2e_story: CELLO-FEDERATION-E2E-001
   depends_on:
-    - CELLO-INFRA-001
-    - CELLO-INFRA-002
+    - CELLO-DEPLOY-001
+    - CELLO-FEDERATION-001
   blocks:
-    - CELLO-INFRA-E2E-001
+    - CELLO-FEDERATION-E2E-001

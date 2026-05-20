@@ -1,6 +1,6 @@
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-INFRA-011
-domain: Node Operations
+id: CELLO-SECOPS-002
+domain: Security Operations
 milestone: M5
 actor: DIR
 priority: P0
@@ -210,11 +210,11 @@ references:
     - "2026-05-16_0753_development-pipeline-and-local-iteration"
     - "2026-05-16_0900_m4-infrastructure-decisions"
   milestone_outline: "docs/planning/user-stories/m5/outline.md"
-  e2e_story: CELLO-INFRA-E2E-001
+  e2e_story: CELLO-FEDERATION-E2E-001
   depends_on:
-    - CELLO-INFRA-002
-    - CELLO-INFRA-003
-    - CELLO-INFRA-004
-    - CELLO-INFRA-009
-    - CELLO-INFRA-010
+    - CELLO-FEDERATION-001
+    - CELLO-FEDERATION-002
+    - CELLO-DEPLOY-002
+    - CELLO-RELAY-001
+    - CELLO-SECOPS-001
   blocks: []

@@ -1,5 +1,5 @@
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-INFRA-014
+id: CELLO-PERSIST-022
 domain: Persistence
 milestone: M5
 actor: CLIENT
@@ -203,10 +203,10 @@ references:
   discussion_logs:
     - "2026-05-16_0753_development-pipeline-and-local-iteration"
   milestone_outline: "docs/planning/user-stories/m5/outline.md"
-  e2e_story: CELLO-INFRA-E2E-001
+  e2e_story: CELLO-FEDERATION-E2E-001
   depends_on:
     - CELLO-PERSIST-009
     - CELLO-PERSIST-010
     - CELLO-PERSIST-011
-    - CELLO-INFRA-001
+    - CELLO-DEPLOY-001
   blocks: []

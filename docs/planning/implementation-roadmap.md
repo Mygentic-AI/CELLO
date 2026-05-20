@@ -141,7 +141,7 @@ Fully specified stories live in `docs/planning/user-stories/m0/`. The table belo
 | ID | Title | Domain | Actor | Priority | Components | Depends on |
 |---|---|---|---|---|---|---|
 | CELLO-SCAFFOLD-001 | Monorepo scaffold: pnpm workspaces, TypeScript project references, Vitest workspace, per-package buildspecs | Infrastructure | DEVELOPER | P0 | monorepo | — |
-| CELLO-INFRA-001 | AWS CI/CD: per-package CodeBuild + CodePipeline wired via EventBridge path-filter | Infrastructure | DEVELOPER | P0 | aws-infrastructure | SCAFFOLD-001 |
+| CELLO-DEPLOY-001 | AWS CI/CD: per-package CodeBuild + CodePipeline wired via EventBridge path-filter | Infrastructure | DEVELOPER | P0 | aws-infrastructure | SCAFFOLD-001 |
 | CELLO-CRYPTO-001 | Ed25519 keypair generation, signing, verification; InMemoryKeyProvider + FileKeyProvider | Crypto | CLIENT | P0 | crypto | SCAFFOLD-001 |
 | CELLO-CRYPTO-002 | SHA-256 hashing with domain separation | Crypto | CLIENT | P0 | crypto | SCAFFOLD-001 |
 | CELLO-MSG-001 | Signed envelope v0 schema (no session, no sequence) | Message Exchange | CLIENT | P0 | protocol-types | CRYPTO-001, CRYPTO-002 |

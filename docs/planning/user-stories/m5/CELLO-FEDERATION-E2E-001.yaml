@@ -1,6 +1,6 @@
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-INFRA-E2E-001
-domain: Node Operations
+id: CELLO-FEDERATION-E2E-001
+domain: Federation
 milestone: M5
 actor: DIR
 priority: P0
@@ -415,18 +415,18 @@ references:
     - "2026-04-08_1700_node-architecture-and-replication"
   milestone_outline: "docs/planning/user-stories/m5/outline.md"
   component_stories:
-    - CELLO-INFRA-001  # IaC — multi-region VPC/RDS/ECS/KMS templates
-    - CELLO-INFRA-002  # PostgreSQL logical replication + session ownership
-    - CELLO-INFRA-003  # Checkpoint cross-signing + coordinator failover
-    - CELLO-INFRA-004  # ECS directory service deployment
-    - CELLO-INFRA-005  # ECS relay service deployment
-    - CELLO-INFRA-006  # Relay public key registration
-    - CELLO-INFRA-007  # CodePipeline + Lambda router (CI/CD)
-    - CELLO-INFRA-008  # Staging environment + smoke test gate
-    - CELLO-INFRA-009  # Relay pool manifest + health checks
-    - CELLO-INFRA-010  # AuditLogShipper (S3AuditLogShipper)
-    - CELLO-INFRA-011  # CloudWatch alarms + dashboards
-    - CELLO-INFRA-012  # WAF + Shield Standard
-    - CELLO-INFRA-013  # Secrets rotation + ACM
-    - CELLO-INFRA-014  # CloudStorageProvider S3 (deferred from PERSIST-011)
-    - CELLO-INFRA-015  # NotificationQueue reliability (deferred from PERSIST-015)
+    - CELLO-DEPLOY-001  # IaC — multi-region VPC/RDS/ECS/KMS templates
+    - CELLO-FEDERATION-001  # PostgreSQL logical replication + session ownership
+    - CELLO-FEDERATION-002  # Checkpoint cross-signing + coordinator failover
+    - CELLO-DEPLOY-002  # ECS directory service deployment
+    - CELLO-DEPLOY-003  # ECS relay service deployment
+    - CELLO-FEDERATION-003  # Relay public key registration
+    - CELLO-DEPLOY-004  # CodePipeline + Lambda router (CI/CD)
+    - CELLO-DEPLOY-005  # Staging environment + smoke test gate
+    - CELLO-RELAY-001  # Relay pool manifest + health checks
+    - CELLO-SECOPS-001  # AuditLogShipper (S3AuditLogShipper)
+    - CELLO-SECOPS-002  # CloudWatch alarms + dashboards
+    - CELLO-SECOPS-003  # WAF + Shield Standard
+    - CELLO-SECOPS-004  # Secrets rotation + ACM
+    - CELLO-PERSIST-022  # CloudStorageProvider S3 (deferred from PERSIST-011)
+    - CELLO-PERSIST-023  # NotificationQueue reliability (deferred from PERSIST-015)

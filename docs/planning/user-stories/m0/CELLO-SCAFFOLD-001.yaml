@@ -17,7 +17,7 @@ story: >
 
   The scaffold is the prerequisite for every other M0 story. No story can have a passing
   test until the Vitest workspace runs. No PR can trigger CI until the CodeBuild pipelines
-  exist (see CELLO-INFRA-001 for the AWS wiring). SCAFFOLD-001 is done when `pnpm test`
+  exist (see CELLO-DEPLOY-001 for the AWS wiring). SCAFFOLD-001 is done when `pnpm test`
   passes locally with a smoke test in each package.
 
   **Monorepo layout:**
@@ -106,7 +106,7 @@ story: >
   ```
 
   The AWS pipeline wiring (EventBridge path-filter Lambda, CodePipeline per package,
-  CodeBuild project per package) is covered by CELLO-INFRA-001 and is not in scope here.
+  CodeBuild project per package) is covered by CELLO-DEPLOY-001 and is not in scope here.
   SCAFFOLD-001 is done when the `buildspec.yml` files exist and `pnpm test` passes locally.
 
 # ─── Behavior (EARS) ───────────────────────────────────────
