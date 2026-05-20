@@ -29,7 +29,7 @@ The current milestone roadmap is capability-centric (M0–M14), focusing on prot
 | **4** | **M8** | **Beta Hardening:** Security Pipeline (DeBERTa/Sanitization); "Not Me" trigger; Account-level trust aggregation verification. |
 
 ## 4. Execution Strategy
-*   **Product-Bridge:** Onboarding registration (M6) generates a `Correlation Token` that links the bot-verified `AccountID` to the web portal login.
+*   **Product-Bridge:** Portal login uses a standard magic link sent to the M6-verified email address, immediately followed by WebAuthn/PIN enrollment on first login. The bot's sole responsibility is issuing the Pre-Authorization token used by the agent CLI for its local FROST ceremony.
 *   **Multi-Agent First:** All backend/schema work in M5 and M6 must support the `1:N Account-to-Agent` architecture from day one.
 *   **Integration Gates:** Every sprint includes its own automated end-to-end test suite as a hard close gate, preventing "product-layer" regressions as we build.
 *   **Constraint:** The development loop is sequential (M5→M6→M7→M8). No milestone is considered complete until it passes its live, multi-process E2E smoke test in the staging environment.
