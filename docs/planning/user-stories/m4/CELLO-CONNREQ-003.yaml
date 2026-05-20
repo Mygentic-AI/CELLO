@@ -1,0 +1,155 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-CONNREQ-003
+domain: Connection Requests
+milestone: M4
+actor: CLIENT
+priority: P0
+components:
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want concurrent outbound connection requests to different targets and
+  concurrent inbound connection request handling,
+  so that a merchant agent can initiate connections to N counterparties
+  simultaneously (fan-out) and a busy agent can accept multiple inbound
+  requests without them queuing behind a single-slot bottleneck.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When cello_request_connection is called for target B while a
+      cello_request_connection to target C is already in flight"
+    action: "the client shall track both requests independently — each has its
+      own resolver keyed by target pubkey — and both shall resolve when their
+      respective directory responses arrive, without either blocking the other"
+
+  - trigger: "When cello_request_connection is called for target B while another
+      cello_request_connection to the same target B is already in flight"
+    action: "the client shall return an error immediately: { result: 'error',
+      reason: 'connection_request_in_flight' } — duplicate concurrent requests
+      to the same target are rejected client-side without sending a second frame
+      to the directory"
+
+  - trigger: "When cello_await_connection_request is called while a previous
+      cello_await_connection_request is still waiting"
+    action: "the client shall support multiple concurrent await calls; each
+      resolves independently when a distinct inbound connection request arrives
+      for that caller"
+
+  - trigger: "When an inbound connection_request_inbound frame arrives from
+      the directory and multiple cello_await_connection_request calls are pending"
+    action: "the client shall deliver the frame to exactly one waiting caller
+      (FIFO order); the other callers continue waiting"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Agent A is registered; targets B and C are registered and listening"
+    when: "Agent A calls cello_request_connection(B) and cello_request_connection(C)
+      without awaiting the first"
+    then: "both calls resolve with { result: 'established', connection_id } — each
+      independently — AND the directory receives two distinct connection_request frames
+      (verified by asserting two [CONN] log entries in the directory for different
+      target pubkeys within a 2-second window); neither call blocks the other"
+    test_type: integration
+    component_under_test: client
+    notes: "Uses session-fixture with opts.register: true for all three agents.
+      Verifies transport evidence (two directory [CONN] entries) not just return values."
+
+  - id: AC-002
+    given: "Agent A already has a cello_request_connection to target B in flight"
+    when: "Agent A calls cello_request_connection(B) a second time before the first resolves"
+    then: "the second call returns { result: 'error', reason: 'connection_request_in_flight' }
+      immediately; only one connection_request frame was sent to the directory (verified
+      by asserting exactly one [CONN] log entry for target B in the directory)"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-003
+    given: "Agent B has called cello_await_connection_request twice (two concurrent
+      await calls)"
+    when: "two connection requests arrive from agents A1 and A2 in rapid succession"
+    then: "each await call resolves with a distinct connection request (one for A1,
+      one for A2); no request is dropped or delivered to both callers; both connections
+      can be accepted independently"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-004
+    given: "Agent A has active connections to B and C from concurrent fan-out"
+    when: "Agent A calls cello_initiate_session(B) and cello_initiate_session(C)"
+    then: "both sessions establish successfully; cello_list_sessions returns two
+      active sessions with distinct session_ids and distinct counterparty pubkeys"
+    test_type: integration
+    component_under_test: client
+    notes: "End-to-end merchant fan-out smoke test — the scenario this story enables."
+
+  - id: AC-005
+    given: "The client's connection resolver map is examined after two concurrent
+      requests to different targets both resolve"
+    when: "the map is inspected"
+    then: "both resolver slots have been cleaned up — the map is empty; no memory
+      leak from stale resolvers"
+    test_type: unit
+    component_under_test: client
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "A connection_established frame for target B shall never resolve
+      a pending cello_request_connection for a different target C"
+    adversarial_condition: "even when connection_established frames arrive out
+      of order (C's response arrives before B's) — the resolver map keyed by
+      target pubkey ensures each frame resolves only its own caller"
+    test_type: unit
+    component_under_test: client
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While a concurrent cello_request_connection to target B times out
+      (directory unreachable)"
+    fallback: "the timed-out slot is cleaned from the resolver map; the concurrent
+      request to target C is unaffected and continues waiting for its own response"
+    test_type: unit
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: connection.request.sent
+      level: info
+      trigger: "cello_request_connection sends a frame to the directory"
+      context_fields: [targetPubkeyHex, correlationId]
+      correlationId: true
+
+    - name: connection.established
+      level: info
+      trigger: "connection_established frame received and resolver resolved"
+      context_fields: [connectionId, counterpartyPubkeyHex, correlationId]
+      correlationId: true
+
+  error_events:
+    - name: connection.request.duplicate
+      level: warn
+      trigger: "cello_request_connection called while same target already in flight"
+      context_fields: [targetPubkeyHex]
+
+    - name: connection.request.failed
+      level: error
+      trigger: "connection_request_error received from directory"
+      context_fields: [targetPubkeyHex, reason, correlationId]
+
+  alarms: []
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Connection Requests"
+  milestone: M4
+  discussion_logs:
+    - "2026-05-20_1142_multi-session-fan-in-fan-out"
+  depends_on:
+    - CELLO-CONNREQ-002  # base connection request flow this extends
+  component_stories:
+    - CELLO-SESSION-007  # fan-in and session lifecycle — the inbound side of multi-session

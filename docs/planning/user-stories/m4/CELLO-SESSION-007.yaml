@@ -1,0 +1,193 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-SESSION-007
+domain: Session Lifecycle
+milestone: M4
+actor: CLIENT
+priority: P0
+components:
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client,
+  I want cello_receive to hint when other sessions have pending messages,
+  a new cello_receive_any tool that returns messages from any active session,
+  and both tools to surface session_sealed events inline,
+  so that a merchant agent with multiple active sessions can efficiently drain
+  its inbound queue and learn when any session closes — without polling,
+  without calling cello_close_session to discover a seal it didn't initiate,
+  and without operator instructions to work around the missing feedback.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When cello_receive returns a message and other active sessions
+      have at least one queued inbound message"
+    action: "the client shall include other_sessions_pending: [<session_id>, ...]
+      in the response — an array of session IDs (excluding the current session)
+      that have queued messages waiting; the array is omitted or empty when no
+      other sessions have pending messages"
+
+  - trigger: "When cello_receive_any is called with a timeout_ms"
+    action: "the client shall return the next inbound message from any active
+      session, whichever arrives first, including session_id in the response
+      so the caller knows which session it came from; other_sessions_pending
+      lists any additional sessions with further queued messages"
+
+  - trigger: "When a session_sealed frame arrives from the directory for any
+      session while a cello_receive or cello_receive_any call is blocked waiting"
+    action: "the client shall enqueue a lifecycle event in the session's inbound
+      queue and wake the waiting call, which returns { type: 'session_sealed',
+      session_id, sealed_root, close_timestamp, checkpoint_status }"
+
+  - trigger: "When a session_sealed frame arrives for session S while no
+      cello_receive call is active on session S"
+    action: "the client shall enqueue the lifecycle event so the next
+      cello_receive(session_id: S) or cello_receive_any call will return it"
+
+  - trigger: "When cello_receive_any is called and no session has pending
+      messages within timeout_ms"
+    action: "the client shall return { type: 'timeout' }"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Agent A has two active sessions S1 and S2; S2 has a queued inbound message"
+    when: "Agent A calls cello_receive({ session_id: S1, timeout_ms: 5000 }) and a
+      message arrives on S1"
+    then: "the response includes the S1 message AND other_sessions_pending: [S2];
+      a subsequent cello_receive({ session_id: S2 }) returns the queued S2 message"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-002
+    given: "Agent A has two active sessions S1 and S2; both have queued messages"
+    when: "Agent A calls cello_receive_any({ timeout_ms: 5000 })"
+    then: "the response includes session_id (either S1 or S2), the message content,
+      and other_sessions_pending listing the other session; calling cello_receive_any
+      again returns the remaining session's message"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-003
+    given: "Agent A is in cello_receive({ session_id: S1, timeout_ms: 30000 }) and
+      Agent B (in a separate process) calls cello_close_session on session S1 —
+      sealing it via the FROST ceremony — while Agent A has NOT called
+      cello_close_session"
+    when: "the directory completes the seal and pushes session_sealed to Agent A's
+      signaling stream"
+    then: "Agent A's blocked cello_receive call returns { type: 'session_sealed',
+      session_id: S1, sealed_root: <64-hex>, close_timestamp: <unix-ms>,
+      checkpoint_status: 'pending' } WITHOUT Agent A having called cello_close_session;
+      verified by running Agent A and Agent B as separate OS processes with no shared
+      memory — the session_sealed event must arrive via the directory's signaling
+      stream, not via in-process state"
+    test_type: e2e
+    component_under_test: client
+    notes: "This is the canonical test for the UX fix. A hollow test (same process,
+      shared client) cannot satisfy this AC — the seal must travel via the real
+      libp2p stream."
+
+  - id: AC-004
+    given: "Agent A is in cello_receive_any({ timeout_ms: 30000 }) with two active
+      sessions; Agent B seals session S1 from a separate process"
+    when: "the seal arrives on Agent A's signaling stream"
+    then: "cello_receive_any returns { type: 'session_sealed', session_id: S1,
+      sealed_root, close_timestamp, checkpoint_status }; session S2 is unaffected
+      and Agent A can continue receiving messages on S2"
+    test_type: e2e
+    component_under_test: client
+
+  - id: AC-005
+    given: "Agent A is in cello_receive_any with no pending messages on any session"
+    when: "timeout_ms elapses without any message or seal event"
+    then: "cello_receive_any returns { type: 'timeout' }"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-006
+    given: "A session_sealed event is enqueued for session S while no cello_receive
+      call is active"
+    when: "cello_receive({ session_id: S }) is subsequently called"
+    then: "the queued session_sealed event is returned immediately (no waiting for
+      timeout); the event includes sealed_root, close_timestamp, and checkpoint_status"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-007
+    given: "The cello-chat.md operator instructions contain workarounds for the
+      previous seal detection behavior (don't wait for confirmation, check
+      list_sessions, handle seal_rejected from cello_close_session)"
+    when: "SESSION-007 is implemented"
+    then: "cello-chat.md is updated: Agent B's Step 5 describes calling cello_receive
+      until { type: 'session_sealed' } arrives; the workaround instructions are
+      removed; cello_close_session is documented as the initiating-party-only tool"
+    test_type: unit
+    component_under_test: client
+    notes: "Documentation test — verifiable by reading the updated cello-chat.md."
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "A session_sealed event for session S shall never be delivered
+      to a cello_receive call blocked on a different session S2"
+    adversarial_condition: "even when cello_receive(S2) is the only active
+      receive call — the session_sealed event for S must wait in S's own queue
+      until cello_receive(S) or cello_receive_any is called; it must not be
+      consumed by a call targeting the wrong session"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: "The sealed_root in a session_sealed event surfaced through
+      cello_receive shall equal the sealed_root committed by the directory
+      and readable via cello_list_sessions"
+    adversarial_condition: "even when the session_sealed frame arrives before
+      cello_list_sessions is called — the value must come from the signed
+      directory frame, not from local Merkle state"
+    test_type: integration
+    component_under_test: client
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the directory signaling stream is temporarily disconnected
+      when a session is sealed"
+    fallback: "on reconnect, the directory re-delivers any queued session_sealed
+      frames; the client enqueues them for the next cello_receive or
+      cello_receive_any call; no seal event is silently dropped"
+    test_type: integration
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: session.sealed.received
+      level: info
+      trigger: "session_sealed frame arrives on signaling stream and is enqueued
+        as a lifecycle event for cello_receive"
+      context_fields: [sessionId, sealedRoot, closeTimestamp, checkpointStatus, correlationId]
+      correlationId: true
+
+    - name: session.receive.pending_hint
+      level: info
+      trigger: "cello_receive or cello_receive_any returns a result with
+        other_sessions_pending non-empty"
+      context_fields: [currentSessionId, pendingSessionCount, correlationId]
+      correlationId: true
+
+  error_events: []
+
+  alarms: []
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Session Lifecycle"
+  milestone: M4
+  discussion_logs:
+    - "2026-05-20_1142_multi-session-fan-in-fan-out"
+    - "agent-conversation-m4-2026-05-20-protocol-proof"
+  depends_on:
+    - CELLO-CONNREQ-003  # multi-session fan-out — precondition for having multiple sessions
+    - CELLO-PERSIST-017  # checkpoint_status field — required for session_sealed response shape
+  component_stories:
+    - CELLO-PERSIST-E2E-001  # AC-003 and AC-004 require the E2E test harness

@@ -1,0 +1,179 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-ACCOUNT-001
+domain: Account
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Directory,
+  I want a user_accounts table with an account_id FK on agent_profiles
+  so that multiple AgentIDs belonging to the same human operator can be
+  grouped under one AccountID, enabling M6 onboarding, M7 portal management,
+  and M8 trust signal aggregation across all of an operator's agents.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a Flyway migration runs against the production RDS instance"
+    action: "the directory shall create a user_accounts table (account_id UUID PRIMARY KEY,
+      phone_stub_hash TEXT UNIQUE NOT NULL, email_stub_hash TEXT, created_at TIMESTAMPTZ,
+      chain_hash TEXT NOT NULL) with RLS insert_only + select_all policies for
+      cello_service, and add an account_id UUID column to agent_profiles with a
+      FK reference to user_accounts.account_id"
+
+  - trigger: "When an agent_profile row is inserted via PgDirectoryStore"
+    action: "the directory shall accept an optional account_id parameter; if provided,
+      the FK constraint ensures the account_id references a valid user_accounts row
+      before the INSERT succeeds"
+
+  - trigger: "When PgDirectoryStore.getAgentsByAccount(accountId) is called"
+    action: "the directory shall return all agent_profiles rows whose account_id
+      matches the given UUID, ordered by registered_at ASC"
+
+  - trigger: "If an INSERT into agent_profiles includes an account_id that does not
+      exist in user_accounts"
+    action: "PostgreSQL shall reject the INSERT with a foreign key violation before
+      any application code runs"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Flyway migrations V16 and V17 have been applied to a clean database"
+    when: "the schema is inspected via information_schema"
+    then: "user_accounts table exists with columns account_id (UUID PK), phone_stub_hash
+      (TEXT UNIQUE NOT NULL), email_stub_hash (TEXT), created_at (TIMESTAMPTZ DEFAULT now()),
+      chain_hash (TEXT NOT NULL); agent_profiles has an account_id UUID column with a FK
+      to user_accounts.account_id that allows NULL (agents registered before M6 have no
+      account); both tables have RLS enabled with insert_only and select_all policies
+      for cello_service"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "A user_accounts row exists for account_id X"
+    when: "two agent_profile rows are inserted with account_id = X"
+    then: "both rows are accepted; getAgentsByAccount(X) returns exactly those two rows
+      in registered_at order; a fresh PgDirectoryStore instance (no cache) returns the
+      same result — proving Postgres persistence, not in-memory state"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A user_accounts row with phone_stub_hash H exists"
+    when: "a second user_accounts INSERT attempts to use the same phone_stub_hash H"
+    then: "the INSERT is rejected with a unique constraint violation; no duplicate row
+      is created; account.phone_stub_hash.duplicate is logged at WARN with
+      { phoneStubHashPrefix } (first 8 chars only — never the full hash)"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "account_id column is NULL on an agent_profiles row (pre-M6 agent)"
+    when: "getAgentsByAccount() is called with any account_id"
+    then: "the pre-M6 agent row is NOT returned; NULL account_id rows are
+      excluded from all account-scoped queries"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A user_accounts row with account_id X has two linked agents"
+    when: "the chain is verified via verifyChain('user_accounts')"
+    then: "verifyChain returns { valid: true }; user_accounts.id (BIGSERIAL) is
+      returned as typeof 'number' after deserializeRow — proving BIGINT_COLUMNS
+      covers the new table"
+    test_type: integration
+    component_under_test: directory
+    notes: "BIGINT_COLUMNS must declare 'id' for user_accounts per PERSIST-021 AC-005
+      static gate. This test is the dynamic correctness check."
+
+  - id: AC-006
+    given: "cello_service role attempts to DELETE or UPDATE a user_accounts row"
+    when: "the query executes against the live Postgres instance"
+    then: "PostgreSQL rejects both with permission denied; the table is append-only
+      for the service role"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "Linking Agent_A to AccountID X shall never expose Agent_A's
+      K_local, FROST shares, or session data to Agent_B also linked to AccountID X"
+    adversarial_condition: "even when both agents share the same account_id in
+      user_accounts and getAgentsByAccount returns both profiles — the profiles
+      contain only public keys and trust metadata, never key material"
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "An agent_profiles INSERT with a fabricated account_id (not in
+      user_accounts) shall be rejected at the database level"
+    adversarial_condition: "even when the calling code passes a well-formed UUID
+      that does not correspond to any user_accounts row — the FK constraint
+      enforces this without application-layer checking"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While the V16/V17 migrations have not yet been applied (e.g. partial
+      deployment where schema is behind)"
+    fallback: "the directory shall fail at startup with migration.out.of.date logged
+      at ERROR with { currentVersion, requiredVersion }; no request is served until
+      migrations complete"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: account.created
+      level: info
+      trigger: "user_accounts INSERT succeeds"
+      context_fields: [accountId, correlationId]
+      correlationId: true
+      notes: "accountId is a UUID; never log phone_stub_hash or email_stub_hash"
+
+    - name: account.agent.linked
+      level: info
+      trigger: "agent_profiles row is inserted with a non-null account_id"
+      context_fields: [accountId, agentId, correlationId]
+      correlationId: true
+
+  error_events:
+    - name: account.phone_stub_hash.duplicate
+      level: warn
+      trigger: "user_accounts INSERT rejected due to unique constraint on phone_stub_hash"
+      context_fields: [phoneStubHashPrefix, correlationId]
+      notes: "phoneStubHashPrefix = first 8 chars of the hash only"
+
+    - name: account.agent.link.failed
+      level: error
+      trigger: "agent_profiles INSERT rejected due to FK violation on account_id"
+      context_fields: [accountId, agentId, reason, correlationId]
+
+  alarms:
+    - condition: "account.agent.link.failed rate > 1% over 5 minutes"
+      fires_to: ops-warning
+      notes: "FK violations at this rate suggest a schema or application bug"
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Registration & Onboarding / Account Identity"
+  milestone: M5
+  discussion_logs:
+    - "2026-05-20_0354_multi-agent-account-architecture"
+    - "2026-05-20_0358_roadmap-revision-beta-launch"
+  depends_on:
+    - CELLO-DEPLOY-001  # IaC templates — user_accounts migration ships in M5 IaC
+    - CELLO-FEDERATION-001  # RDS federation — new tables must replicate across nodes
+  blocks:
+    - CELLO-M6-onboarding  # M6 registration ceremony creates user_accounts rows
+    - CELLO-M7-portal      # M7 portal lists agents by account
+    - CELLO-M8-trust-aggregation  # M8 aggregates signals across account agents
+  component_stories:
+    - CELLO-ACCOUNT-001  # this story — schema + PgDirectoryStore methods
