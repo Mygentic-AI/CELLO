@@ -400,10 +400,61 @@ class CelloClientImpl implements CelloClient {
   /** Callback fired when a disclosure_request_inbound arrives. */
   #onDisclosureRequestedHandler: ((event: import("@cello/protocol-types").DisclosureRequestInbound) => void) | undefined;
 
-  /** Single pending resolver for the in-flight cello_request_connection call.
+  /**
+   * CONNREQ-003: Multi-slot resolver map for concurrent outbound connection requests.
+   * Keyed by target pubkey hex — one slot per unique target.
+   * Replaces the former single-slot #pendingConnectionRequestResolve field.
    * Resolves when connection_established, connection_rejected, connection_insufficient,
-   * connection_request_error, or disclosure_request_inbound arrives. */
-  #pendingConnectionRequestResolve: ((frame: Record<string, unknown>) => void) | null = null;
+   * connection_request_error, or disclosure_request_inbound arrives for that target.
+   *
+   * Pseudocode (Phase P):
+   *   requestConnection(target):
+   *     if map.has(target) → log warn "connection.request.duplicate" → return error immediately
+   *     mint correlationId ; log info "connection.request.sent"
+   *     map.set(target, resolve)
+   *     await outcome / timeout
+   *     map.delete(target)
+   *     on established: log info "connection.established"
+   *     on error: log error "connection.request.failed"
+   *
+   *   signalingReader(connection_established):
+   *     target = frame.counterparty_pubkey
+   *     resolve = map.get(target) ; map.delete(target) ; resolve(frame)
+   *     (if no resolver: B's side — fires #onConnectionEstablishedHandler)
+   */
+  readonly #pendingConnectionRequestResolvers = new Map<string, (frame: Record<string, unknown>) => void>();
+
+  /**
+   * CONNREQ-003: TEST-ONLY escape hatch exposing resolver map size for memory-leak assertions.
+   * Read by connreq-003 tests via (client as any)._pendingConnectionRequestResolverCount.
+   */
+  get _pendingConnectionRequestResolverCount(): number {
+    return this.#pendingConnectionRequestResolvers.size;
+  }
+
+  /**
+   * CONNREQ-003: Promise queue for concurrent awaitConnectionRequest() callers.
+   * Each entry is the resolve fn from one awaitConnectionRequest() call.
+   * When an inbound request arrives, the first queued resolver is called (FIFO).
+   * Replaces the polling-based single-caller pattern for the inbound side.
+   *
+   * Pseudocode (Phase P):
+   *   awaitConnectionRequest(timeoutMs):
+   *     if queue not empty: shift → return immediately with pending_review item
+   *     create Promise, push resolve fn to #pendingAwaitConnectionRequestResolvers
+   *     race against timeout
+   *     on item arrival: first resolver in queue receives the item (FIFO)
+   *
+   *   #handleInboundConnectionRequest (after queuing to #pendingReviewQueue):
+   *     if #pendingAwaitConnectionRequestResolvers.length > 0:
+   *       resolver = shift ; resolver(item) ; return (don't add to #pendingReviewQueue)
+   *     else: add to #pendingReviewQueue as before
+   */
+  readonly #pendingAwaitConnectionRequestResolvers: Array<(item: {
+    connection_request_id: string;
+    from_pubkey: string;
+    report: Extract<import("./connection-policy.js").ConnectionReport, { verdict: "pending_agent_review" }>;
+  }) => void> = [];
 
   /** Pending disclosure_response → resolver (connection_request_id → resolve for cello_respond_to_disclosure_request) */
   readonly #pendingDisclosureResolvers = new Map<string, (result: Record<string, unknown>) => void>();
@@ -3289,8 +3340,19 @@ class CelloClientImpl implements CelloClient {
 
   /**
    * Block until an inbound connection request arrives for agent review,
-   * or until timeoutMs elapses.
-   * Drains from #pendingReviewQueue (FIFO). CELLO-MCP-003.
+   * or until timeoutMs elapses. CELLO-MCP-003.
+   *
+   * CONNREQ-003: Supports multiple concurrent callers via Promise queue
+   * (#pendingAwaitConnectionRequestResolvers). Each caller gets its own Promise.
+   * When a new inbound request arrives, the first waiting resolver is called (FIFO).
+   * If #pendingReviewQueue already has items, the caller returns immediately.
+   *
+   * Pseudocode (Phase P):
+   *   1. if #pendingReviewQueue.length > 0: shift item and return immediately
+   *   2. create Promise with timeout
+   *   3. push resolve fn to #pendingAwaitConnectionRequestResolvers
+   *   4. await Promise.race([itemArrived, timeout])
+   *   5. on arrival: return pending_review ; on timeout: return { type: 'timeout' }
    */
   async awaitConnectionRequest(timeoutMs = 30_000): Promise<
     | {
@@ -3301,22 +3363,59 @@ class CelloClientImpl implements CelloClient {
       }
     | { type: "timeout" }
   > {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (this.#pendingReviewQueue.length > 0) {
-        const item = this.#pendingReviewQueue.shift()!;
-        return {
-          type: "pending_review",
-          connection_request_id: item.connection_request_id,
-          from_pubkey: item.from_pubkey,
-          report: item.report,
-        };
-      }
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) break;
-      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(20, remaining)));
+    // Fast path: if items already queued, return immediately (no Promise overhead)
+    if (this.#pendingReviewQueue.length > 0) {
+      const item = this.#pendingReviewQueue.shift()!;
+      return {
+        type: "pending_review",
+        connection_request_id: item.connection_request_id,
+        from_pubkey: item.from_pubkey,
+        report: item.report,
+      };
     }
-    return { type: "timeout" };
+
+    // CONNREQ-003: multi-slot await via Promise queue.
+    // Each caller registers its resolve fn; when an inbound request arrives,
+    // #handleInboundConnectionRequest calls the first waiting resolver (FIFO).
+    type AwaitItem = {
+      connection_request_id: string;
+      from_pubkey: string;
+      report: Extract<import("./connection-policy.js").ConnectionReport, { verdict: "pending_agent_review" }>;
+    };
+
+    let resolveItem!: (item: AwaitItem) => void;
+    const itemPromise = new Promise<AwaitItem>((resolve) => {
+      resolveItem = resolve;
+    });
+    this.#pendingAwaitConnectionRequestResolvers.push(resolveItem);
+
+    const result: { item: AwaitItem | null } = { item: null };
+    let timedOut = false;
+    await Promise.race([
+      itemPromise.then((i) => { result.item = i; }),
+      new Promise<void>((resolve) => setTimeout(() => { timedOut = true; resolve(); }, timeoutMs)),
+    ]);
+
+    // On timeout: remove our resolver from the queue if it hasn't been consumed yet
+    if (timedOut) {
+      const idx = this.#pendingAwaitConnectionRequestResolvers.indexOf(resolveItem);
+      if (idx !== -1) {
+        this.#pendingAwaitConnectionRequestResolvers.splice(idx, 1);
+      }
+      return { type: "timeout" };
+    }
+
+    const item = result.item;
+    if (!item) {
+      return { type: "timeout" };
+    }
+
+    return {
+      type: "pending_review",
+      connection_request_id: item.connection_request_id,
+      from_pubkey: item.from_pubkey,
+      report: item.report,
+    };
   }
 
   /**
@@ -3340,37 +3439,57 @@ class CelloClientImpl implements CelloClient {
     | { result: "timeout" }
     | { result: "error"; reason: string }
   > {
-    // Ensure the persistent signaling stream is open
-    if (!this.#persistentSignalingStream) {
-      const opened = await this.#openPersistentSignalingStream();
-      if (!opened) {
-        return { result: "error", reason: "directory_unreachable" };
-      }
+    const targetPubkeyHex = opts.target_pubkey;
+
+    // CONNREQ-003 AC-002: reject duplicate concurrent requests to same target immediately.
+    // A second call for the same target while the first is still in flight would overwrite
+    // the first resolver, losing it. Instead, return an error immediately.
+    if (this.#pendingConnectionRequestResolvers.has(targetPubkeyHex)) {
+      this.#logger.warn("connection.request.duplicate", { targetPubkeyHex });
+      return { result: "error", reason: "connection_request_in_flight" };
     }
 
-    // Build the frame
-    const frameBytes = CBOR_ENC.encode({
-      type: "connection_request",
-      target_pubkey: opts.target_pubkey,
-      package_cbor: opts.package_cbor,
-    }) as Uint8Array;
-
-    // Set up Promise that resolves when the directory sends us a connection outcome.
-    // Uses a single slot — only one cello_request_connection in flight at a time.
+    // CONNREQ-003: Reserve this target's slot in the map BEFORE any async work.
+    // This is the earliest possible moment — before stream-open and before the
+    // frame is sent — so that a concurrent duplicate call (AC-002) is rejected
+    // even if the stream open is still in progress.
     let resolveOutcome!: (result: Record<string, unknown>) => void;
     const outcomePromise = new Promise<Record<string, unknown>>((resolve) => {
       resolveOutcome = resolve;
     });
-    this.#pendingConnectionRequestResolve = resolveOutcome;
+    this.#pendingConnectionRequestResolvers.set(targetPubkeyHex, resolveOutcome);
+
+    // Ensure the persistent signaling stream is open
+    if (!this.#persistentSignalingStream) {
+      const opened = await this.#openPersistentSignalingStream();
+      if (!opened) {
+        this.#pendingConnectionRequestResolvers.delete(targetPubkeyHex);
+        return { result: "error", reason: "directory_unreachable" };
+      }
+    }
+
+    // Mint a correlationId for this outbound connection request flow.
+    // Threaded through all log events in this flow (CONNREQ-003 observability ACs).
+    const correlationId = `connreq-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+
+    this.#logger.info("connection.request.sent", { targetPubkeyHex, correlationId });
+
+    // Build the frame
+    const frameBytes = CBOR_ENC.encode({
+      type: "connection_request",
+      target_pubkey: targetPubkeyHex,
+      package_cbor: opts.package_cbor,
+    }) as Uint8Array;
 
     try {
       this.#persistentSignalingStream!.send(lp.encode.single(frameBytes));
     } catch {
-      this.#pendingConnectionRequestResolve = null;
+      this.#pendingConnectionRequestResolvers.delete(targetPubkeyHex);
       return { result: "error", reason: "directory_unreachable" };
     }
 
     // Race: outcome vs connectionTimeoutMs
+    // DB-001: timeout cleans this slot without affecting concurrent requests to other targets.
     let frame: Record<string, unknown> | null = null;
     let timedOut = false;
     await Promise.race([
@@ -3378,8 +3497,10 @@ class CelloClientImpl implements CelloClient {
       new Promise<void>((resolve) => setTimeout(() => { timedOut = true; resolve(); }, this.#connectionTimeoutMs)),
     ]);
 
-    if (this.#pendingConnectionRequestResolve === resolveOutcome) {
-      this.#pendingConnectionRequestResolve = null;
+    // Clean up this target's resolver slot on timeout
+    // (on successful resolution, the signaling reader already deleted it)
+    if (this.#pendingConnectionRequestResolvers.get(targetPubkeyHex) === resolveOutcome) {
+      this.#pendingConnectionRequestResolvers.delete(targetPubkeyHex);
     }
 
     if (timedOut || !frame) {
@@ -3402,6 +3523,11 @@ class CelloClientImpl implements CelloClient {
       };
       this.#connections.set(connectionId, record);
       this.#connectionsByPeer.set(counterpartyPubkey, connectionId);
+      this.#logger.info("connection.established", {
+        connectionId,
+        counterpartyPubkeyHex: counterpartyPubkey,
+        correlationId,
+      });
       return { result: "established", connection_id: connectionId };
     }
 
@@ -3421,17 +3547,23 @@ class CelloClientImpl implements CelloClient {
         if (!this.#connections.has(connectionId)) {
           const record: import("@cello/protocol-types").ClientConnectionRecord = {
             connection_id: connectionId,
-            counterparty_pubkey: opts.target_pubkey,
+            counterparty_pubkey: targetPubkeyHex,
             counterparty_primary_pubkey: "",
             counterparty_ml_dsa_pubkey: "",
             established_at: Date.now(),
             status: "active",
           };
           this.#connections.set(connectionId, record);
-          this.#connectionsByPeer.set(opts.target_pubkey, connectionId);
+          this.#connectionsByPeer.set(targetPubkeyHex, connectionId);
         }
+        this.#logger.info("connection.established", {
+          connectionId,
+          counterpartyPubkeyHex: targetPubkeyHex,
+          correlationId,
+        });
         return { result: "established", connection_id: connectionId };
       }
+      this.#logger.error("connection.request.failed", { targetPubkeyHex, reason, correlationId });
       return { result: "error", reason };
     }
 
@@ -3736,15 +3868,31 @@ class CelloClientImpl implements CelloClient {
             package_cbor: packageCbor,
             round: 1,
           });
-          // Push to awaitConnectionRequest() queue (CELLO-MCP-003)
-          this.#pendingReviewQueue.push({
+
+          const reviewItem = {
             connection_request_id: connectionRequestId,
             from_pubkey: fromPubkey,
             report,
             package_cbor: packageCbor,
             sender_registered_at: senderRegisteredAt,
             sender_is_provisional: senderIsProvisional,
-          });
+          };
+
+          // CONNREQ-003: Deliver to the first waiting awaitConnectionRequest() caller (FIFO),
+          // or enqueue in #pendingReviewQueue if no callers are waiting.
+          const awaitResolver = this.#pendingAwaitConnectionRequestResolvers.shift();
+          if (awaitResolver) {
+            // Direct delivery to waiting caller — do not add to #pendingReviewQueue
+            awaitResolver({
+              connection_request_id: connectionRequestId,
+              from_pubkey: fromPubkey,
+              report,
+            });
+          } else {
+            // No caller waiting — enqueue for future awaitConnectionRequest() poll
+            this.#pendingReviewQueue.push(reviewItem);
+          }
+
           if (this.#onConnectionPendingReview) {
             this.#onConnectionPendingReview({
               type: "connection_request_inbound",
@@ -4350,7 +4498,12 @@ class CelloClientImpl implements CelloClient {
           frame["type"] === "connection_request_error" ||
           frame["type"] === "disclosure_request_inbound"
         ) {
-          // CONNREQ-002: route connection outcome frames.
+          // CONNREQ-002/CONNREQ-003: route connection outcome frames.
+          //
+          // CONNREQ-003: The single-slot #pendingConnectionRequestResolve is replaced by
+          // #pendingConnectionRequestResolvers (Map keyed by target pubkey hex).
+          // Routing uses counterparty_pubkey (for established) or target_pubkey (for errors)
+          // to find the exact resolver for this target — ensuring cross-target isolation (SI-001).
 
           if (frame["type"] === "connection_established") {
             // Store connection record locally (applies to both sender A and target B)
@@ -4379,13 +4532,14 @@ class CelloClientImpl implements CelloClient {
                 handler({ type: "connection_established", counterparty_pubkey: counterpartyPubkey, connection_id: connectionId });
               }
             }
-            // Route to pending cello_request_connection resolver (A's side)
-            const resolve = this.#pendingConnectionRequestResolve;
+            // CONNREQ-003: Route to the resolver for this specific target (keyed by counterparty pubkey).
+            // SI-001: only the resolver waiting for counterpartyPubkey is unblocked; no cross-target routing.
+            const resolve = this.#pendingConnectionRequestResolvers.get(counterpartyPubkey);
             if (resolve) {
-              this.#pendingConnectionRequestResolve = null;
+              this.#pendingConnectionRequestResolvers.delete(counterpartyPubkey);
               resolve(frame);
             } else {
-              // Round 2: route to disclosure resolver if pending
+              // Round 2: route to disclosure resolver if pending (no in-flight connection_request)
               for (const [id, disclosureResolve] of this.#pendingDisclosureResolvers) {
                 this.#pendingDisclosureResolvers.delete(id);
                 disclosureResolve(frame);
@@ -4403,19 +4557,28 @@ class CelloClientImpl implements CelloClient {
                 requested_items: (frame["requested_items"] as import("@cello/protocol-types").DisclosureRequestItem[]) ?? [],
               });
             }
-            // Unblock cello_request_connection on sender's side with disclosure_requested
-            const resolve = this.#pendingConnectionRequestResolve;
+            // CONNREQ-003: disclosure_request_inbound carries from_pubkey (= target).
+            // Route to the resolver for this target.
+            const targetPubkeyForDisclosure = frame["from_pubkey"] as string;
+            const resolve = this.#pendingConnectionRequestResolvers.get(targetPubkeyForDisclosure);
             if (resolve) {
-              this.#pendingConnectionRequestResolve = null;
+              this.#pendingConnectionRequestResolvers.delete(targetPubkeyForDisclosure);
               resolve(frame);
             }
           } else {
             // connection_rejected, connection_insufficient, connection_request_error
-            // Route to pending cello_request_connection resolver
-            const resolve = this.#pendingConnectionRequestResolve;
-            if (resolve) {
-              this.#pendingConnectionRequestResolve = null;
+            // These frames carry target_pubkey so we can route to the correct resolver.
+            const targetPubkeyForError = frame["target_pubkey"] as string | undefined;
+            if (targetPubkeyForError && this.#pendingConnectionRequestResolvers.has(targetPubkeyForError)) {
+              const resolve = this.#pendingConnectionRequestResolvers.get(targetPubkeyForError)!;
+              this.#pendingConnectionRequestResolvers.delete(targetPubkeyForError);
               resolve(frame);
+            } else if (this.#pendingConnectionRequestResolvers.size === 1) {
+              // Fallback: if exactly one request is in flight and frame has no target_pubkey,
+              // route to that single resolver (backward-compatible with pre-CONNREQ-003 directory).
+              const [singleKey, singleResolve] = this.#pendingConnectionRequestResolvers.entries().next().value as [string, (frame: Record<string, unknown>) => void];
+              this.#pendingConnectionRequestResolvers.delete(singleKey);
+              singleResolve(frame);
             } else {
               // Round 2: route to disclosure resolver if pending
               for (const [id, disclosureResolve] of this.#pendingDisclosureResolvers) {
@@ -4461,6 +4624,14 @@ class CelloClientImpl implements CelloClient {
     if (resolve) {
       this.#pendingSessionRequestResolve = null;
       resolve({ type: "session_request_error", reason: "directory_unreachable" });
+    }
+
+    // CONNREQ-003: Unblock all pending connection request resolvers (AC-005)
+    // When the signaling stream closes, all in-flight cello_request_connection calls
+    // receive a synthetic connection_request_error so they can return directory_unreachable.
+    for (const [targetPubkey, pendingResolve] of this.#pendingConnectionRequestResolvers) {
+      this.#pendingConnectionRequestResolvers.delete(targetPubkey);
+      pendingResolve({ type: "connection_request_error", reason: "directory_unreachable", target_pubkey: targetPubkey });
     }
   }
 }
