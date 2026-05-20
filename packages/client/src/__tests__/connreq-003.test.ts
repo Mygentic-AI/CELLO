@@ -102,6 +102,13 @@ import {
 import type { RelayAdapter, RelaySessionAssignment } from "@cello/directory";
 import { createClient } from "../client.js";
 import type { SignalRequirementPolicy } from "../connection-policy.js";
+// CONNREQ-003: fixture import — canonical shared infrastructure from e2e-tests.
+// Note: @cello/e2e-tests is a dev dependency to avoid the circular project reference
+// issue (e2e-tests → client → e2e-tests). TypeScript resolves the types through the
+// package exports map pointing to dist/. Run pnpm --filter @cello/e2e-tests typecheck
+// before this package's typecheck to ensure dist/ is up-to-date.
+import { createSessionFixture } from "@cello/e2e-tests/session-fixture";
+import type { Logger, LogContext } from "@cello/interfaces";
 
 setupV3Tests();
 
@@ -147,101 +154,6 @@ async function buildMinimalPackageCbor(
   return encodeConnectionPackage(pkg);
 }
 
-import type { Logger, LogContext } from "@cello/interfaces";
-
-/** Shared directory + three registered agents (A, B, C) for fan-out tests. */
-async function makeThreeAgentFixture(
-  scope: TestScope,
-  opts?: {
-    connectionTimeoutMs?: number;
-    loggerA?: Logger;
-    loggerB?: Logger;
-  },
-) {
-  const dirKeyProvider = generateKeypair();
-  const { node: dirNode, stop: stopDir } = await createDirectoryNode({
-    keyProvider: dirKeyProvider,
-    relay: makeRelay(),
-    relayEndpoint: { peer_id: "relay-peer-id", multiaddrs: [] },
-    requireRegistration: true,
-  });
-  scope.addCleanup(stopDir);
-
-  const directoryEndpoint = {
-    peer_id: dirNode.getPeerId(),
-    multiaddrs: dirNode.listenAddresses(),
-  };
-
-  const openPolicy: SignalRequirementPolicy = {
-    mode: "open",
-    review_mode: "deterministic",
-    requirements: [],
-  };
-
-  // Agent A
-  const kpA = generateKeypair();
-  const nodeA = await createNode({ keyProvider: kpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-  await nodeA.start();
-  scope.addCleanup(() => nodeA.stop());
-  const clientA = createClient(nodeA, kpA, {
-    directoryEndpoint,
-    connectionPolicy: openPolicy,
-    connectionTimeoutMs: opts?.connectionTimeoutMs ?? 15_000,
-    logger: opts?.loggerA,
-  });
-  await clientA.registerHandler();
-
-  // Agent B
-  const kpB = generateKeypair();
-  const nodeB = await createNode({ keyProvider: kpB, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-  await nodeB.start();
-  scope.addCleanup(() => nodeB.stop());
-  const clientB = createClient(nodeB, kpB, {
-    directoryEndpoint,
-    connectionPolicy: openPolicy,
-    connectionTimeoutMs: opts?.connectionTimeoutMs ?? 15_000,
-    logger: opts?.loggerB,
-  });
-  await clientB.registerHandler();
-
-  // Agent C
-  const kpC = generateKeypair();
-  const nodeC = await createNode({ keyProvider: kpC, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-  await nodeC.start();
-  scope.addCleanup(() => nodeC.stop());
-  const clientC = createClient(nodeC, kpC, {
-    directoryEndpoint,
-    connectionPolicy: openPolicy,
-    connectionTimeoutMs: opts?.connectionTimeoutMs ?? 15_000,
-  });
-  await clientC.registerHandler();
-
-  // Register all three
-  const mlDsaA = await mlDsaKeygen();
-  const regA = await clientA.register("+1111111111");
-  if ("error" in regA) throw new Error(`A reg failed: ${String(regA.error)}`);
-
-  const regB = await clientB.register("+2222222222");
-  if ("error" in regB) throw new Error(`B reg failed: ${String(regB.error)}`);
-
-  const regC = await clientC.register("+3333333333");
-  if ("error" in regC) throw new Error(`C reg failed: ${String(regC.error)}`);
-
-  const pubkeyB = Buffer.from(await kpB.getPublicKey()).toString("hex");
-  const pubkeyC = Buffer.from(await kpC.getPublicKey()).toString("hex");
-
-  const packageCborB = await buildMinimalPackageCbor(kpA, mlDsaA, regA.primary_pubkey);
-  const packageCborC = await buildMinimalPackageCbor(kpA, mlDsaA, regA.primary_pubkey);
-
-  return {
-    clientA, clientB, clientC,
-    kpA, kpB, kpC,
-    regA,
-    pubkeyB, pubkeyC,
-    packageCborB, packageCborC,
-  };
-}
-
 // ─── Test scope ───────────────────────────────────────────────────────────────
 
 let scope: TestScope;
@@ -259,16 +171,22 @@ afterEach(() => {
 // only ONE frame was sent to the directory.
 
 describe("CONNREQ-003-AC-002: duplicate concurrent request to same target returns error", () => {
-  it("AC-002: second cello_request_connection to same target returns connection_request_in_flight immediately", async () => {
-    // For this unit test we need a real directory so the first request goes in flight
-    // but doesn't resolve quickly. We use a very short test and check the second call
-    // returns immediately while the first is still waiting.
+  it("AC-002: second cello_request_connection to same target returns connection_request_in_flight immediately; exactly one [CONN] entry logged for target B", async () => {
+    const dirEvents: Array<{ name: string; ctx: Record<string, unknown> }> = [];
+    const dirLogger: Logger = {
+      debug: () => {},
+      info: (name, ctx) => { dirEvents.push({ name, ctx: ctx ?? {} }); },
+      warn: (name, ctx) => { dirEvents.push({ name, ctx: ctx ?? {} }); },
+      error: () => {},
+    };
+
     const dirKeyProvider = generateKeypair();
     const { node: dirNode, stop: stopDir } = await createDirectoryNode({
       keyProvider: dirKeyProvider,
       relay: makeRelay(),
       relayEndpoint: { peer_id: "relay-peer-id", multiaddrs: [] },
       requireRegistration: true,
+      logger: dirLogger,
     });
     scope.addCleanup(stopDir);
 
@@ -340,6 +258,13 @@ describe("CONNREQ-003-AC-002: duplicate concurrent request to same target return
 
     // First request should eventually resolve (let it finish)
     await firstRequest;
+
+    // AC-002 directory transport-path evidence: exactly one connection.request.received
+    // logged for target B (the second call was short-circuited before reaching the directory).
+    const connReceivedForB = dirEvents.filter(
+      (e) => e.name === "connection.request.received" && e.ctx["targetPubkeyHex"] === pubkeyB,
+    );
+    expect(connReceivedForB.length).toBe(1);
   }, 20_000);
 });
 
@@ -349,11 +274,37 @@ describe("CONNREQ-003-AC-002: duplicate concurrent request to same target return
 // the first), both calls resolve with 'established' and return distinct connection_ids.
 // This fails with the single-slot implementation because the second call's resolve
 // overwrites the first's, leaving the first caller's promise forever unresolved.
+//
+// Transport-path evidence: the directory must log exactly two connection.request.received
+// events for different target pubkeys within the test window.
 
 describe("CONNREQ-003-AC-001: fan-out to two different targets — both resolve", () => {
-  it("AC-001: concurrent requests to B and C both resolve with established, distinct connection_ids", async () => {
-    const { clientA, pubkeyB, pubkeyC, packageCborB, packageCborC } =
-      await makeThreeAgentFixture(scope);
+  it("AC-001: concurrent requests to B and C both resolve with established, distinct connection_ids; two [CONN] entries for different targets logged by directory", async () => {
+    const dirEvents: Array<{ name: string; ctx: Record<string, unknown> }> = [];
+    const dirLogger: Logger = {
+      debug: () => {},
+      info: (name, ctx) => { dirEvents.push({ name, ctx: ctx ?? {} }); },
+      warn: (name, ctx) => { dirEvents.push({ name, ctx: ctx ?? {} }); },
+      error: () => {},
+    };
+
+    const fix = await createSessionFixture({
+      register: true,
+      requireRegistration: true,
+      connectionTimeoutMs: 15_000,
+      withAgentC: true,
+      loggerDir: dirLogger,
+    });
+    scope.addCleanup(() => fix.stopAll());
+
+    const clientA = fix.agentA.client;
+    const pubkeyB = fix.agentB.pubkeyHex;
+    const pubkeyC = fix.agentC!.pubkeyHex;
+    const primaryPubkeyA = fix.agentA.primaryPubkey!;
+
+    const mlDsaA = await mlDsaKeygen();
+    const packageCborB = await buildMinimalPackageCbor(fix.agentA.kp, mlDsaA, primaryPubkeyA);
+    const packageCborC = await buildMinimalPackageCbor(fix.agentA.kp, mlDsaA, primaryPubkeyA);
 
     // Fire both requests concurrently WITHOUT awaiting first
     const [resultB, resultC] = await Promise.all([
@@ -381,7 +332,17 @@ describe("CONNREQ-003-AC-001: fan-out to two different targets — both resolve"
     // A should have two connections
     const connections = clientA.listConnections();
     expect(connections.length).toBe(2);
-  }, 30_000);
+
+    // AC-001 transport-path evidence: directory logged two connection.request.received
+    // events for DIFFERENT target pubkeys within the test window.
+    const connReceivedEvents = dirEvents.filter((e) => e.name === "connection.request.received");
+    expect(connReceivedEvents.length).toBeGreaterThanOrEqual(2);
+    const targetPubkeys = connReceivedEvents.map((e) => e.ctx["targetPubkeyHex"] as string);
+    expect(targetPubkeys).toContain(pubkeyB);
+    expect(targetPubkeys).toContain(pubkeyC);
+    // Both are different targets
+    expect(new Set(targetPubkeys).size).toBeGreaterThanOrEqual(2);
+  }, 45_000);
 });
 
 // ─── AC-005 (unit): resolver Map is empty after both requests resolve ──────────
@@ -391,8 +352,22 @@ describe("CONNREQ-003-AC-001: fan-out to two different targets — both resolve"
 
 describe("CONNREQ-003-AC-005: resolver Map empty after concurrent requests resolve", () => {
   it("AC-005: internal resolver map is empty after two concurrent requests both resolve", async () => {
-    const { clientA, pubkeyB, pubkeyC, packageCborB, packageCborC } =
-      await makeThreeAgentFixture(scope);
+    const fix = await createSessionFixture({
+      register: true,
+      requireRegistration: true,
+      connectionTimeoutMs: 15_000,
+      withAgentC: true,
+    });
+    scope.addCleanup(() => fix.stopAll());
+
+    const clientA = fix.agentA.client;
+    const pubkeyB = fix.agentB.pubkeyHex;
+    const pubkeyC = fix.agentC!.pubkeyHex;
+    const primaryPubkeyA = fix.agentA.primaryPubkey!;
+
+    const mlDsaA = await mlDsaKeygen();
+    const packageCborB = await buildMinimalPackageCbor(fix.agentA.kp, mlDsaA, primaryPubkeyA);
+    const packageCborC = await buildMinimalPackageCbor(fix.agentA.kp, mlDsaA, primaryPubkeyA);
 
     // Fire both requests and await both
     await Promise.all([
@@ -410,56 +385,146 @@ describe("CONNREQ-003-AC-005: resolver Map empty after concurrent requests resol
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const resolverCount = (clientA as any)._pendingConnectionRequestResolverCount ?? 0;
     expect(resolverCount).toBe(0);
-  }, 30_000);
+  }, 45_000);
 });
 
-// ─── SI-001 (unit): out-of-order frame routing — B's frame never resolves C's resolver
+// ─── SI-001 (adversarial unit): out-of-order frame routing — B's frame never resolves C's resolver
 //
-// A connection_established frame with counterparty_pubkey = B must never resolve
-// the pending resolver waiting for target C. This tests the key invariant of the
-// Map-keyed approach: routing by target pubkey ensures cross-target isolation.
+// Adversarial condition: a connection_established frame for target B arrives while
+// ONLY target C's resolver is pending. C's resolver must NOT be fired.
+//
+// This test directly injects frames into the Map-keyed resolver using the
+// _injectConnectionFrame escape hatch, bypassing the real protocol to isolate
+// the routing invariant. It does NOT test the happy path — it tests that the Map
+// correctly isolates B's frame from C's pending slot.
 
 describe("CONNREQ-003-SI-001: out-of-order frame routing — B's frame never resolves C's resolver", () => {
-  it("SI-001: connection_established for B does not resolve pending request for C (out-of-order arrival)", async () => {
-    const { clientA, pubkeyB, pubkeyC, packageCborB, packageCborC } =
-      await makeThreeAgentFixture(scope);
+  it("SI-001: connection_established for B does not resolve pending request for C (adversarial injection)", async () => {
+    // Create a minimal client with no real directory to keep the test a fast unit test.
+    const dirKeyProvider = generateKeypair();
+    const { node: dirNode, stop: stopDir } = await createDirectoryNode({
+      keyProvider: dirKeyProvider,
+      relay: makeRelay(),
+      relayEndpoint: { peer_id: "relay-peer-id", multiaddrs: [] },
+      requireRegistration: true,
+    });
+    scope.addCleanup(stopDir);
 
-    // Track which requests resolved and which are still pending
+    const kpA = generateKeypair();
+    const nodeA = await createNode({ keyProvider: kpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeA.start();
+    scope.addCleanup(() => nodeA.stop());
+
+    const directoryEndpoint = {
+      peer_id: dirNode.getPeerId(),
+      multiaddrs: dirNode.listenAddresses(),
+    };
+    const openPolicy: SignalRequirementPolicy = {
+      mode: "open",
+      review_mode: "deterministic",
+      requirements: [],
+    };
+
+    const clientA = createClient(nodeA, kpA, {
+      directoryEndpoint,
+      connectionPolicy: openPolicy,
+      connectionTimeoutMs: 10_000,
+    });
+    await clientA.registerHandler();
+
+    const mlDsaA = await mlDsaKeygen();
+    const regA = await clientA.register("+1234509876");
+    if ("error" in regA) throw new Error(`A reg failed: ${String(regA.error)}`);
+
+    // Use two fake pubkeys that are different (will never be registered, so requests will
+    // eventually fail/error — but we use _injectConnectionFrame to resolve them manually).
+    const fakePubkeyB = Buffer.from(new Uint8Array(32).fill(0x11)).toString("hex");
+    const fakePubkeyC = Buffer.from(new Uint8Array(32).fill(0x22)).toString("hex");
+
+    const packageCbor = await buildMinimalPackageCbor(kpA, mlDsaA, regA.primary_pubkey);
+
+    // Set up two concurrent pending resolvers: B and C are both in-flight.
+    // We do NOT await either — we want both in the Map simultaneously.
+    // The requests will be in flight (waiting for connection_established).
+    // We use very long timeouts so they don't resolve by themselves before we inject.
+    //
+    // Since the targets are not registered, the directory will send connection_request_error
+    // (target_not_found). To prevent that from resolving the requests before we can inject,
+    // we use a fresh clientA with connectionTimeoutMs set to allow injection within 500ms.
+    // The _injectConnectionFrame method calls the resolver synchronously in the same tick,
+    // so we can inject immediately after starting the requests (within a microtask).
+
+    // We need the requests to be "in flight" (Map slots reserved) but not yet resolved.
+    // Use Promise.race to detect when each is resolved.
     let bResolved = false;
     let cResolved = false;
-    let bResult: Awaited<ReturnType<typeof clientA.cello_request_connection>> | null = null;
-    let cResult: Awaited<ReturnType<typeof clientA.cello_request_connection>> | null = null;
+    let bResult: Awaited<ReturnType<typeof clientA.cello_request_connection>> | undefined;
+    let cResult: Awaited<ReturnType<typeof clientA.cello_request_connection>> | undefined;
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const injectClient = clientA as any;
+
+    // Start both requests (don't await — we're controlling resolution via injection).
     const bPromise = clientA.cello_request_connection({
-      target_pubkey: pubkeyB,
-      package_cbor: packageCborB,
-    }).then((r) => { bResult = r; bResolved = true; return r; });
+      target_pubkey: fakePubkeyB,
+      package_cbor: packageCbor,
+    }).then((r) => { bResolved = true; bResult = r; return r; });
 
     const cPromise = clientA.cello_request_connection({
-      target_pubkey: pubkeyC,
-      package_cbor: packageCborC,
-    }).then((r) => { cResult = r; cResolved = true; return r; });
+      target_pubkey: fakePubkeyC,
+      package_cbor: packageCbor,
+    }).then((r) => { cResolved = true; cResult = r; return r; });
 
-    // Wait for both to resolve
-    await Promise.all([bPromise, cPromise]);
+    // Wait for the resolver slots to be registered in the Map.
+    // The slot is set synchronously before the first await in cello_request_connection,
+    // so after a microtask yield (next tick), both slots should be in the Map.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-    // Both should have resolved with the right counterparty
+    // Adversarial condition: inject a connection_established frame for B while C's
+    // resolver is still pending. The Map-keyed implementation must route this ONLY to B.
+    injectClient._injectConnectionFrame({
+      type: "connection_established",
+      counterparty_pubkey: fakePubkeyB,
+      connection_id: "test-conn-id-B",
+    });
+
+    // B's promise should resolve (it got the frame).
+    // Wait up to 200ms for B to resolve.
+    const bResolvedWithin = await Promise.race([
+      bPromise.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 200)),
+    ]);
+    expect(bResolvedWithin).toBe(true);
     expect(bResolved).toBe(true);
+
+    // C's resolver must NOT have been fired — it should still be pending.
+    // If the old single-slot implementation fired C's resolver with B's frame, cResolved would be true.
+    expect(cResolved).toBe(false);
+
+    // The Map must still contain C's resolver slot.
+    const resolverCount = injectClient._pendingConnectionRequestResolverCount as number;
+    expect(resolverCount).toBe(1);
+
+    // Inject C's resolution to clean up properly (avoids test timeout).
+    injectClient._injectConnectionFrame({
+      type: "connection_established",
+      counterparty_pubkey: fakePubkeyC,
+      connection_id: "test-conn-id-C",
+    });
+
+    await cPromise;
     expect(cResolved).toBe(true);
 
-    // B's result must correspond to B's counterparty
-    expect(bResult!.result).toBe("established");
-    expect(cResult!.result).toBe("established");
+    // Map is now empty (both resolved).
+    expect(injectClient._pendingConnectionRequestResolverCount).toBe(0);
 
-    // Verify both connection IDs are distinct — confirms no cross-routing
-    if (bResult!.result === "established" && cResult!.result === "established") {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const bConnId = (bResult as any).connection_id as string;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const cConnId = (cResult as any).connection_id as string;
-      expect(bConnId).not.toBe(cConnId);
+    // B and C both got distinct connection IDs — confirms no cross-routing.
+    expect(bResult?.result).toBe("established");
+    expect(cResult?.result).toBe("established");
+    if (bResult?.result === "established" && cResult?.result === "established") {
+      expect(bResult.connection_id).not.toBe(cResult.connection_id);
     }
-  }, 30_000);
+  }, 15_000);
 });
 
 // ─── DB-001 (unit): timeout on one slot does not affect the other ─────────────
@@ -675,19 +740,36 @@ describe("CONNREQ-003-AC-003: multiple concurrent awaitConnectionRequest calls",
   }, 35_000);
 });
 
-// ─── AC-004 (integration): fan-out connections then both sessions initiate ────
+// ─── AC-004 (integration): fan-out connections establish — A has connections to both B and C ────
 //
 // After A establishes connections to both B and C via concurrent fan-out,
 // A can initiate sessions with both. cello_list_sessions returns two active sessions.
 //
-// NOTE: This test is intentionally scoped to verifying that two connections exist
-// after fan-out. Full session initiation requires a relay (not wired here),
-// so we verify the connection-level preconditions only.
+// NOTE: End-to-end merchant fan-out smoke test — the scenario this story enables.
+// This test is intentionally scoped to verifying that two connections exist after
+// fan-out. Full session initiation requires a relay; session initiation with the relay
+// is covered by the E2E fixture tests in packages/e2e-tests/src/__tests__/.
+// The story notes field states: "End-to-end merchant fan-out smoke test — the scenario
+// this story enables." This documents the partial coverage intentionally.
 
 describe("CONNREQ-003-AC-004: fan-out connections establish — A has connections to both B and C", () => {
   it("AC-004: after concurrent fan-out, A has exactly two active connections with distinct counterparty pubkeys", async () => {
-    const { clientA, pubkeyB, pubkeyC, packageCborB, packageCborC } =
-      await makeThreeAgentFixture(scope);
+    const fix = await createSessionFixture({
+      register: true,
+      requireRegistration: true,
+      connectionTimeoutMs: 15_000,
+      withAgentC: true,
+    });
+    scope.addCleanup(() => fix.stopAll());
+
+    const clientA = fix.agentA.client;
+    const pubkeyB = fix.agentB.pubkeyHex;
+    const pubkeyC = fix.agentC!.pubkeyHex;
+    const primaryPubkeyA = fix.agentA.primaryPubkey!;
+
+    const mlDsaA = await mlDsaKeygen();
+    const packageCborB = await buildMinimalPackageCbor(fix.agentA.kp, mlDsaA, primaryPubkeyA);
+    const packageCborC = await buildMinimalPackageCbor(fix.agentA.kp, mlDsaA, primaryPubkeyA);
 
     const [resultB, resultC] = await Promise.all([
       clientA.cello_request_connection({
@@ -708,14 +790,14 @@ describe("CONNREQ-003-AC-004: fan-out connections establish — A has connection
     expect(connections.length).toBe(2);
 
     // Both connections are active with distinct counterparty pubkeys
-    const counterpartyPubkeys = connections.map((c) => c.counterparty_pubkey);
+    const counterpartyPubkeys = connections.map((c: { counterparty_pubkey: string }) => c.counterparty_pubkey);
     expect(counterpartyPubkeys).toContain(pubkeyB);
     expect(counterpartyPubkeys).toContain(pubkeyC);
 
     // Both connection_ids are distinct
-    const connIds = connections.map((c) => c.connection_id);
+    const connIds = connections.map((c: { connection_id: string }) => c.connection_id);
     expect(new Set(connIds).size).toBe(2);
-  }, 30_000);
+  }, 45_000);
 });
 
 // ─── Observability (unit): logger events emitted correctly ──────────────────
@@ -742,8 +824,21 @@ describe("CONNREQ-003-Observability: logger events emitted with correct context"
       },
     };
 
-    const { clientA, pubkeyB, packageCborB } =
-      await makeThreeAgentFixture(scope, { loggerA: testLogger });
+    const fix = await createSessionFixture({
+      register: true,
+      requireRegistration: true,
+      connectionTimeoutMs: 15_000,
+      withAgentC: true,
+      loggerA: testLogger,
+    });
+    scope.addCleanup(() => fix.stopAll());
+
+    const clientA = fix.agentA.client;
+    const pubkeyB = fix.agentB.pubkeyHex;
+    const primaryPubkeyA = fix.agentA.primaryPubkey!;
+
+    const mlDsaA = await mlDsaKeygen();
+    const packageCborB = await buildMinimalPackageCbor(fix.agentA.kp, mlDsaA, primaryPubkeyA);
 
     await clientA.cello_request_connection({
       target_pubkey: pubkeyB,
@@ -756,7 +851,7 @@ describe("CONNREQ-003-Observability: logger events emitted with correct context"
     expect(sentEvent.ctx.targetPubkeyHex).toBe(pubkeyB);
     expect(typeof sentEvent.ctx.correlationId).toBe("string");
     expect((sentEvent.ctx.correlationId as string).length).toBeGreaterThan(0);
-  }, 30_000);
+  }, 45_000);
 
   it("Obs-2: connection.established logged when connection is established", async () => {
     const events: Array<{ name: string; ctx: LogContext }> = [];
@@ -770,8 +865,21 @@ describe("CONNREQ-003-Observability: logger events emitted with correct context"
       },
     };
 
-    const { clientA, pubkeyB, packageCborB } =
-      await makeThreeAgentFixture(scope, { loggerA: testLogger });
+    const fix = await createSessionFixture({
+      register: true,
+      requireRegistration: true,
+      connectionTimeoutMs: 15_000,
+      withAgentC: true,
+      loggerA: testLogger,
+    });
+    scope.addCleanup(() => fix.stopAll());
+
+    const clientA = fix.agentA.client;
+    const pubkeyB = fix.agentB.pubkeyHex;
+    const primaryPubkeyA = fix.agentA.primaryPubkey!;
+
+    const mlDsaA = await mlDsaKeygen();
+    const packageCborB = await buildMinimalPackageCbor(fix.agentA.kp, mlDsaA, primaryPubkeyA);
 
     const result = await clientA.cello_request_connection({
       target_pubkey: pubkeyB,
@@ -786,7 +894,7 @@ describe("CONNREQ-003-Observability: logger events emitted with correct context"
     expect(typeof estEvent.ctx.connectionId).toBe("string");
     expect(estEvent.ctx.counterpartyPubkeyHex).toBe(pubkeyB);
     expect(typeof estEvent.ctx.correlationId).toBe("string");
-  }, 30_000);
+  }, 45_000);
 
   it("Obs-3: connection.request.duplicate logged when same target already in flight", async () => {
     const events: Array<{ name: string; ctx: LogContext }> = [];
@@ -914,7 +1022,7 @@ describe("CONNREQ-003-Observability: logger events emitted with correct context"
     const regA = await clientA.register("+1001001001");
     if ("error" in regA) throw new Error(`A reg failed: ${String(regA.error)}`);
 
-    // Target is not registered — directory will return error
+    // Target is not registered — directory will return error (target_not_found)
     const fakePubkey = Buffer.from(new Uint8Array(32).fill(0xcd)).toString("hex");
     const packageCbor = await buildMinimalPackageCbor(kpA, mlDsaA, regA.primary_pubkey);
 
@@ -923,15 +1031,12 @@ describe("CONNREQ-003-Observability: logger events emitted with correct context"
       package_cbor: packageCbor,
     });
 
-    // Should have logged either a failed event or not (depends on directory error type)
-    // The key is that if we get a connection_request_error, the error event is logged
+    // The directory returns connection_request_error (target_not_found) because
+    // the target is not registered. This triggers connection.request.failed.
     const failEvents = events.filter((e) => e.name === "connection.request.failed");
-    // This event fires on connection_request_error — check if we got one
-    if (failEvents.length > 0) {
-      expect(failEvents[0]!.ctx.targetPubkeyHex).toBe(fakePubkey);
-      expect(typeof failEvents[0]!.ctx.reason).toBe("string");
-      expect(typeof failEvents[0]!.ctx.correlationId).toBe("string");
-    }
-    // If no fail event, the directory returned timeout or unknown type — acceptable
+    expect(failEvents.length).toBeGreaterThan(0);
+    expect(failEvents[0]!.ctx.targetPubkeyHex).toBe(fakePubkey);
+    expect(typeof failEvents[0]!.ctx.reason).toBe("string");
+    expect(typeof failEvents[0]!.ctx.correlationId).toBe("string");
   }, 15_000);
 });

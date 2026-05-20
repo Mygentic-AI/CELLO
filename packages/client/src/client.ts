@@ -3730,6 +3730,52 @@ class CelloClientImpl implements CelloClient {
     });
   }
 
+  /**
+   * CONNREQ-003 TEST-ONLY escape hatch: route a synthetic connection outcome frame
+   * through the same resolver logic as the signaling stream reader.
+   *
+   * Used by SI-001 adversarial test to inject a connection_established frame for
+   * target B while C's resolver is still pending, verifying that B's frame does NOT
+   * resolve C's resolver (Map-keyed routing isolation guarantee).
+   *
+   * Accepts the same frame types that the signaling reader handles for connection
+   * outcomes: connection_established, connection_rejected, connection_insufficient,
+   * connection_request_error, disclosure_request_inbound.
+   *
+   * Does not store a connection record (connection_established frames injected in
+   * tests bypass the full connection lifecycle — they test resolver routing only).
+   */
+  _injectConnectionFrame(frame: Record<string, unknown>): void {
+    const type = frame["type"] as string;
+    if (type === "connection_established") {
+      const counterpartyPubkey = frame["counterparty_pubkey"] as string;
+      const resolve = this.#pendingConnectionRequestResolvers.get(counterpartyPubkey);
+      if (resolve) {
+        this.#pendingConnectionRequestResolvers.delete(counterpartyPubkey);
+        resolve(frame);
+      }
+    } else if (type === "disclosure_request_inbound") {
+      const targetPubkeyForDisclosure = frame["from_pubkey"] as string;
+      const resolve = this.#pendingConnectionRequestResolvers.get(targetPubkeyForDisclosure);
+      if (resolve) {
+        this.#pendingConnectionRequestResolvers.delete(targetPubkeyForDisclosure);
+        resolve(frame);
+      }
+    } else {
+      // connection_rejected, connection_insufficient, connection_request_error
+      const targetPubkeyForError = frame["target_pubkey"] as string | undefined;
+      if (targetPubkeyForError && this.#pendingConnectionRequestResolvers.has(targetPubkeyForError)) {
+        const resolve = this.#pendingConnectionRequestResolvers.get(targetPubkeyForError)!;
+        this.#pendingConnectionRequestResolvers.delete(targetPubkeyForError);
+        resolve(frame);
+      } else if (this.#pendingConnectionRequestResolvers.size === 1) {
+        const [singleKey, singleResolve] = this.#pendingConnectionRequestResolvers.entries().next().value as [string, (frame: Record<string, unknown>) => void];
+        this.#pendingConnectionRequestResolvers.delete(singleKey);
+        singleResolve(frame);
+      }
+    }
+  }
+
   // ─── CONNREQ-002: B-side inbound request handler ─────────────────────────────
 
   /**
@@ -4827,6 +4873,13 @@ export function createClient(
   >;
   /** TEST-ONLY: inject a pending inbound connection request into state. */
   _injectPendingConnectionRequest(opts: { connection_request_id: string; from_pubkey: string; package_cbor: Uint8Array; round: number }): void;
+  /**
+   * CONNREQ-003 TEST-ONLY: route a synthetic connection outcome frame through the
+   * resolver Map — used by SI-001 adversarial test to verify cross-target isolation.
+   */
+  _injectConnectionFrame(frame: Record<string, unknown>): void;
+  /** CONNREQ-003 TEST-ONLY: current size of the pending resolver Map. */
+  _pendingConnectionRequestResolverCount: number;
   /** TEST-ONLY: evaluate call counter (only incremented when trackEvaluateCount=true). */
   _evaluateCallCount: number;
 } {
@@ -4884,6 +4937,8 @@ export function createClient(
       | { ok: false; reason: string }
     >;
     _injectPendingConnectionRequest(opts: { connection_request_id: string; from_pubkey: string; package_cbor: Uint8Array; round: number }): void;
+    _injectConnectionFrame(frame: Record<string, unknown>): void;
+    _pendingConnectionRequestResolverCount: number;
     _evaluateCallCount: number;
   };
 }

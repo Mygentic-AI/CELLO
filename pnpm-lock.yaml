@@ -118,6 +118,9 @@ importers:
       '@cello/directory':
         specifier: workspace:*
         version: link:../directory
+      '@cello/e2e-tests':
+        specifier: workspace:*
+        version: link:../e2e-tests
       '@cello/relay':
         specifier: workspace:*
         version: link:../relay

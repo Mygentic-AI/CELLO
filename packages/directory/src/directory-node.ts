@@ -1181,6 +1181,8 @@ export class CelloDirectoryNode {
 
     // OBS-001 AC-005/AC-006: connection request log
     protocolLog("CONN", `Request: ${truncHex(senderHex)} → ${truncHex(targetHex)}`);
+    // CONNREQ-003 AC-001/AC-002: structured event so tests can assert transport-path evidence
+    this.#logger?.info("connection.request.received", { senderPubkeyHex: senderHex, targetPubkeyHex: targetHex });
 
     // Gate 1: sender must be registered if requireRegistration is set
     if (this.#requireRegistration && !this.#store.hasProfile(senderHex)) {

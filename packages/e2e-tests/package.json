@@ -6,6 +6,16 @@
   "engines": {
     "node": ">=24"
   },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./session-fixture": {
+      "import": "./dist/session-fixture.js",
+      "types": "./dist/session-fixture.d.ts"
+    }
+  },
   "scripts": {
     "typecheck": "tsc --build",
     "test": "vitest run",
