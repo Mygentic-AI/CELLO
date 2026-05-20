@@ -208,7 +208,7 @@ export function verifyChain(
  * PERSIST-020: connections added — established connection records are tamper-evident.
  */
 export const HASH_CHAINED_TABLES = [
-  "agent_registrations",
+  // agent_registrations removed — table dropped in V16; agent_profiles (V9) is the authoritative agent identity table
   "connection_requests",
   "conversation_seals",
   "conversation_attestations",

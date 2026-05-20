@@ -482,6 +482,7 @@ The privacy design is intentional: an agent may have valid reasons not to disclo
 - Directory facilitates PSI computation without learning either party's full set; inputs are discarded after computation, never persisted
 - PSI implementation library and API contract: **deferred pending server stack decision** (language/runtime choice for directory nodes — Rust and Go are the primary candidates). PSI is a Phase 2 feature; Phase 1 ships with direct comparison only. Library selection is downstream of the stack decision. **[GAP G-18 — deferred]**
 - Anti-farming enforcement uses `phone_hash` stored in `agent_registrations` — [GAP G-19 RESOLVED]. This gap was written under the home node model, where `phone_hash` was assumed to live only on the home node. With the home node concept dropped and all core tables fully federated, `phone_hash` replicates to all directory nodes via the append-only log. Every directory node can enforce the same-owner rule directly at endorsement submission time: if endorser and endorsed share a `phone_hash`, the submission is rejected. No additional mechanism required.
+> **Note (2026-05-20):** `agent_registrations` was never wired into production code and is dropped in V16. `agent_profiles` (V9) is the authoritative agent identity table. The `phone_stub_hash` field in `agent_profiles` serves the anti-farming enforcement role described above.
 
 **Connection staking (defaults to zero at launch)**:
 - Hooks exist from day one; institutions opt in
@@ -709,7 +710,7 @@ All tables are append-only unless noted. Mutable tables are marked.
 
 | Table | Notes |
 |---|---|
-| `agent_registrations` | append-only; phone_hash enforces uniqueness |
+| `agent_registrations` | append-only; phone_hash enforces uniqueness — **dropped in V16; never wired into production; replaced by `agent_profiles` (V9)** |
 | `agent_authorizations` | append-only |
 | `authorization_revocations` | append-only |
 | `authorization_violation_events` | append-only |
@@ -1067,7 +1068,7 @@ Items where requirements are acknowledged but not yet specified. Each is a decis
 | G-16 | Directory | ~~Resolved~~ — Directory nodes enforce (connection requests happen at FROST ceremony, a directory operation). Cap updated to 25 outbound connections/day during 7-day provisional period. Daily counter on agent record, incremented at each outbound connection request. |
 | G-17 | Directory | ~~Endorsement rate limit N not specified~~ **RESOLVED**: 10 new endorsements per month per owner (phone number), shared across all agents under that owner |
 | G-18 | Directory | ~~Deferred~~ — pending server stack decision (Rust vs. Go for directory nodes). PSI is Phase 2; Phase 1 ships with direct comparison. Library selection is downstream of stack choice. |
-| G-19 | Directory | ~~Resolved~~ — Gap was an artifact of the home node model. `phone_hash` is stored in `agent_registrations` and replicates to all directory nodes. Every node enforces the same-owner rule at endorsement submission time. No additional mechanism required. |
+| G-19 | Directory | ~~Resolved~~ — Gap was an artifact of the home node model. `phone_hash` is stored in `agent_registrations` and replicates to all directory nodes. Every node enforces the same-owner rule at endorsement submission time. No additional mechanism required. **Note (2026-05-20):** `agent_registrations` was never wired into production and is dropped in V16; `agent_profiles` (V9) is the authoritative agent identity table. |
 | G-20 | Directory | ~~Blocked by G-36~~ — custodian API cannot be specified until financial infrastructure is designed. |
 | G-21 | Directory | ~~Resolved~~ — Computed at each directory checkpoint (incremental recomputation for changed neighborhoods). Stored on agent record (`conductance_score`, `conductance_computed_at`, `conductance_sample_size`); append-only history table; replicated via append-only log. Not published externally — internal fraud signal only; feeds network graph health signal class in discovery display. |
 | G-22 | Directory | ~~Resolved~~ — Supported channels: WhatsApp, Telegram, WeChat (standard platform APIs). Registration per telephone number, not per messaging client. No fallback beyond these three. Jurisdiction channel restrictions are a deployment concern. |

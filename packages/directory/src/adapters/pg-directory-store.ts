@@ -38,7 +38,7 @@ import {
  *      The AC-005 static gate enforces completeness of BIGINT_COLUMNS in CI.
  *
  * Source of truth: Flyway migration files in packages/directory/db/migrations/
- *   V2__directory_schema.sql   — agent_registrations id BIGSERIAL
+ *   V2__directory_schema.sql   — agent_registrations id BIGSERIAL (table dropped in V16; agent_profiles is authoritative)
  *   V5__mmr_tables.sql         — conversation_proof_leaves leaf_index, mmr_position;
  *                                conversation_proof_mmr_nodes mmr_position;
  *                                directory_checkpoints mmr_leaf_count
@@ -55,7 +55,7 @@ import {
  */
 export const BIGINT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   // Tables with BIGSERIAL id column (read back in SELECT *)
-  agent_registrations: ["id"],
+  // agent_registrations removed — table dropped in V16; agent_profiles (V9) is the authoritative agent identity table
   // agent_profiles: id BIGSERIAL, registered_at BIGINT (Unix ms timestamp) — V9 migration
   agent_profiles: ["id", "registered_at"],
   conversation_seals: ["id"],
@@ -90,7 +90,7 @@ export const BIGINT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
  * Exported so AC-006 gate test can import and iterate over it.
  */
 export const STORE_TABLES = [
-  "agent_registrations",
+  // agent_registrations removed — table dropped in V16; agent_profiles (V9) is the authoritative agent identity table
   "agent_profiles",
   "conversation_seals",
   "conversation_attestations",

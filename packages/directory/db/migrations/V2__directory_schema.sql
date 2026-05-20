@@ -9,7 +9,8 @@
 --   5. Superuser can still UPDATE/DELETE (addressed by hash chain PERSIST-004 and pgaudit PERSIST-006).
 --
 -- Active M4 tables (conversation_seals, conversation_attestations, conversation_participation,
--- agent_registrations, connection_requests, notification_events) receive full column definitions
+-- agent_registrations [dropped in V16 — never wired into production; see agent_profiles V9],
+-- connection_requests, notification_events) receive full column definitions
 -- from the persistence-layer-design discussion log.
 -- All other tables receive stub schema (id BIGSERIAL PRIMARY KEY, created_at TIMESTAMPTZ).
 --
@@ -37,6 +38,7 @@ GRANT USAGE ON SCHEMA public TO cello_service;
 
 -- ─── Active M4 tables — full column definitions ──────────────────────────────
 
+-- NOTE: this table is dropped in V16__drop_agent_registrations.sql — agent_profiles (V9) is the authoritative agent identity table
 -- agent_registrations — from persistence-layer-design §"Agent registration schema"
 CREATE TABLE IF NOT EXISTS agent_registrations (
   id                          BIGSERIAL   PRIMARY KEY,

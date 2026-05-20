@@ -7,6 +7,7 @@
 -- Precondition: all existing rows must already have a non-null chain_hash.
 -- If seed data exists without chain_hash, run the backfill script before this migration.
 
+-- NOTE: agent_registrations is dropped in V16__drop_agent_registrations.sql — agent_profiles (V9) is the authoritative agent identity table
 ALTER TABLE agent_registrations ALTER COLUMN chain_hash SET NOT NULL;
 ALTER TABLE connection_requests ALTER COLUMN chain_hash SET NOT NULL;
 ALTER TABLE conversation_seals ALTER COLUMN chain_hash SET NOT NULL;

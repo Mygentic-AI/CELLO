@@ -33,6 +33,7 @@ GRANT USAGE ON SCHEMA public TO cello_analytics;
 
 -- SI-001: Grant SELECT-only on all append-only protocol tables.
 -- The analytics job reads from these tables to compute statistics.
+-- NOTE: agent_registrations is dropped in V16__drop_agent_registrations.sql — agent_profiles (V9) is the authoritative agent identity table
 GRANT SELECT ON agent_registrations TO cello_analytics;
 GRANT SELECT ON connection_requests TO cello_analytics;
 GRANT SELECT ON conversation_seals TO cello_analytics;

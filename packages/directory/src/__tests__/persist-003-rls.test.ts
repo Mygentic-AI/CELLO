@@ -40,7 +40,7 @@ const MIGRATIONS_DIR = resolve(import.meta.dirname, "../../db/migrations");
 // The full canonical append-only table list from persistence-layer-design line 1046
 // Must match appendOnlyTables in src/bin/directory.ts
 const APPEND_ONLY_TABLES = [
-  "agent_registrations",
+  // agent_registrations removed — table dropped in V16; agent_profiles (V9) is the authoritative agent identity table
   "social_verifications",
   "social_verification_freshness_checks",
   "social_binding_releases",

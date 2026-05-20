@@ -43,29 +43,18 @@ async function seed(): Promise<void> {
         conversation_participation,
         conversation_seals,
         connection_requests,
-        agent_registrations,
         notification_events
       RESTART IDENTITY CASCADE
     `);
 
     // ── Scenario 1: Registered operator with no active sessions ─────────────
-    // One row in agent_registrations; no conversation rows.
-    await client.query(
-      `INSERT INTO agent_registrations
-         (agent_id, identity_key_hash, phone_hash, initial_signing_key_hash,
-          initial_fallback_pubkey_hash, trust_tier, provisional_period_start, registered_at)
-       VALUES ($1, $2, $3, $4, $5, 'PROVISIONAL', now(), now())`,
-      [
-        "00000000-0000-0000-0000-000000000001",
-        "0000000000000000000000000000000000000000000000000000000000000001",
-        "0000000000000000000000000000000000000000000000000000000000000002",
-        "0000000000000000000000000000000000000000000000000000000000000003",
-        "0000000000000000000000000000000000000000000000000000000000000004",
-      ],
-    );
+    // agent_registrations was dropped in V16 — agent_profiles (V9) is the authoritative
+    // agent identity table. Scenario 1 is represented by a row in agent_profiles.
+    // No seed data is inserted here; tests that require a registered agent should
+    // insert directly into agent_profiles.
 
     // ── Scenario 2: Unregistered operator ───────────────────────────────────
-    // No row needed — an absent agent_registrations row IS the unregistered state.
+    // No row needed — an absent agent_profiles row IS the unregistered state.
 
     // ── Scenario 3: Active session mid-conversation ──────────────────────────
     // A conversation_seals row with close_type='REOPEN' models a conversation that

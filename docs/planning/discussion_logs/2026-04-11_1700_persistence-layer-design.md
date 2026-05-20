@@ -701,6 +701,8 @@ The computed lockout schedule is derived from the `seeder_lockouts` log — no s
 
 ## Agent registration schema
 
+> **Note (2026-05-20):** `agent_registrations` was never wired into production code and is dropped in V16. `agent_profiles` (V9) is the authoritative agent identity table.
+
 `agent_registrations` is listed as append-only but was not previously defined. Complete schema:
 
 ```
@@ -1043,7 +1045,7 @@ CREATE POLICY insert_only ON conversation_seals
 -- No UPDATE or DELETE policy = those operations are impossible for all roles
 ```
 
-**Append-only tables:** `agent_registrations`, `social_verifications`, `social_verification_freshness_checks`, `social_binding_releases`, `device_bindings`, `endorsements`, `attestations`, `bio_history`, `pseudonym_bindings`, `connection_requests`, `conversation_seals`, `conversation_attestations`, `conversation_participation`, `conversation_proof_leaves`, `conversation_proof_mmr_nodes`, `directory_checkpoints`, `checkpoint_node_signatures`, `arbitration_verdicts`, `notification_events`, `revocations`, `tombstones`, `social_proof_freezes`, `anomaly_events`, `recovery_contact_designations`, `recovery_contact_members`, `recovery_events`, `recovery_vouches`, `voucher_accountability_events`, `voucher_lockouts`, `trust_seeders`, `seeder_vouches`, `seeder_accountability_events`, `seeder_lockouts`, `key_rotation_log`, `identity_migration_log`, `agent_authorizations`, `authorization_revocations`, `authorization_violation_events`, `contact_aliases`, `contact_alias_retirements`, `directory_listings`, `group_rooms`, `room_memberships`
+**Append-only tables:** `agent_registrations` *(dropped in V16 — never wired into production; replaced by `agent_profiles` V9)*, `social_verifications`, `social_verification_freshness_checks`, `social_binding_releases`, `device_bindings`, `endorsements`, `attestations`, `bio_history`, `pseudonym_bindings`, `connection_requests`, `conversation_seals`, `conversation_attestations`, `conversation_participation`, `conversation_proof_leaves`, `conversation_proof_mmr_nodes`, `directory_checkpoints`, `checkpoint_node_signatures`, `arbitration_verdicts`, `notification_events`, `revocations`, `tombstones`, `social_proof_freezes`, `anomaly_events`, `recovery_contact_designations`, `recovery_contact_members`, `recovery_events`, `recovery_vouches`, `voucher_accountability_events`, `voucher_lockouts`, `trust_seeders`, `seeder_vouches`, `seeder_accountability_events`, `seeder_lockouts`, `key_rotation_log`, `identity_migration_log`, `agent_authorizations`, `authorization_revocations`, `authorization_violation_events`, `contact_aliases`, `contact_alias_retirements`, `directory_listings`, `group_rooms`, `room_memberships`
 
 **State transition tables** (new rows only — history is never overwritten): `agent_status_history`, `device_binding_releases`, `bond_status_history`
 

@@ -20,8 +20,11 @@
  *   [NOTE: conversation_seals.merkle_root is TEXT in the schema, not BYTEA — returned as string.
  *    The assertion checks chain_hash as Uint8Array and id as number.]
  *
- * AC-003: Write an agent registration, read back from fresh store instance.
- *   Assert pubkey_hex round-trip, chain_hash byte-for-byte match, Uint8Array decoding.
+ * AC-003: Write a connection_request, read back from fresh store instance.
+ *   Assert request_id round-trip, chain_hash byte-for-byte match, Uint8Array decoding.
+ *   NOTE: originally tested agent_registrations but that table was dropped in V16;
+ *   agent_profiles (V9) is the authoritative agent identity table. Connection requests
+ *   are used here as the representative hash-chained INSERT round-trip test.
  *
  * AC-004: Append 3 MMR leaves, commit checkpoint, request inclusion proof for leaf index 1
  *   from fresh store instance. Assert BIGINT columns are numbers, proof verifies.
@@ -44,13 +47,15 @@
  * AC-009: In round-trip tests for AC-002, AC-003, AC-004, assert adapter.persisted fires with
  *   { tableName, rowCount: 1, durationMs } via a log spy.
  *
- * SI-001: Temporarily remove 'id' from BIGINT_COLUMNS['agent_registrations'] (patch the map),
+ * SI-001: Temporarily remove 'id' from BIGINT_COLUMNS['agent_profiles'] (patch the map),
  *   insert a row, read back the raw pg row, call deserializeRow directly.
  *   Assert id remains a string (not coerced) when absent from BIGINT_COLUMNS.
  *   Restore and assert deserializeRow returns id as typeof === 'number'.
  *   The AC-005 static gate (CI) enforces BIGINT_COLUMNS completeness; the runtime path
  *   does not throw — it leaves undeclared columns as-is to avoid false-positive errors
  *   on all-digit TEXT columns (e.g. phone_hash values that happen to be numeric).
+ *   NOTE: agent_registrations was the original target of SI-001 but was dropped in V16.
+ *   agent_profiles (V9) is the authoritative agent identity table and is used instead.
  *
  * SI-002: Write a record to conversation_seals with crafted chain_hash (32 bytes of 0xFF).
  *   Read back from live DB. Assert stored chain_hash != crafted AND stored chain_hash =
@@ -417,7 +422,7 @@ describeIntegration("PERSIST-021 integration: AC-001 (extended) remaining BIGINT
       TRUNCATE notification_events, notification_queue, pending_connection_requests
       RESTART IDENTITY CASCADE
     `);
-    // agent_registrations, agent_profiles, conversation_attestations, conversation_participation,
+    // agent_profiles, conversation_attestations, conversation_participation,
     // seal_notarizations, connection_requests, connections are not truncated here because they
     // may have FK dependencies. Each test inserts and queries by a known unique key.
   });
@@ -729,67 +734,54 @@ describeIntegration("PERSIST-021 integration: AC-002 conversation_seals round-tr
   });
 });
 
-describeIntegration("PERSIST-021 integration: AC-003 agent_registrations round-trip", () => {
+describeIntegration("PERSIST-021 integration: AC-003 connection_request round-trip", () => {
+  // agent_registrations was dropped in V16 (never wired into production code).
+  // agent_profiles (V9) is the authoritative agent identity table.
+  // This test was originally written for agent_registrations but has been migrated
+  // to connection_requests — a hash-chained table that is actively used in production.
   beforeEach(async () => {
-    // We don't truncate agent_registrations globally because other tests may depend on it.
-    // Tests use unique pubkeys so isolation is maintained without TRUNCATE.
+    // Tests use unique request_id values so isolation is maintained without TRUNCATE.
   });
 
-  it("AC-003 + AC-009: registration written and read back from fresh store; pubkey_hex and chain_hash match; adapter.persisted logged", async () => {
+  it("AC-003 + AC-009: connection_request written and read back from fresh store; request_id and chain_hash match; adapter.persisted logged", async () => {
     const logger = makeLogger();
     const store = new PgDirectoryStore(servicePool, logger);
 
-    // Generate a unique agent pubkey for this test
-    const pubkeyHex = randomBytes(32).toString("hex");
-    const agentId = randomUUID();
+    const requestId = randomUUID();
 
-    // AgentProfile.setProfile writes to agent_profiles (V9 migration), not agent_registrations.
-    // agent_registrations is written by insertWithChain in the registration handler flow.
-    // For AC-003, we write directly via insertWithChain to test the deserialization path.
-    const registeredAt = new Date();
     const record: Record<string, unknown> = {
-      agent_id: agentId,
-      identity_key_hash: createHash("sha256").update(pubkeyHex + "_identity").digest("hex"),
-      phone_hash: createHash("sha256").update(pubkeyHex + "_phone").digest("hex"),
-      initial_signing_key_hash: createHash("sha256").update(pubkeyHex + "_signing").digest("hex"),
-      initial_fallback_pubkey_hash: createHash("sha256").update(pubkeyHex + "_fallback").digest("hex"),
-      trust_tier: "PROVISIONAL",
-      provisional_period_start: new Date("2026-01-01T00:00:00.000Z"),
-      registered_at: registeredAt,
+      request_id: requestId,
+      requester_pseudonym: `req_${requestId.slice(0, 8)}`,
+      target_pseudonym: `tgt_${requestId.slice(0, 8)}`,
+      outcome: "ACCEPTED",
     };
 
     const columns = [
-      "agent_id", "identity_key_hash", "phone_hash",
-      "initial_signing_key_hash", "initial_fallback_pubkey_hash",
-      "trust_tier", "provisional_period_start", "registered_at", "chain_hash",
+      "request_id", "requester_pseudonym", "target_pseudonym", "outcome", "chain_hash",
     ];
     const values: unknown[] = [
-      record["agent_id"],
-      record["identity_key_hash"],
-      record["phone_hash"],
-      record["initial_signing_key_hash"],
-      record["initial_fallback_pubkey_hash"],
-      record["trust_tier"],
-      record["provisional_period_start"],
-      registeredAt,
-      "", // chain_hash placeholder — index 8
+      record["request_id"],
+      record["requester_pseudonym"],
+      record["target_pseudonym"],
+      record["outcome"],
+      "", // chain_hash placeholder — index 4
     ];
 
-    // Truncate to ensure clean chain (genesis start) for this agent_id
-    await superPool.query("DELETE FROM agent_registrations WHERE agent_id::text = $1", [agentId]);
+    // Ensure no prior row with this request_id
+    await superPool.query("DELETE FROM connection_requests WHERE request_id::text = $1", [requestId]);
 
-    await store.insertWithChain("agent_registrations", record, columns, values, 8);
+    await store.insertWithChain("connection_requests", record, columns, values, 4);
 
-    // Verify the chain: read all rows for this agent
-    const raw = await superPool.query<{ agent_id: string; identity_key_hash: string; chain_hash: string }>(
-      "SELECT agent_id, identity_key_hash, chain_hash FROM agent_registrations WHERE agent_id::text = $1",
-      [agentId],
+    // Verify the chain: read the row back
+    const raw = await superPool.query<{ request_id: string; requester_pseudonym: string; chain_hash: string }>(
+      "SELECT request_id, requester_pseudonym, chain_hash FROM connection_requests WHERE request_id::text = $1",
+      [requestId],
     );
     expect(raw.rows).toHaveLength(1);
     const storedHash = raw.rows[0]!.chain_hash;
 
-    // Verify pubkey (agent_id) round-trip
-    expect(raw.rows[0]!.agent_id).toBe(agentId);
+    // Verify request_id round-trip
+    expect(raw.rows[0]!.request_id).toBe(requestId);
 
     // AC-003: chain_hash decoded as Uint8Array — byte-for-byte comparison
     const chainHashBytes = hexToUint8Array(storedHash);
@@ -800,22 +792,20 @@ describeIntegration("PERSIST-021 integration: AC-003 agent_registrations round-t
     // chain_hash is a valid SHA-256 hex string
     expect(storedHash).toMatch(/^[0-9a-f]{64}$/);
 
-    // For isolation, we check only that our specific row's hash is correct.
-    // The full chain verification is tested separately in AC-008.
     expect(storedHash).not.toBe(CHAIN_GENESIS); // Must be a real computed hash
 
-    // AC-009: adapter.persisted must have been logged at INFO with tableName: 'agent_registrations'
+    // AC-009: adapter.persisted must have been logged at INFO with tableName: 'connection_requests'
     const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls as [string, Record<string, unknown>][];
     const persistedCalls = infoCalls.filter(([event]) => event === "adapter.persisted");
-    expect(persistedCalls.length, "adapter.persisted must fire for agent_registrations INSERT").toBeGreaterThanOrEqual(1);
+    expect(persistedCalls.length, "adapter.persisted must fire for connection_requests INSERT").toBeGreaterThanOrEqual(1);
 
-    const regPersisted = persistedCalls.find(([, ctx]) => ctx["tableName"] === "agent_registrations");
-    expect(regPersisted, "adapter.persisted must fire with tableName: 'agent_registrations'").toBeDefined();
-    expect(regPersisted![1]["rowCount"]).toBe(1);
-    expect(typeof regPersisted![1]["durationMs"]).toBe("number");
+    const reqPersisted = persistedCalls.find(([, ctx]) => ctx["tableName"] === "connection_requests");
+    expect(reqPersisted, "adapter.persisted must fire with tableName: 'connection_requests'").toBeDefined();
+    expect(reqPersisted![1]["rowCount"]).toBe(1);
+    expect(typeof reqPersisted![1]["durationMs"]).toBe("number");
 
     // Cleanup
-    await superPool.query("DELETE FROM agent_registrations WHERE agent_id::text = $1", [agentId]);
+    await superPool.query("DELETE FROM connection_requests WHERE request_id::text = $1", [requestId]);
   });
 });
 
@@ -1026,11 +1016,15 @@ describeIntegration("PERSIST-021 integration: AC-008 chain break detected at tam
 });
 
 describeIntegration("PERSIST-021 integration: SI-001 deserializeRow leaves undeclared BIGINT column as string", () => {
+  // agent_registrations was dropped in V16 (never wired into production code).
+  // agent_profiles (V9) is the authoritative agent identity table.
+  // This test was originally written for agent_registrations; it now uses agent_profiles
+  // which also has a BIGINT id column and serves the same adversarial verification purpose.
   beforeEach(async () => {
-    await superPool.query("TRUNCATE agent_registrations RESTART IDENTITY CASCADE");
+    // Tests use unique pubkeys so isolation is maintained without TRUNCATE.
   });
 
-  it("SI-001: temporarily removing 'id' from BIGINT_COLUMNS['agent_registrations'] causes deserializeRow to leave id as a string; restoring it coerces id to a number", async () => {
+  it("SI-001: temporarily removing 'id' from BIGINT_COLUMNS['agent_profiles'] causes deserializeRow to leave id as a string; restoring it coerces id to a number", async () => {
     // Adversarial condition: a developer adds a BIGINT column to a migration but omits it
     // from BIGINT_COLUMNS. The AC-005 static gate (run in CI) enforces BIGINT_COLUMNS completeness
     // at migration parse time. At read time, deserializeRow leaves undeclared columns as-is —
@@ -1040,49 +1034,22 @@ describeIntegration("PERSIST-021 integration: SI-001 deserializeRow leaves undec
     //   (a) With 'id' removed from BIGINT_COLUMNS, deserializeRow returns id as a string.
     //   (b) After restoring 'id' to BIGINT_COLUMNS, deserializeRow returns id as a number.
     //
-    // We use agent_registrations (a HashChainedTable) and insert a row so there is live
-    // BIGINT data to read back through deserializeRow.
+    // We use agent_profiles (the authoritative agent identity table, V9) and insert a row
+    // so there is live BIGINT data to read back through deserializeRow.
 
-    const logger = makeLogger();
-    const store = new PgDirectoryStore(servicePool, logger);
+    const pubkey = randomBytes(32).toString("hex");
 
-    // Insert a registration row with all NOT NULL columns.
-    // Mirrors the full shape used in AC-003 to satisfy the schema constraints.
-    const agentId = randomUUID();
-    const siRegisteredAt = new Date();
-    const record: Record<string, unknown> = {
-      agent_id: agentId,
-      identity_key_hash: createHash("sha256").update(agentId + "_identity").digest("hex"),
-      phone_hash: createHash("sha256").update(agentId + "_phone").digest("hex"),
-      initial_signing_key_hash: createHash("sha256").update(agentId + "_signing").digest("hex"),
-      initial_fallback_pubkey_hash: createHash("sha256").update(agentId + "_fallback").digest("hex"),
-      trust_tier: "PROVISIONAL",
-      provisional_period_start: new Date("2026-01-01T00:00:00.000Z"),
-      registered_at: siRegisteredAt,
-    };
-    const columns = [
-      "agent_id", "identity_key_hash", "phone_hash",
-      "initial_signing_key_hash", "initial_fallback_pubkey_hash",
-      "trust_tier", "provisional_period_start", "registered_at", "chain_hash",
-    ];
-    const values: unknown[] = [
-      record["agent_id"],
-      record["identity_key_hash"],
-      record["phone_hash"],
-      record["initial_signing_key_hash"],
-      record["initial_fallback_pubkey_hash"],
-      record["trust_tier"],
-      record["provisional_period_start"],
-      siRegisteredAt,
-      "", // chain_hash placeholder — index 8
-    ];
-    // chainHashIndex = 8 (the 9th element: chain_hash)
-    await store.insertWithChain("agent_registrations", record, columns, values, 8);
+    // Insert directly via superPool (agent_profiles uses a different write path from insertWithChain)
+    await superPool.query(
+      `INSERT INTO agent_profiles (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, chain_hash)
+       VALUES ($1, $2, '', '', 1700000000000, 'active', $3)`,
+      [pubkey, randomBytes(32).toString("hex"), randomBytes(32).toString("hex")],
+    );
 
     // Read back the raw row to get a pg-typed BIGINT value (as string)
     const rawResult = await superPool.query<Record<string, unknown>>(
-      "SELECT * FROM agent_registrations WHERE agent_id::text = $1",
-      [agentId],
+      "SELECT id, registered_at FROM agent_profiles WHERE k_local_pubkey = $1",
+      [pubkey],
     );
     expect(rawResult.rows).toHaveLength(1);
     const rawRow = rawResult.rows[0]!;
@@ -1091,26 +1058,26 @@ describeIntegration("PERSIST-021 integration: SI-001 deserializeRow leaves undec
     expect(typeof rawRow["id"], "raw pg id must be a string before deserialization").toBe("string");
 
     // (a) Adversarial condition: temporarily remove 'id' from BIGINT_COLUMNS
-    const original = [...(BIGINT_COLUMNS["agent_registrations"] ?? [])];
+    const original = [...(BIGINT_COLUMNS["agent_profiles"] ?? [])];
     const patched = original.filter((c) => c !== "id");
-    (BIGINT_COLUMNS as Record<string, readonly string[]>)["agent_registrations"] = patched;
+    (BIGINT_COLUMNS as Record<string, readonly string[]>)["agent_profiles"] = patched;
 
     try {
       // With 'id' removed from BIGINT_COLUMNS, deserializeRow leaves id as a string.
       // The AC-005 static gate (not a runtime heuristic) is the enforcement mechanism.
-      const deserializedPatched = deserializeRow("agent_registrations", rawRow);
+      const deserializedPatched = deserializeRow("agent_profiles", rawRow);
       expect(typeof deserializedPatched["id"], "id must remain a string when not in BIGINT_COLUMNS").toBe("string");
     } finally {
       // Always restore BIGINT_COLUMNS — even if the assertion fails
-      (BIGINT_COLUMNS as Record<string, readonly string[]>)["agent_registrations"] = original;
+      (BIGINT_COLUMNS as Record<string, readonly string[]>)["agent_profiles"] = original;
     }
 
     // (b) After restoring BIGINT_COLUMNS, deserializeRow coerces id to a number
-    const deserializedRestored = deserializeRow("agent_registrations", rawRow);
+    const deserializedRestored = deserializeRow("agent_profiles", rawRow);
     expect(typeof deserializedRestored["id"], "id must be a number after BIGINT_COLUMNS is restored").toBe("number");
 
     // Cleanup
-    await superPool.query("DELETE FROM agent_registrations WHERE agent_id::text = $1", [agentId]);
+    await superPool.query("DELETE FROM agent_profiles WHERE k_local_pubkey = $1", [pubkey]);
   });
 });
 

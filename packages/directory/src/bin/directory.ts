@@ -137,7 +137,8 @@ if (env === "local" && pgPool) {
 // Must match APPEND_ONLY_TABLES in src/__tests__/persist-003-rls.test.ts
 if (env === "local" && pgPool) {
   const appendOnlyTables = [
-    "agent_registrations", "social_verifications", "social_verification_freshness_checks",
+    // agent_registrations removed — table dropped in V16; agent_profiles (V9) is the authoritative agent identity table
+    "social_verifications", "social_verification_freshness_checks",
     "social_binding_releases", "device_bindings", "endorsements", "attestations",
     "bio_history", "pseudonym_bindings", "connection_requests", "conversation_seals",
     "conversation_attestations", "conversation_participation", "conversation_proof_leaves",

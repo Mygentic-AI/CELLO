@@ -17,6 +17,7 @@ CREATE POLICY analytics_select ON conversation_participation
 CREATE POLICY analytics_select ON conversation_attestations
   FOR SELECT TO cello_analytics USING (true);
 
+-- NOTE: agent_registrations is dropped in V16__drop_agent_registrations.sql — agent_profiles (V9) is the authoritative agent identity table
 CREATE POLICY analytics_select ON agent_registrations
   FOR SELECT TO cello_analytics USING (true);
 

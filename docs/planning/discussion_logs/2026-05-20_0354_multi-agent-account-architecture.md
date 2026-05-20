@@ -16,6 +16,8 @@ The CELLO identity model is anchored by a unique `AccountID` (verified via Phone
 *   **AgentID (Cryptographic Entity):** A discrete entity with a unique `primary_pubkey` (via FROST DKG), unique `K_local` (Ed25519), and unique `agent_id`.
 *   **1:N Mapping:** The `agent_registrations` table maps `AccountID` -> `[AgentID_1, AgentID_2, ...]`.
 
+> **Note (2026-05-20):** `agent_registrations` was never wired into production code and is dropped in V16. `agent_profiles` (V9) is the authoritative agent identity table. Any implementation of this 1:N mapping should target `agent_profiles`.
+
 ```
 Human Operator
       │
@@ -81,6 +83,6 @@ To prevent Sybil attacks and reputation farming, trust signals are computed at t
 
 ## 5. References
 *   [[agent-client]] — Pseudonym derivation and FROST ceremony mechanics.
-*   [[server-infrastructure]] — Directory-side aggregation and `agent_registrations` table definition.
+*   [[server-infrastructure]] — Directory-side aggregation and `agent_profiles` table definition (`agent_registrations` was dropped in V16; `agent_profiles` V9 is authoritative).
 *   [[2026-04-16_1400_companion-device-architecture]] — Companion device vs agent session differentiation.
 *   [[2026-04-08_1600_data-residency-and-compliance]] — Account deletion and tombstoning requirements.

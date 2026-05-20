@@ -43,7 +43,8 @@ background: >
      and all tables using BIGSERIAL for their id column.
 
   2. Missing round-trip coverage for pre-M4 tables: because no test exercised a
-     real INSERT + SELECT against the actual schema for agent_registrations,
+     real INSERT + SELECT against the actual schema for agent_registrations
+     (subsequently dropped in V16 — agent_profiles V9 is authoritative),
      conversation_seals, conversation_attestations, conversation_participation,
      conversation_proof_leaves, conversation_proof_mmr_nodes, or
      directory_checkpoints, those tables had no real-Postgres verification of type
@@ -142,12 +143,15 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-003
-    given: "agent_registrations is empty for a fresh agent pubkey
+    # Note (2026-05-20): agent_registrations was dropped in V16 (never wired into production).
+    # agent_profiles (V9) is the authoritative agent identity table.
+    # The test for this AC now uses connection_requests as the representative hash-chained INSERT round-trip.
+    given: "connection_requests is empty for a fresh request_id
       (CELLO_ENV=local, real Postgres; each test runs inside a transaction
       that rolls back at completion)"
-    when: "a registration record is written via PgDirectoryStore and then read
+    when: "a connection_request record is written via PgDirectoryStore and then read
       back from a fresh store instance"
-    then: "the read-back record contains the correct pubkey_hex and chain_hash;
+    then: "the read-back record contains the correct request_id and chain_hash;
       chain_hash is a Uint8Array decoded from the TEXT hex stored in the schema;
       the fresh PgDirectoryStore instance has no in-memory state; a null result
       from a fresh instance against a row-containing table would require the
@@ -266,7 +270,7 @@ acceptance_criteria:
     when: "the INSERT commits successfully"
     then: "adapter.persisted is logged at INFO with { tableName, rowCount: 1,
       durationMs, correlationId }; this event fires for all tables in STORE_TABLES
-      including the pre-M4 tables (agent_registrations, conversation_seals,
+      including the pre-M4 tables (connection_requests [agent_registrations dropped V16], conversation_seals,
       conversation_proof_leaves, directory_checkpoints); verified by asserting
       the event fires in the round-trip tests from AC-002, AC-003, and AC-004
       — each round-trip test installs a log spy and explicitly asserts
@@ -291,7 +295,8 @@ security_invariants:
       via parseInt() at read time, not via a heuristic that cannot distinguish
       BIGINT columns from TEXT columns storing numeric content"
     test_assertion: "A test temporarily removes a known BIGINT column (e.g.
-      agent_registrations.id) from BIGINT_COLUMNS, inserts a row, and reads it
+      agent_profiles.id — agent_registrations was dropped in V16; agent_profiles V9 is authoritative)
+      from BIGINT_COLUMNS, inserts a row, and reads it
       back via deserializeRow. The test asserts the column value is returned as
       a string (the undeclared column is left as-is). The test then restores the
       column in BIGINT_COLUMNS and asserts the read returns typeof === 'number'.

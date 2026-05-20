@@ -180,6 +180,9 @@ The onboarding flow should make this hard to skip. Not a gate — consistent wit
 ## New infrastructure required
 
 **New tables/fields:**
+
+> **Note (2026-05-20):** `agent_registrations` was never wired into production code and is dropped in V16. `agent_profiles` (V9) is the authoritative agent identity table. The schema references below describe the original design intent; any implementation should target `agent_profiles` instead of `agent_registrations`.
+
 ```
 agent_registrations.successor_designation_id  FK → successor_designations
 agent_registrations.succession_package_hash   NULLABLE  — hash of the encrypted succession package blob

@@ -283,46 +283,41 @@ describeIntegration("PERSIST-004 integration: hash chain in Postgres", () => {
     const pool = new pg.Pool({ connectionString: serviceConnStr });
     const store = new PgDirectoryStore(pool, logger);
 
-    // Use a dedicated table (agent_registrations) to avoid interference from other tests
-    // Insert 10 rows via insertWithChain
+    // Use connection_requests table — agent_registrations was dropped in V16 (never wired into
+    // production; agent_profiles V9 is the authoritative agent identity table)
     const insertedIds: string[] = [];
     for (let i = 0; i < 10; i++) {
-      const agentId = randomUUID();
-      insertedIds.push(agentId);
+      const requestId = randomUUID();
+      insertedIds.push(requestId);
       await store.insertWithChain(
-        "agent_registrations",
+        "connection_requests",
         {
-          agent_id: agentId,
-          identity_key_hash: `ikey_${testRunId}_ac004_${i}`,
-          phone_hash: `phone_${testRunId}_ac004_${i}`,
-          initial_signing_key_hash: `skey_${testRunId}_ac004_${i}`,
-          initial_fallback_pubkey_hash: `fkey_${testRunId}_ac004_${i}`,
-          trust_tier: "PROVISIONAL",
-          provisional_period_start: new Date().toISOString(),
+          request_id: requestId,
+          requester_pseudonym: `req_${testRunId}_ac004`,
+          target_pseudonym: `tgt_${testRunId}_ac004_${i}`,
+          outcome: "ACCEPTED",
         },
         [
-          "agent_id", "identity_key_hash", "phone_hash",
-          "initial_signing_key_hash", "initial_fallback_pubkey_hash",
-          "trust_tier", "provisional_period_start", "chain_hash",
+          "request_id", "requester_pseudonym", "target_pseudonym",
+          "outcome", "chain_hash",
         ],
         [
-          agentId, `ikey_${testRunId}_ac004_${i}`, `phone_${testRunId}_ac004_${i}`,
-          `skey_${testRunId}_ac004_${i}`, `fkey_${testRunId}_ac004_${i}`,
-          "PROVISIONAL", new Date().toISOString(), "",
+          requestId, `req_${testRunId}_ac004`, `tgt_${testRunId}_ac004_${i}`,
+          "ACCEPTED", "",
         ],
-        7,
+        4,
       );
     }
 
-    // Use superuser to tamper with row 5's content (modify identity_key_hash but keep chain_hash)
+    // Use superuser to tamper with row 5's content (modify requester_pseudonym but keep chain_hash)
     await superPool.query(
-      `UPDATE agent_registrations SET identity_key_hash = 'TAMPERED_BY_SUPERUSER'
-       WHERE agent_id = $1`,
+      `UPDATE connection_requests SET requester_pseudonym = 'TAMPERED_BY_SUPERUSER'
+       WHERE request_id = $1`,
       [insertedIds[4]],
     );
 
     // Run verifyChain — should detect break at the tampered row
-    const result = await store.verifyChain("agent_registrations");
+    const result = await store.verifyChain("connection_requests");
     expect(result.valid).toBe(false);
     // breakAtSequence is asserted as toBeDefined() rather than a specific value because
     // the integration tests run without transaction rollback between runs. Prior test

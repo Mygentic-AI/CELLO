@@ -87,7 +87,7 @@ import { HASH_CHAINED_TABLES } from "../hash-chain.js";
  * Current values must match HASH_CHAINED_TABLES exactly — the SI-001 test enforces this.
  */
 const KNOWN_DYNAMIC_TABLES: readonly string[] = [
-  "agent_registrations",
+  // agent_registrations removed — table dropped in V16; agent_profiles (V9) is the authoritative agent identity table
   "connection_requests",
   "conversation_seals",
   "conversation_attestations",
