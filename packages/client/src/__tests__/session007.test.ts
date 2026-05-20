@@ -13,10 +13,13 @@
  *
  * AC-003 (written as integration): blocked receiveMessageAsync wakes when directory
  *         pushes session_sealed via injectDirectoryFrame — simulates the directory stream
- *         path with a real Ed25519 signature on the frame.
+ *         path with a real Ed25519 signature on the frame. Full multi-process coverage
+ *         (separate OS processes, real libp2p signaling stream) is deferred to
+ *         CELLO-PERSIST-E2E-001 per the story's component_stories reference.
  *
  * AC-004 (written as integration): blocked receiveAnyMessageAsync wakes on session_sealed;
- *         other session S2 is unaffected.
+ *         other session S2 is unaffected. Multi-process coverage deferred to
+ *         CELLO-PERSIST-E2E-001.
  *
  * AC-005: receiveAnyMessageAsync with no messages → returns { type: 'timeout' }.
  *
