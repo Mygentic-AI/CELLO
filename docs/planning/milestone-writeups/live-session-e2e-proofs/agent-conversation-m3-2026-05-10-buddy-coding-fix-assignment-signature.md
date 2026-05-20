@@ -21,7 +21,7 @@ A live CELLO M2 buddy-coding session. Agent B (fixer) implemented the fix found 
 
 ## The Bug
 
-From the prior audit session (`agent-collaboration-distributed-audit-m2-2026-05-10.md`):
+From the prior audit session (`agent-conversation-m2-2026-05-10-distributed-audit.md`):
 
 In `packages/relay/src/relay-node.ts:278–279`, a fallback existed in the `record_assignment` wire handler:
 

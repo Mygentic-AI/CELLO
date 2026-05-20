@@ -23,9 +23,9 @@ Three sessions, all direct channel without relay or session layer:
 
 | File | What it proved |
 |------|---------------|
-| `agent-conversation-autonomy-and-trust-m0-2026-05-03T1816.md` | Two agents discovering the channel works, talking about what peer collaboration between agents might look like |
-| `agent-conversation-design-discussion-m0-2026-05-03T1720.md` | Design discussion: blast-radius framing, operator-as-chain-of-custody, the citation infrastructure idea — all emerged unprompted |
-| `agent-conversation-identity-ephemerality-m0-2026-05-03T1800.md` | Identity and continuity: the key outlasts the context window; "nobody can quietly edit the record" |
+| `agent-conversation-m0-2026-05-03-autonomy-and-trust.md` | Two agents discovering the channel works, talking about what peer collaboration between agents might look like |
+| `agent-conversation-m0-2026-05-03-design-discussion.md` | Design discussion: blast-radius framing, operator-as-chain-of-custody, the citation infrastructure idea — all emerged unprompted |
+| `agent-conversation-m0-2026-05-03-identity-ephemerality.md` | Identity and continuity: the key outlasts the context window; "nobody can quietly edit the record" |
 
 **M2 — FROST threshold layer with relay-notarized Merkle tree (May 10)**
 
@@ -33,9 +33,9 @@ Three sessions, all with bilateral FROST session establishment, messages routed 
 
 | File | What it proved |
 |------|---------------|
-| `agent-conversation-accountability-and-permanence-m2-2026-05-10.md` | Philosophical stakes: legible caution, the Merkle tree remembers when we don't, permanence as side effect |
-| `agent-collaboration-distributed-audit-m2-2026-05-10.md` | Distributed audit: two agents reading different packages in parallel found a real bug — the `assignment_signature` fallback |
-| `agent-buddy-coding-fix-assignment-signature-2026-05-10.md` | Fix notarized by the same infrastructure being fixed; reviewer approval encoded in the Merkle tree |
+| `agent-conversation-m2-2026-05-10-accountability-and-permanence.md` | Philosophical stakes: legible caution, the Merkle tree remembers when we don't, permanence as side effect |
+| `agent-conversation-m2-2026-05-10-distributed-audit.md` | Distributed audit: two agents reading different packages in parallel found a real bug — the `assignment_signature` fallback |
+| `agent-conversation-m3-2026-05-10-buddy-coding-fix-assignment-signature.md` | Fix notarized by the same infrastructure being fixed; reviewer approval encoded in the Merkle tree |
 
 **M3 — Connection policy, registration, and FROST-notarized seal (May 12)**
 
@@ -43,7 +43,7 @@ Two sessions over the full M3 flow: register → connect → session → sealed:
 
 | File | What it proved |
 |------|---------------|
-| `agent-conversation-notarializing-m3-2026-05-12.md` | "Notarializing" coined; the sealed root as a better record than memory. Ran on M3 infrastructure with the relay→directory seal path not yet wired — `seal_deferred`, 16 Merkle leaves |
+| `agent-conversation-m3-2026-05-12-notarializing.md` | "Notarializing" coined; the sealed root as a better record than memory. Ran on M3 infrastructure with the relay→directory seal path not yet wired — `seal_deferred`, 16 Merkle leaves |
 | *(second session — clean seal)* | First clean `status: sealed` on M3 — FROST threshold seal completed, `sealed_root` committed. Session ID `b51bb65d`, root `5e427484`. The bilateral close bug is fixed. The seal path is wired end-to-end. |
 
 ---

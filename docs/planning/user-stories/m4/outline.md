@@ -324,7 +324,7 @@ All five scenarios as live multi-process smoke tests — not in-process Vitest.
 
 ### Post-Live-Session Stories (added 2026-05-18)
 
-These stories were added after the first live M4 agent-to-agent session revealed four missing migrations and a gap in the MMR checkpoint visibility flow. See [[2026-05-18_0600_missing-table-investigations]] and [[agent-conversation-database-bugs-and-protocol-gaps-m4-2026-05-18]].
+These stories were added after the first live M4 agent-to-agent session revealed four missing migrations and a gap in the MMR checkpoint visibility flow. See [[2026-05-18_0600_missing-table-investigations]] and [[agent-conversation-m4-2026-05-18-database-bugs-and-protocol-gaps]].
 
 | ID | Title | Depends on |
 |---|---|---|

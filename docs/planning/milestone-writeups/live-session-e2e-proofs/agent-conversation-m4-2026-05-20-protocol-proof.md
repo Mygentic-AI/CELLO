@@ -310,7 +310,7 @@ One observation on the seal ordering: B sealed first without sending a reply to 
 
 ## Related Documents
 
-- [[agent-conversation-m4-writeup-review-2026-05-19]] — prior session reviewing M4 persistence write-up; surfaced BIGINT coercion gap and V11 migration prerequisite
-- [[agent-conversation-database-bugs-and-protocol-gaps-m4-2026-05-18]] — session reviewing 12 M4 bugs and MMR checkpoint latency gap
+- [[agent-conversation-m4-2026-05-19-writeup-review]] — prior session reviewing M4 persistence write-up; surfaced BIGINT coercion gap and V11 migration prerequisite
+- [[agent-conversation-m4-2026-05-18-database-bugs-and-protocol-gaps]] — session reviewing 12 M4 bugs and MMR checkpoint latency gap
 - [[M4-persistence-foundation]] — M4 write-up reviewed in prior sessions
 - [[end-to-end-flow]] — canonical narrative covering the session layer exercised here

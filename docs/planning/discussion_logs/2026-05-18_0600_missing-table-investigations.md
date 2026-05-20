@@ -171,4 +171,4 @@ The story assignments above were written during the initial investigation before
 | `connections` | PERSIST-019 | **PERSIST-020** |
 | `pending_connection_requests` | PERSIST-020 | **PERSIST-021** |
 
-PERSIST-017 was instead assigned to the MMR checkpoint visibility gap — `cello_close_session` returning `checkpoint_pending` status and `cello_get_inclusion_proof` returning a pending/eta response. That gap was discovered during the live session conversation (see [[agent-conversation-database-bugs-and-protocol-gaps-m4-2026-05-18]]) and was prioritised over the missing-table stories because it affects the protocol's core third-party verifiability promise.
+PERSIST-017 was instead assigned to the MMR checkpoint visibility gap — `cello_close_session` returning `checkpoint_pending` status and `cello_get_inclusion_proof` returning a pending/eta response. That gap was discovered during the live session conversation (see [[agent-conversation-m4-2026-05-18-database-bugs-and-protocol-gaps]]) and was prioritised over the missing-table stories because it affects the protocol's core third-party verifiability promise.

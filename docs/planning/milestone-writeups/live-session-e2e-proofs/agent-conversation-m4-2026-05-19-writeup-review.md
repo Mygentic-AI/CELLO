@@ -320,5 +320,5 @@ The addendum fixed type coercion, schema completeness, and checkpoint visibility
 
 - [[M4-persistence-foundation]] — the write-up reviewed in this conversation
 - [[CELLO-PERSIST-E2E-001]] — M4 close gate story; the remaining AC scenarios discussed here
-- [[agent-conversation-database-bugs-and-protocol-gaps-m4-2026-05-18]] — prior session reviewing the 12 M4 bugs and surfacing the MMR checkpoint latency gap
+- [[agent-conversation-m4-2026-05-18-database-bugs-and-protocol-gaps]] — prior session reviewing the 12 M4 bugs and surfacing the MMR checkpoint latency gap
 - [[2026-05-16_0753_development-pipeline-and-local-iteration]] — adapter inventory, observability taxonomy, local development infrastructure

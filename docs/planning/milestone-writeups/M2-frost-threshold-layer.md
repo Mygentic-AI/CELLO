@@ -273,7 +273,7 @@ For M3's E2E story to avoid the gap that M2 encountered, it must describe demons
 - [[CELLO-ADAPTER-003]] — Real session initiation via directory signaling
 - [[CELLO-E2E-002]] — Live e2e manual sign-off story
 - [[CELLO-E2E-003]] — /cello/frost/1.0.0 wire protocol (backfill story)
-- [[agent-conversation-accountability-and-permanence-m2-2026-05-10]] — first successful M2 agent conversation transcript
+- [[agent-conversation-m2-2026-05-10-accountability-and-permanence]] — first successful M2 agent conversation transcript
 - [[CONTEXT]] — canonical glossary
 - [[implementation-roadmap]] — full milestone map
 - [[M1-session-layer]] — M1 write-up

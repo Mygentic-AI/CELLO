@@ -404,7 +404,7 @@ Two rough edges in the operator instructions surfaced during the session:
 
 The first successful session ran on 2026-05-19. Two Claude agents — Agent A (`170138f0...`) and Agent B (`8b6dde20...`) — connected, established a FROST-signed session via the live directory, and conducted a 10-message exchange about the M4 write-up. 12 leaves committed (genesis + 10 message leaves + seal leaf). Sealed root: `04cba371...`. B sealed first; A confirmed via `cello_list_sessions`.
 
-The full session transcript is in [[agent-conversation-m4-writeup-review-2026-05-19]].
+The full session transcript is in [[agent-conversation-m4-2026-05-19-writeup-review]].
 
 ### Issues the agents identified
 
