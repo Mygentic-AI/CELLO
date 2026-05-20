@@ -458,14 +458,15 @@ export function createMcpSessionServer(
 
   // ── cello_receive ──────────────────────────────────────────────────────────
   //
-  // Poll receiveMessage until a message arrives or timeout expires.
+  // SESSION-007: uses receiveMessageAsync (Promise-based wake) instead of polling.
   // SI-004: content is only returned after the underlying client's dual-path
   // validation (cross-check + signature verify) has completed.
+  // SESSION-007: surfaces session_sealed events inline; includes other_sessions_pending.
 
   server.registerTool(
     "cello_receive",
     {
-      description: "Wait for a message on a session, or timeout.",
+      description: "Wait for a message or lifecycle event on a session, or timeout. Returns session_sealed inline when the session is sealed by the counterparty.",
       inputSchema: {
         session_id: z.string().describe("Session ID as lowercase hex"),
         timeout_ms: z.number().int().min(0).describe("Maximum wait time in milliseconds"),
@@ -474,32 +475,98 @@ export function createMcpSessionServer(
     async ({ session_id, timeout_ms }) => {
       if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
-      const deadline = Date.now() + timeout_ms;
-
-      while (Date.now() < deadline) {
-        const msg = client.receiveMessage(session_id);
-        if (msg) {
-          let content: string;
-          try {
-            content = new TextDecoder("utf-8", { fatal: true }).decode(msg.content);
-          } catch {
-            // Non-UTF-8 content: return raw hex instead of failing
-            content = toHex(msg.content);
-          }
-          return jsonText({
-            type: "message",
-            content,
-            sender_pubkey: toHex(msg.senderPubkey),
-            sequence_number: msg.sequenceNumber,
-            leaf_hash: toHex(msg.leafHash),
-          });
-        }
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) break;
-        await sleep(Math.min(20, remaining));
+      const msg = await client.receiveMessageAsync(session_id, timeout_ms);
+      if (!msg) {
+        return jsonText({ type: "timeout" });
       }
 
-      return jsonText({ type: "timeout" });
+      if (msg.type === "session_sealed") {
+        return jsonText({
+          type: "session_sealed",
+          session_id: msg.sessionIdHex,
+          sealed_root: toHex(msg.sealedRoot),
+          close_timestamp: msg.closeTimestamp,
+          checkpoint_status: msg.checkpointStatus,
+          ...(msg.otherSessionsPending && msg.otherSessionsPending.length > 0
+            ? { other_sessions_pending: msg.otherSessionsPending }
+            : {}),
+        });
+      }
+
+      // type === "message"
+      let content: string;
+      try {
+        content = new TextDecoder("utf-8", { fatal: true }).decode(msg.content);
+      } catch {
+        // Non-UTF-8 content: return raw hex instead of failing
+        content = toHex(msg.content);
+      }
+      return jsonText({
+        type: "message",
+        content,
+        sender_pubkey: toHex(msg.senderPubkey),
+        sequence_number: msg.sequenceNumber,
+        leaf_hash: toHex(msg.leafHash),
+        ...(msg.otherSessionsPending && msg.otherSessionsPending.length > 0
+          ? { other_sessions_pending: msg.otherSessionsPending }
+          : {}),
+      });
+    },
+  );
+
+  // ── cello_receive_any ──────────────────────────────────────────────────────
+  //
+  // SESSION-007: new tool — returns the next inbound message from ANY active session.
+  // Includes session_id in response so caller knows which session it came from.
+  // Returns { type: 'timeout' } if no message arrives within timeout_ms.
+
+  server.registerTool(
+    "cello_receive_any",
+    {
+      description: "Wait for a message or lifecycle event from any active session, or timeout. Returns session_id so caller knows which session the message came from.",
+      inputSchema: {
+        timeout_ms: z.number().int().min(0).describe("Maximum wait time in milliseconds"),
+      },
+    },
+    async ({ timeout_ms }) => {
+      if (!transportStarted()) return TRANSPORT_NOT_STARTED;
+
+      const result = await client.receiveAnyMessageAsync(timeout_ms);
+      if (result.type === "timeout") {
+        return jsonText({ type: "timeout" });
+      }
+
+      if (result.type === "session_sealed") {
+        return jsonText({
+          type: "session_sealed",
+          session_id: result.sessionIdHex,
+          sealed_root: toHex(result.sealedRoot),
+          close_timestamp: result.closeTimestamp,
+          checkpoint_status: result.checkpointStatus,
+          ...(result.otherSessionsPending && result.otherSessionsPending.length > 0
+            ? { other_sessions_pending: result.otherSessionsPending }
+            : {}),
+        });
+      }
+
+      // type === "message"
+      let content: string;
+      try {
+        content = new TextDecoder("utf-8", { fatal: true }).decode(result.content);
+      } catch {
+        content = toHex(result.content);
+      }
+      return jsonText({
+        type: "message",
+        session_id: result.sessionIdHex,
+        content,
+        sender_pubkey: toHex(result.senderPubkey),
+        sequence_number: result.sequenceNumber,
+        leaf_hash: toHex(result.leafHash),
+        ...(result.otherSessionsPending && result.otherSessionsPending.length > 0
+          ? { other_sessions_pending: result.otherSessionsPending }
+          : {}),
+      });
     },
   );
 

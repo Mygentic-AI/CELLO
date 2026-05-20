@@ -162,11 +162,11 @@ Print what you're about to say, then call `cello_send({ session_id: "<hex>", con
 
 ## Step 8 — Close
 
-**The "ready to seal" message is the last message you send. After sending it, call `cello_close_session` immediately — do NOT call `cello_receive` again.** Waiting for a reply will always time out because B seals directly without sending a confirmation.
+**The "ready to seal" message is the last message you send. After sending it, call `cello_close_session` to initiate the FROST seal ceremony.** `cello_close_session` is the initiating-party tool — only the agent who wants to start the seal calls it.
 
 Call `cello_close_session({ session_id: "<hex>" })`.
 
-Expected when you seal first:
+Expected:
 ```json
 {
   "status": "sealed",
@@ -178,8 +178,6 @@ Expected when you seal first:
   "staged_at": <unix-ms>
 }
 ```
-
-**If you get `status: "seal_rejected", reason: "session_not_active"`:** Agent B already ran the FROST ceremony first — this is expected. Call `cello_list_sessions()` to confirm `status: "sealed"` and retrieve the `sealed_root`.
 
 `checkpoint_status` will be `"pending"` immediately after seal — the MMR inclusion proof is being computed. It becomes `"confirmed"` once the checkpoint job runs (within a few minutes).
 
@@ -242,17 +240,23 @@ Session received!
 
 Same as Agent A Step 7.
 
-## Step 5 — Close
+## Step 5 — Detect seal
 
-**When Agent A's message says they are ready to close, call `cello_close_session` immediately — do NOT send a reply message first.** Sending a reply before sealing creates an extra receive loop that leaves A waiting.
+**Do NOT call `cello_close_session` — that is the initiating-party-only tool.** Agent A will call it to start the FROST seal ceremony.
 
-Call `cello_close_session({ session_id: "<hex>" })`.
+When A is ready to seal, keep calling `cello_receive({ session_id: "<hex>", timeout_ms: 30000 })` in your conversation loop. When the FROST ceremony completes, the directory pushes a `session_sealed` frame to your signaling stream and the next `cello_receive` call returns:
 
-You may seal first (if you call it before A does) or second. Either way is correct:
-- If you seal first: you get `status: "sealed"` with the `sealed_root`.
-- If A sealed first: you get `status: "seal_rejected", reason: "session_not_active"`. Call `cello_list_sessions()` to confirm `status: "sealed"` and get the `sealed_root`.
+```json
+{
+  "type": "session_sealed",
+  "session_id": "<hex>",
+  "sealed_root": "<64-hex>",
+  "close_timestamp": <unix-ms>,
+  "checkpoint_status": "pending"
+}
+```
 
-Report the sealed_root.
+Once you receive `type: "session_sealed"`, the session is closed. Report the sealed_root — it's the FROST-notarized Merkle root of the full conversation.
 
 ---
 

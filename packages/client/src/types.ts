@@ -131,16 +131,34 @@ export type SendResult =
   | { delivered: true; contentHash: string }
   | { delivered: false; reason: SendFailureReason };
 
-// ─── MSG-004: session message types ──────────────────────────────────────────
+// ─── MSG-004 / SESSION-007: session message types ────────────────────────────
 
-/** A cross-checked, verified message delivered from a session. MSG-004. */
-export interface ReceivedMessage {
-  content: Uint8Array;
-  senderPubkey: Uint8Array;
-  sequenceNumber: number;
-  /** SHA-256(leaf_kind_byte || structure2_cbor) per MERKLE-001 (RFC 6962). */
-  leafHash: Uint8Array;
-}
+/**
+ * A cross-checked, verified message OR lifecycle event delivered from a session.
+ * SESSION-007 extends this from a plain message shape to a discriminated union so
+ * that session_sealed lifecycle events can be surfaced inline by receiveMessage /
+ * receiveAnyMessage without a separate API.
+ */
+export type ReceivedMessage =
+  | {
+      type: "message";
+      content: Uint8Array;
+      senderPubkey: Uint8Array;
+      sequenceNumber: number;
+      /** SHA-256(leaf_kind_byte || structure2_cbor) per MERKLE-001 (RFC 6962). */
+      leafHash: Uint8Array;
+      /** SESSION-007: other active sessions that have queued messages. */
+      otherSessionsPending?: string[];
+    }
+  | {
+      type: "session_sealed";
+      sessionIdHex: string;
+      sealedRoot: Uint8Array;
+      closeTimestamp: number;
+      checkpointStatus: "pending" | "confirmed";
+      /** SESSION-007: other active sessions that have queued messages. */
+      otherSessionsPending?: string[];
+    };
 
 export type SendMessageFailureReason =
   | "session_not_found"
@@ -353,6 +371,24 @@ export interface CelloClient {
    * Returns null if all queues are empty. MSG-004.
    */
   receiveAnyMessage(): { sessionIdHex: string; message: ReceivedMessage } | null;
+
+  /**
+   * SESSION-007: Block until a message (or session_sealed event) arrives on the given
+   * session, or timeout_ms elapses. Returns null on timeout.
+   * Wakes immediately if a message is already queued.
+   */
+  receiveMessageAsync(sessionIdHex: string, timeoutMs: number): Promise<ReceivedMessage | null>;
+
+  /**
+   * SESSION-007: Block until a message (or session_sealed event) arrives on ANY active
+   * session, or timeout_ms elapses. Returns { type: 'timeout' } on timeout.
+   * The response includes sessionIdHex so the caller knows which session it came from.
+   * Wakes immediately if any queue is non-empty.
+   */
+  receiveAnyMessageAsync(timeoutMs: number): Promise<
+    | (ReceivedMessage & { sessionIdHex: string })
+    | { type: "timeout" }
+  >;
 
   /**
    * Initiate the bilateral SEAL ceremony. Constructs and submits the initiator SEAL

@@ -263,16 +263,19 @@ function computeContentHash(content: Uint8Array): Uint8Array {
   return new Uint8Array(h.digest());
 }
 
-/** Wait for message with timeout. */
+/** Wait for message with timeout. Returns only type:"message" events. */
 async function waitForMessage(
   client: CelloClient,
   sessionIdHex: string,
   timeoutMs = 5000
-): Promise<import("../types.js").ReceivedMessage> {
+): Promise<Extract<import("../types.js").ReceivedMessage, { type: "message" }>> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const msg = client.receiveMessage(sessionIdHex);
-    if (msg) return msg;
+    if (msg) {
+      if (msg.type !== "message") throw new Error(`unexpected lifecycle event type: ${msg.type}`);
+      return msg;
+    }
     await new Promise((r) => setTimeout(r, 20));
   }
   throw new Error(`timeout waiting for message on session ${sessionIdHex}`);
