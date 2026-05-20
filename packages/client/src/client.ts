@@ -301,6 +301,10 @@ class CelloClientImpl implements CelloClient {
   // FIFO arrival order across all sessions: { sessionIdHex, message }
   readonly #anyMessageQueue: Array<{ sessionIdHex: string; message: ReceivedMessage }> = [];
 
+  // SESSION-007: wake resolvers for receiveMessageAsync (per-session) and receiveAnyMessageAsync
+  readonly #receiveWaiters = new Map<string, Set<() => void>>();
+  readonly #receiveAnyWaiters = new Set<() => void>();
+
   // session_id_hex → directory signaling stream (SESSION-003)
   readonly #directoryStreams = new Map<string, Stream>();
 
@@ -1056,6 +1060,184 @@ class CelloClientImpl implements CelloClient {
     return this.#anyMessageQueue.shift() ?? null;
   }
 
+  // ─── SESSION-007: async blocking receive ─────────────────────────────────────
+  //
+  // Pseudocode for receiveMessageAsync(sessionIdHex, timeoutMs):
+  //   1. Check #sessionMessageQueues[sessionIdHex] — if non-empty, dequeue and return immediately.
+  //   2. Register a wake resolver in #receiveWaiters[sessionIdHex].
+  //   3. Race: wait for wakeUp() signal vs. setTimeout(timeoutMs).
+  //   4. On wake: dequeue from #sessionMessageQueues. If empty (spurious wake), repeat from step 2.
+  //   5. On timeout: clean up resolver, return null.
+  //   6. On return: compute otherSessionsPending, log session.receive.pending_hint if non-empty.
+  //
+  // Pseudocode for receiveAnyMessageAsync(timeoutMs):
+  //   1. Check #anyMessageQueue — if non-empty, dequeue and return immediately.
+  //   2. Register a wake resolver in #receiveAnyWaiters.
+  //   3. Race: wait for wakeUp() signal vs. setTimeout(timeoutMs).
+  //   4. On wake: dequeue from #anyMessageQueue. Also dequeue from per-session queue.
+  //   5. On timeout: return { type: 'timeout' }.
+  //
+  // Pseudocode for #wakeReceiveWaiters(sessionIdHex):
+  //   1. Fire all resolvers in #receiveWaiters[sessionIdHex].
+  //   2. Fire all resolvers in #receiveAnyWaiters.
+  //   (Resolvers clear themselves on fire to avoid double-wake.)
+  //
+  // Pseudocode for #computeOtherSessionsPending(excludeSessionIdHex):
+  //   1. For each entry in #sessionMessageQueues, skip excluded session.
+  //   2. Collect sessionIdHex values where queue.length > 0.
+  //   3. Return collected array.
+  //
+  // Pseudocode for #enqueueSessionSealedEvent(sessionIdHex, sealedRoot, closeTimestamp):
+  //   1. Log session.sealed.received with {sessionId, sealedRoot (hex), closeTimestamp, checkpointStatus, correlationId}.
+  //   2. Build lifecycle event: { type: "session_sealed", sessionIdHex, sealedRoot, closeTimestamp, checkpointStatus: "pending" }.
+  //   3. Enqueue to #sessionMessageQueues[sessionIdHex] (create queue if missing).
+  //   4. Enqueue to #anyMessageQueue.
+  //   5. Call #wakeReceiveWaiters(sessionIdHex).
+
+  #computeOtherSessionsPending(excludeSessionIdHex: string): string[] {
+    const pending: string[] = [];
+    for (const [sid, queue] of this.#sessionMessageQueues.entries()) {
+      if (sid !== excludeSessionIdHex && queue.length > 0) {
+        pending.push(sid);
+      }
+    }
+    return pending;
+  }
+
+  #wakeReceiveWaiters(sessionIdHex: string): void {
+    // Wake per-session waiters
+    const sessionWaiters = this.#receiveWaiters.get(sessionIdHex);
+    if (sessionWaiters) {
+      for (const resolve of sessionWaiters) resolve();
+      sessionWaiters.clear();
+    }
+    // Wake any-session waiters
+    for (const resolve of this.#receiveAnyWaiters) resolve();
+    this.#receiveAnyWaiters.clear();
+  }
+
+  async receiveMessageAsync(sessionIdHex: string, timeoutMs: number): Promise<ReceivedMessage | null> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (true) {
+      // Check queue first (fast path: already has messages)
+      const queue = this.#sessionMessageQueues.get(sessionIdHex);
+      if (queue && queue.length > 0) {
+        const item = queue.shift()!;
+        // Remove from #anyMessageQueue as well to keep in sync
+        const idx = this.#anyMessageQueue.findIndex(
+          (e) => e.sessionIdHex === sessionIdHex && e.message === item
+        );
+        if (idx !== -1) this.#anyMessageQueue.splice(idx, 1);
+        // Attach otherSessionsPending
+        const pending = this.#computeOtherSessionsPending(sessionIdHex);
+        const result = pending.length > 0 ? { ...item, otherSessionsPending: pending } : item;
+        if (pending.length > 0) {
+          this.#logger.info("session.receive.pending_hint", {
+            currentSessionId: sessionIdHex,
+            pendingSessionCount: pending.length,
+            correlationId: sessionIdHex,
+          });
+        }
+        return result;
+      }
+
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return null;
+
+      // Register wake resolver and race against timeout
+      await new Promise<void>((resolve) => {
+        let set = this.#receiveWaiters.get(sessionIdHex);
+        if (!set) {
+          set = new Set();
+          this.#receiveWaiters.set(sessionIdHex, set);
+        }
+        set.add(resolve);
+        setTimeout(() => {
+          // Remove resolver if timeout fires before wake
+          this.#receiveWaiters.get(sessionIdHex)?.delete(resolve);
+          resolve();
+        }, remaining);
+      });
+    }
+  }
+
+  async receiveAnyMessageAsync(timeoutMs: number): Promise<
+    | (ReceivedMessage & { sessionIdHex: string })
+    | { type: "timeout" }
+  > {
+    const deadline = Date.now() + timeoutMs;
+
+    while (true) {
+      // Check any-session queue first (fast path)
+      if (this.#anyMessageQueue.length > 0) {
+        const entry = this.#anyMessageQueue.shift()!;
+        // Remove from per-session queue as well
+        const perSession = this.#sessionMessageQueues.get(entry.sessionIdHex);
+        if (perSession) {
+          const idx = perSession.indexOf(entry.message);
+          if (idx !== -1) perSession.splice(idx, 1);
+        }
+        // Attach otherSessionsPending
+        const pending = this.#computeOtherSessionsPending(entry.sessionIdHex);
+        const result = pending.length > 0
+          ? { ...entry.message, sessionIdHex: entry.sessionIdHex, otherSessionsPending: pending }
+          : { ...entry.message, sessionIdHex: entry.sessionIdHex };
+        if (pending.length > 0) {
+          this.#logger.info("session.receive.pending_hint", {
+            currentSessionId: entry.sessionIdHex,
+            pendingSessionCount: pending.length,
+            correlationId: entry.sessionIdHex,
+          });
+        }
+        return result;
+      }
+
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return { type: "timeout" };
+
+      // Register wake resolver and race against timeout
+      await new Promise<void>((resolve) => {
+        this.#receiveAnyWaiters.add(resolve);
+        setTimeout(() => {
+          this.#receiveAnyWaiters.delete(resolve);
+          resolve();
+        }, remaining);
+      });
+    }
+  }
+
+  #enqueueSessionSealedEvent(
+    sessionIdHex: string,
+    sealedRoot: Uint8Array,
+    closeTimestamp: number,
+  ): void {
+    // Use sessionIdHex as correlationId — minted at session initiation, unique per session flow.
+    const correlationId = sessionIdHex;
+    this.#logger.info("session.sealed.received", {
+      sessionId: sessionIdHex,
+      sealedRoot: Buffer.from(sealedRoot).toString("hex"),
+      closeTimestamp,
+      checkpointStatus: "pending",
+      correlationId,
+    });
+    const lifecycleEvent: ReceivedMessage = {
+      type: "session_sealed",
+      sessionIdHex,
+      sealedRoot: new Uint8Array(sealedRoot),
+      closeTimestamp,
+      checkpointStatus: "pending",
+    };
+    let queue = this.#sessionMessageQueues.get(sessionIdHex);
+    if (!queue) {
+      queue = [];
+      this.#sessionMessageQueues.set(sessionIdHex, queue);
+    }
+    queue.push(lifecycleEvent);
+    this.#anyMessageQueue.push({ sessionIdHex, message: lifecycleEvent });
+    this.#wakeReceiveWaiters(sessionIdHex);
+  }
+
   // ─── SESSION-003: seal ceremony ──────────────────────────────────────────────
 
   async initiateSessionSeal(sessionIdHex: string): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -1460,6 +1642,8 @@ class CelloClientImpl implements CelloClient {
       session.seal_type = "frost";
       session.close_timestamp = closeTimestamp;
       this.#sealVerifiedData.delete(sessionIdHex);
+      // SESSION-007: enqueue lifecycle event for blocked cello_receive callers.
+      this.#enqueueSessionSealedEvent(sessionIdHex, sealedRoot, closeTimestamp);
     } else {
       // M1 single-key: verify directory_signature against pinned directory pubkey
       const dirSigRaw = frame["directory_signature"];
@@ -1483,6 +1667,8 @@ class CelloClientImpl implements CelloClient {
       session.sealed_root = sealedRoot;
       session.directory_signature = dirSig;
       session.close_timestamp = closeTimestamp;
+      // SESSION-007: enqueue lifecycle event for blocked cello_receive callers.
+      this.#enqueueSessionSealedEvent(sessionIdHex, sealedRoot, closeTimestamp);
     }
 
     // Resolve the seal-frost-timeout waiter
@@ -1555,6 +1741,8 @@ class CelloClientImpl implements CelloClient {
     session.seal_type = "frost";
     session.close_timestamp = resolvedCloseTimestamp;
     this.#sealVerifiedData.delete(sessionIdHex);
+    // SESSION-007: enqueue lifecycle event for blocked cello_receive callers.
+    this.#enqueueSessionSealedEvent(sessionIdHex, sealedRoot, resolvedCloseTimestamp);
 
     // Resolve the seal-frost-timeout waiter so initiateSessionSeal returns promptly
     this.#sealFrostResolvers.get(sessionIdHex)?.();
@@ -1774,6 +1962,11 @@ class CelloClientImpl implements CelloClient {
       correlationId,
     });
 
+    // SESSION-007: enqueue lifecycle event for blocked cello_receive callers.
+    if (sealedRoot) {
+      this.#enqueueSessionSealedEvent(sessionIdHex, sealedRoot, session.close_timestamp ?? Date.now());
+    }
+
     // Resolve the FROST ceremony waiter only if a bilateral seal was in-flight for this session.
     // The unilateral and FROST paths are mutually exclusive once the session seals — resolving an
     // absent FROST waiter is harmless (map miss returns undefined), but resolving a present one
@@ -1829,6 +2022,11 @@ class CelloClientImpl implements CelloClient {
     if (sealedRoot) session.sealed_root = sealedRoot;
     session.seal_type = "unilateral";
     session.close_timestamp = typeof frame["sealed_at"] === "number" ? frame["sealed_at"] : Date.now();
+
+    // SESSION-007: enqueue lifecycle event for blocked cello_receive callers.
+    if (sealedRoot) {
+      this.#enqueueSessionSealedEvent(sessionIdHex, sealedRoot, session.close_timestamp);
+    }
 
     // AC-004: Verify sealed root against local Merkle state
     const localRoot = this.#computeLocalRoot(session);
@@ -2557,6 +2755,7 @@ class CelloClientImpl implements CelloClient {
         } else {
           // Counterparty message: enqueue for receiveMessage callers.
           const msg: ReceivedMessage = {
+            type: "message",
             content: content_bytes,
             senderPubkey: s2.sender_pubkey,
             sequenceNumber: s2.sequence_number,
@@ -2564,6 +2763,8 @@ class CelloClientImpl implements CelloClient {
           };
           this.#sessionMessageQueues.get(sessionIdHex)?.push(msg);
           this.#anyMessageQueue.push({ sessionIdHex, message: msg });
+          // SESSION-007: wake any blocked receiveMessageAsync / receiveAnyMessageAsync callers.
+          this.#wakeReceiveWaiters(sessionIdHex);
         }
       }
     }

@@ -380,8 +380,10 @@ describe("E2E SESSION-006-AC-007: two sessions on one connection — independent
       { timeout: 10_000, interval: 100 },
     );
 
-    expect(Buffer.from(msg1!.content).toString()).toBe("msg-on-session-1");
-    expect(Buffer.from(msg2!.content).toString()).toBe("msg-on-session-2");
+    if (msg1!.type !== "message") throw new Error("expected type:message for msg1");
+    if (msg2!.type !== "message") throw new Error("expected type:message for msg2");
+    expect(Buffer.from((msg1 as unknown as { content: Uint8Array }).content).toString()).toBe("msg-on-session-1");
+    expect(Buffer.from((msg2 as unknown as { content: Uint8Array }).content).toString()).toBe("msg-on-session-2");
   }, 90_000);
 });
 
@@ -481,7 +483,8 @@ describe("E2E SESSION-006-AC-008: strangers-to-conversation — full end-to-end 
       { timeout: 10_000, interval: 100 },
     );
     expect(received).not.toBeNull();
-    expect(Buffer.from(received!.content).toString()).toBe("strangers no more");
+    if (received!.type !== "message") throw new Error("expected type:message for received");
+    expect(Buffer.from((received as unknown as { content: Uint8Array }).content).toString()).toBe("strangers no more");
 
     // B sends reply
     const replyResult = await fix.agentB.client.sendMessage(sessionIdHex, Buffer.from("hello to you too"));
@@ -493,7 +496,8 @@ describe("E2E SESSION-006-AC-008: strangers-to-conversation — full end-to-end 
       { timeout: 10_000, interval: 100 },
     );
     expect(reply).not.toBeNull();
-    expect(Buffer.from(reply!.content).toString()).toBe("hello to you too");
+    if (reply!.type !== "message") throw new Error("expected type:message for reply");
+    expect(Buffer.from((reply as unknown as { content: Uint8Array }).content).toString()).toBe("hello to you too");
 
     // Transport-path: both sides' local tree has the correct leaf count (2 messages)
     const aSessionFinal = fix.agentA.client.listSessions().find(x => Buffer.from(x.session_id).toString("hex") === sessionIdHex)!;

@@ -271,6 +271,15 @@ export function createMcpServer(
       while (Date.now() < deadline) {
         const msg = client.receiveMessage(session_id);
         if (msg) {
+          if (msg.type === "session_sealed") {
+            return jsonText({
+              type: "session_sealed",
+              session_id: msg.sessionIdHex,
+              sealed_root: Buffer.from(msg.sealedRoot).toString("hex"),
+              close_timestamp: msg.closeTimestamp,
+              checkpoint_status: msg.checkpointStatus,
+            });
+          }
           return jsonText(formatSessionMessage(msg, session_id));
         }
 

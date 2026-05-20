@@ -163,6 +163,8 @@ function makeStubClientMcp003(state: Mcp003StubState): CelloClient & {
     sendMessage: async () => ({ ok: false, reason: "session_not_found" } as SendMessageResult),
     receiveMessage: () => null,
     receiveAnyMessage: () => null,
+    receiveMessageAsync: async () => null,
+    receiveAnyMessageAsync: async () => ({ type: "timeout" as const }),
     initiateSessionSeal: async () => ({ ok: false, reason: "session_not_active" }),
     closeSession: () => {},
     onSessionAssignment: () => {},
@@ -777,8 +779,8 @@ describe("AC-015: cello_status includes registered, agent_id, connection_count, 
 
 // ─── AC-016: tool set equality (19 tools total) ──────────────────────────────
 
-describe("AC-016: both InMemoryTransport instances register identical tool set (all 19 tools)", () => {
-  it("AC-016: two server instances have identical 19-tool set", async () => {
+describe("AC-016: both InMemoryTransport instances register identical tool set (all 20 tools)", () => {
+  it("AC-016: two server instances have identical 20-tool set", async () => {
     const kpA = generateKeypair();
     const kpB = generateKeypair();
     const nodeA = makeStubNode(true);
@@ -822,7 +824,7 @@ describe("AC-016: both InMemoryTransport instances register identical tool set (
     const toolsA = sortByName((await mcpA.listTools()).tools);
     const toolsB = sortByName((await mcpB.listTools()).tools);
 
-    // 19 tools total: 9 from MCP-002 + 10 new from MCP-003
+    // 20 tools total: 9 from MCP-002 + 10 new from MCP-003 + 1 new from SESSION-007
     const expectedTools = [
       "cello_accept_connection",
       "cello_await_connection_request",
@@ -835,6 +837,7 @@ describe("AC-016: both InMemoryTransport instances register identical tool set (
       "cello_list_connections",
       "cello_list_sessions",
       "cello_receive",
+      "cello_receive_any",
       "cello_register",
       "cello_reject_connection",
       "cello_request_connection",

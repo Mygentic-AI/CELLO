@@ -125,6 +125,8 @@ function makeStubClient(opts: StubClientOptions = {}): CelloClient {
     sendMessage: async () => ({ ok: false, reason: "session_not_found" } as SendMessageResult),
     receiveMessage: () => null,
     receiveAnyMessage: () => null,
+    receiveMessageAsync: async () => null,
+    receiveAnyMessageAsync: async () => ({ type: "timeout" as const }),
     initiateSessionSeal: async () => ({ ok: false, reason: "session_not_active" }),
     closeSession: () => {},
     onSessionAssignment: (handler) => {
@@ -374,7 +376,7 @@ describe("AC-009: createMcpSessionServer registers identical M1 tool set under b
     const toolsA = sortByName((await mcpA.listTools()).tools);
     const toolsB = sortByName((await mcpB.listTools()).tools);
 
-    // MCP-003: 9 original tools + 10 new tools = 19 total
+    // SESSION-007: 19 original tools + 1 new (cello_receive_any) = 20 total
     const expectedTools = [
       "cello_accept_connection",
       "cello_await_connection_request",
@@ -387,6 +389,7 @@ describe("AC-009: createMcpSessionServer registers identical M1 tool set under b
       "cello_list_connections",
       "cello_list_sessions",
       "cello_receive",
+      "cello_receive_any",
       "cello_register",
       "cello_reject_connection",
       "cello_request_connection",
