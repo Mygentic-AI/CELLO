@@ -8,25 +8,25 @@
  * What this provides:
  *   - Real relay node (createRelayNode)
  *   - Real directory node (createDirectoryNode)
- *   - Two real libp2p agent nodes with Ed25519 keypairs
+ *   - Two real libp2p agent nodes with Ed25519 keypairs (A and B)
+ *   - Optional third agent (C) via opts.withAgentC: true (CONNREQ-003)
  *   - FROST threshold signer for agent A (bootstrapped, 2-of-3 in-process stubs)
  *   - Optional FROST signer for agent B (for scenarios where B also initiates)
  *   - Optional MCP server + client pair wired per agent (for MCP tool surface tests)
  *   - Optional registration (runs real DKG ceremony via directory)
  *   - Optional connection policies (M3+)
+ *   - Optional injected loggers for A and C (CONNREQ-003 observability tests)
  *   - Ordered cleanup (relay last, so directory can flush)
  *
  * Canonical location: packages/e2e-tests/src/session-fixture.ts
  *
  * Import as: import { createSessionFixture } from "../session-fixture.js";
  * (from packages/e2e-tests/src/__tests__/)
- *
- * Never import this from production packages or from packages/client/src/__tests__/
- * (client tests that need full infrastructure should live in e2e-tests instead).
  */
 
 import { randomBytes } from "node:crypto";
 import { generateKeypair, FrostThresholdSigner } from "@cello/crypto";
+import type { Logger } from "@cello/interfaces";
 import {
   bootstrapKeyShares,
   clearTestShares,
@@ -75,6 +75,11 @@ export interface SessionFixtureResult {
   relayMultiaddrs: string[];
   agentA: AgentFixture;
   agentB: AgentFixture;
+  /**
+   * Third agent — only present when opts.withAgentC: true (CONNREQ-003 fan-out tests).
+   * Uses the same directory and relay as A and B. Registered if opts.register: true.
+   */
+  agentC?: AgentFixture;
   /** FROST signer for A (always present) */
   signerA: FrostThresholdSigner;
   /** FROST signer for B (only when opts.bootstrapB: true) */
@@ -123,6 +128,29 @@ export interface SessionFixtureOpts {
    * Default: directory node default (600s).
    */
   deliveryGraceSeconds?: number;
+  /**
+   * Provision a third registered agent (Agent C) alongside A and B.
+   * Used by CONNREQ-003 fan-out tests. Default: false.
+   * When true, agentC is populated in the returned SessionFixtureResult.
+   */
+  withAgentC?: boolean;
+  /** Connection policy for agent C (only used when withAgentC: true). Default: open / deterministic */
+  policyC?: SignalRequirementPolicy;
+  /**
+   * Injected logger for agent A's client (CONNREQ-003 observability tests).
+   * Default: no-op.
+   */
+  loggerA?: Logger;
+  /**
+   * Injected logger for agent C's client (CONNREQ-003 observability tests).
+   * Default: no-op. Only meaningful when withAgentC: true.
+   */
+  loggerC?: Logger;
+  /**
+   * Injected logger for the directory node (CONNREQ-003 transport-path evidence tests).
+   * Default: no-op.
+   */
+  loggerDir?: Logger;
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -196,6 +224,7 @@ export async function createSessionFixture(
     requireConnectionGate: opts.requireConnectionGate ?? false,
     store: dirStore,
     deliveryGraceSeconds: opts.deliveryGraceSeconds,
+    logger: opts.loggerDir,
   });
 
   if (opts.networkRelay) {
@@ -229,6 +258,7 @@ export async function createSessionFixture(
     connectionPolicy: opts.policyA,
     connectionTimeoutMs,
     thresholdSigner: signerA,
+    logger: opts.loggerA,
   });
 
   // ── Agent B ────────────────────────────────────────────────────────────────
@@ -263,6 +293,33 @@ export async function createSessionFixture(
   // Needed whenever the session seal path is exercised (e.g. NODE-004).
   clientA.setPrimaryPubkey(bootstrapResultA.primaryPubkey);
   directoryNode.registerPrimaryPubkey(pubkeyAHex, bootstrapResultA.primaryPubkey);
+
+  // ── Agent C (optional, CONNREQ-003 fan-out tests) ──────────────────────────
+  let agentCFixture: AgentFixture | undefined;
+  let nodeC: Awaited<ReturnType<typeof createNode>> | undefined;
+  if (opts.withAgentC) {
+    const kpC = generateKeypair();
+    const pubkeyC = new Uint8Array(await kpC.getPublicKey());
+    const pubkeyCHex = Buffer.from(pubkeyC).toString("hex");
+
+    const nodeCInstance = await createNode({ keyProvider: kpC, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeCInstance.start();
+    nodeC = nodeCInstance;
+
+    const clientC = createClient(nodeCInstance, kpC, {
+      directoryEndpoint,
+      connectionPolicy: opts.policyC,
+      connectionTimeoutMs,
+      logger: opts.loggerC,
+    });
+    await clientC.registerHandler();
+
+    agentCFixture = {
+      kp: kpC, pubkey: pubkeyC, pubkeyHex: pubkeyCHex,
+      node: nodeCInstance,
+      client: clientC,
+    };
+  }
 
   // ── Optional MCP wiring ────────────────────────────────────────────────────
   let mcpA: Client | undefined;
@@ -311,6 +368,12 @@ export async function createSessionFixture(
 
     const regB = await clientB.register(`+${Buffer.from(randomBytes(5)).toString("hex")}`);
     if ("error" in regB) throw new Error(`Agent B registration failed: ${(regB as { error: string }).error}`);
+
+    if (agentCFixture) {
+      const regC = await agentCFixture.client.register(`+${Buffer.from(randomBytes(5)).toString("hex")}`);
+      if ("error" in regC) throw new Error(`Agent C registration failed: ${(regC as { error: string }).error}`);
+      agentCFixture = { ...agentCFixture, primaryPubkey: regC.primary_pubkey };
+    }
   }
 
   // ── Cleanup (MCP first, then nodes, then infrastructure) ──────────────────
@@ -318,6 +381,7 @@ export async function createSessionFixture(
     for (const fn of mcpCleanup) await fn();
     try { await nodeA.stop(); } catch {}
     try { await nodeB.stop(); } catch {}
+    if (nodeC) { try { await nodeC.stop(); } catch {} }
     try { await stopDir(); } catch {}
     if (stopNetworkAdapter) await stopNetworkAdapter();
     try { await relayStop(); } catch {}
@@ -344,6 +408,7 @@ export async function createSessionFixture(
       client: clientB,
       mcp: mcpB, notifications: notificationsB,
     },
+    agentC: agentCFixture,
     signerA,
     signerB,
     sessionWal,
