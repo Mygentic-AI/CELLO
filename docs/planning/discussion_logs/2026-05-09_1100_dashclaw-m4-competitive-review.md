@@ -264,3 +264,4 @@ The portal needs a "trusted peer exception" view — accessible from the connect
 - [[agent-client|CELLO Agent Client Requirements]] — Part 5 specifies all six defense layers; Part 7 contains the contact list schema that Gap 2 (per-peer overrides) extends
 - [[server-infrastructure|CELLO Server Infrastructure Requirements]] — notification type registry where a new `SECURITY_BLOCK` subtype for Layer 3 outbound blocks needs to be added (Gap 1)
 - [[frontend|CELLO Frontend Requirements]] — the connection management section where the per-peer defense exception UI would live (Gap 2)
+- [[2026-05-21_1456_identity-as-governance-foundation|Identity as the Foundation of Governance]] — extends this review's conclusion that governance layer concerns are out of M4 scope; shows how CELLO's identity primitives make per-entity governance a database row rather than a blunt instrument

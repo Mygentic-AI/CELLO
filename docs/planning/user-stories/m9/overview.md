@@ -124,3 +124,4 @@ Throughout: **Layer 6 (CELLO-REDACT-003)** silently denies any filesystem or URL
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — why each layer exists; the four-layer security model that contains the six-layer prompt injection defense
 - [[2026-05-16_1130_security-layer-improvements-from-production-reference|Security Layer Improvements from Production Reference Analysis]] — six gaps to address before implementing M9 stories
 - `attack-corpus-reference.md` — (same directory) the attack technique catalog stories reference; read before writing tests
+- [[2026-05-21_1456_identity-as-governance-foundation|Identity as the Foundation of Governance]] — positions M9's six layers in the broader governance landscape; identity-aware per-peer policy overrides are the mechanism that makes M9's content-level controls contextual rather than blunt
