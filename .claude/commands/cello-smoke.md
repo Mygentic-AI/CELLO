@@ -5,13 +5,15 @@ description: Live multi-agent smoke test for CONNREQ-003 and SESSION-007. Four r
 
 # CELLO Live Smoke Test — CONNREQ-003 + SESSION-007
 
-This is a scripted verification run, not a free conversation. Every agent follows their steps exactly and reports pass/fail at each checkpoint. Deviate from the script only to report an unexpected error.
+This is a fully automated scripted run. **Once the operator gives Agent A the pubkeys for B and C, the operator does nothing more.** All three agents run their scripts to completion without any further human input.
+
+B and C are state machines. They do not pause, they do not ask for permission, they do not wait for signals. They transition immediately at every step.
 
 Four roles, five terminals:
-1. **Node operator** — starts relay (Terminal 1) and directory (Terminal 2), coordinates agent pubkeys
-2. **Agent A** — test driver; registers, fans out connections, drives all scenarios (Terminal 3)
-3. **Agent B** — passive target; registers, accepts, sends one message on cue (Terminal 4)
-4. **Agent C** — passive target; registers, accepts, seals on cue (Terminal 5)
+1. **Node operator** — starts relay (Terminal 1) and directory (Terminal 2), does one pubkey handoff, then watches
+2. **Agent A** — test driver; fans out connections, drives checkpoints, reports results (Terminal 3)
+3. **Agent B** — autonomous target; sends immediately on session, loops on receive until sealed (Terminal 4)
+4. **Agent C** — autonomous target; sends immediately on session, loops on receive, seals on "seal-now" (Terminal 5)
 
 **Wait for the operator to assign your role.**
 
@@ -20,14 +22,6 @@ Four roles, five terminals:
 # Path 1: Node Operator
 
 ## Step 1 — Start relay and directory
-
-Same startup as `/cello-chat`. Use the known stable values:
-
-```
-CELLO_DIRECTORY_PUBKEY=2357394bbe85dd03adfdc8232ae5b8c8bfa8785d36914982ec26357107793ff1
-Directory peer ID: 12D3KooWA4CNABsa1fjVWtS57Q5X8uSsAYXsLXPyMGYs9JEXqB9N
-Relay peer ID:     12D3KooWCNZbpMm5cAxTn2zAsaWKde1izAPqRdnsXSXBkXFFSv3N
-```
 
 **Relay (Terminal 1):**
 ```
@@ -41,307 +35,308 @@ CELLO_ENV=local DATABASE_URL=postgresql://postgres:dev@localhost:5433/cello_dev 
 
 ## Step 2 — Start agents
 
-**Agent A (Terminal 3):**
+**Agent A (Terminal 3):** `claude`
+
+**Agent B (Terminal 4):** `export CELLO_KEY_FILE=~/.cello/key-agent-b && claude`
+
+**Agent C (Terminal 5):** `export CELLO_KEY_FILE=~/.cello/key-agent-c && claude`
+
+## Step 3 — One-time pubkey handoff (your only intervention)
+
+Start A, B, and C with `/cello-smoke` and their role. Wait for all three to report ready with their `own_pubkey`.
+
+Then give Agent A exactly this, substituting the real values:
 ```
-claude
+B_PUBKEY=<B's own_pubkey>
+C_PUBKEY=<C's own_pubkey>
 ```
 
-**Agent B (Terminal 4):**
+After that, **do nothing**. Watch the directory logs. Agent A will report all 5 checkpoints.
+
+## Step 4 — Watch directory logs
+
 ```
-export CELLO_KEY_FILE=~/.cello/key-agent-b && claude
-```
-
-**Agent C (Terminal 5):**
-```
-export CELLO_KEY_FILE=~/.cello/key-agent-c && claude
-```
-
-## Step 3 — Collect pubkeys
-
-Each agent will report both their `own_pubkey` (from `cello_status`) and `primary_pubkey` (from `cello_register`). These are different keys.
-
-**Connection requests use `own_pubkey` only.** Once all three have registered, give:
-- Agent A: B's `own_pubkey` and C's `own_pubkey`
-- Agent B: A's `own_pubkey`
-- Agent C: A's `own_pubkey`
-
-## Step 4 — Drive the script
-
-Tell each agent "Go" in order as described in each path below. Collect pass/fail from each checkpoint. The full test has 5 checkpoints.
-
-## Step 5 — Watch directory logs
-
-Key events to expect during the run:
-```
-[CONN] Request: A → B        ← CONNREQ-003: first fan-out leg
-[CONN] Request: A → C        ← CONNREQ-003: second fan-out leg (simultaneous)
-[CONN] Connection established: A ↔ B
-[CONN] Connection established: A ↔ C
+[CONN] Connection established: A ↔ B   ← CONNREQ-003 fan-out leg 1
+[CONN] Connection established: A ↔ C   ← CONNREQ-003 fan-out leg 2
 [SESS] Session request: A → B
 [SESS] Session request: A → C
-[SEAL] Initiating seal — session <C's session>
-[SEAL] Sealed — session <C's session>
+[SEAL] Sealed — session <S_C>          ← Checkpoint 4
+[SEAL] Sealed — session <S_B>          ← Checkpoint 5
 ```
 
 ---
 
 # Path 2: Agent A (Test Driver)
 
-You drive the entire test sequence. Follow each step precisely and report the checkpoint result before moving on.
+You run this script top to bottom. No pausing, no asking for input except for the initial key handoff from the operator.
 
-## Step 1 — Register
+## Step 1 — Register and report keys
 
-Call `cello_status()`. Note the `own_pubkey` field from that response — this is your Ed25519 identity key.
+Call `cello_status()`. Your `own_pubkey` is in that response.
 
-Call `cello_register()`. Note the `primary_pubkey` field from that response — this is your FROST DKG key.
+Call `cello_register()`. Your `primary_pubkey` is in that response. These are two different keys — `own_pubkey` is your Ed25519 identity, `primary_pubkey` is your FROST DKG output.
 
-**These are two different keys. own_pubkey comes from cello_status. primary_pubkey comes from cello_register.**
-
-Report to the operator using this exact format:
+Report:
 ```
 Agent A ready.
-  own_pubkey (from cello_status):    <hex>
-  primary_pubkey (from cello_register): <hex>
+  own_pubkey:     <hex from cello_status>
+  primary_pubkey: <hex from cello_register>
 ```
 
-Wait until the operator gives you B's `own_pubkey` and C's `own_pubkey` (from their `cello_status()` output, not their register response).
+Wait for the operator to give you `B_PUBKEY` and `C_PUBKEY`. That is the only input you wait for in this entire test.
 
 ## Step 2 — CHECKPOINT 1: Concurrent connection fan-out (CONNREQ-003)
 
-**Send both connection requests as close to simultaneously as possible** — do not wait for the first to resolve before calling the second.
+Issue both connection requests simultaneously — do not await the first before calling the second:
 
 ```
-cello_request_connection({ target_pubkey: "<B's own_pubkey>" })
-cello_request_connection({ target_pubkey: "<C's own_pubkey>" })
+cello_request_connection({ target_pubkey: B_PUBKEY })
+cello_request_connection({ target_pubkey: C_PUBKEY })
 ```
 
-**PASS conditions:**
-- Both calls return `{ status: "accepted" }`
-- The two `connection_id` values are different hex strings
-- Neither call timed out waiting for the other
+**PASS:** Both return `status: "accepted"` with two distinct `connection_id` values.
 
-Report:
 ```
 CHECKPOINT 1: PASS
   B connection_id: <hex>
   C connection_id: <hex>
   Both distinct: yes
 ```
-Or report FAIL with the error.
 
 ## Step 3 — Open two sessions
 
-Call `cello_initiate_session({ target_pubkey: "<B's own_pubkey>" })`. Note `session_id` — this is **Session S_B**.
+```
+cello_initiate_session({ target_pubkey: B_PUBKEY })  → S_B session_id
+cello_initiate_session({ target_pubkey: C_PUBKEY })  → S_C session_id
+```
 
-Call `cello_initiate_session({ target_pubkey: "<C's own_pubkey>" })`. Note `session_id` — this is **Session S_C**.
-
-Report both session IDs to the operator. Tell B and C they can proceed to their respective session steps.
+Note both session IDs. B and C are already running their receive loops by the time you get here — you do not need to tell them anything.
 
 ## Step 4 — CHECKPOINT 2: cello_receive_any (SESSION-007)
 
-Tell B to send you a message (see B's Step 4). Wait for B to confirm they sent it.
+B sends its message automatically as soon as it gets the session. Call receive_any immediately:
 
-Now call:
 ```
 cello_receive_any({ timeout_ms: 15000 })
 ```
 
-**PASS conditions:**
-- Returns `{ type: "message", session_id: "<S_B hex>", content: "...", ... }`
-- `session_id` matches S_B (the session with B, not C)
-- `type` is `"message"`, not `"timeout"`
+This will return whichever of B or C's messages arrived first (non-deterministic). Either is valid.
 
-Report:
+**PASS:** Returns `{ type: "message", session_id: <S_B or S_C>, content: "smoke-test-message-from-B" or "smoke-test-message-from-C", ... }` — not `{ type: "timeout" }`.
+
+If both B and C have already sent, call `cello_receive_any` a second time to drain the second message. Note which session was in `other_sessions_pending` on the first call.
+
 ```
 CHECKPOINT 2: PASS
   type: message
-  session_id: <hex> (matches S_B: yes)
-  content: <received text>
+  first session received: <hex> (S_B or S_C — either is fine)
+  content: <message text>
 ```
-Or report FAIL with what was actually returned.
 
 ## Step 5 — CHECKPOINT 3: otherSessionsPending hint (SESSION-007)
 
-Tell C to send you a message on S_C (see C's Step 4). Wait for C to confirm they sent it.
+After draining both B and C's initial messages (call receive_any twice if needed), send a message to S_B to put something on it, then immediately call `cello_receive` on S_C — the wrong session:
 
-Now call `cello_receive` on S_B — the session that does NOT have the pending message:
 ```
-cello_receive({ session_id: "<S_B hex>", timeout_ms: 5000 })
+cello_send({ session_id: S_B, content: "ping" })
+cello_receive({ session_id: S_C, timeout_ms: 5000 })
 ```
 
-This call should time out (no message on S_B), but the response must include the hint.
+The receive on S_C should time out (no new message on S_C), but `other_sessions_pending` must contain S_B.
 
-**PASS conditions:**
-- Returns `{ type: "timeout", otherSessionsPending: ["<S_C hex>"] }` — or any response with `otherSessionsPending` containing S_C
-- Now call `cello_receive({ session_id: "<S_C hex>", timeout_ms: 5000 })` — must return C's message
+Then drain S_B:
+```
+cello_receive({ session_id: S_B, timeout_ms: 5000 })
+```
 
-Report:
+**PASS:** The S_C receive returned `otherSessionsPending: [S_B]`. The S_B receive returned the "ping" message.
+
 ```
 CHECKPOINT 3: PASS
-  otherSessionsPending on wrong-session receive: [<S_C hex>]
-  S_C message received on follow-up: yes
+  otherSessionsPending on S_C receive: [<S_B hex>]
+  S_B ping message received on follow-up: yes
 ```
-Or report FAIL.
 
 ## Step 6 — CHECKPOINT 4: inline session_sealed detection (SESSION-007)
 
-Tell C to seal their session S_C (see C's Step 5). Do NOT call `cello_close_session` yourself on S_C.
+Send the seal trigger to C, then immediately block on receive for S_C:
 
-Now call:
 ```
-cello_receive({ session_id: "<S_C hex>", timeout_ms: 30000 })
+cello_send({ session_id: S_C, content: "seal-now" })
+cello_receive({ session_id: S_C, timeout_ms: 30000 })
 ```
 
-**PASS conditions:**
-- Returns `{ type: "session_sealed", session_id: "<S_C hex>", sealed_root: "<64-hex>", close_timestamp: <unix-ms>, checkpoint_status: "pending" }`
-- `type` is exactly `"session_sealed"` (not `"timeout"`, not `"message"`)
-- You did NOT call `cello_close_session`
+C is in its receive loop. When C gets "seal-now" it calls `cello_close_session` immediately. You did NOT call `cello_close_session` on S_C.
 
-Report:
+**PASS:** Returns `{ type: "session_sealed", session_id: S_C, sealed_root: "<64-hex>", checkpoint_status: "pending" }`.
+
 ```
 CHECKPOINT 4: PASS
   type: session_sealed
-  session_id: <hex> (matches S_C: yes)
+  session_id: <S_C hex>
   sealed_root: <hex>
   checkpoint_status: pending
-  A called cello_close_session: no
+  A called cello_close_session on S_C: no
 ```
-Or report FAIL.
 
 ## Step 7 — CHECKPOINT 5: clean close S_B
 
-Call `cello_close_session({ session_id: "<S_B hex>" })`.
+```
+cello_close_session({ session_id: S_B })
+```
 
-**PASS conditions:**
-- Returns `{ status: "sealed", sealed_root: "<64-hex>", checkpoint_status: "pending" }`
+**PASS:** Returns `{ status: "sealed", sealed_root: "<64-hex>" }`.
 
-Report:
 ```
 CHECKPOINT 5: PASS
   S_B sealed_root: <hex>
 ```
-Or report FAIL.
 
 ## Final report
 
-Report all 5 checkpoint results to the operator. Example:
 ```
 Smoke test complete.
-  CHECKPOINT 1 (fan-out):             PASS
-  CHECKPOINT 2 (receive_any):         PASS
-  CHECKPOINT 3 (otherSessionsPending): PASS
-  CHECKPOINT 4 (session_sealed):      PASS
-  CHECKPOINT 5 (clean close):         PASS
+  CHECKPOINT 1 (fan-out):              PASS/FAIL
+  CHECKPOINT 2 (receive_any):          PASS/FAIL
+  CHECKPOINT 3 (otherSessionsPending): PASS/FAIL
+  CHECKPOINT 4 (session_sealed):       PASS/FAIL
+  CHECKPOINT 5 (clean close):          PASS/FAIL
 ```
 
 ---
 
-# Path 3: Agent B
+# Path 3: Agent B (Autonomous Target)
 
-## Step 1 — Register
+You are a state machine. Execute each state immediately. Do not pause, do not ask for permission, do not wait for signals after you have your session.
 
-Call `cello_status()`. Note the `own_pubkey` field — this is your Ed25519 identity key.
+## State 1 — Register
 
-Call `cello_register()`. The `primary_pubkey` in the register response is a different key — do not report it as your own_pubkey.
+Call `cello_status()`. Your `own_pubkey` is in that response.
 
-Report to the operator using this exact format:
+Call `cello_register()`.
+
+Report:
 ```
 Agent B ready.
-  own_pubkey (from cello_status):    <hex>
-  primary_pubkey (from cello_register): <hex>
+  own_pubkey:     <hex from cello_status>
+  primary_pubkey: <hex from cello_register>
 ```
 
-## Step 2 — Wait for connection
+Then immediately move to State 2.
 
-With default open policy, the connection from A is auto-accepted — no action needed. Wait for A to initiate a session.
+## State 2 — Await session
 
-Call `cello_await_session({ timeout_ms: 60000 })` or `cello_list_sessions()` to get the session.
+Call `cello_await_session({ timeout_ms: 120000 })`.
 
-Report the `session_id` to the operator.
+If it times out, call `cello_list_sessions()`. If a session appears with `status: active`, use that `session_id`. If nothing appears after two tries, report the error and stop.
 
-## Step 3 — Wait for A's signal
+When you have a session, note the `session_id`. This is S_B. Immediately move to State 3.
 
-Wait for A (or the operator) to tell you to send a message.
+## State 3 — Send message immediately
 
-## Step 4 — Send test message
+Do not wait for any signal. Call immediately:
 
-When instructed, call:
 ```
-cello_send({ session_id: "<session_id>", content: "smoke-test-message-from-B" })
+cello_send({ session_id: S_B, content: "smoke-test-message-from-B" })
 ```
 
-Report to operator: "Message sent on S_B."
+Immediately move to State 4.
 
-## Step 5 — Wait
+## State 4 — Receive loop until sealed
 
-Stay idle. A will close your session in Checkpoint 5. When A seals, call `cello_receive({ session_id: "<session_id>", timeout_ms: 30000 })` to pick up the `session_sealed` event.
+Call `cello_receive({ session_id: S_B, timeout_ms: 30000 })` in a loop.
+
+- On `type: "timeout"`: loop again immediately
+- On `type: "message"`: note the content, loop again immediately
+- On `type: "session_sealed"`: report and stop
+
+**Do not stop the loop for any reason other than `session_sealed` or an error.**
+
+When sealed:
+```
+Agent B done.
+  S_B sealed — sealed_root: <hex>
+```
 
 ---
 
-# Path 4: Agent C
+# Path 4: Agent C (Autonomous Target)
 
-## Step 1 — Register
+You are a state machine. Execute each state immediately. Do not pause, do not ask for permission, do not wait for signals after you have your session.
 
-Call `cello_status()`. Note the `own_pubkey` field — this is your Ed25519 identity key.
+## State 1 — Register
 
-Call `cello_register()`. The `primary_pubkey` in the register response is a different key — do not report it as your own_pubkey.
+Call `cello_status()`. Your `own_pubkey` is in that response.
 
-Report to the operator using this exact format:
+Call `cello_register()`.
+
+Report:
 ```
 Agent C ready.
-  own_pubkey (from cello_status):    <hex>
-  primary_pubkey (from cello_register): <hex>
+  own_pubkey:     <hex from cello_status>
+  primary_pubkey: <hex from cello_register>
 ```
 
-## Step 2 — Wait for connection and session
+Then immediately move to State 2.
 
-With default open policy, connection from A is auto-accepted. Call `cello_await_session({ timeout_ms: 60000 })` or `cello_list_sessions()` to get the session.
+## State 2 — Await session
 
-Report `session_id` to the operator.
+Call `cello_await_session({ timeout_ms: 120000 })`.
 
-## Step 3 — Wait for signal to send
+If it times out, call `cello_list_sessions()`. If a session appears with `status: active`, use that `session_id`. If nothing appears after two tries, report the error and stop.
 
-When instructed by A or the operator, call:
+When you have a session, note the `session_id`. This is S_C. Immediately move to State 3.
+
+## State 3 — Send message immediately
+
+Do not wait for any signal. Call immediately:
+
 ```
-cello_send({ session_id: "<session_id>", content: "smoke-test-message-from-C" })
-```
-
-Report to operator: "Message sent on S_C."
-
-## Step 4 — Wait for signal to seal
-
-When instructed by A or the operator, call:
-```
-cello_close_session({ session_id: "<session_id>" })
+cello_send({ session_id: S_C, content: "smoke-test-message-from-C" })
 ```
 
-**PASS conditions:**
-- Returns `{ status: "sealed", sealed_root: "<64-hex>", checkpoint_status: "pending" }`
+Immediately move to State 4.
 
-Report to operator:
+## State 4 — Receive loop; seal on "seal-now"
+
+Call `cello_receive({ session_id: S_C, timeout_ms: 30000 })` in a loop.
+
+- On `type: "timeout"`: loop again immediately
+- On `type: "message"` with content `"seal-now"`: call `cello_close_session({ session_id: S_C })` immediately, then move to State 5
+- On `type: "message"` with any other content: note it, loop again immediately
+- On `type: "session_sealed"`: this should not happen before you seal — report as unexpected and stop
+
+**Do not stop the loop for any reason other than receiving "seal-now" or an error.**
+
+## State 5 — Confirm seal
+
+After `cello_close_session` returns:
+
 ```
-C sealed S_C.
-  sealed_root: <hex>
+Agent C done.
+  S_C sealed — sealed_root: <hex>
 ```
+
+Stop.
 
 ---
 
 # Troubleshooting
 
 **`cello_request_connection` returns `target_not_found`**
-The target agent hasn't registered yet. Wait for them to call `cello_register` and retry.
+B or C hasn't registered yet. Wait for them to report ready and retry.
 
 **`cello_receive_any` returns `{ type: "timeout" }`**
-B's message hasn't arrived yet or B hasn't sent it. Confirm B sent the message and retry.
+B's or C's message hasn't arrived yet. They send immediately on session — if sessions are open and this still times out, check the directory log for `[SESS]` entries confirming both sessions are active.
 
 **CHECKPOINT 3: `otherSessionsPending` is absent or empty**
-The hint is only populated when another session has enqueued messages waiting in the client's buffer. Confirm C's message was sent and received by the relay before calling `cello_receive` on S_B.
+The hint is only populated when there are enqueued messages in the client buffer. Confirm B has sent and the message is queued before calling receive on S_C.
 
 **CHECKPOINT 4: `cello_receive` times out instead of returning `session_sealed`**
-C's `cello_close_session` may not have been called yet, or the FROST seal ceremony hasn't completed. Check the directory log for `[SEAL] Sealed` and confirm C called `cello_close_session`.
+C hasn't received "seal-now" yet, or C's `cello_close_session` hasn't completed. Check that A's `cello_send({ content: "seal-now" })` was delivered before calling receive.
 
 **Agent C key file**
-`CELLO_KEY_FILE=~/.cello/key-agent-c` must be set before starting the Claude Code session for Agent C. If C and B have the same pubkey, C is missing this export.
+`CELLO_KEY_FILE=~/.cello/key-agent-c` must be exported before starting claude for Agent C. If C and B have the same pubkey, the export is missing.
 
 **After directory restart**
 All registrations are cleared. All agents must re-run `cello_register` before continuing.
