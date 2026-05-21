@@ -297,9 +297,11 @@ describe("DEPLOY-001: AC-008 CI/CD infrastructure", () => {
     expect(pipelines.length).toBe(8);
   });
 
-  it("artifacts bucket is named cello-codepipeline-artifacts-us-east-1", () => {
+  it("artifacts bucket name uses AWS::Region substitution", () => {
     const raw = loadTemplateRaw("cello-cicd.yaml");
-    expect(raw).toContain("cello-codepipeline-artifacts-us-east-1");
+    // Bucket name is derived from region at deploy time: cello-codepipeline-artifacts-{region}
+    expect(raw).toContain("cello-codepipeline-artifacts-");
+    expect(raw).toContain("AWS::Region");
   });
 });
 

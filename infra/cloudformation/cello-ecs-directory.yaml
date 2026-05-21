@@ -21,8 +21,7 @@ Parameters:
     Description: Fargate memory in MB
   ImageUri:
     Type: String
-    Default: "257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:latest"
-    Description: ECR image URI for the directory service
+    Description: "ECR image URI for the directory service (e.g. {account}.dkr.ecr.{region}.amazonaws.com/cello-directory:latest)"
 
 Resources:
   Cluster:
@@ -153,7 +152,7 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: directory
           HealthCheck:
-            Command: ["CMD-SHELL", "curl -f http://localhost:443/health || exit 1"]
+            Command: ["CMD-SHELL", "curl -f -k https://localhost:443/health || curl -f http://localhost:8080/health || exit 1"]
             Interval: 30
             Timeout: 5
             Retries: 3

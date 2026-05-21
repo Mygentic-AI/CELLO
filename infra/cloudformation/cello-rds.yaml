@@ -74,6 +74,10 @@ Resources:
       PubliclyAccessible: false
       MultiAZ: !If [IsProduction, true, false]
       BackupRetentionPeriod: !If [IsProduction, 7, 1]
+      # RDS storage encryption uses the AWS-managed key (aws/rds), not the CELLO CMK.
+      # The CELLO CMK (cello-kms.yaml) is used for application-level envelope encryption
+      # of K_server_X shares only. Separating the two avoids coupling RDS disk access
+      # to the directory task role kms:Decrypt permission.
       StorageEncrypted: true
       CopyTagsToSnapshot: true
       Tags:

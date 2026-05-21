@@ -19,8 +19,7 @@ Parameters:
     Description: Fargate memory in MB
   ImageUri:
     Type: String
-    Default: "257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay:latest"
-    Description: ECR image URI for the relay service
+    Description: "ECR image URI for the relay service (e.g. {account}.dkr.ecr.{region}.amazonaws.com/cello-relay:latest)"
 
 Resources:
   # Task execution role (ECS agent — pulls images, writes logs)

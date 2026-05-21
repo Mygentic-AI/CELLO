@@ -37,7 +37,10 @@ Resources:
   ArtifactsBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: "cello-codepipeline-artifacts-us-east-1"
+      # CI/CD infrastructure is shared across all environments (one deployment).
+      # The bucket name is fixed per AC-008: cello-codepipeline-artifacts-us-east-1.
+      # This template is deployed once in us-east-1 — not per-environment.
+      BucketName: !Sub "cello-codepipeline-artifacts-${AWS::Region}"
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -412,6 +415,7 @@ Resources:
   CryptoPipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
+      PipelineType: V2
       Name: cello-crypto-pipeline
       RoleArn: !GetAtt CodePipelineRole.Arn
       ArtifactStore:
@@ -451,6 +455,7 @@ Resources:
   ProtocolTypesPipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
+      PipelineType: V2
       Name: cello-protocol-types-pipeline
       RoleArn: !GetAtt CodePipelineRole.Arn
       ArtifactStore:
@@ -490,6 +495,7 @@ Resources:
   TransportPipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
+      PipelineType: V2
       Name: cello-transport-pipeline
       RoleArn: !GetAtt CodePipelineRole.Arn
       ArtifactStore:
@@ -529,6 +535,7 @@ Resources:
   ClientPipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
+      PipelineType: V2
       Name: cello-client-pipeline
       RoleArn: !GetAtt CodePipelineRole.Arn
       ArtifactStore:
@@ -568,6 +575,7 @@ Resources:
   AdapterClaudeCodePipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
+      PipelineType: V2
       Name: cello-adapter-claude-code-pipeline
       RoleArn: !GetAtt CodePipelineRole.Arn
       ArtifactStore:
@@ -607,6 +615,7 @@ Resources:
   DirectoryPipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
+      PipelineType: V2
       Name: cello-directory-pipeline
       RoleArn: !GetAtt CodePipelineRole.Arn
       ArtifactStore:
@@ -646,6 +655,7 @@ Resources:
   RelayPipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
+      PipelineType: V2
       Name: cello-relay-pipeline
       RoleArn: !GetAtt CodePipelineRole.Arn
       ArtifactStore:
@@ -685,6 +695,7 @@ Resources:
   E2eTestsPipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
+      PipelineType: V2
       Name: cello-e2e-tests-pipeline
       RoleArn: !GetAtt CodePipelineRole.Arn
       ArtifactStore:

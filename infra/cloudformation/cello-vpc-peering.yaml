@@ -1,9 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  CELLO VPC Peering — establishes a peering connection between two regional VPCs.
-  Security groups permit only port 5432 (RDS replication) and port 4001
-  (directory inter-node checkpoint signing) from the peer VPC CIDR.
-  Deploy one stack per peering pair (3 total for 3 regions).
+  CELLO VPC Peering — one side of a cross-region VPC peering connection.
+  Ports 5432 (RDS) and 4001 (checkpoint) only between peer VPCs.
+  DEPLOY TWICE PER PAIR (6 stacks total): once from each region perspective.
+  Requester side creates the connection; accepter side adds return route and SG rules.
 
 Parameters:
   Environment:
@@ -27,8 +27,7 @@ Parameters:
     Description: AWS region of the accepter VPC
   AccepterAccountId:
     Type: String
-    Default: "257394457473"
-    Description: AWS account ID of the accepter (same account)
+    Description: AWS account ID of the accepter (same account — find via aws sts get-caller-identity)
   RdsSecurityGroupId:
     Type: String
     Description: RDS security group in the requester region (add peer CIDR ingress)

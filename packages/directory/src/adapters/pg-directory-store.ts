@@ -799,6 +799,7 @@ export class PgDirectoryStore implements DirectoryStore {
     region: string;
     endpoint?: string;
     status?: string;
+    correlationId?: string;
   }): Promise<{ id: number }> {
     const start = Date.now();
     const result = await this.#pool.query<{ id: string }>(
@@ -812,6 +813,7 @@ export class PgDirectoryStore implements DirectoryStore {
       tableName: "directory_nodes",
       rowCount: 1,
       durationMs: Date.now() - start,
+      ...(node.correlationId !== undefined && { correlationId: node.correlationId }),
     });
     return { id };
   }
@@ -849,6 +851,7 @@ export class PgDirectoryStore implements DirectoryStore {
   async insertSession(session: {
     sessionId: string;
     owningNodeId: string;
+    correlationId?: string;
   }): Promise<{ id: number }> {
     const start = Date.now();
     const result = await this.#pool.query<{ id: string }>(
@@ -862,6 +865,7 @@ export class PgDirectoryStore implements DirectoryStore {
       tableName: "sessions",
       rowCount: 1,
       durationMs: Date.now() - start,
+      ...(session.correlationId !== undefined && { correlationId: session.correlationId }),
     });
     return { id };
   }
