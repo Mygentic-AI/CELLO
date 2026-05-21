@@ -1,4 +1,4 @@
-FROM postgres:18.4
+FROM postgres:18
 
 # Install pgaudit for the matching Postgres major version
 RUN apt-get update \

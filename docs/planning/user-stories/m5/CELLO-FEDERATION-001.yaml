@@ -381,6 +381,7 @@ references:
   discussion_logs:
     - "2026-05-16_0900_m4-infrastructure-decisions"
     - "2026-05-16_0753_development-pipeline-and-local-iteration"
+    - "2026-05-21_1400_m5-infrastructure-decisions"
     - "2026-04-11_1700_persistence-layer-design"
   milestone_outline: "docs/planning/user-stories/m5/outline.md"
   e2e_story: CELLO-FEDERATION-E2E-001

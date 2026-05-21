@@ -70,6 +70,39 @@ behavior:
       at M5 the operator triggers a manifest reload by performing
       a rolling ECS service update"
 
+# ─── Manifest Schema ───────────────────────────────────────
+# Canonical relay pool manifest JSON structure.
+# See 2026-05-21_1400_m5-infrastructure-decisions Decision 7.
+manifest_schema:
+  structure: |
+    {
+      "version": <int, monotonically increasing>,
+      "signedBy": "<node_id of signing directory node — lowest node_id>",
+      "signature": "<Ed25519 signature hex over canonical JSON of body>",
+      "updatedAt": "<ISO 8601 UTC timestamp>",
+      "relays": [
+        {
+          "relayId": "<Ed25519 public key hex>",
+          "endpoint": "<WebSocket URL>",
+          "region": "<AWS region>",
+          "status": "active" | "draining"
+        }
+      ]
+    }
+  signing_rules:
+    - "signature covers canonical JSON of { version, updatedAt, relays }"
+    - "canonical JSON: sorted keys, no whitespace, UTF-8 encoded"
+    - "signedBy and signature fields are excluded from the signed payload"
+    - "signing key is the node-private-key of the lowest node_id directory node"
+    - "clients verify against the signing node's registered public key"
+  version_rules:
+    - "version is a monotonically increasing integer"
+    - "a manifest with version <= currently loaded version is rejected"
+    - "no rollback — fix-forward only"
+  status_values:
+    active: "relay is eligible for new session assignments"
+    draining: "relay is excluded from new assignments but continues serving existing sessions"
+
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
@@ -299,6 +332,7 @@ references:
   discussion_logs:
     - "2026-05-16_0753_development-pipeline-and-local-iteration"
     - "2026-05-16_0900_m4-infrastructure-decisions"
+    - "2026-05-21_1400_m5-infrastructure-decisions"
   milestone_outline: "docs/planning/user-stories/m5/outline.md"
   e2e_story: CELLO-FEDERATION-E2E-001
   depends_on:

@@ -32,7 +32,7 @@ behavior:
   - trigger: "When an operator deploys the M5 IaC templates with
       Environment=production and Region=eu-central-1 (or ap-northeast-1)"
     action: "a complete CELLO node is provisioned in that region: VPC with
-      private subnets, RDS PostgreSQL 18.4, ECS Fargate cluster for
+      private subnets, RDS PostgreSQL 18, ECS Fargate cluster for
       directory and relay services, KMS key, Secrets Manager secrets,
       S3 audit and manifest buckets, VPC Interface Endpoints — all
       resource names derived from Environment and Region parameters"
@@ -51,6 +51,40 @@ behavior:
       are created in us-east-1 — completely independent of the cello-agent
       CI/CD infrastructure in eu-west-1; no shared IAM roles, no shared
       S3 buckets, no shared Lambda functions between the two projects"
+
+# ─── Infrastructure Parameters ─────────────────────────────
+# Concrete values from 2026-05-21_1400_m5-infrastructure-decisions.
+parameters:
+  vpc_cidrs:
+    us-east-1: "10.0.0.0/16"  # confirm against M4 dev VPC
+    eu-central-1: "10.1.0.0/16"
+    ap-northeast-1: "10.2.0.0/16"
+  node_ids:
+    us-east-1: "us-east-1"
+    eu-central-1: "eu-central-1"
+    ap-northeast-1: "ap-northeast-1"
+    coordinator_election: "lexicographic lowest → ap-northeast-1 is default coordinator"
+  rds:
+    engine: "postgres"
+    engine_version: "18"
+    instance_class_dev: "db.t3.small"
+    instance_class_staging: "db.t3.small"
+    instance_class_production: "db.t3.medium"
+  ecs_directory:
+    cpu_dev: "256"       # 0.25 vCPU
+    memory_dev: "512"    # 0.5 GB
+    cpu_production: "512"  # 0.5 vCPU
+    memory_production: "1024"  # 1 GB
+  ecs_relay:
+    cpu_all: "256"       # 0.25 vCPU
+    memory_all: "512"    # 0.5 GB
+  dns:
+    hosted_zone: "{domain}"  # actual domain decided at registration
+    records:
+      - "directory-us1.{domain} → us-east-1 ALB"
+      - "directory-eu1.{domain} → eu-central-1 ALB"
+      - "directory-ap1.{domain} → ap-northeast-1 ALB"
+    acm: "one cert per region, DNS-validated against Route 53 zone"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -302,6 +336,7 @@ references:
   discussion_logs:
     - "2026-05-16_0900_m4-infrastructure-decisions"
     - "2026-05-16_0753_development-pipeline-and-local-iteration"
+    - "2026-05-21_1400_m5-infrastructure-decisions"
   milestone_outline: "docs/planning/user-stories/m5/outline.md"
   e2e_story: CELLO-FEDERATION-E2E-001
   depends_on: []

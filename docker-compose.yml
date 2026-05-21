@@ -2,7 +2,7 @@ services:
   postgres:
     build:
       context: docker/postgres
-    image: cello-postgres:18.4
+    image: cello-postgres:18
     environment:
       POSTGRES_DB: cello_dev
       POSTGRES_USER: postgres
