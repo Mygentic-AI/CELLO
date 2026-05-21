@@ -7,6 +7,7 @@
   "scripts": {
     "typecheck": "tsc --build",
     "test": "vitest run",
+    "test:all": "pnpm -r --workspace-concurrency=1 run test",
     "lint": "eslint packages/*/src",
     "dev": "pnpm --filter @cello/directory run start & pnpm --filter @cello/relay run start"
   },
