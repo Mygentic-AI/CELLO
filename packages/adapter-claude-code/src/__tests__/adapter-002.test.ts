@@ -183,6 +183,7 @@ describe("AC-007: M1 tool set registered — no M0-removed tools", () => {
       "cello_initiate_session",
       "cello_list_sessions",
       "cello_receive",
+      "cello_receive_session",
       "cello_send",
       "cello_status",
     ].sort();

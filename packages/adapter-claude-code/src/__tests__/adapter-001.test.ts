@@ -3,7 +3,7 @@
  *
  * AC-001: key file generation and persistence
  * AC-002: inbound message → claude/channel notification (content-free)
- * AC-003: cello_receive after notification returns message
+ * AC-003: cello_receive_session after notification returns message
  * AC-004: factory produces identical wiring under InMemoryTransport and stdio
  * AC-005: cello_status returns correct fields
  * AC-006: server declares claude/channel capability
@@ -148,7 +148,7 @@ describe("AC-004: factory produces identical tool names, schemas, wiring under I
     expect(toolsA.map((t) => t.name)).toEqual(toolsB.map((t) => t.name));
     expect(toolsA.map((t) => t.description)).toEqual(toolsB.map((t) => t.description));
     expect(toolsA.map((t) => t.inputSchema)).toEqual(toolsB.map((t) => t.inputSchema));
-    // M1 tool set (ADAPTER-002): cello_connect_peer and cello_list_peers removed
+    // M1 tool set: cello_receive (any-session default) + cello_receive_session (session-locked)
     expect(toolsA.map((t) => t.name)).toEqual([
       "cello_await_session",
       "cello_close_session",
@@ -157,6 +157,7 @@ describe("AC-004: factory produces identical tool names, schemas, wiring under I
       "cello_initiate_session",
       "cello_list_sessions",
       "cello_receive",
+      "cello_receive_session",
       "cello_send",
       "cello_status",
     ]);

@@ -103,7 +103,7 @@ describe("CELLO-NODE-004: AC-007 — full session flow over /cello/directory-rel
 
     // B receives the message
     const receiveResult = await fix.agentB.mcp!.callTool({
-      name: "cello_receive",
+      name: "cello_receive_session",
       arguments: { session_id: sessionId, timeout_ms: 5000 },
     });
     const received = parseResult(receiveResult) as { type: string };

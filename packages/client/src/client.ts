@@ -301,7 +301,7 @@ class CelloClientImpl implements CelloClient {
   // FIFO arrival order across all sessions: { sessionIdHex, message }
   readonly #anyMessageQueue: Array<{ sessionIdHex: string; message: ReceivedMessage }> = [];
 
-  // SESSION-007: wake resolvers for receiveMessageAsync (per-session) and receiveAnyMessageAsync
+  // SESSION-007: wake resolvers for receiveSessionMessageAsync (per-session) and receiveMessageAsync (any-session)
   readonly #receiveWaiters = new Map<string, Set<() => void>>();
   readonly #receiveAnyWaiters = new Set<() => void>();
 
@@ -1062,20 +1062,20 @@ class CelloClientImpl implements CelloClient {
 
   // ─── SESSION-007: async blocking receive ─────────────────────────────────────
   //
-  // Pseudocode for receiveMessageAsync(sessionIdHex, timeoutMs):
+  // Pseudocode for receiveMessageAsync(timeoutMs):
+  //   1. Check #anyMessageQueue — if non-empty, dequeue and return immediately.
+  //   2. Register a wake resolver in #receiveAnyWaiters.
+  //   3. Race: wait for wakeUp() signal vs. setTimeout(timeoutMs).
+  //   4. On wake: dequeue from #anyMessageQueue. Also dequeue from per-session queue.
+  //   5. On timeout: return { type: 'timeout' }.
+  //
+  // Pseudocode for receiveSessionMessageAsync(sessionIdHex, timeoutMs):
   //   1. Check #sessionMessageQueues[sessionIdHex] — if non-empty, dequeue and return immediately.
   //   2. Register a wake resolver in #receiveWaiters[sessionIdHex].
   //   3. Race: wait for wakeUp() signal vs. setTimeout(timeoutMs).
   //   4. On wake: dequeue from #sessionMessageQueues. If empty (spurious wake), repeat from step 2.
   //   5. On timeout: clean up resolver, return null.
   //   6. On return: compute otherSessionsPending, log session.receive.pending_hint if non-empty.
-  //
-  // Pseudocode for receiveAnyMessageAsync(timeoutMs):
-  //   1. Check #anyMessageQueue — if non-empty, dequeue and return immediately.
-  //   2. Register a wake resolver in #receiveAnyWaiters.
-  //   3. Race: wait for wakeUp() signal vs. setTimeout(timeoutMs).
-  //   4. On wake: dequeue from #anyMessageQueue. Also dequeue from per-session queue.
-  //   5. On timeout: return { type: 'timeout' }.
   //
   // Pseudocode for #wakeReceiveWaiters(sessionIdHex):
   //   1. Fire all resolvers in #receiveWaiters[sessionIdHex].
@@ -1116,7 +1116,7 @@ class CelloClientImpl implements CelloClient {
     this.#receiveAnyWaiters.clear();
   }
 
-  async receiveMessageAsync(sessionIdHex: string, timeoutMs: number): Promise<ReceivedMessage | null> {
+  async receiveSessionMessageAsync(sessionIdHex: string, timeoutMs: number): Promise<ReceivedMessage | null> {
     const deadline = Date.now() + timeoutMs;
 
     while (true) {
@@ -1162,7 +1162,7 @@ class CelloClientImpl implements CelloClient {
     }
   }
 
-  async receiveAnyMessageAsync(timeoutMs: number): Promise<
+  async receiveMessageAsync(timeoutMs: number): Promise<
     | (ReceivedMessage & { sessionIdHex: string })
     | { type: "timeout" }
   > {
@@ -2763,7 +2763,7 @@ class CelloClientImpl implements CelloClient {
           };
           this.#sessionMessageQueues.get(sessionIdHex)?.push(msg);
           this.#anyMessageQueue.push({ sessionIdHex, message: msg });
-          // SESSION-007: wake any blocked receiveMessageAsync / receiveAnyMessageAsync callers.
+          // SESSION-007: wake any blocked receiveSessionMessageAsync / receiveMessageAsync callers.
           this.#wakeReceiveWaiters(sessionIdHex);
         }
       }
