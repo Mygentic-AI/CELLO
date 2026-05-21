@@ -83,7 +83,20 @@ acceptance_criteria:
       (3) message exchange with Merkle verification,
       (4) session seal with directory confirmation,
       (5) relay failure simulation and reassignment,
-      (6) pre-seal reconciliation with one-sided delivery failure;
+      (6) pre-seal reconciliation with one-sided delivery failure,
+      (7) concurrent connection fan-out — Agent A sends two
+          simultaneous cello_request_connection calls to two
+          different targets B and C; both must resolve; a second
+          request to the same target while one is in-flight must
+          return connection_request_in_flight (CONNREQ-003),
+      (8) multi-session fan-in — Agent B opens two sessions with
+          Agent A from separate processes; when B seals the first
+          session, A's blocked cello_receive call returns
+          session_sealed without A calling cello_close_session;
+          A's next cello_receive returns B's message from the
+          second session; the other_sessions_pending hint is
+          present when a second inbound session is waiting
+          (SESSION-007);
       each scenario connects to staging via its ALB endpoint,
       not via shared memory — verified by asserting the smoke
       test process has no direct database access"
@@ -155,6 +168,25 @@ acceptance_criteria:
       not updated — verified by inspecting CodePipeline stage
       transition timestamps from a separate terminal"
     test_type: integration
+    component_under_test: directory
+
+  - id: AC-008-tool-names
+    given: "The smoke test scenario scripts in the CodeBuild project
+      invoke MCP tools by name"
+    when: "every scenario script is inspected for tool name references"
+    then: "all receive calls use the post-M4-round3 canonical names:
+      cello_receive for any-session receive (no session_id parameter)
+      and cello_receive_session for session-locked receive (requires
+      session_id parameter); any reference to cello_receive_any is a
+      blocking failure — that name was the pre-rename form and no longer
+      exists in the compiled binary; verify by grepping all smoke test
+      scripts for 'cello_receive_any' and asserting zero matches before
+      the CodeBuild project is deployed (lesson from M4 round 3:
+      cello_receive and cello_receive_session replace the earlier
+      cello_receive / cello_receive_any naming — 15 source files across
+      5 packages were updated; any smoke script written against the old
+      names will silently fail with 'unknown tool')"
+    test_type: e2e
     component_under_test: directory
 
 # ─── Security Invariants ────────────────────────────────────

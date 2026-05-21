@@ -19,7 +19,7 @@ story: >
 
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
-  - trigger: "When the federation schema migration (V10) is applied"
+  - trigger: "When the federation schema migration (V17) is applied"
     action: "the sessions table is created with owning_node_id TEXT NOT NULL;
       directory_checkpoints (which already has checkpoint_id UUID, mmr_leaf_count
       BIGINT, peak_hash TEXT, staged_seal_count INT, chain_hash TEXT from V5)
@@ -65,7 +65,7 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "The V10 federation schema migration has been applied"
+    given: "The V17 federation schema migration has been applied"
     when: "the sessions table is inspected"
     then: "the sessions table exists with columns: session_id UUID NOT NULL
       UNIQUE, owning_node_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL;
@@ -75,7 +75,7 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-002
-    given: "The V10 federation schema migration has been applied"
+    given: "The V17 federation schema migration has been applied"
     when: "the directory_checkpoints table schema is inspected"
     then: "the table has all columns from V5 (checkpoint_id UUID,
       mmr_leaf_count BIGINT, peak_hash TEXT, staged_seal_count INT,
@@ -155,23 +155,23 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-008-idempotency
-    given: "The V10 federation schema migration has been applied once
-      to a database that already has V1–V9 applied"
+    given: "The V17 federation schema migration has been applied once
+      to a database that already has V1–V16 applied"
     when: "flyway migrate is run a second time against the same database"
     then: "flyway exits 0 with no new rows in flyway_schema_history;
-      no error is produced; every CREATE in V10 uses IF NOT EXISTS;
+      no error is produced; every CREATE in V17 uses IF NOT EXISTS;
       every ALTER TABLE ADD COLUMN uses DO $$ BEGIN IF NOT EXISTS
       (SELECT 1 FROM information_schema.columns WHERE table_name=...
       AND column_name=...) THEN ALTER TABLE ... ADD COLUMN ...; END IF;
       END $$; running the migration on a database that already has the
-      sessions table or the V10 columns is safe — verified by applying
-      V10 twice and asserting flyway_schema_history row count does not
+      sessions table or the V17 columns is safe — verified by applying
+      V17 twice and asserting flyway_schema_history row count does not
       change on the second run"
     test_type: integration
     component_under_test: directory
 
   - id: AC-009-sessions-round-trip
-    given: "The V10 federation schema migration has been applied;
+    given: "The V17 federation schema migration has been applied;
       the sessions table is empty for a fresh session_id
       (CELLO_ENV=local, real Postgres — a stub returning a canned row
       does NOT satisfy this AC; the test runs inside a transaction that
@@ -195,6 +195,47 @@ acceptance_criteria:
       with state = 'streaming' and write_lag, flush_lag, replay_lag all
       under 10 seconds — verified by querying pg_stat_replication from
       a separate database connection on each node"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-011-configure-pg-types-startup
+    given: "Each of the three directory nodes constructs its own
+      PgDirectoryStore independently; each creates a separate pg Pool
+      pointing to its own regional RDS instance"
+    when: "each node's PgDirectoryStore constructor runs"
+    then: "each constructor calls configurePgTypes() before the Pool
+      is first used; configurePgTypes() is idempotent (multiple calls
+      are safe); each node performs a startup verification query
+      immediately after pool creation: it reads a known DATE column
+      (e.g. created_at from any table) and asserts the returned value
+      is a string, not a JS Date object; if the assertion fails, the
+      node logs db.type-parsers.verification.failed at ERROR and
+      refuses to start; if it passes, db.type-parsers.verified is
+      logged at INFO with { nodeId, region }; this test runs with
+      CELLO_ENV=local against a real Postgres instance and asserts
+      the log event is emitted (lesson from M4 bug #6 extended:
+      in multi-region deployments each node constructs its own pool
+      independently; a DATE stored as '2026-01-01' on the owning
+      node reads back as a different timestamp on a receiving node in
+      a different timezone if type parsers are not applied, causing
+      federation.replication.chain_hash_mismatch on every replicated row)"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-012-table-extra-excluded
+    given: "A sessions row is inserted with owning_node_id set but no
+      other optional columns; the sessions table has owning_node_id
+      TEXT NOT NULL and no other nullable columns per V17 spec"
+    when: "the row is read back via a fresh PgDirectoryStore instance
+      and verifyChain('sessions') is called"
+    then: "verifyChain returns { valid: true }; if V17 or a later
+      migration adds any nullable column to sessions, that column must
+      be audited against TABLE_EXTRA_EXCLUDED; the integration test
+      must use CELLO_ENV=local against a real Postgres instance —
+      a stub does NOT satisfy this AC; this AC must be revisited if
+      any subsequent migration adds a nullable sessions column
+      (lesson from M4 bug #7: nullable columns absent at INSERT time
+      appear in SELECT as NULL and break chain hash recomputation)"
     test_type: integration
     component_under_test: directory
 

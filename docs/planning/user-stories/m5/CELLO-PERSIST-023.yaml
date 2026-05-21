@@ -60,7 +60,7 @@ acceptance_criteria:
     given: "No pending_notifications table exists in M4 migrations
       (PERSIST-015 described it as a future M5 table — it was not
       created in any M4 migration file)"
-    when: "the V12 migration is applied"
+    when: "the V19 migration is applied"
     then: "the pending_notifications table is created with columns:
       notification_id UUID NOT NULL UNIQUE, recipient_agent_id TEXT
       NOT NULL, notification_type TEXT NOT NULL, payload JSONB NOT NULL,
@@ -152,14 +152,51 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-008-idempotency
-    given: "The V12 pending_notifications schema migration has been
-      applied once to a database that already has V1–V11 applied"
+    given: "The V19 pending_notifications schema migration has been
+      applied once to a database that already has V1–V18 applied"
     when: "flyway migrate is run a second time against the same database"
     then: "flyway exits 0 with no new rows in flyway_schema_history;
       the CREATE TABLE for pending_notifications uses IF NOT EXISTS;
-      the CREATE INDEX uses IF NOT EXISTS; running V12 twice is safe —
-      verified by applying V12 twice and asserting flyway_schema_history
+      the CREATE INDEX uses IF NOT EXISTS; running V19 twice is safe —
+      verified by applying V19 twice and asserting flyway_schema_history
       row count does not change on the second run"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-009-table-extra-excluded
+    given: "A pending_notifications row is inserted via
+      PgNotificationQueue.enqueue() without a delivered_at value
+      (delivered_at is nullable — it is only set when the notification
+      is delivered, not at enqueue time; per V19 schema, the column
+      definition should omit delivered_at entirely since rows are
+      deleted on acknowledgement — but if delivered_at is retained as
+      a nullable tracking column, this AC applies)"
+    when: "the row is read back via a fresh PgNotificationQueue instance
+      and any chain verification or round-trip integrity check runs"
+    then: "if delivered_at or any other nullable column is present in
+      the schema but NOT set at enqueue() time, it must be declared in
+      TABLE_EXTRA_EXCLUDED for pending_notifications in PgNotificationQueue
+      (or PgDirectoryStore, whichever holds the map); an integration test
+      with CELLO_ENV=local against a real Postgres instance confirms the
+      round-trip reads back correctly without a NULL-induced hash
+      mismatch; a stub returning a canned row does NOT satisfy this AC
+      (lesson from M4 bug #7: nullable columns absent at INSERT time
+      appear in SELECT as NULL and silently break chain hash verification
+      if not excluded from record_contents)"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010-dist-freshness
+    given: "pnpm run typecheck has been run from the repo root
+      (this rebuilds dist/ via tsc --build)"
+    when: "dist/server.js is grepped for any notification-related
+      handler or tool name that PgNotificationQueue introduces in
+      the directory server"
+    then: "every expected name is present in dist/server.js;
+      absence is a blocking failure — the registration is missing
+      or dist was not rebuilt; this check must be in the completion
+      gate before any smoke test; vitest transpiles source on the fly
+      and never reads dist/ (lesson from M4 addendum 3)"
     test_type: integration
     component_under_test: directory
 

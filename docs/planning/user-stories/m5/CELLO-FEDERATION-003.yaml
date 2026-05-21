@@ -64,7 +64,7 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "The V11 relay registration schema migration has been applied"
+    given: "The V18 relay registration schema migration has been applied"
     when: "the relay_registrations table is inspected"
     then: "the table has columns: id BIGSERIAL PRIMARY KEY,
       relay_id TEXT NOT NULL UNIQUE, public_key_hex TEXT NOT NULL,
@@ -154,12 +154,12 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-008-idempotency
-    given: "The V11 relay registration schema migration has been applied
-      once to a database that already has V1–V10 applied"
+    given: "The V18 relay registration schema migration has been applied
+      once to a database that already has V1–V17 applied"
     when: "flyway migrate is run a second time against the same database"
     then: "flyway exits 0 with no new rows in flyway_schema_history;
       the CREATE TABLE for relay_registrations uses IF NOT EXISTS;
-      running V11 twice is safe — verified by applying V11 twice and
+      running V18 twice is safe — verified by applying V18 twice and
       asserting flyway_schema_history row count does not change on the
       second run"
     test_type: integration
@@ -178,6 +178,42 @@ acceptance_criteria:
       instance with no in-memory state (CELLO_ENV=local, real Postgres —
       no stub); the fresh instance having no cache is itself the evidence
       that the result came from a live SELECT"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010-table-extra-excluded
+    given: "A relay_registrations row is inserted via registerRelay()
+      without a deregistered_at value (deregistered_at is nullable —
+      it is only set when a relay is explicitly deregistered, not at
+      initial registration time)"
+    when: "the row is read back via a fresh PgDirectoryStore instance
+      and verifyChain('relay_registrations') is called"
+    then: "verifyChain returns { valid: true }; deregistered_at must be
+      declared in TABLE_EXTRA_EXCLUDED for relay_registrations in
+      PgDirectoryStore because it is nullable and is NOT set at initial
+      INSERT time; if it is absent from TABLE_EXTRA_EXCLUDED, the SELECT
+      result will include deregistered_at: null while the stored chain_hash
+      was computed without it, causing verifyChain to return { valid: false };
+      the integration test runs with CELLO_ENV=local against a real Postgres
+      instance — a stub does NOT satisfy this AC (lesson from M4 bug #7:
+      nullable columns absent at INSERT time appear in SELECT as NULL and
+      break chain hash recomputation if not excluded from record_contents;
+      this is the same pattern that broke seal_notarizations in M4 live testing)"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-011-dist-freshness
+    given: "pnpm run typecheck has been run from the repo root
+      (this rebuilds dist/ via tsc --build)"
+    when: "dist/server.js is grepped for the relay registration
+      handler name that this story introduces"
+    then: "the handler name is present in dist/server.js; absence
+      is a blocking failure — the registration is missing or dist
+      was not rebuilt; this check must be in the completion gate
+      before any smoke test; vitest transpiles source on the fly
+      and never reads dist/, making a stale binary invisible to
+      all automated checks until a smoke test hits it (lesson from
+      M4 addendum 3)"
     test_type: integration
     component_under_test: directory
 

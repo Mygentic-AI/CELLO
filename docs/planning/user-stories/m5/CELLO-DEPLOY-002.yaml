@@ -151,6 +151,44 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
+  - id: AC-009-configure-pg-types
+    given: "PgDirectoryStore is the class that creates the pg Pool
+      for the directory service"
+    when: "the PgDirectoryStore constructor is inspected"
+    then: "configurePgTypes() is called inside the constructor body,
+      not at module import time (top-level module scope);
+      configurePgTypes() contains an idempotency guard so multiple
+      constructor calls do not conflict; the integration test suite
+      passes when test files are loaded in any order (pool: 'forks',
+      maxForks: 1); a test that imports PgDirectoryStore from two
+      different test files in the same process must not see DATE
+      type parser contamination between files — verified by asserting
+      that a DATE column read from a fresh PgDirectoryStore returns a
+      string, not a JS Date object (lesson from M4 bug #6: module-scope
+      pg.types.setTypeParser calls contaminate other test files when
+      multiple adapters are imported in the same vitest process)"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010-dist-freshness
+    given: "pnpm run typecheck has been run from the repo root
+      (this rebuilds dist/ via tsc --build)"
+    when: "dist/server.js is grepped for each MCP tool name that
+      this story introduces or modifies"
+    then: "every tool name is present in dist/server.js; absence of
+      any tool name is a blocking failure — the server.ts registration
+      is missing or the dist was not rebuilt; this check must be in
+      the completion gate before any smoke test is run; a stale
+      dist/server.js is invisible to vitest (which transpiles source
+      on the fly and never reads dist/) and to tsc --noEmit (which
+      checks types without producing output) — pnpm run typecheck
+      rebuilds dist/ as a side effect of tsc --build; grepping
+      dist/server.js is the only automated verification that the
+      compiled binary the smoke test will execute is current
+      (lesson from M4 addendum 3)"
+    test_type: integration
+    component_under_test: directory
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001

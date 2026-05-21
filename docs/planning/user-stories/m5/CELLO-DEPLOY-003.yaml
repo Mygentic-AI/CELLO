@@ -127,6 +127,23 @@ acceptance_criteria:
     test_type: integration
     component_under_test: relay
 
+  - id: AC-008-dist-freshness
+    given: "pnpm run typecheck has been run from the repo root
+      (this rebuilds dist/ via tsc --build)"
+    when: "dist/relay-server.js (or equivalent relay entry point)
+      is grepped for each MCP tool name or relay handler that
+      this story introduces or modifies"
+    then: "every expected handler name is present in the compiled
+      output; absence of any name is a blocking failure — the
+      registration is missing or the dist was not rebuilt; this
+      check must be in the completion gate before any smoke test
+      is run; vitest transpiles source on the fly and never reads
+      dist/, so a stale dist is invisible to all automated checks
+      until a smoke test hits the compiled binary (lesson from
+      M4 addendum 3)"
+    test_type: integration
+    component_under_test: relay
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001

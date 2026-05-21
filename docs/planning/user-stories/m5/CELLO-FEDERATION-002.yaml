@@ -208,7 +208,14 @@ acceptance_criteria:
       writes a checkpoint_node_signatures row via PgDirectoryStore and
       reads it back from a fresh store instance (CELLO_ENV=local, real
       Postgres — no stub); the fresh PgDirectoryStore instance having no
-      cache is itself the evidence that the result came from a live SELECT"
+      cache is itself the evidence that the result came from a live SELECT;
+      every column in checkpoint_node_signatures is NOT NULL (checkpoint_id,
+      node_id, node_signature, signed_at are all required at INSERT time),
+      so TABLE_EXTRA_EXCLUDED is empty for this table — the round-trip
+      integration test confirms no NULL-induced chain hash mismatch
+      (lesson from M4 bug #7: only nullable columns absent at INSERT
+      time need excluding; this table has none, but this must be
+      verified by reading the V17 schema before implementing)"
     test_type: integration
     component_under_test: directory
 

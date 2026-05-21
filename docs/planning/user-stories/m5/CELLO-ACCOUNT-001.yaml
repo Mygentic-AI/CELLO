@@ -45,7 +45,7 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "Flyway migrations V16 and V17 have been applied to a clean database"
+    given: "Flyway migrations V20 and V21 have been applied to a clean database"
     when: "the schema is inspected via information_schema"
     then: "user_accounts table exists with columns account_id (UUID PK), phone_stub_hash
       (TEXT UNIQUE NOT NULL), email_stub_hash (TEXT), created_at (TIMESTAMPTZ DEFAULT now()),
@@ -101,6 +101,26 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
+  - id: AC-007-table-extra-excluded
+    given: "A user_accounts row is inserted without email_stub_hash
+      (account created with no email address — email_stub_hash is a
+      nullable column, absent from the INSERT parameter map)"
+    when: "the row is read back via a fresh PgDirectoryStore instance
+      and verifyChain('user_accounts') is called"
+    then: "verifyChain returns { valid: true }; email_stub_hash must be
+      declared in TABLE_EXTRA_EXCLUDED for user_accounts in PgDirectoryStore
+      because it is nullable and is not set at initial INSERT time;
+      if it is absent from TABLE_EXTRA_EXCLUDED, the SELECT result will
+      include email_stub_hash: null while the stored chain_hash was
+      computed without it, causing verifyChain to return { valid: false };
+      the round-trip integration test runs with CELLO_ENV=local against
+      a real Postgres instance — a stub returning a canned row does NOT
+      satisfy this AC (lesson from M4 bug #7: nullable columns absent
+      at INSERT time appear in SELECT as NULL and break chain hash
+      recomputation if not excluded from record_contents)"
+    test_type: integration
+    component_under_test: directory
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
@@ -124,7 +144,7 @@ security_invariants:
 # ─── Degraded Behavior ──────────────────────────────────────
 degraded_behavior:
   - id: DB-001
-    condition: "While the V16/V17 migrations have not yet been applied (e.g. partial
+    condition: "While the V20/V21 migrations have not yet been applied (e.g. partial
       deployment where schema is behind)"
     fallback: "the directory shall fail at startup with migration.out.of.date logged
       at ERROR with { currentVersion, requiredVersion }; no request is served until

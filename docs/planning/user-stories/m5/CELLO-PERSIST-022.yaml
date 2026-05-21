@@ -124,6 +124,22 @@ acceptance_criteria:
     test_type: unit
     component_under_test: client
 
+  - id: AC-007-dist-freshness
+    given: "pnpm run typecheck has been run from the repo root
+      (this rebuilds dist/ via tsc --build)"
+    when: "dist/server.js is grepped for any MCP tool names
+      or backup/restore handler names that S3CloudStorageProvider
+      introduces or modifies in server.ts"
+    then: "every expected name is present in dist/server.js;
+      absence of any name is a blocking failure — the registration
+      is missing or the dist was not rebuilt; this check must be
+      in the completion gate before any smoke test; vitest
+      transpiles source on the fly and never reads dist/, making
+      a stale compiled binary invisible to all automated checks
+      until a smoke test runs against it (lesson from M4 addendum 3)"
+    test_type: integration
+    component_under_test: client
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
