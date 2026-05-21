@@ -130,6 +130,9 @@ importers:
       '@claude-flow/testing':
         specifier: '*'
         version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0))
+      '@types/node':
+        specifier: ^25.6.2
+        version: 25.6.2
 
   packages/crypto:
     dependencies:

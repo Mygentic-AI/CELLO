@@ -2,16 +2,16 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    "types": ["node"]
   },
   "include": ["src"],
+  "exclude": ["dist", "src/__tests__"],
   "references": [
     { "path": "../crypto" },
     { "path": "../interfaces" },
     { "path": "../protocol-types" },
     { "path": "../test-fixtures" },
-    { "path": "../transport" },
-    { "path": "../directory" },
-    { "path": "../relay" }
+    { "path": "../transport" }
   ]
 }

@@ -90,10 +90,10 @@ function buildFixtureSealedRoot(): Uint8Array {
 
 // ─── Stub CelloNode ───────────────────────────────────────────────────────────
 
-function makeStubNode(started = true): CelloNode {
+function makeStubNode(started = true, connectedPeerIds: string[] = []): CelloNode {
   return {
     listenAddresses: () => (started ? ["/ip4/127.0.0.1/tcp/9999"] : []),
-    getConnections: () => [],
+    getConnections: () => connectedPeerIds.map((peerId) => ({ peerId })),
     start: async () => {},
     stop: async () => {},
     dial: async () => ({ peerId: "12D3..." }),
@@ -136,7 +136,10 @@ function makeStubClient(opts: StubClientOptions = {}): CelloClient {
     register: async () => ({ error: "not_implemented" }),
     // ─── MCP-003 additions ─────────────────────────────────────────────────
     getRegistrationState: () => null,
-    getDirectoryPeerId: () => null,
+    getDirectoryPeerId: () => {
+      const active = sessions.find((s) => s.status === "active" && s.directory_endpoint?.peer_id);
+      return active?.directory_endpoint?.peer_id ?? null;
+    },
     setPolicy: () => {},
     getPolicy: () => ({ mode: "open" as const, review_mode: "deterministic" as const, requirements: [] }),
     hasConnection: () => null,
@@ -210,8 +213,9 @@ async function makeServerAndClient(
   cleanup: () => Promise<void>;
 }> {
   const kp = generateKeypair();
-  const node = makeStubNode(started);
   const celloClient = makeStubClient({ sessions });
+  const dirPeerId = celloClient.getDirectoryPeerId();
+  const node = makeStubNode(started, dirPeerId ? [dirPeerId] : []);
   const server = createMcpSessionServer(node, celloClient, kp);
 
   const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();

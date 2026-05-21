@@ -325,24 +325,27 @@ export function createMcpServer(
         });
       }
 
-      // type === "message"
-      let content: string;
-      try {
-        content = new TextDecoder("utf-8", { fatal: true }).decode(result.content);
-      } catch {
-        content = Buffer.from(result.content).toString("hex");
+      if (result.type === "message") {
+        let content: string;
+        try {
+          content = new TextDecoder("utf-8", { fatal: true }).decode(result.content);
+        } catch {
+          content = Buffer.from(result.content).toString("hex");
+        }
+        return jsonText({
+          type: "message",
+          session_id: result.sessionIdHex,
+          content,
+          sender_pubkey: Buffer.from(result.senderPubkey).toString("hex"),
+          sequence_number: result.sequenceNumber,
+          leaf_hash: Buffer.from(result.leafHash).toString("hex"),
+          ...(result.otherSessionsPending && result.otherSessionsPending.length > 0
+            ? { other_sessions_pending: result.otherSessionsPending }
+            : {}),
+        });
       }
-      return jsonText({
-        type: "message",
-        session_id: result.sessionIdHex,
-        content,
-        sender_pubkey: Buffer.from(result.senderPubkey).toString("hex"),
-        sequence_number: result.sequenceNumber,
-        leaf_hash: Buffer.from(result.leafHash).toString("hex"),
-        ...(result.otherSessionsPending && result.otherSessionsPending.length > 0
-          ? { other_sessions_pending: result.otherSessionsPending }
-          : {}),
-      });
+
+      return jsonText({ type: "unknown", raw: JSON.stringify(result) });
     }
   );
 

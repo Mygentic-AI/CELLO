@@ -37,6 +37,7 @@
     "@cello/directory": "workspace:*",
     "@cello/e2e-tests": "workspace:*",
     "@cello/relay": "workspace:*",
-    "@cello/test-fixtures": "workspace:*"
+    "@cello/test-fixtures": "workspace:*",
+    "@types/node": "^25.6.2"
   }
 }
