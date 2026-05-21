@@ -120,11 +120,11 @@ B sends its message automatically as soon as it gets the session. Call receive i
 cello_receive({ timeout_ms: 15000 })
 ```
 
-This will return whichever of B or C's messages arrived first (non-deterministic). Either is valid.
+This will return whichever message arrived first (non-deterministic). Either B or C is valid.
 
-**PASS:** Returns `{ type: "message", session_id: <S_B or S_C>, content: "smoke-test-message-from-B" or "smoke-test-message-from-C", ... }` — not `{ type: "timeout" }`.
+**PASS:** Returns `{ type: "message", session_id: <S_B or S_C>, ... }` — not `{ type: "timeout" }`.
 
-If both B and C have already sent, call `cello_receive` a second time to drain the second message. Note which session was in `other_sessions_pending` on the first call.
+Call `cello_receive` a second time to get the other session's first message. After two `cello_receive` calls you will have consumed one message from each of S_B and S_C. B's second message (`smoke-test-message-from-B-2`) remains buffered in S_B — do NOT drain it here. It is needed for CHECKPOINT 3.
 
 ```
 CHECKPOINT 2: PASS
@@ -135,38 +135,37 @@ CHECKPOINT 2: PASS
 
 ## Step 5 — CHECKPOINT 3: otherSessionsPending hint (SESSION-007)
 
-After draining both B and C's initial messages (call cello_receive twice if needed), send a message to S_B to put something on it, then immediately call `cello_receive_session` on S_C — the wrong session:
+B sends two messages in its State 3 (one initial + one follow-up). After CP2 drains one of B's messages, B's second message is still sitting in A's S_B buffer. Call `cello_receive_session` on S_C — the session with no pending messages:
 
 ```
-cello_send({ session_id: S_B, content: "ping" })
 cello_receive_session({ session_id: S_C, timeout_ms: 5000 })
 ```
 
-The receive on S_C should time out (no new message on S_C), but `other_sessions_pending` must contain S_B.
+S_C has no pending messages so this times out, but `other_sessions_pending` must contain S_B because B's second message is buffered.
 
-Then drain S_B:
+Then drain S_B to confirm:
 ```
 cello_receive_session({ session_id: S_B, timeout_ms: 5000 })
 ```
 
-**PASS:** The S_C receive returned `otherSessionsPending: [S_B]`. The S_B receive returned the "ping" message.
+**PASS:** The S_C receive returned with `otherSessionsPending: [S_B]`. The S_B receive returned B's second message.
 
 ```
 CHECKPOINT 3: PASS
   otherSessionsPending on S_C receive: [<S_B hex>]
-  S_B ping message received on follow-up: yes
+  S_B second message received on follow-up: yes
 ```
 
 ## Step 6 — CHECKPOINT 4: inline session_sealed detection (SESSION-007)
 
-Send the seal trigger to C, then immediately block on receive for S_C:
+**These two calls must happen in the same response — do not pause between them:**
 
 ```
 cello_send({ session_id: S_C, content: "seal-now" })
 cello_receive_session({ session_id: S_C, timeout_ms: 30000 })
 ```
 
-C is in its receive loop. When C gets "seal-now" it calls `cello_close_session` immediately. You did NOT call `cello_close_session` on S_C.
+Send "seal-now" to C and immediately call receive on S_C in the same turn. C is in its receive loop — when it gets "seal-now" it seals immediately. You did NOT call `cello_close_session` on S_C.
 
 **PASS:** Returns `{ type: "session_sealed", session_id: S_C, sealed_root: "<64-hex>", checkpoint_status: "pending" }`.
 
@@ -232,15 +231,16 @@ If it times out, call `cello_list_sessions()`. If a session appears with `status
 
 When you have a session, note the `session_id`. This is S_B. Immediately move to State 3.
 
-## State 3 — Send message immediately
+## State 3 — Send two messages immediately
 
-Do not wait for any signal. Call immediately:
+Do not wait for any signal. Call both immediately, one after the other:
 
 ```
 cello_send({ session_id: S_B, content: "smoke-test-message-from-B" })
+cello_send({ session_id: S_B, content: "smoke-test-message-from-B-2" })
 ```
 
-Immediately move to State 4.
+Both must be sent before moving to State 4. Immediately move to State 4.
 
 ## State 4 — Receive loop until sealed
 
