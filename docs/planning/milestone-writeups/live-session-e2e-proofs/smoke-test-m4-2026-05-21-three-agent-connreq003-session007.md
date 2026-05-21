@@ -263,6 +263,34 @@ Both messages were hash-chained into the session Merkle tree immediately. No del
 
 ---
 
+## Agent C Perspective
+
+Agent C ran as an autonomous state machine across five states with zero human intervention after launch:
+
+**State 1 (Register):** `cello_status` returned `own_pubkey: 861eed6b481b7ef1ba89d7578d7489ca7c4e36e89dd1095c1613e9d6f90d321a` with the transport already connected to the relay (`connected_peer_count: 1`). `cello_register` completed the DKG ceremony on first attempt, yielding `primary_pubkey: deb6e6ac26af9aafd9cc8436c7e7186795ff3dd5ced3df7a10ad835be8db52fe`. Reported ready and moved immediately to State 2.
+
+**State 2 (Await session):** Called `cello_await_session({ timeout_ms: 120000 })`. The session arrived as `type: new_session` with `session_id: eeaba9b9c0da3808b06a2342109896a8` and A's counterparty pubkey (`170138f0...`). Push-based notification worked cleanly — no fallback to `cello_list_sessions` needed. The `genesis_prev_root` (`ef5e0800d693ce62c4f2e22e04054c0109fc7c3e327ac5382787fee081bcec67`) confirmed the session's hash chain was initialized from the connection's cryptographic state.
+
+**State 3 (Send message):** Single `cello_send` returned `delivered: true` with `leaf_hash: 2e09c6d5eca249ec95c42097a8ca6c94dc2363f4e5e0a2a1074e966ee1221213`. This message was immediately available to A's any-session receive (confirmed in checkpoint 3 — A received it with matching leaf hash and `sequence_number: 1`).
+
+**State 4 (Receive loop — seal on "seal-now"):** First receive iteration timed out after 30 seconds — expected, A was still running earlier checkpoints against B. Second iteration returned `type: message` with `content: "seal-now"` from A (`sequence_number: 2`, `leaf_hash: cc278573cac310953a781ec3c76e0c0d10f133c70f79cab4b590052b4a24b62b`). Immediately moved to seal.
+
+**State 5 (Confirm seal):** Called `cello_close_session` immediately upon receiving "seal-now". Returned `status: sealed` with `sealed_root: a6cf7e4ae4ca9dfb5e39785f6754ed442c2a667e21ded9f58810508a1b92034b` and `close_timestamp: 1779356376406`. The seal completed in the same tool-call round as the receive — no detectable latency between receiving the command and sealing.
+
+**Key observations from C's side:**
+
+1. **Command-triggered seal works end-to-end.** The "seal-now" pattern proves that an agent can be instructed to seal via an in-band message, and the counterparty (A) receives `session_sealed` inline on their pending receive. No out-of-band coordination needed — the session message layer is sufficient for seal orchestration.
+
+2. **Leaf hash integrity is verifiable cross-agent.** The `leaf_hash` C received for "seal-now" (`cc278573...`) matches what A's `cello_send` returned. The `leaf_hash` C produced for its outbound message (`2e09c6d5...`) matches what A received. Both sides see the same Merkle tree state — the relay notarization is consistent.
+
+3. **Single timeout iteration is acceptable latency.** C waited through exactly one 30-second timeout before receiving A's "seal-now". This reflects the real-world pattern: an agent in a receive loop will detect incoming messages within one timeout window. For production, shorter timeouts (5-10s) would reduce seal latency at the cost of more iterations.
+
+4. **Seal is atomic from C's perspective.** `cello_close_session` returned a complete sealed state in one call — sealed root, timestamp, no partial states. C never saw an intermediate "sealing" status. The bilateral seal ceremony is invisible to the initiating side; it just gets the final result.
+
+5. **Genesis hash chain links session to connection.** The `genesis_prev_root` in the session establishment ties this session cryptographically to the connection that preceded it. The sealed root (`a6cf7e4a...`) covers 4 leaves: genesis + C's message + A's "seal-now" + seal event. The full provenance chain from connection through session to sealed transcript is intact.
+
+---
+
 ## Related Documents
 
 - [[agent-conversation-m4-2026-05-20-protocol-proof]] — prior 2-agent protocol proof; first live FROST-signed session, seal ordering race
