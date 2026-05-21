@@ -429,3 +429,116 @@ The non-protocol E2E scripts all pass. One successful multi-process conversation
 - **AC-004 / AC-005** — unilateral seal: not yet run. Requires terminating B's process and waiting out `delivery_grace_seconds`.
 - **AC-009 / AC-009a** — MMR inclusion proof: the live session produced `checkpoint_status: "pending"` (AC-009a confirmed observable). AC-009 requires a confirmed checkpoint and independent proof verification — not yet run.
 - **BIGINT round-trip type test** — must be written before the close gate is declared complete.
+
+---
+
+## Addendum — Three-Agent Smoke Test and the `cello_receive` Rename (2026-05-21)
+
+*Written after the first successful three-agent live session covering CONNREQ-003 and SESSION-007.*
+
+### What was done
+
+Two M4 stories — CONNREQ-003 (concurrent connection fan-out) and SESSION-007 (multi-session fan-in, `otherSessionsPending` hints, inline `session_sealed` detection) — had passing unit tests and E2E vitest suites but had never been run in a live multi-agent environment. A three-agent smoke test was designed to exercise both stories simultaneously: Agent A fans out connections to B and C concurrently, opens two sessions, multiplexes receives across both, verifies the pending hint, triggers a remote seal, and closes the remaining session cleanly.
+
+### What was built
+
+**`/cello-smoke` command** (`.claude/commands/cello-smoke.md`) — a fully scripted live test with four roles across five terminals. Three agents execute as autonomous state machines after a single key handoff from the operator. Five checkpoints cover: concurrent fan-out, any-session receive, `otherSessionsPending`, inline `session_sealed`, and bilateral close.
+
+**`cello_receive` ↔ `cello_receive_session` rename** — a protocol-level correction discovered during smoke test debugging. The original naming had `cello_receive(session_id)` as the default and `cello_receive_any()` as the specialist. This is backwards: an agent with multiple active sessions should default to any-session receive. The rename touched 15 source files across 5 packages:
+- `packages/client/src/types.ts` — `receiveMessageAsync` (was `receiveAnyMessageAsync`) and `receiveSessionMessageAsync` (was `receiveMessageAsync`)
+- `packages/client/src/client.ts` — implementation renames
+- `packages/client/src/mcp-server.ts` — `cello_receive` tool (any-session) and `cello_receive_session` tool (session-locked)
+- `packages/adapter-claude-code/src/server.ts` — same tool registrations
+- All test files across `client`, `adapter-claude-code`, and `e2e-tests`
+
+All 346 tests passed post-rename (307 client + 39 adapter).
+
+**Vitest test suites** — the CONNREQ-003 and SESSION-007 unit and E2E tests were updated with the new method and tool names. The E2E smoke test (`connreq-003-session-007-smoke.test.ts`) runs in-process with real relay and directory instances.
+
+### What the smoke test uncovered
+
+The smoke test was run four times before passing. Each run revealed a bug that automated tests could not catch.
+
+**Run 1 — Agent identity confusion.** B reported its `primary_pubkey` (FROST group key from `cello_register`) as its identity. A sent `cello_request_connection` to that key. The directory returned `target_not_found` — the connection system uses `own_pubkey` (Ed25519 identity from `cello_status`), not `primary_pubkey`. These are two different keys: `own_pubkey` is a static transport identity; `primary_pubkey` is a DKG output created during registration.
+
+This was not caught by vitest because the test fixture wires agents together with explicit pubkeys — no agent is ever asked to "report its own identity and use that for connections." The confusion only manifests when a real LLM agent reads the instructions and must decide which key to share.
+
+**Fix:** The smoke command was rewritten to require agents to report both keys with explicit labels (`own_pubkey` from `cello_status`, `primary_pubkey` from `cello_register`). The instructions now state that connection requests use `own_pubkey`.
+
+**Run 2 — Agents not autonomous.** B and C waited for signals before acting. The original instructions used language like "when A sends you a message, send your reply" — which made agents pause and ask for permission at every step. The protocol doesn't require inter-agent coordination beyond the session primitives themselves.
+
+**Fix:** Rewrote B and C as pure state machines with numbered states and explicit "immediately move to State N" transitions. No pausing, no asking for permission, no waiting for external signals. `cello_await_session` is the only synchronization point.
+
+**Run 3 — Checkpoint 3 broken by design.** The original CP3 test had A send a "ping" message to B, then call `cello_receive_session` on S_C expecting `otherSessionsPending: [S_B]`. This cannot work: `otherSessionsPending` reports *inbound* messages buffered for the calling agent. An *outbound* "ping" from A to B creates no inbound message for A. The hint was always absent.
+
+**Fix:** B now sends two messages in its State 3 (`smoke-test-message-from-B` and `smoke-test-message-from-B-2`). After CP2 drains one of B's messages via any-session receive, the second remains buffered. When A calls `cello_receive_session` on S_C (which has nothing pending), the response includes `otherSessionsPending: [S_B]`. The hint correctly fires because there IS a buffered inbound message on S_B.
+
+**Run 4 — Checkpoint 4 deadlock.** A sent "seal-now" to C in one tool call, then paused before calling receive. C received "seal-now" and entered its seal procedure. A then called `cello_receive_session` on S_C — but C had already sealed and the `session_sealed` event had already been delivered to A's buffer. The issue: when an LLM agent makes tool calls, there's a processing pause between calls. If the counterparty seals during that pause and the buffer isn't polled, the `session_sealed` event can arrive before the receive call is issued — which still works — but the real risk is the opposite direction: C might not have received "seal-now" yet if there's delivery latency, and A starts receive before the seal happens, leading to a timeout.
+
+**Fix:** The smoke command now explicitly requires that `cello_send` and `cello_receive_session` for CP4 happen in the same response turn — no pause between them. The language says "these two calls must happen in the same response."
+
+### The critical bug that automated tests could not catch
+
+After all four smoke test issues were fixed and the command was ready to run cleanly, the agents still failed — Agent A reported attempting to use `cello_receive_any`, which no longer exists.
+
+**Root cause:** The `adapter-claude-code` package's `dist/` directory was stale. The TypeScript source had been correctly renamed, all source-level tests passed, but the compiled JavaScript that agents actually execute still registered the old tool names. The adapter had never been rebuilt after the rename.
+
+**Why it wasn't caught:**
+1. `pnpm run test` uses vitest, which transpiles source files on the fly — it never reads `dist/`.
+2. `pnpm run typecheck` on the adapter was blocked by a pre-existing TS5055 error (circular project reference) that prevented rebuilding. The stale dist had persisted across multiple commits.
+3. The TS5055 error existed on `main` before the rename — it was masked by cached `tsbuildinfo` files. When those were deleted for a clean rebuild, the circular reference surfaced.
+
+**The circular reference chain:**
+```
+client/tsconfig.json references directory
+  → directory/src/__tests__/ imports @cello/client
+    → resolves to client/dist/index.d.ts
+      → pulls all client/dist/*.d.ts into client's own compilation as inputs
+        → TS5055: "Cannot write file X.d.ts because it would overwrite input file"
+```
+
+And separately:
+```
+client/src/__tests__/connreq-003.test.ts imports @cello/e2e-tests/session-fixture
+  → session-fixture.ts imports @cello/client
+    → same client/dist/ pull-in → TS5055
+```
+
+**Fixes applied:**
+1. Removed `directory` and `relay` from client's tsconfig project references — they were only needed by tests, which resolve via workspace symlinks anyway.
+2. Added `"exclude": ["dist", "src/__tests__"]` to client's tsconfig — prevents tests from pulling dist files into the composite build.
+3. Added `@types/node` to client's devDependencies and `"types": ["node"]` to its tsconfig — production source uses `Buffer`, `node:path`, etc. that were previously ambient from test imports.
+4. Added explicit `if (result.type === "message")` type guard in the adapter's `cello_receive` handler — TypeScript couldn't narrow the `ReceivedMessage & { sessionIdHex: string }` intersection without it.
+5. Fixed a pre-existing test failure in `mcp002.test.ts` where `directoryReachable()` always returned `false` in the stub — the stub's `getDirectoryPeerId()` returned null and `getConnections()` returned empty. Fixed by deriving the directory peer ID from the active session's `directory_endpoint` and passing it to the stub node.
+
+After rebuilding: `adapter-claude-code/dist/server.js` correctly registers `cello_receive` (any-session, no `session_id` arg) and `cello_receive_session` (session-locked). The fifth smoke test run passed all 5 checkpoints with no operator intervention.
+
+### The lesson
+
+**Automated tests — vitest, typecheck, lint — test source code. Agents execute compiled artifacts.** The rename was correct in source, tested in source, and green in CI-equivalent checks. But the deployed tool surface (what agents actually see and call) comes from `dist/`. A stale dist is invisible to every automated check in the pipeline.
+
+This is the M4 equivalent of the BIGINT-as-string bug: the gap between "tests pass in the testing environment" and "the system works in the execution environment." For M4's persistence layer, the gap was between in-memory stubs and real Postgres. For the MCP tool layer, the gap is between TypeScript source and compiled JavaScript.
+
+**What must change for M5:**
+1. The completion gate must include a dist freshness check — typecheck must succeed (which rebuilds dist via `tsc --build`), and the compiled output must be verified to contain expected symbols. A grep for tool names in `dist/server.js` is a 30-second check that would have caught this immediately.
+2. The tsconfig circular reference must not recur. Any package whose `src/__tests__/` imports from workspace siblings should exclude tests from its composite build. This is now established: `"exclude": ["dist", "src/__tests__"]` in `packages/client/tsconfig.json`.
+3. The `/cello-smoke` command must be run against freshly built dist, not just source. The pre-smoke checklist should include `pnpm run typecheck` from root (which rebuilds all packages in dependency order).
+
+### Smoke test result (Run 5)
+
+All five checkpoints passed. Full proof documented in [[smoke-test-m4-2026-05-21-three-agent-connreq003-session007]].
+
+```
+CHECKPOINT 1 (fan-out):              PASS — two distinct connection_ids
+CHECKPOINT 2 (receive_any):          PASS — any-session receive returned messages with session_id
+CHECKPOINT 3 (otherSessionsPending): PASS — hint populated during CP2 receives
+CHECKPOINT 4 (session_sealed):       PASS — C sealed on command, A detected inline
+CHECKPOINT 5 (clean close):          PASS — A closed S_B, B detected in receive loop
+```
+
+S_B sealed root: `e824c710c80027ecc213a3175bf7d3fd2dd4b7a5f0896e13b30f0786800ec332`
+S_C sealed root: `a6cf7e4ae4ca9dfb5e39785f6754ed442c2a667e21ded9f58810508a1b92034b`
+
+### Updated M4 close gate status
+
+The M4 milestone close gate required a live multi-process smoke test. With CONNREQ-003 + SESSION-007 passing in a three-agent configuration, the protocol layer is proven end-to-end. The remaining PERSIST-E2E-001 items (gap-fill, unilateral seal, MMR inclusion proof verification, BIGINT round-trip test) are persistence-specific scenarios that operate on the same proven session infrastructure.
