@@ -253,8 +253,28 @@ Standard SPARC gate sequence plus live smoke tests:
 
 ---
 
+## Bootstrap Checklist (2026-05-21)
+
+Pre-implementation operations required before DEPLOY-001 can be validated.
+
+| Item | Status | Date | Notes |
+|---|---|---|---|
+| Route 53 hosted zone for `cello.mygentic.ai` | Done | 2026-05-21 | NS delegated from GoDaddy; 4 NS records added |
+| Confirm us-east-1 VPC CIDR | Done | 2026-05-21 | No existing CELLO VPC — `10.0.0.0/16` is clean to use |
+| ECR repo `cello-directory` (us-east-1) | Done | 2026-05-21 | `257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory` |
+| ECR repo `cello-relay` (us-east-1) | Done | 2026-05-21 | `257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay` |
+| Service limits (eu-central-1, ap-northeast-1) | Done | 2026-05-21 | RDS: 40 instances, ALB: 50 — far above need |
+| GitHub webhook + HMAC secret | Pending | — | Blocks DEPLOY-004; needs Lambda from DEPLOY-001 first |
+| Ed25519 key pairs (3 directory + 3 relay) | Pending | — | Blocks DEPLOY-002/003; needs Secrets Manager resources from DEPLOY-001 first |
+| Domain registered | N/A | — | Already owned (`mygentic.ai` on GoDaddy) |
+
+**DEPLOY-001 is unblocked.** Remaining items depend on DEPLOY-001 outputs.
+
+---
+
 ## Related Documents
 
+- [[2026-05-21_1400_m5-infrastructure-decisions|M5 Infrastructure Decisions]] — VPC CIDRs, node IDs, RDS/ECS sizing, PostgreSQL version, domain strategy, relay manifest schema
 - [[2026-05-16_0753_development-pipeline-and-local-iteration|Development Pipeline and Local Iteration Strategy]] — CI/CD pipeline design, Lambda router pattern, IaC discipline, environment tiers
 - [[2026-05-14_1853_milestone-sequence-revision|Milestone Sequence Revision]] — sequencing decisions placing M5 here
 - [[2026-05-16_0900_m4-infrastructure-decisions|M4 Infrastructure Decisions]] — VPC, IAM, Secrets Manager naming convention, KMS, S3 audit bucket established at M4; M5 adds two regions and federation on top of this foundation
