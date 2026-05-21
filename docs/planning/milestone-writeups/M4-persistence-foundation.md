@@ -542,3 +542,11 @@ S_C sealed root: `a6cf7e4ae4ca9dfb5e39785f6754ed442c2a667e21ded9f58810508a1b9203
 ### Updated M4 close gate status
 
 The M4 milestone close gate required a live multi-process smoke test. With CONNREQ-003 + SESSION-007 passing in a three-agent configuration, the protocol layer is proven end-to-end. The remaining PERSIST-E2E-001 items (gap-fill, unilateral seal, MMR inclusion proof verification, BIGINT round-trip test) are persistence-specific scenarios that operate on the same proven session infrastructure.
+
+---
+
+## Addendum — M4 Close Gate: Full Suite Green (2026-05-21 13:35 AEST)
+
+Full workspace test suite run with `CELLO_ENV=local` against live Docker Postgres. **1,147 tests passing, zero failures, zero skipped.** Commit `9e13713`.
+
+M4 is closed.
