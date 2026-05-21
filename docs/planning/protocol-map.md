@@ -1,7 +1,7 @@
 ---
 name: CELLO Protocol Map
 type: design
-date: 2026-04-16
+date: 2026-05-21
 topics: [identity, trust, FROST, merkle-tree, connection-policy, endorsements, PSI, prompt-injection, dispute-resolution, discovery, compliance, recovery, key-management, federation, transport, sybil-defense, persistence, MCP-tools, quantum-resistance, session-termination, notifications, succession]
 status: active
 description: Top-level orientation document — protocol domains, what's decided, where to find the deep reference, which discussion logs matter, and readiness for user stories.
@@ -52,6 +52,7 @@ Device attestation (TPM, Play Integrity, App Attest) requires a native app and i
 - [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — hash-everything model; client as data custodian
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — 8-layer anti-Sybil architecture
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — four-class trust signal taxonomy
+- [[2026-05-16_0800_trust-signal-verification-architecture|Trust Signal Verification Architecture]] — OAuth proof of account ownership (Passport.js per-provider strategies); browser-based profile extraction; community-driven oracle model for longer-term verification; M7 implementation architecture
 
 **Readiness: Stable.** All design decisions resolved. No blocking open items. Implementation choices (API selection, scoring weights) are engineering decisions.
 
@@ -124,8 +125,12 @@ Multi-party (N>2) conversations separate authorship from ordering. Two modes: se
 - [[2026-04-08_1830_notification-message-type|Notification Message Type]] — fire-and-forget primitive; filtering rule engine
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — dual-path hash relay; Merkle chain as implicit ACK
 - [[2026-04-19_2045_group-room-design|Group Room Design]] — complete group room specification: room configuration, ownership/admin model, violation enforcement with auto-mute, CONCURRENT+GCD mode, attention modes, wallet protection, 20-participant cap
+- [[2026-05-20_1142_multi-session-fan-in-fan-out|Multi-Session Fan-In and Fan-Out Architecture]] — concurrent session support: fan-out removes single-slot constraint via per-target resolver map; fan-in adds `cello_receive_any` and `other_sessions_pending` hint; merchant pattern requiring simultaneous sessions is the primary driver
+- [[2026-05-14_1702_relay-session-mechanics-and-recovery|Relay Session Mechanics and Recovery]] — relay WAL scoped to crash recovery only; agent-side hash queue as first-class protocol primitive; pre-seal reconciliation protocol; relay failure does not interrupt P2P conversation
+- [[2026-05-14_1702_arbitration-mechanics-and-dispute-resolution|Arbitration Mechanics and Dispute Resolution]] — four-scenario matrix for complaints; UNSUBSTANTIATED vs REFUSED vs upheld verdicts; refusal as a distinct negative signal; client backup as the non-repudiation obligation
+- [[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol Primitive — CRDTs]] — Goals as first-class CELLO primitive using CRDTs; CRDT operation log as the Merkle tree; field-level write authority; non-repudiation applies to document mutations exactly as to messages
 
-**Readiness: Stable.** Delivery failure handling, termination protocol, multi-party support, group rooms, and notification system are fully designed.
+**Readiness: Stable.** Delivery failure handling, termination protocol, multi-party support, group rooms, and notification system are fully designed. Multi-session fan-in/fan-out and relay recovery mechanics added in May 2026 and are stable. Shared-state (CRDTs/Goals) and arbitration mechanics are designed; user stories not yet written.
 
 ---
 
@@ -142,12 +147,16 @@ The receiver's scan is the security boundary. The sender's scan is an honesty si
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — gate pyramid principle
 - [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] — FROST stays for session/seal; ML-DSA for all non-threshold signatures; library choice (liboqs)
 - [[2026-05-16_1130_security-layer-improvements-from-production-reference|Security Layer Improvements from Production Reference Analysis]] — six concrete improvements: RE2 engine for Layer 1 (closes ReDoS), entropy scoring for Step 8, three missing PII types (SSN/CC/IP) in Layer 4, honey tokens (new deception primitive), policy change approval gate, audit log streaming with KMS-wrapped credentials
+- [[2026-05-09_1100_dashclaw-m4-competitive-review|DashClaw Competitive Review]] — production-tested patterns for Layer 1 and Layer 3; mission distinction (CELLO defends inbound; DashClaw governs outbound); per-peer defense policy override gap and observe mode gap identified
+- [[2026-05-21_1456_identity-as-governance-foundation|Identity as the Foundation of Governance]] — positions the six-layer defense in the broader governance landscape; identity-aware per-peer policy makes content controls contextual; core claim: governance without identity is a tax on everyone, governance with identity is a database row
 
 **Also see:**
 - [[design-problems|Design Problems]] — Problem 8 (ML supply chain, resolved) and Problem 12 (false positive handling, resolved with one deferred edge case)
 
-**Readiness: Stable with deferred item.**
+**Readiness: Stable with deferred items.**
 - *Subtle manipulation edge case*: Innocuous-looking inputs that through reasoning chains cause flaggable output. Known limitation of statistical classifiers; no CELLO-specific fix designed. Deferred as future refinement.
+- *Per-peer defense policy overrides*: Contact record has `policy_override` for connection acceptance policy; extension to defense layers (layer1_step_mask, layer2 threshold overrides, layer3/4 exemptions) not yet in a story. Needed for agents with legitimate use cases that generate false positives (security research, code review).
+- *Observe mode*: No story yet for `injection_defense_mode: observe | enforce`. Needed for operators validating Layer 1 coverage against real traffic before enabling enforcement.
 
 ---
 
@@ -248,6 +257,8 @@ These documents span multiple domains and are important for understanding how th
 | [[design-problems\|Design Problems]] | 12 design problems — all closed |
 | [[00-synthesis\|Protocol Review — Synthesis]] | Adversarial review: 8 critical, 23 high findings — all addressed |
 | [[day-0-agent-driven-development-plan\|Day-0 Development Plan]] | Implementation plan using Claude-Flow multi-agent orchestration |
+| [[2026-05-13_2044_a2a-interoperability-and-positioning\|A2A Interoperability and Strategic Positioning]] | Privacy × Trust grid; CELLO as the only top-right quadrant (sovereign privacy + provable trust); why A2A is a delegation protocol that doesn't compete; A2A compatibility shim as edge adapter |
+| [[2026-05-21_1456_identity-as-governance-foundation\|Identity as the Foundation of Governance]] | How CELLO's identity primitives make governance a database row; governance without identity is a tax on everyone; competitive positioning against governance tooling market |
 
 ---
 
@@ -258,8 +269,8 @@ These documents span multiple domains and are important for understanding how th
 | 1. Identity & Trust Signals | **Stable** | — |
 | 2. Directory Infrastructure | **Stable** | — |
 | 3. Connections | **Stable** | PSI (phased rollout); connection staking (defaults to zero) |
-| 4. Conversations | **Stable** | — |
-| 5. Security & Scanning | **Stable** | Subtle manipulation edge case (classifier limitation) |
+| 4. Conversations | **Stable** | Shared-state (CRDTs/Goals) needs stories; arbitration mechanics designed but no stories yet |
+| 5. Security & Scanning | **Stable** | Subtle manipulation edge case (classifier limitation); per-peer defense policy override (no story); observe mode (no story) |
 | 6. Compromise & Recovery | **Stable** | — |
 | 7. Discovery | **Stable** | — |
 | 8. Compliance & Privacy | **Stable** | — |
