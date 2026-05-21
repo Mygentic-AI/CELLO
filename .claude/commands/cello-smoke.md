@@ -1,6 +1,6 @@
 ---
 name: cello-smoke
-description: Live multi-agent smoke test for CONNREQ-003 and SESSION-007. Four roles — node operator, Agent A (test driver), Agent B, Agent C. Exercises concurrent connection fan-out, cello_receive_any, and inline session_sealed detection.
+description: Live multi-agent smoke test for CONNREQ-003 and SESSION-007. Four roles — node operator, Agent A (test driver), Agent B, Agent C. Exercises concurrent connection fan-out, cello_receive (any-session), and inline session_sealed detection.
 ---
 
 # CELLO Live Smoke Test — CONNREQ-003 + SESSION-007
@@ -112,19 +112,19 @@ cello_initiate_session({ target_pubkey: C_PUBKEY })  → S_C session_id
 
 Note both session IDs. B and C are already running their receive loops by the time you get here — you do not need to tell them anything.
 
-## Step 4 — CHECKPOINT 2: cello_receive_any (SESSION-007)
+## Step 4 — CHECKPOINT 2: cello_receive — any-session (SESSION-007)
 
-B sends its message automatically as soon as it gets the session. Call receive_any immediately:
+B sends its message automatically as soon as it gets the session. Call receive immediately:
 
 ```
-cello_receive_any({ timeout_ms: 15000 })
+cello_receive({ timeout_ms: 15000 })
 ```
 
 This will return whichever of B or C's messages arrived first (non-deterministic). Either is valid.
 
 **PASS:** Returns `{ type: "message", session_id: <S_B or S_C>, content: "smoke-test-message-from-B" or "smoke-test-message-from-C", ... }` — not `{ type: "timeout" }`.
 
-If both B and C have already sent, call `cello_receive_any` a second time to drain the second message. Note which session was in `other_sessions_pending` on the first call.
+If both B and C have already sent, call `cello_receive` a second time to drain the second message. Note which session was in `other_sessions_pending` on the first call.
 
 ```
 CHECKPOINT 2: PASS
@@ -135,18 +135,18 @@ CHECKPOINT 2: PASS
 
 ## Step 5 — CHECKPOINT 3: otherSessionsPending hint (SESSION-007)
 
-After draining both B and C's initial messages (call receive_any twice if needed), send a message to S_B to put something on it, then immediately call `cello_receive` on S_C — the wrong session:
+After draining both B and C's initial messages (call cello_receive twice if needed), send a message to S_B to put something on it, then immediately call `cello_receive_session` on S_C — the wrong session:
 
 ```
 cello_send({ session_id: S_B, content: "ping" })
-cello_receive({ session_id: S_C, timeout_ms: 5000 })
+cello_receive_session({ session_id: S_C, timeout_ms: 5000 })
 ```
 
 The receive on S_C should time out (no new message on S_C), but `other_sessions_pending` must contain S_B.
 
 Then drain S_B:
 ```
-cello_receive({ session_id: S_B, timeout_ms: 5000 })
+cello_receive_session({ session_id: S_B, timeout_ms: 5000 })
 ```
 
 **PASS:** The S_C receive returned `otherSessionsPending: [S_B]`. The S_B receive returned the "ping" message.
@@ -163,7 +163,7 @@ Send the seal trigger to C, then immediately block on receive for S_C:
 
 ```
 cello_send({ session_id: S_C, content: "seal-now" })
-cello_receive({ session_id: S_C, timeout_ms: 30000 })
+cello_receive_session({ session_id: S_C, timeout_ms: 30000 })
 ```
 
 C is in its receive loop. When C gets "seal-now" it calls `cello_close_session` immediately. You did NOT call `cello_close_session` on S_C.
@@ -244,7 +244,7 @@ Immediately move to State 4.
 
 ## State 4 — Receive loop until sealed
 
-Call `cello_receive({ session_id: S_B, timeout_ms: 30000 })` in a loop.
+Call `cello_receive_session({ session_id: S_B, timeout_ms: 30000 })` in a loop.
 
 - On `type: "timeout"`: loop again immediately
 - On `type: "message"`: note the content, loop again immediately
@@ -299,7 +299,7 @@ Immediately move to State 4.
 
 ## State 4 — Receive loop; seal on "seal-now"
 
-Call `cello_receive({ session_id: S_C, timeout_ms: 30000 })` in a loop.
+Call `cello_receive_session({ session_id: S_C, timeout_ms: 30000 })` in a loop.
 
 - On `type: "timeout"`: loop again immediately
 - On `type: "message"` with content `"seal-now"`: call `cello_close_session({ session_id: S_C })` immediately, then move to State 5
@@ -326,13 +326,13 @@ Stop.
 **`cello_request_connection` returns `target_not_found`**
 B or C hasn't registered yet. Wait for them to report ready and retry.
 
-**`cello_receive_any` returns `{ type: "timeout" }`**
+**`cello_receive` (any-session) returns `{ type: "timeout" }`**
 B's or C's message hasn't arrived yet. They send immediately on session — if sessions are open and this still times out, check the directory log for `[SESS]` entries confirming both sessions are active.
 
 **CHECKPOINT 3: `otherSessionsPending` is absent or empty**
 The hint is only populated when there are enqueued messages in the client buffer. Confirm B has sent and the message is queued before calling receive on S_C.
 
-**CHECKPOINT 4: `cello_receive` times out instead of returning `session_sealed`**
+**CHECKPOINT 4: `cello_receive_session` times out instead of returning `session_sealed`**
 C hasn't received "seal-now" yet, or C's `cello_close_session` hasn't completed. Check that A's `cello_send({ content: "seal-now" })` was delivered before calling receive.
 
 **Agent C key file**

@@ -8,7 +8,7 @@
  *   AC-001: cello_initiate_session on A polls until directory assigns session → session_id returned
  *   AC-002: cello_await_session on B returns new_session when assignment arrives
  *   AC-003: cello_send (session-keyed) delivers message on active session
- *   AC-004: cello_receive (session-keyed) returns message with correct content and sender_pubkey
+ *   AC-004: cello_receive_session (session-locked) returns message with correct content and sender_pubkey
  *   AC-005: cello_list_sessions shows both A and B sessions with status:active, leaf_count > 0
  *
  * AC-010, AC-011 (seal ceremony via MCP) require the full SESSION-003 + directory seal flow
@@ -105,10 +105,10 @@ describe("AC-002: cello_await_session on B returns new_session with session deta
   }, 15_000);
 });
 
-// ─── AC-003 + AC-004: cello_send + cello_receive round-trip ──────────────────
+// ─── AC-003 + AC-004: cello_send + cello_receive_session round-trip ───────────
 
-describe("AC-003 + AC-004: cello_send delivers; cello_receive returns message with correct content", () => {
-  it("AC-003+004: A sends 'hello'; B's cello_receive returns {type:message, content:'hello', sender_pubkey:A's pubkey}", async () => {
+describe("AC-003 + AC-004: cello_send delivers; cello_receive_session returns message with correct content", () => {
+  it("AC-003+004: A sends 'hello'; B's cello_receive_session returns {type:message, content:'hello', sender_pubkey:A's pubkey}", async () => {
     const fix = await createSessionFixture({ withMcp: true });
     fix.directory.registerThresholdSigner(fix.agentA.pubkeyHex, fix.signerA);
 
@@ -127,10 +127,10 @@ describe("AC-003 + AC-004: cello_send delivers; cello_receive returns message wi
     expect(sendResult.delivered).toBe(true);
     expect(sendResult.leaf_hash).toMatch(/^[0-9a-f]{64}$/);
 
-    // AC-004: B receives via session-keyed cello_receive
+    // AC-004: B receives via session-locked cello_receive_session
     const recvResult = parseResult(
       await fix.agentB.mcp!.callTool({
-        name: "cello_receive",
+        name: "cello_receive_session",
         arguments: { session_id: sessionIdHex, timeout_ms: 10_000 },
       })
     ) as { type: string; content: string; sender_pubkey: string; sequence_number: number; leaf_hash: string };
@@ -214,7 +214,7 @@ describe("AC-006 (SESSION-004): Post-FROST session message exchange is identical
     // B receives the message — identical behavior to M1 dual-path
     const recvResult = parseResult(
       await fix.agentB.mcp!.callTool({
-        name: "cello_receive",
+        name: "cello_receive_session",
         arguments: { session_id: sessionIdHex, timeout_ms: 10_000 },
       })
     ) as { type: string; content: string; sender_pubkey: string; sequence_number: number; leaf_hash: string };

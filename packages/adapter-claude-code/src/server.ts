@@ -46,7 +46,7 @@
  *      ok:true  → { delivered: true }
  *      ok:false → { delivered: false, reason: result.reason }
  *
- * tool: cello_receive({ session_id: string, timeout_ms: number })
+ * tool: cello_receive_session({ session_id: string, timeout_ms: number })
  *   1. Guard: transport_not_started
  *   2. deadline = Date.now() + timeout_ms
  *   3. Poll every 20ms until deadline:
@@ -248,13 +248,13 @@ export function createMcpServer(
     }
   );
 
-  // ── cello_receive (session-keyed, M1) ─────────────────────────────────────
+  // ── cello_receive_session (session-keyed, M1) ────────────────────────────
 
   server.registerTool(
-    "cello_receive",
+    "cello_receive_session",
     {
       description:
-        "Wait for a message on a specific CELLO session. Blocks until a message arrives or the timeout expires.",
+        "Wait for a message on a specific CELLO session (session-locked). Blocks until a message arrives or the timeout expires.",
       inputSchema: {
         session_id: z
           .string()
@@ -289,6 +289,60 @@ export function createMcpServer(
       }
 
       return jsonText({ type: "timeout" });
+    }
+  );
+
+  // ── cello_receive (any-session, default) ──────────────────────────────────
+
+  server.registerTool(
+    "cello_receive",
+    {
+      description:
+        "Wait for a message from any active CELLO session (default receive). Returns session_id so caller knows which session the message came from. Blocks until a message arrives or the timeout expires.",
+      inputSchema: {
+        timeout_ms: z.number().int().min(0).describe("Maximum wait time in milliseconds"),
+      },
+    },
+    async ({ timeout_ms }) => {
+      if (client == null) return CLIENT_NOT_INITIALIZED;
+      if (!transportStarted()) return TRANSPORT_NOT_STARTED;
+
+      const result = await client.receiveMessageAsync(timeout_ms);
+      if (result.type === "timeout") {
+        return jsonText({ type: "timeout" });
+      }
+
+      if (result.type === "session_sealed") {
+        return jsonText({
+          type: "session_sealed",
+          session_id: result.sessionIdHex,
+          sealed_root: Buffer.from(result.sealedRoot).toString("hex"),
+          close_timestamp: result.closeTimestamp,
+          checkpoint_status: result.checkpointStatus,
+          ...(result.otherSessionsPending && result.otherSessionsPending.length > 0
+            ? { other_sessions_pending: result.otherSessionsPending }
+            : {}),
+        });
+      }
+
+      // type === "message"
+      let content: string;
+      try {
+        content = new TextDecoder("utf-8", { fatal: true }).decode(result.content);
+      } catch {
+        content = Buffer.from(result.content).toString("hex");
+      }
+      return jsonText({
+        type: "message",
+        session_id: result.sessionIdHex,
+        content,
+        sender_pubkey: Buffer.from(result.senderPubkey).toString("hex"),
+        sequence_number: result.sequenceNumber,
+        leaf_hash: Buffer.from(result.leafHash).toString("hex"),
+        ...(result.otherSessionsPending && result.otherSessionsPending.length > 0
+          ? { other_sessions_pending: result.otherSessionsPending }
+          : {}),
+      });
     }
   );
 

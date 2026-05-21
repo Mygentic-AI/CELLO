@@ -156,7 +156,7 @@ Print what you're about to say, then call `cello_send({ session_id: "<hex>", con
 
 ## Step 7 — Conversation loop
 
-1. `cello_receive({ session_id: "<hex>", timeout_ms: 30000 })`
+1. `cello_receive_session({ session_id: "<hex>", timeout_ms: 30000 })`
 2. On `type: "message"`: print received, formulate reply, print reply, `cello_send`
 3. On `type: "timeout"`: print "Listening..." and loop
 
@@ -244,7 +244,7 @@ Same as Agent A Step 7.
 
 **Do NOT call `cello_close_session` — that is the initiating-party-only tool.** Agent A will call it to start the FROST seal ceremony.
 
-When A is ready to seal, keep calling `cello_receive({ session_id: "<hex>", timeout_ms: 30000 })` in your conversation loop. When the FROST ceremony completes, the directory pushes a `session_sealed` frame to your signaling stream and the next `cello_receive` call returns:
+When A is ready to seal, keep calling `cello_receive_session({ session_id: "<hex>", timeout_ms: 30000 })` in your conversation loop. When the FROST ceremony completes, the directory pushes a `session_sealed` frame to your signaling stream and the next `cello_receive_session` call returns:
 
 ```json
 {

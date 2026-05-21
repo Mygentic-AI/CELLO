@@ -168,7 +168,7 @@
  *    else:
  *      return { delivered: false, reason: result.reason }
  *
- * ─── tool: cello_receive({ session_id, timeout_ms }) ─────────────────────────────
+ * ─── tool: cello_receive_session({ session_id, timeout_ms }) — session-locked ────────
  * 1. Guard: transport_not_started
  * 2. deadline = Date.now() + timeout_ms
  * 3. Poll every 20ms until deadline:
@@ -179,6 +179,12 @@
  *                  sequence_number: msg.sequenceNumber,
  *                  leaf_hash: toHex(msg.leafHash) }
  * 4. return { type: 'timeout' }
+ *
+ * ─── tool: cello_receive({ timeout_ms }) — any-session default ───────────────────────
+ * 1. Guard: transport_not_started
+ * 2. result = await client.receiveMessageAsync(timeout_ms)
+ * 3. if timeout: return { type: 'timeout' }
+ * 4. return { type: 'message', session_id, content, sender_pubkey, sequence_number, leaf_hash }
  *
  * ─── tool: cello_close_session({ session_id }) ────────────────────────────────────
  * 1. Guard: transport_not_started
@@ -458,15 +464,15 @@ export function createMcpSessionServer(
 
   // ── cello_receive ──────────────────────────────────────────────────────────
   //
-  // SESSION-007: uses receiveMessageAsync (Promise-based wake) instead of polling.
+  // SESSION-007: uses receiveSessionMessageAsync (Promise-based wake) instead of polling.
   // SI-004: content is only returned after the underlying client's dual-path
   // validation (cross-check + signature verify) has completed.
   // SESSION-007: surfaces session_sealed events inline; includes other_sessions_pending.
 
   server.registerTool(
-    "cello_receive",
+    "cello_receive_session",
     {
-      description: "Wait for a message or lifecycle event on a session, or timeout. Returns session_sealed inline when the session is sealed by the counterparty.",
+      description: "Wait for a message or lifecycle event on a specific session (session-locked), or timeout. Returns session_sealed inline when the session is sealed by the counterparty.",
       inputSchema: {
         session_id: z.string().describe("Session ID as lowercase hex"),
         timeout_ms: z.number().int().min(0).describe("Maximum wait time in milliseconds"),
@@ -475,7 +481,7 @@ export function createMcpSessionServer(
     async ({ session_id, timeout_ms }) => {
       if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
-      const msg = await client.receiveMessageAsync(session_id, timeout_ms);
+      const msg = await client.receiveSessionMessageAsync(session_id, timeout_ms);
       if (!msg) {
         return jsonText({ type: "timeout" });
       }
@@ -514,16 +520,16 @@ export function createMcpSessionServer(
     },
   );
 
-  // ── cello_receive_any ──────────────────────────────────────────────────────
+  // ── cello_receive ──────────────────────────────────────────────────────────
   //
-  // SESSION-007: new tool — returns the next inbound message from ANY active session.
+  // SESSION-007: default receive — returns the next inbound message from ANY active session.
   // Includes session_id in response so caller knows which session it came from.
   // Returns { type: 'timeout' } if no message arrives within timeout_ms.
 
   server.registerTool(
-    "cello_receive_any",
+    "cello_receive",
     {
-      description: "Wait for a message or lifecycle event from any active session, or timeout. Returns session_id so caller knows which session the message came from.",
+      description: "Wait for a message or lifecycle event from any active session, or timeout. Returns session_id so caller knows which session the message came from. This is the default receive tool.",
       inputSchema: {
         timeout_ms: z.number().int().min(0).describe("Maximum wait time in milliseconds"),
       },
@@ -531,7 +537,7 @@ export function createMcpSessionServer(
     async ({ timeout_ms }) => {
       if (!transportStarted()) return TRANSPORT_NOT_STARTED;
 
-      const result = await client.receiveAnyMessageAsync(timeout_ms);
+      const result = await client.receiveMessageAsync(timeout_ms);
       if (result.type === "timeout") {
         return jsonText({ type: "timeout" });
       }

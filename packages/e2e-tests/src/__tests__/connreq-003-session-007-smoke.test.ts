@@ -13,11 +13,11 @@
  *   blocks the other. Two distinct connection IDs with distinct counterparty pubkeys.
  *
  * SESSION-007 AC-003 equivalent (Scenario 2 — cross-client seal detection):
- *   Agent A is blocked in receiveMessageAsync on session S1.
+ *   Agent A is blocked in receiveSessionMessageAsync on session S1.
  *   Agent B (separate CelloClient, separate libp2p node, no shared references) calls
  *   initiateSessionSeal on the same session S1.
  *   The seal travels via the real directory signaling stream (not in-process shared state).
- *   Agent A's blocked receiveMessageAsync returns { type: 'session_sealed', session_id,
+ *   Agent A's blocked receiveSessionMessageAsync returns { type: 'session_sealed', session_id,
  *   sealed_root, close_timestamp, checkpoint_status: 'pending' } without A having called
  *   initiateSessionSeal.
  *   sealed_root in the returned event matches the sealed_root from listSessions().
@@ -45,7 +45,7 @@
  *   3. A initiates session; B accepts (awaitSession via onSessionAssignment)
  *   4. A sends at least one message (so session has a leaf for the Merkle seal)
  *   5. B starts initiateSessionSeal (don't await yet)
- *   6. A calls receiveMessageAsync with a large timeout
+ *   6. A calls receiveSessionMessageAsync with a large timeout
  *   7. Assert A's result is { type: 'session_sealed', ... }
  *   8. Assert sealed_root matches A's listSessions() record
  *
@@ -53,7 +53,7 @@
  *   1. createSessionFixture({ register: true, requireConnectionGate: true })
  *   2. A establishes connections to B (two sessions)
  *   3. B sends messages on both S1 and S2
- *   4. A calls receiveMessageAsync on S1
+ *   4. A calls receiveSessionMessageAsync on S1
  *   5. Assert result includes otherSessionsPending: [S2_id]
  *   6. A calls receiveMessage on S2 — returns the queued message
  *
@@ -215,7 +215,7 @@ describe("CONNREQ-003-AC-001: fan-out — two concurrent connection requests to 
 
 // ─── Scenario 2: SESSION-007 AC-003 equivalent — cross-client seal detection ──
 //
-// AC-003 (SESSION-007): Agent A is blocked in receiveMessageAsync on session S1.
+// AC-003 (SESSION-007): Agent A is blocked in receiveSessionMessageAsync on session S1.
 // Agent B (separate CelloClient instance, separate libp2p node, no shared references)
 // calls initiateSessionSeal — triggering the FROST ceremony via the real directory
 // signaling stream.
@@ -232,10 +232,10 @@ describe("CONNREQ-003-AC-001: fan-out — two concurrent connection requests to 
 
 describe(
   "SESSION-007-AC-003: cross-client seal detection — B seals from separate instance; " +
-  "A's blocked receiveMessageAsync returns { type: 'session_sealed' }",
+  "A's blocked receiveSessionMessageAsync returns { type: 'session_sealed' }",
   () => {
     it(
-      "A blocked in receiveMessageAsync; B (separate client) initiates seal via real directory stream; " +
+      "A blocked in receiveSessionMessageAsync; B (separate client) initiates seal via real directory stream; " +
       "A's call returns session_sealed; sealed_root matches listSessions(); A never called closeSession",
       async () => {
         // bootstrapB: true — B needs a thresholdSigner to participate in the FROST seal ceremony.
@@ -307,16 +307,16 @@ describe(
           { timeout: 10_000, interval: 50 },
         );
 
-        // ── Step 4: A starts blocking in receiveMessageAsync ──────────────────
+        // ── Step 4: A starts blocking in receiveSessionMessageAsync ──────────
         //
         // A has NOT called initiateSessionSeal. A is just waiting for the next message.
-        // The receiveMessageAsync must wake when the directory pushes session_sealed.
+        // The receiveSessionMessageAsync must wake when the directory pushes session_sealed.
 
-        let aReceivedSealEvent: Awaited<ReturnType<typeof fix.agentA.client.receiveMessageAsync>> | null = null;
+        let aReceivedSealEvent: Awaited<ReturnType<typeof fix.agentA.client.receiveSessionMessageAsync>> | null = null;
         let aReceiveError: unknown = null;
 
         // Start A's receive in background — don't await yet.
-        const aReceivePromise = fix.agentA.client.receiveMessageAsync(sessionIdHex, 30_000)
+        const aReceivePromise = fix.agentA.client.receiveSessionMessageAsync(sessionIdHex, 30_000)
           .then(result => { aReceivedSealEvent = result; })
           .catch(err => { aReceiveError = err; });
 
@@ -356,7 +356,7 @@ describe(
 
         // The event must be a session_sealed type (not null from timeout, not a regular message)
         expect(sealEvent).not.toBeNull();
-        if (sealEvent === null) throw new Error("receiveMessageAsync returned null (timeout)");
+        if (sealEvent === null) throw new Error("receiveSessionMessageAsync returned null (timeout)");
         expect(sealEvent.type).toBe("session_sealed");
         if (sealEvent.type !== "session_sealed") {
           throw new Error(`Expected session_sealed, got ${sealEvent.type}`);
@@ -372,7 +372,7 @@ describe(
 
         // ── Step 8: SI-002 — sealed_root matches listSessions() ───────────────
         //
-        // The sealed_root surfaced through receiveMessageAsync must equal the
+        // The sealed_root surfaced through receiveSessionMessageAsync must equal the
         // sealed_root committed by the directory — not from local Merkle state.
 
         await waitFor(
@@ -405,13 +405,13 @@ describe(
 // ─── Scenario 3: SESSION-007 AC-001 — other_sessions_pending hint ─────────────
 //
 // AC-001 (SESSION-007): Agent A has two active sessions S1 and S2.
-// S2 has a queued inbound message when A calls cello_receive on S1.
+// S2 has a queued inbound message when A calls cello_receive_session on S1.
 // The S1 response includes otherSessionsPending: [S2_id].
-// A subsequent cello_receive on S2 returns the queued message.
+// A subsequent cello_receive_session on S2 returns the queued message.
 //
 // Design: send S2's message first, confirm it has arrived in A's queue using
 // a per-session leaf count check (non-destructive), then send S1's message
-// and call receiveMessageAsync(S1). Since S2 is already queued, the S1 result
+// and call receiveSessionMessageAsync(S1). Since S2 is already queued, the S1 result
 // includes otherSessionsPending: [s2IdHex].
 //
 // Leaf count is used as the non-destructive arrival detector: when B sends a
@@ -423,7 +423,7 @@ describe(
   "SESSION-007-AC-001: other_sessions_pending hint — S2 has pending message when A receives on S1",
   () => {
     it(
-      "A has S1 and S2 active; B sends to S2; leaf count confirms arrival; A's receiveMessageAsync(S1) " +
+      "A has S1 and S2 active; B sends to S2; leaf count confirms arrival; A's receiveSessionMessageAsync(S1) " +
       "returns with otherSessionsPending: [S2]; subsequent receiveMessage(S2) returns the S2 message",
       async () => {
         const fix = await createSessionFixture({
@@ -508,10 +508,10 @@ describe(
           { timeout: 10_000, interval: 50 },
         );
 
-        // ── B sends a message on S1 (unblocks A's receiveMessageAsync) ────────
+        // ── B sends a message on S1 (unblocks A's receiveSessionMessageAsync) ──
         //
         // S2's message is already queued. Now send S1's message.
-        // A's receiveMessageAsync(S1) will either return immediately (if S1 already
+        // A's receiveSessionMessageAsync(S1) will either return immediately (if S1 already
         // arrived) or block until S1 arrives. In both cases, S2 is in queue.
 
         const sendS1 = await fix.agentB.client.sendMessage(
@@ -520,11 +520,11 @@ describe(
         );
         expect(sendS1.ok).toBe(true);
 
-        // ── A calls receiveMessageAsync on S1; S2 has queued message ──────────
+        // ── A calls receiveSessionMessageAsync on S1; S2 has queued message ───
         //
         // otherSessionsPending must include s2IdHex because S2's message is in queue.
 
-        const s1Receive = await fix.agentA.client.receiveMessageAsync(s1IdHex, 15_000);
+        const s1Receive = await fix.agentA.client.receiveSessionMessageAsync(s1IdHex, 15_000);
 
         // Must receive the S1 message
         expect(s1Receive).not.toBeNull();

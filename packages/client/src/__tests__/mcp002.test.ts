@@ -125,8 +125,8 @@ function makeStubClient(opts: StubClientOptions = {}): CelloClient {
     sendMessage: async () => ({ ok: false, reason: "session_not_found" } as SendMessageResult),
     receiveMessage: () => null,
     receiveAnyMessage: () => null,
-    receiveMessageAsync: async () => null,
-    receiveAnyMessageAsync: async () => ({ type: "timeout" as const }),
+    receiveSessionMessageAsync: async () => null,
+    receiveMessageAsync: async () => ({ type: "timeout" as const }),
     initiateSessionSeal: async () => ({ ok: false, reason: "session_not_active" }),
     closeSession: () => {},
     onSessionAssignment: (handler) => {
@@ -376,7 +376,7 @@ describe("AC-009: createMcpSessionServer registers identical M1 tool set under b
     const toolsA = sortByName((await mcpA.listTools()).tools);
     const toolsB = sortByName((await mcpB.listTools()).tools);
 
-    // SESSION-007: 19 original tools + 1 new (cello_receive_any) = 20 total
+    // SESSION-007: cello_receive (any-session default) + cello_receive_session (session-locked) = 20 total
     const expectedTools = [
       "cello_accept_connection",
       "cello_await_connection_request",
@@ -389,7 +389,7 @@ describe("AC-009: createMcpSessionServer registers identical M1 tool set under b
       "cello_list_connections",
       "cello_list_sessions",
       "cello_receive",
-      "cello_receive_any",
+      "cello_receive_session",
       "cello_register",
       "cello_reject_connection",
       "cello_request_connection",
@@ -756,7 +756,7 @@ describe("cello_await_session: timeout when no inbound sessions", () => {
   });
 });
 
-describe("cello_receive: timeout when no messages", () => {
+describe("cello_receive_session: timeout when no messages", () => {
   it("returns {type: 'timeout'} when no messages and timeout expires", async () => {
     const session = makeActiveSession();
     const sessionIdHex = toHex(session.session_id);
@@ -765,7 +765,7 @@ describe("cello_receive: timeout when no messages", () => {
 
     const result = parseResult(
       await mcpClient.callTool({
-        name: "cello_receive",
+        name: "cello_receive_session",
         arguments: { session_id: sessionIdHex, timeout_ms: 200 },
       })
     ) as { type: string };

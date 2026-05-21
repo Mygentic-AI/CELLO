@@ -5,23 +5,23 @@
  *
  * S — Specification:
  *
- * AC-001: cello_receive on S1 when S2 has queued messages → response includes
- *         other_sessions_pending: [S2]; subsequent cello_receive(S2) returns S2 message.
+ * AC-001: cello_receive_session on S1 when S2 has queued messages → response includes
+ *         other_sessions_pending: [S2]; subsequent cello_receive_session(S2) returns S2 message.
  *
- * AC-002: cello_receive_any with two queued sessions → returns session_id and message
+ * AC-002: cello_receive (any-session) with two queued sessions → returns session_id and message
  *         from one session; other_sessions_pending lists the other; second call returns other.
  *
- * AC-003 (written as integration): blocked receiveMessageAsync wakes when directory
+ * AC-003 (written as integration): blocked receiveSessionMessageAsync wakes when directory
  *         pushes session_sealed via injectDirectoryFrame — simulates the directory stream
  *         path with a real Ed25519 signature on the frame. Full multi-process coverage
  *         (separate OS processes, real libp2p signaling stream) is deferred to
  *         CELLO-PERSIST-E2E-001 per the story's component_stories reference.
  *
- * AC-004 (written as integration): blocked receiveAnyMessageAsync wakes on session_sealed;
+ * AC-004 (written as integration): blocked receiveMessageAsync (any-session) wakes on session_sealed;
  *         other session S2 is unaffected. Multi-process coverage deferred to
  *         CELLO-PERSIST-E2E-001.
  *
- * AC-005: receiveAnyMessageAsync with no messages → returns { type: 'timeout' }.
+ * AC-005: receiveMessageAsync (any-session) with no messages → returns { type: 'timeout' }.
  *
  * AC-006: session_sealed enqueued while no receiver is active → next receiveMessage
  *         returns it immediately with sealed_root, close_timestamp, checkpoint_status.
@@ -33,8 +33,8 @@
  * SI-002: sealed_root from session_sealed event equals sealed_root in listSessions() record.
  *
  * Additional coverage:
- *   MCP layer: cello_receive returns session_sealed inline.
- *   MCP layer: cello_receive_any tool exists; returns { type: 'timeout' }; includes session_id.
+ *   MCP layer: cello_receive_session returns session_sealed inline.
+ *   MCP layer: cello_receive (any-session) tool exists; returns { type: 'timeout' }; includes session_id.
  *   Unit: other_sessions_pending populated when multiple sessions have queued messages.
  *
  * Crypto refs:
@@ -134,7 +134,7 @@ afterEach(() => scope.run(async () => {}));
 
 // ─── AC-005: timeout ──────────────────────────────────────────────────────────
 
-describe("AC-005: receiveAnyMessageAsync times out when no messages arrive", () => {
+describe("AC-005: receiveMessageAsync (any-session) times out when no messages arrive", () => {
   it("AC-005: returns { type: 'timeout' } after timeout_ms elapses with no messages", async () => {
     const { client, stopAll } = await makeClient();
     scope.addCleanup(stopAll);
@@ -145,7 +145,7 @@ describe("AC-005: receiveAnyMessageAsync times out when no messages arrive", () 
     const s1Hex = Buffer.from(sessionId1).toString("hex");
     client.injectTestSession(s1Hex, sessionId1, "a".repeat(64), dirPubkey);
 
-    const result = await client.receiveAnyMessageAsync(50);
+    const result = await client.receiveMessageAsync(50);
     expect(result.type).toBe("timeout");
   }, 3000);
 });
@@ -257,8 +257,8 @@ describe("SI-002: sealed_root in session_sealed event matches listSessions() rec
 
 // ─── AC-001: other_sessions_pending hint ─────────────────────────────────────
 
-describe("AC-001: receiveMessageAsync on S1 includes other_sessions_pending when S2 has queued messages", () => {
-  it("AC-001: S2 queued message causes other_sessions_pending: [S2] in receiveMessageAsync(S1) result", async () => {
+describe("AC-001: receiveSessionMessageAsync on S1 includes other_sessions_pending when S2 has queued messages", () => {
+  it("AC-001: S2 queued message causes other_sessions_pending: [S2] in receiveSessionMessageAsync(S1) result", async () => {
     const { client, stopAll } = await makeClient();
     scope.addCleanup(stopAll);
 
@@ -291,8 +291,8 @@ describe("AC-001: receiveMessageAsync on S1 includes other_sessions_pending when
     });
     client.injectDirectoryFrame(s1Hex, frame1);
 
-    // receiveMessageAsync(S1) should return S1's message AND include other_sessions_pending: [S2]
-    const msg = await client.receiveMessageAsync(s1Hex, 2000);
+    // receiveSessionMessageAsync(S1) should return S1's message AND include other_sessions_pending: [S2]
+    const msg = await client.receiveSessionMessageAsync(s1Hex, 2000);
     expect(msg).not.toBeNull();
     expect(msg!.type).toBe("session_sealed");
     expect(msg!.otherSessionsPending).toEqual([s2Hex]);
@@ -304,9 +304,9 @@ describe("AC-001: receiveMessageAsync on S1 includes other_sessions_pending when
   }, 5000);
 });
 
-// ─── AC-002: receiveAnyMessageAsync returns session_id + other_sessions_pending ──
+// ─── AC-002: receiveMessageAsync (any-session) returns session_id + other_sessions_pending ──
 
-describe("AC-002: receiveAnyMessageAsync with two queued sessions", () => {
+describe("AC-002: receiveMessageAsync (any-session) with two queued sessions", () => {
   it("AC-002: returns session_id and other_sessions_pending; second call returns remaining session", async () => {
     const { client, stopAll } = await makeClient();
     scope.addCleanup(stopAll);
@@ -336,8 +336,8 @@ describe("AC-002: receiveAnyMessageAsync with two queued sessions", () => {
       client.injectDirectoryFrame(sidHex, frame);
     }
 
-    // First receiveAnyMessageAsync: returns one session's message + other in pending
-    const result1 = await client.receiveAnyMessageAsync(2000);
+    // First receiveMessageAsync (any-session): returns one session's message + other in pending
+    const result1 = await client.receiveMessageAsync(2000);
     expect(result1.type).not.toBe("timeout");
     if (result1.type !== "timeout") {
       expect(typeof result1.sessionIdHex).toBe("string");
@@ -346,7 +346,7 @@ describe("AC-002: receiveAnyMessageAsync with two queued sessions", () => {
     }
 
     // Second call: returns the other session's message
-    const result2 = await client.receiveAnyMessageAsync(2000);
+    const result2 = await client.receiveMessageAsync(2000);
     expect(result2.type).not.toBe("timeout");
     if (result2.type !== "timeout" && result1.type !== "timeout") {
       expect(result2.sessionIdHex).not.toBe(result1.sessionIdHex);
@@ -354,9 +354,9 @@ describe("AC-002: receiveAnyMessageAsync with two queued sessions", () => {
   }, 5000);
 });
 
-// ─── AC-003: blocked receiveMessageAsync wakes on session_sealed ──────────────
+// ─── AC-003: blocked receiveSessionMessageAsync wakes on session_sealed ───────
 
-describe("AC-003: blocked receiveMessageAsync wakes when session_sealed arrives via directory stream", () => {
+describe("AC-003: blocked receiveSessionMessageAsync wakes when session_sealed arrives via directory stream", () => {
   it("AC-003: returns { type: 'session_sealed' } when directory pushes seal while call is blocked", async () => {
     const { client, stopAll } = await makeClient();
     scope.addCleanup(stopAll);
@@ -371,7 +371,7 @@ describe("AC-003: blocked receiveMessageAsync wakes when session_sealed arrives 
     client.injectTestSession(sessionIdHex, sessionId, "a".repeat(64), dirPubkey, "active");
 
     // Start blocked receive BEFORE injecting the frame
-    const receivePromise = client.receiveMessageAsync(sessionIdHex, 5000);
+    const receivePromise = client.receiveSessionMessageAsync(sessionIdHex, 5000);
 
     // Inject the seal frame asynchronously after the call is blocked
     buildSignedSealFrame({ dirKp, sessionId, sealedRoot, closeTimestamp }).then(frame => {
@@ -392,9 +392,9 @@ describe("AC-003: blocked receiveMessageAsync wakes when session_sealed arrives 
   }, 8000);
 });
 
-// ─── AC-004: blocked receiveAnyMessageAsync wakes on session_sealed ──────────
+// ─── AC-004: blocked receiveMessageAsync (any-session) wakes on session_sealed ─
 
-describe("AC-004: blocked receiveAnyMessageAsync wakes on session_sealed; S2 unaffected", () => {
+describe("AC-004: blocked receiveMessageAsync (any-session) wakes on session_sealed; S2 unaffected", () => {
   it("AC-004: returns session_sealed for S1 while S2 remains active and receivable", async () => {
     const { client, stopAll } = await makeClient();
     scope.addCleanup(stopAll);
@@ -412,7 +412,7 @@ describe("AC-004: blocked receiveAnyMessageAsync wakes on session_sealed; S2 una
     client.injectTestSession(s2Hex, sessionId2, "a".repeat(64), dirPubkey, "active");
 
     // Start blocked receive BEFORE injecting the frame
-    const receivePromise = client.receiveAnyMessageAsync(5000);
+    const receivePromise = client.receiveMessageAsync(5000);
 
     // Inject seal for S1 asynchronously
     buildSignedSealFrame({ dirKp, sessionId: sessionId1, sealedRoot, closeTimestamp }).then(frame => {
@@ -457,10 +457,10 @@ describe("AC-007: cello-chat.md documents session_sealed inline and removes work
   });
 });
 
-// ─── MCP layer: cello_receive returns session_sealed inline ───────────────────
+// ─── MCP layer: cello_receive_session returns session_sealed inline ───────────
 
-describe("MCP: cello_receive surfaces session_sealed inline", () => {
-  it("MCP cello_receive returns { type: 'session_sealed', session_id, sealed_root, close_timestamp, checkpoint_status } when lifecycle event is queued", async () => {
+describe("MCP: cello_receive_session surfaces session_sealed inline", () => {
+  it("MCP cello_receive_session returns { type: 'session_sealed', session_id, sealed_root, close_timestamp, checkpoint_status } when lifecycle event is queued", async () => {
     const kp = generateKeypair();
     const node = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await node.start();
@@ -492,9 +492,9 @@ describe("MCP: cello_receive surfaces session_sealed inline", () => {
     const frame = await buildSignedSealFrame({ dirKp, sessionId, sealedRoot, closeTimestamp });
     celloClient.injectDirectoryFrame(sessionIdHex, frame);
 
-    // cello_receive should return session_sealed immediately without polling
+    // cello_receive_session should return session_sealed immediately without polling
     const result = await mcpClient.callTool({
-      name: "cello_receive",
+      name: "cello_receive_session",
       arguments: { session_id: sessionIdHex, timeout_ms: 1000 },
     });
 
@@ -513,10 +513,10 @@ describe("MCP: cello_receive surfaces session_sealed inline", () => {
   }, 10000);
 });
 
-// ─── MCP layer: cello_receive_any tool ───────────────────────────────────────
+// ─── MCP layer: cello_receive (any-session) tool ─────────────────────────────
 
-describe("MCP: cello_receive_any tool", () => {
-  it("MCP cello_receive_any returns { type: 'timeout' } when no messages arrive", async () => {
+describe("MCP: cello_receive (any-session) tool", () => {
+  it("MCP cello_receive (any-session) returns { type: 'timeout' } when no messages arrive", async () => {
     const kp = generateKeypair();
     const node = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await node.start();
@@ -535,7 +535,7 @@ describe("MCP: cello_receive_any tool", () => {
     await mcpClient.callTool({ name: "cello_status", arguments: {} });
 
     const result = await mcpClient.callTool({
-      name: "cello_receive_any",
+      name: "cello_receive",
       arguments: { timeout_ms: 50 },
     });
 
@@ -549,7 +549,7 @@ describe("MCP: cello_receive_any tool", () => {
     await server.close();
   }, 5000);
 
-  it("MCP cello_receive_any includes session_id in response when message is available", async () => {
+  it("MCP cello_receive (any-session) includes session_id in response when message is available", async () => {
     const kp = generateKeypair();
     const node = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await node.start();
@@ -581,7 +581,7 @@ describe("MCP: cello_receive_any tool", () => {
     celloClient.injectDirectoryFrame(sessionIdHex, frame);
 
     const result = await mcpClient.callTool({
-      name: "cello_receive_any",
+      name: "cello_receive",
       arguments: { timeout_ms: 1000 },
     });
 
@@ -631,8 +631,8 @@ describe("Unit: other_sessions_pending computed correctly across three sessions"
       client.injectDirectoryFrame(hexes[i]!, frame);
     }
 
-    // receiveMessageAsync(S1) — S2 and S3 have pending messages
-    const msg = await client.receiveMessageAsync(hexes[0]!, 2000);
+    // receiveSessionMessageAsync(S1) — S2 and S3 have pending messages
+    const msg = await client.receiveSessionMessageAsync(hexes[0]!, 2000);
     expect(msg).not.toBeNull();
     const pending = msg!.otherSessionsPending ?? [];
     expect(pending).toContain(hexes[1]!);

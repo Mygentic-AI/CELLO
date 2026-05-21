@@ -373,22 +373,22 @@ export interface CelloClient {
   receiveAnyMessage(): { sessionIdHex: string; message: ReceivedMessage } | null;
 
   /**
-   * SESSION-007: Block until a message (or session_sealed event) arrives on the given
-   * session, or timeout_ms elapses. Returns null on timeout.
-   * Wakes immediately if a message is already queued.
-   */
-  receiveMessageAsync(sessionIdHex: string, timeoutMs: number): Promise<ReceivedMessage | null>;
-
-  /**
    * SESSION-007: Block until a message (or session_sealed event) arrives on ANY active
    * session, or timeout_ms elapses. Returns { type: 'timeout' } on timeout.
    * The response includes sessionIdHex so the caller knows which session it came from.
    * Wakes immediately if any queue is non-empty.
    */
-  receiveAnyMessageAsync(timeoutMs: number): Promise<
+  receiveMessageAsync(timeoutMs: number): Promise<
     | (ReceivedMessage & { sessionIdHex: string })
     | { type: "timeout" }
   >;
+
+  /**
+   * SESSION-007: Block until a message (or session_sealed event) arrives on the given
+   * session, or timeout_ms elapses. Returns null on timeout.
+   * Wakes immediately if a message is already queued.
+   */
+  receiveSessionMessageAsync(sessionIdHex: string, timeoutMs: number): Promise<ReceivedMessage | null>;
 
   /**
    * Initiate the bilateral SEAL ceremony. Constructs and submits the initiator SEAL
