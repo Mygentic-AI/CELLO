@@ -71,9 +71,9 @@ export const BIGINT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   conversation_proof_leaves: ["id", "leaf_index", "mmr_position"],
   conversation_proof_mmr_nodes: ["id", "mmr_position"],
   directory_checkpoints: ["id", "mmr_leaf_count"],
-  // DEPLOY-001 / FEDERATION-001: directory_nodes and sessions tables (V17 migration)
+  // DEPLOY-001: directory_nodes table (V17 migration)
+  // sessions table and sessions.id are added to BIGINT_COLUMNS in FEDERATION-001 (V18 migration)
   directory_nodes: ["id"],
-  sessions: ["id"],
 } as const;
 
 /**
@@ -107,8 +107,8 @@ export const STORE_TABLES = [
   "conversation_proof_leaves",
   "conversation_proof_mmr_nodes",
   "directory_checkpoints",
+  // sessions added to STORE_TABLES in FEDERATION-001 (V18 migration)
   "directory_nodes",
-  "sessions",
 ] as const;
 
 export type StoreTables = (typeof STORE_TABLES)[number];
@@ -843,51 +843,5 @@ export class PgDirectoryStore implements DirectoryStore {
     };
   }
 
-  /**
-   * Insert a session with owning_node_id.
-   * The owning node is the sole writer for this session's hash chain.
-   * session_id is a UUID per FEDERATION-001 AC-001 specification.
-   */
-  async insertSession(session: {
-    sessionId: string;
-    owningNodeId: string;
-    correlationId?: string;
-  }): Promise<{ id: number }> {
-    const start = Date.now();
-    const result = await this.#pool.query<{ id: string }>(
-      `INSERT INTO sessions (session_id, owning_node_id)
-       VALUES ($1::uuid, $2)
-       RETURNING id`,
-      [session.sessionId, session.owningNodeId],
-    );
-    const id = parseInt(result.rows[0].id, 10);
-    this.#logger.info("adapter.persisted", {
-      tableName: "sessions",
-      rowCount: 1,
-      durationMs: Date.now() - start,
-      ...(session.correlationId !== undefined && { correlationId: session.correlationId }),
-    });
-    return { id };
-  }
-
-  /**
-   * Get a session by session_id (UUID).
-   */
-  async getSession(sessionId: string): Promise<{
-    id: number;
-    sessionId: string;
-    owningNodeId: string;
-  } | null> {
-    const result = await this.#pool.query<Record<string, unknown>>(
-      `SELECT * FROM sessions WHERE session_id = $1::uuid`,
-      [sessionId],
-    );
-    if (result.rows.length === 0) return null;
-    const row = deserializeRow<Record<string, unknown>>("sessions", result.rows[0]);
-    return {
-      id: row.id as number,
-      sessionId: row.session_id as string,
-      owningNodeId: row.owning_node_id as string,
-    };
-  }
+  // insertSession / getSession deferred to FEDERATION-001 (V18 migration creates sessions table)
 }

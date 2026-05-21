@@ -166,7 +166,7 @@ Resources:
     Properties:
       FunctionName: !Sub "cello-pipeline-filter-${Environment}"
       Runtime: python3.12
-      Handler: index.handler
+      Handler: index.lambda_handler
       Role: !GetAtt PipelineFilterLambdaRole.Arn
       Timeout: 30
       MemorySize: 128

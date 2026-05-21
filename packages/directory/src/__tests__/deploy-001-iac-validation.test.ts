@@ -266,6 +266,12 @@ describe("DEPLOY-001: AC-007 S3 buckets", () => {
     expect(raw).toContain("s3:PutObject");
     expect(raw).toContain("DenyNonPutActions");
   });
+
+  it("manifest bucket GetObject policy grants relay task role only — not directory", () => {
+    const raw = loadTemplateRaw("cello-s3.yaml");
+    expect(raw).toContain("AllowRelayGetObject");
+    expect(raw).not.toContain("AllowDirectoryAndRelayGetObject");
+  });
 });
 
 // ─── AC-008: CI/CD infrastructure ───────────────────────────────────────────
@@ -397,9 +403,11 @@ describe("DEPLOY-001: SI-003 CI/CD isolation from cello-agent in eu-west-1", () 
     expect(raw).not.toContain("eu-west-1");
   });
 
-  it("artifacts bucket uses us-east-1 naming", () => {
+  it("artifacts bucket name uses AWS::Region substitution", () => {
     const raw = loadTemplateRaw("cello-cicd.yaml");
-    expect(raw).toContain("us-east-1");
+    // Bucket name is cello-codepipeline-artifacts-{region} — derived at deploy time
+    expect(raw).toContain("cello-codepipeline-artifacts-");
+    expect(raw).toContain("AWS::Region");
   });
 
   it("IAM role names are CELLO-specific", () => {

@@ -10,11 +10,8 @@
  * (CELLO_ENV=local, real Postgres — no stub). The fresh instance having no cache is
  * itself the evidence that the result came from a live SELECT.
  *
- * NOTE: sessions table and insertSession/getSession are also in scope for AC-010
- * ("sessions (owning_node_id)") but the sessions table is created by FEDERATION-001
- * (V18 migration). Sessions round-trip tests live in FEDERATION-001's test file.
- * The STORE_TABLES and BIGINT_COLUMNS static gate for sessions is tested here
- * because the methods exist in PgDirectoryStore in this branch.
+ * NOTE: sessions table belongs to FEDERATION-001 (V18 migration). STORE_TABLES/BIGINT_COLUMNS
+ * declarations for sessions and insertSession/getSession live in FEDERATION-001.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -39,22 +36,17 @@ const describeIntegration = isLocal ? describe : describe.skip;
 
 // ─── Static analysis: STORE_TABLES and BIGINT_COLUMNS include new tables ─────
 
-describe("DEPLOY-001: AC-010 static analysis — directory_nodes and sessions in STORE_TABLES", () => {
+describe("DEPLOY-001: AC-010 static analysis — directory_nodes in STORE_TABLES", () => {
   it("STORE_TABLES includes directory_nodes", () => {
     expect(STORE_TABLES).toContain("directory_nodes");
-  });
-
-  it("STORE_TABLES includes sessions", () => {
-    expect(STORE_TABLES).toContain("sessions");
   });
 
   it("BIGINT_COLUMNS declares directory_nodes.id", () => {
     expect(BIGINT_COLUMNS["directory_nodes"]).toContain("id");
   });
 
-  it("BIGINT_COLUMNS declares sessions.id", () => {
-    expect(BIGINT_COLUMNS["sessions"]).toContain("id");
-  });
+  // sessions and sessions.id are added to STORE_TABLES/BIGINT_COLUMNS in FEDERATION-001
+  // (V18 migration creates the sessions table)
 });
 
 // ─── Integration test: directory_nodes round-trip ────────────────────────────
