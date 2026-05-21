@@ -1,0 +1,133 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO S3 — audit log bucket (append-only) and relay manifest bucket (versioned).
+  Bucket policies enforce least-privilege: directory task role PutObject on audit,
+  directory+relay task roles GetObject on manifest.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment
+  DirectoryTaskRoleArn:
+    Type: String
+    Description: ARN of the ECS directory task role
+  RelayTaskRoleArn:
+    Type: String
+    Description: ARN of the ECS relay task role
+
+Resources:
+  AuditLogBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "cello-audit-logs-${Environment}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ArchiveAfter90Days
+            Status: Enabled
+            Transitions:
+              - StorageClass: GLACIER
+                TransitionInDays: 90
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  AuditLogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AuditLogBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowDirectoryPutOnly
+            Effect: Allow
+            Principal:
+              AWS: !Ref DirectoryTaskRoleArn
+            Action:
+              - s3:PutObject
+            Resource: !Sub "${AuditLogBucket.Arn}/*"
+          - Sid: DenyNonPutActions
+            Effect: Deny
+            Principal:
+              AWS: !Ref DirectoryTaskRoleArn
+            Action:
+              - s3:GetObject
+              - s3:DeleteObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt AuditLogBucket.Arn
+              - !Sub "${AuditLogBucket.Arn}/*"
+
+  RelayManifestBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "cello-relay-manifest-${Environment}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  RelayManifestBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref RelayManifestBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowDirectoryAndRelayGetObject
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Ref DirectoryTaskRoleArn
+                - !Ref RelayTaskRoleArn
+            Action:
+              - s3:GetObject
+            Resource: !Sub "${RelayManifestBucket.Arn}/*"
+
+Outputs:
+  AuditLogBucketName:
+    Value: !Ref AuditLogBucket
+    Export:
+      Name: !Sub "cello-${Environment}-audit-bucket"
+
+  AuditLogBucketArn:
+    Value: !GetAtt AuditLogBucket.Arn
+    Export:
+      Name: !Sub "cello-${Environment}-audit-bucket-arn"
+
+  RelayManifestBucketName:
+    Value: !Ref RelayManifestBucket
+    Export:
+      Name: !Sub "cello-${Environment}-manifest-bucket"
+
+  RelayManifestBucketArn:
+    Value: !GetAtt RelayManifestBucket.Arn
+    Export:
+      Name: !Sub "cello-${Environment}-manifest-bucket-arn"

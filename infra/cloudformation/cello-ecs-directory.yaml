@@ -1,0 +1,199 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO ECS Directory — Fargate service for the directory node.
+  Task role has least-privilege: KMS Decrypt and DescribeKey only,
+  Secrets Manager GetSecretValue on directory secrets, S3 PutObject on audit bucket only.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment
+  Cpu:
+    Type: String
+    Default: "256"
+    AllowedValues: ["256", "512", "1024"]
+    Description: Fargate CPU units (256 = 0.25 vCPU)
+  Memory:
+    Type: String
+    Default: "512"
+    AllowedValues: ["512", "1024", "2048"]
+    Description: Fargate memory in MB
+  ImageUri:
+    Type: String
+    Default: "257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:latest"
+    Description: ECR image URI for the directory service
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "cello-${Environment}"
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Task execution role (ECS agent — pulls images, writes logs)
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-${Environment}-directory-execution-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SecretsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/*"
+      Tags:
+        - Key: Project
+          Value: cello
+
+  # Task role (application code — what the container can do)
+  DirectoryTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-${Environment}-directory-task-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DirectoryPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: KmsDecryptOnly
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                Resource:
+                  - !ImportValue
+                    Fn::Sub: "cello-${Environment}-kms-key-arn"
+              - Sid: SecretsManagerGet
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/*"
+              - Sid: S3AuditPutOnly
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - !Sub "arn:aws:s3:::cello-audit-logs-${Environment}-${AWS::Region}/*"
+      Tags:
+        - Key: Project
+          Value: cello
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/cello-directory-${Environment}"
+      RetentionInDays: 90
+      Tags:
+        - Key: Project
+          Value: cello
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "cello-directory-${Environment}"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt DirectoryTaskRole.Arn
+      ContainerDefinitions:
+        - Name: directory
+          Image: !Ref ImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 443
+              Protocol: tcp
+          Environment:
+            - Name: CELLO_ENV
+              Value: !Ref Environment
+            - Name: NODE_ID
+              Value: !Ref AWS::Region
+            - Name: PORT
+              Value: "443"
+          Secrets:
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/rds-credentials"
+            - Name: NODE_PRIVATE_KEY
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/node-private-key"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: directory
+          HealthCheck:
+            Command: ["CMD-SHELL", "curl -f http://localhost:443/health || exit 1"]
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub "cello-directory-${Environment}"
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !ImportValue
+              Fn::Sub: "cello-${Environment}-private-subnet-a"
+            - !ImportValue
+              Fn::Sub: "cello-${Environment}-private-subnet-b"
+          SecurityGroups:
+            - !ImportValue
+              Fn::Sub: "cello-${Environment}-ecs-directory-sg"
+      Tags:
+        - Key: Project
+          Value: cello
+
+Outputs:
+  ClusterArn:
+    Value: !GetAtt Cluster.Arn
+    Export:
+      Name: !Sub "cello-${Environment}-cluster-arn"
+
+  DirectoryTaskRoleArn:
+    Value: !GetAtt DirectoryTaskRole.Arn
+    Export:
+      Name: !Sub "cello-${Environment}-directory-task-role-arn"
+
+  DirectoryServiceArn:
+    Value: !Ref Service
+    Export:
+      Name: !Sub "cello-${Environment}-directory-service-arn"
