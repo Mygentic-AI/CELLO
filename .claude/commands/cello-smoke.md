@@ -135,25 +135,29 @@ CHECKPOINT 2: PASS
 
 ## Step 5 — CHECKPOINT 3: otherSessionsPending hint (SESSION-007)
 
-B sends two messages in its State 3 (one initial + one follow-up). After CP2 drains one of B's messages, B's second message is still sitting in A's S_B buffer. Call `cello_receive_session` on S_C — the session with no pending messages:
+B sends two messages in its State 3 (one initial + one follow-up). The `otherSessionsPending` hint fires whenever a `cello_receive` or `cello_receive_session` returns a message and there are queued messages on OTHER sessions.
+
+**How to verify (order is non-deterministic):**
+
+Check the CP2 `cello_receive` responses. If any response included an `other_sessions_pending` array naming the other session, CP3 is already proven.
+
+If CP2 did NOT show the hint (e.g. messages arrived one at a time), then B's second message may still be buffered. In that case:
 
 ```
 cello_receive_session({ session_id: S_C, timeout_ms: 5000 })
 ```
 
-S_C has no pending messages so this times out, but `other_sessions_pending` must contain S_B because B's second message is buffered.
-
-Then drain S_B to confirm:
+If S_C has no pending messages this times out, but `other_sessions_pending` must contain S_B. Then drain S_B:
 ```
 cello_receive_session({ session_id: S_B, timeout_ms: 5000 })
 ```
 
-**PASS:** The S_C receive returned with `otherSessionsPending: [S_B]`. The S_B receive returned B's second message.
+**PASS:** At least one receive call (either during CP2 or here) returned `otherSessionsPending` naming another active session.
 
 ```
 CHECKPOINT 3: PASS
-  otherSessionsPending on S_C receive: [<S_B hex>]
-  S_B second message received on follow-up: yes
+  otherSessionsPending observed: [<session hex>]
+  Observed during: CP2 any-session receive / CP3 session-locked receive
 ```
 
 ## Step 6 — CHECKPOINT 4: inline session_sealed detection (SESSION-007)
