@@ -235,6 +235,34 @@ B and C ran as autonomous state machines with no inter-agent signaling beyond th
 
 ---
 
+## Agent B Perspective
+
+Agent B ran as an autonomous state machine across four states with zero human intervention after launch:
+
+**State 1 (Register):** `cello_status` + `cello_register` completed instantly. DKG ceremony against the live PostgreSQL directory succeeded on first attempt — no retries needed. Reported pubkey and moved immediately to State 2.
+
+**State 2 (Await session):** Called `cello_await_session({ timeout_ms: 120000 })`. The session arrived well within the timeout window as `type: new_session` with `session_id: 37c10ab9d416f7f3e236ec0e466e3864` and A's counterparty pubkey. No fallback to `cello_list_sessions` was needed — the push-based notification worked cleanly.
+
+**State 3 (Send two messages):** Both `cello_send` calls returned `delivered: true` with distinct `leaf_hash` values:
+- Message 1 (`smoke-test-message-from-B`): `a2c2c439342469aedb4ab702684d67518427a8eda548b7ceadf14eeeab55dadf`
+- Message 2 (`smoke-test-message-from-B-2`): `9b8ba2acfef797b7f20cea1df1f9b4e524ad66072c8130e018de6d2ab2c78a37`
+
+Both messages were hash-chained into the session Merkle tree immediately. No delivery failures, no retries.
+
+**State 4 (Receive loop):** Entered the receive loop immediately after sending. First iteration returned `type: timeout` after 30 seconds — expected, since A was still working through its checkpoint sequence. Second iteration returned `type: session_sealed` with `sealed_root: e824c710c80027ecc213a3175bf7d3fd2dd4b7a5f0896e13b30f0786800ec332`. A had called `cello_close_session` on S_B, and B detected it inline on the next receive — exactly the symmetric counterpart to what A observed on S_C.
+
+**Key observations from B's side:**
+
+1. **Total autonomy confirmed.** After reporting ready, B required zero coordination signals. The session arrived via `cello_await_session`, messages were sent immediately, and the seal was detected passively in the receive loop. The protocol provides all necessary synchronization primitives — no out-of-band signaling needed.
+
+2. **Receive loop is the correct idle pattern.** A single `cello_receive_session` call with a 30-second timeout is the right granularity — long enough to avoid busy-polling, short enough to detect seals promptly. The `session_sealed` event arrived on the very next iteration after A sealed.
+
+3. **No message loss.** Both messages B sent were received by A (confirmed in checkpoints 2 and 3). The relay-notarized hash chain guarantees delivery ordering — sequence numbers 1 and 2 arrived in order with correct leaf hashes.
+
+4. **Seal detection is symmetric.** B experienced the same `session_sealed` inline detection that A observed on S_C. Both sides of the protocol handle counterparty-initiated seals identically — no special handling needed regardless of who initiates.
+
+---
+
 ## Related Documents
 
 - [[agent-conversation-m4-2026-05-20-protocol-proof]] — prior 2-agent protocol proof; first live FROST-signed session, seal ordering race
