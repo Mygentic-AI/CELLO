@@ -4286,14 +4286,24 @@ class CelloClientImpl implements CelloClient {
               package_cbor: packageCbor,
               round: 2,
             });
-            this.#pendingReviewQueue.push({
+            const round2ReviewItem = {
               connection_request_id: connectionRequestId,
               from_pubkey: fromPubkey,
               report: round2Report,
               package_cbor: packageCbor,
               sender_registered_at: 0,
               sender_is_provisional: false,
-            });
+            };
+            const awaitResolver = this.#pendingAwaitConnectionRequestResolvers.shift();
+            if (awaitResolver) {
+              awaitResolver({
+                connection_request_id: connectionRequestId,
+                from_pubkey: fromPubkey,
+                report: round2Report,
+              });
+            } else {
+              this.#pendingReviewQueue.push(round2ReviewItem);
+            }
             // No response yet — wait for agent to call accept/reject.
             return;
           }

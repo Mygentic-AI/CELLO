@@ -292,7 +292,8 @@ describe("E2E CONNREQ-002-SI-005: second connection_request when already connect
     });
     expect(firstResult.result).toBe("established");
 
-    // Second request from A to B (same direction) should fail with already_connected
+    // Second request from A to B (same direction) — idempotent reconnection
+    // Returns "established" with the same connection_id (not an error)
     const mlDsaA2 = await mlDsaKeygen();
     const packageCbor2 = await buildMinimalPackageCbor(fix.agentA.kp, mlDsaA2, fix.agentA.primaryPubkey);
     const secondResult = await fix.agentA.client.cello_request_connection({
@@ -300,9 +301,9 @@ describe("E2E CONNREQ-002-SI-005: second connection_request when already connect
       package_cbor: packageCbor2,
     });
 
-    expect(secondResult.result).toBe("error");
-    if (secondResult.result !== "error") throw new Error("Expected error");
-    expect(secondResult.reason).toBe("already_connected");
+    expect(secondResult.result).toBe("established");
+    if (secondResult.result !== "established") throw new Error("Expected established");
+    expect(secondResult.connection_id).toBe((firstResult as { connection_id: string }).connection_id);
 
     // Transport-path: still only one connection record in directory store
     const dirConnAB = await fix.dirStore.hasConnection(fix.agentA.pubkeyHex, fix.agentB.pubkeyHex);
