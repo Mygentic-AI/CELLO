@@ -804,11 +804,6 @@ export class PgDirectoryStore implements DirectoryStore {
     const result = await this.#pool.query<{ id: string }>(
       `INSERT INTO directory_nodes (node_id, region, endpoint, status)
        VALUES ($1, $2, $3, $4)
-       ON CONFLICT (node_id) DO UPDATE SET
-         region = EXCLUDED.region,
-         endpoint = EXCLUDED.endpoint,
-         status = EXCLUDED.status,
-         updated_at = NOW()
        RETURNING id`,
       [node.nodeId, node.region, node.endpoint ?? null, node.status ?? "active"],
     );
@@ -849,26 +844,18 @@ export class PgDirectoryStore implements DirectoryStore {
   /**
    * Insert a session with owning_node_id.
    * The owning node is the sole writer for this session's hash chain.
+   * session_id is a UUID per FEDERATION-001 AC-001 specification.
    */
   async insertSession(session: {
     sessionId: string;
-    initiatorPubkey: string;
-    responderPubkey: string;
     owningNodeId: string;
-    status?: string;
   }): Promise<{ id: number }> {
     const start = Date.now();
     const result = await this.#pool.query<{ id: string }>(
-      `INSERT INTO sessions (session_id, initiator_pubkey, responder_pubkey, owning_node_id, status)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO sessions (session_id, owning_node_id)
+       VALUES ($1::uuid, $2)
        RETURNING id`,
-      [
-        session.sessionId,
-        session.initiatorPubkey,
-        session.responderPubkey,
-        session.owningNodeId,
-        session.status ?? "active",
-      ],
+      [session.sessionId, session.owningNodeId],
     );
     const id = parseInt(result.rows[0].id, 10);
     this.#logger.info("adapter.persisted", {
@@ -880,18 +867,15 @@ export class PgDirectoryStore implements DirectoryStore {
   }
 
   /**
-   * Get a session by session_id.
+   * Get a session by session_id (UUID).
    */
   async getSession(sessionId: string): Promise<{
     id: number;
     sessionId: string;
-    initiatorPubkey: string;
-    responderPubkey: string;
     owningNodeId: string;
-    status: string;
   } | null> {
     const result = await this.#pool.query<Record<string, unknown>>(
-      `SELECT * FROM sessions WHERE session_id = $1`,
+      `SELECT * FROM sessions WHERE session_id = $1::uuid`,
       [sessionId],
     );
     if (result.rows.length === 0) return null;
@@ -899,10 +883,7 @@ export class PgDirectoryStore implements DirectoryStore {
     return {
       id: row.id as number,
       sessionId: row.session_id as string,
-      initiatorPubkey: row.initiator_pubkey as string,
-      responderPubkey: row.responder_pubkey as string,
       owningNodeId: row.owning_node_id as string,
-      status: row.status as string,
     };
   }
 }

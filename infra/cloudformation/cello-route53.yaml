@@ -1,6 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  CELLO Route 53 + ACM — hosted zone, regional ALIAS records, and TLS certificates.
+  CELLO Route 53 + ACM — regional ALIAS records and TLS certificates.
+  Uses the existing hosted zone (created manually during bootstrap).
   One certificate per region, DNS-validated against the Route 53 zone.
 
 Parameters:
@@ -12,6 +13,12 @@ Parameters:
     Type: String
     Default: "cello.mygentic.ai"
     Description: Root domain for CELLO services
+  HostedZoneId:
+    Type: String
+    Description: >
+      ID of the existing Route 53 hosted zone for DomainName.
+      The hosted zone is created manually during bootstrap — not by IaC.
+      Find it with: aws route53 list-hosted-zones-by-name --dns-name cello.mygentic.ai
   AlbDnsName:
     Type: String
     Description: DNS name of the regional ALB
@@ -23,13 +30,6 @@ Parameters:
     Description: Subdomain prefix (e.g. directory-us1, directory-eu1, directory-ap1)
 
 Resources:
-  HostedZone:
-    Type: AWS::Route53::HostedZone
-    Properties:
-      Name: !Ref DomainName
-      HostedZoneConfig:
-        Comment: !Sub "CELLO ${Environment} hosted zone"
-
   Certificate:
     Type: AWS::CertificateManager::Certificate
     Properties:
@@ -37,7 +37,7 @@ Resources:
       ValidationMethod: DNS
       DomainValidationOptions:
         - DomainName: !Sub "${Subdomain}.${DomainName}"
-          HostedZoneId: !Ref HostedZone
+          HostedZoneId: !Ref HostedZoneId
       Tags:
         - Key: Project
           Value: cello
@@ -47,7 +47,7 @@ Resources:
   AliasRecord:
     Type: AWS::Route53::RecordSet
     Properties:
-      HostedZoneId: !Ref HostedZone
+      HostedZoneId: !Ref HostedZoneId
       Name: !Sub "${Subdomain}.${DomainName}"
       Type: A
       AliasTarget:
@@ -55,11 +55,6 @@ Resources:
         HostedZoneId: !Ref AlbHostedZoneId
 
 Outputs:
-  HostedZoneId:
-    Value: !Ref HostedZone
-    Export:
-      Name: !Sub "cello-${Environment}-hosted-zone-id"
-
   CertificateArn:
     Value: !Ref Certificate
     Export:

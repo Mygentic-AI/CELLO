@@ -13,7 +13,8 @@
  *
  * Pseudocode:
  *   1. Insert a directory_node { nodeId: "us-east-1", region: "us-east-1", status: "active" }
- *   2. Insert a session { sessionId: random, initiatorPubkey, responderPubkey, owningNodeId: "us-east-1" }
+ *   2. Insert a session { sessionId: randomUUID(), owningNodeId: "us-east-1" }
+ *      (session_id is UUID per FEDERATION-001 AC-001 specification)
  *   3. Create a FRESH PgDirectoryStore instance (new Pool connection — no shared state)
  *   4. Read directory_node by nodeId from the fresh instance
  *   5. Assert id is typeof number (BIGINT deserialization)
@@ -79,7 +80,8 @@ describeIntegration("DEPLOY-001: AC-010 integration — directory_nodes and sess
     adminPool = new pg.Pool({ connectionString: DATABASE_URL });
     servicePool = new pg.Pool({ connectionString: SERVICE_URL });
 
-    // Run migration V17 if not already applied
+    // Create tables matching V17 migration if not already applied.
+    // session_id is UUID per FEDERATION-001 AC-001 specification.
     const client = await adminPool.connect();
     try {
       await client.query(`
@@ -96,18 +98,14 @@ describeIntegration("DEPLOY-001: AC-010 integration — directory_nodes and sess
       await client.query(`
         CREATE TABLE IF NOT EXISTS sessions (
           id BIGSERIAL PRIMARY KEY,
-          session_id TEXT NOT NULL UNIQUE,
-          initiator_pubkey TEXT NOT NULL,
-          responder_pubkey TEXT NOT NULL,
+          session_id UUID NOT NULL UNIQUE,
           owning_node_id TEXT NOT NULL REFERENCES directory_nodes(node_id),
-          status TEXT NOT NULL DEFAULT 'active',
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `);
-      // Grant permissions to cello_service
-      await client.query(`GRANT SELECT, INSERT, UPDATE ON directory_nodes TO cello_service`);
-      await client.query(`GRANT SELECT, INSERT, UPDATE ON sessions TO cello_service`);
+      // Grant SELECT and INSERT only (no UPDATE — tables are append-only per design)
+      await client.query(`GRANT SELECT, INSERT ON directory_nodes TO cello_service`);
+      await client.query(`GRANT SELECT, INSERT ON sessions TO cello_service`);
       await client.query(`GRANT USAGE, SELECT ON SEQUENCE directory_nodes_id_seq TO cello_service`);
       await client.query(`GRANT USAGE, SELECT ON SEQUENCE sessions_id_seq TO cello_service`);
     } finally {
@@ -160,14 +158,11 @@ describeIntegration("DEPLOY-001: AC-010 integration — directory_nodes and sess
       region: "eu-central-1",
     });
 
-    // Insert a session
+    // Insert a session — session_id is UUID per FEDERATION-001 AC-001
     const sessionId = randomUUID();
     const { id: writtenId } = await writeStore.insertSession({
       sessionId,
-      initiatorPubkey: "a".repeat(64),
-      responderPubkey: "b".repeat(64),
       owningNodeId: nodeId,
-      status: "active",
     });
     expect(typeof writtenId).toBe("number");
 
@@ -179,10 +174,7 @@ describeIntegration("DEPLOY-001: AC-010 integration — directory_nodes and sess
 
       expect(session).not.toBeNull();
       expect(session!.sessionId).toBe(sessionId);
-      expect(session!.initiatorPubkey).toBe("a".repeat(64));
-      expect(session!.responderPubkey).toBe("b".repeat(64));
       expect(session!.owningNodeId).toBe(nodeId);
-      expect(session!.status).toBe("active");
       // BIGINT deserialization
       expect(typeof session!.id).toBe("number");
       expect(session!.id).toBe(writtenId);
