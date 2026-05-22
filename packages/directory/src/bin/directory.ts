@@ -168,8 +168,9 @@ if (pgPool) {
       `SELECT MAX(installed_rank) AS max_rank FROM flyway_schema_history WHERE success = true`,
     );
     appliedVersion = result.rows[0]?.max_rank ?? 0;
-  } catch {
-    // flyway_schema_history doesn't exist — migrations have never run
+  } catch (err) {
+    // flyway_schema_history doesn't exist or cello_service lacks SELECT — log the actual error
+    logger.error("migration.version.query.failed", { reason: String(err), env });
     appliedVersion = 0;
   }
 
