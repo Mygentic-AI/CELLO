@@ -15,4 +15,54 @@ phases:
       - pnpm --filter @cello/client run typecheck
       - pnpm --filter @cello/relay run typecheck
       - pnpm --filter @cello/directory run typecheck
-      - pnpm --filter @cello/directory run test
+      - pnpm --filter @cello/directory run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
+      # ── Docker build → ECR push → ECS deploy (DEPLOY-003) ──────────────────
+      # IMAGE_TAG = first 7 chars of git commit SHA (CodeBuild sets CODEBUILD_RESOLVED_SOURCE_VERSION)
+      - export IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:7}
+      - export ECR_REPO=257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory
+      - export IMAGE_URI=${ECR_REPO}:${IMAGE_TAG}
+      # Authenticate to ECR
+      - aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 257394457473.dkr.ecr.us-east-1.amazonaws.com
+      # Build linux/amd64 image (ECS Fargate requires x86_64; CodeBuild may run on arm64)
+      - docker build --platform linux/amd64 -t ${IMAGE_URI} -f packages/directory/Dockerfile .
+      # Push to ECR
+      - docker push ${IMAGE_URI}
+      # ── ECS rolling deploy ─────────────────────────────────────────────────
+      # Retrieve current task definition, update image URI, register new revision,
+      # call update-service. The old task continues running until ECS drains it;
+      # the new task must pass health check before old task stops (AC-006).
+      - >
+        TASK_DEF=$(aws ecs describe-task-definition
+        --task-definition cello-directory-dev
+        --region us-east-1
+        --query "taskDefinition"
+        --output json)
+      - >
+        NEW_TASK_DEF=$(echo $TASK_DEF | python3 -c "
+        import json, sys
+        td = json.load(sys.stdin)
+        for c in td['containerDefinitions']:
+            if c['name'] == 'cello-directory':
+                c['image'] = '${IMAGE_URI}'
+        for k in ['taskDefinitionArn','revision','status','requiresAttributes','compatibilities','registeredAt','registeredBy']:
+            td.pop(k, None)
+        print(json.dumps(td))
+        ")
+      - >
+        NEW_TASK_ARN=$(aws ecs register-task-definition
+        --region us-east-1
+        --cli-input-json "$NEW_TASK_DEF"
+        --query "taskDefinition.taskDefinitionArn"
+        --output text)
+      - >
+        aws ecs update-service
+        --cluster cello-dev
+        --service cello-directory-dev
+        --task-definition $NEW_TASK_ARN
+        --region us-east-1
+      # Wait for service to stabilise
+      - >
+        aws ecs wait services-stable
+        --cluster cello-dev
+        --services cello-directory-dev
+        --region us-east-1
