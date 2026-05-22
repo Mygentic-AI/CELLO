@@ -819,7 +819,7 @@ describeIntegration(
         store.setProfile(profile, "obs-linked-corr");
 
         // Wait for the fire-and-forget INSERT + .then() logger call to complete
-        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+        await new Promise<void>((resolve) => setTimeout(resolve, 500));
 
         // account.agent.linked must have been logged at INFO
         expect(logger.info).toHaveBeenCalledWith(

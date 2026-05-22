@@ -178,7 +178,7 @@ if (pgPool) {
   }
 
   if (appliedVersion < expectedVersion) {
-    logger.error("migration.out.of.date", { appliedVersion, expectedVersion, env });
+    logger.error("migration.out.of.date", { currentVersion: appliedVersion, requiredVersion: expectedVersion, env });
     await pgPool.end();
     process.exit(1);
   }
