@@ -191,6 +191,24 @@ Resources:
       Principal: secretsmanager.amazonaws.com
       SourceAccount: !Ref AWS::AccountId
 
+  # ── Wire rotation schedule to the rds-credentials secret ─────────────────
+  # This resource lives in cello-rotation.yaml (not cello-secrets.yaml) to avoid
+  # a first-deploy circular dependency: cello-secrets deploys in Step 2 before the
+  # rotation Lambda exists (Step 6a). AWS::SecretsManager::RotationSchedule can be
+  # created after both the secret and the Lambda exist — exactly what Step 6a delivers.
+  #
+  # AC-001: automatic rotation every 30 days (SI-001).
+
+  RdsCredentialsRotationSchedule:
+    Type: AWS::SecretsManager::RotationSchedule
+    DependsOn: SecretsManagerInvokePermission
+    Properties:
+      SecretId: !ImportValue
+        Fn::Sub: "cello-${Environment}-rds-credentials-arn"
+      RotationLambdaARN: !GetAtt RotationLambdaFunction.Arn
+      RotationRules:
+        AutomaticallyAfterDays: 30
+
 Outputs:
   RotationLambdaArn:
     Description: >

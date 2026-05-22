@@ -119,10 +119,6 @@ derive_ed25519_public_key_hex() {
   # Since we already have the PEM from generation, we use a simpler path:
   # re-derive the public key directly from the raw seed via a temporary key file.
 
-  # Write raw seed bytes to a temp file
-  local raw_seed="${tmpdir}/seed.bin"
-  printf '%s' "${private_key_hex}" | xxd -r -p > "${raw_seed}"
-
   # Build a minimal PKCS#8 DER for the Ed25519 private key:
   # openssl requires the full PKCS8 structure. We construct it from the raw seed.
   # The DER hex for the PKCS#8 envelope of an Ed25519 key (32 bytes) is:

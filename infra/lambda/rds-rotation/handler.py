@@ -44,7 +44,11 @@ logger.setLevel(logging.INFO)
 # ── AWS clients (initialised at module scope for Lambda warm-start reuse) ───
 
 _secretsmanager = None
-_rds_endpoint: str | None = None
+
+
+class _RotationAlreadyDone(Exception):
+    """Raised by _validate_rotation_state when the token is already AWSCURRENT.
+    Caught in lambda_handler to exit cleanly without triggering the error path."""
 
 
 def _get_secretsmanager():
@@ -93,7 +97,8 @@ def lambda_handler(event: dict, context: Any) -> None:
     sm = _get_secretsmanager()
 
     try:
-        # Validate the secret version state before acting
+        # Validate the secret version state before acting.
+        # Raises _RotationAlreadyDone if already AWSCURRENT (idempotent exit).
         _validate_rotation_state(sm, secret_id, token, step)
 
         if step == "createSecret":
@@ -111,16 +116,15 @@ def lambda_handler(event: dict, context: Any) -> None:
         else:
             raise ValueError(f"Unsupported step: {step!r}")
 
+    except _RotationAlreadyDone:
+        # Idempotent: this token is already AWSCURRENT — nothing to do.
+        # Do NOT route through the error path; this is not a failure.
+        return
+
     except Exception as exc:
-        reason = str(exc)
-        logger.error(
-            "secrets.rotation.failed",
-            extra={"secretId": secret_id, "reason": reason},
-        )
-        # Structured log entry for CloudWatch Logs Insights
         _emit_event("ERROR", "secrets.rotation.failed", {
             "secretId": secret_id,
-            "reason": reason,
+            "reason": str(exc),
             "step": step,
         })
         raise
@@ -158,12 +162,9 @@ def _validate_rotation_state(sm, secret_id: str, token: str, step: str) -> None:
     current_version_stages = versions.get(token, [])
 
     if "AWSCURRENT" in current_version_stages:
-        # Already rotated — this is a no-op (idempotent)
-        logger.info(
-            "rotation: token is already AWSCURRENT — rotation already completed",
-            extra={"secretId": secret_id, "step": step},
-        )
-        return
+        # Already rotated — raise sentinel so lambda_handler exits cleanly
+        # without dispatching to the step handler or firing the error path.
+        raise _RotationAlreadyDone(f"Token {token} is already AWSCURRENT for {secret_id}")
 
     if step == "createSecret":
         # AWSPENDING with our token already exists — idempotent, skip create
@@ -373,12 +374,6 @@ def _finish_secret(sm, secret_id: str, token: str, rotation_start_ms: int) -> No
     rotation_end_ms = int(time.time() * 1000)
     rotation_duration_ms = rotation_end_ms - rotation_start_ms
 
-    logger.info(
-        "finishSecret: rotation complete",
-        extra={"secretId": secret_id, "rotationDurationMs": rotation_duration_ms},
-    )
-
-    # Structured log event for CloudWatch Logs Insights queries
     _emit_event("INFO", "secrets.rotation.completed", {
         "secretId": secret_id,
         "rotationDuration": rotation_duration_ms,

@@ -23,7 +23,6 @@ Notes:
 
 import os
 import stat
-import subprocess
 import sys
 import yaml
 
@@ -95,42 +94,79 @@ def load_yaml(filename: str) -> dict:
 
 
 def test_ac001_rds_credentials_rotation_enabled():
-    """AC-001: rds-credentials secret has automatic rotation configured."""
-    tmpl = load_yaml("cello-secrets.yaml")
+    """AC-001: cello-rotation.yaml has a RotationSchedule for rds-credentials (30 days).
+
+    The rotation schedule lives in cello-rotation.yaml (not cello-secrets.yaml) to avoid
+    a first-deploy circular dependency. AWS::SecretsManager::RotationSchedule wires the
+    Lambda ARN to the secret after both the secret and Lambda exist.
+    """
+    tmpl = load_yaml("cello-rotation.yaml")
     resources = tmpl["Resources"]
 
-    assert "RdsCredentials" in resources, "RdsCredentials resource missing from cello-secrets.yaml"
-    rds_cred = resources["RdsCredentials"]
-    props = rds_cred["Properties"]
+    rotation_schedules = {
+        name: res for name, res in resources.items()
+        if res.get("Type") == "AWS::SecretsManager::RotationSchedule"
+    }
+    assert rotation_schedules, (
+        "cello-rotation.yaml must define an AWS::SecretsManager::RotationSchedule "
+        "for rds-credentials (AC-001)"
+    )
 
-    # Must have RotationRules with AutomaticallyAfterDays: 30
-    assert "RotationRules" in props, (
-        "RdsCredentials secret must have RotationRules (AC-001)"
-    )
-    rotation_rules = props["RotationRules"]
-    assert rotation_rules.get("AutomaticallyAfterDays") == 30, (
-        f"RotationRules.AutomaticallyAfterDays must be 30, got: {rotation_rules.get('AutomaticallyAfterDays')}"
-    )
+    for name, sched in rotation_schedules.items():
+        props = sched.get("Properties", {})
+        rules = props.get("RotationRules", {})
+        assert rules.get("AutomaticallyAfterDays") == 30, (
+            f"RotationSchedule {name}: AutomaticallyAfterDays must be 30, "
+            f"got: {rules.get('AutomaticallyAfterDays')}"
+        )
 
 
 def test_ac001_rds_credentials_rotation_lambda_arn():
-    """AC-001: rds-credentials secret references the rotation Lambda ARN."""
+    """AC-001: RotationSchedule in cello-rotation.yaml references the Lambda function."""
+    tmpl = load_yaml("cello-rotation.yaml")
+    resources = tmpl["Resources"]
+
+    rotation_schedules = {
+        name: res for name, res in resources.items()
+        if res.get("Type") == "AWS::SecretsManager::RotationSchedule"
+    }
+    assert rotation_schedules, (
+        "cello-rotation.yaml must have an AWS::SecretsManager::RotationSchedule"
+    )
+
+    for name, sched in rotation_schedules.items():
+        props = sched.get("Properties", {})
+        lambda_arn = props.get("RotationLambdaARN")
+        assert lambda_arn is not None, (
+            f"RotationSchedule {name} must specify RotationLambdaARN"
+        )
+        arn_str = str(lambda_arn)
+        assert "257394457473" not in arn_str, (
+            "RotationLambdaARN must not hardcode the account ID"
+        )
+
+
+def test_ac001_rds_credentials_no_rotation_in_secrets_yaml():
+    """AC-001: cello-secrets.yaml must NOT have RotationRules or RotationLambdaARN.
+
+    The rotation schedule is in cello-rotation.yaml to avoid first-deploy circular
+    dependency (cello-secrets deploys in Step 2, before the Lambda exists in Step 6a).
+    """
     tmpl = load_yaml("cello-secrets.yaml")
     resources = tmpl["Resources"]
 
-    rds_cred = resources["RdsCredentials"]
-    props = rds_cred["Properties"]
+    rds_cred = resources.get("RdsCredentials", {})
+    props = rds_cred.get("Properties", {})
 
-    # Must have RotationLambdaARN wired in
-    assert "RotationLambdaARN" in props, (
-        "RdsCredentials secret must have RotationLambdaARN (AC-001)"
+    assert "RotationLambdaARN" not in props, (
+        "RdsCredentials in cello-secrets.yaml must NOT have RotationLambdaARN — "
+        "rotation schedule lives in cello-rotation.yaml to avoid first-deploy "
+        "circular dependency (Step 2 deploys before Step 6a)"
     )
-    # The ARN must reference the cello-rotation stack output (not hardcoded)
-    arn = props["RotationLambdaARN"]
-    assert arn is not None, "RotationLambdaARN must not be None"
-    # Should use !ImportValue or !Sub with the rotation Lambda output
-    arn_str = str(arn)
-    assert "hardcoded" not in arn_str.lower(), "RotationLambdaARN must not be hardcoded"
+    assert "RotationRules" not in props, (
+        "RdsCredentials in cello-secrets.yaml must NOT have RotationRules — "
+        "rotation schedule lives in cello-rotation.yaml"
+    )
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -313,15 +349,16 @@ def test_ac008_script_prints_public_key():
 # ════════════════════════════════════════════════════════════════════════════
 
 
-def test_si003_ecs_task_role_cannot_access_rds_admin():
-    """SI-003: DirectoryTaskRole must NOT grant access to rds-admin-credentials."""
-    tmpl = load_yaml("cello-iam.yaml")
-    resources = tmpl["Resources"]
+def _check_role_for_admin_access(role_name: str, role_resource: dict) -> None:
+    """Helper: assert a role's policies do not allow access to rds-admin-credentials.
 
-    assert "DirectoryTaskRole" in resources, "DirectoryTaskRole missing from cello-iam.yaml"
+    Checks both explicit mentions of 'rds-admin-credentials' and wildcard patterns
+    like 'directory/*' that would implicitly include the admin credential.
+    """
+    policies = role_resource.get("Properties", {}).get("Policies", [])
 
-    task_role = resources["DirectoryTaskRole"]
-    policies = task_role.get("Properties", {}).get("Policies", [])
+    # Secrets that are explicitly allowed for ECS task roles
+    ALLOWED_SECRETS = {"rds-credentials", "node-private-key", "kms-key-arn"}
 
     for policy in policies:
         doc = policy.get("PolicyDocument", {})
@@ -331,11 +368,59 @@ def test_si003_ecs_task_role_cannot_access_rds_admin():
                 resources_list = [resources_list]
             for res in resources_list:
                 res_str = str(res)
+
+                # Direct mention
                 assert "rds-admin-credentials" not in res_str, (
-                    f"SI-003 VIOLATION: DirectoryTaskRole must NOT have access to "
-                    f"rds-admin-credentials. Found: {res_str}\n"
+                    f"SI-003 VIOLATION: {role_name} must NOT have access to "
+                    f"rds-admin-credentials. Found explicit reference: {res_str}\n"
                     "Only the rotation Lambda execution role may access the admin credential."
                 )
+
+                # Wildcard pattern that would cover rds-admin-credentials:
+                #   cello/${Environment}/directory/*
+                # Any trailing wildcard on the directory prefix must be rejected.
+                if "secretsmanager" in res_str and "/directory/" in res_str:
+                    assert not res_str.endswith("/*"), (
+                        f"SI-003 VIOLATION: {role_name} uses wildcard 'directory/*' "
+                        f"in resource ARN: {res_str}\n"
+                        "This wildcard covers rds-admin-credentials. "
+                        "Enumerate specific secrets: rds-credentials, node-private-key, kms-key-arn."
+                    )
+                    # Check the resource doesn't use a prefix that covers admin
+                    # e.g., 'directory/rds*' would match both rds-credentials and rds-admin-credentials
+                    if "/directory/rds*" in res_str:
+                        assert False, (
+                            f"SI-003 VIOLATION: {role_name} uses 'directory/rds*' wildcard "
+                            f"in resource ARN: {res_str}\n"
+                            "This matches both rds-credentials and rds-admin-credentials. "
+                            "Use 'directory/rds-credentials*' (not 'directory/rds*')."
+                        )
+
+
+def test_si003_ecs_task_role_cannot_access_rds_admin():
+    """SI-003: DirectoryTaskRole must NOT grant access to rds-admin-credentials.
+
+    Checks both explicit references and wildcard patterns (directory/*) that
+    would implicitly include the admin credential (SECOPS-004 blocking finding).
+    """
+    tmpl = load_yaml("cello-iam.yaml")
+    resources = tmpl["Resources"]
+
+    assert "DirectoryTaskRole" in resources, "DirectoryTaskRole missing from cello-iam.yaml"
+    _check_role_for_admin_access("DirectoryTaskRole", resources["DirectoryTaskRole"])
+
+
+def test_si003_ecs_task_execution_role_cannot_access_rds_admin():
+    """SI-003: DirectoryTaskExecutionRole must NOT grant access to rds-admin-credentials.
+
+    The execution role (used by the ECS agent for image pull and log writing) also
+    had the directory/* wildcard. Verify it is also narrowed.
+    """
+    tmpl = load_yaml("cello-iam.yaml")
+    resources = tmpl["Resources"]
+
+    assert "DirectoryTaskExecutionRole" in resources, "DirectoryTaskExecutionRole missing"
+    _check_role_for_admin_access("DirectoryTaskExecutionRole", resources["DirectoryTaskExecutionRole"])
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -585,6 +670,7 @@ if __name__ == "__main__":
     tests = [
         test_ac001_rds_credentials_rotation_enabled,
         test_ac001_rds_credentials_rotation_lambda_arn,
+        test_ac001_rds_credentials_no_rotation_in_secrets_yaml,
         test_ac006_directory_node_private_key_no_rotation,
         test_ac006_relay_node_private_key_no_rotation,
         test_ac007_runbook_exists,
@@ -598,6 +684,7 @@ if __name__ == "__main__":
         test_ac008_script_stores_in_secrets_manager,
         test_ac008_script_prints_public_key,
         test_si003_ecs_task_role_cannot_access_rds_admin,
+        test_si003_ecs_task_execution_role_cannot_access_rds_admin,
         test_rotation_template_exists,
         test_rotation_template_has_lambda_function,
         test_rotation_template_lambda_in_vpc,
