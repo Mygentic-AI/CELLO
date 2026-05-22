@@ -269,6 +269,27 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/cello-directory"
                   - !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/cello-relay"
+              # ── ECS deploy permissions (DEPLOY-003) ───────────────────────────
+              # Required for buildspec docker build → ECR push → ECS rolling deploy.
+              # RegisterTaskDefinition + UpdateService + DescribeServices/TaskDefinition
+              # allow the buildspec to register a new task revision and deploy it.
+              # iam:PassRole is required so CodeBuild can pass the ECS task execution
+              # role (AmazonECSTaskExecutionRolePolicy) to the new task definition.
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeServices
+                  - ecs:DescribeTaskDefinition
+                  - ecs:RegisterTaskDefinition
+                  - ecs:UpdateService
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-directory-execution-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-directory-task-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-relay-execution-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-relay-task-role"
       Tags:
         - Key: Project
           Value: cello
