@@ -100,7 +100,6 @@ export function logRelayServiceCrashed(logger: Logger, ctx: RelayServiceCrashedC
 export interface RelayHealthServerOptions {
   relayId: string;
   logger: Logger;
-  port: number;
 }
 
 /**

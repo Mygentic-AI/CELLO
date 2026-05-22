@@ -40,7 +40,7 @@ phases:
         import json, sys
         td = json.load(sys.stdin)
         for c in td['containerDefinitions']:
-            if c['name'] == 'cello-relay':
+            if c['name'] == 'relay':
                 c['image'] = '${IMAGE_URI}'
         for k in ['taskDefinitionArn','revision','status','requiresAttributes','compatibilities','registeredAt','registeredBy']:
             td.pop(k, None)

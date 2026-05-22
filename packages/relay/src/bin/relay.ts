@@ -26,7 +26,6 @@
  *   CELLO_DIRECTORY_MULTIADDR         — directory multiaddr for seal_submission callbacks (optional)
  *                                        Format: /ip4/<host>/tcp/<port>/p2p/<peer-id>
  *   AWS_REGION                        — AWS region for observability events (default: us-east-1)
- *   NODE_ID                           — override for the nodeId field in log events
  *   WAL_DIR                           — directory for per-session WAL files (required for CELLO_ENV=dev/production)
  *                                        PERSIST-013: FileSessionWal writes one {sessionId}.wal per active session.
  *
@@ -240,7 +239,7 @@ for (const addr of relayResult.node.listenAddresses()) {
 // Port 4000 is VPC-internal only — not exposed via ALB.
 // The directory's relay pool health checks (INFRA-009) use this endpoint.
 
-const healthServer = createRelayHealthServer({ relayId, logger, port: healthPort });
+const healthServer = createRelayHealthServer({ relayId, logger });
 healthServer.listen(healthPort, () => {
   logger.info("adapter.initialised", { adapterName: "RelayHealthServer", port: healthPort });
 });

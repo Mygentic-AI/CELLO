@@ -286,10 +286,10 @@ Resources:
                 Action:
                   - iam:PassRole
                 Resource:
-                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-directory-execution-role-${Environment}"
-                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-directory-task-role-${Environment}"
-                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-relay-execution-role-${Environment}"
-                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-relay-task-role-${Environment}"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-directory-execution-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-directory-task-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-relay-execution-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-relay-task-role"
       Tags:
         - Key: Project
           Value: cello

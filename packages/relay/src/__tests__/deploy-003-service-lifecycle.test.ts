@@ -144,7 +144,7 @@ describe("DEPLOY-003: relay health server", () => {
     const relayId = Buffer.from(pubkeyBytes).toString("hex");
 
     const { logger } = makeCaptureLogger();
-    const server = createRelayHealthServer({ relayId, logger, port: 0 });
+    const server = createRelayHealthServer({ relayId, logger });
 
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const address = server.address() as { port: number };
@@ -164,7 +164,7 @@ describe("DEPLOY-003: relay health server", () => {
   it("GET /health responds within 2 seconds", async () => {
     const relayId = "a".repeat(64); // mock hex key
     const { logger } = makeCaptureLogger();
-    const server = createRelayHealthServer({ relayId, logger, port: 0 });
+    const server = createRelayHealthServer({ relayId, logger });
 
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const address = server.address() as { port: number };
@@ -184,7 +184,7 @@ describe("DEPLOY-003: relay health server", () => {
   it("non-/health path returns 404", async () => {
     const relayId = "b".repeat(64);
     const { logger } = makeCaptureLogger();
-    const server = createRelayHealthServer({ relayId, logger, port: 0 });
+    const server = createRelayHealthServer({ relayId, logger });
 
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const address = server.address() as { port: number };
