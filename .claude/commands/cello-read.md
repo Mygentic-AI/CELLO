@@ -1,55 +1,56 @@
 ---
 name: cello-read
-description: Load current CELLO project context — protocol map, recent activity, readiness status. Start every session with this.
+description: Load current CELLO project context — active milestone, recent story activity, open work. Start every session with this.
 ---
 
-Load context about the current state of the CELLO project. Starts from the whole protocol, then layers in recent activity. This is a briefing, not a full reading.
+Orient to the current state of the CELLO project. This is a fast briefing — not a full protocol review. The protocol design is stable and complete. The work now is implementation.
 
-**The protocol map is the foundation of every session. Do not skip it, skim it, or defer it. Everything else builds on what you learn there.**
+## Step 1 — Read the canonical glossary (always required)
 
-## Step 1 — Read the canonical glossary and protocol map (REQUIRED — do not proceed to Step 2 without completing both)
+Read `CONTEXT.md` at the repo root. It is the authoritative source for all CELLO terms, package structure, interface contracts, and architectural decisions. Do not use terms that are not defined there.
 
-Read `CONTEXT.md` at the repo root **first**. It is the canonical glossary for CELLO — terms, package structure, interface contracts, and architectural decisions. Using terms not defined there, or contradicting definitions in it, is a mistake.
+Keep it in mind for the rest of the session. If the task involves writing code, the SPARC/TDD methodology in `.claude/CLAUDE.md` is equally required — read it before touching implementation.
 
-Then read `docs/planning/protocol-map.md` **in full, from top to bottom**.
+## Step 2 — Identify the active milestone and recent story activity
 
-This is non-negotiable. The protocol map is the only document that gives you a complete, current picture of what is decided across all 9 protocol domains. Without it you will answer questions based on stale context, miss resolved decisions, or treat open items as open when they are not.
+Run these in parallel:
 
-Each domain entry tells you: what is decided, where the deep reference lives, which discussion logs matter, and whether the domain is ready for user stories. The Protocol Readiness Summary table at the bottom gives you the one-line status of every domain.
+```bash
+git log --oneline -20
+git log --oneline -10 -- packages/
+```
 
-Do not start Step 2 until you have read the full file and can answer: which domains are stable, what is deferred, and what is the current readiness status across all 9 domains.
+The first shows overall project activity (docs, infra, stories, fixes). The second shows implementation commits — these tell you which stories have shipped recently and what code is moving.
 
-## Step 1b — Read infrastructure state (if working on M5+)
+From the commit history, identify:
+- What milestone is currently active (look for story ID prefixes like DEPLOY-, PERSIST-, SECOPS-, SESSION-, etc.)
+- Which stories merged in the last ~5 commits
+- Any open fix loops (commits with `fix(STORY-ID):` patterns mean a reviewer returned findings)
 
-If the session involves anything infrastructure-related — deployment, AWS, IaC, ECS, RDS, CI/CD — read `infra/STATE.md` now. It is the authoritative record of what actually exists in AWS: which stacks are deployed, their current status, and all key resource identifiers (VPC IDs, KMS ARNs, RDS endpoints, ALB DNS names). Do not guess at infrastructure state from code alone.
+## Step 3 — Read the active milestone outline
 
-## Step 2 — Recent activity
+Find the active milestone's outline file at `docs/planning/user-stories/<milestone>/outline.md` and read it in full.
 
-Run: `git log --oneline -15 -- docs/`
+This tells you: what the milestone delivers, what stories are in scope, what's been completed, and what's still pending. It is the single best document for understanding where things stand.
 
-This tells you what's been active recently. Note which domains from the protocol map are represented in recent commits. This is additive context on top of the map — it tells you what's moving, but it doesn't define the agenda.
+If the milestone outline has a "Gap" or "Post-" section (like the DEPLOY-001A section in M5), those are reactive additions — read them carefully as they often explain why recent commits look different from the original plan.
 
-## Step 3 — Read files the user is likely working on next
+## Step 4 — Read infrastructure state (if the task touches AWS)
 
-Choose what to read in full based on two signals:
+If the session involves deployment, AWS, IaC, ECS, RDS, or CI/CD — read `infra/STATE.md`. It is the authoritative record of what exists in AWS: deployed stacks, current status, and all key resource identifiers. Do not guess at infrastructure state from code alone.
 
-1. **Readiness status from the protocol map**: Domains with deferred items or "needs work" status may have active design questions. Read the relevant discussion logs or end-to-end-flow sections.
-2. **Recent git activity**: Files modified in the last 3 commits are likely relevant to the current session. Read them in full.
+## Step 5 — Synthesize and report (keep it to one screen)
 
-Do NOT read end-to-end-flow.md in its entirety — it is 1100+ lines. Instead, read the specific sections referenced by whichever domains are active. The protocol map tells you exactly which sections those are.
+Provide a concise briefing with these sections:
 
-If nothing stands out as particularly active, default to reading the Protocol Readiness Summary table at the bottom of the protocol map and any deferred items listed there.
+**Active milestone** — one sentence: what milestone, what it delivers, how far along it looks based on recent commits.
 
-## Step 4 — Synthesize and report
+**Recently shipped** — bullet list of story IDs that merged in the last ~5 commits. If there were reviewer fix loops, note that too (e.g. "DEPLOY-001 — merged after 3 review rounds").
 
-Provide a concise briefing covering:
+**What's open** — any stories in the milestone outline that haven't appeared in git log yet; any pending manual steps from infra/STATE.md; any open items flagged in the outline.
 
-1. **Protocol overview** — one paragraph confirming you've read the map and understand the current state. Mention the overall readiness (how many domains are stable, any that need work).
-2. **What's been active** — the 2-3 most recent topics from git log, mapped to their protocol domain.
-3. **What's open or deferred** — items from the protocol map's readiness column plus any unresolved questions flagged in recently modified files.
-4. **What's ready for the next stage** — which domains are ready for user stories, based on the readiness status.
-5. **Graph gaps** — any documents added recently that have no `## Related Documents` section (flag these for `/cello-link`).
+**If the task is coding** — add one line: "Task involves implementation — SPARC/TDD methodology in `.claude/CLAUDE.md` applies."
 
-Frame the briefing as "here's the protocol, here's what's moving, here's what's ready" — not "here's what changed last." The session starts from the whole, not from whatever was last touched.
+**Graph gaps** — any documents added recently (check `git log --oneline -10 -- docs/`) that are likely missing wikilinks. Flag for `/cello-link`.
 
-Keep it to one screen. If the user wants to go deeper on a specific domain, they'll ask.
+Do not reproduce the protocol readiness table. Do not enumerate all 9 protocol domains. Do not describe what each milestone from M0–M14 does. The protocol design is done — the briefing is about implementation state.
