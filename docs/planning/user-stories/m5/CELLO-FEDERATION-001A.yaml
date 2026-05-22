@@ -112,16 +112,17 @@ acceptance_criteria:
     when: "./infra/setup-replication.sh dev us-east-1 eu-central-1
       ap-northeast-1 is run for the first time"
     then: "all 6 replication slots are created:
-      cello_dev_us-east-1_eu-central-1,
-      cello_dev_us-east-1_ap-northeast-1,
-      cello_dev_eu-central-1_us-east-1,
-      cello_dev_eu-central-1_ap-northeast-1,
-      cello_dev_ap-northeast-1_us-east-1,
-      cello_dev_ap-northeast-1_eu-central-1;
+      cello_dev_us_east_1_eu_central_1,
+      cello_dev_us_east_1_ap_northeast_1,
+      cello_dev_eu_central_1_us_east_1,
+      cello_dev_eu_central_1_ap_northeast_1,
+      cello_dev_ap_northeast_1_us_east_1,
+      cello_dev_ap_northeast_1_eu_central_1;
+      (region hyphens replaced with underscores — PostgreSQL slot names must match [a-z0-9_]+)
       each slot is in streaming state; verified by querying
-      pg_stat_replication on each node from a separate database connection
+      pg_replication_slots on each source node from a separate database connection
       (not via the script itself) and asserting all 6 slot names and
-      streaming state are present"
+      active=true are present"
     test_type: e2e
     component_under_test: directory
 

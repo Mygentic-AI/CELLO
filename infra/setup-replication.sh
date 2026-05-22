@@ -28,10 +28,11 @@
 #   Passwords never appear in stdout, stderr, or CloudWatch logs.
 #
 # Replication slot naming: cello_{env}_{source_region}_{target_region}
-#   e.g. cello_dev_us-east-1_eu-central-1
+#   Region hyphens are replaced by underscores (PostgreSQL slot names: [a-z0-9_]+)
+#   e.g. cello_dev_us_east_1_eu_central_1
 #
 # Subscription naming: cello_sub_from_{source_region}
-#   e.g. cello_sub_from_us-east-1
+#   e.g. cello_sub_from_us_east_1
 #
 # Publication naming: cello_pub (same on every node)
 
@@ -304,8 +305,9 @@ done
 
 # ── Step 4: Create subscriptions on each node (2 per node = 6 total) ──────────
 # Each node subscribes to cello_pub on each of the other two nodes.
-# Slot naming: cello_{env}_{source_region}_{target_region}
-# Subscription naming: cello_sub_from_{source_region}
+# Slot naming: cello_{env}_{source_sanitized}_{target_sanitized}  e.g. cello_dev_us_east_1_eu_central_1
+# Subscription naming: cello_sub_from_{source_sanitized}  e.g. cello_sub_from_us_east_1
+# Region hyphens are replaced by underscores — PostgreSQL identifiers must match [a-z0-9_]+
 
 # Build connection strings per region using replication credentials from Secrets Manager
 declare -A RDS_HOSTS
@@ -352,10 +354,13 @@ for TARGET_REGION in "${REGIONS[@]}"; do
     SOURCE_HOST="${RDS_HOSTS[${SOURCE_REGION}]}"
     SOURCE_PASS="${REPLICATION_PASSWORDS[${SOURCE_REGION}]}"
 
-    # Build the subscription connection string. Password is passed via PGPASSWORD env var
-    # inside the container command so it does not appear in the --command argument
-    # (which would be logged by CloudTrail) or in the SQL literal.
-    CONN_STRING="host=${SOURCE_HOST} port=5432 dbname=cello_${ENVIRONMENT} user=cello_replication sslmode=require"
+    # Build the subscription connection string. The password must be in CONN_STRING because
+    # the WAL receiver is a separate OS process that reads pg_subscription.subconninfo directly
+    # and does not inherit shell environment variables. PGPASSWORD only affects the psql CLI
+    # process, not the background worker. Without password= in the connection string, the
+    # WAL receiver cannot authenticate and slots remain in disconnected state.
+    # The password is stored in pg_subscription (readable by postgres superusers only).
+    CONN_STRING="host=${SOURCE_HOST} port=5432 dbname=cello_${ENVIRONMENT} user=cello_replication password=${SOURCE_PASS} sslmode=require"
 
     echo "  Creating subscription ${SUB_NAME} (slot: ${SLOT_NAME}) on ${TARGET_REGION}..."
 
