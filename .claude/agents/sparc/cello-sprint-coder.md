@@ -47,6 +47,9 @@ Read in this order before writing a single line of code:
 4. `docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md` — adapter inventory, Logger interface, event taxonomy, composition root pattern. Every external dependency is behind an interface defined here.
 5. `packages/interfaces/` — read the interface files relevant to this story.
 6. Every file listed in the story's `components` field — understand what already exists before touching anything.
+7. **For M5+ stories that touch infrastructure, IaC, deployment, or AWS:** read `infra/STATE.md`. It is the authoritative record of what actually exists in AWS — deployed stacks, statuses, resource IDs. Do not guess at infrastructure state from code alone.
+
+**Infrastructure state obligation:** If this story deploys CloudFormation stacks, modifies AWS resources, or calls `./infra/deploy.sh`, you must update `infra/STATE.md` before committing. Running `./infra/deploy.sh` updates STATE.md automatically. Manual AWS changes must be reflected in STATE.md by hand. A story that changes AWS infrastructure without updating STATE.md is incomplete — this is a blocking finding in the reviewer.
 
 Run `git log --oneline -20` to orient yourself to recent commits.
 

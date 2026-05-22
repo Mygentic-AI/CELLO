@@ -26,6 +26,7 @@ Read in this order:
 2. `CONTEXT.md` at the repo root — canonical glossary; any term used differently is a bug
 3. `docs/planning/user-stories/{milestone}/CELLO-{STORY-ID}.yaml` — the story being reviewed
 4. The implementation files named in the story's `components` field
+5. **For M5+ stories that touch infrastructure, IaC, deployment, or AWS:** read `infra/STATE.md` to understand the current real infrastructure state before evaluating the implementation.
 
 If the story depends on other stories (`depends_on`), note which interfaces/types those stories define — the implementation must use them, not reinvent them.
 
@@ -165,6 +166,10 @@ If any gate was skipped or failed, that is blocking regardless of test results.
 **Reactive fix check:**
 
 If any commit in this story's history touches production code outside a story-driven change (a hotfix, live-session fix, or quick patch), verify it has a corresponding test. A production code change with no test is a **blocking** finding. See the canonical examples: CONNREQ-002, REG-001, PERSIST-020 wiring fix, encodeConnectionRequestError field inclusion.
+
+**Infrastructure state check (M5+ stories touching AWS):**
+
+If the story deploys CloudFormation stacks, modifies AWS resources, or calls `./infra/deploy.sh`, verify that `infra/STATE.md` was updated before the final commit. `./infra/deploy.sh` updates STATE.md automatically — check that the script was used, not manual `aws cloudformation deploy` commands. If STATE.md was not updated and the story changed infrastructure, that is a **blocking** finding.
 
 ---
 
