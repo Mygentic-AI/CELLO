@@ -11,6 +11,11 @@ FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-slim AS build
 
 WORKDIR /app
 
+# Install build tools required for native addons (hnswlib-node, better-sqlite3)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends python3 make g++ && \
+    rm -rf /var/lib/apt/lists/*
+
 # Install pnpm
 RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
 
@@ -42,9 +47,9 @@ RUN pnpm --filter @cello/interfaces run typecheck && \
 # ─── Stage 2: Production ───────────────────────────────────────────────────
 FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-slim AS production
 
-# Install curl for ECS health check and Java for Flyway
+# Install curl (health check), Java (Flyway), and build tools (native addon compilation)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl default-jre-headless && \
+    apt-get install -y --no-install-recommends curl default-jre-headless python3 make g++ && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Flyway CLI
