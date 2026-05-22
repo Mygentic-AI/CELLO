@@ -97,7 +97,7 @@ const auditLogShipper: AuditLogShipper = await (async (): Promise<AuditLogShippe
   const auditBucket = requireEnv("CELLO_AUDIT_BUCKET");
   const awsRegion = process.env["AWS_REGION"] ?? "us-east-1";
   const { S3AuditLogShipper } = await import("../adapters/s3-audit-log-shipper.js");
-  const s = new S3AuditLogShipper(auditBucket, awsRegion, logger);
+  const s = new S3AuditLogShipper(auditBucket, logger, undefined, { region: awsRegion });
   logger.info("adapter.initialised", { adapterName: "AuditLogShipper", implementation: "S3AuditLogShipper", env, bucket: auditBucket, region: awsRegion });
   return s;
 })();
@@ -375,13 +375,10 @@ for (const addr of result.node.listenAddresses()) {
 }
 
 const shutdown = () => {
-  const startMs = Date.now();
   result.stop()
     .then(() => pgPool?.end())
     .then(() => auditLogShipper.flush())
-    .then((entriesShipped: number) => {
-      logger.info("audit.shipper.flushed", { entriesShipped, durationMs: Date.now() - startMs });
-    })
+    // audit.shipper.flushed is emitted by the adapter itself — do not log it again here
     .catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error("adapter.init.failed", { adapterName: "shutdown", reason: msg });

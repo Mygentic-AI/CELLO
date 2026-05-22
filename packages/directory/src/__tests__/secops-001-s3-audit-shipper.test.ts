@@ -68,10 +68,12 @@ function makeCapturingLogger(): { logger: Logger; logs: CapturedLog[] } {
 
 function makeEntry(overrides?: Partial<AuditLogEntry>): AuditLogEntry {
   return {
-    role: "cello_service",
-    statement: "INSERT",
-    table: "conversation_seals",
     timestamp: new Date().toISOString(),
+    sessionId: "test-session-1",
+    objectType: "TABLE",
+    command: "INSERT",
+    statementText: "INSERT INTO conversation_seals ...",
+    parameters: [],
     ...overrides,
   };
 }
@@ -107,11 +109,10 @@ describe("SECOPS-001 AC-001 / SI-003: AuditLogShipper interface has no AWS types
   it("S3AuditLogShipper satisfies AuditLogShipper interface type at compile time", () => {
     const { logger } = makeCapturingLogger();
     const { client } = makeMockS3Client();
-    // Constructor signature: (bucketName, region, logger, s3Client?)
+    // Constructor signature: (bucketName, logger, s3Client?, opts?)
     // The s3Client parameter accepts an unknown type — the interface boundary is at AuditLogShipper
     const shipper: AuditLogShipper = new S3AuditLogShipper(
       "cello-audit-logs-test",
-      "us-east-1",
       logger,
       client as unknown as import("@aws-sdk/client-s3").S3Client,
     );
@@ -142,7 +143,6 @@ describe("SECOPS-001 AC-004 / SI-001: entries buffered when S3 unavailable", () 
 
     const shipper = new S3AuditLogShipper(
       "test-bucket",
-      "us-east-1",
       logger,
       client as unknown as import("@aws-sdk/client-s3").S3Client,
     );
@@ -151,7 +151,7 @@ describe("SECOPS-001 AC-004 / SI-001: entries buffered when S3 unavailable", () 
 
     // Ship 5 entries — all should buffer silently (no throw from ship())
     for (let i = 0; i < 5; i++) {
-      await shipper.ship(makeEntry({ statement: `INSERT_${i}` }));
+      await shipper.ship(makeEntry({ command: `INSERT_${i}` }));
     }
 
     const afterShip = Date.now();
@@ -179,7 +179,6 @@ describe("SECOPS-001 AC-004 / SI-001: entries buffered when S3 unavailable", () 
 
     const shipper = new S3AuditLogShipper(
       "test-bucket",
-      "us-east-1",
       logger,
       client as unknown as import("@aws-sdk/client-s3").S3Client,
       // Disable background retry so it doesn't interfere with the flush assertion
@@ -188,7 +187,7 @@ describe("SECOPS-001 AC-004 / SI-001: entries buffered when S3 unavailable", () 
 
     // Ship 100 entries — the first triggers degraded mode, the rest go directly to buffer
     for (let i = 0; i < 100; i++) {
-      await shipper.ship(makeEntry({ statement: `INSERT_${i}` }));
+      await shipper.ship(makeEntry({ command: `INSERT_${i}` }));
     }
 
     // flush() — mock now succeeds (failCount exhausted after 1 call)
@@ -213,16 +212,15 @@ describe("SECOPS-001 observability: audit.shipper.recovered after successful ret
     // Use a very short retry delay so the test completes quickly
     const shipper = new S3AuditLogShipper(
       "test-bucket",
-      "us-east-1",
       logger,
       client as unknown as import("@aws-sdk/client-s3").S3Client,
       { initialRetryMs: 10 },
     );
 
     // Buffer 3 entries (first ship() fails, triggering degraded + backoff)
-    await shipper.ship(makeEntry({ statement: "INSERT_0" }));
-    await shipper.ship(makeEntry({ statement: "INSERT_1" }));
-    await shipper.ship(makeEntry({ statement: "INSERT_2" }));
+    await shipper.ship(makeEntry({ command: "INSERT_0" }));
+    await shipper.ship(makeEntry({ command: "INSERT_1" }));
+    await shipper.ship(makeEntry({ command: "INSERT_2" }));
 
     // Wait for backoff retry to fire and drain the buffer
     await new Promise<void>((resolve) => {
@@ -261,7 +259,6 @@ describe("SECOPS-001 AC-005: buffer overflow — oldest entries dropped at limit
     // 10,001 ship() calls (each takes ~0ms; retry is async and shouldn't fire, but be explicit)
     const shipper = new S3AuditLogShipper(
       "test-bucket",
-      "us-east-1",
       logger,
       client as unknown as import("@aws-sdk/client-s3").S3Client,
       { initialRetryMs: 600_000 },
@@ -269,14 +266,14 @@ describe("SECOPS-001 AC-005: buffer overflow — oldest entries dropped at limit
 
     // Fill buffer to exactly 10,000
     for (let i = 0; i < 10_000; i++) {
-      await shipper.ship(makeEntry({ statement: `INSERT_${i}` }));
+      await shipper.ship(makeEntry({ command: `INSERT_${i}` }));
     }
 
     // At 10,000 entries the buffer is full. Verify via flush count below.
     // (No _bufferSizeForTest — observable only through logged events and flush behavior)
 
     // Ship the 10,001st entry
-    await shipper.ship(makeEntry({ statement: "INSERT_10000" }));
+    await shipper.ship(makeEntry({ command: "INSERT_10000" }));
 
     // audit.shipper.buffer.overflow must have been logged at ERROR
     const overflowLogs = logs.filter((l) => l.event === "audit.shipper.buffer.overflow");
@@ -300,7 +297,6 @@ describe("SECOPS-001 AC-007: flush() ships all buffered entries on shutdown", ()
     // Long initial retry to prevent background retry from racing with flush()
     const shipper = new S3AuditLogShipper(
       "test-bucket",
-      "us-east-1",
       logger,
       client as unknown as import("@aws-sdk/client-s3").S3Client,
       { initialRetryMs: 600_000 },
@@ -310,9 +306,9 @@ describe("SECOPS-001 AC-007: flush() ships all buffered entries on shutdown", ()
     // Only the FIRST ship() call actually invokes send() (the call that fails, triggering
     // degraded mode). Subsequent ship() calls see a non-empty buffer and add directly without
     // calling send(). So failCount:1 is the correct value to cause all 3 entries to buffer.
-    await shipper.ship(makeEntry({ statement: "INSERT" }));
-    await shipper.ship(makeEntry({ statement: "UPDATE" }));
-    await shipper.ship(makeEntry({ statement: "DELETE" }));
+    await shipper.ship(makeEntry({ command: "INSERT" }));
+    await shipper.ship(makeEntry({ command: "UPDATE" }));
+    await shipper.ship(makeEntry({ command: "DELETE" }));
 
     // flush() — mock now succeeds (failCount exhausted)
     const shipped = await shipper.flush();
@@ -335,15 +331,14 @@ describe("SECOPS-001 AC-007: flush() ships all buffered entries on shutdown", ()
 
     const shipper = new S3AuditLogShipper(
       "test-bucket",
-      "us-east-1",
       logger,
       client as unknown as import("@aws-sdk/client-s3").S3Client,
       { flushTimeoutMs: 100, initialRetryMs: 600_000 },
     );
 
-    await shipper.ship(makeEntry({ statement: "INSERT" }));
-    await shipper.ship(makeEntry({ statement: "UPDATE" }));
-    await shipper.ship(makeEntry({ statement: "DELETE" }));
+    await shipper.ship(makeEntry({ command: "INSERT" }));
+    await shipper.ship(makeEntry({ command: "UPDATE" }));
+    await shipper.ship(makeEntry({ command: "DELETE" }));
 
     const shipped = await shipper.flush();
 
@@ -367,12 +362,11 @@ describe("SECOPS-001 observability: audit.shipper.shipped on successful ship()",
 
     const shipper = new S3AuditLogShipper(
       "test-bucket",
-      "us-east-1",
       logger,
       client as unknown as import("@aws-sdk/client-s3").S3Client,
     );
 
-    await shipper.ship(makeEntry({ statement: "INSERT" }));
+    await shipper.ship(makeEntry({ command: "INSERT" }));
 
     const shippedLogs = logs.filter((l) => l.event === "audit.shipper.shipped");
     expect(shippedLogs.length).toBe(1);
@@ -388,7 +382,6 @@ describe("SECOPS-001 observability: audit.shipper.shipped on successful ship()",
 
     const shipper = new S3AuditLogShipper(
       "test-bucket",
-      "us-east-1",
       logger,
       client as unknown as import("@aws-sdk/client-s3").S3Client,
     );
@@ -417,22 +410,24 @@ describe("SECOPS-001 concurrency: concurrent flush() calls don't double-ship ent
     // Long initial retry to prevent background retry from racing with flush()
     const shipper = new S3AuditLogShipper(
       "test-bucket",
-      "us-east-1",
       logger,
       client as unknown as import("@aws-sdk/client-s3").S3Client,
       { initialRetryMs: 600_000 },
     );
 
     // Buffer 2 entries: first ship() fails (send called, fails), second ships to buffer directly
-    await shipper.ship(makeEntry({ statement: "INSERT_1" }));
-    await shipper.ship(makeEntry({ statement: "INSERT_2" }));
+    await shipper.ship(makeEntry({ command: "INSERT_1" }));
+    await shipper.ship(makeEntry({ command: "INSERT_2" }));
 
-    // Concurrent flush calls — only one should execute, second should be a no-op or wait
+    // Concurrent flush calls — one executes, the other awaits the in-flight flush.
+    // MED-1: Both callers receive the actual shipped count (not 0 for the second caller).
     const [r1, r2] = await Promise.all([shipper.flush(), shipper.flush()]);
 
-    // Total shipped across both calls must equal exactly 2 (no double-shipping)
-    expect(r1 + r2).toBe(2);
+    // Entries shipped exactly once — no double-shipping
     expect(sentCommands).toHaveLength(2);
+    // Both callers receive the actual shipped count (MED-1)
+    expect(r1).toBe(2);
+    expect(r2).toBe(2);
   });
 });
 
@@ -443,17 +438,25 @@ describe("SECOPS-001 SI-004: no key material in shipped AuditLogEntry fields", (
     // SI-004: The AuditLogEntry type must not have a field that could carry raw key bytes.
     // Verified structurally: the interface only has string fields.
     const entry: AuditLogEntry = makeEntry();
-    // All fields are strings
-    expect(typeof entry.role).toBe("string");
-    expect(typeof entry.statement).toBe("string");
-    expect(typeof entry.table).toBe("string");
+    // Scalar fields are strings; parameters is string[] — no binary/key material
     expect(typeof entry.timestamp).toBe("string");
-    // No binary fields, no Uint8Array, no Buffer
-    const entryKeys = Object.keys(entry);
-    for (const key of entryKeys) {
-      const val = (entry as unknown as Record<string, unknown>)[key];
+    expect(typeof entry.sessionId).toBe("string");
+    expect(typeof entry.objectType).toBe("string");
+    expect(typeof entry.command).toBe("string");
+    expect(typeof entry.statementText).toBe("string");
+    expect(Array.isArray(entry.parameters)).toBe(true);
+    for (const p of entry.parameters) {
+      expect(typeof p).toBe("string");
+    }
+    // No binary fields, no Uint8Array, no Buffer — iterate all fields
+    const entryRecord = entry as unknown as Record<string, unknown>;
+    for (const key of Object.keys(entryRecord)) {
+      const val = entryRecord[key];
       if (val !== undefined) {
-        expect(typeof val).toBe("string");
+        // Each field is either a string or string[] — no binary types
+        const isString = typeof val === "string";
+        const isStringArray = Array.isArray(val) && (val as unknown[]).every((v) => typeof v === "string");
+        expect(isString || isStringArray).toBe(true);
       }
     }
   });
@@ -475,9 +478,9 @@ describeIntegration("SECOPS-001 AC-002 (integration): ship() writes to real S3 b
     const { S3Client, GetObjectCommand } = await import("@aws-sdk/client-s3");
     const region = process.env["AWS_REGION"] ?? "us-east-1";
     const { logger, logs } = makeCapturingLogger();
-    const shipper = new S3AuditLogShipper(AUDIT_BUCKET!, region, logger);
+    const shipper = new S3AuditLogShipper(AUDIT_BUCKET!, logger, undefined, { region });
 
-    const entry = makeEntry({ statement: "INSERT", table: "conversation_seals", role: "cello_service" });
+    const entry = makeEntry({ command: "INSERT", objectType: "TABLE", sessionId: "cello-session-1" });
     await shipper.ship(entry);
 
     // Find the s3Key from the logged event
@@ -492,9 +495,9 @@ describeIntegration("SECOPS-001 AC-002 (integration): ship() writes to real S3 b
     const body = await response.Body!.transformToString();
     const parsed = JSON.parse(body) as AuditLogEntry;
 
-    expect(parsed.role).toBe("cello_service");
-    expect(parsed.statement).toBe("INSERT");
-    expect(parsed.table).toBe("conversation_seals");
+    expect(parsed.sessionId).toBe("cello-session-1");
+    expect(parsed.command).toBe("INSERT");
+    expect(parsed.objectType).toBe("TABLE");
     expect(typeof parsed.timestamp).toBe("string");
   }, 20_000);
 });
@@ -509,7 +512,6 @@ describeIntegration("SECOPS-001 AC-004 (integration): buffering and recovery", (
     // Long initial retry to prevent background retry from racing with flush()
     const shipper = new S3AuditLogShipper(
       AUDIT_BUCKET!,
-      "us-east-1",
       logger,
       client as unknown as import("@aws-sdk/client-s3").S3Client,
       { initialRetryMs: 600_000 },
@@ -519,7 +521,7 @@ describeIntegration("SECOPS-001 AC-004 (integration): buffering and recovery", (
     // Note: only the first call actually invokes send() and fails; the rest go directly to buffer.
     // failCount:5 means calls 1-5 fail. But only call 1 is made by ship() (degraded mode kicks in).
     for (let i = 0; i < 5; i++) {
-      await shipper.ship(makeEntry({ statement: `INSERT_${i}` }));
+      await shipper.ship(makeEntry({ command: `INSERT_${i}` }));
     }
 
     // flush() — call 2 onwards succeed (failCount=5 but only call 1 was made so far)
@@ -545,15 +547,14 @@ describeIntegration("SECOPS-001 AC-007 (integration): flush on shutdown ships to
     const { client } = makeMockS3Client({ failCount: 3 });
     const shipper = new S3AuditLogShipper(
       AUDIT_BUCKET!,
-      region,
       logger,
       client as unknown as import("@aws-sdk/client-s3").S3Client,
-      { initialRetryMs: 600_000 },
+      { region, initialRetryMs: 600_000 },
     );
 
-    await shipper.ship(makeEntry({ statement: "INSERT" }));
-    await shipper.ship(makeEntry({ statement: "UPDATE" }));
-    await shipper.ship(makeEntry({ statement: "DELETE" }));
+    await shipper.ship(makeEntry({ command: "INSERT" }));
+    await shipper.ship(makeEntry({ command: "UPDATE" }));
+    await shipper.ship(makeEntry({ command: "DELETE" }));
 
     const shipped = await shipper.flush();
     expect(shipped).toBe(3);
@@ -584,9 +585,9 @@ describeIntegration("SECOPS-001 SI-002 (integration): S3 bucket policy denies de
 
     const shipper = new S3AuditLogShipper(
       AUDIT_BUCKET!,
-      region,
       logger,
       trackingClient as unknown as import("@aws-sdk/client-s3").S3Client,
+      { region },
     );
 
     await shipper.ship(makeEntry());

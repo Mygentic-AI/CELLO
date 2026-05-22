@@ -7,9 +7,12 @@
  * ─────────────────────────────────────────────────────────────────
  * ship(entry):
  *   // Per-write shipping — no intentional batching delay (AC-002)
- *   // If in degraded mode (buffer non-empty), add to buffer for ordering preservation
+ *   // If in degraded mode (buffer non-empty), add to buffer for ordering preservation.
+ *   // HIGH-4: always emit audit.shipper.degraded while in degraded mode (not just on first failure).
  *   if this.#buffer.length > 0:
  *     this.#addToBuffer(entry)
+ *     oldestEntryAge = Date.now() - this.#bufferOldestTs
+ *     this.#logger.warn("audit.shipper.degraded", { reason: 'S3 unavailable', bufferedCount, oldestEntryAge })
  *     return
  *   try:
  *     s3Key = await this.#putToS3(entry)
@@ -24,6 +27,9 @@
  *   // Bounded at MAX_BUFFER=10,000; drop oldest if full (AC-005)
  *   if this.#buffer.length >= MAX_BUFFER:
  *     this.#buffer.shift()  // drop oldest
+ *     // HIGH-1/HIGH-3: update #bufferOldestTs after overflow drop
+ *     if this.#buffer.length > 0: this.#bufferOldestTs = Date.now()
+ *     else: this.#bufferOldestTs = 0
  *     this.#logger.error("audit.shipper.buffer.overflow", { droppedCount: 1, bufferedCount: MAX_BUFFER })
  *   if this.#buffer.length === 0: this.#bufferOldestTs = Date.now()
  *   this.#buffer.push(entry)
@@ -51,6 +57,8 @@
  *       s3Key = await this.#putToS3(this.#buffer[0])
  *       // S3 is back — drain buffer
  *       this.#buffer.shift()
+ *       // HIGH-1: update #bufferOldestTs after shift
+ *       this.#bufferOldestTs = this.#buffer.length > 0 ? Date.now() : 0
  *       this.#logger.info("audit.shipper.recovered", { bufferedCount: this.#buffer.length })
  *       // Flush remaining buffer entries
  *       for remaining entries: ship them
@@ -61,10 +69,13 @@
  *
  * flush():
  *   // Called on SIGTERM — attempt to ship all buffered within flushTimeoutMs (default: 10s)
- *   // Concurrent flush calls: #flushInProgress guard prevents double-shipping (AC concurrency)
- *   if this.#flushInProgress: await this.#flushPromise; return 0
+ *   // HIGH-2: Wait for any in-progress retryFlush before draining.
+ *   // MED-1: Concurrent flush calls return the actual shipped count from the in-flight flush.
+ *   if this.#flushInProgress: await this.#flushPromise; return result
  *   this.#flushInProgress = true
  *   cancel any pending retry timer
+ *   // HIGH-2: also wait for any in-flight #retryFlush
+ *   if this.#retryPromise: await this.#retryPromise
  *   shipped = 0
  *   startMs = Date.now()
  *   try:
@@ -74,6 +85,9 @@
  *       remove from buffer
  *       shipped++
  *     if buffer.length > 0:
+ *       // MED-2: restore unshipped entries; protect with try/catch
+ *       try: this.#buffer.unshift(...remaining)
+ *       catch (e): this.#logger.error("audit.shipper.flush.failed", { lostEntryCount: ..., error })
  *       this.#logger.error("audit.shipper.flush.failed", { lostEntryCount: buffer.length })
  *     else:
  *       this.#logger.info("audit.shipper.flushed", { entriesShipped: shipped, durationMs })
@@ -109,6 +123,8 @@ const INITIAL_RETRY_MS = 1_000;
 const MAX_RETRY_MS = 60_000;
 
 export interface S3AuditLogShipperOptions {
+  /** AWS region for the S3 bucket. Default: "us-east-1" */
+  region?: string;
   /** Maximum time (ms) to wait during flush() before giving up. Default: 10,000 */
   flushTimeoutMs?: number;
   /** Initial retry delay (ms) for exponential backoff. Default: 1,000 */
@@ -126,25 +142,30 @@ export class S3AuditLogShipper implements AuditLogShipper {
   readonly #initialRetryMs: number;
 
   // Timestamp of the oldest entry currently in the buffer (for oldestEntryAge computation)
+  // HIGH-1: Updated after each shift() so oldestEntryAge is always accurate
   #bufferOldestTs = 0;
 
   // Concurrency guard: flush() sets this to prevent double-shipping on concurrent calls
+  // MED-1: #flushPromise is Promise<number> so concurrent callers get the actual shipped count
   #flushInProgress = false;
-  #flushResolve?: () => void;
-  #flushPromise?: Promise<void>;
+  #flushResolve?: (count: number) => void;
+  #flushPromise?: Promise<number>;
+
+  // HIGH-2: Tracks the in-flight #retryFlush promise to prevent concurrent flush+retry races
+  #retryPromise?: Promise<void>;
 
   // Background retry timer handle (null = no retry scheduled)
   #retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     bucketName: string,
-    region: string,
     logger: Logger,
     s3Client?: S3Client,
     opts: S3AuditLogShipperOptions = {},
   ) {
     this.#bucket = bucketName;
     this.#logger = logger;
+    const region = opts.region ?? "us-east-1";
     // Inject client for testing; create real client for production
     this.#client = s3Client ?? new S3Client({ region });
     this.#flushTimeoutMs = opts.flushTimeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS;
@@ -152,9 +173,17 @@ export class S3AuditLogShipper implements AuditLogShipper {
   }
 
   async ship(entry: AuditLogEntry): Promise<void> {
-    // If already in degraded mode, buffer this entry for ordering preservation
+    // HIGH-4: If already in degraded mode, buffer this entry AND emit degraded warning.
+    // Operators must see continued warnings during extended degraded operation, not just
+    // the first failure event.
     if (this.#buffer.length > 0) {
       this.#addToBuffer(entry);
+      const oldestEntryAge = Date.now() - this.#bufferOldestTs;
+      this.#logger.warn("audit.shipper.degraded", {
+        reason: "S3 unavailable",
+        bufferedCount: this.#buffer.length,
+        oldestEntryAge,
+      });
       return;
     }
 
@@ -181,22 +210,30 @@ export class S3AuditLogShipper implements AuditLogShipper {
   }
 
   async flush(): Promise<number> {
-    // Concurrency guard: if a flush is already in progress, wait for it and return 0
+    // MED-1: Concurrency guard — if a flush is already in progress, await it and return
+    // its actual result (not 0), so all concurrent callers get the real shipped count.
     if (this.#flushInProgress) {
       if (this.#flushPromise) {
-        await this.#flushPromise;
+        return this.#flushPromise;
       }
       return 0;
     }
 
     this.#flushInProgress = true;
-    // Cancel any pending background retry — flush takes over
+    // Cancel any pending background retry timer — flush takes over
     if (this.#retryTimer !== null) {
       clearTimeout(this.#retryTimer);
       this.#retryTimer = null;
     }
-    // Set up the promise that concurrent callers can await
-    this.#flushPromise = new Promise<void>((resolve) => {
+
+    // HIGH-2: Wait for any in-flight #retryFlush before draining the buffer.
+    // Without this guard, flush() and #retryFlush() could both drain #buffer simultaneously.
+    if (this.#retryPromise) {
+      await this.#retryPromise;
+    }
+
+    // Set up the promise that concurrent callers can await (MED-1: typed as Promise<number>)
+    this.#flushPromise = new Promise<number>((resolve) => {
       this.#flushResolve = resolve;
     });
 
@@ -204,14 +241,22 @@ export class S3AuditLogShipper implements AuditLogShipper {
     let shipped = 0;
 
     try {
-      // Take a snapshot length to avoid racing with concurrent ship() calls
+      // Take a snapshot to iterate; clear buffer atomically before attempting
       const toShip = [...this.#buffer];
-      this.#buffer.length = 0; // clear atomically before attempting
+      this.#buffer.length = 0;
 
       for (const entry of toShip) {
         if (Date.now() - startMs > this.#flushTimeoutMs) {
           // Timeout exceeded — put remaining entries back
-          this.#buffer.unshift(...toShip.slice(shipped));
+          // MED-2: protect the restore path with try/catch
+          try {
+            this.#buffer.unshift(...toShip.slice(shipped));
+          } catch (restoreErr) {
+            this.#logger.error("audit.shipper.flush.failed", {
+              lostEntryCount: toShip.length - shipped,
+              error: String(restoreErr),
+            });
+          }
           break;
         }
         try {
@@ -219,7 +264,15 @@ export class S3AuditLogShipper implements AuditLogShipper {
           shipped++;
         } catch {
           // S3 still unavailable — put remaining entries back and give up
-          this.#buffer.unshift(...toShip.slice(shipped));
+          // MED-2: protect the restore path with try/catch
+          try {
+            this.#buffer.unshift(...toShip.slice(shipped));
+          } catch (restoreErr) {
+            this.#logger.error("audit.shipper.flush.failed", {
+              lostEntryCount: toShip.length - shipped,
+              error: String(restoreErr),
+            });
+          }
           break;
         }
       }
@@ -237,7 +290,7 @@ export class S3AuditLogShipper implements AuditLogShipper {
     } finally {
       this.#flushInProgress = false;
       if (this.#flushResolve) {
-        this.#flushResolve();
+        this.#flushResolve(shipped);
         this.#flushResolve = undefined;
         this.#flushPromise = undefined;
       }
@@ -272,11 +325,14 @@ export class S3AuditLogShipper implements AuditLogShipper {
   /**
    * Add entry to bounded in-memory buffer.
    * If buffer is full, drops the oldest entry and logs audit.shipper.buffer.overflow (AC-005).
+   * HIGH-1/HIGH-3: Updates #bufferOldestTs after any shift() to keep oldestEntryAge accurate.
    */
   #addToBuffer(entry: AuditLogEntry): void {
     if (this.#buffer.length >= MAX_BUFFER) {
       // Drop oldest entry to prevent unbounded memory growth
       this.#buffer.shift();
+      // HIGH-3: Update #bufferOldestTs after overflow drop so age is accurate going forward
+      this.#bufferOldestTs = this.#buffer.length > 0 ? Date.now() : 0;
       this.#logger.error("audit.shipper.buffer.overflow", {
         droppedCount: 1,
         bufferedCount: MAX_BUFFER,
@@ -305,8 +361,13 @@ export class S3AuditLogShipper implements AuditLogShipper {
       this.#retryTimer = null;
       // If buffer is empty (drained by flush() or successful ships) — nothing to do
       if (this.#buffer.length === 0) return;
-      // Attempt to ship the oldest buffered entry as a probe
-      void this.#retryFlush(delayMs);
+      // HIGH-2: Store the promise so flush() can await it before draining
+      // LOW-1: Catch unexpected errors from #retryFlush so the loop doesn't silently die
+      this.#retryPromise = this.#retryFlush(delayMs).catch((err) => {
+        this.#logger.error("audit.shipper.retry.error", { error: String(err) });
+      }).finally(() => {
+        this.#retryPromise = undefined;
+      });
     }, delayMs);
   }
 
@@ -320,6 +381,8 @@ export class S3AuditLogShipper implements AuditLogShipper {
       const first = this.#buffer[0]!;
       await this.#putToS3(first);
       this.#buffer.shift();
+      // HIGH-1: Update #bufferOldestTs after successful probe shift
+      this.#bufferOldestTs = this.#buffer.length > 0 ? Date.now() : 0;
 
       // S3 is back — log recovery and drain the rest of the buffer
       this.#logger.info("audit.shipper.recovered", {
@@ -332,6 +395,8 @@ export class S3AuditLogShipper implements AuditLogShipper {
         try {
           await this.#putToS3(entry);
           this.#buffer.shift();
+          // HIGH-1: Update #bufferOldestTs after each successful drain shift
+          this.#bufferOldestTs = this.#buffer.length > 0 ? Date.now() : 0;
         } catch {
           // S3 went down again mid-drain — reschedule backoff from initial delay
           this.#scheduleRetry(this.#initialRetryMs);
