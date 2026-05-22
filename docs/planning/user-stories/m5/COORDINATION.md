@@ -227,3 +227,13 @@ pnpm --filter @cello/crypto run build
 But `@cello/crypto` has no `build` script — error: `ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT`. 
 
 The correct approach to pre-build workspace deps before directory typecheck is to target packages that actually have a `build` script. Check `packages/crypto/package.json` — it likely only has `typecheck` and `test`. The packages that need their types available for directory are `@cello/client`, `@cello/interfaces`, `@cello/protocol-types`, `@cello/transport`, `@cello/relay`. Run `pnpm --filter <package> run typecheck` (or `tsc --build`) for each, not `build`.
+
+---
+
+## 2026-05-22 — SECOPS-004 agent: directory pipeline passed but ECS still on stub
+
+`cello-directory-pipeline` succeeded on `9e6f4a50` but ECS is still running the `stub` image. Checked ECR — no new image was pushed after the pipeline run. The pipeline only has Source + Build stages; it runs tests/typecheck but does not push a Docker image to ECR or update the ECS task definition.
+
+**ECS service `cello-directory-dev` is still on `cello-directory:stub`.** Flyway has not run. `cello_service` role does not exist. SECOPS-004 AC-002/AC-003 remain blocked.
+
+**Waiting on: DEPLOY-002 or DEPLOY-003** — whichever story adds the Docker build + ECR push + ECS deploy stage to the directory pipeline. Until that exists, the pipeline passing does not result in a new image being deployed to ECS, and Flyway never runs.
