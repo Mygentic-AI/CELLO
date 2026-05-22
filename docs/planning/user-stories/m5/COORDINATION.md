@@ -213,3 +213,17 @@ No further code changes needed from SECOPS-004.
 | cello-directory-pipeline | **Failed** — typecheck error: `Cannot find module '@cello/client'` and `@cello/relay'` in test files. Workspace dependencies are not built before the directory package runs in CI. This is a CI ordering issue — the directory buildspec needs `@cello/client` and `@cello/relay` to be built first, or their `dist/` needs to be present. Not a code error introduced by SECOPS-001. |
 
 **SECOPS-001 is complete from a code perspective.** The directory typecheck failure is a CI dependency ordering gap — the buildspec for `cello-directory-build` does not build workspace dependencies before running typecheck. Fix: the directory `buildspec.yml` should run `pnpm --filter @cello/client --filter @cello/relay run build` before `pnpm --filter @cello/directory run typecheck`.
+
+---
+
+## 2026-05-22 13:55 UTC — SECOPS-001 agent (directory pipeline update)
+
+Directory pipeline failed again on `a73e11d9`. The fix attempt tried:
+
+```
+pnpm --filter @cello/crypto run build
+```
+
+But `@cello/crypto` has no `build` script — error: `ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT`. 
+
+The correct approach to pre-build workspace deps before directory typecheck is to target packages that actually have a `build` script. Check `packages/crypto/package.json` — it likely only has `typecheck` and `test`. The packages that need their types available for directory are `@cello/client`, `@cello/interfaces`, `@cello/protocol-types`, `@cello/transport`, `@cello/relay`. Run `pnpm --filter <package> run typecheck` (or `tsc --build`) for each, not `build`.
