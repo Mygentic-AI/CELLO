@@ -28,6 +28,8 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-22 |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-22 |
 | cello-cicd-dev | CREATE_COMPLETE | 2026-05-22 |
+| Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 |
+| Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-22 |
 
 #### Key Resources — dev us-east-1
 
@@ -51,6 +53,9 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | ACM Certificate | arn:aws:acm:us-east-1:257394457473:certificate/900d9dde-abd9-4d05-931b-507a6fdf55f4 |
 | ECS Cluster | arn:aws:ecs:us-east-1:257394457473:cluster/cello-dev |
 | RDS Rotation Lambda | arn:aws:lambda:us-east-1:257394457473:function:cello-dev-rds-rotation |
+| GitHub Webhook Receiver Lambda | arn:aws:lambda:us-east-1:257394457473:function:cello-github-webhook-receiver-dev |
+| GitHub Webhook Receiver URL | https://e2cy6e5vuxif5zdqjjhy3aplqu0crnzi.lambda-url.us-east-1.on.aws/ |
+| Pipeline Filter Lambda | arn:aws:lambda:us-east-1:257394457473:function:cello-pipeline-filter-dev |
 | Directory Node Public Key | 167ca6b145bfdd3696af8f4befd883c3dc610f4a9c8d52a30f6a22f669dc27b5 |
 | Relay Node Public Key | 8c3a882b15ad39f42044bac2044c76f00535e3ff345767b9fda7b4e665efc4e6 |
 
@@ -83,7 +88,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | Stub images pushed (linux/amd64) | Done | 2026-05-22 | Run `./infra/build-stubs.sh <region>` — never `docker build` directly (arm64 on Apple Silicon breaks ECS) |
 | CodeStar Connection `github-cello-main` | Done | 2026-05-22 | us-east-1, AVAILABLE |
 | Ed25519 key pairs — us-east-1 | Done | 2026-05-22 | Run `./infra/scripts/generate-node-keys.sh dev us-east-1` — eu-central-1 and ap-northeast-1 pending (staging/prod only) |
-| GitHub webhook HMAC secret | Pending | — | After cello-cicd-dev deploys |
+| GitHub webhook HMAC secret | Pending | — | Run step 2-4 in infra/runbooks/github-webhook-setup.md |
 
 ---
 
