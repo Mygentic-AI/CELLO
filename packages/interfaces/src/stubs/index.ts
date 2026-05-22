@@ -7,3 +7,4 @@ export { LocalJobScheduler } from "./local-job-scheduler.js";
 export { InMemorySessionWal } from "./in-memory-session-wal.js";
 export { LocalAuditLogShipper } from "./local-audit-log-shipper.js";
 export { LocalCloudStorageProvider } from "./local-cloud-storage-provider.js";
+export { InMemoryNotificationQueue } from "./in-memory-notification-queue.js";

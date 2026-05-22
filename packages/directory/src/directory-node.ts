@@ -111,7 +111,7 @@ import { createNode } from "@cello/transport";
 import type { CelloNode } from "@cello/transport";
 import type { Stream } from "@libp2p/interface";
 import type { SessionAbandoned, SessionSealed, SessionSealRejected, SealVerified } from "@cello/protocol-types";
-import type { SealNotarization, Logger } from "@cello/interfaces";
+import type { SealNotarization, Logger, NotificationQueue } from "@cello/interfaces";
 import type {
   SessionAssignment,
   SessionAssignmentFrame,
@@ -251,6 +251,13 @@ export interface DirectoryNodeOptions {
    * failure does not block session closure.
    */
   mmrStore?: MmrStore;
+  /**
+   * PERSIST-023: NotificationQueue for SEAL_UNILATERAL notifications.
+   * When provided, the directory will drain pending notifications for a reconnecting
+   * agent and deliver them over the established signaling stream.
+   * Defaults to InMemoryNotificationQueue when not provided.
+   */
+  notificationQueue?: NotificationQueue;
 }
 
 export class CelloDirectoryNode {
@@ -265,6 +272,8 @@ export class CelloDirectoryNode {
   readonly #logger: Logger | undefined;
   // PERSIST-017: MmrStore for appending seals to the MMR staging table after notarization
   readonly #mmrStore: MmrStore | undefined;
+  // PERSIST-023: NotificationQueue for SEAL_UNILATERAL notifications
+  readonly #notificationQueue: NotificationQueue | undefined;
 
   // REG-001: forceDkgFailure — test injection for below-threshold DKG simulation
   readonly #forceDkgFailure: boolean;
@@ -387,6 +396,7 @@ export class CelloDirectoryNode {
     this.#packageCborInterceptor = opts.packageCborInterceptor;
     this.#deliveryGraceSeconds = opts.deliveryGraceSeconds ?? 600;
     this.#mmrStore = opts.mmrStore;
+    this.#notificationQueue = opts.notificationQueue;
   }
 
   async start(): Promise<void> {
@@ -2406,6 +2416,12 @@ export interface CreateDirectoryNodeOptions {
    * When provided, appendSeal() is called after every successful SealNotarization.
    */
   mmrStore?: MmrStore;
+  /**
+   * PERSIST-023: NotificationQueue for SEAL_UNILATERAL notifications.
+   * When provided, the directory will drain and deliver pending notifications
+   * for a reconnecting agent over the established signaling stream.
+   */
+  notificationQueue?: NotificationQueue;
 }
 
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{
@@ -2438,6 +2454,7 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     logger: opts.logger,
     deliveryGraceSeconds: opts.deliveryGraceSeconds,
     mmrStore: opts.mmrStore,
+    notificationQueue: opts.notificationQueue,
   });
   await directory.start();
 
