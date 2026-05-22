@@ -422,22 +422,18 @@ with open(state_file) as f:
 
 # Update last deployed date
 content = re.sub(
-    rf"(### {re.escape(env)} — {re.escape(region)}
-\*Last deployed:) [^
-]+",
+    rf"(### {re.escape(env)} — {re.escape(region)}\n\*Last deployed:) [^\n]+",
     rf"\1 {today}",
     content
 )
 
 # Update RDS endpoint if not pending
 if rds_endpoint and rds_endpoint != "pending" and rds_endpoint != "None":
-    content = re.sub(r"\| RDS Endpoint \|[^
-]+", f"| RDS Endpoint | {rds_endpoint} |", content)
+    content = re.sub(r"\| RDS Endpoint \|[^\n]+", f"| RDS Endpoint | {rds_endpoint} |", content)
 
 # Update ALB if not pending
 if alb_dns and alb_dns != "pending" and alb_dns != "None":
-    content = re.sub(r"\| Directory ALB \|[^
-]+", f"| Directory ALB | {alb_dns} |", content)
+    content = re.sub(r"\| Directory ALB \|[^\n]+", f"| Directory ALB | {alb_dns} |", content)
 
 with open(state_file, "w") as f:
     f.write(content)

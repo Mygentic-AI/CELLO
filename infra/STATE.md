@@ -21,28 +21,33 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-vpc-dev | CREATE_COMPLETE | 2026-05-22 |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-22 |
 | cello-s3-dev | CREATE_COMPLETE | 2026-05-22 |
-| cello-rds-dev | IN PROGRESS | 2026-05-22 |
-| cello-ecs-directory-dev | NOT DEPLOYED | — |
-| cello-ecs-relay-dev | NOT DEPLOYED | — |
-| cello-route53-dev | NOT DEPLOYED | — |
-| cello-cicd-dev | NOT DEPLOYED | — |
+| cello-rds-dev | CREATE_COMPLETE | 2026-05-22 |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-22 |
+| cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-22 |
+| cello-route53-dev | CREATE_COMPLETE | 2026-05-22 |
+| cello-cicd-dev | CREATE_COMPLETE | 2026-05-22 |
 
 #### Key Resources — dev us-east-1
 
 | Resource | Value |
 |---|---|
-| VPC ID | vpc-0ac8a7ab49079c524 |
+| VPC ID | vpc-042c7b8ac97f6a38b |
 | VPC CIDR | 10.0.0.0/16 |
-| Private Subnet A | subnet-0c16031f3e75888bf |
-| Private Subnet B | subnet-04bd06a7192397267 |
-| KMS Key ARN | arn:aws:kms:us-east-1:257394457473:key/d8b50480-656e-46b4-908f-15ea76bbb636 |
-| KMS Key ID | d8b50480-656e-46b4-908f-15ea76bbb636 |
+| Private Subnet A | subnet-05552d24bb15a7782 |
+| Private Subnet B | subnet-0dba876a5a923404b |
+| Public Subnet A | subnet-00780580ba49e6eb0 |
+| Public Subnet B | subnet-03f5ad4cd18fca4c7 |
+| KMS Key ARN | arn:aws:kms:us-east-1:257394457473:key/7eb72942-d9f4-4c9a-9494-05bce889a39f |
+| KMS Key ID | 7eb72942-d9f4-4c9a-9494-05bce889a39f |
 | Audit Log Bucket | cello-audit-logs-dev-us-east-1 |
 | Relay Manifest Bucket | cello-relay-manifest-dev-us-east-1 |
-| RDS Endpoint | pending |
-| Directory ALB | pending |
-| Relay ALB | pending |
-| Route 53 Record | pending |
+| RDS Endpoint | cello-dev.c9iokw02w3f8.us-east-1.rds.amazonaws.com |
+| RDS Port | 5432 |
+| Directory ALB | cello-dir-dev-1136016900.us-east-1.elb.amazonaws.com |
+| ALB Hosted Zone ID | Z35SXDOTRQ7X7K |
+| Route 53 Record | directory-us1.cello.mygentic.ai |
+| ACM Certificate | arn:aws:acm:us-east-1:257394457473:certificate/900d9dde-abd9-4d05-931b-507a6fdf55f4 |
+| ECS Cluster | arn:aws:ecs:us-east-1:257394457473:cluster/cello-dev |
 
 ### staging — not deployed
 

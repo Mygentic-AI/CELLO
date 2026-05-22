@@ -85,14 +85,63 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: directory
           HealthCheck:
-            Command: ["CMD-SHELL", "curl -f -k https://localhost:443/health || curl -f http://localhost:8080/health || exit 1"]
+            Command: ["CMD-SHELL", "curl -f -k https://localhost:443/health || curl -f http://localhost:443/health || exit 1"]
             Interval: 30
             Timeout: 5
             Retries: 3
             StartPeriod: 60
 
+  Alb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "cello-dir-${Environment}"
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-public-subnet-a"
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-public-subnet-b"
+      SecurityGroups:
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-alb-sg"
+      Tags:
+        - Key: Project
+          Value: cello
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "cello-dir-${Environment}"
+      Port: 443
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: "443"
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      Tags:
+        - Key: Project
+          Value: cello
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
   Service:
     Type: AWS::ECS::Service
+    DependsOn: HttpListener
     Properties:
       ServiceName: !Sub "cello-directory-${Environment}"
       Cluster: !Ref Cluster
@@ -110,6 +159,10 @@ Resources:
           SecurityGroups:
             - !ImportValue
               Fn::Sub: "cello-${Environment}-ecs-directory-sg"
+      LoadBalancers:
+        - ContainerName: directory
+          ContainerPort: 443
+          TargetGroupArn: !Ref TargetGroup
       Tags:
         - Key: Project
           Value: cello
@@ -124,3 +177,13 @@ Outputs:
     Value: !Ref Service
     Export:
       Name: !Sub "cello-${Environment}-directory-service-arn"
+
+  AlbDnsName:
+    Value: !GetAtt Alb.DNSName
+    Export:
+      Name: !Sub "cello-${Environment}-alb-dns-name"
+
+  AlbHostedZoneId:
+    Value: !GetAtt Alb.CanonicalHostedZoneID
+    Export:
+      Name: !Sub "cello-${Environment}-alb-hosted-zone-id"
