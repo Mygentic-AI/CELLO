@@ -47,11 +47,18 @@ if [ -z "$DATABASE_URL" ] && [ -n "$RDS_CREDENTIALS_SECRET_ARN" ]; then
   DB_USER=$(echo "$SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['username'])")
   DB_PASS=$(echo "$SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['password'])")
 
-  # URL-encode password for connection string
+  # URL-encode password for the JDBC connection string only.
+  # FLYWAY_USER and FLYWAY_PASSWORD env vars are set to the raw values below
+  # so Flyway sends them verbatim to PostgreSQL (no double-encoding).
   DB_PASS_ENCODED=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$DB_PASS")
 
   DATABASE_URL="postgresql://${DB_USER}:${DB_PASS_ENCODED}@${RDS_ENDPOINT}:${RDS_PORT}/${RDS_DB_NAME}"
   export DATABASE_URL
+
+  # Export raw credentials for Flyway — Flyway env vars are NOT URL-decoded,
+  # so they must be the plain text values, not percent-encoded.
+  export FLYWAY_USER="$DB_USER"
+  export FLYWAY_PASSWORD="$DB_PASS"
 fi
 
 if [ -z "$DATABASE_URL" ]; then
@@ -62,11 +69,16 @@ fi
 # ─── Parse DATABASE_URL for Flyway JDBC format ─────────────────────────────
 # DATABASE_URL format: postgresql://user:pass@host:port/dbname
 # Flyway JDBC format:  jdbc:postgresql://host:port/dbname
+#
+# FLYWAY_USER and FLYWAY_PASSWORD are only parsed from DATABASE_URL when not
+# already set (i.e. when DATABASE_URL is provided directly, not via Secrets Manager).
+# When using RDS_CREDENTIALS_SECRET_ARN, raw credentials are exported above —
+# parsing them back from the URL would yield URL-encoded values (wrong password).
 
 DB_HOST_PORT_NAME=$(echo "$DATABASE_URL" | sed 's|^postgres\(ql\)\?://[^@]*@||')
 FLYWAY_URL="jdbc:postgresql://${DB_HOST_PORT_NAME}"
-FLYWAY_USER=$(echo "$DATABASE_URL" | sed 's|^postgres\(ql\)\?://||' | sed 's|:.*||')
-FLYWAY_PASSWORD=$(echo "$DATABASE_URL" | sed 's|^postgres\(ql\)\?://[^:]*:||' | sed 's|@.*||')
+: "${FLYWAY_USER:=$(echo "$DATABASE_URL" | sed 's|^postgres\(ql\)\?://||' | sed 's|:.*||')}"
+: "${FLYWAY_PASSWORD:=$(echo "$DATABASE_URL" | sed 's|^postgres\(ql\)\?://[^:]*:||' | sed 's|@.*||')}"
 
 export FLYWAY_URL
 export FLYWAY_USER
