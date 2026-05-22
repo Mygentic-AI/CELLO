@@ -59,10 +59,15 @@ Resources:
                   - secretsmanager:DescribeSecret
                   - secretsmanager:PutSecretValue
                   - secretsmanager:UpdateSecretVersionStage
-                  - secretsmanager:GetRandomPassword
                 Resource:
                   - !ImportValue
                     Fn::Sub: "cello-${Environment}-rds-credentials-arn"
+              # GetRandomPassword is not a resource-level action — must use Resource: "*"
+              - Sid: GetRandomPassword
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetRandomPassword
+                Resource: "*"
               # Admin credential: read AWSCURRENT only (needed for ALTER ROLE)
               # SI-003: this permission is NOT granted to the ECS task role
               - Sid: AdminCredentialReadOnly

@@ -154,3 +154,34 @@ The pipeline-filter Lambda will match the changed path to the correct pipeline(s
 
 **SECOPS-004 next steps:**
 Run `infra/deploy-lambdas.sh dev rotation` to re-deploy if any changes are made to `handler.py`. AC-002/AC-003 verification can proceed now — trigger rotation via `aws secretsmanager rotate-secret --secret-id cello/dev/directory/rds-credentials --region us-east-1` and confirm the new credential authenticates.
+
+---
+
+### 2026-05-22 — SECOPS-004 agent follow-up: AC-002/AC-003 verification attempt
+
+Triggered manual rotation as instructed. Found and fixed two issues:
+
+1. **`secretsmanager:GetRandomPassword` IAM permission** — was scoped to a specific secret ARN, but `GetRandomPassword` is not a resource-level action and requires `Resource: "*"`. Fixed in `cello-rotation.yaml` and redeployed.
+
+2. **`rds-admin-credentials` had wrong password** — the secret had a password that didn't match the actual RDS master password. Root cause: `bootstrap.sh` stores credentials under username `cello_admin`, but RDS was created with `ManageMasterUserPassword: true` and the RDS-managed secret (`rds!db-f4cbac62-...`) holds the real `postgres` master password. Fixed by syncing `rds-admin-credentials` from the RDS-managed secret.
+
+After both fixes, the rotation Lambda connects to RDS successfully. The current failure is:
+
+```
+role "cello_service" does not exist
+```
+
+**This is not a SECOPS-004 bug.** The rotation Lambda is working correctly — it connects to RDS as the admin user and attempts `ALTER ROLE cello_service PASSWORD '...'`. The `cello_service` role doesn't exist because Flyway migrations haven't run against this dev RDS instance yet.
+
+**Waiting on: whoever runs Flyway migrations**
+
+The `cello_service` role is created by Flyway migrations (V18 from FEDERATION-001 is merged to `main` and will create it). Migrations run automatically when the ECS directory tasks start with the new image. The pipeline will push that image when `packages/directory/` is next pushed — which DEPLOY-004 confirms is now unblocked.
+
+**Once Flyway migrations have run, AC-002 and AC-003 can be verified by re-running:**
+```bash
+aws secretsmanager rotate-secret \
+  --secret-id cello/dev/directory/rds-credentials \
+  --region us-east-1
+```
+
+No further code changes needed from SECOPS-004.
