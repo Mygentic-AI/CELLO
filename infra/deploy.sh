@@ -104,6 +104,9 @@ fi
 
 RELAY_CPU="256"
 RELAY_MEM="512"
+# Directory node pubkey — relay needs this to authenticate directory connections.
+# Override with CELLO_DIRECTORY_PUBKEY env var if deploying a different environment.
+RELAY_DIRECTORY_PUBKEY="${CELLO_DIRECTORY_PUBKEY:-167ca6b145bfdd3696af8f4befd883c3dc610f4a9c8d52a30f6a22f669dc27b5}"
 
 # ── GitHub CodeStar Connection ARN ────────────────────────────────────────────
 # Set CELLO_GITHUB_CONNECTION_ID to the UUID of the CodeStar connection in us-east-1.
@@ -356,7 +359,8 @@ deploy_stack "cello-ecs-relay-${ENVIRONMENT}" "cello-ecs-relay.yaml" \
   "Environment=${ENVIRONMENT}" \
   "Cpu=${RELAY_CPU}" \
   "Memory=${RELAY_MEM}" \
-  "ImageUri=${RELAY_IMAGE}"
+  "ImageUri=${RELAY_IMAGE}" \
+  "DirectoryNodePubkey=${RELAY_DIRECTORY_PUBKEY}"
 
 # ── STEP 10: cello-route53 — Route 53 ALIAS records and ACM certs ────────────
 # depends on: cello-ecs-directory (ALB outputs read in Step 8)

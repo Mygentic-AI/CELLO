@@ -21,6 +21,9 @@ Parameters:
   ImageUri:
     Type: String
     Description: "ECR image URI for the relay service (e.g. {account}.dkr.ecr.{region}.amazonaws.com/cello-relay:latest)"
+  DirectoryNodePubkey:
+    Type: String
+    Description: "Hex-encoded Ed25519 public key of the directory node (64 chars)"
 
 Resources:
   LogGroup:
@@ -59,6 +62,8 @@ Resources:
               Value: "4000"
             - Name: WAL_DIR
               Value: /tmp/wal
+            - Name: CELLO_DIRECTORY_PUBKEY
+              Value: !Ref DirectoryNodePubkey
           Secrets:
             - Name: NODE_PRIVATE_KEY
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/relay/node-private-key"

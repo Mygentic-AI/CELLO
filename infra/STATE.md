@@ -25,7 +25,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-rds-dev | CREATE_COMPLETE | 2026-05-22 |
 | cello-rotation-dev | CREATE_COMPLETE | 2026-05-22 |
 | cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-22 | RDS_ENDPOINT/PORT/DB_NAME added |
-| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-22 |
+| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-22 | WAL_DIR + CELLO_DIRECTORY_PUBKEY added |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-22 |
 | cello-cicd-dev | UPDATE_COMPLETE | 2026-05-22 |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 |
