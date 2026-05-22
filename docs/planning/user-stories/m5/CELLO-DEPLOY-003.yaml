@@ -6,17 +6,27 @@ actor: DIR
 priority: P0
 components:
   - relay
+  - directory
 
 # ─── Intent ─────────────────────────────────────────────────
 story: >
-  As the CELLO Relay Node,
-  I want the relay service running as a persistent ECS Fargate service
-  with its own Ed25519 signing key loaded from Secrets Manager,
-  so that the relay can sign ACKs with a stable, revocable identity
-  and relay nodes are managed independently of directory nodes.
+  As the CELLO platform,
+  I want both the relay and directory services built as real Docker images,
+  pushed to ECR, and deployed to ECS Fargate so that the stub images are
+  replaced with production code, Flyway migrations run at directory startup,
+  and the relay signs ACKs with a stable Ed25519 identity loaded from
+  Secrets Manager — making both services live and independently deployable.
 
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
+  - trigger: "When a commit touching packages/directory/ or packages/relay/ is pushed to main"
+    action: "the directory or relay CodeBuild project builds a Docker image
+      for linux/amd64, tags it with the git commit SHA, pushes it to the
+      cello-directory or cello-relay ECR repository, then calls
+      aws ecs update-service to deploy the new task definition revision;
+      the old stub image is replaced; ECS performs a rolling replacement
+      and the new task must pass its health check before the old task stops"
+
   - trigger: "When an ECS relay task starts"
     action: "the task reads cello/{env}/relay/node-private-key from
       Secrets Manager; the relay service process initialises its
@@ -45,6 +55,46 @@ behavior:
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
+  - id: AC-000-directory-image-built
+    given: "The directory buildspec.yml is updated to include a Docker
+      build stage after typecheck and test"
+    when: "the cello-directory-pipeline runs on a commit that touches
+      packages/directory/"
+    then: "docker build --platform linux/amd64 succeeds, the image is
+      tagged with the git commit SHA, pushed to
+      257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:<sha>,
+      and aws ecs update-service is called to deploy the new revision;
+      aws ecs describe-services shows runningCount=1 with the new task
+      definition revision — verified from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-000-relay-image-built
+    given: "The relay buildspec.yml is updated to include a Docker
+      build stage after typecheck and test"
+    when: "the cello-relay-pipeline runs on a commit that touches
+      packages/relay/"
+    then: "docker build --platform linux/amd64 succeeds, the image is
+      tagged with the git commit SHA, pushed to
+      257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay:<sha>,
+      and aws ecs update-service is called to deploy the new revision;
+      aws ecs describe-services shows runningCount=1 with the new task
+      definition revision — verified from a separate terminal"
+    test_type: integration
+    component_under_test: relay
+
+  - id: AC-000-directory-flyway-live
+    given: "The directory ECS task has been updated to run the real image"
+    when: "CloudWatch Logs for /ecs/cello-directory-dev are inspected"
+    then: "migration.applied is logged for each Flyway migration that ran
+      (or migration.complete if all migrations were already applied);
+      directory.service.started is logged at INFO with { nodeId, region,
+      environment, schemaVersion }; GET /health via the ALB returns
+      HTTP 200 with { status: 'ok', nodeId, schemaVersion } — verified
+      from a separate terminal"
+    test_type: integration
+    component_under_test: directory
+
   - id: AC-001
     given: "The cello-ecs-relay CloudFormation stack is deployed with
       Environment=production and Region=us-east-1"
@@ -244,6 +294,13 @@ references:
   depends_on:
     - CELLO-DEPLOY-001
     - CELLO-DEPLOY-002
+  implementation_note: >
+    The Docker build/push/deploy work (AC-000-*) is the gap between
+    DEPLOY-002 (Dockerfile authored) and DEPLOY-005 (regional sequencing).
+    This story closes that gap: update both directory and relay buildspecs
+    to add docker build → ecr push → ecs update-service stages, build and
+    push the first real images, and verify both services are live in
+    dev/us-east-1 with the real code running.
   blocks:
     - CELLO-FEDERATION-003
     - CELLO-RELAY-001
