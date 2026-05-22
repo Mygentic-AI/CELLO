@@ -27,7 +27,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-22 |
 | cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-22 |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-22 |
-| cello-cicd-dev | CREATE_COMPLETE | 2026-05-22 |
+| cello-cicd-dev | UPDATE_COMPLETE | 2026-05-22 |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 |
 | Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-22 |
 
@@ -72,7 +72,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | AWS Account ID | 257394457473 | |
 | ECR repo — directory | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory | us-east-1 only until per-region repos added |
 | ECR repo — relay | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay | us-east-1 only until per-region repos added |
-| Current image tag | stub | Replace with real image tag when DEPLOY-002/003 complete |
+| Current image tag | stub (pending DEPLOY-003 pipeline success) | Pipeline building real images — relay and directory pipelines triggered 2026-05-22 |
 | Route 53 Hosted Zone | cello.mygentic.ai | Zone ID read at deploy time via aws route53 list-hosted-zones |
 | CodeStar Connection (us-east-1) | arn:aws:codeconnections:us-east-1:257394457473:connection/1a7fba2b-dd1d-4ebe-8372-7122b89f56b5 | AVAILABLE — override via CELLO_GITHUB_CONNECTION_ID |
 
