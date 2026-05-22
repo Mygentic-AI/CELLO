@@ -426,9 +426,15 @@ describe("FEDERATION-001A: idempotency — IF NOT EXISTS guards", () => {
     expect(script).toMatch(/pg_subscription|subname|IF NOT EXISTS/i);
   });
 
-  it("setup-replication.sh polls pg_stat_replication for streaming state verification", () => {
+  it("setup-replication.sh polls pg_replication_slots (active=true) for streaming state verification", () => {
     const script = loadScript();
-    expect(script).toContain("pg_stat_replication");
+    // Polling uses pg_replication_slots with active = 't' — NOT pg_stat_replication.application_name,
+    // which carries the subscription name, not the target region, so slot name reconstruction would fail.
+    expect(script).toContain("pg_replication_slots");
+    expect(script).toContain("active = 't'");
+    // The polling query must include slot_name to match against the expected slot set
+    const pollIdx = script.indexOf("SELECT slot_name FROM pg_replication_slots");
+    expect(pollIdx).toBeGreaterThan(-1);
   });
 });
 

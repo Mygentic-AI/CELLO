@@ -17,7 +17,7 @@
 #   2. For each node: creates the cello_replication user with REPLICATION privilege only
 #   3. For each node: creates publication cello_pub covering all append-only tables
 #   4. For each node: creates 2 subscriptions (one per peer node)
-#   5. Polls pg_stat_replication until all 6 slots reach streaming state (60s timeout)
+#   5. Polls pg_replication_slots until all 6 slots are active (60s timeout)
 #   6. Prints summary table and exits 0
 #
 # All operations are idempotent — safe to re-run. Existing objects are detected
@@ -331,9 +331,11 @@ for TARGET_REGION in "${REGIONS[@]}"; do
   done
 done
 
-# ── Step 5: Poll pg_stat_replication until all 6 slots reach streaming state ──
+# ── Step 5: Poll pg_replication_slots until all 6 slots are active ────────────
 # Timeout: 60 seconds (AC-003, DB-001).
 # All 6 expected slots are verified in parallel across all nodes.
+# Queries pg_replication_slots (slot_name, active) — not pg_stat_replication.application_name,
+# which is the subscription name, not the target region.
 
 echo ""
 echo "── Polling for streaming state on all 6 replication slots ───────────────"
@@ -352,7 +354,7 @@ for SOURCE_REGION in "${REGIONS[@]}"; do
   done
 done
 
-# Polling loop: check pg_stat_replication on each source node until all slots stream
+# Polling loop: check pg_replication_slots on each source node until all slots are active
 while true; do
   NOW=$(date +%s)
   ELAPSED=$(( NOW - POLL_START ))
