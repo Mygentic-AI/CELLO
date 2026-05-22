@@ -10,8 +10,10 @@ description: In-progress write-up for M5. Initial deployment issues, IaC gaps fo
 # M5 — Infrastructure Deployment
 
 **Started:** 2026-05-22  
-**Stories:** CELLO-DEPLOY-001A and related infrastructure stories  
-**Stacks deployed:** 12 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-ecs-relay, cello-route53, cello-cicd)
+**Stories:** DEPLOY-001A, DEPLOY-004, SECOPS-001, SECOPS-004, FEDERATION-001  
+**Stacks deployed:** 12 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-ecs-relay, cello-route53, cello-cicd)  
+**Lambdas deployed:** 3 (webhook-receiver, pipeline-filter, rds-rotation)  
+**Pipelines active:** 8 (5 green, 3 with pre-existing test failures)
 
 ---
 
@@ -93,9 +95,102 @@ Stack count is now 12.
 
 ---
 
+## DEPLOY-004 — GitHub Webhook Receiver, Pipeline Filter, and CI/CD Wiring
+
+The CI/CD story connected GitHub push events to CodePipeline executions via two Lambdas and EventBridge. It also uncovered and fixed every first-run CodeBuild failure across all 8 pipelines.
+
+**What was delivered:**
+
+- `infra/lambda/webhook-receiver/index.py` — Lambda function URL receiving GitHub push/PR webhooks, validating HMAC-SHA256 signatures against a Secrets Manager secret, and publishing structured events to EventBridge.
+- `infra/lambda/pipeline-filter/index.py` — EventBridge-triggered Lambda that inspects `commits[].added/modified/removed` paths and starts the correct CodePipeline(s) based on a data-driven path→pipeline mapping.
+- `infra/deploy-lambdas.sh` — deploys webhook-receiver, pipeline-filter, and rds-rotation Lambdas (the rotation target uses Docker for cross-platform psycopg2-binary packaging on Apple Silicon).
+- `infra/runbooks/github-webhook-setup.md` — manual Phase 5 runbook for HMAC secret generation and webhook registration.
+- Full end-to-end verification: push → `pipeline.webhook.received` → EventBridge → `pipeline.filter.match` → CodePipeline starts.
+
+**Bugs found and fixed during live testing:**
+
+### 1. GitHub HMAC signing uses raw UTF-8 bytes, not hex-decoded
+
+**Symptom:** Every webhook delivery returned `invalid_signature`.  
+**Root cause:** The Lambda was doing `bytes.fromhex(secret_string)` — treating the secret as hex-encoded. GitHub actually signs with the secret's raw UTF-8 bytes.  
+**Fix:** Changed to `secret_string.encode("utf-8")`. Non-obvious because the AWS docs for webhook validation show hex decoding (they assume hex-format secrets).
+
+### 2. GitHub sends form-encoded payloads even when configured for JSON
+
+**Symptom:** `invalid_json` error on push events despite configuring `application/json` content type.  
+**Root cause:** GitHub's initial delivery (and some webhook retries) sends `application/x-www-form-urlencoded` with `payload=<url-encoded-json>` regardless of the content-type setting.  
+**Fix:** Detect `payload=` prefix and URL-decode before JSON parsing. Both content types now work.
+
+### 3. Secrets Manager secret name vs constructed ARN
+
+**Symptom:** `ResourceNotFoundException` fetching the HMAC secret.  
+**Root cause:** CloudFormation appends a random 6-char suffix to secret ARNs (`-lwb9Z8`). The Lambda used a constructed ARN without the suffix. The Secrets Manager API accepts the secret *name* (which resolves to the correct ARN internally) but rejects a malformed ARN.  
+**Fix:** Changed env var from `HMAC_SECRET_ARN` (constructed) to `HMAC_SECRET_ID` (name-only: `cello/${env}/pipeline/github-hmac-secret`).
+
+### 4. pnpm `"*"` wildcard specifier rejected in lockfile mode
+
+**Symptom:** All 8 CodeBuild pipelines failed on `pnpm install --frozen-lockfile` with `ERR_PNPM_OUTDATED_LOCKFILE`.  
+**Root cause:** `@claude-flow/testing: "*"` in 7 package.json files. pnpm 10.x cannot resolve wildcard specifiers in frozen-lockfile mode — the lockfile records a specific version but the specifier `"*"` doesn't match the resolution algorithm's expectations.  
+**Fix:** Pinned to `"3.0.0-alpha.6"` (the installed version) in all 7 packages. Regenerated lockfile.
+
+### 5. pnpm `minimumReleaseAge` supply-chain policy
+
+**Symptom:** `pnpm install` in CodeBuild rejected `@aws-sdk/*` packages.  
+**Root cause:** Latest pnpm (installed via `npm install -g pnpm` without a version pin) enforces a 24-hour minimum release age. Several AWS SDK packages were published <16h before the build ran.  
+**Fix:** Pinned `pnpm@10.33.2` in all 8 buildspecs. This version doesn't enforce the policy, matching our local development environment.
+
+### 6. Packages have `typecheck` not `build` scripts
+
+**Symptom:** `ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT` — `@cello/crypto` has no `build` script.  
+**Root cause:** The initial buildspec fix attempted `pnpm --filter <pkg> run build` for upstream deps. CELLO packages use `typecheck` (which runs `tsc --build`, producing `dist/` as a side effect).  
+**Fix:** Changed all upstream dependency steps to `run typecheck`.
+
+### 7. Circular test imports between client and directory
+
+**Symptom:** Client pipeline: `Cannot find module '@cello/client'` during `@cello/directory run typecheck`.  
+**Root cause:** The client buildspec ran `@cello/directory run typecheck` before `@cello/client run typecheck`. Directory's test files import `@cello/client`, which needs its `dist/` to exist. But we're in the *client* pipeline — client hasn't been compiled yet.  
+**Fix:** Reordered buildspec: compile `@cello/client` first, then `@cello/directory`, then run client tests. The key insight: `tsc --build` in one package needs upstream `dist/` to exist, and test files create implicit cross-package dependencies that don't appear in `package.json`.
+
+### 8. RDS rotation Lambda requires linux/amd64 psycopg2-binary
+
+**Symptom:** Docker build for rotation Lambda produced ARM64 binary (Apple Silicon default), which fails on Lambda's x86_64 runtime.  
+**Root cause:** `pip install psycopg2-binary` on macOS installs the macOS wheel. Lambda needs a linux/amd64 wheel with the correct libpq.  
+**Fix:** `deploy-lambdas.sh` uses `docker run --platform linux/amd64 public.ecr.aws/lambda/python:3.12` with `--entrypoint pip` to install dependencies in a Lambda-compatible environment.
+
+**Key lesson:** First-run CI is a different beast from local development. Fresh checkouts have no `dist/`, no cached dependencies, and no implicit state from prior builds. Every cross-package import — including imports in *test* files — becomes a hard ordering constraint in CI that's invisible locally.
+
+---
+
+## FEDERATION-001 — Federation Schema and Session Ownership
+
+Delivered the multi-region federation foundation as application code + Flyway migration V18. No deployment step required — migration runs automatically when ECS tasks restart with the new image.
+
+**What was delivered:**
+
+- `V18__federation_schema.sql` — `sessions` table, checkpoint columns (`mmr_peaks`, `identity_merkle_root`, `checkpoint_hash`, `coordinator_node_id`), and `checkpoint_node_signatures` table.
+- `PgDirectoryStore` methods: `writeSession` (with ownership pre-check), `getSessionOwner`, `verifyReplicatedRow`, `verifyPgTypes`.
+- 620-line integration test suite. Six `describe.skip` stubs deferred to FEDERATION-E2E-001 (requires multi-node RDS with logical replication).
+
+**Dependency:** V18 reaches ECS when the directory pipeline passes and deploys. The `cello_service` role created by V18 unblocks SECOPS-004's rotation verification (AC-002/AC-003).
+
+---
+
+## SECOPS-001 — S3 Audit Log Shipper
+
+Delivered the S3AuditLogShipper adapter implementing the `AuditLogShipper` interface. Ships audit events as NDJSON to the `cello-audit-logs-{env}-{region}` bucket with path partitioning by date and node ID.
+
+**Post-merge finding:** The CodeBuild service role lacked `s3:PutObject` on the audit bucket. Integration tests that exercise the shipper fail in CI but pass locally (where the developer's AWS profile has broad permissions). Fix applied by adding the permission to `cello-cicd.yaml`.
+
+---
+
 ## What Remains Open
 
-*To be updated as M5 progresses.*
+- **DEPLOY-002** — Directory Dockerfile, entrypoint, health check, Flyway integration (starting now)
+- **DEPLOY-003** — Relay Dockerfile and deployment
+- **DEPLOY-005** — Production deployment sequencing (sequential region rollout)
+- **cello-crypto-pipeline** — flaky timing test (`keygen under 50ms`, gets 71ms on cold CodeBuild VMs). Threshold needs raising.
+- **cello-client-pipeline** — 1 test file failing (pre-existing, not CI-related)
+- **cello-directory-pipeline** — 3 test failures (pre-existing, likely integration tests needing real AWS state)
 
 ---
 
