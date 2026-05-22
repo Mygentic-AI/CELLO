@@ -16,7 +16,7 @@ phases:
       - pnpm --filter @cello/relay run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
       # ── Docker build → ECR push → ECS deploy (DEPLOY-003) ──────────────────
       # IMAGE_TAG = first 7 chars of git commit SHA (CodeBuild sets CODEBUILD_RESOLVED_SOURCE_VERSION)
-      - export IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:7}
+      - export IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
       - export ECR_REPO=257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay
       - export IMAGE_URI=${ECR_REPO}:${IMAGE_TAG}
       # Authenticate to ECR
