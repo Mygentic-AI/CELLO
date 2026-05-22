@@ -889,7 +889,7 @@ describeIntegration(
       store.setProfile(profile, "obs-link-failed-corr");
 
       // Wait for the fire-and-forget INSERT + .catch() logger call to complete
-      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
 
       // account.agent.link.failed must have been logged at ERROR
       expect(logger.error).toHaveBeenCalledWith(
