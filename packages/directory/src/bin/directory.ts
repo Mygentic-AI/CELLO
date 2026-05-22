@@ -26,7 +26,7 @@
  *   NODE_ID                            — node identifier (default: AWS_REGION or "local")
  *   RDS_CREDENTIALS_SECRET_ARN         — required for CELLO_ENV=dev/staging/production; Secrets Manager ARN
  *   NODE_PRIVATE_KEY                   — required for CELLO_ENV=dev/staging/production; Ed25519 key hex
- *   KMS_KEY_ARN                        — required for CELLO_ENV=dev/staging/production; KMS key ARN
+ *   KMS_KEY_ARN                        — future: KmsEnvelopeKeyProvider (not yet enforced; LocalEnvelopeKeyProvider used as placeholder)
  *   HEALTH_PORT                        — HTTP health check port (default: 443)
  */
 import { homedir } from "node:os";

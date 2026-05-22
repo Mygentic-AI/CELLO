@@ -67,7 +67,14 @@ export function logSecretsUnavailable(logger: Logger, ctx: SecretsUnavailableCon
   logger.error("directory.secrets.unavailable", ctx as unknown as LogContext);
 }
 
-// ─── migration.applied ─────────────────────────────────────────────────────
+// ─── migration.applied / migration.failed ──────────────────────────────────
+// These helpers are ready for use but not yet called from production code.
+// Flyway runs in docker-entrypoint.sh (shell), not in the Node.js process.
+// To wire: parse Flyway's JSON output (flyway -outputType=json) in the
+// entrypoint and pipe per-migration events to the Node.js process via stdin
+// or a shared log file — or migrate from shell to a Node.js Flyway runner.
+// TODO(DEPLOY-002): wire logMigrationApplied/logMigrationFailed once
+// Flyway JSON output parsing is added to the entrypoint.
 
 export interface MigrationAppliedContext {
   version: string;

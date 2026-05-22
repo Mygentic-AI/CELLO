@@ -162,11 +162,17 @@ describe("DEPLOY-002: AC-009 configurePgTypes in constructor", () => {
 // ─── AC-010: dist freshness check ─────────────────────────────────────────
 
 describe("DEPLOY-002: AC-010 dist freshness check", () => {
-  it("dist/bin/directory.js exists after typecheck", () => {
+  it("dist/bin/directory.js contains createHealthServer reference", () => {
     const distPath = resolve(import.meta.dirname, "../../dist/bin/directory.js");
-    // This test only verifies the path is checkable — the actual gate
-    // is run after pnpm run typecheck rebuilds dist/
-    expect(typeof distPath).toBe("string");
+    if (existsSync(distPath)) {
+      const content = readFileSync(distPath, "utf-8");
+      expect(content).toContain("createHealthServer");
+    } else {
+      // dist not yet built — gate sequence runs pnpm run typecheck first,
+      // which rebuilds dist/ via tsc --build. A missing dist/ here means
+      // the test ran before typecheck, which is a gate sequence violation.
+      throw new Error("dist/bin/directory.js does not exist — run pnpm run typecheck first");
+    }
   });
 
   it("dist/health-server.js contains createHealthServer export", () => {
@@ -175,8 +181,7 @@ describe("DEPLOY-002: AC-010 dist freshness check", () => {
       const content = readFileSync(distPath, "utf-8");
       expect(content).toContain("createHealthServer");
     } else {
-      // dist not yet built — skip gracefully (will be caught by gate sequence)
-      expect(true).toBe(true);
+      throw new Error("dist/health-server.js does not exist — run pnpm run typecheck first");
     }
   });
 });
@@ -415,17 +420,103 @@ describe("DEPLOY-002: Dockerfile structure", () => {
   });
 });
 
-// ─── SecretsProvider interface ──────────────────────────────────────────────
+// ─── SI-003: ECS task has no public IP, routes only through ALB ───────────────
+//
+// Adversarial condition: even if a developer sets AssignPublicIp: ENABLED,
+// the security group (ecs-directory-sg) accepts inbound only from the ALB
+// security group; direct internet traffic is blocked at the SG level.
+// We validate the CloudFormation template enforces this by construction.
 
-describe("DEPLOY-002: SecretsProvider interface", () => {
-  it("SecretsProvider interface exists in packages/interfaces", async () => {
-    const srcPath = resolve(import.meta.dirname, "../../../../packages/interfaces/src/secrets-provider.ts");
-    expect(existsSync(srcPath)).toBe(true);
+describe("DEPLOY-002: SI-003 no public IP, private subnets only", () => {
+  const templatePath = resolve(import.meta.dirname, "../../../../infra/cloudformation/cello-ecs-directory.yaml");
+
+  it("ECS service template exists", () => {
+    expect(existsSync(templatePath)).toBe(true);
   });
 
-  it("SecretsProvider has getSecret method", async () => {
-    const srcPath = resolve(import.meta.dirname, "../../../../packages/interfaces/src/secrets-provider.ts");
-    const content = readFileSync(srcPath, "utf-8");
-    expect(content).toContain("getSecret");
+  it("AssignPublicIp is DISABLED", () => {
+    const content = readFileSync(templatePath, "utf-8");
+    expect(content).toContain("AssignPublicIp: DISABLED");
+    expect(content).not.toContain("AssignPublicIp: ENABLED");
+  });
+
+  it("subnets reference private subnet imports only", () => {
+    const content = readFileSync(templatePath, "utf-8");
+    // The AwsvpcConfiguration subnets block must only reference private-subnet imports
+    expect(content).toContain("private-subnet-a");
+    expect(content).toContain("private-subnet-b");
+    // Public subnets must NOT appear in the ECS service subnet list
+    // (they appear only in the ALB Subnets block, which is expected)
+    const serviceBlock = content.slice(content.indexOf("Service:"), content.indexOf("Outputs:"));
+    expect(serviceBlock).not.toContain("public-subnet");
+  });
+
+  it("security group references ecs-directory-sg, not a wildcard", () => {
+    const content = readFileSync(templatePath, "utf-8");
+    const serviceBlock = content.slice(content.indexOf("Service:"), content.indexOf("Outputs:"));
+    expect(serviceBlock).toContain("ecs-directory-sg");
+  });
+});
+
+// ─── Infrastructure AC validation (template structure) ────────────────────────
+//
+// AC-001: ECS service has desiredCount=1, private subnets, no public IP.
+// AC-004: Task definition uses Secrets Manager ARN references, no plaintext.
+// AC-007: Task role has s3:PutObject only (no Delete, Get, List on audit bucket).
+// AC-008: Log group name matches /cello/{env}/directory or /ecs/cello-directory-{env}.
+
+describe("DEPLOY-002: AC-001 ECS service desired count and placement", () => {
+  const templatePath = resolve(import.meta.dirname, "../../../../infra/cloudformation/cello-ecs-directory.yaml");
+
+  it("DesiredCount is 1", () => {
+    const content = readFileSync(templatePath, "utf-8");
+    expect(content).toContain("DesiredCount: 1");
+  });
+
+  it("LaunchType is FARGATE", () => {
+    const content = readFileSync(templatePath, "utf-8");
+    expect(content).toContain("LaunchType: FARGATE");
+  });
+
+  it("RequiresCompatibilities includes FARGATE", () => {
+    const content = readFileSync(templatePath, "utf-8");
+    expect(content).toContain("- FARGATE");
+  });
+});
+
+describe("DEPLOY-002: AC-004 secrets via ARN references, no plaintext", () => {
+  const templatePath = resolve(import.meta.dirname, "../../../../infra/cloudformation/cello-ecs-directory.yaml");
+
+  it("rds-credentials secret is referenced by ARN, not inline value", () => {
+    const content = readFileSync(templatePath, "utf-8");
+    expect(content).toContain("rds-credentials");
+    // The value must be an ARN reference pattern, not a plaintext password
+    expect(content).not.toMatch(/password:\s*["'][^"']+["']/);
+  });
+
+  it("node-private-key secret uses Secrets.ValueFrom (ECS injection)", () => {
+    const content = readFileSync(templatePath, "utf-8");
+    expect(content).toContain("node-private-key");
+    expect(content).toContain("ValueFrom");
+  });
+
+  it("no plaintext credential values in Environment section", () => {
+    const content = readFileSync(templatePath, "utf-8");
+    // Environment vars should only have non-secret values
+    expect(content).not.toMatch(/Value:\s*["'][a-zA-Z0-9+/]{20,}={0,2}["']/); // no base64 blobs
+  });
+});
+
+describe("DEPLOY-002: AC-008 log group name", () => {
+  const templatePath = resolve(import.meta.dirname, "../../../../infra/cloudformation/cello-ecs-directory.yaml");
+
+  it("CloudWatch log group references cello and directory in name", () => {
+    const content = readFileSync(templatePath, "utf-8");
+    expect(content).toMatch(/LogGroupName.*cello.*directory/s);
+  });
+
+  it("log group has a retention policy", () => {
+    const content = readFileSync(templatePath, "utf-8");
+    expect(content).toContain("RetentionInDays");
   });
 });
