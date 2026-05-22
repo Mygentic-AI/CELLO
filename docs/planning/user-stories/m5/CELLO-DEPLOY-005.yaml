@@ -104,7 +104,7 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-003
-    given: "The smoke test suite passes all 6 scenarios"
+    given: "The smoke test suite passes all 8 scenarios"
     when: "the Production Deploy stage runs"
     then: "the production directory ECS services in us-east-1,
       eu-central-1, and ap-northeast-1 are each updated to the

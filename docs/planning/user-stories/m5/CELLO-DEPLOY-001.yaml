@@ -207,6 +207,28 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
+  - id: AC-011-vpc-peering-automation
+    given: "The cello-vpc-peering.yaml CloudFormation template exists and
+      cello-vpc stacks have been deployed in all three regions (us-east-1,
+      eu-central-1, ap-northeast-1) — each region's VPC ID and private
+      route table ID are available as stack outputs"
+    when: "./infra/setup-vpc-peering.sh {env} us-east-1 eu-central-1
+      ap-northeast-1 is run"
+    then: "the script reads VPC IDs, private route table IDs, RDS security
+      group IDs, and ECS directory security group IDs from each region's
+      cello-vpc-{env} and cello-ecs-directory-{env} stack outputs; it
+      deploys 6 cello-vpc-peering stacks (2 per region — one to each
+      peer); all 3 VPC Peering connections reach 'active' status; route
+      tables in each VPC's private subnets have routes for peer VPC CIDR
+      ranges pointing at the peering connection; the script is idempotent
+      (re-running it when peering already exists exits 0 with no changes);
+      for production environments the script prints a confirmation prompt
+      before executing — verified by running the script and asserting
+      aws ec2 describe-vpc-peering-connections returns 3 active connections
+      from a separate terminal"
+    test_type: e2e
+    component_under_test: directory
+
   - id: AC-010-store-tables
     given: "INFRA-001 introduces the directory_nodes table and the
       owning_node_id column on sessions — the first PgDirectoryStore
