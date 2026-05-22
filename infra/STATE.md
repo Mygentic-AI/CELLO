@@ -23,6 +23,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-22 |
 | cello-s3-dev | CREATE_COMPLETE | 2026-05-22 |
 | cello-rds-dev | CREATE_COMPLETE | 2026-05-22 |
+| cello-rotation-dev | CREATE_COMPLETE | 2026-05-22 |
 | cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-22 |
 | cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-22 |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-22 |

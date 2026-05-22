@@ -98,11 +98,14 @@ Resources:
           ToPort: 5432
           DestinationSecurityGroupId: !ImportValue
             Fn::Sub: "cello-${Environment}-rds-sg"
-        # Allow HTTPS to VPC endpoints (Secrets Manager, KMS, CloudWatch Logs)
+        # Allow HTTPS to VPC Interface Endpoints (Secrets Manager, KMS, CloudWatch Logs).
+        # Scoped to VPC CIDR — the Lambda runs in private subnets with no NAT Gateway;
+        # HTTPS traffic can only reach Interface Endpoints within the VPC.
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          CidrIp: "0.0.0.0/0"
+          CidrIp: !ImportValue
+            Fn::Sub: "cello-${Environment}-vpc-cidr"
       Tags:
         - Key: Name
           Value: !Sub "cello-rotation-lambda-sg-${Environment}"

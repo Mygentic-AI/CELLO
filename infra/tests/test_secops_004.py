@@ -170,6 +170,86 @@ def test_ac001_rds_credentials_no_rotation_in_secrets_yaml():
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# AC-004/AC-005: ACM certificate is ACM-issued via cello-route53.yaml
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def test_ac004_acm_certificate_is_acm_issued():
+    """AC-004/AC-005: cello-route53.yaml uses AWS::CertificateManager::Certificate.
+
+    ACM-issued certificates auto-renew automatically (no operator action required).
+    This structural test verifies the template does not use a manually-uploaded cert.
+    """
+    tmpl = load_yaml("cello-route53.yaml")
+    resources = tmpl.get("Resources", {})
+
+    acm_certs = [
+        name for name, res in resources.items()
+        if res.get("Type") == "AWS::CertificateManager::Certificate"
+    ]
+    assert acm_certs, (
+        "cello-route53.yaml must define an AWS::CertificateManager::Certificate "
+        "resource — manually-uploaded certificates are not permitted (AC-004, SI-002)"
+    )
+
+
+def test_ac004_acm_certificate_uses_dns_validation():
+    """AC-004: ACM certificate uses DNS validation for auto-renewal support."""
+    tmpl = load_yaml("cello-route53.yaml")
+    resources = tmpl.get("Resources", {})
+
+    for name, res in resources.items():
+        if res.get("Type") == "AWS::CertificateManager::Certificate":
+            props = res.get("Properties", {})
+            method = props.get("ValidationMethod")
+            assert method == "DNS", (
+                f"ACM certificate {name} must use DNS validation (ValidationMethod: DNS) "
+                "for ACM auto-renewal to work. Email validation requires manual action."
+            )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# SI-004: DB_PASSWORD must NOT be injected as a task-launch snapshot
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def test_si004_db_password_not_injected_as_task_launch_snapshot():
+    """SI-004: cello-ecs-directory.yaml must NOT inject DB_PASSWORD via Secrets.ValueFrom.
+
+    ECS Secrets.ValueFrom fetches the secret value once at task launch and injects it
+    as a snapshot env var. After rotation, the task holds a stale password until it
+    restarts — defeating the 30-day rotation. Instead, inject RDS_CREDENTIALS_SECRET_ARN
+    as a plain env var; the application calls GetSecretValue at connection-pool refresh.
+    """
+    path = os.path.join(CFN_DIR, "cello-ecs-directory.yaml")
+    assert os.path.exists(path), f"cello-ecs-directory.yaml not found at {path}"
+
+    with open(path) as f:
+        content = f.read()
+
+    # DB_PASSWORD must not appear as a Secrets.ValueFrom name
+    # Parse the YAML to check the Secrets list structure
+    tmpl = yaml.load(open(path), Loader=CfnLoader)  # noqa: S506 — internal test
+    task_defs = [
+        res for res in tmpl.get("Resources", {}).values()
+        if res.get("Type") == "AWS::ECS::TaskDefinition"
+    ]
+    assert task_defs, "No ECS TaskDefinition found in cello-ecs-directory.yaml"
+
+    for task_def in task_defs:
+        containers = task_def.get("Properties", {}).get("ContainerDefinitions", [])
+        for container in containers:
+            secrets = container.get("Secrets", [])
+            secret_names = [s.get("Name", "") for s in secrets]
+            assert "DB_PASSWORD" not in secret_names, (
+                "SI-004 VIOLATION: DB_PASSWORD injected via Secrets.ValueFrom "
+                "is a task-launch snapshot. After rotation it goes stale. "
+                "Use RDS_CREDENTIALS_SECRET_ARN as a plain env var instead — "
+                "the application must call GetSecretValue at connection-pool refresh time."
+            )
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # AC-006: node-private-key secrets do NOT have rotation Lambda configured
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -671,6 +751,9 @@ if __name__ == "__main__":
         test_ac001_rds_credentials_rotation_enabled,
         test_ac001_rds_credentials_rotation_lambda_arn,
         test_ac001_rds_credentials_no_rotation_in_secrets_yaml,
+        test_ac004_acm_certificate_is_acm_issued,
+        test_ac004_acm_certificate_uses_dns_validation,
+        test_si004_db_password_not_injected_as_task_launch_snapshot,
         test_ac006_directory_node_private_key_no_rotation,
         test_ac006_relay_node_private_key_no_rotation,
         test_ac007_runbook_exists,
