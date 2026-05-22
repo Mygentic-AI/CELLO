@@ -13,6 +13,6 @@ phases:
       - pnpm --filter @cello/protocol-types run typecheck
       - pnpm --filter @cello/transport run typecheck
       - pnpm --filter @cello/relay run typecheck
-      - pnpm --filter @cello/directory run typecheck
       - pnpm --filter @cello/client run typecheck
+      - pnpm --filter @cello/directory run typecheck
       - pnpm --filter @cello/client run test
