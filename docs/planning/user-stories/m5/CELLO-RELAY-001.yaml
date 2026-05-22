@@ -213,6 +213,86 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
+  - id: AC-010
+    given: "infra/sign-manifest.sh is invoked with Environment=dev,
+      Region=us-east-1, and a relay definitions JSON file containing
+      one active relay entry; no manifest currently exists in the
+      cello-relay-manifest-dev-us-east-1 S3 bucket"
+    when: "the script completes successfully"
+    then: "the S3 bucket contains a new object at the manifest key
+      with version=1; the object's signature field verifies using
+      Ed25519.verify(signingNodePublicKey, canonicalJSON({ version,
+      updatedAt, relays })) — verified by reading the manifest from
+      S3 in a separate process, fetching the signing node's public
+      key from Secrets Manager under
+      cello/dev/directory/node-private-key, deriving the public key
+      via @noble/ed25519, and running signature verification; the
+      script prints the manifest version and S3 key to stdout on
+      success; the script prints a rolling ECS service update command
+      that the operator can use to trigger a directory reload"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-011
+    given: "a manifest with version=2 is already stored in the S3
+      bucket"
+    when: "sign-manifest.sh is invoked and produces a new manifest"
+    then: "the resulting manifest has version=3 (increments by
+      exactly 1 from the current version); if sign-manifest.sh is
+      invoked a second time without changes to relay definitions,
+      the resulting manifest has a new updatedAt timestamp and
+      version=4 — versioning is monotonic and every invocation
+      increments the version regardless of whether relay definitions
+      changed"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-012
+    given: "sign-manifest.sh is invoked with a relay definitions
+      file that marks an existing relay as status=draining"
+    when: "the resulting manifest is uploaded to S3 and the
+      directory reloads (via rolling ECS service update)"
+    then: "the directory excludes the draining relay from new
+      session assignments while it continues serving existing
+      sessions; the draining relay's status is visible in the
+      in-memory pool state — verified by the AC-009 mechanism:
+      a relay with status draining in the manifest is never
+      assigned to new sessions across 20 consecutive session
+      establishment requests from a separate client process"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-013
+    given: "the signing node's private key secret exists in
+      Secrets Manager at cello/{env}/directory/node-private-key
+      but its value is an empty placeholder (as created by
+      deploy.sh before the operator populates it)"
+    when: "sign-manifest.sh is invoked"
+    then: "the script exits non-zero with the error message:
+      'Signing key is empty — populate
+      cello/{env}/directory/node-private-key in Secrets Manager
+      before signing the manifest'; no manifest object is uploaded
+      to S3 — verified by asserting the S3 object is absent or
+      unchanged after the failed invocation"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-014
+    given: "infra/scripts/sign-ed25519.js exists in the repository
+      and is invoked with a known Ed25519 private key (32-byte hex)
+      and a known UTF-8 message string as arguments"
+    when: "the script completes"
+    then: "it outputs the Ed25519 signature as a lowercase hex
+      string to stdout; the signature verifies using
+      Ed25519.verify with the public key derived from the private
+      key via @noble/ed25519; the script is deterministic — given
+      the same private key and message it always produces the same
+      signature — verified by running sign-ed25519.js with a fixed
+      test key pair and asserting the output matches the expected
+      signature value"
+    test_type: unit
+    component_under_test: directory
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
