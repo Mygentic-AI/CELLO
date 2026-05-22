@@ -128,10 +128,11 @@ fi
 # ── Observability helpers ─────────────────────────────────────────────────────
 
 # cello-cicd deploys to us-east-1 only — adjust count per region
+# +1 for cello-rotation (SECOPS-004)
 if [[ "${REGION}" == "us-east-1" ]]; then
-  STACK_COUNT=11
+  STACK_COUNT=12
 else
-  STACK_COUNT=10
+  STACK_COUNT=11
 fi
 DEPLOY_START=$(date +%s)
 
@@ -278,6 +279,25 @@ deploy_stack "cello-rds-${ENVIRONMENT}" "cello-rds.yaml" \
   "Environment=${ENVIRONMENT}" \
   "InstanceClass=${RDS_CLASS}"
 
+# ── STEP 6a: cello-rotation — RDS credential rotation Lambda ─────────────────
+# depends on: cello-vpc, cello-secrets, cello-iam, cello-rds
+# Must deploy BEFORE cello-ecs-directory so that the rotation Lambda ARN export
+# (cello-${ENVIRONMENT}-rds-rotation-lambda-arn) is available when cello-secrets.yaml
+# references it via !ImportValue in the RotationLambdaARN property.
+#
+# NOTE: cello-secrets.yaml imports the rotation Lambda ARN. This means cello-rotation
+# must deploy before cello-secrets is updated with rotation config. However, cello-secrets
+# was deployed in Step 2 without rotation config (to avoid a circular dependency on
+# first deploy). On subsequent deploys, Step 2 updates cello-secrets with the rotation
+# ARN from cello-rotation. The sequence is correct for re-deployments.
+# On first deploy: cello-secrets deploys with no rotation config (placeholder).
+#                  cello-rotation deploys and exports the Lambda ARN.
+#                  cello-secrets update (Step 2 re-run or manual) wires in the ARN.
+# On re-deploy: cello-secrets picks up the ARN from the already-deployed cello-rotation.
+
+deploy_stack "cello-rotation-${ENVIRONMENT}" "cello-rotation.yaml" \
+  "Environment=${ENVIRONMENT}"
+
 # ── STEP 6.5: Pre-flight — ensure container images exist in ECR ──────────────
 # If the image tag doesn't exist, build and push stubs automatically.
 # This prevents ECS tasks from failing to start on a fresh deployment.
@@ -390,6 +410,7 @@ for stack in \
   "cello-kms-${ENVIRONMENT}" \
   "cello-s3-${ENVIRONMENT}" \
   "cello-rds-${ENVIRONMENT}" \
+  "cello-rotation-${ENVIRONMENT}" \
   "cello-ecs-directory-${ENVIRONMENT}" \
   "cello-ecs-relay-${ENVIRONMENT}" \
   "cello-route53-${ENVIRONMENT}"; do
