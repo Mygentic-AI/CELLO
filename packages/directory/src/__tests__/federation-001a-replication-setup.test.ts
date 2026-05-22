@@ -37,7 +37,7 @@
  *   directory_checkpoints, checkpoint_node_signatures, relay_registrations,
  *   sessions, pending_notifications, user_accounts
  *
- * AC-001, AC-002, AC-003, AC-005, AC-006, SI-001, DB-001 require live AWS ECS + RDS
+ * AC-001, AC-002, AC-003, AC-005, AC-006, AC-007, SI-001, SI-002, DB-001 require live AWS ECS + RDS
  * infrastructure with logical replication configured. These are registered as
  * describe.skip with test type e2e/integration. They are exercised by FEDERATION-E2E-001.
  */
@@ -79,10 +79,10 @@ describe("FEDERATION-001A: setup-replication.sh exists and is executable", () =>
     expect(script).toContain("command -v python3");
   });
 
-  it("setup-replication.sh checks ECS Exec output for psql ERROR: lines on all DDL calls", () => {
+  it("setup-replication.sh checks ECS Exec output for psql errors on all DDL calls", () => {
     const script = loadScript();
-    // grep -q "^ERROR:" must be present to catch silent psql failures
-    expect(script).toContain('grep -q "^ERROR:"');
+    // Both PostgreSQL ERROR: lines and psql connection errors (psql: error:) are caught
+    expect(script).toContain('grep -qE "^ERROR:|^psql: error:"');
   });
 });
 
@@ -205,11 +205,13 @@ describe("FEDERATION-001A: AC-007 script fails fast when ECS task not running", 
 // ─── SI-002: Deterministic slot naming ───────────────────────────────────────
 
 describe("FEDERATION-001A: SI-002 deterministic slot naming convention", () => {
-  it("setup-replication.sh uses cello_{env}_{source}_{target} slot naming pattern", () => {
+  it("setup-replication.sh uses cello_{env}_{source}_{target} slot naming pattern with hyphens sanitized to underscores", () => {
     const script = loadScript();
-    // Slot name must be constructed from env+source+target variables
-    // Pattern: cello_{ENVIRONMENT}_{source_region}_{target_region}
-    expect(script).toMatch(/cello.*ENVIRONMENT.*source|cello.*env.*source/i);
+    // Slot name constructed from env+source+target with hyphens replaced by underscores.
+    // PostgreSQL slot names must match [a-z0-9_]+ — hyphens are not permitted.
+    expect(script).toMatch(/cello_.*ENVIRONMENT.*SOURCE_REGION.*TARGET_REGION|SLOT_NAME=.*ENVIRONMENT/);
+    // Sanitization: hyphens in region names must be replaced with underscores
+    expect(script).toMatch(/SOURCE_REGION\/\/-\/_|SOURCE_REGION\/\/\[-\]\/_/);
   });
 
   it("setup-replication.sh slot naming uses only env and region variables (no random/timestamp)", () => {
@@ -521,6 +523,19 @@ describe("FEDERATION-001A: AC-005 Secrets Manager path convention", () => {
   });
 });
 
+// ─── AC-007 deferred integration test ────────────────────────────────────────
+
+describe.skip("FEDERATION-001A integration: AC-007 — script exits before psql when ECS task not RUNNING (deferred to live AWS)", () => {
+  // AC-007: When a task is found but its lastStatus is not RUNNING (e.g. STOPPED, PENDING),
+  // the script exits 1 before any psql command runs and no database modifications occur.
+  // Verified by stopping one of the three ECS tasks and re-running the script.
+  // Requires: live ECS cluster, stopped task, ability to describe-tasks.
+  // Deferred to CELLO-FEDERATION-E2E-001.
+  it("AC-007: script exits 1 and makes no DB changes when any task is STOPPED", () => {
+    throw new Error("Deferred to CELLO-FEDERATION-E2E-001 — requires live AWS ECS with a stopped task");
+  });
+});
+
 // ─── E2E and integration tests deferred to live-infra environment ─────────────
 
 describe.skip("FEDERATION-001A e2e: AC-001 — first-time setup creates 6 streaming slots (deferred to live AWS)", () => {
@@ -583,25 +598,21 @@ describe.skip("FEDERATION-001A integration: DB-001 — slot_not_streaming timeou
   });
 });
 
-describe.skip("FEDERATION-001A e2e: SI-002 adversarial — tampered row rejected by replication (deferred to CELLO-FEDERATION-E2E-001)", () => {
+describe.skip("FEDERATION-001A integration: SI-002 adversarial — forged slot name rejected by polling loop (deferred to CELLO-FEDERATION-E2E-001)", () => {
   // Deferred to CELLO-FEDERATION-E2E-001 — requires multi-region infrastructure.
   //
-  // Adversarial condition: a row in agent_profiles is directly modified at the
-  // database level on one node (bypassing application logic) such that it violates
-  // the hash chain. The modified row must NOT be replicated to peer nodes — or if
-  // replicated, the hash chain verification on peer nodes must reject the row.
-  //
-  // SI-002 invariant: slot names are deterministic — cello_{env}_{source}_{target}.
-  // A tampered replica cannot introduce a forged slot name that would cause the
-  // polling loop to accept a bogus "streaming" status.
+  // SI-002 adversarial condition: verify that slot naming is deterministic and
+  // cannot be spoofed. A rogue actor cannot introduce a subscription with a
+  // non-cello slot name that the polling loop would incorrectly count as one
+  // of the 6 expected slots.
   //
   // Test plan (live infrastructure required):
   //   1. Run setup-replication.sh to establish all 6 streaming slots.
-  //   2. Directly UPDATE an agent_profiles row on one source node, altering prev_hash.
-  //   3. Verify that peer nodes detect the hash chain violation and log
-  //      directory.hashchain.violation at ERROR with { region, agentId, detectedAt }.
-  //   4. Verify the tampered row is not silently accepted.
-  it("SI-002: tampered row rejected — hash chain violation detected on peer nodes", () => {
+  //   2. Manually create a rogue replication slot with name "fake_slot" on one source node.
+  //   3. Verify the polling loop does NOT count fake_slot as one of the 6 expected slots.
+  //      (The SLOT_QUERY filters `slot_name LIKE 'cello_%'` — fake_slot must not match.)
+  //   4. Verify the script only accepts slots matching cello_{env}_{source_sanitized}_{target_sanitized}.
+  it("SI-002: rogue slot name is not accepted by the polling loop", () => {
     throw new Error(
       "Deferred to CELLO-FEDERATION-E2E-001 — requires multi-region infrastructure",
     );

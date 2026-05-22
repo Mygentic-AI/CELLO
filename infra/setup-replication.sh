@@ -251,20 +251,25 @@ for REGION in "${REGIONS[@]}"; do
   # Uses DO $$ block for idempotency — PostgreSQL 15 introduced CREATE ROLE IF NOT EXISTS
   # but RDS may be on earlier versions; the DO block is universally compatible.
   # SI-001: REPLICATION privilege only — no INSERT, UPDATE, DELETE, DDL, SUPERUSER, CREATEDB.
+  # The CREATE USER password must appear in the SQL literal — PostgreSQL has no env var
+  # equivalent for role passwords. The --command arg is the ECS Exec trust boundary;
+  # keep CloudTrail logging disabled (ECS Exec execute-command-configuration LogConfiguration
+  # is not enabled in the cello CFN templates).
   local_create_user_sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cello_replication') THEN CREATE USER cello_replication WITH REPLICATION LOGIN PASSWORD '${REPL_PASS}'; END IF; END \$\$;"
+  local_user_cmd="PGPASSWORD='${REPL_PASS}' psql \${DATABASE_URL} -c \"${local_create_user_sql}\""
 
   EXEC_OUTPUT=$(aws ecs execute-command \
     --region "${REGION}" \
     --cluster "${ECS_CLUSTER_NAME}" \
     --task "${TASK_ARNS[${REGION}]}" \
     --container "cello-directory" \
-    --command "psql \${DATABASE_URL} -c \"${local_create_user_sql}\"" \
+    --command "${local_user_cmd}" \
     --interactive 2>&1) || {
       log_error "infra.replication.setup.task_not_running" "{ \"region\": \"${REGION}\", \"step\": \"create_user\" }"
       echo "ERROR: ECS Exec failed in ${REGION} during user creation." >&2
       exit 1
     }
-  if echo "${EXEC_OUTPUT}" | grep -q "^ERROR:"; then
+  if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|^psql: error:"; then
     log_error "infra.replication.setup.task_not_running" "{ \"region\": \"${REGION}\", \"step\": \"create_user\" }"
     echo "ERROR: psql error during user creation in ${REGION}: ${EXEC_OUTPUT}" >&2
     exit 1
@@ -287,7 +292,7 @@ for REGION in "${REGIONS[@]}"; do
       echo "ERROR: ECS Exec failed in ${REGION} during publication creation." >&2
       exit 1
     }
-  if echo "${EXEC_OUTPUT}" | grep -q "^ERROR:"; then
+  if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|^psql: error:"; then
     log_error "infra.replication.setup.task_not_running" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\" }"
     echo "ERROR: psql error during publication creation in ${REGION}: ${EXEC_OUTPUT}" >&2
     exit 1
@@ -341,8 +346,9 @@ for TARGET_REGION in "${REGIONS[@]}"; do
     fi
 
     # Deterministic slot name: cello_{env}_{source}_{target} (SI-002)
-    SLOT_NAME="cello_${ENVIRONMENT}_${SOURCE_REGION}_${TARGET_REGION}"
-    SUB_NAME="cello_sub_from_${SOURCE_REGION}"
+    # PostgreSQL slot/subscription names must match [a-z0-9_]+ — sanitize region hyphens to underscores.
+    SLOT_NAME="cello_${ENVIRONMENT}_${SOURCE_REGION//-/_}_${TARGET_REGION//-/_}"
+    SUB_NAME="cello_sub_from_${SOURCE_REGION//-/_}"
     SOURCE_HOST="${RDS_HOSTS[${SOURCE_REGION}]}"
     SOURCE_PASS="${REPLICATION_PASSWORDS[${SOURCE_REGION}]}"
 
@@ -372,7 +378,7 @@ for TARGET_REGION in "${REGIONS[@]}"; do
         echo "ERROR: ECS Exec failed in ${TARGET_REGION} during subscription creation." >&2
         exit 1
       }
-    if echo "${EXEC_OUTPUT}" | grep -q "^ERROR:"; then
+    if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|^psql: error:"; then
       log_error "infra.replication.setup.task_not_running" "{ \"region\": \"${TARGET_REGION}\", \"step\": \"create_subscription\" }"
       echo "ERROR: psql error during subscription creation in ${TARGET_REGION}: ${EXEC_OUTPUT}" >&2
       exit 1
@@ -401,7 +407,7 @@ EXPECTED_SLOTS=()
 for SOURCE_REGION in "${REGIONS[@]}"; do
   for TARGET_REGION in "${REGIONS[@]}"; do
     if [[ "${SOURCE_REGION}" != "${TARGET_REGION}" ]]; then
-      EXPECTED_SLOTS+=("${SOURCE_REGION}:cello_${ENVIRONMENT}_${SOURCE_REGION}_${TARGET_REGION}")
+      EXPECTED_SLOTS+=("${SOURCE_REGION}:cello_${ENVIRONMENT}_${SOURCE_REGION//-/_}_${TARGET_REGION//-/_}")
     fi
   done
 done
@@ -519,7 +525,7 @@ printf "  %-50s  %-12s  %-15s\n" "───────────────�
 for SOURCE_REGION in "${REGIONS[@]}"; do
   for TARGET_REGION in "${REGIONS[@]}"; do
     if [[ "${SOURCE_REGION}" != "${TARGET_REGION}" ]]; then
-      SLOT_NAME="cello_${ENVIRONMENT}_${SOURCE_REGION}_${TARGET_REGION}"
+      SLOT_NAME="cello_${ENVIRONMENT}_${SOURCE_REGION//-/_}_${TARGET_REGION//-/_}"
       EXPECTED_ENTRY="${SOURCE_REGION}:${SLOT_NAME}"
       SLOT_STATE="unknown"
       for S in "${STREAMING_SLOTS[@]}"; do

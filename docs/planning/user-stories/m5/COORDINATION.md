@@ -266,9 +266,5 @@ The `describe.skip` stubs in `packages/directory/src/__tests__/federation-001a-r
 
 **Usage (once multi-region RDS exists):**
 ```bash
-./infra/setup-replication.sh \
-  --environment dev \
-  --regions us-east-1,eu-central-1,ap-southeast-1 \
-  --cluster-name cello-dev-directory \
-  --secret-name cello/dev/directory/replication-credentials
+./infra/setup-replication.sh dev us-east-1 eu-central-1 ap-northeast-1
 ```
