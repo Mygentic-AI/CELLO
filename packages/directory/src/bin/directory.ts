@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 /**
- * CELLO Directory composition root (CELLO-NODE-004 / PERSIST-001)
+ * CELLO Directory composition root (CELLO-NODE-004 / PERSIST-001 / DEPLOY-002)
  *
  * Adapter selection is driven by CELLO_ENV:
- *   local  — Docker Compose Postgres + all local stubs (no AWS)
- *   dev    — RDS + KMS + CloudWatch + EventBridge (real AWS, dev key)
+ *   local      — Docker Compose Postgres + all local stubs (no AWS)
+ *   dev        — RDS + KMS + CloudWatch + EventBridge (real AWS, dev key)
+ *   staging    — same as dev, reduced instance sizes
+ *   production — full production AWS services
  *
  * The process exits with code 1 and logs adapter.config.missing if any
  * required configuration key is absent. It never starts with a silently
@@ -21,6 +23,11 @@
  *   CELLO_DIRECTORY_LISTEN_ADDR        — libp2p listen address (default: /ip4/0.0.0.0/tcp/4000)
  *   CELLO_RELAY_MULTIADDR              — relay multiaddr (required)
  *   AWS_REGION                         — required for CELLO_ENV=dev/staging/production (default: us-east-1)
+ *   NODE_ID                            — node identifier (default: AWS_REGION or "local")
+ *   RDS_CREDENTIALS_SECRET_ARN         — required for CELLO_ENV=dev/staging/production; Secrets Manager ARN
+ *   NODE_PRIVATE_KEY                   — required for CELLO_ENV=dev/staging/production; Ed25519 key hex
+ *   KMS_KEY_ARN                        — future: KmsEnvelopeKeyProvider (not yet enforced; LocalEnvelopeKeyProvider used as placeholder)
+ *   HEALTH_PORT                        — HTTP health check port (default: 443)
  */
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
@@ -28,7 +35,7 @@ import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import pg from "pg";
-import { FileKeyProvider } from "@cello/crypto";
+import { FileKeyProvider, InMemoryKeyProvider } from "@cello/crypto";
 import { createDirectoryNode } from "../directory-node.js";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
 import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper } from "@cello/interfaces/stubs";
@@ -43,6 +50,8 @@ import { MmrStore } from "../mmr-store.js";
 import { MmrCheckpointService } from "../mmr-checkpoint-service.js";
 import { AnalyticsJob } from "../analytics-job.js";
 import { PendingConnectionRequestTtlSweep } from "../pending-connection-request-ttl-sweep.js";
+import { createHealthServer } from "../health-server.js";
+import { logServiceStarted, logServiceStopped, logServiceCrashed, logSecretsUnavailable } from "../service-lifecycle.js";
 
 const env = process.env["CELLO_ENV"];
 const logger = new StdoutLogger();
@@ -60,6 +69,10 @@ const keyPath = process.env["CELLO_DIRECTORY_KEY_FILE"] ?? join(homedir(), ".cel
 const transportKeyPath = process.env["CELLO_DIRECTORY_TRANSPORT_KEY_FILE"] ?? join(homedir(), ".cello", "directory-transport-key");
 const listenAddr = process.env["CELLO_DIRECTORY_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/tcp/4000";
 const relayAddr = process.env["CELLO_RELAY_MULTIADDR"];
+const awsRegion = process.env["AWS_REGION"] ?? "us-east-1";
+const nodeId = process.env["NODE_ID"] ?? (env === "local" ? "local" : awsRegion);
+const healthPort = parseInt(process.env["HEALTH_PORT"] ?? "443", 10);
+const startedAt = Date.now();
 
 if (!relayAddr) {
   logger.error("adapter.config.missing", { missingKey: "CELLO_RELAY_MULTIADDR", env });
@@ -95,7 +108,6 @@ const auditLogShipper: AuditLogShipper = await (async (): Promise<AuditLogShippe
   }
   // dev/staging/production: S3AuditLogShipper (SECOPS-001)
   const auditBucket = requireEnv("CELLO_AUDIT_BUCKET");
-  const awsRegion = process.env["AWS_REGION"] ?? "us-east-1";
   const { S3AuditLogShipper } = await import("../adapters/s3-audit-log-shipper.js");
   const s = new S3AuditLogShipper(auditBucket, logger, undefined, { region: awsRegion });
   logger.info("adapter.initialised", { adapterName: "AuditLogShipper", implementation: "S3AuditLogShipper", env, bucket: auditBucket, region: awsRegion });
@@ -106,22 +118,46 @@ const auditLogShipper: AuditLogShipper = await (async (): Promise<AuditLogShippe
 
 let pgPool: pg.Pool | undefined;
 
-const store = (() => {
+const store = await (async () => {
   if (env === "local") {
     const databaseUrl = requireEnv("DATABASE_URL");
     pgPool = new pg.Pool({ connectionString: databaseUrl });
-    const s = new PgDirectoryStore(pgPool, logger);
+    const s = new PgDirectoryStore(pgPool, logger, nodeId, awsRegion);
     logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env });
     return s;
   }
-  // dev/staging/production: RdsDirectoryStore (not yet implemented — will replace in PERSIST-003+)
-  logger.error("adapter.init.failed", { adapterName: "DirectoryStore", reason: `CELLO_ENV=${env} not yet supported` });
-  process.exit(1);
+  // dev/staging/production: PgDirectoryStore backed by RDS credentials from Secrets Manager
+  const rdsSecretArn = requireEnv("RDS_CREDENTIALS_SECRET_ARN");
+  let databaseUrl: string;
+  try {
+    // Dynamic import to avoid loading @aws-sdk in CELLO_ENV=local
+    const { SecretsManagerClient, GetSecretValueCommand } = await import("@aws-sdk/client-secrets-manager");
+    const smClient = new SecretsManagerClient({ region: awsRegion });
+    const resp = await smClient.send(new GetSecretValueCommand({ SecretId: rdsSecretArn }));
+    if (!resp.SecretString) {
+      throw new Error("SecretString is empty");
+    }
+    // RDS secret format: { username, password, host, port, dbname }
+    const secret = JSON.parse(resp.SecretString) as {
+      username: string; password: string; host: string; port: number; dbname: string;
+    };
+    databaseUrl = `postgresql://${secret.username}:${encodeURIComponent(secret.password)}@${secret.host}:${secret.port}/${secret.dbname}`;
+  } catch (err: unknown) {
+    const reason = err instanceof Error ? err.message : String(err);
+    logSecretsUnavailable(logger, { nodeId, region: awsRegion, reason });
+    process.exit(1);
+  }
+  pgPool = new pg.Pool({ connectionString: databaseUrl });
+  const s = new PgDirectoryStore(pgPool, logger, nodeId, awsRegion);
+  logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env });
+  return s;
 })();
 
 // ─── AC-010: Schema version guard ────────────────────────────────────────────
 // Query flyway_schema_history and refuse to start if migrations haven't been applied.
-if (env === "local" && pgPool) {
+// For dev/staging/production, Flyway runs via docker-entrypoint.sh before this process starts,
+// but we still verify as a safety net.
+if (pgPool) {
   const migrationsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../db/migrations");
   const migrationFiles = readdirSync(migrationsDir).filter((f) => /^V\d+__.*\.sql$/.test(f));
   const expectedVersion = migrationFiles.length;
@@ -148,9 +184,9 @@ if (env === "local" && pgPool) {
 // Verify that every append-only table has row-level security enabled.
 // Logs db.rls.verified on success; logs db.rls.missing and exits 1 on any gap.
 // This runs after the migration version guard so the tables are guaranteed to exist.
-// Note: RLS check extended to dev/staging/production in follow-up story when RDS adapter wired
+// DEPLOY-002: extended to all envs now that PgDirectoryStore is wired for dev/staging/production.
 // Must match APPEND_ONLY_TABLES in src/__tests__/persist-003-rls.test.ts
-if (env === "local" && pgPool) {
+if (pgPool) {
   const appendOnlyTables = [
     // agent_registrations removed — table dropped in V16; agent_profiles (V9) is the authoritative agent identity table
     "social_verifications", "social_verification_freshness_checks",
@@ -202,7 +238,7 @@ if (env === "local" && pgPool) {
 // and appendSeal() calls inside CelloDirectoryNode's seal handlers.
 let mmrStore: MmrStore | undefined;
 let mmrCheckpointService: MmrCheckpointService | undefined;
-if (env === "local" && pgPool) {
+if (pgPool) {
   mmrStore = new MmrStore(pgPool, logger);
   mmrCheckpointService = new MmrCheckpointService(mmrStore, pgPool, logger);
   logger.info("adapter.initialised", { adapterName: "MmrCheckpointService", implementation: "MmrCheckpointService", env });
@@ -216,7 +252,9 @@ if (env === "local" && pgPool) {
 // ─── PERSIST-005: EnvelopeKeyProvider + EncryptedPgShareStore ─────────────────
 // EnvelopeKeyProvider encrypts K_server_X shares at rest before any DB INSERT.
 // LocalEnvelopeKeyProvider uses AES-256-GCM with the key from DEV_ENVELOPE_KEY (CELLO_ENV=local).
-// KmsEnvelopeKeyProvider uses AWS KMS (CELLO_ENV=dev+, not yet implemented).
+// dev/staging/production: KMS_KEY_ARN provides the key ARN for KmsEnvelopeKeyProvider.
+// For DEPLOY-002 we use LocalEnvelopeKeyProvider with DEV_ENVELOPE_KEY for dev/staging
+// until the KmsEnvelopeKeyProvider is fully implemented in a follow-up story.
 const envelopeKeyProvider = (() => {
   if (env === "local") {
     const devKey = requireEnv("DEV_ENVELOPE_KEY");
@@ -224,9 +262,11 @@ const envelopeKeyProvider = (() => {
     logger.info("adapter.initialised", { adapterName: "EnvelopeKeyProvider", implementation: "LocalEnvelopeKeyProvider", env });
     return p;
   }
-  // dev+: KmsEnvelopeKeyProvider (future milestone)
-  logger.error("adapter.init.failed", { adapterName: "EnvelopeKeyProvider", reason: `CELLO_ENV=${env} not yet supported` });
-  process.exit(1);
+  // dev/staging/production: use DEV_ENVELOPE_KEY until KmsEnvelopeKeyProvider is wired
+  const devKey = requireEnv("DEV_ENVELOPE_KEY");
+  const p = new LocalEnvelopeKeyProvider(devKey, logger);
+  logger.info("adapter.initialised", { adapterName: "EnvelopeKeyProvider", implementation: "LocalEnvelopeKeyProvider", env });
+  return p;
 })();
 
 void new LocalClientStore(); // wired in PERSIST-003+
@@ -285,14 +325,29 @@ if (env === "local" && pgPool) {
 }
 
 // ─── Key loading ──────────────────────────────────────────────────────────
+// CELLO_ENV=local: load from key file (persisted across restarts)
+// CELLO_ENV=dev/staging/production: load from NODE_PRIVATE_KEY env var (injected by ECS Secrets)
 
-let kp: FileKeyProvider;
-try {
-  kp = await FileKeyProvider.load(keyPath);
-} catch (err: unknown) {
-  const msg = err instanceof Error ? err.message : String(err);
-  logger.error("adapter.init.failed", { adapterName: "FileKeyProvider", reason: msg });
-  process.exit(1);
+let kp: FileKeyProvider | InMemoryKeyProvider;
+if (env === "local") {
+  try {
+    kp = await FileKeyProvider.load(keyPath);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error("adapter.init.failed", { adapterName: "FileKeyProvider", reason: msg });
+    process.exit(1);
+  }
+} else {
+  // dev/staging/production: NODE_PRIVATE_KEY is injected by ECS Secrets (ValueFrom)
+  const nodePrivateKeyHex = requireEnv("NODE_PRIVATE_KEY");
+  try {
+    const seed = Buffer.from(nodePrivateKeyHex, "hex");
+    kp = new InMemoryKeyProvider(seed);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error("adapter.init.failed", { adapterName: "InMemoryKeyProvider", reason: msg });
+    process.exit(1);
+  }
 }
 
 let transportPrivateKey: Uint8Array;
@@ -374,7 +429,32 @@ for (const addr of result.node.listenAddresses()) {
   logger.info("adapter.initialised", { adapterName: "ListenAddr", implementation: addr.toString(), env });
 }
 
+// ─── DEPLOY-002: Health check HTTP server ─────────────────────────────────────
+// The ALB target group sends GET /health to verify the task is alive.
+// schemaVersion is derived from the migration count (same as the version guard above).
+const migrationsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../db/migrations");
+const schemaVersion = readdirSync(migrationsDir).filter((f) => /^V\d+__.*\.sql$/.test(f)).length;
+
+const healthServer = createHealthServer({ nodeId, schemaVersion, logger, port: healthPort });
+healthServer.listen(healthPort, () => {
+  logger.info("adapter.initialised", { adapterName: "HealthServer", implementation: "http", env, port: healthPort });
+});
+
+// ─── DEPLOY-002: directory.service.started ─────────────────────────────────────
+logServiceStarted(logger, {
+  nodeId,
+  region: awsRegion,
+  environment: env,
+  schemaVersion,
+});
+
+// ─── Shutdown handlers ──────────────────────────────────────────────────────
+
 const shutdown = () => {
+  const uptimeMs = Date.now() - startedAt;
+  logServiceStopped(logger, { nodeId, region: awsRegion, environment: env, uptimeMs });
+
+  healthServer.close();
   result.stop()
     .then(() => pgPool?.end())
     .then(() => auditLogShipper.flush())
@@ -388,3 +468,16 @@ const shutdown = () => {
 
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
+
+// ─── DEPLOY-002: uncaught exception → directory.service.crashed ─────────────
+let consecutiveFailures = 0;
+process.on("uncaughtException", (err) => {
+  consecutiveFailures++;
+  logServiceCrashed(logger, {
+    nodeId,
+    region: awsRegion,
+    reason: err.message,
+    consecutiveFailures,
+  });
+  process.exit(1);
+});
