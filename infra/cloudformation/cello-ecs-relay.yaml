@@ -57,6 +57,8 @@ Resources:
               Value: !Ref Environment
             - Name: PORT
               Value: "4000"
+            - Name: WAL_DIR
+              Value: /tmp/wal
           Secrets:
             - Name: NODE_PRIVATE_KEY
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/relay/node-private-key"
