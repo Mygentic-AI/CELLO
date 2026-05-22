@@ -247,7 +247,12 @@ Resources:
               - Effect: Allow
                 Action:
                   - s3:PutObject
+                  - s3:GetObject
                 Resource: !Sub "arn:aws:s3:::cello-audit-logs-${Environment}-${AWS::Region}/*"
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !Sub "arn:aws:s3:::cello-audit-logs-${Environment}-${AWS::Region}"
               - Effect: Allow
                 Action:
                   - ecr:GetAuthorizationToken

@@ -643,7 +643,7 @@ describeIntegration("SECOPS-001 AC-004 (integration): buffering and recovery", (
     // This test verifies the buffer+recovery flow using a mock S3 client
     // that fails for the first N calls then succeeds (simulating temporary unavailability).
     const { logger } = makeCapturingLogger();
-    const { client, sentCommands } = makeMockS3Client({ failCount: 5 });
+    const { client, sentCommands } = makeMockS3Client({ failCount: 1 });
 
     // Long initial retry to prevent background retry from racing with flush()
     const shipper = new S3AuditLogShipper(
@@ -654,13 +654,12 @@ describeIntegration("SECOPS-001 AC-004 (integration): buffering and recovery", (
     );
 
     // Ship 5 entries — all buffer (first call fails, subsequent calls see non-empty buffer)
-    // Note: only the first call actually invokes send() and fails; the rest go directly to buffer.
-    // failCount:5 means calls 1-5 fail. But only call 1 is made by ship() (degraded mode kicks in).
+    // Only call 1 (ship #1) invokes send() and fails; ships #2-5 go directly to buffer (degraded mode).
     for (let i = 0; i < 5; i++) {
       await shipper.ship(makeEntry({ command: `INSERT_${i}` }));
     }
 
-    // flush() — call 2 onwards succeed (failCount=5 but only call 1 was made so far)
+    // flush() — calls 2-6 succeed (failCount:1 exhausted after call 1)
     const shipped = await shipper.flush();
     expect(shipped).toBe(5);
     expect(sentCommands).toHaveLength(5);
@@ -679,8 +678,9 @@ describeIntegration("SECOPS-001 AC-007 (integration): flush on shutdown ships to
     void before; // countBefore captured for reference; primary assertion is shipped count
 
     const { logger } = makeCapturingLogger();
-    // First 3 ship() calls fail, so they buffer; flush() succeeds
-    const { client } = makeMockS3Client({ failCount: 3 });
+    // First ship() call fails (call 1), triggering degraded mode; subsequent ship() calls buffer without calling S3.
+    // flush() calls (calls 2-4) succeed because failCount:1 is exhausted after call 1.
+    const { client } = makeMockS3Client({ failCount: 1 });
     const shipper = new S3AuditLogShipper(
       AUDIT_BUCKET!,
       logger,
