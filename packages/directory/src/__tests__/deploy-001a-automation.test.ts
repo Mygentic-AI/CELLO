@@ -486,3 +486,33 @@ describe("DEPLOY-001A: deploy.sh deploys all required stacks", () => {
     expect(script).toMatch(/infra\.deploy\.started|Deploying.*stacks|Starting.*deploy/i);
   });
 });
+
+describe("DEPLOY-001A: AC-005 idempotency — deploy.sh handles no-op updates", () => {
+  it("AC-005: deploy.sh uses --no-fail-on-empty-changeset on every stack deployment", () => {
+    const script = loadDeployScript();
+    expect(script).toContain("--no-fail-on-empty-changeset");
+  });
+
+  it("AC-005: deploy.sh does not use --fail-on-empty-changeset", () => {
+    const script = loadDeployScript();
+    expect(script).not.toContain("--fail-on-empty-changeset");
+  });
+});
+
+describe("DEPLOY-001A: AC-009 failure handling — deploy.sh exits on stack failure", () => {
+  it("AC-009: deploy.sh uses set -euo pipefail for immediate exit on failure", () => {
+    const script = loadDeployScript();
+    expect(script).toContain("set -euo pipefail");
+  });
+
+  it("AC-009: deploy.sh prints infra.stack.failed event on failure", () => {
+    const script = loadDeployScript();
+    expect(script).toContain("infra.stack.failed");
+  });
+
+  it("AC-009: deploy.sh prints to stderr on failure", () => {
+    const script = loadDeployScript();
+    // Error output goes to stderr (>&2)
+    expect(script).toMatch(/>&2/);
+  });
+});

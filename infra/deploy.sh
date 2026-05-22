@@ -66,7 +66,8 @@ ACCOUNT_ID=$(aws sts get-caller-identity \
 
 # ECR repos are only in us-east-1 — cross-region image pull until per-region repos exist
 ECR_REGION="us-east-1"
-IMAGE_TAG="stub"
+# IMAGE_TAG can be overridden: CELLO_IMAGE_TAG=v1.2.3 ./infra/deploy.sh dev us-east-1
+IMAGE_TAG="${CELLO_IMAGE_TAG:-stub}"
 DIR_IMAGE="${ACCOUNT_ID}.dkr.ecr.${ECR_REGION}.amazonaws.com/cello-directory:${IMAGE_TAG}"
 RELAY_IMAGE="${ACCOUNT_ID}.dkr.ecr.${ECR_REGION}.amazonaws.com/cello-relay:${IMAGE_TAG}"
 
@@ -112,8 +113,12 @@ RELAY_CPU="256"
 RELAY_MEM="512"
 
 # ── GitHub CodeStar Connection ARN ────────────────────────────────────────────
+# Set CELLO_GITHUB_CONNECTION_ID to the UUID of the CodeStar connection in us-east-1.
+# Find it: aws codestar-connections list-connections --region us-east-1
+# Current dev connection: 1a7fba2b-dd1d-4ebe-8372-7122b89f56b5
 
-GITHUB_CONNECTION_ARN="arn:aws:codeconnections:us-east-1:${ACCOUNT_ID}:connection/1a7fba2b-dd1d-4ebe-8372-7122b89f56b5"
+GITHUB_CONNECTION_ID="${CELLO_GITHUB_CONNECTION_ID:-1a7fba2b-dd1d-4ebe-8372-7122b89f56b5}"
+GITHUB_CONNECTION_ARN="arn:aws:codeconnections:us-east-1:${ACCOUNT_ID}:connection/${GITHUB_CONNECTION_ID}"
 
 # ── Route 53 Hosted Zone ID (read at runtime) ─────────────────────────────────
 
@@ -129,7 +134,12 @@ fi
 
 # ── Observability helpers ─────────────────────────────────────────────────────
 
-STACK_COUNT=10
+# cello-cicd deploys to us-east-1 only — adjust count per region
+if [[ "${REGION}" == "us-east-1" ]]; then
+  STACK_COUNT=10
+else
+  STACK_COUNT=9
+fi
 DEPLOY_START=$(date +%s)
 
 log_event() {
