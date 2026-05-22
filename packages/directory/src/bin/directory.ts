@@ -35,7 +35,7 @@ import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import pg from "pg";
-import { FileKeyProvider } from "@cello/crypto";
+import { FileKeyProvider, InMemoryKeyProvider } from "@cello/crypto";
 import { createDirectoryNode } from "../directory-node.js";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
 import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper } from "@cello/interfaces/stubs";
@@ -108,7 +108,6 @@ const auditLogShipper: AuditLogShipper = await (async (): Promise<AuditLogShippe
   }
   // dev/staging/production: S3AuditLogShipper (SECOPS-001)
   const auditBucket = requireEnv("CELLO_AUDIT_BUCKET");
-  const awsRegion = process.env["AWS_REGION"] ?? "us-east-1";
   const { S3AuditLogShipper } = await import("../adapters/s3-audit-log-shipper.js");
   const s = new S3AuditLogShipper(auditBucket, logger, undefined, { region: awsRegion });
   logger.info("adapter.initialised", { adapterName: "AuditLogShipper", implementation: "S3AuditLogShipper", env, bucket: auditBucket, region: awsRegion });
@@ -326,14 +325,29 @@ if (env === "local" && pgPool) {
 }
 
 // ─── Key loading ──────────────────────────────────────────────────────────
+// CELLO_ENV=local: load from key file (persisted across restarts)
+// CELLO_ENV=dev/staging/production: load from NODE_PRIVATE_KEY env var (injected by ECS Secrets)
 
-let kp: FileKeyProvider;
-try {
-  kp = await FileKeyProvider.load(keyPath);
-} catch (err: unknown) {
-  const msg = err instanceof Error ? err.message : String(err);
-  logger.error("adapter.init.failed", { adapterName: "FileKeyProvider", reason: msg });
-  process.exit(1);
+let kp: FileKeyProvider | InMemoryKeyProvider;
+if (env === "local") {
+  try {
+    kp = await FileKeyProvider.load(keyPath);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error("adapter.init.failed", { adapterName: "FileKeyProvider", reason: msg });
+    process.exit(1);
+  }
+} else {
+  // dev/staging/production: NODE_PRIVATE_KEY is injected by ECS Secrets (ValueFrom)
+  const nodePrivateKeyHex = requireEnv("NODE_PRIVATE_KEY");
+  try {
+    const seed = Buffer.from(nodePrivateKeyHex, "hex");
+    kp = new InMemoryKeyProvider(seed);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error("adapter.init.failed", { adapterName: "InMemoryKeyProvider", reason: msg });
+    process.exit(1);
+  }
 }
 
 let transportPrivateKey: Uint8Array;
