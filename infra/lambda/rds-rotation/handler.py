@@ -304,6 +304,17 @@ def _set_secret(sm, secret_id: str, token: str) -> None:
                 "GRANT rds_superuser TO %s",
                 (psycopg2.extensions.AsIs(f'"{app_user}"'),),
             )
+            # Grant table-level privileges so cello_service can read flyway_schema_history
+            # and read/write all application tables. GRANT ALL ON SCHEMA public only grants
+            # schema-level (CREATE/USAGE) — not table-level SELECT/INSERT/UPDATE/DELETE.
+            cur.execute(
+                "GRANT ALL ON ALL TABLES IN SCHEMA public TO %s",
+                (psycopg2.extensions.AsIs(f'"{app_user}"'),),
+            )
+            cur.execute(
+                "GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO %s",
+                (psycopg2.extensions.AsIs(f'"{app_user}"'),),
+            )
             # Use parameterized password to prevent SQL injection.
             # psycopg2 does not support parameters for ALTER ROLE — we use
             # mogrify-style quoting via the Identifier/Literal adapters.
