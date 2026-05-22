@@ -38,7 +38,7 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       # CI/CD infrastructure is shared across all environments (one deployment).
-      # The bucket name is fixed per AC-008: cello-codepipeline-artifacts-us-east-1.
+      # The bucket name is fixed per AC-001: cello-codepipeline-artifacts-us-east-1.
       # This template is deployed once in us-east-1 — not per-environment.
       BucketName: !Sub "cello-codepipeline-artifacts-${AWS::Region}"
       PublicAccessBlockConfiguration:

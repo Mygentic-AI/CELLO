@@ -68,9 +68,12 @@ behavior:
   - trigger: "When infra/pipeline-mappings.json is updated
       (new package added or mapping changed)"
     action: "the updated mappings file is committed to the repo;
-      the cello-pipeline-filter Lambda reads the file from the
-      CodePipeline source artifact at invocation time — no Lambda
-      redeployment is required to add a new pipeline mapping"
+      updating the pipeline routing requires only repackaging and
+      redeploying the cello-pipeline-filter Lambda (aws lambda
+      update-function-code) — no Lambda code change is required,
+      only a content change to the bundled JSON file; the mappings
+      are cached per Lambda container lifetime and refreshed on the
+      next cold start after redeployment"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -151,12 +154,14 @@ acceptance_criteria:
   - id: AC-007
     given: "infra/pipeline-mappings.json is updated to add a new
       package mapping and committed to main"
-    when: "the next push to main touches the new package path"
-    then: "the new pipeline is triggered without any Lambda
-      redeployment — the mappings file is read from the source
-      artifact at invocation time; verified by adding a test
-      mapping, committing, pushing, and confirming the new pipeline
-      executes"
+    when: "the Lambda is redeployed via aws lambda update-function-code
+      (no code change, only the bundled JSON changes) and the next
+      push touches the new package path"
+    then: "the new pipeline is triggered without any Lambda code
+      change — only the JSON mappings file is updated and the Lambda
+      repackaged; verified by adding a test mapping, redeploying,
+      pushing a commit touching the new path, and confirming the new
+      pipeline executes"
     test_type: integration
     component_under_test: directory
 
