@@ -208,6 +208,22 @@ acceptance_criteria:
     test_type: unit
     component_under_test: directory
 
+  - id: AC-012-cloudwatch-waf-included
+    given: "infra/deploy.sh includes the full 12-stack deployment sequence:
+      cello-iam, cello-secrets, cello-kms, cello-vpc, cello-s3, cello-rds,
+      cello-ecs-directory, cello-ecs-relay, cello-route53, cello-cloudwatch,
+      cello-waf, cello-cicd"
+    when: "./infra/deploy.sh dev us-east-1 is run on a clean account"
+    then: "all 12 stacks reach CREATE_COMPLETE or UPDATE_COMPLETE status;
+      cello-cloudwatch-dev and cello-waf-dev are deployed after
+      cello-ecs-directory-dev in the sequence (they depend on ALB and ECS
+      service resources created by that stack); no stack is omitted; the
+      script exits 0 — verified by listing all cello-*-dev stacks from a
+      separate terminal after the script completes and asserting exactly
+      12 stacks are present"
+    test_type: e2e
+    component_under_test: directory
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001

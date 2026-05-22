@@ -150,6 +150,22 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
+  - id: AC-008-deploy-script-inclusion
+    given: "The infra/deploy.sh script and all CloudFormation templates
+      are present in the repository"
+    when: "infra/deploy.sh dev us-east-1 is run on a clean account"
+    then: "the cello-cloudwatch-dev stack reaches CREATE_COMPLETE or
+      UPDATE_COMPLETE status as part of the automated deployment sequence;
+      the stack is deployed after cello-ecs-directory-dev (CloudWatch
+      alarms reference ECS service metrics that require the ECS stack
+      to exist first); no manual aws cloudformation deploy command is
+      required to create CloudWatch alarms — verified by running the
+      deploy script and asserting the cello-cloudwatch-dev stack exists
+      with status CREATE_COMPLETE in us-east-1 from a separate terminal
+      without any manual intervention between stack deployments"
+    test_type: integration
+    component_under_test: directory
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
