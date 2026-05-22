@@ -177,9 +177,64 @@ Delivered the multi-region federation foundation as application code + Flyway mi
 
 ## SECOPS-001 — S3 Audit Log Shipper
 
-Delivered the S3AuditLogShipper adapter implementing the `AuditLogShipper` interface. Ships audit events as NDJSON to the `cello-audit-logs-{env}-{region}` bucket with path partitioning by date and node ID.
+Delivered the production `S3AuditLogShipper` adapter and wired it into the composition root. The implementation itself was straightforward; getting the CI pipeline green exposed five distinct issues that took longer to resolve than the code itself.
 
-**Post-merge finding:** The CodeBuild service role lacked `s3:PutObject` on the audit bucket. Integration tests that exercise the shipper fail in CI but pass locally (where the developer's AWS profile has broad permissions). Fix applied by adding the permission to `cello-cicd.yaml`.
+**What was delivered:**
+
+- `packages/directory/src/adapters/s3-audit-log-shipper.ts` — per-entry `PutObject` calls (no batching), bounded buffer (10,000 max), exponential backoff retry loop (1s → 60s cap), graceful `flush()` on SIGTERM. S3 key: `audit/{YYYY-MM-DD}/{timestamp}-{uuid}.jsonl`.
+- Updated `AuditLogEntry` interface: `{ timestamp, sessionId, objectType, command, statementText, parameters: string[], correlationId? }` — the pgaudit wire format.
+- `flush()` return type changed to `Promise<number>` (entries shipped in that flush, not cumulative).
+- 735-line test suite with all ACs/SIs covered. Integration tests gated on `CELLO_AUDIT_BUCKET`.
+
+**Pipeline failures found and fixed after merge:**
+
+### 1. pnpm `minimumReleaseAge` supply-chain policy rejected `@aws-sdk/client-s3`
+
+**Symptom:** CodeBuild failed with a pnpm supply-chain policy error on `@aws-sdk/client-s3@3.1052.0`. The package installed fine locally.
+
+**Root cause:** pnpm enforces a 24-hour minimum release age for new packages. `@aws-sdk/client-s3@3.1052.0` had been published ~16 hours before the build. Local pnpm 10.33.2 (pinned in buildspecs) does not enforce this policy; the version resolving from `^3.1052.0` triggered it.
+
+**Fix:** Downgraded to `@aws-sdk/client-s3@3.1051.0` (exact pin, no caret). **Rule going forward: always exact-pin `@aws-sdk/*` packages, never caret. Check the npm publish timestamp before pinning.**
+
+### 2. CodeBuild role lacked `s3:PutObject` on the audit bucket
+
+**Symptom:** Integration tests failed with `AccessDenied` for `PutObject` on `cello-audit-logs-dev-us-east-1`.
+
+**Root cause:** The CodeBuild role was granted access to the artifacts bucket but not to the new audit log bucket. `CELLO_AUDIT_BUCKET` was set in the CodeBuild environment, so integration tests ran — and immediately hit permission denied.
+
+**Fix:** Added an explicit `s3:PutObject` grant on `arn:aws:s3:::cello-audit-logs-${Environment}-${AWS::Region}/*` to `CodeBuildRole` in `cello-cicd.yaml`. Deployed via `deploy.sh`.
+
+**Rule:** Every S3 bucket that integration tests touch needs an explicit IAM grant to the CodeBuild role. The bucket policy and the CodeBuild role policy are independent — check the role when adding tests against a new bucket.
+
+### 3. Integration test `failCount` bug — mock semantics mismatch
+
+**Symptom:** AC-004 and AC-007 integration tests returned `expected 5 to be 0` / `expected 3 to be 0`.
+
+**Root cause:** The mock's predicate is `callCount <= failCount`. The test used `failCount: 5`, intending "only the first ship() call fails." But `flush()` issues one `send()` per entry — 5 flush calls starting at call #2 still fall within `callCount <= 5`. Result: flush returns 0 because every flush call also fails.
+
+**Fix:** Changed both tests to `failCount: 1`. Only the first `ship()` call (call 1) fails; all `flush()` calls (calls 2+) succeed.
+
+**Rule:** When writing "fail first N calls" mock tests, count *all* `send()` invocations — ship calls and flush calls combined. If `flush()` issues M calls, you need `failCount < 1 + M` for any flush call to succeed. Draw the call sequence before setting `failCount`.
+
+### 4. `s3:GetObject` and `s3:ListBucket` also missing from CodeBuild role
+
+**Symptom:** AC-002 failed with `AccessDenied` for `GetObject`; AC-007 failed for `ListBucket`. These tests read back objects after writing to verify correctness.
+
+**Root cause:** The fix in issue #2 only added `PutObject`. The integration tests do a read-after-write. The `DenyNonPutActions` statement in `cello-s3.yaml` that denies `GetObject`/`ListBucket` applies only to the *ECS task role* — not to CodeBuild. Adding these to the CodeBuild role is safe and correct.
+
+**Fix:** Added `s3:GetObject` on `cello-audit-logs-${Environment}-${AWS::Region}/*` and `s3:ListBucket` on `cello-audit-logs-${Environment}-${AWS::Region}` to `CodeBuildRole`. **Rule: read integration tests fully before writing the IAM policy. If a test writes and reads back, both need grants.**
+
+### 5. `@cello/e2e-tests` not built before `@cello/client` tests
+
+**Symptom:** `cello-client-pipeline` failed with `Cannot find package '@cello/e2e-tests/session-fixture'` in `connreq-003.test.ts`.
+
+**Root cause:** `connreq-003.test.ts` imports via the `exports` map (`@cello/e2e-tests/session-fixture` → `dist/session-fixture.js`). In a fresh CodeBuild checkout there is no `dist/`. The client `buildspec.yml` compiled upstream packages but not `@cello/e2e-tests`.
+
+**Fix:** Added `pnpm --filter @cello/e2e-tests run typecheck` to `packages/client/buildspec.yml` before the test step.
+
+**Rule:** Any workspace package imported via its `exports` map (not source) must be compiled before tests run. Imports in test files create ordering constraints that don't appear in `package.json` dependencies — they're invisible until CI runs on a clean checkout.
+
+**Final result:** `cello-directory-pipeline` succeeded on commit `9e6f4a5`. All 7 substantive pipelines green. One pre-existing failure: `cello-crypto-pipeline` Ed25519 keygen timing test (71ms vs 50ms threshold on cold CodeBuild VMs — not SECOPS-001 scope).
 
 ---
 
