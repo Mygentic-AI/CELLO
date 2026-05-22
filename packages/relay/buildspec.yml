@@ -26,41 +26,12 @@ phases:
       # Push to ECR
       - docker push ${IMAGE_URI}
       # ── ECS rolling deploy ─────────────────────────────────────────────────
-      # Retrieve current task definition, update image URI, register new revision,
-      # call update-service. The old task continues running until ECS drains it;
+      # Retrieve current task definition, update image URI with jq, register new revision.
+      # The old task continues running until ECS drains it;
       # the new task must pass health check before old task stops (AC-006).
-      - >
-        TASK_DEF=$(aws ecs describe-task-definition
-        --task-definition cello-relay-dev
-        --region us-east-1
-        --query "taskDefinition"
-        --output json)
-      - >
-        NEW_TASK_DEF=$(echo $TASK_DEF | python3 -c "
-        import json, sys
-        td = json.load(sys.stdin)
-        for c in td['containerDefinitions']:
-            if c['name'] == 'relay':
-                c['image'] = '${IMAGE_URI}'
-        for k in ['taskDefinitionArn','revision','status','requiresAttributes','compatibilities','registeredAt','registeredBy']:
-            td.pop(k, None)
-        print(json.dumps(td))
-        ")
-      - >
-        NEW_TASK_ARN=$(aws ecs register-task-definition
-        --region us-east-1
-        --cli-input-json "$NEW_TASK_DEF"
-        --query "taskDefinition.taskDefinitionArn"
-        --output text)
-      - >
-        aws ecs update-service
-        --cluster cello-dev
-        --service cello-relay-dev
-        --task-definition $NEW_TASK_ARN
-        --region us-east-1
+      - TASK_DEF=$(aws ecs describe-task-definition --task-definition cello-relay-dev --region us-east-1 --query "taskDefinition" --output json)
+      - NEW_TASK_DEF=$(echo $TASK_DEF | jq --arg IMAGE "$IMAGE_URI" '(.containerDefinitions[] | select(.name=="relay") | .image) |= $IMAGE | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+      - NEW_TASK_ARN=$(aws ecs register-task-definition --region us-east-1 --cli-input-json "$NEW_TASK_DEF" --query "taskDefinition.taskDefinitionArn" --output text)
+      - aws ecs update-service --cluster cello-dev --service cello-relay-dev --task-definition $NEW_TASK_ARN --region us-east-1
       # Wait for service to stabilise
-      - >
-        aws ecs wait services-stable
-        --cluster cello-dev
-        --services cello-relay-dev
-        --region us-east-1
+      - aws ecs wait services-stable --cluster cello-dev --services cello-relay-dev --region us-east-1
