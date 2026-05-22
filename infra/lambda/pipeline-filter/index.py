@@ -103,7 +103,6 @@ def _resolve_pipelines(changed_files: list, mappings: dict) -> set:
     # Root config check: any match triggers all CELLO pipelines.
     for path in changed_files:
         if path in root_config_set:
-            _log("info", "pipeline.root_config_changed", path=path, triggeringAll=True)
             pipelines_to_trigger.update(all_cello)
             return pipelines_to_trigger  # already maximum set
 

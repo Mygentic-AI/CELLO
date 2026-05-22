@@ -25,7 +25,7 @@ import sys
 import types
 import unittest
 from contextlib import redirect_stdout
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 _fake_codepipeline = MagicMock()
 
@@ -189,42 +189,43 @@ class TestPipelineFilter(unittest.TestCase):
     # ── DB-002: single pipeline failure does not block others ────────────────
 
     def test_single_pipeline_failure_does_not_block_others(self):
-        """DB-002: If one pipeline start fails, the others are still attempted."""
+        """DB-002: One pipeline failure in an 8-pipeline set still attempts all 8."""
         mod = _load_module()
 
-        # Make the directory-pipeline call fail; all others succeed.
+        # crypto change → all 8 pipelines; make one fail, rest succeed.
         def start_side_effect(*args, **kwargs):
             name = args[0] if args else kwargs.get("name")
-            if name == "cello-directory-pipeline":
+            if name == "cello-crypto-pipeline":
                 raise RuntimeError("CodePipeline API error")
             return {"pipelineExecutionId": f"exec-{name}"}
 
         _fake_codepipeline.start_pipeline_execution.side_effect = start_side_effect
 
-        # Only change packages/directory to keep the set small.
-        event = _make_event(["packages/directory/src/server.ts"])
+        event = _make_event(["packages/crypto/src/ed25519.ts"])
         buf = io.StringIO()
         with redirect_stdout(buf):
             result = mod.lambda_handler(event, None)
 
         output = buf.getvalue()
 
-        # pipeline.trigger.failed must be logged.
+        # All 8 pipelines should have been attempted despite one failure.
+        self.assertEqual(_fake_codepipeline.start_pipeline_execution.call_count, 8)
+
+        # pipeline.trigger.failed must be logged for the failing pipeline.
         found_failed = any(
             json.loads(line).get("event") == "pipeline.trigger.failed"
-            and json.loads(line).get("pipeline") == "cello-directory-pipeline"
+            and json.loads(line).get("pipeline") == "cello-crypto-pipeline"
             for line in output.strip().splitlines()
             if line.strip()
         )
         self.assertTrue(found_failed, f"Expected pipeline.trigger.failed in:\n{output}")
 
-        # Lambda returns 200 (not 500) even with partial failure.
+        # Lambda returns 200 even with partial failure.
         self.assertEqual(result["statusCode"], 200)
 
     def test_one_failure_does_not_prevent_other_pipelines(self):
         """DB-002: Crypto change — one failure still attempts all 8 pipelines."""
         mod = _load_module()
-        call_count = {"n": 0}
         fail_on_first = {"done": False}
 
         def start_side_effect(*args, **kwargs):

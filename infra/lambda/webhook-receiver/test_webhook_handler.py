@@ -30,7 +30,7 @@ _fake_secrets_client = MagicMock()
 _fake_events_client = MagicMock()
 
 
-def _make_boto3_stub(secrets_response=None, events_response=None):
+def _make_boto3_stub():
     """Return a boto3 module stub that returns pre-configured clients."""
     boto3_stub = types.ModuleType("boto3")
 
@@ -101,27 +101,6 @@ class TestWebhookReceiver(unittest.TestCase):
             "FailedEntryCount": 0,
             "Entries": [{"EventId": "abc-123"}],
         }
-
-    def _import_handler(self):
-        """Import the handler module with boto3 stubbed out."""
-        boto3_stub = _make_boto3_stub()
-        with patch.dict("sys.modules", {"boto3": boto3_stub}):
-            # Also need to clear any cached secret in the module.
-            import importlib.util
-            import os
-            spec = importlib.util.spec_from_file_location(
-                "index",
-                os.path.join(os.path.dirname(__file__), "index.py"),
-            )
-            mod = importlib.util.module_from_spec(spec)
-            mod.boto3 = boto3_stub
-            # Patch os.environ for the module.
-            with patch.dict("os.environ", {
-                "HMAC_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:123:secret:test",
-                "EVENT_BUS_NAME": "cello-github-events-test",
-            }):
-                spec.loader.exec_module(mod)
-        return mod
 
     def _call_handler(self, event: dict):
         """Import a fresh module and call handler(event, None)."""

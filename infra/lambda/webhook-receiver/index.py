@@ -37,9 +37,7 @@ Error handling:
 import hashlib
 import hmac
 import json
-import logging
 import os
-import sys
 
 import boto3
 
@@ -49,15 +47,6 @@ _events_client = boto3.client("events")
 
 # Cached HMAC secret — fetched once on first warm invocation, reused thereafter.
 _cached_hmac_secret: bytes | None = None
-
-# ── Structured logger ──────────────────────────────────────────────────────
-# CloudWatch Logs picks up JSON written to stdout.
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-_handler = logging.StreamHandler(sys.stdout)
-_handler.setFormatter(logging.Formatter("%(message)s"))
-logger.addHandler(_handler)
-logger.propagate = False
 
 
 def _log(level: str, event_name: str, **fields) -> None:
