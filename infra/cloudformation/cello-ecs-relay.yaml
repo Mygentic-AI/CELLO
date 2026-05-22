@@ -1,6 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   CELLO ECS Relay — Fargate service for relay nodes.
+  IAM roles are defined in cello-iam.yaml and imported via !ImportValue.
   Task role has minimal permissions: Secrets Manager GetSecretValue for relay
   private key only. No KMS, no S3, no directory secret access.
 
@@ -22,61 +23,6 @@ Parameters:
     Description: "ECR image URI for the relay service (e.g. {account}.dkr.ecr.{region}.amazonaws.com/cello-relay:latest)"
 
 Resources:
-  # Task execution role (ECS agent — pulls images, writes logs)
-  RelayTaskExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "cello-${Environment}-relay-execution-role"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-      Policies:
-        - PolicyName: RelaySecretsAccess
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                Resource:
-                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/relay/*"
-      Tags:
-        - Key: Project
-          Value: cello
-
-  # Task role (application code — minimal permissions)
-  RelayTaskRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "cello-${Environment}-relay-task-role"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: RelayPermissions
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Sid: SecretsManagerRelayKeyOnly
-                Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                Resource:
-                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/relay/node-private-key*"
-      Tags:
-        - Key: Project
-          Value: cello
-
   LogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -95,8 +41,10 @@ Resources:
         - FARGATE
       Cpu: !Ref Cpu
       Memory: !Ref Memory
-      ExecutionRoleArn: !GetAtt RelayTaskExecutionRole.Arn
-      TaskRoleArn: !GetAtt RelayTaskRole.Arn
+      ExecutionRoleArn: !ImportValue
+        Fn::Sub: "cello-${Environment}-relay-execution-role-arn"
+      TaskRoleArn: !ImportValue
+        Fn::Sub: "cello-${Environment}-relay-task-role-arn"
       ContainerDefinitions:
         - Name: relay
           Image: !Ref ImageUri
@@ -150,11 +98,6 @@ Resources:
           Value: cello
 
 Outputs:
-  RelayTaskRoleArn:
-    Value: !GetAtt RelayTaskRole.Arn
-    Export:
-      Name: !Sub "cello-${Environment}-relay-task-role-arn"
-
   RelayServiceArn:
     Value: !Ref Service
     Export:

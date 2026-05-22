@@ -175,22 +175,27 @@ describe("DEPLOY-001: AC-004 secrets use placeholder values", () => {
 
 // ─── AC-005: Directory task role least-privilege ─────────────────────────────
 
+// DEPLOY-001A: directory task role policy moved to cello-iam.yaml
+
 describe("DEPLOY-001: AC-005 directory task role IAM policy", () => {
   it("has kms:Decrypt and kms:DescribeKey only (no Encrypt)", () => {
-    const raw = loadTemplateRaw("cello-ecs-directory.yaml");
+    // After DEPLOY-001A refactor: DirectoryTaskRole is in cello-iam.yaml
+    const raw = loadTemplateRaw("cello-iam.yaml");
     expect(raw).toContain("kms:Decrypt");
     expect(raw).toContain("kms:DescribeKey");
     expect(raw).not.toContain("kms:Encrypt");
   });
 
   it("has secretsmanager:GetSecretValue on directory path", () => {
-    const raw = loadTemplateRaw("cello-ecs-directory.yaml");
+    // After DEPLOY-001A refactor: DirectoryTaskRole is in cello-iam.yaml
+    const raw = loadTemplateRaw("cello-iam.yaml");
     expect(raw).toContain("secretsmanager:GetSecretValue");
     expect(raw).toContain("directory/*");
   });
 
   it("has s3:PutObject only (no GetObject, DeleteObject, ListBucket)", () => {
-    const raw = loadTemplateRaw("cello-ecs-directory.yaml");
+    // After DEPLOY-001A refactor: DirectoryTaskRole is in cello-iam.yaml
+    const raw = loadTemplateRaw("cello-iam.yaml");
     expect(raw).toContain("s3:PutObject");
     expect(raw).not.toContain("s3:GetObject");
     expect(raw).not.toContain("s3:DeleteObject");
@@ -199,10 +204,12 @@ describe("DEPLOY-001: AC-005 directory task role IAM policy", () => {
 });
 
 // ─── AC-006: Relay task role minimal permissions ─────────────────────────────
+// DEPLOY-001A: roles are now defined in cello-iam.yaml (extracted from cello-ecs-relay.yaml)
 
 describe("DEPLOY-001: AC-006 relay task role IAM policy", () => {
   it("has secretsmanager:GetSecretValue on relay key only", () => {
-    const template = loadTemplate("cello-ecs-relay.yaml");
+    // After DEPLOY-001A refactor: RelayTaskRole is in cello-iam.yaml
+    const template = loadTemplate("cello-iam.yaml");
     const resources = template["Resources"] as Record<string, Record<string, unknown>>;
 
     const taskRole = resources["RelayTaskRole"];
@@ -214,7 +221,8 @@ describe("DEPLOY-001: AC-006 relay task role IAM policy", () => {
   });
 
   it("has no KMS permissions", () => {
-    const template = loadTemplate("cello-ecs-relay.yaml");
+    // After DEPLOY-001A refactor: RelayTaskRole is in cello-iam.yaml
+    const template = loadTemplate("cello-iam.yaml");
     const resources = template["Resources"] as Record<string, Record<string, unknown>>;
     const taskRole = resources["RelayTaskRole"];
     const raw = JSON.stringify(taskRole);
@@ -223,7 +231,8 @@ describe("DEPLOY-001: AC-006 relay task role IAM policy", () => {
   });
 
   it("has no S3 permissions", () => {
-    const template = loadTemplate("cello-ecs-relay.yaml");
+    // After DEPLOY-001A refactor: RelayTaskRole is in cello-iam.yaml
+    const template = loadTemplate("cello-iam.yaml");
     const resources = template["Resources"] as Record<string, Record<string, unknown>>;
     const taskRole = resources["RelayTaskRole"];
     const raw = JSON.stringify(taskRole);
@@ -232,7 +241,8 @@ describe("DEPLOY-001: AC-006 relay task role IAM policy", () => {
   });
 
   it("has no directory secret access", () => {
-    const template = loadTemplate("cello-ecs-relay.yaml");
+    // After DEPLOY-001A refactor: RelayTaskRole is in cello-iam.yaml
+    const template = loadTemplate("cello-iam.yaml");
     const resources = template["Resources"] as Record<string, Record<string, unknown>>;
     const taskRole = resources["RelayTaskRole"];
     const raw = JSON.stringify(taskRole);
@@ -379,16 +389,20 @@ describe("DEPLOY-001: SI-001 no secret values in templates", () => {
 });
 
 // ─── SI-002: KMS key policy separation ──────────────────────────────────────
+// DEPLOY-001A: DirectoryTaskRoleArn parameter removed from cello-kms.yaml.
+// The key policy principal now uses !ImportValue from cello-iam.yaml.
 
 describe("DEPLOY-001: SI-002 KMS key policy environment isolation", () => {
-  it("KMS key policy references only DirectoryTaskRoleArn parameter", () => {
+  it("KMS key policy references directory task role via ImportValue (not hardcoded)", () => {
     const template = loadTemplate("cello-kms.yaml");
     const resources = template["Resources"] as Record<string, Record<string, unknown>>;
     const key = resources["MasterKey"];
     expect(key).toBeDefined();
 
     const raw = JSON.stringify(key);
-    expect(raw).toContain("DirectoryTaskRoleArn");
+    // After DEPLOY-001A: uses ImportValue, not DirectoryTaskRoleArn parameter
+    expect(raw).toContain("directory-task-role-arn");
+    expect(raw).toContain("Fn::Sub");
     // Should NOT contain hardcoded environment-specific ARN strings
     expect(raw).not.toMatch(/"arn:aws:iam::\d+:role\/cello-dev/);
     expect(raw).not.toMatch(/"arn:aws:iam::\d+:role\/cello-production/);
