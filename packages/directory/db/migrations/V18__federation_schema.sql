@@ -104,19 +104,24 @@ END $$;
 -- V2 created checkpoint_node_signatures as a stub with only (id BIGSERIAL PRIMARY KEY).
 -- V18 adds: checkpoint_id UUID, node_id TEXT, node_signature TEXT, signed_at TIMESTAMPTZ.
 
--- checkpoint_id: add without FK first (safe for existing stub rows), then add FK constraint separately.
--- DEFAULT gen_random_uuid() with an inline REFERENCES would assign random UUIDs to any pre-existing
--- rows and immediately violate the FK when PostgreSQL checks it at statement time.
+-- checkpoint_node_signatures (stub from V2) — full schema via idempotent ADD COLUMN.
+--
+-- The V2 stub has only (id BIGSERIAL PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT now())
+-- with no data rows ever written to it. Safe to add NOT NULL columns without defaults:
+-- PostgreSQL allows NOT NULL on ADD COLUMN when the table has zero rows.
+--
+-- checkpoint_id: add without inline REFERENCES first so the idempotency guard works.
+-- Then add the FK constraint separately to avoid re-checking data on idempotent re-run.
 DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_name = 'checkpoint_node_signatures' AND column_name = 'checkpoint_id'
   ) THEN
-    ALTER TABLE checkpoint_node_signatures ADD COLUMN checkpoint_id UUID;
+    ALTER TABLE checkpoint_node_signatures ADD COLUMN checkpoint_id UUID NOT NULL;
   END IF;
 END $$;
 
--- Add FK constraint separately so it applies only to future rows, not to any pre-existing stub rows.
+-- Add FK constraint separately so the idempotency guard covers it independently.
 DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
@@ -129,14 +134,12 @@ DO $$ BEGIN
   END IF;
 END $$;
 
--- node_id and node_signature: nullable for the ADD COLUMN (no default) so pre-existing stub rows
--- get NULL rather than a misleading empty string. Callers must always supply real values.
 DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_name = 'checkpoint_node_signatures' AND column_name = 'node_id'
   ) THEN
-    ALTER TABLE checkpoint_node_signatures ADD COLUMN node_id TEXT;
+    ALTER TABLE checkpoint_node_signatures ADD COLUMN node_id TEXT NOT NULL;
   END IF;
 END $$;
 
@@ -145,7 +148,7 @@ DO $$ BEGIN
     SELECT 1 FROM information_schema.columns
     WHERE table_name = 'checkpoint_node_signatures' AND column_name = 'node_signature'
   ) THEN
-    ALTER TABLE checkpoint_node_signatures ADD COLUMN node_signature TEXT;
+    ALTER TABLE checkpoint_node_signatures ADD COLUMN node_signature TEXT NOT NULL;
   END IF;
 END $$;
 

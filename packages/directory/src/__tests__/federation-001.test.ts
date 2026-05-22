@@ -536,3 +536,85 @@ describeIntegration("FEDERATION-001 integration: verifyReplicatedRow observabili
     expect(verifiedCall, "federation.replication.verified must NOT be logged on mismatch").toBeUndefined();
   });
 });
+
+// ─── E2E tests deferred to CELLO-FEDERATION-E2E-001 ──────────────────────────
+//
+// The following ACs and SIs require either:
+//   (a) Two live RDS instances with PostgreSQL logical replication configured, or
+//   (b) pg_stat_replication / pg_replication_slots on a real Postgres instance with
+//       a configured replication role.
+//
+// These cannot be exercised in a single Vitest process against the Docker Compose
+// local environment. They are deferred to CELLO-FEDERATION-E2E-001.
+//
+// Each test is registered as describe.skip so the AC/SI coverage is documented here
+// and the tests are ready to enable when the multi-node test environment is available.
+
+describe.skip("FEDERATION-001 e2e: AC-003 — replicated row appears on node-2 (deferred to FEDERATION-E2E-001)", () => {
+  // AC-003: a conversation_seals row inserted on node-1 appears on node-2 within 5 seconds,
+  // with an identical chain_hash — verified by querying node-2's conversation_seals from a
+  // separate process connecting directly to node-2's RDS endpoint.
+  //
+  // Cannot run in the Docker Compose local environment (single-node Postgres, no logical replication).
+  // Deferred to CELLO-FEDERATION-E2E-001 which provisions a two-node RDS test environment.
+  it("AC-003: replicated row appears on node-2 within 5 seconds with identical chain_hash", () => {
+    throw new Error("Deferred to CELLO-FEDERATION-E2E-001 — requires two live RDS instances with logical replication");
+  });
+});
+
+describe.skip("FEDERATION-001 e2e: AC-004 — non-owning node does not write hash chain entries (deferred to FEDERATION-E2E-001)", () => {
+  // AC-004: after sessions row replicates to node-2, node-2 does not write hash chain entries
+  // for that session — verified by counting conversation_seals rows from separate processes.
+  //
+  // Deferred to CELLO-FEDERATION-E2E-001.
+  it("AC-004: node-2 does not write hash chain entries for a node-1-owned session", () => {
+    throw new Error("Deferred to CELLO-FEDERATION-E2E-001 — requires two live RDS instances with logical replication");
+  });
+});
+
+describe.skip("FEDERATION-001 e2e: AC-007 — chain frozen after owning node stops (deferred to FEDERATION-E2E-001)", () => {
+  // AC-007: chain entry count is frozen after the owning node stops — verified by querying
+  // each node's RDS instance from separate processes with no shared memory.
+  //
+  // Deferred to CELLO-FEDERATION-E2E-001.
+  it("AC-007: chain entry count frozen 60s after owning node stops", () => {
+    throw new Error("Deferred to CELLO-FEDERATION-E2E-001 — requires live ECS task management and two RDS instances");
+  });
+});
+
+describe.skip("FEDERATION-001 integration: AC-010 — pg_stat_replication shows active slots (deferred to FEDERATION-E2E-001)", () => {
+  // AC-010: each node shows two active replication slots in pg_stat_replication with
+  // state = 'streaming' and lag under 10 seconds.
+  //
+  // Requires a real multi-node Postgres setup with logical replication configured.
+  // The Docker Compose local environment has a single-node Postgres — pg_stat_replication
+  // will show no subscriptions. Deferred to CELLO-FEDERATION-E2E-001.
+  it("AC-010: pg_stat_replication shows two active slots per node with lag under 10s", () => {
+    throw new Error("Deferred to CELLO-FEDERATION-E2E-001 — requires multi-node Postgres with logical replication");
+  });
+});
+
+describe.skip("FEDERATION-001 integration: SI-002 — replication slot naming convention (deferred to FEDERATION-E2E-001)", () => {
+  // SI-002: replication slots shall follow the cello_{env}_{source_region}_{target_region}
+  // naming convention. This prevents name collisions with debugging slots.
+  //
+  // Verification requires querying pg_replication_slots on a live Postgres instance that
+  // has the slots configured. The Docker Compose local environment has no replication slots.
+  // Deferred to CELLO-FEDERATION-E2E-001.
+  it("SI-002: replication slot names follow cello_{env}_{source_region}_{target_region} convention", () => {
+    throw new Error("Deferred to CELLO-FEDERATION-E2E-001 — requires Postgres with configured replication slots");
+  });
+});
+
+describe.skip("FEDERATION-001 integration: SI-003 — cello_replication role has REPLICATION privilege only (deferred to FEDERATION-E2E-001)", () => {
+  // SI-003: the cello_replication role has REPLICATION privilege only — no INSERT, UPDATE, DELETE,
+  // or DDL on any table. The adversarial test attempts an INSERT via cello_replication and asserts
+  // permission denied.
+  //
+  // Requires the cello_replication role to be provisioned (FEDERATION-001A / SECOPS-001).
+  // The Docker Compose local environment does not create this role.
+  // Deferred to CELLO-FEDERATION-E2E-001.
+  it("SI-003: cello_replication role cannot INSERT into any table (REPLICATION only)", () => {
+    throw new Error("Deferred to CELLO-FEDERATION-E2E-001 — requires cello_replication role provisioned in Postgres");
+  });
+});

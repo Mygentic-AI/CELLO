@@ -209,16 +209,19 @@ export class PgDirectoryStore implements DirectoryStore {
    * configurePgTypes() is called in the constructor — this method verifies the result.
    */
   async verifyPgTypes(): Promise<void> {
-    // Use SELECT NOW() which always returns a TIMESTAMPTZ value; no table required.
-    const result = await this.#pool.query<{ now: unknown }>("SELECT NOW() AS now");
-    const value = result.rows[0]?.now;
+    // AC-011: query a known DATE literal to verify DATE type parsers are returning strings.
+    // The multi-region chain hash risk is specifically with DATE columns — a DATE stored as
+    // '2026-01-01' reads back as a different timestamp in a different timezone if type
+    // parsers are not configured. SELECT '2026-01-01'::date requires no table to exist.
+    const result = await this.#pool.query<{ d: unknown }>("SELECT '2026-01-01'::date AS d");
+    const value = result.rows[0]?.d;
     if (typeof value !== "string") {
       this.#logger.error("db.type-parsers.verification.failed", {
         nodeId: this.#nodeId,
         region: this.#region,
       });
       throw new Error(
-        `PgDirectoryStore: pg type parsers not configured — NOW() returned ${typeof value}, expected string. ` +
+        `PgDirectoryStore: pg type parsers not configured — DATE literal returned ${typeof value}, expected string. ` +
         `configurePgTypes() must be called before any Pool is created.`,
       );
     }
