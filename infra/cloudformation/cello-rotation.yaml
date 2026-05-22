@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  CELLO RDS Credential Rotation — deploys the Secrets Manager multi-user rotation
+  CELLO RDS Credential Rotation - deploys the Secrets Manager multi-user rotation
   Lambda for cello/{env}/directory/rds-credentials.
 
   Multi-user strategy: the Lambda connects to RDS using the admin credential
@@ -10,7 +10,7 @@ Description: >
   Security model (SI-003):
     - The Lambda execution role grants access to BOTH the app and admin credentials.
     - The ECS task role (cello-iam.yaml: DirectoryTaskRole) grants access to the app
-      credential ONLY — it must never access rds-admin-credentials.
+      credential ONLY - it must never access rds-admin-credentials.
 
   The Lambda runs in VPC private subnets to reach RDS on port 5432.
   A dedicated Lambda security group allows outbound to the RDS security group only.
@@ -88,7 +88,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: >
-        CELLO RDS rotation Lambda — outbound to RDS port 5432 only.
+        CELLO RDS rotation Lambda - outbound to RDS port 5432 only.
         No inbound traffic required (Lambda is invoked by Secrets Manager, not by network).
       VpcId: !ImportValue
         Fn::Sub: "cello-${Environment}-vpc-id"
@@ -138,7 +138,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub "cello-${Environment}-rds-rotation"
-      Description: !Sub "CELLO ${Environment} — Secrets Manager RDS credential rotation (multi-user)"
+      Description: !Sub "CELLO ${Environment} - Secrets Manager RDS credential rotation (multi-user)"
       Runtime: python3.12
       Handler: handler.lambda_handler
       Role: !GetAtt RotationLambdaExecutionRole.Arn
@@ -174,7 +174,7 @@ Resources:
           # stack creation; the CI/CD pipeline updates the function code post-deploy.
           def lambda_handler(event, context):
               raise NotImplementedError(
-                  "Lambda code must be deployed via CI/CD pipeline — "
+                  "Lambda code must be deployed via CI/CD pipeline - "
                   "see infra/lambda/rds-rotation/handler.py"
               )
       Tags:
@@ -226,3 +226,4 @@ Outputs:
     Value: !GetAtt RotationLambdaExecutionRole.Arn
     Export:
       Name: !Sub "cello-${Environment}-rds-rotation-role-arn"
+

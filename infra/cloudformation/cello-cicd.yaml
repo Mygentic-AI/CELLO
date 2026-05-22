@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  CELLO CI/CD — GitHub webhook Lambda, pipeline-filter Lambda, EventBridge bus,
+  CELLO CI/CD - GitHub webhook Lambda, pipeline-filter Lambda, EventBridge bus,
   and per-package CodePipelines. Deployed in us-east-1 only.
   Completely independent of cello-agent CI/CD infrastructure (SI-003).
 
@@ -108,7 +108,7 @@ Resources:
       Code:
         ZipFile: |
           """
-          GitHub webhook receiver — validates HMAC signature, forwards to EventBridge.
+          GitHub webhook receiver - validates HMAC signature, forwards to EventBridge.
           Actual implementation deployed via CI; this is the bootstrap placeholder.
           """
           def handler(event, context):
@@ -184,7 +184,7 @@ Resources:
       Code:
         ZipFile: |
           """
-          Pipeline filter — inspects commit paths, triggers matching CodePipelines.
+          Pipeline filter - inspects commit paths, triggers matching CodePipelines.
           Actual implementation deployed via CI; this is the bootstrap placeholder.
           """
           def handler(event, context):
