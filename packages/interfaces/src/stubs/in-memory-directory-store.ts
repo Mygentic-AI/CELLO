@@ -128,4 +128,22 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     if (!queue || queue.length === 0) return Promise.resolve([]);
     return Promise.resolve(queue.splice(0));
   }
+
+  // ─── FEDERATION-001: Session ownership methods ───────────────────────────
+
+  // In-memory store for session ownership (sessionId → owningNodeId)
+  readonly #sessionOwners = new Map<string, string>();
+
+  async writeSession(sessionId: string, owningNodeId: string): Promise<void> {
+    // In-memory stub: no hash chain; SI-001 ownership guard only applies to PgDirectoryStore.
+    this.#sessionOwners.set(sessionId, owningNodeId);
+  }
+
+  async getSessionOwner(sessionId: string): Promise<string | undefined> {
+    return this.#sessionOwners.get(sessionId);
+  }
+
+  async verifyReplicatedRow(_tableName: string, _row: Record<string, unknown>): Promise<void> {
+    // In-memory stub: no-op. Hash chain verification only applies to PgDirectoryStore.
+  }
 }
