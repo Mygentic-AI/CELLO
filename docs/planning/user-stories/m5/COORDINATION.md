@@ -155,6 +155,15 @@ The pipeline-filter Lambda will match the changed path to the correct pipeline(s
 **SECOPS-004 next steps:**
 Run `infra/deploy-lambdas.sh dev rotation` to re-deploy if any changes are made to `handler.py`. AC-002/AC-003 verification can proceed now — trigger rotation via `aws secretsmanager rotate-secret --secret-id cello/dev/directory/rds-credentials --region us-east-1` and confirm the new credential authenticates.
 
+**Pipeline build fixes — additional commits after initial entry:**
+
+Two more pre-existing CodeBuild issues were found and fixed after the pipelines started running:
+
+- `dae93e0` — pinned pnpm to `10.33.2` in all 8 buildspecs. Latest pnpm enforces a `minimumReleaseAge` supply-chain policy (24h window) that was rejecting `@aws-sdk/*` packages published ~16h earlier. Our local pnpm 10.33.2 does not enforce this policy. Keeping versions in sync eliminates the divergence.
+- `a73e11d` — added upstream `build` steps to `packages/directory/buildspec.yml` before `typecheck`. Directory test files import `@cello/client` and `@cello/relay`, which need compiled `dist/` outputs. In a fresh CodeBuild checkout there are no artifacts — typecheck was failing with TS2307. Build order: crypto → interfaces → protocol-types → transport → client → relay → directory typecheck + test.
+
+These were first-run issues — the pipelines had never run clean from a fresh checkout before DEPLOY-004 wired them. Once `cello-directory-pipeline` passes on HEAD (`a73e11d`), V18 will deploy to ECS.
+
 ---
 
 ### 2026-05-22 — SECOPS-004 agent follow-up: AC-002/AC-003 verification attempt
