@@ -24,7 +24,7 @@
     "start": "node dist/bin/relay.js"
   },
   "devDependencies": {
-    "@claude-flow/testing": "*"
+    "@claude-flow/testing": "3.0.0-alpha.6"
   },
   "dependencies": {
     "@cello/crypto": "workspace:*",

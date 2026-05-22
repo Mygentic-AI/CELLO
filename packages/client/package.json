@@ -33,7 +33,7 @@
     "zod": "^4.4.2"
   },
   "devDependencies": {
-    "@claude-flow/testing": "*",
+    "@claude-flow/testing": "3.0.0-alpha.6",
     "@cello/directory": "workspace:*",
     "@cello/e2e-tests": "workspace:*",
     "@cello/relay": "workspace:*",

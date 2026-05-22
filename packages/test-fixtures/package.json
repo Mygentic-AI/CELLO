@@ -22,7 +22,7 @@
     "@cello/protocol-types": "workspace:*"
   },
   "devDependencies": {
-    "@claude-flow/testing": "*",
+    "@claude-flow/testing": "3.0.0-alpha.6",
     "@types/node": "^25.6.2"
   }
 }
