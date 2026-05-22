@@ -10,6 +10,9 @@
  *
  * FEDERATION-001: sessions table added to BIGINT_COLUMNS and STORE_TABLES; writeSession,
  * getSessionOwner, verifyReplicatedRow, and startup pg-type verification added.
+ *
+ * ACCOUNT-001: user_accounts table added to BIGINT_COLUMNS and STORE_TABLES; createAccount
+ * and getAgentsByAccount methods added; setProfile updated to accept optional account_id.
  */
 
 import pg from "pg";
@@ -19,6 +22,8 @@ import type {
   DirectoryNotification,
   SealNotarization,
   Logger,
+  AccountRow,
+  CreateAccountParams,
 } from "@cello/interfaces";
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello/protocol-types";
 import {
@@ -82,6 +87,8 @@ export const BIGINT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   checkpoint_node_signatures: ["id"],
   // FEDERATION-003: relay_registrations table (V19 migration)
   relay_registrations: ["id"],
+  // ACCOUNT-001: user_accounts table (V22 migration) — id is BIGSERIAL
+  user_accounts: ["id"],
 } as const;
 
 /**
@@ -122,6 +129,8 @@ export const STORE_TABLES = [
   "checkpoint_node_signatures",
   // FEDERATION-003: relay_registrations table added (V19 migration)
   "relay_registrations",
+  // ACCOUNT-001: user_accounts table added (V22 migration)
+  "user_accounts",
 ] as const;
 
 export type StoreTables = (typeof STORE_TABLES)[number];
@@ -476,21 +485,179 @@ export class PgDirectoryStore implements DirectoryStore {
     // but indexing by primary_pubkey too means either key works robustly.
     this.#profilesByLocalKey.set(profile.k_local_pubkey, profile);
     this.#profilesByPrimaryKey.set(profile.primary_pubkey, profile);
-    // Persist to Postgres (V9 migration adds agent_profiles table).
-    this.#fire(this.#pool.query(
-      `INSERT INTO agent_profiles
-         (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (k_local_pubkey) DO NOTHING`,
-      [
-        profile.k_local_pubkey,
-        profile.primary_pubkey,
-        profile.ml_dsa_pubkey,
-        profile.phone_stub_hash,
-        profile.registered_at,
-        profile.status,
-      ],
-    ), "agent_profiles");
+
+    // ACCOUNT-001: if account_id is provided, log account.agent.linked and include it in INSERT.
+    const accountId = (profile as AgentProfile & { account_id?: string | null }).account_id ?? null;
+    if (accountId !== null && accountId !== undefined) {
+      this.#logger.info("account.agent.linked", {
+        accountId,
+        agentId: profile.k_local_pubkey,
+      });
+    }
+
+    // Persist to Postgres (V9 migration adds agent_profiles table;
+    // V22 migration adds account_id nullable column).
+    const insertQuery = accountId !== null && accountId !== undefined
+      ? this.#pool.query(
+          `INSERT INTO agent_profiles
+             (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, account_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT (k_local_pubkey) DO NOTHING`,
+          [
+            profile.k_local_pubkey,
+            profile.primary_pubkey,
+            profile.ml_dsa_pubkey,
+            profile.phone_stub_hash,
+            profile.registered_at,
+            profile.status,
+            accountId,
+          ],
+        )
+      : this.#pool.query(
+          `INSERT INTO agent_profiles
+             (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status)
+           VALUES ($1,$2,$3,$4,$5,$6)
+           ON CONFLICT (k_local_pubkey) DO NOTHING`,
+          [
+            profile.k_local_pubkey,
+            profile.primary_pubkey,
+            profile.ml_dsa_pubkey,
+            profile.phone_stub_hash,
+            profile.registered_at,
+            profile.status,
+          ],
+        );
+    this.#fire(insertQuery, "agent_profiles");
+  }
+
+  /**
+   * ACCOUNT-001: Create a new user_accounts row via insertWithChain.
+   *
+   * Pseudocode:
+   *   1. Build record with account_id, phone_stub_hash (email_stub_hash is optional).
+   *   2. Call insertWithChain("user_accounts", ...) which acquires advisory lock,
+   *      fetches previous chain_hash, computes new chain_hash, inserts row.
+   *   3. On success: log account.created at INFO with { accountId, correlationId }.
+   *      Never log phone_stub_hash or email_stub_hash.
+   *   4. On unique constraint violation (duplicate phone_stub_hash):
+   *      log account.phone_stub_hash.duplicate at WARN with
+   *      { phoneStubHashPrefix (first 8 chars only), correlationId };
+   *      rethrow so caller knows the operation failed.
+   *   5. On other error: rethrow without additional logging (insertWithChain already logs
+   *      adapter.persisted or adapter.write.failed as appropriate).
+   */
+  async createAccount(params: CreateAccountParams): Promise<AccountRow> {
+    const { accountId, phoneStubHash, emailStubHash, correlationId } = params;
+
+    const record: Record<string, unknown> = {
+      account_id: accountId,
+      phone_stub_hash: phoneStubHash,
+    };
+    if (emailStubHash !== undefined && emailStubHash !== null) {
+      record["email_stub_hash"] = emailStubHash;
+    }
+
+    const columns = emailStubHash !== undefined && emailStubHash !== null
+      ? ["account_id", "phone_stub_hash", "email_stub_hash", "chain_hash"]
+      : ["account_id", "phone_stub_hash", "chain_hash"];
+
+    const values: unknown[] = emailStubHash !== undefined && emailStubHash !== null
+      ? [accountId, phoneStubHash, emailStubHash, ""]
+      : [accountId, phoneStubHash, ""];
+
+    const chainHashIndex = columns.length - 1;
+
+    try {
+      await this.insertWithChain(
+        "user_accounts",
+        record,
+        columns,
+        values,
+        chainHashIndex,
+        undefined,
+        correlationId,
+      );
+      this.#logger.info("account.created", { accountId, correlationId });
+
+      // Read back the inserted row to return AccountRow
+      const result = await this.#pool.query<Record<string, unknown>>(
+        `SELECT id, account_id, phone_stub_hash, email_stub_hash, created_at, chain_hash
+         FROM user_accounts WHERE account_id = $1`,
+        [accountId],
+      );
+      const row = deserializeRow<{
+        id: number;
+        account_id: string;
+        phone_stub_hash: string;
+        email_stub_hash: string | null;
+        created_at: string;
+        chain_hash: string;
+      }>("user_accounts", result.rows[0]!);
+      return {
+        id: row.id,
+        account_id: row.account_id,
+        phone_stub_hash: row.phone_stub_hash,
+        email_stub_hash: row.email_stub_hash,
+        created_at: row.created_at,
+        chain_hash: row.chain_hash,
+      };
+    } catch (err) {
+      if (this.#isUniqueViolation(err)) {
+        this.#logger.warn("account.phone_stub_hash.duplicate", {
+          phoneStubHashPrefix: phoneStubHash.slice(0, 8),
+          correlationId,
+        });
+        throw err;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * ACCOUNT-001: Return all agent_profiles rows with account_id = accountId,
+   * ordered by registered_at ASC.
+   *
+   * Pseudocode:
+   *   SELECT * FROM agent_profiles WHERE account_id = $1 ORDER BY registered_at ASC
+   *   Returns [] if no rows found. Does not throw on empty result.
+   *
+   * AC-004: NULL account_id rows are excluded — the WHERE clause requires account_id = $1,
+   *   so rows with NULL account_id never appear.
+   */
+  async getAgentsByAccount(accountId: string): Promise<AgentProfile[]> {
+    const result = await this.#pool.query<Record<string, unknown>>(
+      `SELECT k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash,
+              registered_at, status, account_id
+       FROM agent_profiles
+       WHERE account_id = $1
+       ORDER BY registered_at ASC`,
+      [accountId],
+    );
+
+    return result.rows.map((row) => {
+      const deserialized = deserializeRow<{
+        k_local_pubkey: string;
+        primary_pubkey: string;
+        ml_dsa_pubkey: string;
+        phone_stub_hash: string;
+        registered_at: number;
+        status: string;
+        account_id: string;
+      }>("agent_profiles", row);
+      return {
+        k_local_pubkey: deserialized.k_local_pubkey,
+        primary_pubkey: deserialized.primary_pubkey,
+        ml_dsa_pubkey: deserialized.ml_dsa_pubkey,
+        phone_stub_hash: deserialized.phone_stub_hash,
+        registered_at: deserialized.registered_at,
+        status: deserialized.status as "active",
+        // profile and agent_id are not stored in the agent_profiles table —
+        // they are TypeScript-only fields populated at registration time.
+        // getAgentsByAccount returns them as empty defaults.
+        profile: {} as Record<string, unknown>,
+        agent_id: "",
+      };
+    });
   }
 
   getProfile(pubkeyHex: string): AgentProfile | undefined {

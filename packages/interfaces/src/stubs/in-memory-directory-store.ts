@@ -9,7 +9,7 @@
  */
 
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello/protocol-types";
-import type { DirectoryStore, DirectoryNotification, SealNotarization } from "../directory-store.js";
+import type { DirectoryStore, DirectoryNotification, SealNotarization, AccountRow, CreateAccountParams } from "../directory-store.js";
 
 const NOTIFICATION_QUEUE_BOUND = 256;
 const PENDING_CONNECTION_REQUEST_BOUND = 32;
@@ -22,6 +22,13 @@ export class InMemoryDirectoryStore implements DirectoryStore {
   readonly #profiles = new Map<string, AgentProfile>();
   // REG-001: phone_stub_hash → k_local_pubkey (for duplicate phone guard)
   readonly #phoneHashIndex = new Map<string, string>();
+
+  // ACCOUNT-001: Account rows indexed by account_id
+  readonly #accounts = new Map<string, AccountRow>();
+  // ACCOUNT-001: phone_stub_hash → account_id (for duplicate guard)
+  readonly #accountPhoneHashIndex = new Map<string, string>();
+  // ACCOUNT-001: account_id → k_local_pubkey[] (for getAgentsByAccount)
+  readonly #accountAgentIndex = new Map<string, string[]>();
 
   // CONNREQ-002: Connection records indexed by connection_id
   readonly #connections = new Map<string, ConnectionRecord>();
@@ -59,9 +66,48 @@ export class InMemoryDirectoryStore implements DirectoryStore {
 
   // ─── REG-001: Profile methods ─────────────────────────────────────────────
 
+  // ─── ACCOUNT-001: Account identity methods ───────────────────────────────
+
+  async createAccount(params: CreateAccountParams): Promise<AccountRow> {
+    const { accountId, phoneStubHash, emailStubHash } = params;
+    if (this.#accountPhoneHashIndex.has(phoneStubHash)) {
+      const err = new Error(`unique constraint violation: phone_stub_hash already exists`);
+      (err as unknown as { code: string }).code = "23505";
+      throw err;
+    }
+    const row: AccountRow = {
+      id: this.#accounts.size + 1,
+      account_id: accountId,
+      phone_stub_hash: phoneStubHash,
+      email_stub_hash: emailStubHash ?? null,
+      created_at: new Date().toISOString(),
+      chain_hash: "",
+    };
+    this.#accounts.set(accountId, row);
+    this.#accountPhoneHashIndex.set(phoneStubHash, accountId);
+    return row;
+  }
+
+  async getAgentsByAccount(accountId: string): Promise<AgentProfile[]> {
+    const pubkeys = this.#accountAgentIndex.get(accountId) ?? [];
+    return pubkeys
+      .map((k) => this.#profiles.get(k))
+      .filter((p): p is AgentProfile => p !== undefined)
+      .sort((a, b) => a.registered_at - b.registered_at);
+  }
+
   setProfile(profile: AgentProfile): void {
     this.#profiles.set(profile.k_local_pubkey, profile);
     this.#phoneHashIndex.set(profile.phone_stub_hash, profile.k_local_pubkey);
+    // ACCOUNT-001: if account_id is set, update the account-agent index
+    const accountId = (profile as AgentProfile & { account_id?: string | null }).account_id;
+    if (accountId) {
+      const list = this.#accountAgentIndex.get(accountId) ?? [];
+      if (!list.includes(profile.k_local_pubkey)) {
+        list.push(profile.k_local_pubkey);
+      }
+      this.#accountAgentIndex.set(accountId, list);
+    }
   }
 
   getProfile(kLocalPubkeyHex: string): AgentProfile | undefined {

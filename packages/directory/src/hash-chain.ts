@@ -77,6 +77,10 @@ const TABLE_EXTRA_EXCLUDED: Record<string, ReadonlySet<string>> = {
   // the stored chain_hash was computed without deregistered_at, but SELECT * includes it as NULL.
   // This is the same M4 bug #7 pattern that broke seal_notarizations in M4 live testing.
   relay_registrations: new Set(["deregistered_at"]),
+  // ACCOUNT-001: email_stub_hash is nullable and absent from initial INSERT.
+  // If not excluded, verifyChain fails: SELECT returns email_stub_hash: null
+  // while chain_hash was computed without it (lesson from M4 bug #7).
+  user_accounts: new Set(["email_stub_hash"]),
 };
 
 function isExcluded(tableName: string, column: string): boolean {
@@ -227,6 +231,9 @@ export const HASH_CHAINED_TABLES = [
   "sessions",
   // FEDERATION-003: relay registrations are hash-chained; deregistered_at excluded via TABLE_EXTRA_EXCLUDED.
   "relay_registrations",
+  // ACCOUNT-001: user_accounts is hash-chained to provide tamper-evidence for the
+  // account identity table. append-only per RLS policy.
+  "user_accounts",
 ] as const;
 
 export type HashChainedTable = (typeof HASH_CHAINED_TABLES)[number];

@@ -16,6 +16,32 @@ import type {
 } from "@cello/protocol-types";
 import type { AgentProfile, ConnectionEstablished, ConnectionRecord, PendingConnectionRequest } from "@cello/protocol-types";
 
+// ─── ACCOUNT-001: Account identity types ─────────────────────────────────────
+
+/**
+ * Parameters for creating a new user_accounts row.
+ * ACCOUNT-001: email_stub_hash is optional — email is not required at account creation time.
+ */
+export interface CreateAccountParams {
+  accountId: string;        // UUID
+  phoneStubHash: string;    // SHA-256(phone_stub) per FIPS 180-4
+  emailStubHash?: string;   // SHA-256(email_stub) per FIPS 180-4 — optional
+  correlationId?: string;   // For observability threading
+}
+
+/**
+ * A persisted user_accounts row.
+ * ACCOUNT-001: returned by createAccount().
+ */
+export interface AccountRow {
+  id: number;               // BIGSERIAL — internal row ordering
+  account_id: string;       // UUID PRIMARY KEY
+  phone_stub_hash: string;  // SHA-256(phone_stub) — stored opaque; never decrypted by directory
+  email_stub_hash: string | null; // SHA-256(email_stub) — optional; null if not set
+  created_at: string;       // TIMESTAMPTZ as ISO string
+  chain_hash: string;       // SHA-256 hash chain value
+}
+
 /** Internal storage record for a completed FROST-notarized seal ceremony. Never sent on the wire. */
 export interface SealNotarization {
   session_id: Uint8Array;           // 16 bytes
@@ -95,6 +121,35 @@ export interface DirectoryStore {
    * REG-001 SI-001: raw phone_stub is NEVER passed here — only the hash.
    */
   hasPhoneStubHash(phoneStubHashHex: string): boolean;
+
+  // ─── ACCOUNT-001: Account identity methods ───────────────────────────────
+
+  /**
+   * Create a new user_accounts row with hash chain enforcement.
+   *
+   * ACCOUNT-001: logs account.created at INFO on success.
+   * Logs account.phone_stub_hash.duplicate at WARN on unique constraint violation;
+   * rethrows so the caller can handle the failure.
+   *
+   * @param params.accountId - UUID for the new account
+   * @param params.phoneStubHash - SHA-256(phone_stub) — must be unique
+   * @param params.emailStubHash - Optional SHA-256(email_stub)
+   * @param params.correlationId - For observability threading
+   * @throws on duplicate phone_stub_hash or other DB error
+   */
+  createAccount(params: CreateAccountParams): Promise<AccountRow>;
+
+  /**
+   * Return all agent_profiles rows with account_id = accountId,
+   * ordered by registered_at ASC.
+   *
+   * ACCOUNT-001 AC-002: returns both linked agents in registration order.
+   * ACCOUNT-001 AC-004: NULL account_id rows are excluded from results.
+   *
+   * Returns [] if no agents are linked to this account.
+   * Does not throw on empty result.
+   */
+  getAgentsByAccount(accountId: string): Promise<AgentProfile[]>;
 
   // ─── CONNREQ-002: Connection record methods ───────────────────────────────
 
