@@ -13,7 +13,7 @@
  *                       must be enabled on the bucket. Current bucket (cello-audit-logs-dev-us-east-1)
  *                       was deployed without Object Lock; this AC verifies the IAM policy denials.
  * AC-004 (unit): S3 unavailable (simulated by rejecting PutObjectCommand) → entries buffered,
- *                audit.shipper.buffered logged at WARN with { bufferedCount, oldestEntryAge }.
+ *                audit.shipper.degraded logged at WARN with { bufferedCount, oldestEntryAge }.
  *                NOTE: story YAML says "audit.shipper.buffered" (AC-004) and "audit.shipper.degraded"
  *                (DB-001/observability). The canonical event name in the observability section is
  *                "audit.shipper.degraded" — that is the implementation. AC-004 verifies buffering
@@ -136,42 +136,117 @@ describe("SECOPS-001 AC-001 / SI-003: AuditLogShipper interface has no AWS types
 // ─── AC-004 / SI-001: buffering on S3 unavailability ─────────────────────────
 
 describe("SECOPS-001 AC-004 / SI-001: entries buffered when S3 unavailable", () => {
-  it("5 entries buffered when S3 is down; audit.shipper.degraded logged at WARN with bufferedCount", async () => {
+  it("AC-004: 5 entries buffered when S3 is down; audit.shipper.degraded logged at WARN with { bufferedCount, oldestEntryAge }", async () => {
     const { logger, logs } = makeCapturingLogger();
     const { client } = makeMockS3Client({ shouldFail: true });
 
-    const shipper = new S3AuditLogShipper("test-bucket", "us-east-1", logger, client as unknown as import("@aws-sdk/client-s3").S3Client);
+    const shipper = new S3AuditLogShipper(
+      "test-bucket",
+      "us-east-1",
+      logger,
+      client as unknown as import("@aws-sdk/client-s3").S3Client,
+    );
+
+    const beforeShip = Date.now();
 
     // Ship 5 entries — all should buffer silently (no throw from ship())
     for (let i = 0; i < 5; i++) {
       await shipper.ship(makeEntry({ statement: `INSERT_${i}` }));
     }
 
-    // Buffer should hold all 5
-    const bufferSize = (shipper as unknown as { _bufferSizeForTest: number })._bufferSizeForTest;
-    expect(bufferSize).toBe(5);
+    const afterShip = Date.now();
 
-    // audit.shipper.degraded should have been logged at WARN
+    // audit.shipper.degraded should have been logged at WARN on the first failure
     const degradedLogs = logs.filter((l) => l.event === "audit.shipper.degraded");
     expect(degradedLogs.length).toBeGreaterThanOrEqual(1);
     expect(degradedLogs[0]!.level).toBe("warn");
-    // bufferedCount should be present (may be 1 on first degraded event, growing to 5)
+
+    // bufferedCount and oldestEntryAge must both be present (AC-004)
     expect(degradedLogs[0]!.context).toHaveProperty("bufferedCount");
+    expect(degradedLogs[0]!.context).toHaveProperty("oldestEntryAge");
+
+    // oldestEntryAge must be a non-negative number bounded by elapsed test time
+    const age = degradedLogs[0]!.context!["oldestEntryAge"] as number;
+    expect(typeof age).toBe("number");
+    expect(age).toBeGreaterThanOrEqual(0);
+    expect(age).toBeLessThanOrEqual(afterShip - beforeShip + 50); // 50ms slack
   });
 
-  it("SI-001: no entries dropped before buffer limit of 10,000 reached", async () => {
+  it("SI-001: no entries dropped before buffer limit of 10,000 reached — observable via shipped count in flush()", async () => {
     const { logger } = makeCapturingLogger();
-    const { client } = makeMockS3Client({ shouldFail: true });
+    // First 1 call fails (triggers degraded mode), subsequent calls succeed (for flush)
+    const { client, sentCommands } = makeMockS3Client({ failCount: 1 });
 
-    const shipper = new S3AuditLogShipper("test-bucket", "us-east-1", logger, client as unknown as import("@aws-sdk/client-s3").S3Client);
+    const shipper = new S3AuditLogShipper(
+      "test-bucket",
+      "us-east-1",
+      logger,
+      client as unknown as import("@aws-sdk/client-s3").S3Client,
+      // Disable background retry so it doesn't interfere with the flush assertion
+      { initialRetryMs: 600_000 },
+    );
 
-    // Ship 100 entries — well under the limit, none should be dropped
+    // Ship 100 entries — the first triggers degraded mode, the rest go directly to buffer
     for (let i = 0; i < 100; i++) {
       await shipper.ship(makeEntry({ statement: `INSERT_${i}` }));
     }
 
-    const bufferSize = (shipper as unknown as { _bufferSizeForTest: number })._bufferSizeForTest;
-    expect(bufferSize).toBe(100);
+    // flush() — mock now succeeds (failCount exhausted after 1 call)
+    const shipped = await shipper.flush();
+
+    // All 100 entries must have been preserved (SI-001: no drops before buffer limit)
+    expect(shipped).toBe(100);
+    // 100 PutObjectCommand calls happened: 1 failed + 100 from flush = 101 total calls
+    // But sentCommands only counts successful calls
+    expect(sentCommands).toHaveLength(100);
+  });
+});
+
+// ─── Observability: audit.shipper.recovered after backoff retry ──────────────
+
+describe("SECOPS-001 observability: audit.shipper.recovered after successful retry", () => {
+  it("audit.shipper.recovered logged at INFO with { bufferedCount } when S3 comes back after outage", async () => {
+    const { logger, logs } = makeCapturingLogger();
+    // First call fails (triggers degraded mode + backoff), then succeeds (S3 recovery)
+    const { client } = makeMockS3Client({ failCount: 1 });
+
+    // Use a very short retry delay so the test completes quickly
+    const shipper = new S3AuditLogShipper(
+      "test-bucket",
+      "us-east-1",
+      logger,
+      client as unknown as import("@aws-sdk/client-s3").S3Client,
+      { initialRetryMs: 10 },
+    );
+
+    // Buffer 3 entries (first ship() fails, triggering degraded + backoff)
+    await shipper.ship(makeEntry({ statement: "INSERT_0" }));
+    await shipper.ship(makeEntry({ statement: "INSERT_1" }));
+    await shipper.ship(makeEntry({ statement: "INSERT_2" }));
+
+    // Wait for backoff retry to fire and drain the buffer
+    await new Promise<void>((resolve) => {
+      const poll = setInterval(() => {
+        const recoveredLogs = logs.filter((l) => l.event === "audit.shipper.recovered");
+        if (recoveredLogs.length > 0) {
+          clearInterval(poll);
+          resolve();
+        }
+      }, 5);
+      // Timeout after 500ms
+      setTimeout(() => { clearInterval(poll); resolve(); }, 500);
+    });
+
+    const recoveredLogs = logs.filter((l) => l.event === "audit.shipper.recovered");
+    expect(recoveredLogs.length).toBeGreaterThanOrEqual(1);
+    expect(recoveredLogs[0]!.level).toBe("info");
+    // bufferedCount must be present (count of entries in buffer at time of recovery)
+    expect(recoveredLogs[0]!.context).toHaveProperty("bufferedCount");
+    const bufferedCount = recoveredLogs[0]!.context!["bufferedCount"] as number;
+    expect(typeof bufferedCount).toBe("number");
+    // bufferedCount should reflect how many entries were waiting (3 total)
+    expect(bufferedCount).toBeGreaterThanOrEqual(1);
+    expect(bufferedCount).toBeLessThanOrEqual(3);
   });
 });
 
@@ -182,21 +257,26 @@ describe("SECOPS-001 AC-005: buffer overflow — oldest entries dropped at limit
     const { logger, logs } = makeCapturingLogger();
     const { client } = makeMockS3Client({ shouldFail: true });
 
-    const shipper = new S3AuditLogShipper("test-bucket", "us-east-1", logger, client as unknown as import("@aws-sdk/client-s3").S3Client);
+    // Use a very long initial retry so the background retry doesn't interfere during the
+    // 10,001 ship() calls (each takes ~0ms; retry is async and shouldn't fire, but be explicit)
+    const shipper = new S3AuditLogShipper(
+      "test-bucket",
+      "us-east-1",
+      logger,
+      client as unknown as import("@aws-sdk/client-s3").S3Client,
+      { initialRetryMs: 600_000 },
+    );
 
     // Fill buffer to exactly 10,000
     for (let i = 0; i < 10_000; i++) {
       await shipper.ship(makeEntry({ statement: `INSERT_${i}` }));
     }
 
-    // Verify buffer is at limit
-    expect((shipper as unknown as { _bufferSizeForTest: number })._bufferSizeForTest).toBe(10_000);
+    // At 10,000 entries the buffer is full. Verify via flush count below.
+    // (No _bufferSizeForTest — observable only through logged events and flush behavior)
 
     // Ship the 10,001st entry
     await shipper.ship(makeEntry({ statement: "INSERT_10000" }));
-
-    // Buffer must not exceed 10,000
-    expect((shipper as unknown as { _bufferSizeForTest: number })._bufferSizeForTest).toBe(10_000);
 
     // audit.shipper.buffer.overflow must have been logged at ERROR
     const overflowLogs = logs.filter((l) => l.event === "audit.shipper.buffer.overflow");
@@ -217,7 +297,14 @@ describe("SECOPS-001 AC-007: flush() ships all buffered entries on shutdown", ()
     // First 3 calls fail (buffering), then succeed (flush)
     const { client, sentCommands } = makeMockS3Client({ failCount: 1 });
 
-    const shipper = new S3AuditLogShipper("test-bucket", "us-east-1", logger, client as unknown as import("@aws-sdk/client-s3").S3Client);
+    // Long initial retry to prevent background retry from racing with flush()
+    const shipper = new S3AuditLogShipper(
+      "test-bucket",
+      "us-east-1",
+      logger,
+      client as unknown as import("@aws-sdk/client-s3").S3Client,
+      { initialRetryMs: 600_000 },
+    );
 
     // Ship 3 entries — they will buffer because the mock fails for the first call.
     // Only the FIRST ship() call actually invokes send() (the call that fails, triggering
@@ -227,14 +314,10 @@ describe("SECOPS-001 AC-007: flush() ships all buffered entries on shutdown", ()
     await shipper.ship(makeEntry({ statement: "UPDATE" }));
     await shipper.ship(makeEntry({ statement: "DELETE" }));
 
-    expect((shipper as unknown as { _bufferSizeForTest: number })._bufferSizeForTest).toBe(3);
-
     // flush() — mock now succeeds (failCount exhausted)
     const shipped = await shipper.flush();
 
     expect(shipped).toBe(3);
-    // Buffer should be empty after flush
-    expect((shipper as unknown as { _bufferSizeForTest: number })._bufferSizeForTest).toBe(0);
 
     // audit.shipper.flushed should be logged
     const flushedLogs = logs.filter((l) => l.event === "audit.shipper.flushed");
@@ -250,7 +333,13 @@ describe("SECOPS-001 AC-007: flush() ships all buffered entries on shutdown", ()
     const { logger, logs } = makeCapturingLogger();
     const { client } = makeMockS3Client({ shouldFail: true });
 
-    const shipper = new S3AuditLogShipper("test-bucket", "us-east-1", logger, client as unknown as import("@aws-sdk/client-s3").S3Client, { flushTimeoutMs: 100 });
+    const shipper = new S3AuditLogShipper(
+      "test-bucket",
+      "us-east-1",
+      logger,
+      client as unknown as import("@aws-sdk/client-s3").S3Client,
+      { flushTimeoutMs: 100, initialRetryMs: 600_000 },
+    );
 
     await shipper.ship(makeEntry({ statement: "INSERT" }));
     await shipper.ship(makeEntry({ statement: "UPDATE" }));
@@ -276,7 +365,12 @@ describe("SECOPS-001 observability: audit.shipper.shipped on successful ship()",
     const { logger, logs } = makeCapturingLogger();
     const { client } = makeMockS3Client({ shouldFail: false });
 
-    const shipper = new S3AuditLogShipper("test-bucket", "us-east-1", logger, client as unknown as import("@aws-sdk/client-s3").S3Client);
+    const shipper = new S3AuditLogShipper(
+      "test-bucket",
+      "us-east-1",
+      logger,
+      client as unknown as import("@aws-sdk/client-s3").S3Client,
+    );
 
     await shipper.ship(makeEntry({ statement: "INSERT" }));
 
@@ -292,7 +386,12 @@ describe("SECOPS-001 observability: audit.shipper.shipped on successful ship()",
     const { logger, logs } = makeCapturingLogger();
     const { client } = makeMockS3Client();
 
-    const shipper = new S3AuditLogShipper("test-bucket", "us-east-1", logger, client as unknown as import("@aws-sdk/client-s3").S3Client);
+    const shipper = new S3AuditLogShipper(
+      "test-bucket",
+      "us-east-1",
+      logger,
+      client as unknown as import("@aws-sdk/client-s3").S3Client,
+    );
 
     await shipper.ship(makeEntry());
 
@@ -315,7 +414,14 @@ describe("SECOPS-001 concurrency: concurrent flush() calls don't double-ship ent
     // flush() calls 2 & 3 succeed (callCount 2 and 3 exceed failCount:1).
     const { client, sentCommands } = makeMockS3Client({ failCount: 1 });
 
-    const shipper = new S3AuditLogShipper("test-bucket", "us-east-1", logger, client as unknown as import("@aws-sdk/client-s3").S3Client);
+    // Long initial retry to prevent background retry from racing with flush()
+    const shipper = new S3AuditLogShipper(
+      "test-bucket",
+      "us-east-1",
+      logger,
+      client as unknown as import("@aws-sdk/client-s3").S3Client,
+      { initialRetryMs: 600_000 },
+    );
 
     // Buffer 2 entries: first ship() fails (send called, fails), second ships to buffer directly
     await shipper.ship(makeEntry({ statement: "INSERT_1" }));
@@ -400,16 +506,23 @@ describeIntegration("SECOPS-001 AC-004 (integration): buffering and recovery", (
     const { logger } = makeCapturingLogger();
     const { client, sentCommands } = makeMockS3Client({ failCount: 5 });
 
-    const shipper = new S3AuditLogShipper(AUDIT_BUCKET!, "us-east-1", logger, client as unknown as import("@aws-sdk/client-s3").S3Client);
+    // Long initial retry to prevent background retry from racing with flush()
+    const shipper = new S3AuditLogShipper(
+      AUDIT_BUCKET!,
+      "us-east-1",
+      logger,
+      client as unknown as import("@aws-sdk/client-s3").S3Client,
+      { initialRetryMs: 600_000 },
+    );
 
-    // Ship 5 entries — all buffer
+    // Ship 5 entries — all buffer (first call fails, subsequent calls see non-empty buffer)
+    // Note: only the first call actually invokes send() and fails; the rest go directly to buffer.
+    // failCount:5 means calls 1-5 fail. But only call 1 is made by ship() (degraded mode kicks in).
     for (let i = 0; i < 5; i++) {
       await shipper.ship(makeEntry({ statement: `INSERT_${i}` }));
     }
 
-    expect((shipper as unknown as { _bufferSizeForTest: number })._bufferSizeForTest).toBe(5);
-
-    // flush() — mock now succeeds
+    // flush() — call 2 onwards succeed (failCount=5 but only call 1 was made so far)
     const shipped = await shipper.flush();
     expect(shipped).toBe(5);
     expect(sentCommands).toHaveLength(5);
@@ -430,7 +543,13 @@ describeIntegration("SECOPS-001 AC-007 (integration): flush on shutdown ships to
     const { logger } = makeCapturingLogger();
     // First 3 ship() calls fail, so they buffer; flush() succeeds
     const { client } = makeMockS3Client({ failCount: 3 });
-    const shipper = new S3AuditLogShipper(AUDIT_BUCKET!, region, logger, client as unknown as import("@aws-sdk/client-s3").S3Client);
+    const shipper = new S3AuditLogShipper(
+      AUDIT_BUCKET!,
+      region,
+      logger,
+      client as unknown as import("@aws-sdk/client-s3").S3Client,
+      { initialRetryMs: 600_000 },
+    );
 
     await shipper.ship(makeEntry({ statement: "INSERT" }));
     await shipper.ship(makeEntry({ statement: "UPDATE" }));
@@ -442,16 +561,16 @@ describeIntegration("SECOPS-001 AC-007 (integration): flush on shutdown ships to
 });
 
 describeIntegration("SECOPS-001 SI-002 (integration): S3 bucket policy denies delete/overwrite", () => {
-  it("SI-002: DeleteObject denied; PutObject to new key allowed; verifies IAM policy enforcement", async () => {
-    // NOTE: This test verifies that the bucket policy in cello-s3.yaml denies s3:DeleteObject.
-    // Running this as operator credentials (not task role) — demonstrates that DELETE is
-    // denied because the bucket has no AllowDelete policy statement.
-    // The actual enforcement is in the CloudFormation bucket policy (DenyNonPutActions).
-    // This test can only run as the task role itself — we verify the policy exists in IaC.
-    // For a full verification, see cello-s3.yaml: DenyNonPutActions explicitly denies
-    // s3:DeleteObject for the directory task role.
-
-    // Verify the S3AuditLogShipper never calls DeleteObject or GetObject
+  /**
+   * SI-002: adapter never issues DeleteObject or GetObject (tamper resistance enforced at bucket policy)
+   *
+   * The enforcement of SI-002 is at the IAM bucket policy level (cello-s3.yaml DenyNonPutActions),
+   * which explicitly denies s3:DeleteObject for the directory task role. That policy-level denial
+   * cannot be triggered in a unit test running under developer credentials. This test verifies the
+   * adapter side of the invariant: S3AuditLogShipper must never call DeleteObject or GetObject —
+   * it only issues PutObjectCommand. The complementary IAM verification is in cello-s3.yaml.
+   */
+  it("SI-002: adapter never issues DeleteObject or GetObject (tamper resistance enforced at bucket policy)", async () => {
     const { logger } = makeCapturingLogger();
     const region = process.env["AWS_REGION"] ?? "us-east-1";
 

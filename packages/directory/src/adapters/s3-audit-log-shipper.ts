@@ -16,13 +16,16 @@
  *     this.#logger.info("audit.shipper.shipped", { entryCount: 1, s3Key, durationMs })
  *   catch:
  *     this.#addToBuffer(entry)
- *     this.#logger.warn("audit.shipper.degraded", { reason, bufferedCount })
+ *     oldestEntryAge = Date.now() - this.#bufferOldestTs
+ *     this.#logger.warn("audit.shipper.degraded", { reason, bufferedCount, oldestEntryAge })
+ *     this.#startBackoffRetry()
  *
  * #addToBuffer(entry):
  *   // Bounded at MAX_BUFFER=10,000; drop oldest if full (AC-005)
  *   if this.#buffer.length >= MAX_BUFFER:
  *     this.#buffer.shift()  // drop oldest
  *     this.#logger.error("audit.shipper.buffer.overflow", { droppedCount: 1, bufferedCount: MAX_BUFFER })
+ *   if this.#buffer.length === 0: this.#bufferOldestTs = Date.now()
  *   this.#buffer.push(entry)
  *
  * #putToS3(entry):
@@ -34,11 +37,34 @@
  *   }))
  *   return s3Key
  *
+ * #startBackoffRetry():
+ *   // Start background retry loop if not already running (SI-001: backoff — EARS behavior)
+ *   // Schedule: 1s, 2s, 4s, 8s, 16s, 32s, cap at 60s
+ *   if this.#retryTimer !== null: return  // already scheduled
+ *   this.#scheduleRetry(INITIAL_RETRY_MS)
+ *
+ * #scheduleRetry(delayMs):
+ *   this.#retryTimer = setTimeout(async () => {
+ *     this.#retryTimer = null
+ *     if this.#buffer.length === 0: return  // buffer drained by flush()
+ *     try:
+ *       s3Key = await this.#putToS3(this.#buffer[0])
+ *       // S3 is back — drain buffer
+ *       this.#buffer.shift()
+ *       this.#logger.info("audit.shipper.recovered", { bufferedCount: this.#buffer.length })
+ *       // Flush remaining buffer entries
+ *       for remaining entries: ship them
+ *     catch:
+ *       // S3 still unavailable — reschedule with backoff
+ *       this.#scheduleRetry(Math.min(delayMs * 2, MAX_RETRY_MS))
+ *   }, delayMs)
+ *
  * flush():
  *   // Called on SIGTERM — attempt to ship all buffered within flushTimeoutMs (default: 10s)
  *   // Concurrent flush calls: #flushInProgress guard prevents double-shipping (AC concurrency)
  *   if this.#flushInProgress: await this.#flushPromise; return 0
  *   this.#flushInProgress = true
+ *   cancel any pending retry timer
  *   shipped = 0
  *   startMs = Date.now()
  *   try:
@@ -76,9 +102,17 @@ const MAX_BUFFER = 10_000;
 /** Default flush timeout in milliseconds (SIGTERM path — AC-007) */
 const DEFAULT_FLUSH_TIMEOUT_MS = 10_000;
 
+/** Initial retry delay in milliseconds (exponential backoff starting point) */
+const INITIAL_RETRY_MS = 1_000;
+
+/** Maximum retry delay in milliseconds (backoff cap) */
+const MAX_RETRY_MS = 60_000;
+
 export interface S3AuditLogShipperOptions {
   /** Maximum time (ms) to wait during flush() before giving up. Default: 10,000 */
   flushTimeoutMs?: number;
+  /** Initial retry delay (ms) for exponential backoff. Default: 1,000 */
+  initialRetryMs?: number;
 }
 
 export class S3AuditLogShipper implements AuditLogShipper {
@@ -89,11 +123,18 @@ export class S3AuditLogShipper implements AuditLogShipper {
   // Bounded in-memory buffer for degraded-mode accumulation
   readonly #buffer: AuditLogEntry[] = [];
   readonly #flushTimeoutMs: number;
+  readonly #initialRetryMs: number;
+
+  // Timestamp of the oldest entry currently in the buffer (for oldestEntryAge computation)
+  #bufferOldestTs = 0;
 
   // Concurrency guard: flush() sets this to prevent double-shipping on concurrent calls
   #flushInProgress = false;
   #flushResolve?: () => void;
   #flushPromise?: Promise<void>;
+
+  // Background retry timer handle (null = no retry scheduled)
+  #retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     bucketName: string,
@@ -107,15 +148,7 @@ export class S3AuditLogShipper implements AuditLogShipper {
     // Inject client for testing; create real client for production
     this.#client = s3Client ?? new S3Client({ region });
     this.#flushTimeoutMs = opts.flushTimeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS;
-  }
-
-  /**
-   * Test-only accessor: exposes buffer size without exposing buffer contents.
-   * Named with underscore prefix to signal internal-only intent; accessed in tests via
-   * (shipper as unknown as { _bufferSizeForTest: number })._bufferSizeForTest
-   */
-  get _bufferSizeForTest(): number {
-    return this.#buffer.length;
+    this.#initialRetryMs = opts.initialRetryMs ?? INITIAL_RETRY_MS;
   }
 
   async ship(entry: AuditLogEntry): Promise<void> {
@@ -134,13 +167,16 @@ export class S3AuditLogShipper implements AuditLogShipper {
         durationMs: Date.now() - startMs,
       });
     } catch (err) {
-      // Enter degraded mode: buffer the entry and log
+      // Enter degraded mode: buffer the entry and log with oldestEntryAge
       this.#addToBuffer(entry);
       const reason = err instanceof Error ? err.message : String(err);
       this.#logger.warn("audit.shipper.degraded", {
         reason,
         bufferedCount: this.#buffer.length,
+        oldestEntryAge: Date.now() - this.#bufferOldestTs,
       });
+      // Start background retry loop (idempotent — no-op if already running)
+      this.#startBackoffRetry(this.#initialRetryMs);
     }
   }
 
@@ -154,6 +190,11 @@ export class S3AuditLogShipper implements AuditLogShipper {
     }
 
     this.#flushInProgress = true;
+    // Cancel any pending background retry — flush takes over
+    if (this.#retryTimer !== null) {
+      clearTimeout(this.#retryTimer);
+      this.#retryTimer = null;
+    }
     // Set up the promise that concurrent callers can await
     this.#flushPromise = new Promise<void>((resolve) => {
       this.#flushResolve = resolve;
@@ -241,6 +282,66 @@ export class S3AuditLogShipper implements AuditLogShipper {
         bufferedCount: MAX_BUFFER,
       });
     }
+    // Track the oldest entry's arrival time for oldestEntryAge reporting
+    if (this.#buffer.length === 0) {
+      this.#bufferOldestTs = Date.now();
+    }
     this.#buffer.push(entry);
+  }
+
+  /**
+   * Start the exponential backoff retry loop (idempotent — no-op if already running).
+   * Schedule: initialRetryMs → 2x → 4x → … → cap at MAX_RETRY_MS (60s).
+   * When a flush attempt succeeds, emits audit.shipper.recovered and drains the buffer.
+   */
+  #startBackoffRetry(delayMs: number): void {
+    // Only one retry loop at a time
+    if (this.#retryTimer !== null) return;
+    this.#scheduleRetry(delayMs);
+  }
+
+  #scheduleRetry(delayMs: number): void {
+    this.#retryTimer = setTimeout(() => {
+      this.#retryTimer = null;
+      // If buffer is empty (drained by flush() or successful ships) — nothing to do
+      if (this.#buffer.length === 0) return;
+      // Attempt to ship the oldest buffered entry as a probe
+      void this.#retryFlush(delayMs);
+    }, delayMs);
+  }
+
+  async #retryFlush(prevDelayMs: number): Promise<void> {
+    if (this.#buffer.length === 0) return;
+
+    const countBeforeFlush = this.#buffer.length;
+
+    try {
+      // Attempt to ship the first buffered entry as a probe
+      const first = this.#buffer[0]!;
+      await this.#putToS3(first);
+      this.#buffer.shift();
+
+      // S3 is back — log recovery and drain the rest of the buffer
+      this.#logger.info("audit.shipper.recovered", {
+        bufferedCount: countBeforeFlush,
+      });
+
+      // Drain remaining buffered entries (best-effort, no timeout here)
+      while (this.#buffer.length > 0) {
+        const entry = this.#buffer[0]!;
+        try {
+          await this.#putToS3(entry);
+          this.#buffer.shift();
+        } catch {
+          // S3 went down again mid-drain — reschedule backoff from initial delay
+          this.#scheduleRetry(this.#initialRetryMs);
+          return;
+        }
+      }
+    } catch {
+      // S3 still unavailable — reschedule with exponential backoff (cap at MAX_RETRY_MS)
+      const nextDelay = Math.min(prevDelayMs * 2, MAX_RETRY_MS);
+      this.#scheduleRetry(nextDelay);
+    }
   }
 }
