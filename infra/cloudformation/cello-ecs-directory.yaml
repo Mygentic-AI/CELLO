@@ -9,6 +9,9 @@ Parameters:
     Type: String
     AllowedValues: [dev, staging, production]
     Description: Deployment environment
+  RelayMultiaddr:
+    Type: String
+    Description: "Relay libp2p multiaddr including peer ID (e.g. /ip4/10.x.x.x/tcp/4001/p2p/12D3KooW...)"
   Cpu:
     Type: String
     Default: "256"
@@ -75,6 +78,8 @@ Resources:
               Value: "443"
             - Name: HOME
               Value: /tmp
+            - Name: CELLO_RELAY_MULTIADDR
+              Value: !Ref RelayMultiaddr
             # SI-004 (SECOPS-004): inject the secret ARN, not the secret value.
             # ECS Secrets.ValueFrom fetches the value once at task launch and injects
             # it as an env var — this is a snapshot that goes stale after the first
