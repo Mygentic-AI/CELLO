@@ -197,6 +197,10 @@ logger.info("session.started", { userId, sessionId, principalType })
 - `infra.replication.setup.rds_host_not_found` — level: error; context fields: `{ region }`; correlationId: false; fired to stderr when neither the ECS task environment variable `RDS_ENDPOINT` nor the CloudFormation stack output `RdsEndpoint` can supply the RDS hostname for a region; script exits 1 after logging; added in FEDERATION-001A; package: infra (bash script)
 - `relay.shutdown.failed` — level: error; context fields: `{ reason }`; correlationId: false; fired by the relay binary shutdown handler when `relayResult.stop()` rejects; the process still exits 0 after logging (graceful drain failed, not a fatal crash); added in DEPLOY-003; package: relay
 - `relay.startup.ephemeral-key` — level: warn; context fields: `{ reason }`; correlationId: false; fired by the relay binary when `CELLO_DIRECTORY_PUBKEY` is absent in test mode (`NODE_ENV=test`); uses a random ephemeral public key for the directory authentication check; never fires in non-test environments (would exit 1 instead); added in DEPLOY-003; package: relay
+- `relay.service.started` — level: info; context fields: `{ relayId, region, environment }`; correlationId: false; fired when relay service starts and signing key is loaded successfully; added in DEPLOY-003; package: relay
+- `relay.service.stopped` — level: info; context fields: `{ relayId, region, environment, uptimeMs }`; correlationId: false; fired on clean SIGTERM shutdown; added in DEPLOY-003; package: relay
+- `relay.service.start.failed` — level: error; context fields: `{ reason, region }`; correlationId: false; NO relayId field (key may not be loaded when this fires); fired when relay fails to start (key load failure, config error, port conflict); added in DEPLOY-003; package: relay
+- `relay.service.crashed` — level: error; context fields: `{ relayId, region, reason }`; correlationId: false; fired on unexpected process exit; added in DEPLOY-003; package: relay
 
 ---
 
