@@ -1,0 +1,350 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO VPC — private subnets for RDS and ECS, public subnet for ALB only.
+  No NAT Gateway — VPC Interface Endpoints provide AWS service access.
+  Parameterised by Environment and Region.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment
+  VpcCidr:
+    Type: String
+    Description: VPC CIDR block (e.g. 10.0.0.0/16)
+    AllowedPattern: '(\d{1,3}\.){3}\d{1,3}/\d{1,2}'
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-vpc-${Environment}"
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Two private subnets in different AZs for RDS Multi-AZ and ECS
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 4, 14]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-private-a-${Environment}"
+        - Key: Project
+          Value: cello
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 4, 14]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-private-b-${Environment}"
+        - Key: Project
+          Value: cello
+
+  # Public subnet for ALB only
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 4, 14]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-public-a-${Environment}"
+        - Key: Project
+          Value: cello
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [3, !Cidr [!Ref VpcCidr, 4, 14]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-public-b-${Environment}"
+        - Key: Project
+          Value: cello
+
+  # Internet Gateway for public subnets (ALB)
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-igw-${Environment}"
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  # Route tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-public-rt-${Environment}"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-private-rt-${Environment}"
+
+  PrivateSubnetARouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetBRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+  # Security Groups
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB - accepts HTTPS from internet
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: "0.0.0.0/0"
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-alb-sg-${Environment}"
+
+  EcsDirectorySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS Directory tasks - accepts traffic from ALB only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-ecs-directory-sg-${Environment}"
+
+  EcsRelaySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS Relay tasks - accepts traffic from ALB only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 4000
+          ToPort: 4000
+          SourceSecurityGroupId: !Ref EcsDirectorySecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-ecs-relay-sg-${Environment}"
+
+  RdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS - accepts connections from ECS directory tasks only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref EcsDirectorySecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-rds-sg-${Environment}"
+
+  # VPC Interface Endpoints (no NAT Gateway needed)
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: VPC Endpoints - accepts HTTPS from private subnets
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref VpcCidr
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-endpoint-sg-${Environment}"
+
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  EcrDkrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  KmsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.kms"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  # S3 Gateway Endpoint (free, no interface charge)
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+    Export:
+      Name: !Sub "cello-${Environment}-vpc-id"
+
+  VpcCidr:
+    Value: !Ref VpcCidr
+    Export:
+      Name: !Sub "cello-${Environment}-vpc-cidr"
+
+  PrivateSubnetA:
+    Value: !Ref PrivateSubnetA
+    Export:
+      Name: !Sub "cello-${Environment}-private-subnet-a"
+
+  PrivateSubnetB:
+    Value: !Ref PrivateSubnetB
+    Export:
+      Name: !Sub "cello-${Environment}-private-subnet-b"
+
+  PublicSubnetA:
+    Value: !Ref PublicSubnetA
+    Export:
+      Name: !Sub "cello-${Environment}-public-subnet-a"
+
+  PublicSubnetB:
+    Value: !Ref PublicSubnetB
+    Export:
+      Name: !Sub "cello-${Environment}-public-subnet-b"
+
+  PrivateRouteTableId:
+    Value: !Ref PrivateRouteTable
+    Export:
+      Name: !Sub "cello-${Environment}-private-rt"
+
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup
+    Export:
+      Name: !Sub "cello-${Environment}-alb-sg"
+
+  EcsDirectorySecurityGroupId:
+    Value: !Ref EcsDirectorySecurityGroup
+    Export:
+      Name: !Sub "cello-${Environment}-ecs-directory-sg"
+
+  EcsRelaySecurityGroupId:
+    Value: !Ref EcsRelaySecurityGroup
+    Export:
+      Name: !Sub "cello-${Environment}-ecs-relay-sg"
+
+  RdsSecurityGroupId:
+    Value: !Ref RdsSecurityGroup
+    Export:
+      Name: !Sub "cello-${Environment}-rds-sg"

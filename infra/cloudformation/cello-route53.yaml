@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO Route 53 + ACM — regional ALIAS records and TLS certificates.
+  Uses the existing hosted zone (created manually during bootstrap).
+  One certificate per region, DNS-validated against the Route 53 zone.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment
+  DomainName:
+    Type: String
+    Default: "cello.mygentic.ai"
+    Description: Root domain for CELLO services
+  HostedZoneId:
+    Type: String
+    Description: >
+      ID of the existing Route 53 hosted zone for DomainName.
+      The hosted zone is created manually during bootstrap — not by IaC.
+      Find it with: aws route53 list-hosted-zones-by-name --dns-name cello.mygentic.ai
+  AlbDnsName:
+    Type: String
+    Description: DNS name of the regional ALB
+  AlbHostedZoneId:
+    Type: String
+    Description: Hosted zone ID of the regional ALB
+  Subdomain:
+    Type: String
+    Description: Subdomain prefix (e.g. directory-us1, directory-eu1, directory-ap1)
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub "${Subdomain}.${DomainName}"
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub "${Subdomain}.${DomainName}"
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  AliasRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "${Subdomain}.${DomainName}"
+      Type: A
+      AliasTarget:
+        DNSName: !Ref AlbDnsName
+        HostedZoneId: !Ref AlbHostedZoneId
+
+Outputs:
+  CertificateArn:
+    Value: !Ref Certificate
+    Export:
+      Name: !Sub "cello-${Environment}-certificate-arn-${Subdomain}"

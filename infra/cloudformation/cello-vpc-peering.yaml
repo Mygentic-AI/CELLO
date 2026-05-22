@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO VPC Peering — one side of a cross-region VPC peering connection.
+  Ports 5432 (RDS) and 4001 (checkpoint) only between peer VPCs.
+  DEPLOY TWICE PER PAIR (6 stacks total): once from each region perspective.
+  Requester side creates the connection; accepter side adds return route and SG rules.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment
+  RequesterVpcId:
+    Type: String
+    Description: VPC ID in the requester region
+  RequesterPrivateRouteTableId:
+    Type: String
+    Description: Route table ID for the requester private subnets
+  AccepterVpcId:
+    Type: String
+    Description: VPC ID in the accepter region
+  AccepterVpcCidr:
+    Type: String
+    Description: CIDR of the accepter VPC
+  AccepterRegion:
+    Type: String
+    Description: AWS region of the accepter VPC
+  AccepterAccountId:
+    Type: String
+    Description: AWS account ID of the accepter (same account — find via aws sts get-caller-identity)
+  RdsSecurityGroupId:
+    Type: String
+    Description: RDS security group in the requester region (add peer CIDR ingress)
+  EcsDirectorySecurityGroupId:
+    Type: String
+    Description: ECS directory security group in the requester region (add peer CIDR ingress)
+
+Resources:
+  PeeringConnection:
+    Type: AWS::EC2::VPCPeeringConnection
+    Properties:
+      VpcId: !Ref RequesterVpcId
+      PeerVpcId: !Ref AccepterVpcId
+      PeerRegion: !Ref AccepterRegion
+      PeerOwnerId: !Ref AccepterAccountId
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-peering-${Environment}-${AWS::Region}-to-${AccepterRegion}"
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Route to peer VPC via peering connection
+  RequesterRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RequesterPrivateRouteTableId
+      DestinationCidrBlock: !Ref AccepterVpcCidr
+      VpcPeeringConnectionId: !Ref PeeringConnection
+
+  # Security group rules: only ports 5432 (RDS) and 4001 (checkpoint) from peer
+  RdsPeerIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RdsSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      CidrIp: !Ref AccepterVpcCidr
+      Description: !Sub "RDS replication from peer VPC ${AccepterRegion}"
+
+  DirectoryCheckpointPeerIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EcsDirectorySecurityGroupId
+      IpProtocol: tcp
+      FromPort: 4001
+      ToPort: 4001
+      CidrIp: !Ref AccepterVpcCidr
+      Description: !Sub "Checkpoint cross-signing from peer VPC ${AccepterRegion}"
+
+Outputs:
+  PeeringConnectionId:
+    Value: !Ref PeeringConnection
+    Export:
+      Name: !Sub "cello-${Environment}-peering-to-${AccepterRegion}"

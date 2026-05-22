@@ -1,0 +1,754 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO CI/CD — GitHub webhook Lambda, pipeline-filter Lambda, EventBridge bus,
+  and per-package CodePipelines. Deployed in us-east-1 only.
+  Completely independent of cello-agent CI/CD infrastructure (SI-003).
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment
+  GitHubRepo:
+    Type: String
+    Default: "Mygentic-AI/CELLO"
+    Description: GitHub repository (owner/repo)
+  GitHubBranch:
+    Type: String
+    Default: "main"
+    Description: Branch to monitor
+  GitHubConnectionArn:
+    Type: String
+    Description: CodeStar connection ARN for GitHub
+
+Resources:
+  # EventBridge bus for GitHub events
+  GitHubEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub "cello-github-events-${Environment}"
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # S3 artifacts bucket for CodePipeline
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # CI/CD infrastructure is shared across all environments (one deployment).
+      # The bucket name is fixed per AC-008: cello-codepipeline-artifacts-us-east-1.
+      # This template is deployed once in us-east-1 — not per-environment.
+      BucketName: !Sub "cello-codepipeline-artifacts-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+      Tags:
+        - Key: Project
+          Value: cello
+
+  # IAM role for webhook Lambda
+  WebhookLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-webhook-lambda-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: EventBridgePut
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource: !GetAtt GitHubEventBus.Arn
+        - PolicyName: SecretsManagerHmac
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/pipeline/github-hmac-secret*"
+      Tags:
+        - Key: Project
+          Value: cello
+
+  # Webhook receiver Lambda
+  WebhookLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-github-webhook-receiver-${Environment}"
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt WebhookLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 128
+      Environment:
+        Variables:
+          EVENT_BUS_NAME: !Ref GitHubEventBus
+          HMAC_SECRET_ARN: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/pipeline/github-hmac-secret"
+      Code:
+        ZipFile: |
+          """
+          GitHub webhook receiver — validates HMAC signature, forwards to EventBridge.
+          Actual implementation deployed via CI; this is the bootstrap placeholder.
+          """
+          def handler(event, context):
+              return {"statusCode": 200, "body": "placeholder"}
+      Tags:
+        - Key: Project
+          Value: cello
+
+  # Webhook Lambda URL (public HTTPS endpoint for GitHub)
+  WebhookLambdaUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      AuthType: NONE
+      TargetFunctionArn: !GetAtt WebhookLambda.Arn
+
+  WebhookLambdaUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt WebhookLambda.Arn
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+  # IAM role for pipeline-filter Lambda
+  PipelineFilterLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-pipeline-filter-lambda-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: StartPipelines
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codepipeline:StartPipelineExecution
+                Resource:
+                  - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-*-pipeline"
+      Tags:
+        - Key: Project
+          Value: cello
+
+  # Pipeline filter Lambda
+  PipelineFilterLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-pipeline-filter-${Environment}"
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Role: !GetAtt PipelineFilterLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 128
+      Code:
+        ZipFile: |
+          """
+          Pipeline filter — inspects commit paths, triggers matching CodePipelines.
+          Actual implementation deployed via CI; this is the bootstrap placeholder.
+          """
+          def handler(event, context):
+              return {"statusCode": 200, "body": "placeholder"}
+      Tags:
+        - Key: Project
+          Value: cello
+
+  # EventBridge rule: forward GitHub push events to pipeline-filter Lambda
+  PipelineFilterRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "cello-github-push-to-filter-${Environment}"
+      EventBusName: !Ref GitHubEventBus
+      EventPattern:
+        source:
+          - "cello.github"
+        detail-type:
+          - "push"
+      Targets:
+        - Id: PipelineFilterTarget
+          Arn: !GetAtt PipelineFilterLambda.Arn
+
+  PipelineFilterLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt PipelineFilterLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt PipelineFilterRule.Arn
+
+  # IAM roles for CodeBuild and CodePipeline
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-codebuild-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/cello-*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${ArtifactsBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                Resource:
+                  - !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/cello-directory"
+                  - !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/cello-relay"
+      Tags:
+        - Key: Project
+          Value: cello
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-codepipeline-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodePipelinePermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !GetAtt ArtifactsBucket.Arn
+                  - !Sub "${ArtifactsBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource: !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/cello-*"
+              - Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                Resource: !Ref GitHubConnectionArn
+      Tags:
+        - Key: Project
+          Value: cello
+
+  # CodeBuild projects and CodePipelines (8 total, one per package)
+  CryptoBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cello-crypto-build
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: packages/crypto/buildspec.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+
+  ProtocolTypesBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cello-protocol-types-build
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: packages/protocol-types/buildspec.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+
+  TransportBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cello-transport-build
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: packages/transport/buildspec.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+
+  ClientBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cello-client-build
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: packages/client/buildspec.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+
+  AdapterClaudeCodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cello-adapter-claude-code-build
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: packages/adapter-claude-code/buildspec.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+
+  DirectoryBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cello-directory-build
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: packages/directory/buildspec.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+
+  RelayBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cello-relay-build
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: packages/relay/buildspec.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+
+  E2eTestsBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cello-e2e-tests-build
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: packages/e2e-tests/buildspec.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+
+  # CodePipelines (one per package)
+  CryptoPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      PipelineType: V2
+      Name: cello-crypto-pipeline
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactsBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Ref GitHubRepo
+                BranchName: !Ref GitHubBranch
+                DetectChanges: "false"
+              OutputArtifacts:
+                - Name: SourceOutput
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref CryptoBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+
+  ProtocolTypesPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      PipelineType: V2
+      Name: cello-protocol-types-pipeline
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactsBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Ref GitHubRepo
+                BranchName: !Ref GitHubBranch
+                DetectChanges: "false"
+              OutputArtifacts:
+                - Name: SourceOutput
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref ProtocolTypesBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+
+  TransportPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      PipelineType: V2
+      Name: cello-transport-pipeline
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactsBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Ref GitHubRepo
+                BranchName: !Ref GitHubBranch
+                DetectChanges: "false"
+              OutputArtifacts:
+                - Name: SourceOutput
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref TransportBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+
+  ClientPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      PipelineType: V2
+      Name: cello-client-pipeline
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactsBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Ref GitHubRepo
+                BranchName: !Ref GitHubBranch
+                DetectChanges: "false"
+              OutputArtifacts:
+                - Name: SourceOutput
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref ClientBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+
+  AdapterClaudeCodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      PipelineType: V2
+      Name: cello-adapter-claude-code-pipeline
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactsBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Ref GitHubRepo
+                BranchName: !Ref GitHubBranch
+                DetectChanges: "false"
+              OutputArtifacts:
+                - Name: SourceOutput
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref AdapterClaudeCodeBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+
+  DirectoryPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      PipelineType: V2
+      Name: cello-directory-pipeline
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactsBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Ref GitHubRepo
+                BranchName: !Ref GitHubBranch
+                DetectChanges: "false"
+              OutputArtifacts:
+                - Name: SourceOutput
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref DirectoryBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+
+  RelayPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      PipelineType: V2
+      Name: cello-relay-pipeline
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactsBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Ref GitHubRepo
+                BranchName: !Ref GitHubBranch
+                DetectChanges: "false"
+              OutputArtifacts:
+                - Name: SourceOutput
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref RelayBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+
+  E2eTestsPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      PipelineType: V2
+      Name: cello-e2e-tests-pipeline
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactsBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Ref GitHubRepo
+                BranchName: !Ref GitHubBranch
+                DetectChanges: "false"
+              OutputArtifacts:
+                - Name: SourceOutput
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref E2eTestsBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+
+Outputs:
+  WebhookLambdaArn:
+    Value: !GetAtt WebhookLambda.Arn
+    Export:
+      Name: !Sub "cello-${Environment}-webhook-lambda-arn"
+
+  WebhookUrl:
+    Value: !GetAtt WebhookLambdaUrl.FunctionUrl
+    Export:
+      Name: !Sub "cello-${Environment}-webhook-url"
+
+  PipelineFilterLambdaArn:
+    Value: !GetAtt PipelineFilterLambda.Arn
+    Export:
+      Name: !Sub "cello-${Environment}-pipeline-filter-lambda-arn"
+
+  ArtifactsBucketName:
+    Value: !Ref ArtifactsBucket
+    Export:
+      Name: !Sub "cello-${Environment}-artifacts-bucket"

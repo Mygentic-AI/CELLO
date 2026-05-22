@@ -1,0 +1,63 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO KMS — one master key per environment per region.
+  Used to encrypt K_server_X shares at rest. Directory ECS task role
+  gets Decrypt/DescribeKey only. No Encrypt on the task role —
+  encryption uses the unwrapped key in-process.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment
+  DirectoryTaskRoleArn:
+    Type: String
+    Description: ARN of the ECS directory task role (gets Decrypt/DescribeKey)
+
+Resources:
+  MasterKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub "CELLO ${Environment} master key - encrypts K_server_X shares at rest"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowRootAccountFullAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: AllowDirectoryTaskDecrypt
+            Effect: Allow
+            Principal:
+              AWS: !Ref DirectoryTaskRoleArn
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+            Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-${Environment}-master-key"
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  MasterKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/cello-${Environment}-master-key"
+      TargetKeyId: !Ref MasterKey
+
+Outputs:
+  KmsKeyArn:
+    Value: !GetAtt MasterKey.Arn
+    Export:
+      Name: !Sub "cello-${Environment}-kms-key-arn"
+
+  KmsKeyId:
+    Value: !Ref MasterKey
+    Export:
+      Name: !Sub "cello-${Environment}-kms-key-id"

@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO RDS — PostgreSQL 18, private subnets, pgaudit enabled.
+  Instance class parameterised by environment.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment
+  InstanceClass:
+    Type: String
+    Default: db.t3.small
+    AllowedValues: [db.t3.small, db.t3.medium, db.t3.large]
+    Description: RDS instance class
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, production]
+
+Resources:
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub "CELLO ${Environment} RDS subnet group"
+      SubnetIds:
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-private-subnet-a"
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-private-subnet-b"
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  PgAuditParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Family: postgres18
+      Description: !Sub "CELLO ${Environment} - pgaudit and logical replication"
+      Parameters:
+        shared_preload_libraries: pgaudit
+        pgaudit.log: all
+        rds.logical_replication: "1"
+        wal_level: logical
+        max_replication_slots: "10"
+        max_wal_senders: "10"
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  PostgresInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "cello-${Environment}"
+      Engine: postgres
+      EngineVersion: "18"
+      DBInstanceClass: !Ref InstanceClass
+      AllocatedStorage: 20
+      MaxAllocatedStorage: 100
+      StorageType: gp3
+      DBName: !Sub "cello_${Environment}"
+      MasterUsername: postgres
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      DBParameterGroupName: !Ref PgAuditParameterGroup
+      VPCSecurityGroups:
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-rds-sg"
+      PubliclyAccessible: false
+      MultiAZ: !If [IsProduction, true, false]
+      BackupRetentionPeriod: !If [IsProduction, 7, 1]
+      # RDS storage encryption uses the AWS-managed key (aws/rds), not the CELLO CMK.
+      # The CELLO CMK (cello-kms.yaml) is used for application-level envelope encryption
+      # of K_server_X shares only. Separating the two avoids coupling RDS disk access
+      # to the directory task role kms:Decrypt permission.
+      StorageEncrypted: true
+      CopyTagsToSnapshot: true
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  RdsEndpoint:
+    Value: !GetAtt PostgresInstance.Endpoint.Address
+    Export:
+      Name: !Sub "cello-${Environment}-rds-endpoint"
+
+  RdsPort:
+    Value: !GetAtt PostgresInstance.Endpoint.Port
+    Export:
+      Name: !Sub "cello-${Environment}-rds-port"
+
+  RdsInstanceId:
+    Value: !Ref PostgresInstance
+    Export:
+      Name: !Sub "cello-${Environment}-rds-instance-id"

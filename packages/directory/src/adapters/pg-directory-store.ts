@@ -71,6 +71,9 @@ export const BIGINT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   conversation_proof_leaves: ["id", "leaf_index", "mmr_position"],
   conversation_proof_mmr_nodes: ["id", "mmr_position"],
   directory_checkpoints: ["id", "mmr_leaf_count"],
+  // DEPLOY-001: directory_nodes table (V17 migration)
+  // sessions table and sessions.id are added to BIGINT_COLUMNS in FEDERATION-001 (V18 migration)
+  directory_nodes: ["id"],
 } as const;
 
 /**
@@ -104,6 +107,8 @@ export const STORE_TABLES = [
   "conversation_proof_leaves",
   "conversation_proof_mmr_nodes",
   "directory_checkpoints",
+  // sessions added to STORE_TABLES in FEDERATION-001 (V18 migration)
+  "directory_nodes",
 ] as const;
 
 export type StoreTables = (typeof STORE_TABLES)[number];
@@ -782,4 +787,61 @@ export class PgDirectoryStore implements DirectoryStore {
     );
     return verifyChain(deserializedRows, this.#logger, tableName);
   }
+
+  // ─── DEPLOY-001 / FEDERATION-001: directory_nodes and sessions ──────────────
+
+  /**
+   * Insert a directory node record.
+   * Used at startup to register this node in the federation.
+   */
+  async insertDirectoryNode(node: {
+    nodeId: string;
+    region: string;
+    endpoint?: string;
+    status?: string;
+    correlationId?: string;
+  }): Promise<{ id: number }> {
+    const start = Date.now();
+    const result = await this.#pool.query<{ id: string }>(
+      `INSERT INTO directory_nodes (node_id, region, endpoint, status)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id`,
+      [node.nodeId, node.region, node.endpoint ?? null, node.status ?? "active"],
+    );
+    const id = parseInt(result.rows[0].id, 10);
+    this.#logger.info("adapter.persisted", {
+      tableName: "directory_nodes",
+      rowCount: 1,
+      durationMs: Date.now() - start,
+      ...(node.correlationId !== undefined && { correlationId: node.correlationId }),
+    });
+    return { id };
+  }
+
+  /**
+   * Get a directory node by node_id.
+   */
+  async getDirectoryNode(nodeId: string): Promise<{
+    id: number;
+    nodeId: string;
+    region: string;
+    endpoint: string | null;
+    status: string;
+  } | null> {
+    const result = await this.#pool.query<Record<string, unknown>>(
+      `SELECT * FROM directory_nodes WHERE node_id = $1`,
+      [nodeId],
+    );
+    if (result.rows.length === 0) return null;
+    const row = deserializeRow<Record<string, unknown>>("directory_nodes", result.rows[0]);
+    return {
+      id: row.id as number,
+      nodeId: row.node_id as string,
+      region: row.region as string,
+      endpoint: row.endpoint as string | null,
+      status: row.status as string,
+    };
+  }
+
+  // insertSession / getSession deferred to FEDERATION-001 (V18 migration creates sessions table)
 }
