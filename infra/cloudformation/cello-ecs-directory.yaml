@@ -73,9 +73,19 @@ Resources:
               Value: !Ref AWS::Region
             - Name: PORT
               Value: "443"
+            # SI-004 (SECOPS-004): inject the secret ARN, not the secret value.
+            # ECS Secrets.ValueFrom fetches the value once at task launch and injects
+            # it as an env var — this is a snapshot that goes stale after the first
+            # 30-day rotation. The application must call GetSecretValue(RDS_CREDENTIALS_SECRET_ARN)
+            # at connection-pool refresh time to pick up rotated credentials without
+            # a task restart. The ARN is stable; the value is fetched at runtime.
+            - Name: RDS_CREDENTIALS_SECRET_ARN
+              Value: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/rds-credentials"
           Secrets:
-            - Name: DB_PASSWORD
-              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/rds-credentials"
+            # NODE_PRIVATE_KEY is safe to inject at task launch — it changes only
+            # on manual key rotation, which requires a coordinated task restart
+            # (documented in infra/runbooks/node-key-rotation.md).
+            # It is NOT injected via RDS_CREDENTIALS_SECRET_ARN pattern.
             - Name: NODE_PRIVATE_KEY
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/node-private-key"
           LogConfiguration:

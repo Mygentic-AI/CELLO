@@ -33,12 +33,17 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
+              # SI-003 (SECOPS-004): enumerate specific secrets — do NOT use directory/*
+              # wildcard, which would grant access to rds-admin-credentials.
+              # rds-admin-credentials is accessible ONLY to the rotation Lambda role.
               - Sid: SecretsManagerGetForExecution
                 Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
                 Resource:
-                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/rds-credentials*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/node-private-key*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/kms-key-arn*"
       Tags:
         - Key: Project
           Value: cello
@@ -75,12 +80,16 @@ Resources:
                   - kms:DescribeKey
                 Resource:
                   - !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:alias/cello-${Environment}-master-key"
+              # SI-003 (SECOPS-004): enumerate specific secrets — do NOT use directory/*
+              # wildcard, which would grant access to rds-admin-credentials.
               - Sid: SecretsManagerGet
                 Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
                 Resource:
-                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/rds-credentials*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/node-private-key*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/kms-key-arn*"
               - Sid: S3AuditPutOnly
                 Effect: Allow
                 Action:
@@ -113,12 +122,15 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
+              # Enumerate specific secrets rather than using relay/* wildcard,
+              # consistent with directory role narrowing (SI-003). If new relay
+              # secrets are added, this list must be extended explicitly.
               - Sid: SecretsManagerGetForExecution
                 Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
                 Resource:
-                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/relay/*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/relay/node-private-key*"
       Tags:
         - Key: Project
           Value: cello

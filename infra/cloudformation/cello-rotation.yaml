@@ -1,0 +1,228 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO RDS Credential Rotation — deploys the Secrets Manager multi-user rotation
+  Lambda for cello/{env}/directory/rds-credentials.
+
+  Multi-user strategy: the Lambda connects to RDS using the admin credential
+  (cello/{env}/directory/rds-admin-credentials) and updates the cello_service
+  user password via ALTER ROLE.
+
+  Security model (SI-003):
+    - The Lambda execution role grants access to BOTH the app and admin credentials.
+    - The ECS task role (cello-iam.yaml: DirectoryTaskRole) grants access to the app
+      credential ONLY — it must never access rds-admin-credentials.
+
+  The Lambda runs in VPC private subnets to reach RDS on port 5432.
+  A dedicated Lambda security group allows outbound to the RDS security group only.
+
+  Dependencies: cello-vpc, cello-secrets, cello-iam, cello-rds
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment
+
+Resources:
+
+  # ── Lambda execution role (least-privilege) ───────────────────────────────
+  # This role is granted access to BOTH the app credential and the admin credential.
+  # The admin credential is needed to connect to RDS as the admin user and
+  # ALTER ROLE cello_service PASSWORD '<new>'.
+  # SI-003: the ECS task role must NOT have equivalent access to rds-admin-credentials.
+
+  RotationLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-${Environment}-rds-rotation-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Grants CreateNetworkInterface / DeleteNetworkInterface / DescribeNetworkInterfaces
+        # which are required for Lambda VPC configuration.
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: RotationLambdaPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # App credential: read AWSCURRENT/AWSPENDING, write AWSPENDING, update stages
+              - Sid: AppCredentialAccess
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:UpdateSecretVersionStage
+                  - secretsmanager:GetRandomPassword
+                Resource:
+                  - !ImportValue
+                    Fn::Sub: "cello-${Environment}-rds-credentials-arn"
+              # Admin credential: read AWSCURRENT only (needed for ALTER ROLE)
+              # SI-003: this permission is NOT granted to the ECS task role
+              - Sid: AdminCredentialReadOnly
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !ImportValue
+                    Fn::Sub: "cello-${Environment}-rds-admin-credentials-arn"
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── Lambda-specific security group ───────────────────────────────────────
+  # The Lambda needs outbound TCP 5432 to RDS.
+  # The RDS SG (cello-${Environment}-rds-sg) currently only allows inbound from
+  # EcsDirectorySecurityGroup. We add a Lambda SG here and patch the RDS SG
+  # ingress rule below via a separate ingress resource.
+
+  RotationLambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: >
+        CELLO RDS rotation Lambda — outbound to RDS port 5432 only.
+        No inbound traffic required (Lambda is invoked by Secrets Manager, not by network).
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          DestinationSecurityGroupId: !ImportValue
+            Fn::Sub: "cello-${Environment}-rds-sg"
+        # Allow HTTPS to VPC Interface Endpoints (Secrets Manager, KMS, CloudWatch Logs).
+        # Scoped to VPC CIDR — the Lambda runs in private subnets with no NAT Gateway;
+        # HTTPS traffic can only reach Interface Endpoints within the VPC.
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !ImportValue
+            Fn::Sub: "cello-${Environment}-vpc-cidr"
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-rotation-lambda-sg-${Environment}"
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── Allow rotation Lambda SG to reach RDS ────────────────────────────────
+  # Adds an ingress rule to the RDS SG permitting TCP 5432 from the rotation Lambda SG.
+  # This avoids modifying cello-vpc.yaml (which would require coordinated stack updates).
+
+  RdsIngressFromRotationLambda:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !ImportValue
+        Fn::Sub: "cello-${Environment}-rds-sg"
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref RotationLambdaSecurityGroup
+      Description: "Allow RDS rotation Lambda to reach RDS on port 5432"
+
+  # ── Rotation Lambda function ──────────────────────────────────────────────
+  # Python 3.12 runtime — boto3 and psycopg2-binary are bundled in a Lambda layer.
+  # The Lambda source is inline (small enough to inline; avoids S3 bucket dependency).
+  # In production, replace InlineCode with S3-sourced ZipFile via a CodeBuild step.
+
+  RotationLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-${Environment}-rds-rotation"
+      Description: !Sub "CELLO ${Environment} — Secrets Manager RDS credential rotation (multi-user)"
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt RotationLambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      # The Lambda must run in VPC private subnets to reach RDS on port 5432.
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-a"
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-b"
+        SecurityGroupIds:
+          - !Ref RotationLambdaSecurityGroup
+      Environment:
+        Variables:
+          # RDS_ENDPOINT is the database hostname. Injected at deploy time — never hardcoded.
+          RDS_ENDPOINT: !ImportValue
+            Fn::Sub: "cello-${Environment}-rds-endpoint"
+          # Admin credential secret ID — rotation Lambda reads this to get admin creds
+          # for ALTER ROLE. The ECS task role does NOT have access to this secret (SI-003).
+          ADMIN_SECRET_ID: !Sub "cello/${Environment}/directory/rds-admin-credentials"
+          RDS_PORT: "5432"
+          # cello_dev for dev, cello_staging for staging, cello_production for production
+          RDS_DB_NAME: !Sub "cello_${Environment}"
+          CELLO_ENV: !Ref Environment
+      Code:
+        ZipFile: |
+          # Placeholder — replace with S3 ZipFile reference via CodeBuild
+          # when cello-cicd pipeline builds and deploys this Lambda.
+          # The handler.py in infra/lambda/rds-rotation/ is the authoritative source.
+          # This inline placeholder satisfies CloudFormation's requirement for initial
+          # stack creation; the CI/CD pipeline updates the function code post-deploy.
+          def lambda_handler(event, context):
+              raise NotImplementedError(
+                  "Lambda code must be deployed via CI/CD pipeline — "
+                  "see infra/lambda/rds-rotation/handler.py"
+              )
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── Grant Secrets Manager permission to invoke the rotation Lambda ─────────
+  # Without this, Secrets Manager cannot trigger the Lambda when rotation is due.
+
+  SecretsManagerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt RotationLambdaFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: secretsmanager.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+
+  # ── Wire rotation schedule to the rds-credentials secret ─────────────────
+  # This resource lives in cello-rotation.yaml (not cello-secrets.yaml) to avoid
+  # a first-deploy circular dependency: cello-secrets deploys in Step 2 before the
+  # rotation Lambda exists (Step 6a). AWS::SecretsManager::RotationSchedule can be
+  # created after both the secret and the Lambda exist — exactly what Step 6a delivers.
+  #
+  # AC-001: automatic rotation every 30 days (SI-001).
+
+  RdsCredentialsRotationSchedule:
+    Type: AWS::SecretsManager::RotationSchedule
+    DependsOn: SecretsManagerInvokePermission
+    Properties:
+      SecretId: !ImportValue
+        Fn::Sub: "cello-${Environment}-rds-credentials-arn"
+      RotationLambdaARN: !GetAtt RotationLambdaFunction.Arn
+      RotationRules:
+        AutomaticallyAfterDays: 30
+
+Outputs:
+  RotationLambdaArn:
+    Description: >
+      ARN of the RDS credential rotation Lambda.
+      Imported by cello-secrets.yaml to wire the RotationLambdaARN on the rds-credentials secret.
+    Value: !GetAtt RotationLambdaFunction.Arn
+    Export:
+      Name: !Sub "cello-${Environment}-rds-rotation-lambda-arn"
+
+  RotationLambdaRoleArn:
+    Description: ARN of the rotation Lambda execution role.
+    Value: !GetAtt RotationLambdaExecutionRole.Arn
+    Export:
+      Name: !Sub "cello-${Environment}-rds-rotation-role-arn"
