@@ -11,7 +11,7 @@ description: In-progress write-up for M5. Initial deployment issues, IaC gaps fo
 
 **Started:** 2026-05-22  
 **Stories:** CELLO-DEPLOY-001A and related infrastructure stories  
-**Stacks deployed:** 11 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-ecs-directory, cello-ecs-relay, cello-route53, cello-cicd)
+**Stacks deployed:** 12 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-ecs-relay, cello-route53, cello-cicd)
 
 ---
 
@@ -65,6 +65,31 @@ After the initial deployment succeeded, a review identified four gaps that would
 2. **Image pre-flight check** — before ECS stacks, deploy.sh verifies images exist in ECR; auto-runs `build-stubs.sh` if missing
 3. **S3 DeletionPolicy conditional** — dev/staging use Delete; production uses Retain
 4. **`bootstrap.sh`** — one-time secret population script (Ed25519 keys, RDS credentials, KMS ARN, webhook HMAC) with idempotent "skip if already set" logic
+
+---
+
+## SECOPS-004 — Credential Rotation, ACM Auto-Renewal, and Key Generation
+
+With core infrastructure stable, SECOPS-004 added operational security tooling needed before any real workloads run.
+
+**What was delivered:**
+
+- `cello-rotation.yaml` — new stack deploying the Secrets Manager rotation Lambda, its IAM execution role (least-privilege, access to both app and admin credentials), a dedicated Lambda security group (egress to RDS 5432 only), and an `AWS::SecretsManager::RotationSchedule` wiring 30-day automatic rotation to the `rds-credentials` secret. The RotationSchedule lives in this stack (not `cello-secrets.yaml`) to avoid a first-deploy circular dependency: the rotation Lambda can't exist in Step 2 before it's deployed in Step 6a.
+
+- `infra/lambda/rds-rotation/handler.py` — Python 3.12 four-step rotation handler (createSecret → setSecret → testSecret → finishSecret) using the multi-user strategy: connects to RDS as the admin user and runs `ALTER ROLE cello_service PASSWORD '<new>'`. Includes a `_RotationAlreadyDone` sentinel to handle idempotent re-invocation cleanly. Currently deployed as a placeholder that raises `NotImplementedError` — real code is deployed via CI/CD pipeline (AC-002/AC-003 verification pending that step).
+
+- `infra/scripts/generate-node-keys.sh` — generates Ed25519 key pairs using `openssl genpkey -algorithm ed25519` (not random bytes), derives public key via PKCS#8 DER construction, and populates Secrets Manager with idempotency protection. Run for us-east-1 dev during this session; public keys recorded in STATE.md.
+
+- `infra/runbooks/node-key-rotation.md` — documents relay vs. directory rotation procedures and the ordering constraint: distribute the new directory public key to all peers *before* rolling the ECS restart.
+
+**Security fixes found and applied during implementation:**
+
+- *SI-003:* `cello-iam.yaml` used wildcard `directory/*` for task role Secrets Manager access — this implicitly granted `rds-admin-credentials` to ECS tasks. Fixed by enumerating specific secret ARNs.
+- *SI-004:* `cello-ecs-directory.yaml` injected `DB_PASSWORD` via `Secrets.ValueFrom` — a task-launch snapshot that goes stale after the first 30-day rotation. Replaced with `RDS_CREDENTIALS_SECRET_ARN` as a plain env var; the application must call `GetSecretValue` at connection-pool refresh time.
+
+**Deployment note:** `cello-rotation-dev` hit ROLLBACK_COMPLETE on the first attempt due to a non-ASCII em dash in the security group description (EC2 only permits `a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*`). deploy.sh auto-detected the ROLLBACK_COMPLETE state, deleted the failed stack, and recreated it cleanly on the second run.
+
+Stack count is now 12.
 
 ---
 

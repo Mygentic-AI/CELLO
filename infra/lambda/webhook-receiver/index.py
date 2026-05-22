@@ -7,7 +7,7 @@ the verified payload to the cello-github-events EventBridge bus.
 Security contract (SI-002):
   - No payload reaches EventBridge unless HMAC-SHA256 verification passes.
   - Invalid or missing X-Hub-Signature-256 → HTTP 401, no forwarding.
-  - HMAC secret fetched from Secrets Manager (ARN in HMAC_SECRET_ARN env var).
+  - HMAC secret fetched from Secrets Manager (name in HMAC_SECRET_ID env var).
   - Secret is cached in module scope after first fetch to avoid per-invocation
     Secrets Manager calls (standard Lambda warm-start optimisation).
 
@@ -65,17 +65,14 @@ def _get_hmac_secret() -> bytes:
     if _cached_hmac_secret is not None:
         return _cached_hmac_secret
 
-    secret_arn = os.environ["HMAC_SECRET_ARN"]
-    response = _secrets_client.get_secret_value(SecretId=secret_arn)
+    secret_id = os.environ["HMAC_SECRET_ID"]
+    response = _secrets_client.get_secret_value(SecretId=secret_id)
 
     # SecretString for text secrets, SecretBinary for binary.
+    # GitHub signs with the secret value as-is (UTF-8 bytes), so we must not
+    # hex-decode it — the raw string stored in Secrets Manager is the key.
     if "SecretString" in response:
-        raw = response["SecretString"]
-        # Accept hex-encoded or plain-text secrets.
-        try:
-            secret_bytes = bytes.fromhex(raw)
-        except ValueError:
-            secret_bytes = raw.encode("utf-8")
+        secret_bytes = response["SecretString"].encode("utf-8")
     else:
         secret_bytes = response["SecretBinary"]
 
@@ -140,8 +137,16 @@ def handler(event: dict, context) -> dict:
         return {"statusCode": 401, "body": json.dumps({"error": "Invalid signature"})}
 
     # ── 5. Parse payload ───────────────────────────────────────────────────
+    # GitHub may send as application/json (raw JSON body) or
+    # application/x-www-form-urlencoded (body = "payload=<url-encoded-json>").
+    # The HMAC is computed over the raw body bytes in both cases.
     try:
-        body = json.loads(raw_body_bytes.decode("utf-8"))
+        body_str = raw_body_bytes.decode("utf-8")
+        if body_str.startswith("payload="):
+            import urllib.parse
+            body = json.loads(urllib.parse.unquote_plus(body_str[len("payload="):]))
+        else:
+            body = json.loads(body_str)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         _log("warn", "pipeline.webhook.rejected", reason="invalid_json", sourceIp=source_ip)
         return {"statusCode": 400, "body": json.dumps({"error": "Invalid JSON body"})}

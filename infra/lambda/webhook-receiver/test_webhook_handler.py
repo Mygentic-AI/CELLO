@@ -92,9 +92,9 @@ class TestWebhookReceiver(unittest.TestCase):
         # Default secret for tests.
         self.secret = b"test-hmac-secret-32bytes-for-test"
 
-        # Default secret fetch response (hex-encoded secret).
+        # Default secret fetch response (raw string — matches how GitHub uses the secret).
         _fake_secrets_client.get_secret_value.return_value = {
-            "SecretString": self.secret.hex()
+            "SecretString": self.secret.decode("utf-8")
         }
         # Default EventBridge success.
         _fake_events_client.put_events.return_value = {
@@ -114,7 +114,7 @@ class TestWebhookReceiver(unittest.TestCase):
         boto3_stub = _make_boto3_stub()
         mod.boto3 = boto3_stub
         with patch.dict("os.environ", {
-            "HMAC_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:123:secret:test",
+            "HMAC_SECRET_ID": "cello/test/pipeline/github-hmac-secret",
             "EVENT_BUS_NAME": "cello-github-events-test",
         }):
             # Inject the fake boto3 clients into the module's namespace.

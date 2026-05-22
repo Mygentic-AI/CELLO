@@ -104,7 +104,7 @@ Resources:
       Environment:
         Variables:
           EVENT_BUS_NAME: !Ref GitHubEventBus
-          HMAC_SECRET_ARN: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/pipeline/github-hmac-secret"
+          HMAC_SECRET_ID: !Sub "cello/${Environment}/pipeline/github-hmac-secret"
       Code:
         ZipFile: |
           """
