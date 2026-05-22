@@ -30,6 +30,7 @@ At the end of M5:
 - Staging environment — 3-node, functionally equivalent to production
 - Relay pool management — static signed manifest, health checks
 - Operational security — CloudWatch, WAF, DDoS mitigation, secrets rotation, certificate management, pgaudit shipping to S3
+- **Deployment automation** — a single parameterized script that provisions any environment in any region from one command; no environment shall ever require manual CloudFormation commands
 
 **Explicitly out of scope:**
 - 6-node full Alpha topology → grows organically after M5 proves the 3-node foundation
@@ -243,6 +244,25 @@ Standard SPARC gate sequence plus live smoke tests:
 4. Relay pool manifest update flow: update manifest → directory reloads → new relay appears in assignment pool
 5. Fault tolerance: kill one directory node → checkpoint cross-signing continues with 2-of-3 → node restarts → catches up via logical replication
 6. Fault tolerance: kill one relay node → directory marks it unavailable → session assignments route to remaining relays → recovered relay returns to pool
+
+---
+
+## Post-DEPLOY-001 Gap — Deployment Automation (DEPLOY-001A)
+
+**Added 2026-05-22. The original stories did not automate deployment.**
+
+DEPLOY-001 delivered CloudFormation templates but not the automation to run them. When deployment was attempted, two structural gaps became apparent:
+
+1. **Circular dependency**: `cello-kms.yaml` and `cello-s3.yaml` accepted IAM role ARNs as parameters. Those roles were defined inside `cello-ecs-directory.yaml` and `cello-ecs-relay.yaml`. KMS must deploy before ECS (ECS imports the KMS key ARN), but the role ARNs were needed before KMS could deploy. Unresolvable without restructuring.
+
+2. **Route 53 requires runtime ALB values**: The ALB DNS name and hosted zone ID only exist after the ECS stack deploys. Without automation, this requires a manual `describe-stacks` lookup between deploy steps.
+
+**This should have been in scope from the start.** The goal of M5 was always reproducible, automated infrastructure — identical process for dev, staging, and production. A set of templates with no deployment automation does not meet that goal. The requirement was implicit in the milestone description ("same templates with different parameter sets") but was never made explicit in a story, which is why it was missed.
+
+**DEPLOY-001A** fixes this:
+- Extracts all IAM roles into `cello-iam.yaml` (deploys first, breaks the circular dependency)
+- Delivers `infra/deploy.sh` — one command, any environment, any region
+- Every environment from here forward is created by running the script, never by manual commands
 
 ---
 

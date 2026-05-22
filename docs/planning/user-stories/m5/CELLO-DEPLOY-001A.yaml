@@ -1,0 +1,287 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-DEPLOY-001A
+domain: Deployment
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+  - relay
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO infrastructure operator,
+  I want a single parameterized deployment script that provisions a
+  complete CELLO environment (dev, staging, or production) in a given
+  region by running one command,
+  so that staging and production environments are created from the same
+  code path as dev with zero manual steps, zero knowledge held only in
+  someone's head, and a complete audit trail in git.
+
+# ─── Background ─────────────────────────────────────────────
+background: >
+  DEPLOY-001 delivered 10 CloudFormation templates. It did not deliver
+  the automation to deploy them. The templates have two structural gaps
+  that make automated deployment impossible without manual intervention:
+
+  1. Circular dependency: cello-kms.yaml and cello-s3.yaml accept
+     DirectoryTaskRoleArn and RelayTaskRoleArn as parameters. Those roles
+     are defined inside cello-ecs-directory.yaml and cello-ecs-relay.yaml.
+     KMS and S3 must deploy before ECS (ECS imports the KMS key ARN), but
+     ECS role ARNs are needed before KMS can deploy. This circle breaks
+     any automated deploy.
+
+  2. Route 53 requires ALB outputs that only exist after ECS is deployed.
+     The ALB DNS name and hosted zone ID are runtime values — not knowable
+     at script-write time. Without automation, this requires a manual lookup
+     between two deploy steps.
+
+  The fix has two parts:
+  (a) Extract all IAM roles into a new cello-iam.yaml template that deploys
+      first. KMS and S3 import role ARNs via !ImportValue — no parameters,
+      no circular dependency.
+  (b) Write infra/deploy.sh — a single script parameterized by Environment
+      and Region that deploys all stacks in dependency order, reads outputs
+      from completed stacks, and passes them as inputs to subsequent stacks.
+
+  This story delivers both parts. No environment shall ever be created by
+  manually running aws cloudformation deploy commands in a terminal.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When an operator runs ./infra/deploy.sh dev us-east-1"
+    action: "the script deploys all cello CloudFormation stacks for the
+      dev environment in us-east-1 in dependency order; it reads outputs
+      from each completed stack and passes them as parameters to the next
+      stack; it exits non-zero with a clear error message if any stack
+      fails; on success it prints a summary of all stack ARNs and key
+      outputs (ALB endpoint, KMS key ARN, RDS endpoint)"
+
+  - trigger: "When an operator runs ./infra/deploy.sh staging eu-central-1"
+    action: "the same script deploys a complete staging environment in
+      eu-central-1 using the same templates with different parameter values;
+      no code changes are required between environments — only the
+      Environment and Region arguments differ"
+
+  - trigger: "When an operator runs ./infra/deploy.sh production ap-northeast-1"
+    action: "the same script deploys a production environment; the script
+      uses db.t3.medium for RDS and 0.5vCPU/1024MB for ECS directory tasks
+      when Environment=production; the operator is prompted to confirm
+      before deploying to production"
+
+  - trigger: "When a stack already exists and the script is re-run"
+    action: "the script performs an update (not a replacement); stacks
+      with no changes exit cleanly with no-op status; the script does not
+      fail on empty changesets"
+
+  - trigger: "When the cello-ecs-directory stack completes"
+    action: "the script reads the ALB DNS name and ALB hosted zone ID from
+      the stack outputs and passes them to cello-route53.yaml as parameters;
+      no manual lookup is required"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001-iam-stack
+    given: "cello-iam.yaml is deployed with Environment=dev in us-east-1"
+    when: "the CloudFormation stack outputs are inspected"
+    then: "the following exports exist and resolve to valid IAM role ARNs:
+      cello-dev-directory-task-role-arn,
+      cello-dev-directory-execution-role-arn,
+      cello-dev-relay-task-role-arn,
+      cello-dev-relay-execution-role-arn;
+      all four roles exist in IAM with the correct trust policies and
+      permission boundaries — verified by calling aws iam get-role
+      from a separate terminal for each role"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002-kms-imports-iam
+    given: "cello-iam.yaml and cello-kms.yaml are both deployed"
+    when: "cello-kms.yaml template is inspected"
+    then: "the KMS key policy principal uses !ImportValue
+      cello-${Environment}-directory-task-role-arn — no DirectoryTaskRoleArn
+      parameter exists in cello-kms.yaml; there is no circular dependency
+      between cello-kms.yaml and cello-ecs-directory.yaml — verified by
+      confirming cello-kms.yaml has zero Parameters entries referencing
+      role ARNs and that cfn-lint reports no dependency warnings"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003-s3-imports-iam
+    given: "cello-iam.yaml and cello-s3.yaml are both deployed"
+    when: "cello-s3.yaml template is inspected"
+    then: "the relay manifest bucket policy principal uses !ImportValue
+      cello-${Environment}-relay-task-role-arn — no DirectoryTaskRoleArn
+      or RelayTaskRoleArn parameters exist in cello-s3.yaml — verified by
+      confirming cello-s3.yaml has zero Parameters entries referencing
+      role ARNs"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004-deploy-script-one-command
+    given: "A clean AWS account with no existing CELLO stacks in us-east-1"
+    when: "./infra/deploy.sh dev us-east-1 is run"
+    then: "all 10 stacks (cello-iam-dev, cello-secrets-dev, cello-kms-dev,
+      cello-vpc-dev, cello-s3-dev, cello-rds-dev, cello-ecs-directory-dev,
+      cello-ecs-relay-dev, cello-route53-dev, cello-cicd-dev) reach
+      CREATE_COMPLETE or UPDATE_COMPLETE status; no manual intervention is
+      required between stacks; the script exits 0 — verified by inspecting
+      all stack statuses from a separate terminal after the script completes"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-005-deploy-script-idempotent
+    given: "All 10 CELLO stacks already exist in dev us-east-1"
+    when: "./infra/deploy.sh dev us-east-1 is run a second time
+      with no template changes"
+    then: "the script exits 0; no stack is replaced; stacks with no changes
+      complete with 'No changes to deploy' status; no resources are
+      recreated — verified by comparing stack resource physical IDs before
+      and after the second run and asserting they are identical"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006-route53-automated
+    given: "cello-ecs-directory-dev stack has been deployed and its ALB
+      exists with a DNS name and hosted zone ID in its outputs"
+    when: "the deploy script reaches the cello-route53 deployment step"
+    then: "the script reads AlbDnsName and AlbHostedZoneId from the
+      cello-ecs-directory-dev stack outputs via aws cloudformation
+      describe-stacks and passes them as parameters to cello-route53.yaml
+      without any operator input — verified by grepping the deploy script
+      for 'describe-stacks' and confirming no hardcoded ALB DNS values
+      appear anywhere in the script or templates"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007-environment-sizing
+    given: "The deploy script is invoked with Environment=production"
+    when: "cello-rds-dev and cello-ecs-directory are deployed"
+    then: "RDS InstanceClass is db.t3.medium; ECS directory task CPU is 512
+      and Memory is 1024; for Environment=dev or staging, RDS is db.t3.small
+      and ECS directory CPU is 256 and Memory is 512 — verified by reading
+      the deployed task definition and RDS instance class from separate
+      terminals"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008-production-confirmation
+    given: "The deploy script is invoked with Environment=production"
+    when: "the script reaches the first stack deployment"
+    then: "the script prints 'Deploying to PRODUCTION in {region}. Type
+      YES to confirm:' and waits for input; if the operator types anything
+      other than YES the script exits 1 with no stacks deployed — verified
+      by running the script with Environment=production and providing
+      incorrect input and asserting exit code 1 and zero stack changes"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-009-failure-handling
+    given: "A stack deployment fails (simulated by injecting a template
+      syntax error into one stack)"
+    when: "the deploy script runs and encounters the failure"
+    then: "the script exits non-zero immediately; subsequent stacks are
+      not deployed; the failed stack name and CloudFormation error reason
+      are printed to stderr — verified by asserting exit code is non-zero
+      and that the stacks which should not have deployed are absent from
+      the account"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010-cfn-lint-clean
+    given: "All CloudFormation templates including the new cello-iam.yaml
+      and any modified templates are present"
+    when: "cfn-lint infra/cloudformation/*.yaml is run"
+    then: "zero errors and zero warnings — verified by asserting cfn-lint
+      exit code 0"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-011-no-manual-steps
+    given: "The deploy script and all templates are inspected"
+    when: "the infra/ directory is grepped for any instruction to run
+      aws cloudformation deploy manually or any TODO noting a manual step"
+    then: "zero results — all deployment steps are automated in the script;
+      the only manual prerequisite steps are: (1) AWS credentials configured,
+      (2) Ed25519 key pairs populated in Secrets Manager after first deploy
+      (documented in the script's --help output as a post-deploy step)"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "No secret values, account IDs, or environment-specific
+      ARNs shall be hardcoded in the deploy script or any template"
+    adversarial_condition: "even when it is convenient to hardcode the
+      account ID 257394457473 — the script derives the account ID at
+      runtime via aws sts get-caller-identity; all ARNs are constructed
+      from runtime values or read from stack outputs"
+    test_type: unit
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "The production confirmation gate shall not be bypassable
+      via any script flag or environment variable"
+    adversarial_condition: "even when a CI system sets ENVIRONMENT=production
+      — the confirmation prompt fires whenever Environment=production
+      regardless of how the argument was supplied; CI pipelines targeting
+      production must pipe YES explicitly"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While a stack deployment fails mid-way due to a resource
+      limit or transient AWS error"
+    fallback: "the script exits non-zero; CloudFormation rolls back the
+      failed stack automatically; the operator can re-run the script after
+      resolving the underlying issue; the script is idempotent — re-running
+      after a failure resumes from the failed stack, not from the beginning"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: infra.deploy.started
+      level: info
+      trigger: "deploy script begins execution"
+      context_fields: [environment, region, stackCount]
+      correlationId: false
+
+    - name: infra.stack.deployed
+      level: info
+      trigger: "a CloudFormation stack reaches CREATE_COMPLETE or
+        UPDATE_COMPLETE"
+      context_fields: [stackName, environment, region, durationMs]
+      correlationId: false
+
+    - name: infra.deploy.completed
+      level: info
+      trigger: "all stacks deployed successfully"
+      context_fields: [environment, region, totalDurationMs, stackCount]
+      correlationId: false
+
+  error_events:
+    - name: infra.stack.failed
+      level: error
+      trigger: "a CloudFormation stack reaches a FAILED state"
+      context_fields: [stackName, environment, region, reason]
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-05-21_1400_m5-infrastructure-decisions"
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  depends_on:
+    - CELLO-DEPLOY-001
+  blocks:
+    - CELLO-DEPLOY-002
+    - CELLO-DEPLOY-003
+    - CELLO-DEPLOY-004
+    - CELLO-DEPLOY-005
