@@ -89,7 +89,34 @@ With core infrastructure stable, SECOPS-004 added operational security tooling n
 - *SI-003:* `cello-iam.yaml` used wildcard `directory/*` for task role Secrets Manager access — this implicitly granted `rds-admin-credentials` to ECS tasks. Fixed by enumerating specific secret ARNs.
 - *SI-004:* `cello-ecs-directory.yaml` injected `DB_PASSWORD` via `Secrets.ValueFrom` — a task-launch snapshot that goes stale after the first 30-day rotation. Replaced with `RDS_CREDENTIALS_SECRET_ARN` as a plain env var; the application must call `GetSecretValue` at connection-pool refresh time.
 
-**Deployment note:** `cello-rotation-dev` hit ROLLBACK_COMPLETE on the first attempt due to a non-ASCII em dash in the security group description (EC2 only permits `a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*`). deploy.sh auto-detected the ROLLBACK_COMPLETE state, deleted the failed stack, and recreated it cleanly on the second run.
+**Bugs found and fixed during deployment and live rotation testing:**
+
+### 1. Non-ASCII em dash in EC2 security group description
+
+**Symptom:** `cello-rotation-dev` hit ROLLBACK_COMPLETE immediately. CloudFormation error: `Value ... for parameter GroupDescription is invalid. Character sets beyond ASCII are not supported`.  
+**Root cause:** The YAML block scalar used an em dash (`—`) in the GroupDescription. EC2 only permits `a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*`. An em dash looks like a hyphen in most editors and passes CloudFormation template validation — it only fails at stack creation time.  
+**Fix:** Replaced with a plain hyphen. deploy.sh auto-detected ROLLBACK_COMPLETE, deleted the failed stack, and recreated it cleanly.  
+**Rule:** Never use typographic punctuation (em dash, smart quotes, ellipsis) in any AWS resource name or description field. Validate in a scratch stack before deploying to a shared environment.
+
+### 2. `secretsmanager:GetRandomPassword` scoped to a secret ARN
+
+**Symptom:** Rotation failed at `createSecret` step with `AccessDeniedException: not authorized to perform secretsmanager:GetRandomPassword`.  
+**Root cause:** The IAM policy statement placed `GetRandomPassword` in the same statement as `GetSecretValue`/`PutSecretValue`, scoped to the specific secret ARN. `GetRandomPassword` is not a resource-level action — it cannot be scoped to a resource. AWS silently rejects it at evaluation time.  
+**Fix:** Moved `GetRandomPassword` to its own statement with `Resource: "*"`.  
+**Rule:** Check the AWS docs "Actions, resources, and condition keys" table before writing IAM statements. Actions marked "resource-level permissions: No" must use `Resource: "*"`.
+
+### 3. `rds-admin-credentials` stored the wrong password
+
+**Symptom:** Rotation failed at `setSecret` with `FATAL: password authentication failed for user "postgres"`.  
+**Root cause:** The RDS instance was created with `ManageMasterUserPassword: true`, which means AWS generates the master password and stores it in a system-managed secret (`rds!db-<uuid>`). `bootstrap.sh` separately created `rds-admin-credentials` with a different password. The two secrets were never in sync.  
+**Fix:** Synced `rds-admin-credentials` from the RDS-managed secret.  
+**Rule:** When `ManageMasterUserPassword: true` is set on an RDS instance, the canonical password lives in the `rds!db-*` secret. Any manually maintained credential secret that duplicates it will drift immediately. Either use the RDS-managed secret directly, or make syncing it an explicit bootstrap step.
+
+### 4. `cello_service` role doesn't exist yet — rotation correctly fails
+
+**Symptom:** After all IAM and credential fixes, rotation failed at `setSecret` with `role "cello_service" does not exist`.  
+**Root cause:** This is not a bug. `cello_service` is created by Flyway migration V18, which only runs when ECS tasks start with the real application image. ECS was still running the stub image because the directory pipeline has no Docker build or ECS deploy stage.  
+**Status:** AC-002 and AC-003 remain blocked on DEPLOY-002/DEPLOY-003 adding a Deploy stage to `cello-directory-pipeline`. Once ECS cycles to the real image and Flyway runs, the rotation can be re-triggered and both ACs verified in minutes.
 
 Stack count is now 12.
 
