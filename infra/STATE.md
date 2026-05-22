@@ -70,7 +70,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | Route 53 hosted zone `cello.mygentic.ai` | Done | 2026-05-21 | NS delegated from GoDaddy |
 | ECR repo `cello-directory` | Done | 2026-05-21 | us-east-1 |
 | ECR repo `cello-relay` | Done | 2026-05-21 | us-east-1 |
-| Stub images pushed | Done | 2026-05-22 | 1.8MB Go/scratch, tagged `stub` |
+| Stub images pushed (linux/amd64) | Done | 2026-05-22 | Run `./infra/build-stubs.sh <region>` — never `docker build` directly (arm64 on Apple Silicon breaks ECS) |
 | CodeStar Connection `github-cello-main` | Done | 2026-05-22 | us-east-1, AVAILABLE |
 | Ed25519 key pairs (3 directory + 3 relay) | Pending | — | Populate Secrets Manager after RDS + ECS deploy |
 | GitHub webhook HMAC secret | Pending | — | After cello-cicd-dev deploys |

@@ -17,7 +17,9 @@
 #      Example: aws secretsmanager put-secret-value \
 #        --secret-id cello/{env}/directory/node-private-key \
 #        --secret-string "$(openssl rand -hex 32)"
-#   2. Build and push Docker images to ECR (cello-directory:latest, cello-relay:latest).
+#   2. Seed ECR with stub images (once per environment): ./infra/build-stubs.sh <region>
+#      IMPORTANT: always use build-stubs.sh — never build Docker images locally with plain
+#      docker build. It produces arm64 on Apple Silicon; ECS Fargate requires linux/amd64.
 #   3. Run Flyway migrations against the RDS instance.
 #
 # All stacks are idempotent — safe to re-run. Stacks with no changes
@@ -381,9 +383,9 @@ fi
 echo ""
 echo "Next steps (one-time, if first deploy):"
 echo "  1. Populate secrets in cello/${ENVIRONMENT}/directory/ and cello/${ENVIRONMENT}/relay/"
-echo "  2. Build and push Docker images to ECR (us-east-1):"
-echo "     docker build -t ${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/cello-directory:latest packages/directory"
-echo "     docker build -t ${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/cello-relay:latest packages/relay"
+echo "  2. Real images are built by CodeBuild (DEPLOY-004) — not locally."
+echo "     If ECR repos are empty (new environment), seed them first:"
+echo "     ./infra/build-stubs.sh ${REGION}"
 echo "  3. Run Flyway migrations against the RDS endpoint: ${RDS_ENDPOINT}"
 echo ""
 

@@ -285,7 +285,7 @@ Pre-implementation operations required before DEPLOY-001 can be validated.
 | ECR repo `cello-relay` (us-east-1) | Done | 2026-05-21 | `257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay` |
 | Service limits (eu-central-1, ap-northeast-1) | Done | 2026-05-21 | RDS: 40 instances, ALB: 50 — far above need |
 | CodeStar Connection `github-cello-main` (us-east-1) | Done | 2026-05-22 | ARN: `arn:aws:codeconnections:us-east-1:257394457473:connection/1a7fba2b-dd1d-4ebe-8372-7122b89f56b5` — AVAILABLE |
-| Stub images pushed to ECR | Done | 2026-05-22 | 1.8MB Go/scratch image tagged `stub` in both repos; digest `sha256:2ea73da...` |
+| Stub images pushed to ECR (linux/amd64) | Done | 2026-05-22 | Run `./infra/build-stubs.sh <region>` — **never** `docker build` directly; Apple Silicon produces arm64 which ECS Fargate (linux/amd64) rejects |
 | GitHub webhook + HMAC secret | Pending | — | Blocks DEPLOY-004; needs Lambda from DEPLOY-001 first |
 | Ed25519 key pairs (3 directory + 3 relay) | Pending | — | Blocks DEPLOY-002/003; needs Secrets Manager resources from DEPLOY-001 first |
 | Domain registered | N/A | — | Already owned (`mygentic.ai` on GoDaddy) |
