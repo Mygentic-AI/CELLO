@@ -246,6 +246,10 @@ Resources:
                 Resource: !Sub "${ArtifactsBucket.Arn}/*"
               - Effect: Allow
                 Action:
+                  - s3:PutObject
+                Resource: !Sub "arn:aws:s3:::cello-audit-logs-${Environment}-${AWS::Region}/*"
+              - Effect: Allow
+                Action:
                   - ecr:GetAuthorizationToken
                 Resource: "*"
               - Effect: Allow
