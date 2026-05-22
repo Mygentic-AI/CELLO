@@ -44,10 +44,12 @@ const tsxEsm = createRequire(import.meta.url).resolve("tsx/esm");
 
 function makeEntry(overrides?: Partial<AuditLogEntry>): AuditLogEntry {
   return {
-    role: "cello_service",
-    statement: "INSERT",
-    table: "conversation_seals",
     timestamp: new Date().toISOString(),
+    sessionId: "test-session-1",
+    objectType: "TABLE",
+    command: "INSERT",
+    statementText: "INSERT INTO conversation_seals ...",
+    parameters: [],
     ...overrides,
   };
 }
@@ -85,21 +87,24 @@ describe("PERSIST-006 AC-003: flush() drains all buffered entries before returni
     const logger = new StdoutLogger();
     const shipper = new LocalAuditLogShipper(path, logger);
 
-    const entries = [makeEntry({ statement: "INSERT" }), makeEntry({ statement: "SELECT" }), makeEntry({ statement: "DELETE" })];
+    const entries = [makeEntry({ command: "INSERT" }), makeEntry({ command: "SELECT" }), makeEntry({ command: "DELETE" })];
 
     // ship() may be async — await each, but the critical invariant is:
     // everything shipped BEFORE flush() must be in the file AFTER flush()
     for (const e of entries) {
       await shipper.ship(e);
     }
+    // All 3 entries were shipped successfully in ship() — retry queue is empty.
+    // flush() returns per-flush count (entries drained from the retry queue only).
     const count = await shipper.flush();
 
-    expect(count).toBe(3);
+    expect(count).toBe(0);
+    // The actual entries are in the file — all 3 were written by ship()
     const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
     expect(lines).toHaveLength(3);
     for (const [i, line] of lines.entries()) {
       const parsed = JSON.parse(line) as AuditLogEntry;
-      expect(parsed.statement).toBe(entries[i]!.statement);
+      expect(parsed.command).toBe(entries[i]!.command);
     }
 
     // Cleanup
@@ -119,7 +124,7 @@ describe("PERSIST-006 AC-006: 10 ship() calls → 10 JSON lines, no partial writ
     // AC-006 specifies "10 concurrent ship() calls" — use Promise.all to exercise
     // append-atomicity behavior; no interleaved partial lines may appear
     await Promise.all(
-      Array.from({ length: 10 }, (_, i) => shipper.ship(makeEntry({ statement: `INSERT_${i}` }))),
+      Array.from({ length: 10 }, (_, i) => shipper.ship(makeEntry({ command: `INSERT_${i}` }))),
     );
     await shipper.flush();
 
@@ -128,7 +133,7 @@ describe("PERSIST-006 AC-006: 10 ship() calls → 10 JSON lines, no partial writ
     expect(lines).toHaveLength(10);
     for (const line of lines) {
       const parsed = JSON.parse(line) as AuditLogEntry;
-      expect(parsed).toMatchObject({ role: "cello_service", table: "conversation_seals" });
+      expect(parsed).toMatchObject({ sessionId: "test-session-1", objectType: "TABLE" });
     }
 
     // Cleanup
@@ -145,7 +150,7 @@ describe("PERSIST-006 AC-006: 10 ship() calls → 10 JSON lines, no partial writ
     await writeFile(path, sentinel + "\n", { flag: "a" });
 
     const shipper = new LocalAuditLogShipper(path, logger);
-    await shipper.ship(makeEntry({ statement: "INSERT" }));
+    await shipper.ship(makeEntry({ command: "INSERT" }));
     await shipper.flush();
 
     const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
@@ -167,15 +172,15 @@ describe("PERSIST-006 AC-002: LocalAuditLogShipper writes structured JSON", () =
     const logger = new StdoutLogger();
     const shipper = new LocalAuditLogShipper(path, logger);
 
-    const entry = makeEntry({ role: "cello_service", statement: "INSERT", table: "conversation_seals" });
+    const entry = makeEntry({ sessionId: "cello-session-1", command: "INSERT", objectType: "TABLE" });
     await shipper.ship(entry);
     await shipper.flush();
 
     const line = readFileSync(path, "utf8").trim();
     const parsed = JSON.parse(line) as AuditLogEntry;
-    expect(parsed.role).toBe("cello_service");
-    expect(parsed.statement).toBe("INSERT");
-    expect(parsed.table).toBe("conversation_seals");
+    expect(parsed.sessionId).toBe("cello-session-1");
+    expect(parsed.command).toBe("INSERT");
+    expect(parsed.objectType).toBe("TABLE");
     expect(typeof parsed.timestamp).toBe("string");
 
     // Cleanup
@@ -237,9 +242,9 @@ describe("PERSIST-006 AC-004 (unit): SIGTERM handler invokes flush() and resolve
     const shipper = new LocalAuditLogShipper(auditPath, logger);
 
     // Ship 3 entries — not yet flushed
-    await shipper.ship(makeEntry({ statement: "INSERT" }));
-    await shipper.ship(makeEntry({ statement: "UPDATE" }));
-    await shipper.ship(makeEntry({ statement: "DELETE" }));
+    await shipper.ship(makeEntry({ command: "INSERT" }));
+    await shipper.ship(makeEntry({ command: "UPDATE" }));
+    await shipper.ship(makeEntry({ command: "DELETE" }));
 
     // Replicate the shutdown handler from directory.ts lines 275–288:
     //   .then(() => auditLogShipper.flush())
@@ -257,18 +262,21 @@ describe("PERSIST-006 AC-004 (unit): SIGTERM handler invokes flush() and resolve
 
     const startMs = Date.now();
     // This is the exact promise chain from directory.ts shutdown()
+    // All 3 entries were shipped successfully in ship() — retry queue is empty.
+    // flush() returns per-flush count (entries drained from the retry queue only).
     const entriesShipped = await shipper.flush();
     capturingLogger.info("audit.shipper.flushed", { entriesShipped, durationMs: Date.now() - startMs });
 
     // Verify the handler correctly invoked flush() and logged the event
+    // entriesShipped is 0 because all entries were directly written by ship() (no retry queue)
     expect(loggedEvent).toBe("audit.shipper.flushed");
-    expect(loggedCount).toBe(3);
+    expect(loggedCount).toBe(0);
 
     // Verify all entries are on disk — the point of calling flush() before exit
     const lines = readFileSync(auditPath, "utf8").trim().split("\n").filter(Boolean);
     expect(lines).toHaveLength(3);
-    const statements = lines.map((l) => (JSON.parse(l) as AuditLogEntry).statement);
-    expect(statements).toEqual(["INSERT", "UPDATE", "DELETE"]);
+    const commands = lines.map((l) => (JSON.parse(l) as AuditLogEntry).command);
+    expect(commands).toEqual(["INSERT", "UPDATE", "DELETE"]);
 
     // Cleanup
     await rm(dir, { recursive: true, force: true });
@@ -288,9 +296,9 @@ import { LocalAuditLogShipper, StdoutLogger } from "@cello/interfaces/stubs";
 const logger = new StdoutLogger();
 const shipper = new LocalAuditLogShipper(${JSON.stringify(auditPath)}, logger);
 
-await shipper.ship({ role: "test", statement: "INSERT", table: "t1", timestamp: new Date().toISOString() });
-await shipper.ship({ role: "test", statement: "UPDATE", table: "t2", timestamp: new Date().toISOString() });
-await shipper.ship({ role: "test", statement: "DELETE", table: "t3", timestamp: new Date().toISOString() });
+await shipper.ship({ timestamp: new Date().toISOString(), sessionId: "test-session-1", objectType: "TABLE", command: "INSERT", statementText: "INSERT INTO t1 ...", parameters: [] });
+await shipper.ship({ timestamp: new Date().toISOString(), sessionId: "test-session-1", objectType: "TABLE", command: "UPDATE", statementText: "UPDATE t2 ...", parameters: [] });
+await shipper.ship({ timestamp: new Date().toISOString(), sessionId: "test-session-1", objectType: "TABLE", command: "DELETE", statementText: "DELETE FROM t3 ...", parameters: [] });
 
 // Register shutdown handler — mirrors composition root wiring
 const shutdown = () => {
@@ -355,8 +363,8 @@ process.on("SIGTERM", () => { clearInterval(keepAlive); });
     // Verify all 3 entries are on disk after graceful shutdown
     const lines = readFileSync(auditPath, "utf8").trim().split("\n").filter(Boolean);
     expect(lines).toHaveLength(3);
-    const statements = lines.map((l) => (JSON.parse(l) as AuditLogEntry).statement);
-    expect(statements).toEqual(["INSERT", "UPDATE", "DELETE"]);
+    const commands = lines.map((l) => (JSON.parse(l) as AuditLogEntry).command);
+    expect(commands).toEqual(["INSERT", "UPDATE", "DELETE"]);
 
     // Cleanup
     await rm(dir, { recursive: true, force: true });
@@ -375,7 +383,7 @@ describe("PERSIST-006 SI-002: ship() failure triggers retry — entries not sile
     // Adversarial condition: ship to a path where the parent directory doesn't exist
     // This will cause appendFile to reject, triggering the retry queue
     const shipper = new LocalAuditLogShipper(invalidPath, logger);
-    const entry = makeEntry({ statement: "INSERT" });
+    const entry = makeEntry({ command: "INSERT" });
 
     // First ship() should fail and throw
     await expect(shipper.ship(entry)).rejects.toThrow();
@@ -390,7 +398,7 @@ describe("PERSIST-006 SI-002: ship() failure triggers retry — entries not sile
     const lines = readFileSync(invalidPath, "utf8").trim().split("\n").filter(Boolean);
     expect(lines).toHaveLength(1);
     const parsed = JSON.parse(lines[0]!) as AuditLogEntry;
-    expect(parsed.statement).toBe("INSERT");
+    expect(parsed.command).toBe("INSERT");
 
     // Cleanup
     await rm(dir, { recursive: true, force: true });

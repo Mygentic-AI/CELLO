@@ -15,10 +15,12 @@
  *   DATABASE_URL                       — required for CELLO_ENV=local
  *   DEV_ENVELOPE_KEY                   — required for CELLO_ENV=local (64-char hex)
  *   AUDIT_LOG_PATH                     — required for CELLO_ENV=local; path to pgaudit log sink
+ *   CELLO_AUDIT_BUCKET                 — required for CELLO_ENV=dev/staging/production; S3 bucket name
  *   CELLO_DIRECTORY_KEY_FILE           — path to persisted directory signing keypair
  *   CELLO_DIRECTORY_TRANSPORT_KEY_FILE — path to persisted libp2p transport key
  *   CELLO_DIRECTORY_LISTEN_ADDR        — libp2p listen address (default: /ip4/0.0.0.0/tcp/4000)
  *   CELLO_RELAY_MULTIADDR              — relay multiaddr (required)
+ *   AWS_REGION                         — required for CELLO_ENV=dev/staging/production (default: us-east-1)
  */
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
@@ -31,6 +33,8 @@ import { createDirectoryNode } from "../directory-node.js";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
 import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper } from "@cello/interfaces/stubs";
 import type { AuditLogShipper } from "@cello/interfaces";
+// S3AuditLogShipper is imported dynamically below to avoid loading @aws-sdk/client-s3
+// in CELLO_ENV=local subprocesses where it causes tsx/esm resolution noise.
 import { InMemoryShareStore } from "../share-store.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { EncryptedPgShareStore } from "../encrypted-share-store.js";
@@ -72,19 +76,30 @@ if (env !== "local" && env !== "dev" && env !== "staging" && env !== "production
   process.exit(1);
 }
 
-// ─── PERSIST-006: AuditLogShipper instantiation ───────────────────────────
-// Must be instantiated before the database pool so that if AUDIT_LOG_PATH is
+// ─── SECOPS-001: AuditLogShipper instantiation ───────────────────────────
+// CELLO_ENV=local  → LocalAuditLogShipper (appends to AUDIT_LOG_PATH)
+// CELLO_ENV=dev+   → S3AuditLogShipper (ships to CELLO_AUDIT_BUCKET in AWS_REGION)
+//
+// S3AuditLogShipper is imported dynamically so that @aws-sdk/client-s3 is never
+// loaded in CELLO_ENV=local processes (avoids tsx/esm resolution issues in tests
+// and keeps the local dev loop free of AWS SDK module load overhead).
+//
+// Must be instantiated before the database pool so that if required config is
 // missing the process exits 1 with adapter.config.missing before any DB work.
-const auditLogShipper: AuditLogShipper = (() => {
+const auditLogShipper: AuditLogShipper = await (async (): Promise<AuditLogShipper> => {
   if (env === "local") {
     const auditLogPath = requireEnv("AUDIT_LOG_PATH");
     const s = new LocalAuditLogShipper(auditLogPath, logger);
     logger.info("adapter.initialised", { adapterName: "AuditLogShipper", implementation: "LocalAuditLogShipper", env });
     return s;
   }
-  // dev+: S3AuditLogShipper (not yet implemented — PERSIST-006 follow-up)
-  logger.error("adapter.init.failed", { adapterName: "AuditLogShipper", reason: `CELLO_ENV=${env} not yet supported` });
-  process.exit(1);
+  // dev/staging/production: S3AuditLogShipper (SECOPS-001)
+  const auditBucket = requireEnv("CELLO_AUDIT_BUCKET");
+  const awsRegion = process.env["AWS_REGION"] ?? "us-east-1";
+  const { S3AuditLogShipper } = await import("../adapters/s3-audit-log-shipper.js");
+  const s = new S3AuditLogShipper(auditBucket, logger, undefined, { region: awsRegion });
+  logger.info("adapter.initialised", { adapterName: "AuditLogShipper", implementation: "S3AuditLogShipper", env, bucket: auditBucket, region: awsRegion });
+  return s;
 })();
 
 // ─── Adapter instantiation ────────────────────────────────────────────────
@@ -360,13 +375,10 @@ for (const addr of result.node.listenAddresses()) {
 }
 
 const shutdown = () => {
-  const startMs = Date.now();
   result.stop()
     .then(() => pgPool?.end())
     .then(() => auditLogShipper.flush())
-    .then((entriesShipped: number) => {
-      logger.info("audit.shipper.flushed", { entriesShipped, durationMs: Date.now() - startMs });
-    })
+    // audit.shipper.flushed is emitted by the adapter itself — do not log it again here
     .catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error("adapter.init.failed", { adapterName: "shutdown", reason: msg });

@@ -11,14 +11,18 @@
  */
 
 export interface AuditLogEntry {
-  /** The Postgres role that executed the statement (e.g. "cello_service") */
-  role: string;
-  /** SQL statement type: SELECT, INSERT, UPDATE, DELETE, DDL, etc. */
-  statement: string;
-  /** Table name the statement targeted */
-  table: string;
   /** ISO-8601 timestamp of the statement */
   timestamp: string;
+  /** Session identifier (e.g. Postgres session ID or correlation ID) */
+  sessionId: string;
+  /** Object type targeted by the statement (e.g. "TABLE", "VIEW") */
+  objectType: string;
+  /** SQL command type: SELECT, INSERT, UPDATE, DELETE, DDL, etc. */
+  command: string;
+  /** Full SQL statement text as executed */
+  statementText: string;
+  /** Bind parameters associated with the statement */
+  parameters: string[];
   /** Optional correlation ID to thread async flows */
   correlationId?: string;
 }
