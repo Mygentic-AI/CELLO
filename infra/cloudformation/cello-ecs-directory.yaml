@@ -73,6 +73,8 @@ Resources:
               Value: !Ref AWS::Region
             - Name: PORT
               Value: "443"
+            - Name: HOME
+              Value: /tmp
             # SI-004 (SECOPS-004): inject the secret ARN, not the secret value.
             # ECS Secrets.ValueFrom fetches the value once at task launch and injects
             # it as an env var — this is a snapshot that goes stale after the first
