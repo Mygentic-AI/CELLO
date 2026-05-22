@@ -971,6 +971,11 @@ export class PgDirectoryStore implements DirectoryStore {
    * @param row - The row as returned by the pg driver
    */
   async verifyReplicatedRow(tableName: string, row: Record<string, unknown>): Promise<void> {
+    // Runtime guard: tableName flows into SQL via template literal — verify it is in
+    // the known-safe set. HASH_CHAINED_TABLES is the definitive safe list.
+    if (!(HASH_CHAINED_TABLES as readonly string[]).includes(tableName)) {
+      throw new Error(`verifyReplicatedRow: unknown table '${tableName}'`);
+    }
     const startMs = Date.now();
     const deserialized = deserializeRow(tableName, row);
     const leafIndex = deserialized["id"] as number;
