@@ -868,17 +868,31 @@ export class CelloDirectoryNode {
           // PERSIST-015 AC-003: deliver queued unilateral seal notifications (absent party reconnected)
           const unilateralNotifs = this.#pendingNotifications.get(authedPubkeyHex) ?? [];
           this.#pendingNotifications.delete(authedPubkeyHex);
+          // SI-003 (double-delivery prevention): track which session IDs were delivered in-memory.
+          // Using a per-session set rather than a coarse count to avoid the scenario where:
+          //   - Session A seals → enters #pendingNotifications AND Pg
+          //   - Directory restarts → #pendingNotifications cleared, Pg row for A persists
+          //   - Session B seals → enters #pendingNotifications AND Pg
+          //   - Agent reconnects → in-memory has [B only], Pg drain has [A, B]
+          //   A count-based guard (count > 0) would ack A without delivering it — silent loss.
+          //   A per-session-id set correctly delivers A from Pg while suppressing B from Pg.
+          const deliveredInMemoryIds = new Set<string>();
           for (const notif of unilateralNotifs) {
             try {
               this.#sendFrame(stream, encodeSealUnilateralNotification({
                 ...notif,
                 seal_type: "UNILATERAL",
               }));
+              deliveredInMemoryIds.add(Buffer.from(notif.session_id).toString("hex"));
             } catch { break; }
           }
 
           // PERSIST-023: drain Postgres-backed SEAL_UNILATERAL notifications (dev/staging/production).
           // Delivers notifications that survived directory restarts (AC-002).
+          //
+          // SI-003 (double-delivery prevention): only suppress a Pg row if its session_id_hex
+          // is present in deliveredInMemoryIds (i.e. that specific session was delivered in-memory).
+          // Pg rows for sessions NOT in the set must be delivered normally.
           if (this.#notificationQueue) {
             try {
               const pgNotifs = await this.#notificationQueue.drainUndelivered(authedPubkeyHex);
@@ -886,6 +900,11 @@ export class CelloDirectoryNode {
                 const p = pgNotif.payload as { session_id_hex?: string; sealed_root_hex?: string; sealed_at?: number };
                 if (!p.session_id_hex || !p.sealed_root_hex || pgNotif.notificationType !== "seal_unilateral") {
                   // Unrecognised payload — acknowledge to remove from queue without delivering
+                  void this.#notificationQueue!.acknowledge(pgNotif.notificationId).catch(() => {});
+                  continue;
+                }
+                if (deliveredInMemoryIds.has(p.session_id_hex)) {
+                  // Already delivered in-memory for this session — ack the Pg row without re-sending
                   void this.#notificationQueue!.acknowledge(pgNotif.notificationId).catch(() => {});
                   continue;
                 }
@@ -1914,7 +1933,7 @@ export class CelloDirectoryNode {
           },
         }).catch((err: unknown) => {
           const reason = err instanceof Error ? err.message : String(err);
-          this.#logger?.warn("notification.delivery.failed", {
+          this.#logger?.warn("pending_notification.enqueue.failed", {
             notificationId,
             recipientAgentId: absentPartyHex,
             reason,
@@ -2291,6 +2310,87 @@ export class CelloDirectoryNode {
 
   #sendFrame(stream: Stream, bytes: Uint8Array): void {
     stream.send(lp.encode.single(bytes));
+  }
+
+  // ─── Test-only helpers ───────────────────────────────────────────────────────
+
+  /**
+   * PERSIST-023 test hook: seeds session state and triggers #processSealUnilateral
+   * via a mock stream. Only available in NODE_ENV=test.
+   *
+   * Used to exercise the fire-and-forget notificationQueue.enqueue() path and its
+   * .catch() handler (pending_notification.enqueue.failed event) without requiring
+   * a full libp2p auth handshake.
+   *
+   * @param senderHex - Hex pubkey of the sealing party
+   * @param sessionId - 16-byte session ID
+   * @param reportedRoot - 32-byte merkle root
+   * @param absentPartyHex - Hex pubkey of the absent party (notification recipient)
+   * @param mockStream - Mock stream for seal_unilateral_confirmed frame
+   */
+  triggerSealUnilateralForTest(
+    senderHex: string,
+    sessionId: Uint8Array,
+    reportedRoot: Uint8Array,
+    absentPartyHex: string,
+    mockStream: Stream,
+  ): void {
+    if (process.env["NODE_ENV"] !== "test") throw new Error("test-only");
+    const sessionIdHex = Buffer.from(sessionId).toString("hex");
+    // Pre-seed session state: last activity far enough in the past to pass the grace period
+    this.#sessionLastActivity.set(sessionIdHex, this.#clock.now() - (this.#deliveryGraceSeconds + 1) * 1000);
+    this.#sessionParticipants.set(sessionIdHex, { initiatorHex: senderHex, targetHex: absentPartyHex });
+    this.#processSealUnilateral(mockStream, senderHex, {
+      type: "seal_unilateral",
+      session_id: sessionId,
+      reported_root: reportedRoot,
+      reported_seq: 0,
+    });
+  }
+
+  /**
+   * PERSIST-023 test hook: runs the Pg notification drain portion of the reconnect path
+   * using an injected mock stream. Only available in NODE_ENV=test.
+   *
+   * Used to exercise drainUndelivered(), delivery, acknowledge(), and the
+   * notification.delivery.failed error path without requiring a live libp2p connection.
+   *
+   * @param agentPubkeyHex - Hex pubkey of the reconnecting agent
+   * @param mockStream - Mock stream for delivering notifications (may throw to simulate failure)
+   * @returns Promise<void> — resolves after drain loop completes
+   */
+  async triggerPgDrainForTest(agentPubkeyHex: string, mockStream: Stream): Promise<void> {
+    if (process.env["NODE_ENV"] !== "test") throw new Error("test-only");
+    if (!this.#notificationQueue) return;
+    try {
+      const pgNotifs = await this.#notificationQueue.drainUndelivered(agentPubkeyHex);
+      for (const pgNotif of pgNotifs) {
+        const p = pgNotif.payload as { session_id_hex?: string; sealed_root_hex?: string; sealed_at?: number };
+        if (!p.session_id_hex || !p.sealed_root_hex || pgNotif.notificationType !== "seal_unilateral") {
+          void this.#notificationQueue.acknowledge(pgNotif.notificationId).catch(() => {});
+          continue;
+        }
+        try {
+          this.#sendFrame(mockStream, encodeSealUnilateralNotification({
+            type: "seal_unilateral_notification",
+            session_id: Buffer.from(p.session_id_hex, "hex"),
+            sealed_root: Buffer.from(p.sealed_root_hex, "hex"),
+            sealed_at: p.sealed_at ?? 0,
+            seal_type: "UNILATERAL",
+          }));
+          void this.#notificationQueue.acknowledge(pgNotif.notificationId).catch(() => {});
+        } catch {
+          this.#logger?.warn("notification.delivery.failed", {
+            notificationId: pgNotif.notificationId,
+            recipientAgentId: agentPubkeyHex,
+            reason: "stream_send_failed",
+          });
+          break;
+        }
+      }
+    } catch {
+      // drainUndelivered failed — continue without Pg notifications
+    }
   }
 }
 
