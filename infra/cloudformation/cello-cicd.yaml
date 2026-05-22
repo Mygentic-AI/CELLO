@@ -154,8 +154,19 @@ Resources:
               - Effect: Allow
                 Action:
                   - codepipeline:StartPipelineExecution
+                # SI-003: Explicit named pipeline ARNs — no wildcard resource.
+                # Wildcard access (cello-*-pipeline) would allow triggering
+                # unrelated pipelines. Every new pipeline requires an explicit
+                # entry here.
                 Resource:
-                  - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-*-pipeline"
+                  - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-crypto-pipeline"
+                  - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-protocol-types-pipeline"
+                  - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-transport-pipeline"
+                  - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-client-pipeline"
+                  - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-adapter-claude-code-pipeline"
+                  - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-directory-pipeline"
+                  - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-relay-pipeline"
+                  - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-e2e-tests-pipeline"
       Tags:
         - Key: Project
           Value: cello
