@@ -58,7 +58,7 @@ Resources:
     Properties:
       DBInstanceIdentifier: !Sub "cello-${Environment}"
       Engine: postgres
-      EngineVersion: "18"
+      EngineVersion: "18.3"
       DBInstanceClass: !Ref InstanceClass
       AllocatedStorage: 20
       MaxAllocatedStorage: 100
