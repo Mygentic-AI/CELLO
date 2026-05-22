@@ -73,6 +73,17 @@ describe("FEDERATION-001A: setup-replication.sh exists and is executable", () =>
     const script = loadScript();
     expect(script).toContain("set -euo pipefail");
   });
+
+  it("setup-replication.sh checks for python3 prerequisite", () => {
+    const script = loadScript();
+    expect(script).toContain("command -v python3");
+  });
+
+  it("setup-replication.sh checks ECS Exec output for psql ERROR: lines on all DDL calls", () => {
+    const script = loadScript();
+    // grep -q "^ERROR:" must be present to catch silent psql failures
+    expect(script).toContain('grep -q "^ERROR:"');
+  });
 });
 
 // ─── AC-004: Production confirmation gate (static + subprocess) ──────────────
@@ -83,11 +94,13 @@ describe("FEDERATION-001A: AC-004 production confirmation gate", () => {
     expect(script).toContain("Configuring replication for PRODUCTION. Type YES to confirm:");
   });
 
-  it("setup-replication.sh exits 1 when input is not YES", () => {
+  it("setup-replication.sh exits 1 when input is not YES — exit 1 is inside the confirmation block", () => {
     const script = loadScript();
-    // Must have a read statement and exit 1
     expect(script).toMatch(/read\s/);
-    expect(script).toMatch(/exit\s+1/);
+    // Verify exit 1 appears inside the production confirmation block
+    const confirmIdx = script.indexOf('Configuring replication for PRODUCTION');
+    const confirmBlock = script.slice(confirmIdx, confirmIdx + 500);
+    expect(confirmBlock).toMatch(/exit\s+1/);
   });
 
   it("setup-replication.sh confirmation gate fires on ENVIRONMENT=production value", () => {
@@ -96,11 +109,17 @@ describe("FEDERATION-001A: AC-004 production confirmation gate", () => {
     expect(script).toMatch(/\$\{?ENVIRONMENT\}?.*production|production.*\$\{?ENVIRONMENT\}?/);
   });
 
-  it("setup-replication.sh production gate is not bypassable via skip flags", () => {
+  it("setup-replication.sh production gate fires on ENVIRONMENT value — not bypassable via env vars or flags", () => {
     const script = loadScript();
+    // No bypass flags or env vars — the gate is based on ENVIRONMENT value only
     expect(script).not.toMatch(/--skip[-_]confirm/i);
     expect(script).not.toMatch(/SKIP_CONFIRM/);
     expect(script).not.toMatch(/NO_CONFIRM/);
+    expect(script).not.toMatch(/FORCE_YES|AUTO_CONFIRM|CI_MODE/);
+    // The gate reads user input — cannot be bypassed by a flag
+    expect(script).toMatch(/read -r CONFIRM/);
+    const gateIdx = script.indexOf('[[ "${CONFIRM}" != "YES" ]]');
+    expect(gateIdx).toBeGreaterThan(-1);
   });
 
   it("AC-004: non-YES input causes exit 1 (subprocess test)", () => {
@@ -333,12 +352,13 @@ describe("FEDERATION-001A: security invariants — static analysis", () => {
     expect(script).not.toMatch(/GRANT\s+(INSERT|UPDATE|DELETE|TRUNCATE|CREATE|DROP)\s+ON/i);
   });
 
-  it("password does not appear in script stdout or stderr (secrets from Secrets Manager only)", () => {
+  it("password variables are not echoed to stdout or stderr", () => {
     const script = loadScript();
-    // The password must be read from Secrets Manager, not echoed to stdout
-    // Check that any password variable is not echoed
-    expect(script).not.toMatch(/echo.*password/i);
-    expect(script).not.toMatch(/echo.*REPL_PASSWORD/i);
+    // REPL_PASS and SOURCE_PASS must not appear in echo statements
+    expect(script).not.toMatch(/echo[^#\n]*\$\{?REPL_PASS\}?/);
+    expect(script).not.toMatch(/echo[^#\n]*\$\{?SOURCE_PASS\}?/);
+    // python3 is used to parse the secret JSON — password is handled via python3, not echoed
+    expect(script).toContain("python3");
   });
 });
 
