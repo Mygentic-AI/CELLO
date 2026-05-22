@@ -47,9 +47,10 @@ RUN pnpm --filter @cello/interfaces run typecheck && \
 # ─── Stage 2: Production ───────────────────────────────────────────────────
 FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-slim AS production
 
-# Install curl (health check), Java (Flyway), and build tools (native addon compilation)
+# Install curl (health check), Java (Flyway), build tools (native addons), awscli (Secrets Manager fetch)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl default-jre-headless python3 make g++ && \
+    apt-get install -y --no-install-recommends curl default-jre-headless python3 python3-pip make g++ unzip && \
+    pip3 install --no-cache-dir awscli --break-system-packages && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Flyway CLI

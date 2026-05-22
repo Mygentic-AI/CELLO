@@ -19,23 +19,33 @@
 set -e
 
 # ─── Resolve DATABASE_URL ──────────────────────────────────────────────────
-# If DATABASE_URL is not set but RDS_CREDENTIALS_SECRET_ARN is, fetch from Secrets Manager.
-# The secret contains JSON: { username, password, host, port, dbname }
+# If DATABASE_URL is not set but RDS_CREDENTIALS_SECRET_ARN is, fetch from Secrets Manager
+# using the AWS CLI (available on ECS Fargate via task IAM role).
 
 if [ -z "$DATABASE_URL" ] && [ -n "$RDS_CREDENTIALS_SECRET_ARN" ]; then
   REGION="${AWS_REGION:-us-east-1}"
 
-  # Use node to fetch the secret (AWS SDK already available in the image)
-  DATABASE_URL=$(node -e "
-    const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
-    (async () => {
-      const client = new SecretsManagerClient({ region: '${REGION}' });
-      const resp = await client.send(new GetSecretValueCommand({ SecretId: '${RDS_CREDENTIALS_SECRET_ARN}' }));
-      const s = JSON.parse(resp.SecretString);
-      const pass = encodeURIComponent(s.password);
-      process.stdout.write('postgresql://' + s.username + ':' + pass + '@' + s.host + ':' + s.port + '/' + s.dbname);
-    })().catch(e => { process.stderr.write(JSON.stringify({event:'directory.secrets.unavailable',level:'error',reason:e.message}) + '\n'); process.exit(1); });
-  ")
+  SECRET_JSON=$(aws secretsmanager get-secret-value \
+    --secret-id "$RDS_CREDENTIALS_SECRET_ARN" \
+    --region "$REGION" \
+    --query SecretString \
+    --output text)
+
+  if [ -z "$SECRET_JSON" ]; then
+    echo '{"event":"directory.secrets.unavailable","level":"error","reason":"empty secret value"}'
+    exit 1
+  fi
+
+  DB_USER=$(echo "$SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['username'])")
+  DB_PASS=$(echo "$SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['password'])")
+  DB_HOST=$(echo "$SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['host'])")
+  DB_PORT=$(echo "$SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['port'])")
+  DB_NAME=$(echo "$SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['dbname'])")
+
+  # URL-encode password for connection string
+  DB_PASS_ENCODED=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$DB_PASS")
+
+  DATABASE_URL="postgresql://${DB_USER}:${DB_PASS_ENCODED}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
   export DATABASE_URL
 fi
 
