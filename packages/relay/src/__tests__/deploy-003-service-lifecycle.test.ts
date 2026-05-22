@@ -23,6 +23,8 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { readFileSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { generateKeypair } from "@cello/crypto";
 import type { Logger, LogContext } from "@cello/interfaces";
 import {
@@ -196,5 +198,74 @@ describe("DEPLOY-003: relay health server", () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+});
+
+// ─── AC-008-dist-freshness ─────────────────────────────────────────────────────
+//
+// Vitest transpiles TypeScript on the fly and never reads dist/.
+// A stale dist is invisible to all automated checks until a live smoke test
+// hits the compiled binary. This check ensures the compiled output contains
+// the handlers introduced or modified by DEPLOY-003.
+
+describe("DEPLOY-003: AC-008-dist-freshness", () => {
+  it("dist/bin/relay.js contains relay-service-lifecycle imports", () => {
+    const distPath = resolve(import.meta.dirname, "../../dist/bin/relay.js");
+    if (existsSync(distPath)) {
+      const content = readFileSync(distPath, "utf-8");
+      expect(content).toContain("logRelayServiceStarted");
+      expect(content).toContain("createRelayHealthServer");
+      expect(content).toContain("logRelayServiceCrashed");
+    } else {
+      throw new Error("dist/bin/relay.js does not exist — run pnpm run typecheck first");
+    }
+  });
+
+  it("dist/relay-service-lifecycle.js contains all four exported log functions", () => {
+    const distPath = resolve(import.meta.dirname, "../../dist/relay-service-lifecycle.js");
+    if (existsSync(distPath)) {
+      const content = readFileSync(distPath, "utf-8");
+      expect(content).toContain("logRelayServiceStarted");
+      expect(content).toContain("logRelayServiceStopped");
+      expect(content).toContain("logRelayServiceStartFailed");
+      expect(content).toContain("logRelayServiceCrashed");
+      expect(content).toContain("createRelayHealthServer");
+    } else {
+      throw new Error("dist/relay-service-lifecycle.js does not exist — run pnpm run typecheck first");
+    }
+  });
+});
+
+// ─── SI-003: relay task has no public IP ──────────────────────────────────────
+//
+// Adversarial condition: even if a developer sets AssignPublicIp: ENABLED,
+// the ECS service template must enforce private subnets and no public IP
+// by construction — verified by reading cello-ecs-relay.yaml.
+
+describe("DEPLOY-003: SI-003 relay task has no public IP", () => {
+  const templatePath = resolve(import.meta.dirname, "../../../../infra/cloudformation/cello-ecs-relay.yaml");
+
+  it("template exists", () => {
+    expect(existsSync(templatePath)).toBe(true);
+  });
+
+  it("AssignPublicIp is DISABLED", () => {
+    const content = readFileSync(templatePath, "utf-8");
+    expect(content).toContain("AssignPublicIp: DISABLED");
+    expect(content).not.toContain("AssignPublicIp: ENABLED");
+  });
+
+  it("service subnets reference private-subnet imports only", () => {
+    const content = readFileSync(templatePath, "utf-8");
+    // AwsvpcConfiguration subnets must be private subnets
+    expect(content).toContain("private-subnet-a");
+    expect(content).toContain("private-subnet-b");
+    // Relay has no ALB — no public subnets anywhere in the template
+    expect(content).not.toContain("public-subnet");
+  });
+
+  it("security group references ecs-relay-sg, not a wildcard", () => {
+    const content = readFileSync(templatePath, "utf-8");
+    expect(content).toContain("ecs-relay-sg");
   });
 });

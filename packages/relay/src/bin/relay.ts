@@ -180,7 +180,7 @@ try {
   transportPrivateKey = randomBytes(32);
   mkdirSync(join(homedir(), ".cello"), { recursive: true });
   writeFileSync(transportKeyPath, transportPrivateKey, { mode: 0o600 });
-  logger.info("adapter.initialised", { adapterName: "TransportKey", implementation: "generated" });
+  logger.info("adapter.initialised", { adapterName: "TransportKey", implementation: "generated", env: celloEnv });
 }
 
 // ─── Directory adapter ─────────────────────────────────────────────────────────
@@ -201,7 +201,7 @@ if (directoryMultiaddr) {
     directoryPeerId: dirPeerId,
     directoryMultiaddrs: [directoryMultiaddr],
   });
-  logger.info("adapter.initialised", { adapterName: "NetworkDirectoryAdapter", directoryMultiaddr });
+  logger.info("adapter.initialised", { adapterName: "NetworkDirectoryAdapter", directoryMultiaddr, env: celloEnv });
 }
 
 // ─── Relay node startup ────────────────────────────────────────────────────────
@@ -231,7 +231,7 @@ if (directoryAdapter) {
 }
 
 for (const addr of relayResult.node.listenAddresses()) {
-  logger.info("adapter.initialised", { adapterName: "ListenAddr", implementation: String(addr) });
+  logger.info("adapter.initialised", { adapterName: "ListenAddr", implementation: String(addr), env: celloEnv });
 }
 
 // ─── DEPLOY-003: Health check HTTP server (AC-007) ─────────────────────────────
@@ -241,7 +241,7 @@ for (const addr of relayResult.node.listenAddresses()) {
 
 const healthServer = createRelayHealthServer({ relayId, logger });
 healthServer.listen(healthPort, () => {
-  logger.info("adapter.initialised", { adapterName: "RelayHealthServer", port: healthPort });
+  logger.info("adapter.initialised", { adapterName: "RelayHealthServer", port: healthPort, env: celloEnv });
 });
 
 // ─── DEPLOY-003: relay.service.started (AC-002) ────────────────────────────────
