@@ -42,7 +42,6 @@ Resources:
         shared_preload_libraries: pgaudit
         pgaudit.log: all
         rds.logical_replication: "1"
-        wal_level: logical
         max_replication_slots: "10"
         max_wal_senders: "10"
       Tags:

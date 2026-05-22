@@ -166,8 +166,9 @@ deploy_stack() {
 
   local param_overrides=""
   for param in "${params[@]}"; do
-    param_overrides="${param_overrides} ParameterKey=${param%%=*},ParameterValue=${param#*=}"
+    param_overrides="${param_overrides} ${param}"
   done
+  param_overrides="${param_overrides# }"  # trim leading space
 
   local stack_start
   stack_start=$(date +%s)
