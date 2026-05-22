@@ -7,7 +7,7 @@
 # Target: linux/amd64 (ECS Fargate requirement)
 
 # ─── Stage 1: Build ────────────────────────────────────────────────────────
-FROM --platform=linux/amd64 node:24-slim AS build
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-slim AS build
 
 WORKDIR /app
 
@@ -40,7 +40,7 @@ RUN pnpm --filter @cello/interfaces run typecheck && \
     pnpm --filter @cello/directory run typecheck
 
 # ─── Stage 2: Production ───────────────────────────────────────────────────
-FROM --platform=linux/amd64 node:24-slim AS production
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-slim AS production
 
 # Install curl for ECS health check and Java for Flyway
 RUN apt-get update && \

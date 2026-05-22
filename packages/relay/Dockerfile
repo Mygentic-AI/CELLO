@@ -8,7 +8,7 @@
 # The relay has no Flyway / no Java dependency — leaner than the directory image.
 
 # ─── Stage 1: Build ────────────────────────────────────────────────────────
-FROM --platform=linux/amd64 node:24-slim AS build
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-slim AS build
 
 WORKDIR /app
 
@@ -41,7 +41,7 @@ RUN pnpm --filter @cello/interfaces run typecheck && \
     pnpm --filter @cello/relay run typecheck
 
 # ─── Stage 2: Production ───────────────────────────────────────────────────
-FROM --platform=linux/amd64 node:24-slim AS production
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-slim AS production
 
 WORKDIR /app
 
