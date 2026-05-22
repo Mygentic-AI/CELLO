@@ -288,8 +288,9 @@ def _set_secret(sm, secret_id: str, token: str) -> None:
                 "END $$",
                 (app_user, app_user, new_password),
             )
-            # Idempotent: grant schema + connect privileges needed for Flyway migrations.
+            # Idempotent: grant schema + connect + superuser privileges for Flyway migrations.
             # GRANT IF NOT EXISTS is not available in PostgreSQL — GRANT is idempotent.
+            # rds_superuser is required to CREATE EXTENSION (e.g. pgaudit) on RDS.
             cur.execute(
                 "GRANT CONNECT ON DATABASE %s TO %s",
                 (psycopg2.extensions.AsIs(f'"{db_name}"'),
@@ -297,6 +298,10 @@ def _set_secret(sm, secret_id: str, token: str) -> None:
             )
             cur.execute(
                 "GRANT ALL ON SCHEMA public TO %s",
+                (psycopg2.extensions.AsIs(f'"{app_user}"'),),
+            )
+            cur.execute(
+                "GRANT rds_superuser TO %s",
                 (psycopg2.extensions.AsIs(f'"{app_user}"'),),
             )
             # Use parameterized password to prevent SQL injection.
