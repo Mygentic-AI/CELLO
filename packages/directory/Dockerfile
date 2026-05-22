@@ -83,8 +83,9 @@ COPY --from=build /app/packages/crypto/dist/ packages/crypto/dist/
 COPY --from=build /app/packages/transport/dist/ packages/transport/dist/
 COPY --from=build /app/packages/directory/dist/ packages/directory/dist/
 
-# Copy Flyway migrations
+# Copy Flyway migrations — to both Flyway's location and the app's expected path
 COPY packages/directory/db/migrations/ /flyway/sql/
+COPY packages/directory/db/migrations/ /app/packages/directory/db/migrations/
 
 # Copy entrypoint script
 COPY packages/directory/docker-entrypoint.sh /app/docker-entrypoint.sh
