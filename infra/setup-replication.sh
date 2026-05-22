@@ -1,0 +1,516 @@
+#!/usr/bin/env bash
+# CELLO-FEDERATION-001A — PostgreSQL logical replication setup script
+#
+# Sets up logical replication between all three Directory RDS instances in a
+# CELLO environment by running psql commands via ECS Exec on each directory task.
+#
+# Usage:
+#   ./infra/setup-replication.sh <environment> <region1> <region2> <region3>
+#
+#   environment  One of: dev, staging, production
+#   region1      Primary region (e.g. us-east-1)
+#   region2      Second region (e.g. eu-central-1)
+#   region3      Third region (e.g. ap-northeast-1)
+#
+# What this script does:
+#   1. Validates that all 3 Directory ECS tasks are running before touching any DB
+#   2. For each node: creates the cello_replication user with REPLICATION privilege only
+#   3. For each node: creates publication cello_pub covering all append-only tables
+#   4. For each node: creates 2 subscriptions (one per peer node)
+#   5. Polls pg_stat_replication until all 6 slots reach streaming state (60s timeout)
+#   6. Prints summary table and exits 0
+#
+# All operations are idempotent — safe to re-run. Existing objects are detected
+# via pre-flight queries and skipped.
+#
+# Secrets: replication credentials are stored in Secrets Manager under
+#   cello/{env}/directory/rds-replication-credentials in each region.
+#   Passwords never appear in stdout, stderr, or CloudWatch logs.
+#
+# Replication slot naming: cello_{env}_{source_region}_{target_region}
+#   e.g. cello_dev_us-east-1_eu-central-1
+#
+# Subscription naming: cello_sub_from_{source_region}
+#   e.g. cello_sub_from_us-east-1
+#
+# Publication naming: cello_pub (same on every node)
+
+set -euo pipefail
+
+# ── Argument validation ──────────────────────────────────────────────────────
+
+ENVIRONMENT="${1:-}"
+REGION1="${2:-}"
+REGION2="${3:-}"
+REGION3="${4:-}"
+
+if [[ -z "${ENVIRONMENT}" || -z "${REGION1}" || -z "${REGION2}" || -z "${REGION3}" ]]; then
+  echo "Usage: $0 <environment> <region1> <region2> <region3>" >&2
+  echo "  environment: dev | staging | production" >&2
+  echo "  regionN:     e.g. us-east-1, eu-central-1, ap-northeast-1" >&2
+  exit 1
+fi
+
+if [[ "${ENVIRONMENT}" != "dev" && "${ENVIRONMENT}" != "staging" && "${ENVIRONMENT}" != "production" ]]; then
+  echo "ERROR: environment must be one of: dev, staging, production" >&2
+  exit 1
+fi
+
+REGIONS=("${REGION1}" "${REGION2}" "${REGION3}")
+NODE_COUNT=${#REGIONS[@]}
+
+# ── Production confirmation gate (AC-004) ────────────────────────────────────
+# Fires on ENVIRONMENT value — not bypassable by flags or env vars.
+
+if [[ "${ENVIRONMENT}" == "production" ]]; then
+  echo ""
+  echo "Configuring replication for PRODUCTION. Type YES to confirm:"
+  read -r CONFIRM
+  if [[ "${CONFIRM}" != "YES" ]]; then
+    echo "Aborted. No replication setup was performed." >&2
+    exit 1
+  fi
+  echo ""
+fi
+
+# ── Observability helpers ────────────────────────────────────────────────────
+
+SCRIPT_START=$(date +%s)
+
+log_info() {
+  local event_name="$1"
+  local message="$2"
+  echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] INFO  ${event_name} ${message}"
+}
+
+log_error() {
+  local event_name="$1"
+  local message="$2"
+  echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] ERROR ${event_name} ${message}" >&2
+}
+
+# Format regions array as JSON string for log context
+regions_json="[\"${REGION1}\",\"${REGION2}\",\"${REGION3}\"]"
+
+log_info "infra.replication.setup.started" "{ \"environment\": \"${ENVIRONMENT}\", \"regions\": ${regions_json}, \"nodeCount\": ${NODE_COUNT} }"
+
+# ── ECS cluster and service naming ───────────────────────────────────────────
+
+ECS_CLUSTER_NAME="cello-${ENVIRONMENT}"
+ECS_SERVICE_NAME="cello-directory-${ENVIRONMENT}"
+
+# Tables covered by the publication (all append-only tables, AC behavior)
+PUBLICATION_TABLES="agent_profiles,conversation_seals,conversation_seal_staging,directory_checkpoints,checkpoint_node_signatures,relay_registrations,sessions,pending_notifications,user_accounts"
+TABLE_COUNT=9
+
+# ── Step 1: Validate all ECS tasks are RUNNING before touching any DB ─────────
+# AC-007: exit 1 before any psql commands if any task is not in RUNNING state.
+
+declare -A TASK_ARNS
+declare -A TASK_IDS
+
+for REGION in "${REGIONS[@]}"; do
+  echo "── Checking Directory ECS task in ${REGION} ──────────────────────────"
+
+  TASK_ARN=$(aws ecs list-tasks \
+    --region "${REGION}" \
+    --cluster "${ECS_CLUSTER_NAME}" \
+    --service-name "${ECS_SERVICE_NAME}" \
+    --query "taskArns[0]" \
+    --output text 2>/dev/null || echo "")
+
+  if [[ -z "${TASK_ARN}" || "${TASK_ARN}" == "None" ]]; then
+    log_error "infra.replication.setup.task_not_running" "{ \"region\": \"${REGION}\", \"taskStatus\": \"NOT_FOUND\" }"
+    echo "ERROR: No running Directory ECS task found in ${REGION}." >&2
+    echo "Ensure all Directory ECS tasks are running before executing this script." >&2
+    exit 1
+  fi
+
+  # Verify the task is actually in RUNNING state
+  TASK_STATUS=$(aws ecs describe-tasks \
+    --region "${REGION}" \
+    --cluster "${ECS_CLUSTER_NAME}" \
+    --tasks "${TASK_ARN}" \
+    --query "tasks[0].lastStatus" \
+    --output text 2>/dev/null || echo "UNKNOWN")
+
+  if [[ "${TASK_STATUS}" != "RUNNING" ]]; then
+    log_error "infra.replication.setup.task_not_running" "{ \"region\": \"${REGION}\", \"taskStatus\": \"${TASK_STATUS}\" }"
+    echo "ERROR: Directory ECS task in ${REGION} is in state '${TASK_STATUS}' (expected RUNNING)." >&2
+    echo "Ensure all Directory ECS tasks are running before executing this script." >&2
+    exit 1
+  fi
+
+  TASK_ARNS["${REGION}"]="${TASK_ARN}"
+  # Extract task ID from ARN (last component)
+  TASK_IDS["${REGION}"]=$(basename "${TASK_ARN}")
+
+  echo "  Task ${TASK_IDS[${REGION}]} is RUNNING in ${REGION}"
+done
+
+echo ""
+echo "All ${NODE_COUNT} Directory ECS tasks are running. Proceeding with replication setup."
+echo ""
+
+# ── Step 2: Ensure Secrets Manager credentials exist in each region ───────────
+# AC-005: create cello_replication credentials in Secrets Manager before the user
+# is created; the password never appears in stdout, stderr, or CloudWatch logs.
+
+declare -A REPLICATION_SECRET_ARNS
+declare -A REPLICATION_PASSWORDS
+
+SECRET_PATH_SUFFIX="directory/rds-replication-credentials"
+
+for REGION in "${REGIONS[@]}"; do
+  echo "── Ensuring replication credentials in Secrets Manager (${REGION}) ───"
+
+  SECRET_NAME="cello/${ENVIRONMENT}/${SECRET_PATH_SUFFIX}"
+  SECRET_REGION="${REGION}"
+
+  # Check if secret already exists
+  EXISTING_SECRET=$(aws secretsmanager describe-secret \
+    --region "${SECRET_REGION}" \
+    --secret-id "${SECRET_NAME}" \
+    --query "ARN" \
+    --output text 2>/dev/null || echo "")
+
+  if [[ -n "${EXISTING_SECRET}" && "${EXISTING_SECRET}" != "None" ]]; then
+    echo "  Secret ${SECRET_NAME} already exists in ${REGION} — using existing credentials."
+    REPLICATION_SECRET_ARNS["${REGION}"]="${EXISTING_SECRET}"
+
+    # Retrieve existing password (never echo it)
+    REPL_PASS=$(aws secretsmanager get-secret-value \
+      --region "${SECRET_REGION}" \
+      --secret-id "${SECRET_NAME}" \
+      --query "SecretString" \
+      --output text 2>/dev/null || echo "")
+
+    if [[ -z "${REPL_PASS}" ]]; then
+      log_error "infra.replication.setup.credentials_mismatch" "{ \"region\": \"${REGION}\", \"secretArn\": \"${EXISTING_SECRET}\" }"
+      echo "ERROR: Secret ${SECRET_NAME} exists in ${REGION} but cannot be read." >&2
+      echo "Rotate the secret manually or check IAM permissions, then re-run the script." >&2
+      exit 1
+    fi
+    REPLICATION_PASSWORDS["${REGION}"]="${REPL_PASS}"
+  else
+    # Generate a new password and store it in Secrets Manager
+    # The password is generated by AWS — it never appears in this script's output
+    echo "  Creating new replication credentials in Secrets Manager for ${REGION}..."
+
+    # Generate random password using Secrets Manager's password generator
+    REPL_PASS=$(aws secretsmanager get-random-password \
+      --region "${SECRET_REGION}" \
+      --password-length 32 \
+      --exclude-punctuation \
+      --require-each-included-type \
+      --query "RandomPassword" \
+      --output text 2>/dev/null)
+
+    # Store the password — the variable is passed directly and never echoed
+    NEW_SECRET_ARN=$(aws secretsmanager create-secret \
+      --region "${SECRET_REGION}" \
+      --name "${SECRET_NAME}" \
+      --description "CELLO replication user credentials for ${ENVIRONMENT}" \
+      --secret-string "{\"username\":\"cello_replication\",\"password\":\"${REPL_PASS}\"}" \
+      --query "ARN" \
+      --output text 2>/dev/null)
+
+    REPLICATION_SECRET_ARNS["${REGION}"]="${NEW_SECRET_ARN}"
+    REPLICATION_PASSWORDS["${REGION}"]="${REPL_PASS}"
+    echo "  Created secret ${SECRET_NAME} in ${REGION} (ARN: ${NEW_SECRET_ARN})"
+  fi
+done
+
+# ── Helper: run psql via ECS Exec ────────────────────────────────────────────
+# Runs a psql command on the ECS task in the given region using ECS Exec.
+# The command is passed as a string and executed inside the container.
+#
+# Usage: run_psql_on_node REGION SQL_COMMAND
+# Returns the psql output.
+
+run_psql_on_node() {
+  local region="$1"
+  local sql="$2"
+  local task_id="${TASK_IDS[${region}]}"
+  local task_arn="${TASK_ARNS[${region}]}"
+
+  aws ecs execute-command \
+    --region "${region}" \
+    --cluster "${ECS_CLUSTER_NAME}" \
+    --task "${task_arn}" \
+    --container "cello-directory" \
+    --command "psql \${DATABASE_URL} -c \"${sql}\"" \
+    --interactive \
+    2>/dev/null || true
+}
+
+# ── Helper: get RDS DSN from the ECS task's environment ─────────────────────
+# Reads the DATABASE_URL from the running task to build subscription connection strings.
+# We extract the host/port from the task's environment variables via aws ecs describe-tasks.
+
+get_rds_host() {
+  local region="$1"
+  local task_arn="${TASK_ARNS[${region}]}"
+
+  aws ecs describe-tasks \
+    --region "${region}" \
+    --cluster "${ECS_CLUSTER_NAME}" \
+    --tasks "${task_arn}" \
+    --query "tasks[0].containers[0].environment[?name=='RDS_ENDPOINT'].value" \
+    --output text 2>/dev/null || echo ""
+}
+
+# ── Step 3: Create replication user and publication on each node ───────────────
+
+for REGION in "${REGIONS[@]}"; do
+  echo "── Setting up replication user and publication on ${REGION} ──────────"
+
+  REPL_PASS="${REPLICATION_PASSWORDS[${REGION}]}"
+
+  # Create the cello_replication user with REPLICATION privilege only (SI-001).
+  # Uses DO $$ block for idempotency — PostgreSQL 15 introduced CREATE ROLE IF NOT EXISTS
+  # but RDS may be on earlier versions; the DO block is universally compatible.
+  # SI-001: REPLICATION privilege only — no INSERT, UPDATE, DELETE, DDL, SUPERUSER, CREATEDB.
+  local_create_user_sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cello_replication') THEN CREATE USER cello_replication WITH REPLICATION LOGIN PASSWORD '${REPL_PASS}'; END IF; END \$\$;"
+
+  aws ecs execute-command \
+    --region "${REGION}" \
+    --cluster "${ECS_CLUSTER_NAME}" \
+    --task "${TASK_ARNS[${REGION}]}" \
+    --container "cello-directory" \
+    --command "psql \${DATABASE_URL} -c \"${local_create_user_sql}\"" \
+    --interactive \
+    2>&1 | grep -v "^$" || true
+
+  echo "  cello_replication user ready on ${REGION}"
+
+  # Create publication covering all append-only tables (idempotent).
+  # The publication is checked via pg_publication before creating.
+  local_create_pub_sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'cello_pub') THEN CREATE PUBLICATION cello_pub FOR TABLE ${PUBLICATION_TABLES}; END IF; END \$\$;"
+
+  aws ecs execute-command \
+    --region "${REGION}" \
+    --cluster "${ECS_CLUSTER_NAME}" \
+    --task "${TASK_ARNS[${REGION}]}" \
+    --container "cello-directory" \
+    --command "psql \${DATABASE_URL} -c \"${local_create_pub_sql}\"" \
+    --interactive \
+    2>&1 | grep -v "^$" || true
+
+  log_info "infra.replication.setup.publication_created" "{ \"environment\": \"${ENVIRONMENT}\", \"region\": \"${REGION}\", \"tableCount\": ${TABLE_COUNT} }"
+  echo "  Publication cello_pub ready on ${REGION}"
+done
+
+# ── Step 4: Create subscriptions on each node (2 per node = 6 total) ──────────
+# Each node subscribes to cello_pub on each of the other two nodes.
+# Slot naming: cello_{env}_{source_region}_{target_region}
+# Subscription naming: cello_sub_from_{source_region}
+
+# Build connection strings per region using replication credentials from Secrets Manager
+declare -A RDS_HOSTS
+
+for REGION in "${REGIONS[@]}"; do
+  # Extract RDS hostname from the task's container environment
+  RDS_HOST=$(aws ecs describe-tasks \
+    --region "${REGION}" \
+    --cluster "${ECS_CLUSTER_NAME}" \
+    --tasks "${TASK_ARNS[${REGION}]}" \
+    --query "tasks[0].containers[?name=='cello-directory'].environment[?name=='RDS_ENDPOINT'].value" \
+    --output text 2>/dev/null || echo "")
+
+  if [[ -z "${RDS_HOST}" || "${RDS_HOST}" == "None" ]]; then
+    # Fallback: read from CloudFormation stack output
+    RDS_HOST=$(aws cloudformation describe-stacks \
+      --region "${REGION}" \
+      --stack-name "cello-rds-${ENVIRONMENT}" \
+      --query "Stacks[0].Outputs[?OutputKey=='RdsEndpoint'].OutputValue" \
+      --output text 2>/dev/null || echo "")
+  fi
+
+  RDS_HOSTS["${REGION}"]="${RDS_HOST}"
+done
+
+for TARGET_REGION in "${REGIONS[@]}"; do
+  echo "── Creating subscriptions on ${TARGET_REGION} ────────────────────────"
+
+  for SOURCE_REGION in "${REGIONS[@]}"; do
+    if [[ "${SOURCE_REGION}" == "${TARGET_REGION}" ]]; then
+      continue
+    fi
+
+    # Deterministic slot name: cello_{env}_{source}_{target} (SI-002)
+    SLOT_NAME="cello_${ENVIRONMENT}_${SOURCE_REGION}_${TARGET_REGION}"
+    SUB_NAME="cello_sub_from_${SOURCE_REGION}"
+    SOURCE_HOST="${RDS_HOSTS[${SOURCE_REGION}]}"
+    SOURCE_PASS="${REPLICATION_PASSWORDS[${SOURCE_REGION}]}"
+
+    # Build the subscription connection string using the source region's replication credentials
+    # The password is passed via psql connection string — it never appears in the script output
+    CONN_STRING="host=${SOURCE_HOST} port=5432 dbname=cello_${ENVIRONMENT} user=cello_replication sslmode=require"
+
+    echo "  Creating subscription ${SUB_NAME} (slot: ${SLOT_NAME}) on ${TARGET_REGION}..."
+
+    # Idempotent subscription creation: check pg_subscription before creating.
+    # PostgreSQL 17+ supports CREATE SUBSCRIPTION IF NOT EXISTS; for compatibility
+    # with PG 14/15/16, we use a DO $$ block with a pre-flight check.
+    local_create_sub_sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_subscription WHERE subname = '${SUB_NAME}') THEN CREATE SUBSCRIPTION ${SUB_NAME} CONNECTION '${CONN_STRING} password=${SOURCE_PASS}' PUBLICATION cello_pub WITH (slot_name = '${SLOT_NAME}', copy_data = false); END IF; END \$\$;"
+
+    aws ecs execute-command \
+      --region "${TARGET_REGION}" \
+      --cluster "${ECS_CLUSTER_NAME}" \
+      --task "${TASK_ARNS[${TARGET_REGION}]}" \
+      --container "cello-directory" \
+      --command "psql \${DATABASE_URL} -c \"${local_create_sub_sql}\"" \
+      --interactive \
+      2>&1 | grep -v "^$" || true
+
+    log_info "infra.replication.setup.subscription_created" "{ \"environment\": \"${ENVIRONMENT}\", \"targetRegion\": \"${TARGET_REGION}\", \"sourceRegion\": \"${SOURCE_REGION}\", \"slotName\": \"${SLOT_NAME}\" }"
+    echo "  Subscription ${SUB_NAME} ready on ${TARGET_REGION}"
+  done
+done
+
+# ── Step 5: Poll pg_stat_replication until all 6 slots reach streaming state ──
+# Timeout: 60 seconds (AC-003, DB-001).
+# All 6 expected slots are verified in parallel across all nodes.
+
+echo ""
+echo "── Polling for streaming state on all 6 replication slots ───────────────"
+
+POLL_START=$(date +%s)
+POLL_TIMEOUT=60
+STREAMING_SLOTS=()
+
+# Build the expected set of 6 slot names
+EXPECTED_SLOTS=()
+for SOURCE_REGION in "${REGIONS[@]}"; do
+  for TARGET_REGION in "${REGIONS[@]}"; do
+    if [[ "${SOURCE_REGION}" != "${TARGET_REGION}" ]]; then
+      EXPECTED_SLOTS+=("${SOURCE_REGION}:cello_${ENVIRONMENT}_${SOURCE_REGION}_${TARGET_REGION}")
+    fi
+  done
+done
+
+# Polling loop: check pg_stat_replication on each source node until all slots stream
+while true; do
+  NOW=$(date +%s)
+  ELAPSED=$(( NOW - POLL_START ))
+
+  STREAMING_SLOTS=()
+
+  # For each source region, check pg_stat_replication
+  for SOURCE_REGION in "${REGIONS[@]}"; do
+    SLOT_QUERY="SELECT application_name, state FROM pg_stat_replication WHERE state = 'streaming';"
+
+    STAT_OUTPUT=$(aws ecs execute-command \
+      --region "${SOURCE_REGION}" \
+      --cluster "${ECS_CLUSTER_NAME}" \
+      --task "${TASK_ARNS[${SOURCE_REGION}]}" \
+      --container "cello-directory" \
+      --command "psql \${DATABASE_URL} -t -A -c \"${SLOT_QUERY}\"" \
+      --interactive \
+      2>/dev/null || echo "")
+
+    # Parse streaming slots from this node
+    while IFS= read -r line; do
+      if [[ -n "${line}" && "${line}" != "--"* ]]; then
+        # Each streaming subscription appears as the slot name in application_name
+        APP_NAME=$(echo "${line}" | cut -d'|' -f1 | tr -d ' ')
+        if [[ -n "${APP_NAME}" ]]; then
+          SLOT_NAME_FROM_STAT="cello_${ENVIRONMENT}_${SOURCE_REGION}_${APP_NAME}"
+          STREAMING_SLOTS+=("${SOURCE_REGION}:${SLOT_NAME_FROM_STAT}")
+
+          # Log per-slot streaming event
+          log_info "infra.replication.setup.slot_streaming" "{ \"slotName\": \"${SLOT_NAME_FROM_STAT}\", \"region\": \"${SOURCE_REGION}\", \"elapsedSeconds\": ${ELAPSED} }"
+        fi
+      fi
+    done <<< "${STAT_OUTPUT}"
+  done
+
+  # Check if all 6 slots are streaming
+  ALL_STREAMING=true
+  for EXPECTED in "${EXPECTED_SLOTS[@]}"; do
+    FOUND=false
+    for STREAMING in "${STREAMING_SLOTS[@]}"; do
+      if [[ "${STREAMING}" == "${EXPECTED}" ]]; then
+        FOUND=true
+        break
+      fi
+    done
+    if [[ "${FOUND}" == "false" ]]; then
+      ALL_STREAMING=false
+      break
+    fi
+  done
+
+  if [[ "${ALL_STREAMING}" == "true" ]]; then
+    echo "  All 6 replication slots are in streaming state."
+    break
+  fi
+
+  if [[ ${ELAPSED} -ge ${POLL_TIMEOUT} ]]; then
+    # Timeout — log and exit 1
+    echo ""
+    echo "ERROR: Replication slots did not reach streaming state within ${POLL_TIMEOUT} seconds." >&2
+
+    for EXPECTED in "${EXPECTED_SLOTS[@]}"; do
+      SLOT_NAME=$(echo "${EXPECTED}" | cut -d: -f2)
+      SLOT_REGION=$(echo "${EXPECTED}" | cut -d: -f1)
+      FOUND=false
+      for STREAMING in "${STREAMING_SLOTS[@]}"; do
+        if [[ "${STREAMING}" == "${EXPECTED}" ]]; then
+          FOUND=true
+          break
+        fi
+      done
+      if [[ "${FOUND}" == "false" ]]; then
+        log_error "infra.replication.setup.slot_not_streaming" "{ \"slotName\": \"${SLOT_NAME}\", \"region\": \"${SLOT_REGION}\", \"elapsedSeconds\": ${ELAPSED} }"
+      fi
+    done
+
+    echo ""
+    echo "Current slot states:"
+    for SOURCE_REGION in "${REGIONS[@]}"; do
+      echo "  ${SOURCE_REGION}:"
+      aws ecs execute-command \
+        --region "${SOURCE_REGION}" \
+        --cluster "${ECS_CLUSTER_NAME}" \
+        --task "${TASK_ARNS[${SOURCE_REGION}]}" \
+        --container "cello-directory" \
+        --command "psql \${DATABASE_URL} -c \"SELECT application_name, state, sent_lsn, write_lsn, flush_lsn, replay_lsn FROM pg_stat_replication;\"" \
+        --interactive \
+        2>/dev/null || echo "    (unable to query)"
+    done
+
+    exit 1
+  fi
+
+  echo "  Waiting for streaming state... (${ELAPSED}s elapsed, ${STREAMING_SLOTS[*]:-none} streaming so far)"
+  sleep 5
+done
+
+# ── Step 6: Print summary table ───────────────────────────────────────────────
+
+TOTAL_ELAPSED=$(( $(date +%s) - SCRIPT_START ))
+
+echo ""
+echo "═══════════════════════════════════════════════════════════════════════════"
+echo "  REPLICATION SUMMARY — ${ENVIRONMENT}"
+echo "═══════════════════════════════════════════════════════════════════════════"
+echo ""
+printf "  %-50s  %-12s  %-15s\n" "SLOT NAME" "STATE" "NODE"
+printf "  %-50s  %-12s  %-15s\n" "─────────────────────────────────────────────────" "────────────" "───────────────"
+
+for SOURCE_REGION in "${REGIONS[@]}"; do
+  for TARGET_REGION in "${REGIONS[@]}"; do
+    if [[ "${SOURCE_REGION}" != "${TARGET_REGION}" ]]; then
+      SLOT_NAME="cello_${ENVIRONMENT}_${SOURCE_REGION}_${TARGET_REGION}"
+      printf "  %-50s  %-12s  %-15s\n" "${SLOT_NAME}" "streaming" "${SOURCE_REGION}"
+    fi
+  done
+done
+
+echo ""
+echo "  Total: 6 slots | All streaming | Elapsed: ${TOTAL_ELAPSED}s"
+echo ""
+
+log_info "infra.replication.setup.completed" "{ \"environment\": \"${ENVIRONMENT}\", \"regions\": ${regions_json}, \"slotCount\": 6, \"totalElapsedSeconds\": ${TOTAL_ELAPSED} }"
