@@ -302,12 +302,12 @@ describeIntegration("PERSIST-023 AC-002: notification survives process restart",
     expect(drained[0]!.notificationId).toBe(notification.notificationId);
 
     // Verify row is visible from a separate DB connection (key part of the AC)
+    // drainUndelivered does NOT delete — rows remain until acknowledge() is called
     const result = await superPool.query<{ notification_id: string }>(
       `SELECT notification_id FROM pending_notifications WHERE recipient_agent_id = $1`,
       [agentId],
     );
-    // drainUndelivered does NOT delete — it only returns; rows remain until acknowledged
-    expect(result.rows.length).toBeGreaterThanOrEqual(0); // row may still exist
+    expect(result.rows.length).toBe(1); // row must still be present (not deleted by drainUndelivered)
   });
 });
 
@@ -454,7 +454,8 @@ describeIntegration("PERSIST-023 AC-008-idempotency: V20 migration idempotent", 
     // The SQL uses IF NOT EXISTS so running it against an existing schema must not throw.
     // This is the authoritative test for AC-008 — it directly verifies the IF NOT EXISTS clauses.
 
-    // Run the same CREATE TABLE IF NOT EXISTS statement again (simulating Flyway re-run)
+    // Run the same CREATE TABLE IF NOT EXISTS statement again (simulating Flyway re-run).
+    // The SQL must match V20 exactly — IF NOT EXISTS skips the CREATE if the table exists.
     await expect(
       superPool.query(`
         CREATE TABLE IF NOT EXISTS pending_notifications (
@@ -463,8 +464,7 @@ describeIntegration("PERSIST-023 AC-008-idempotency: V20 migration idempotent", 
           notification_type  TEXT         NOT NULL,
           payload            JSONB        NOT NULL,
           created_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
-          CONSTRAINT pending_notifications_pkey PRIMARY KEY (notification_id),
-          CONSTRAINT pending_notifications_notification_id_unique UNIQUE (notification_id)
+          CONSTRAINT pending_notifications_pkey PRIMARY KEY (notification_id)
         )
       `),
     ).resolves.not.toThrow();
@@ -556,56 +556,127 @@ describeIntegration("PERSIST-023 SI-001: rows only deleted on explicit acknowled
   });
 });
 
+// ─── DB-001: Rows remain indefinitely if the absent party never reconnects ────────
+
+describeIntegration("PERSIST-023 DB-001: unacknowledged rows persist indefinitely", () => {
+  it("DB-001: rows remain indefinitely — no TTL evicts unacknowledged rows", async () => {
+    // Adversarial condition: absent party never reconnects after a unilateral seal.
+    // SI-001 requires the row to persist indefinitely — no background process deletes it.
+    const logger = makeMockLogger();
+    const queue = new PgNotificationQueue(superPool, logger);
+
+    const agentId = randomBytes(16).toString("hex");
+    const notification = makeQueuedNotification();
+
+    await queue.enqueue(agentId, notification);
+
+    // Simulate the passage of time by updating created_at far into the past (24h+ old)
+    await superPool.query(
+      `UPDATE pending_notifications SET created_at = now() - INTERVAL '25 hours'
+       WHERE notification_id = $1`,
+      [notification.notificationId],
+    );
+
+    // DB-001: drainUndelivered still returns the row — no TTL has evicted it
+    const drained = await queue.drainUndelivered(agentId);
+    expect(drained).toHaveLength(1);
+    expect(drained[0]!.notificationId).toBe(notification.notificationId);
+
+    // Verify the row count directly
+    const rowCount = await superPool.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM pending_notifications WHERE notification_id = $1`,
+      [notification.notificationId],
+    );
+    expect(parseInt(rowCount.rows[0]!.count, 10)).toBe(1);
+  });
+});
+
 // ─── SI-002: Client validates SEAL_UNILATERAL payload against local session state ──
+
+// Validation logic an agent MUST perform before acting on a SEAL_UNILATERAL notification.
+// Defined here so both the unit test and the integration test can use it.
+function validateSealUnilateral(
+  deliveredRoot: string,
+  localRoot: string,
+  sid: string,
+  log: Logger,
+): boolean {
+  if (deliveredRoot !== localRoot) {
+    log.warn("session.unilateral.mismatch", {
+      sessionId: sid,
+      deliveredSealedRoot: deliveredRoot,
+      localSealedRoot: localRoot,
+    });
+    return false;
+  }
+  return true;
+}
 
 describe("PERSIST-023 SI-002: mismatch between delivered payload and local session state is logged at WARN", () => {
   it("SI-002: session.unilateral.mismatch is logged at WARN when sealedRoot does not match", () => {
-    // This test verifies the agent-side validation logic that a consuming application
-    // would implement. The directory queues the notification; the receiving agent must
-    // validate it before acting.
-    //
-    // Adversarial condition: a compromised cello_service role INSERTs a fabricated
-    // SEAL_UNILATERAL notification with an arbitrary sessionId and sealedRoot.
-    // The receiving agent must detect the mismatch and log session.unilateral.mismatch at WARN.
-    //
-    // This validation function is defined here as a unit test of the validation logic
-    // that MUST be implemented in the agent session lifecycle code before acting on a
-    // SEAL_UNILATERAL notification.
+    // Unit test: verifies the validation logic in isolation.
+    // A compromised cello_service role could INSERT a fabricated SEAL_UNILATERAL notification
+    // with an arbitrary sessionId and sealedRoot. The receiving agent must detect the mismatch
+    // and log session.unilateral.mismatch at WARN.
 
     const logger = makeMockLogger();
-
-    // Simulate agent's local sealed root computation
     const localSealedRoot = randomBytes(32).toString("hex");
-
-    // Delivered notification has a different sealedRoot (adversarial or stale)
     const deliveredSealedRoot = randomBytes(32).toString("hex");
     const sessionId = randomUUID();
 
-    // Simulate the validation logic an agent MUST perform
-    function validateSealUnilateral(
-      deliveredRoot: string,
-      localRoot: string,
-      sid: string,
-      log: Logger,
-    ): boolean {
-      if (deliveredRoot !== localRoot) {
-        log.warn("session.unilateral.mismatch", {
-          sessionId: sid,
-          deliveredSealedRoot: deliveredRoot,
-          localSealedRoot: localRoot,
-        });
-        return false;
-      }
-      return true;
-    }
+    const valid = validateSealUnilateral(deliveredSealedRoot, localSealedRoot, sessionId, logger);
 
+    expect(valid).toBe(false);
+    const mismatchEvent = logger.warnEvents.find((e) => e.event === "session.unilateral.mismatch");
+    expect(mismatchEvent, "session.unilateral.mismatch not logged at WARN").toBeDefined();
+    expect(mismatchEvent!.context).toMatchObject({ sessionId });
+  });
+});
+
+describeIntegration("PERSIST-023 SI-002 integration: fabricated notification from compromised cello_service is detected", () => {
+  it("SI-002 integration: cello_service INSERTs fabricated notification; agent validates and logs mismatch at WARN", async () => {
+    // Adversarial condition (integration): a compromised cello_service role INSERTs a fabricated
+    // SEAL_UNILATERAL notification with an arbitrary sealedRoot into pending_notifications.
+    // The receiving agent must detect the mismatch between the delivered sealedRoot and
+    // its locally-computed sealed root.
+
+    const agentId = randomBytes(16).toString("hex");
+    const sessionId = randomUUID();
+
+    // Adversary inserts a fabricated notification via cello_service (INSERT is permitted by RLS)
+    const fabricatedSealedRoot = randomBytes(32).toString("hex");
+    await servicePool.query(
+      `INSERT INTO pending_notifications (notification_id, recipient_agent_id, notification_type, payload)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [
+        randomUUID(),
+        agentId,
+        "seal_unilateral",
+        JSON.stringify({ session_id_hex: sessionId, sealed_root_hex: fabricatedSealedRoot, sealed_at: Date.now() }),
+      ],
+    );
+
+    // Agent drains the notification from Postgres
+    const logger = makeMockLogger();
+    const queue = new PgNotificationQueue(superPool, logger);
+    const drained = await queue.drainUndelivered(agentId);
+    expect(drained).toHaveLength(1);
+
+    const delivered = drained[0]!;
+    const deliveredPayload = delivered.payload as { sealed_root_hex?: string };
+
+    // Agent's locally-computed sealed root (different from the fabricated one)
+    const localSealedRoot = randomBytes(32).toString("hex");
+
+    // Agent validates the delivered sealedRoot against its local state
     const valid = validateSealUnilateral(
-      deliveredSealedRoot,
+      deliveredPayload.sealed_root_hex ?? "",
       localSealedRoot,
       sessionId,
       logger,
     );
 
+    // SI-002: mismatch detected — validation returns false and logs session.unilateral.mismatch
     expect(valid).toBe(false);
     const mismatchEvent = logger.warnEvents.find((e) => e.event === "session.unilateral.mismatch");
     expect(mismatchEvent, "session.unilateral.mismatch not logged at WARN").toBeDefined();

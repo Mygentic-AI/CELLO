@@ -99,7 +99,7 @@
  *   per SESSION-003.
  */
 
-import { randomBytes, createHash } from "node:crypto";
+import { randomBytes, randomUUID, createHash } from "node:crypto";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature } from "@cello/crypto";
@@ -875,6 +875,43 @@ export class CelloDirectoryNode {
                 seal_type: "UNILATERAL",
               }));
             } catch { break; }
+          }
+
+          // PERSIST-023: drain Postgres-backed SEAL_UNILATERAL notifications (dev/staging/production).
+          // Delivers notifications that survived directory restarts (AC-002).
+          if (this.#notificationQueue) {
+            try {
+              const pgNotifs = await this.#notificationQueue.drainUndelivered(authedPubkeyHex);
+              for (const pgNotif of pgNotifs) {
+                const p = pgNotif.payload as { session_id_hex?: string; sealed_root_hex?: string; sealed_at?: number };
+                if (!p.session_id_hex || !p.sealed_root_hex || pgNotif.notificationType !== "seal_unilateral") {
+                  // Unrecognised payload — acknowledge to remove from queue without delivering
+                  void this.#notificationQueue!.acknowledge(pgNotif.notificationId).catch(() => {});
+                  continue;
+                }
+                try {
+                  this.#sendFrame(stream, encodeSealUnilateralNotification({
+                    type: "seal_unilateral_notification",
+                    session_id: Buffer.from(p.session_id_hex, "hex"),
+                    sealed_root: Buffer.from(p.sealed_root_hex, "hex"),
+                    sealed_at: p.sealed_at ?? 0,
+                    seal_type: "UNILATERAL",
+                  }));
+                  // Acknowledge on successful delivery
+                  void this.#notificationQueue!.acknowledge(pgNotif.notificationId).catch(() => {});
+                } catch {
+                  // Stream send failed — log notification.delivery.failed and continue
+                  this.#logger?.warn("notification.delivery.failed", {
+                    notificationId: pgNotif.notificationId,
+                    recipientAgentId: authedPubkeyHex,
+                    reason: "stream_send_failed",
+                  });
+                  break;
+                }
+              }
+            } catch {
+              // drainUndelivered failed — continue without Pg notifications (in-memory path above is fallback)
+            }
           }
 
           // CONNREQ-002 DB-001: deliver queued pending connection requests (target reconnected)
@@ -1849,6 +1886,7 @@ export class CelloDirectoryNode {
 
     // AC-003: Queue notification for absent party (delivered on reconnect)
     if (absentPartyHex) {
+      // In-memory queue for CELLO_ENV=local (PERSIST-015 M4 path — InMemoryNotificationQueue)
       let notifications = this.#pendingNotifications.get(absentPartyHex);
       if (!notifications) {
         notifications = [];
@@ -1860,6 +1898,29 @@ export class CelloDirectoryNode {
         sealed_root: frame.reported_root,
         sealed_at: sealedAt,
       });
+
+      // PERSIST-023: also enqueue to the injected NotificationQueue (PgNotificationQueue for
+      // dev/staging/production — notifications survive directory restarts per AC-002).
+      // Fire-and-forget: if the DB enqueue fails, the in-memory queue above is the fallback.
+      if (this.#notificationQueue) {
+        const notificationId = randomUUID();
+        this.#notificationQueue.enqueue(absentPartyHex, {
+          notificationId,
+          notificationType: "seal_unilateral",
+          payload: {
+            session_id_hex: Buffer.from(frame.session_id).toString("hex"),
+            sealed_root_hex: Buffer.from(frame.reported_root).toString("hex"),
+            sealed_at: sealedAt,
+          },
+        }).catch((err: unknown) => {
+          const reason = err instanceof Error ? err.message : String(err);
+          this.#logger?.warn("notification.delivery.failed", {
+            notificationId,
+            recipientAgentId: absentPartyHex,
+            reason,
+          });
+        });
+      }
     }
 
     // Send confirmation to the submitting party
