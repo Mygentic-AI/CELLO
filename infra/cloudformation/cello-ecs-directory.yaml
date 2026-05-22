@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   CELLO ECS Directory — Fargate service for the directory node.
-  Task role has least-privilege: KMS Decrypt and DescribeKey only,
-  Secrets Manager GetSecretValue on directory secrets, S3 PutObject on audit bucket only.
+  IAM roles are defined in cello-iam.yaml and imported via !ImportValue.
+  Task definition uses least-privilege roles from the IAM stack.
 
 Parameters:
   Environment:
@@ -37,75 +37,6 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # Task execution role (ECS agent — pulls images, writes logs)
-  TaskExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "cello-${Environment}-directory-execution-role"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-      Policies:
-        - PolicyName: SecretsAccess
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                Resource:
-                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/*"
-      Tags:
-        - Key: Project
-          Value: cello
-
-  # Task role (application code — what the container can do)
-  DirectoryTaskRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "cello-${Environment}-directory-task-role"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: DirectoryPermissions
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Sid: KmsDecryptOnly
-                Effect: Allow
-                Action:
-                  - kms:Decrypt
-                  - kms:DescribeKey
-                Resource:
-                  - !ImportValue
-                    Fn::Sub: "cello-${Environment}-kms-key-arn"
-              - Sid: SecretsManagerGet
-                Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                Resource:
-                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/*"
-              - Sid: S3AuditPutOnly
-                Effect: Allow
-                Action:
-                  - s3:PutObject
-                Resource:
-                  - !Sub "arn:aws:s3:::cello-audit-logs-${Environment}-${AWS::Region}/*"
-      Tags:
-        - Key: Project
-          Value: cello
-
   LogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -124,8 +55,10 @@ Resources:
         - FARGATE
       Cpu: !Ref Cpu
       Memory: !Ref Memory
-      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
-      TaskRoleArn: !GetAtt DirectoryTaskRole.Arn
+      ExecutionRoleArn: !ImportValue
+        Fn::Sub: "cello-${Environment}-directory-execution-role-arn"
+      TaskRoleArn: !ImportValue
+        Fn::Sub: "cello-${Environment}-directory-task-role-arn"
       ContainerDefinitions:
         - Name: directory
           Image: !Ref ImageUri
@@ -186,11 +119,6 @@ Outputs:
     Value: !GetAtt Cluster.Arn
     Export:
       Name: !Sub "cello-${Environment}-cluster-arn"
-
-  DirectoryTaskRoleArn:
-    Value: !GetAtt DirectoryTaskRole.Arn
-    Export:
-      Name: !Sub "cello-${Environment}-directory-task-role-arn"
 
   DirectoryServiceArn:
     Value: !Ref Service

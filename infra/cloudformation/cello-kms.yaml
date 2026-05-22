@@ -4,15 +4,13 @@ Description: >
   Used to encrypt K_server_X shares at rest. Directory ECS task role
   gets Decrypt/DescribeKey only. No Encrypt on the task role —
   encryption uses the unwrapped key in-process.
+  Role ARN is imported from cello-iam.yaml via !ImportValue (no circular dependency).
 
 Parameters:
   Environment:
     Type: String
     AllowedValues: [dev, staging, production]
     Description: Deployment environment
-  DirectoryTaskRoleArn:
-    Type: String
-    Description: ARN of the ECS directory task role (gets Decrypt/DescribeKey)
 
 Resources:
   MasterKey:
@@ -32,7 +30,8 @@ Resources:
           - Sid: AllowDirectoryTaskDecrypt
             Effect: Allow
             Principal:
-              AWS: !Ref DirectoryTaskRoleArn
+              AWS: !ImportValue
+                Fn::Sub: "cello-${Environment}-directory-task-role-arn"
             Action:
               - kms:Decrypt
               - kms:DescribeKey

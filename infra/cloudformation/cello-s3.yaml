@@ -2,19 +2,14 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   CELLO S3 — audit log bucket (append-only) and relay manifest bucket (versioned).
   Bucket policies enforce least-privilege: directory task role PutObject on audit,
-  directory+relay task roles GetObject on manifest.
+  relay task role GetObject on manifest.
+  Role ARNs are imported from cello-iam.yaml via !ImportValue (no circular dependency).
 
 Parameters:
   Environment:
     Type: String
     AllowedValues: [dev, staging, production]
     Description: Deployment environment
-  DirectoryTaskRoleArn:
-    Type: String
-    Description: ARN of the ECS directory task role
-  RelayTaskRoleArn:
-    Type: String
-    Description: ARN of the ECS relay task role
 
 Resources:
   AuditLogBucket:
@@ -55,14 +50,16 @@ Resources:
           - Sid: AllowDirectoryPutOnly
             Effect: Allow
             Principal:
-              AWS: !Ref DirectoryTaskRoleArn
+              AWS: !ImportValue
+                Fn::Sub: "cello-${Environment}-directory-task-role-arn"
             Action:
               - s3:PutObject
             Resource: !Sub "${AuditLogBucket.Arn}/*"
           - Sid: DenyNonPutActions
             Effect: Deny
             Principal:
-              AWS: !Ref DirectoryTaskRoleArn
+              AWS: !ImportValue
+                Fn::Sub: "cello-${Environment}-directory-task-role-arn"
             Action:
               - s3:GetObject
               - s3:DeleteObject
@@ -108,7 +105,8 @@ Resources:
             Effect: Allow
             Principal:
               AWS:
-                - !Ref RelayTaskRoleArn
+                - !ImportValue
+                  Fn::Sub: "cello-${Environment}-relay-task-role-arn"
             Action:
               - s3:GetObject
             Resource: !Sub "${RelayManifestBucket.Arn}/*"
