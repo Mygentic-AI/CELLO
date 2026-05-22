@@ -369,6 +369,15 @@ export class PgDirectoryStore implements DirectoryStore {
     );
   }
 
+  /** Whether a Postgres error is a foreign key violation (SQLSTATE 23503). */
+  #isFkViolation(err: unknown): boolean {
+    return (
+      err instanceof Error &&
+      "code" in err &&
+      (err as { code: string }).code === "23503"
+    );
+  }
+
   /**
    * Retrieve a SealNotarization by session_id (hex-encoded).
    * Returns undefined if no row exists — absence is not an error.
@@ -487,33 +496,52 @@ export class PgDirectoryStore implements DirectoryStore {
     this.#profilesByPrimaryKey.set(profile.primary_pubkey, profile);
 
     // ACCOUNT-001: if account_id is provided, log account.agent.linked and include it in INSERT.
+    // correlationId is not available on the setProfile signature (interface constraint) — logged as undefined.
     const accountId = (profile as AgentProfile & { account_id?: string | null }).account_id ?? null;
     if (accountId !== null && accountId !== undefined) {
       this.#logger.info("account.agent.linked", {
         accountId,
         agentId: profile.k_local_pubkey,
+        correlationId: undefined,
       });
     }
 
     // Persist to Postgres (V9 migration adds agent_profiles table;
     // V22 migration adds account_id nullable column).
-    const insertQuery = accountId !== null && accountId !== undefined
-      ? this.#pool.query(
-          `INSERT INTO agent_profiles
-             (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, account_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)
-           ON CONFLICT (k_local_pubkey) DO NOTHING`,
-          [
-            profile.k_local_pubkey,
-            profile.primary_pubkey,
-            profile.ml_dsa_pubkey,
-            profile.phone_stub_hash,
-            profile.registered_at,
-            profile.status,
+    if (accountId !== null && accountId !== undefined) {
+      // When account_id is set, handle FK violation specifically to emit account.agent.link.failed.
+      const agentId = profile.k_local_pubkey;
+      void this.#pool.query(
+        `INSERT INTO agent_profiles
+           (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, account_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (k_local_pubkey) DO NOTHING`,
+        [
+          profile.k_local_pubkey,
+          profile.primary_pubkey,
+          profile.ml_dsa_pubkey,
+          profile.phone_stub_hash,
+          profile.registered_at,
+          profile.status,
+          accountId,
+        ],
+      ).catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        // ACCOUNT-001: FK violation (23503) — account_id not in user_accounts
+        if (this.#isFkViolation(err)) {
+          this.#logger.error("account.agent.link.failed", {
             accountId,
-          ],
-        )
-      : this.#pool.query(
+            agentId,
+            reason,
+            correlationId: undefined,
+          });
+        } else {
+          this.#logger.error("adapter.write.failed", { adapterName: "PgDirectoryStore", reason, tableName: "agent_profiles" });
+        }
+      });
+    } else {
+      this.#fire(
+        this.#pool.query(
           `INSERT INTO agent_profiles
              (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status)
            VALUES ($1,$2,$3,$4,$5,$6)
@@ -526,8 +554,10 @@ export class PgDirectoryStore implements DirectoryStore {
             profile.registered_at,
             profile.status,
           ],
-        );
-    this.#fire(insertQuery, "agent_profiles");
+        ),
+        "agent_profiles",
+      );
+    }
   }
 
   /**

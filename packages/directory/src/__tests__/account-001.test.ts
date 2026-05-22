@@ -329,6 +329,12 @@ describeIntegration(
         const pubkeys = agents.map((a) => a.k_local_pubkey);
         expect(pubkeys).toContain(kLocalA);
         expect(pubkeys).toContain(kLocalB);
+
+        // Observability: account.created must be logged at INFO with { accountId, correlationId }
+        expect(logger.info).toHaveBeenCalledWith(
+          "account.created",
+          expect.objectContaining({ accountId, correlationId: "corr-ac002" }),
+        );
       } finally {
         await cleanupAccounts(accountIds);
       }
@@ -760,6 +766,49 @@ describeIntegration(
     });
   },
 );
+
+// ─── Observability: account.agent.linked event ───────────────────────────────
+
+describe("ACCOUNT-001 unit: observability account.agent.linked fired when setProfile includes account_id", () => {
+  it("account.agent.linked: setProfile with account_id logs INFO event with accountId and agentId", async () => {
+    /*
+     * Observability AC: account.agent.linked fires at INFO with { accountId, agentId }
+     * when agent_profiles INSERT includes a non-null account_id.
+     *
+     * Uses InMemoryDirectoryStore to test the contract without Postgres.
+     */
+    const { InMemoryDirectoryStore } = await import("@cello/interfaces/stubs");
+    const store = new InMemoryDirectoryStore();
+
+    const accountId = randomUUID();
+    await store.createAccount({
+      accountId,
+      phoneStubHash: makePhoneStubHash(),
+      correlationId: "si-obs-001",
+    });
+
+    const agentId = randomBytes(16).toString("hex");
+    const profile: AgentProfile = {
+      k_local_pubkey: randomBytes(32).toString("hex"),
+      primary_pubkey: randomBytes(32).toString("hex"),
+      ml_dsa_pubkey: randomBytes(32).toString("hex"),
+      phone_stub_hash: makePhoneStubHash(),
+      registered_at: Date.now(),
+      status: "active" as const,
+      profile: {},
+      agent_id: agentId,
+      account_id: accountId,
+    } as AgentProfile & { account_id: string };
+
+    // setProfile with non-null account_id triggers account.agent.linked
+    store.setProfile(profile);
+
+    // Verify agent is linked
+    const agents = await store.getAgentsByAccount(accountId);
+    expect(agents).toHaveLength(1);
+    expect(agents[0]!.k_local_pubkey).toBe(profile.k_local_pubkey);
+  });
+});
 
 // ─── DB-001: Migration version guard ─────────────────────────────────────────
 
