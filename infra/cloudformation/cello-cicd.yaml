@@ -390,6 +390,9 @@ Resources:
         Type: LINUX_CONTAINER
         Image: aws/codebuild/standard:7.0
         ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - Name: CELLO_AUDIT_BUCKET
+            Value: cello-audit-logs-dev-us-east-1
       ServiceRole: !GetAtt CodeBuildRole.Arn
 
   RelayBuild:
