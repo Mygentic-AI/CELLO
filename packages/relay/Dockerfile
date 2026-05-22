@@ -50,9 +50,9 @@ FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-slim AS produc
 
 WORKDIR /app
 
-# Install build tools for native addon compilation in production install
+# Install curl (health check) + build tools for native addon compilation
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends python3 make g++ && \
+    apt-get install -y --no-install-recommends curl python3 make g++ && \
     rm -rf /var/lib/apt/lists/*
 
 # Install pnpm for production deps

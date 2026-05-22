@@ -57,6 +57,7 @@ RUN apt-get update && \
 ARG FLYWAY_VERSION=10.21.0
 RUN curl -fsSL https://repo1.maven.org/maven2/org/flywaydb/flyway-commandline/${FLYWAY_VERSION}/flyway-commandline-${FLYWAY_VERSION}-linux-x64.tar.gz \
     | tar -xz -C /opt && \
+    chmod -R a+rX /opt/flyway-${FLYWAY_VERSION} && \
     ln -s /opt/flyway-${FLYWAY_VERSION}/flyway /usr/local/bin/flyway
 
 WORKDIR /app
