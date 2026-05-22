@@ -96,7 +96,7 @@ export class InMemoryDirectoryStore implements DirectoryStore {
       .sort((a, b) => a.registered_at - b.registered_at);
   }
 
-  setProfile(profile: AgentProfile): void {
+  setProfile(profile: AgentProfile, _correlationId?: string): void {
     this.#profiles.set(profile.k_local_pubkey, profile);
     this.#phoneHashIndex.set(profile.phone_stub_hash, profile.k_local_pubkey);
     // ACCOUNT-001: if account_id is set, update the account-agent index

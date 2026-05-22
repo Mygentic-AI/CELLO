@@ -102,8 +102,13 @@ export interface DirectoryStore {
    * Store an AgentProfile. k_local_pubkey is the primary key.
    * Also indexes phone_stub_hash for phone_already_claimed guard.
    * REG-001 SI-002: Only called after successful FROST DKG.
+   *
+   * ACCOUNT-001: correlationId is optional. When the profile includes an account_id,
+   * correlationId is threaded into the account.agent.linked and account.agent.link.failed
+   * log events. M6 callers will populate it; pre-M6 callers pass nothing (undefined is
+   * acceptable).
    */
-  setProfile(profile: AgentProfile): void;
+  setProfile(profile: AgentProfile, correlationId?: string): void;
 
   /**
    * Retrieve a profile by k_local_pubkey hex. Returns undefined if not registered.

@@ -230,13 +230,14 @@ describeIntegration(
         expect(hasPhoneUniqueConstraint).toBe(true);
 
         // 5. Policies: insert_only + select_all for cello_service
-        await client.query("SET ROLE cello_service");
+        // Note: pg_catalog.pg_policies is readable by all roles regardless of SET ROLE —
+        // we query as the superuser (superPool), which already has full access.
+        // The actual RLS enforcement check is done via the service pool privilege test below.
         const policyResult = await client.query<{ policyname: string }>(
           `SELECT policyname FROM pg_catalog.pg_policies
            WHERE tablename = 'user_accounts'
            ORDER BY policyname`,
         );
-        await client.query("RESET ROLE");
         const policyNames = policyResult.rows.map((r) => r.policyname);
         expect(policyNames).toHaveLength(2);
         expect(policyNames).toContain("insert_only");
@@ -498,6 +499,10 @@ describeIntegration(
         // Fresh verifier instance — no prior in-memory state
         const verifyLogger = makeLogger();
         const verifyStore = new PgDirectoryStore(servicePool, verifyLogger);
+        // Note: verifyChain covers the full user_accounts table (all rows inserted by all
+        // test runs), not just the two rows inserted above. This is correct because all
+        // rows in user_accounts are inserted via insertWithChain — no row can exist that
+        // was inserted outside the chain mechanism. Chain validity holds globally.
         const result = await verifyStore.verifyChain("user_accounts");
         expect(result.valid).toBe(true);
 
@@ -769,46 +774,142 @@ describeIntegration(
 
 // ─── Observability: account.agent.linked event ───────────────────────────────
 
-describe("ACCOUNT-001 unit: observability account.agent.linked fired when setProfile includes account_id", () => {
-  it("account.agent.linked: setProfile with account_id logs INFO event with accountId and agentId", async () => {
-    /*
-     * Observability AC: account.agent.linked fires at INFO with { accountId, agentId }
-     * when agent_profiles INSERT includes a non-null account_id.
-     *
-     * Uses InMemoryDirectoryStore to test the contract without Postgres.
-     */
-    const { InMemoryDirectoryStore } = await import("@cello/interfaces/stubs");
-    const store = new InMemoryDirectoryStore();
+describeIntegration(
+  isLocal
+    ? "ACCOUNT-001 integration: observability account.agent.linked fired by setProfile with account_id"
+    : "ACCOUNT-001 integration: observability account.agent.linked (SKIPPED: CELLO_ENV != local)",
+  () => {
+    it("account.agent.linked: setProfile with account_id logs INFO event with accountId and agentId", async () => {
+      /*
+       * Observability AC: account.agent.linked fires at INFO with { accountId, agentId }
+       * when agent_profiles INSERT includes a non-null account_id.
+       *
+       * Uses PgDirectoryStore with a vi.fn() mock logger against a real Postgres instance.
+       * The event fires asynchronously (fire-and-forget after INSERT), so we wait briefly
+       * for the promise chain to resolve before asserting.
+       *
+       * account.agent.linked must fire ONLY after the INSERT confirms success (MEDIUM finding #3).
+       */
+      const accountId = randomUUID();
+      const logger = makeLogger();
+      const store = new PgDirectoryStore(servicePool, logger);
 
-    const accountId = randomUUID();
-    await store.createAccount({
-      accountId,
-      phoneStubHash: makePhoneStubHash(),
-      correlationId: "si-obs-001",
+      try {
+        // Create the account so the FK constraint is satisfied
+        await store.createAccount({
+          accountId,
+          phoneStubHash: makePhoneStubHash(),
+          correlationId: "obs-linked-corr",
+        });
+
+        const agentId = randomBytes(16).toString("hex");
+        const profile: AgentProfile = {
+          k_local_pubkey: randomBytes(32).toString("hex"),
+          primary_pubkey: randomBytes(32).toString("hex"),
+          ml_dsa_pubkey: randomBytes(32).toString("hex"),
+          phone_stub_hash: makePhoneStubHash(),
+          registered_at: Date.now(),
+          status: "active" as const,
+          profile: {},
+          agent_id: agentId,
+          account_id: accountId,
+        } as AgentProfile & { account_id: string };
+
+        // setProfile with non-null account_id — INSERT succeeds, log fires on success branch
+        store.setProfile(profile, "obs-linked-corr");
+
+        // Wait for the fire-and-forget INSERT + .then() logger call to complete
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+
+        // account.agent.linked must have been logged at INFO
+        expect(logger.info).toHaveBeenCalledWith(
+          "account.agent.linked",
+          expect.objectContaining({
+            accountId,
+            agentId: profile.k_local_pubkey,
+            correlationId: "obs-linked-corr",
+          }),
+        );
+
+        // account.agent.link.failed must NOT have been logged (INSERT succeeded)
+        expect(logger.error).not.toHaveBeenCalledWith(
+          "account.agent.link.failed",
+          expect.anything(),
+        );
+      } finally {
+        await superPool.query(
+          "DELETE FROM agent_profiles WHERE account_id = $1",
+          [accountId],
+        ).catch(() => { /* ignore */ });
+        await superPool.query(
+          "DELETE FROM user_accounts WHERE account_id = $1",
+          [accountId],
+        ).catch(() => { /* ignore */ });
+      }
     });
+  },
+);
 
-    const agentId = randomBytes(16).toString("hex");
-    const profile: AgentProfile = {
-      k_local_pubkey: randomBytes(32).toString("hex"),
-      primary_pubkey: randomBytes(32).toString("hex"),
-      ml_dsa_pubkey: randomBytes(32).toString("hex"),
-      phone_stub_hash: makePhoneStubHash(),
-      registered_at: Date.now(),
-      status: "active" as const,
-      profile: {},
-      agent_id: agentId,
-      account_id: accountId,
-    } as AgentProfile & { account_id: string };
+// ─── Observability: account.agent.link.failed event ─────────────────────────
 
-    // setProfile with non-null account_id triggers account.agent.linked
-    store.setProfile(profile);
+describeIntegration(
+  isLocal
+    ? "ACCOUNT-001 integration: observability account.agent.link.failed fired on FK violation"
+    : "ACCOUNT-001 integration: observability account.agent.link.failed (SKIPPED: CELLO_ENV != local)",
+  () => {
+    it("account.agent.link.failed: setProfile with non-existent account_id logs ERROR with accountId, agentId, reason", async () => {
+      /*
+       * Observability AC: account.agent.link.failed fires at ERROR with { accountId, agentId, reason }
+       * when agent_profiles INSERT fails with SQLSTATE 23503 (FK violation) because account_id
+       * does not exist in user_accounts.
+       *
+       * Adversarial condition: setProfile with a well-formed UUID account_id that was never
+       * inserted into user_accounts — the DB FK constraint fires and the error branch logs
+       * account.agent.link.failed.
+       *
+       * Uses PgDirectoryStore with a vi.fn() mock logger against a real Postgres instance.
+       */
+      const nonExistentAccountId = randomUUID(); // never inserted into user_accounts
+      const logger = makeLogger();
+      const store = new PgDirectoryStore(servicePool, logger);
 
-    // Verify agent is linked
-    const agents = await store.getAgentsByAccount(accountId);
-    expect(agents).toHaveLength(1);
-    expect(agents[0]!.k_local_pubkey).toBe(profile.k_local_pubkey);
-  });
-});
+      const profile: AgentProfile = {
+        k_local_pubkey: randomBytes(32).toString("hex"),
+        primary_pubkey: randomBytes(32).toString("hex"),
+        ml_dsa_pubkey: randomBytes(32).toString("hex"),
+        phone_stub_hash: makePhoneStubHash(),
+        registered_at: Date.now(),
+        status: "active" as const,
+        profile: {},
+        agent_id: randomBytes(16).toString("hex"),
+        account_id: nonExistentAccountId,
+      } as AgentProfile & { account_id: string };
+
+      // setProfile triggers INSERT which fails with FK violation (23503)
+      store.setProfile(profile, "obs-link-failed-corr");
+
+      // Wait for the fire-and-forget INSERT + .catch() logger call to complete
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+
+      // account.agent.link.failed must have been logged at ERROR
+      expect(logger.error).toHaveBeenCalledWith(
+        "account.agent.link.failed",
+        expect.objectContaining({
+          accountId: nonExistentAccountId,
+          agentId: profile.k_local_pubkey,
+          reason: expect.any(String),
+          correlationId: "obs-link-failed-corr",
+        }),
+      );
+
+      // account.agent.linked must NOT have been logged (INSERT failed)
+      expect(logger.info).not.toHaveBeenCalledWith(
+        "account.agent.linked",
+        expect.anything(),
+      );
+    });
+  },
+);
 
 // ─── DB-001: Migration version guard ─────────────────────────────────────────
 

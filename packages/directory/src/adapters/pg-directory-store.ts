@@ -489,27 +489,24 @@ export class PgDirectoryStore implements DirectoryStore {
 
   // ─── Agent profiles ───────────────────────────────────────────────────────
 
-  setProfile(profile: AgentProfile): void {
+  setProfile(profile: AgentProfile, correlationId?: string): void {
     // Cache by both keys immediately — connection pre-check uses k_local_pubkey,
     // but indexing by primary_pubkey too means either key works robustly.
     this.#profilesByLocalKey.set(profile.k_local_pubkey, profile);
     this.#profilesByPrimaryKey.set(profile.primary_pubkey, profile);
 
-    // ACCOUNT-001: if account_id is provided, log account.agent.linked and include it in INSERT.
-    // correlationId is not available on the setProfile signature (interface constraint) — logged as undefined.
+    // ACCOUNT-001: if account_id is provided, fire INSERT with account_id and emit
+    // account.agent.linked only after the INSERT confirms success (MEDIUM finding #3:
+    // log must not fire before the INSERT completes — a false positive log on FK failure
+    // would emit "linked" followed by "link.failed" for the same operation, which is
+    // contradictory and confusing for operators).
     const accountId = (profile as AgentProfile & { account_id?: string | null }).account_id ?? null;
-    if (accountId !== null && accountId !== undefined) {
-      this.#logger.info("account.agent.linked", {
-        accountId,
-        agentId: profile.k_local_pubkey,
-        correlationId: undefined,
-      });
-    }
 
     // Persist to Postgres (V9 migration adds agent_profiles table;
     // V22 migration adds account_id nullable column).
     if (accountId !== null && accountId !== undefined) {
       // When account_id is set, handle FK violation specifically to emit account.agent.link.failed.
+      // account.agent.linked fires ONLY on INSERT success (after the INSERT resolves).
       const agentId = profile.k_local_pubkey;
       void this.#pool.query(
         `INSERT INTO agent_profiles
@@ -525,7 +522,15 @@ export class PgDirectoryStore implements DirectoryStore {
           profile.status,
           accountId,
         ],
-      ).catch((err: unknown) => {
+      ).then(() => {
+        // ACCOUNT-001: log account.agent.linked only after INSERT confirms success.
+        // correlationId is threaded from M6 callers; undefined for pre-M6 usage.
+        this.#logger.info("account.agent.linked", {
+          accountId,
+          agentId,
+          correlationId,
+        });
+      }).catch((err: unknown) => {
         const reason = err instanceof Error ? err.message : String(err);
         // ACCOUNT-001: FK violation (23503) — account_id not in user_accounts
         if (this.#isFkViolation(err)) {
@@ -533,7 +538,7 @@ export class PgDirectoryStore implements DirectoryStore {
             accountId,
             agentId,
             reason,
-            correlationId: undefined,
+            correlationId,
           });
         } else {
           this.#logger.error("adapter.write.failed", { adapterName: "PgDirectoryStore", reason, tableName: "agent_profiles" });
