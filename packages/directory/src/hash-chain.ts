@@ -48,6 +48,7 @@ const ALWAYS_EXCLUDED_FROM_CHAIN = new Set([
   "recorded_at",
   "last_run_at",
   "applied_at",
+  "signed_at",
 ]);
 
 /**
@@ -206,6 +207,8 @@ export function verifyChain(
  * These are the "active" tables with full column definitions.
  *
  * PERSIST-020: connections added — established connection records are tamper-evident.
+ * FEDERATION-001: sessions added — session rows are hash-chained; ownership enforcement
+ *   is the application-layer guard (see PgDirectoryStore.writeSession).
  */
 export const HASH_CHAINED_TABLES = [
   // agent_registrations removed — table dropped in V16; agent_profiles (V9) is the authoritative agent identity table
@@ -216,6 +219,7 @@ export const HASH_CHAINED_TABLES = [
   "notification_events",
   "seal_notarizations",
   "connections",
+  "sessions",
 ] as const;
 
 export type HashChainedTable = (typeof HASH_CHAINED_TABLES)[number];

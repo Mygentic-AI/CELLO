@@ -148,4 +148,45 @@ export interface DirectoryStore {
    * (SI-001). correlationId appears in queue.pending_connection_requests.drained event.
    */
   dequeuePendingConnectionRequests(targetPubkey: string, correlationId: string): Promise<PendingConnectionRequest[]>;
+
+  // ─── FEDERATION-001: Session ownership methods ───────────────────────────
+
+  /**
+   * Write a sessions row with owning_node_id set to this node's node_id.
+   *
+   * FEDERATION-001 AC-009: inserts via the hash chain mechanism; the sessions
+   * table is append-only and hash-chained. SI-001: the owning node is the sole
+   * writer — callers pass the owning node's node_id explicitly so application code
+   * cannot write for a foreign session.
+   *
+   * Throws if a sessions row for this session_id already exists (unique constraint).
+   */
+  writeSession(sessionId: string, owningNodeId: string): Promise<void>;
+
+  /**
+   * Retrieve the owning_node_id for a session_id.
+   *
+   * Returns undefined if no sessions row exists for this session_id.
+   * Does not throw on absence.
+   */
+  getSessionOwner(sessionId: string): Promise<string | undefined>;
+
+  /**
+   * Verify a single replicated row's chain hash.
+   *
+   * FEDERATION-001 AC-005/AC-006: called by the receiving node when a row arrives
+   * via logical replication. Computes SHA-256(record_contents || previous_chain_hash)
+   * and compares to the row's chain_hash field.
+   *
+   * On match: logs federation.replication.verified at INFO with
+   *   { nodeId, sessionId, leafIndex, chainHash, durationMs }.
+   * On mismatch: logs federation.replication.chain_hash_mismatch at ERROR with
+   *   { nodeId, sessionId, leafIndex, expectedHash, receivedHash }, then throws so the
+   *   caller can halt replication for this session's rows pending operator investigation.
+   *
+   * @param tableName - The name of the hash-chained table the row belongs to.
+   * @param row - The row as returned by the pg driver (field values are strings/numbers/etc).
+   * @throws if the chain hash does not match (caller must halt replication on throw)
+   */
+  verifyReplicatedRow(tableName: string, row: Record<string, unknown>): Promise<void>;
 }

@@ -7,6 +7,9 @@
  *
  * PERSIST-021: BIGINT_COLUMNS and STORE_TABLES are exported for use by the static analysis
  * gate tests (AC-005 and AC-006) and by the deserialization path (SI-001).
+ *
+ * FEDERATION-001: sessions table added to BIGINT_COLUMNS and STORE_TABLES; writeSession,
+ * getSessionOwner, verifyReplicatedRow, and startup pg-type verification added.
  */
 
 import pg from "pg";
@@ -72,8 +75,9 @@ export const BIGINT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   conversation_proof_mmr_nodes: ["id", "mmr_position"],
   directory_checkpoints: ["id", "mmr_leaf_count"],
   // DEPLOY-001: directory_nodes table (V17 migration)
-  // sessions table and sessions.id are added to BIGINT_COLUMNS in FEDERATION-001 (V18 migration)
   directory_nodes: ["id"],
+  // FEDERATION-001: sessions table (V18 migration)
+  sessions: ["id"],
 } as const;
 
 /**
@@ -107,8 +111,9 @@ export const STORE_TABLES = [
   "conversation_proof_leaves",
   "conversation_proof_mmr_nodes",
   "directory_checkpoints",
-  // sessions added to STORE_TABLES in FEDERATION-001 (V18 migration)
   "directory_nodes",
+  // FEDERATION-001: sessions table added (V18 migration)
+  "sessions",
 ] as const;
 
 export type StoreTables = (typeof STORE_TABLES)[number];
@@ -153,6 +158,8 @@ export function deserializeRow<T extends Record<string, unknown>>(
 export class PgDirectoryStore implements DirectoryStore {
   readonly #pool: pg.Pool;
   readonly #logger: Logger;
+  readonly #nodeId: string;
+  readonly #region: string;
   // In-memory profile cache — two indexes for the two lookup patterns:
   //   #profilesByLocalKey:   k_local_pubkey (own_pubkey) → profile
   //   #profilesByPrimaryKey: primary_pubkey (FROST group key) → profile
@@ -162,10 +169,66 @@ export class PgDirectoryStore implements DirectoryStore {
   readonly #profilesByLocalKey = new Map<string, AgentProfile>();
   readonly #profilesByPrimaryKey = new Map<string, AgentProfile>();
 
-  constructor(pool: pg.Pool, logger: Logger) {
+  /**
+   * Pseudocode for constructor (FEDERATION-001 AC-011):
+   *   1. Call configurePgTypes() — idempotent, safe to call multiple times.
+   *   2. Store pool, logger, nodeId, region.
+   *   3. (Async startup verification — call verifyPgTypes() after construction
+   *      from the composition root or use the static factory method.)
+   *
+   * The startup type-parser verification (AC-011) is performed by verifyPgTypes()
+   * which must be called once after construction. The constructor itself is sync
+   * to preserve compatibility with existing call sites.
+   *
+   * @param pool - The pg.Pool instance for this node
+   * @param logger - Injected logger (domain.noun.verb taxonomy)
+   * @param nodeId - This node's node_id (used for ownership checks and observability)
+   * @param region - This node's region (used for observability events)
+   */
+  constructor(pool: pg.Pool, logger: Logger, nodeId = "local", region = "local") {
     configurePgTypes();
     this.#pool = pool;
     this.#logger = logger;
+    this.#nodeId = nodeId;
+    this.#region = region;
+  }
+
+  /**
+   * FEDERATION-001 AC-011 / SI-004: Verify pg type parsers are configured correctly.
+   *
+   * Pseudocode:
+   *   1. Query a known TIMESTAMPTZ column (created_at from directory_nodes or any table).
+   *      Use a SELECT that returns a row with TIMESTAMPTZ to exercise the type parser.
+   *   2. If the returned value is a string (not a Date object): type parsers are correct.
+   *      Log db.type-parsers.verified at INFO with { nodeId, region }.
+   *   3. If the returned value is a Date object: type parsers are not configured.
+   *      Log db.type-parsers.verification.failed at ERROR with { nodeId, region }.
+   *      Throw an error to prevent startup.
+   *
+   * Must be called once after construction from the composition root.
+   * configurePgTypes() is called in the constructor — this method verifies the result.
+   */
+  async verifyPgTypes(): Promise<void> {
+    // AC-011: query a known DATE literal to verify DATE type parsers are returning strings.
+    // The multi-region chain hash risk is specifically with DATE columns — a DATE stored as
+    // '2026-01-01' reads back as a different timestamp in a different timezone if type
+    // parsers are not configured. SELECT '2026-01-01'::date requires no table to exist.
+    const result = await this.#pool.query<{ d: unknown }>("SELECT '2026-01-01'::date AS d");
+    const value = result.rows[0]?.d;
+    if (typeof value !== "string") {
+      this.#logger.error("db.type-parsers.verification.failed", {
+        nodeId: this.#nodeId,
+        region: this.#region,
+      });
+      throw new Error(
+        `PgDirectoryStore: pg type parsers not configured — DATE literal returned ${typeof value}, expected string. ` +
+        `configurePgTypes() must be called before any Pool is created.`,
+      );
+    }
+    this.#logger.info("db.type-parsers.verified", {
+      nodeId: this.#nodeId,
+      region: this.#region,
+    });
   }
 
   // PERSIST-016 observability: tableName is required so operators can distinguish a
@@ -843,5 +906,126 @@ export class PgDirectoryStore implements DirectoryStore {
     };
   }
 
-  // insertSession / getSession deferred to FEDERATION-001 (V18 migration creates sessions table)
+  // ─── FEDERATION-001: Session ownership ───────────────────────────────────
+
+  /**
+   * Write a sessions row via the hash chain mechanism.
+   *
+   * SI-001: application-layer ownership pre-check. If the session_id already exists
+   * in the DB and is owned by a different node, this method throws before attempting
+   * any hash chain write. This prevents a non-owning node from hijacking a session
+   * that belongs to another node (even though the unique constraint also prevents a
+   * duplicate INSERT, the application-layer check produces a clear ownership-violation
+   * error rather than a generic constraint error).
+   *
+   * @throws OwnershipViolationError if session_id already exists with a different owning_node_id
+   * @throws on DB unique constraint violation if session_id already exists (SQLSTATE 23505)
+   */
+  async writeSession(sessionId: string, owningNodeId: string): Promise<void> {
+    // SI-001: check existing ownership before any chain write
+    const existing = await this.#pool.query<{ owning_node_id: string }>(
+      `SELECT owning_node_id FROM sessions WHERE session_id = $1`,
+      [sessionId],
+    );
+    if (existing.rows.length > 0 && existing.rows[0]!.owning_node_id !== this.#nodeId) {
+      throw new Error(
+        `writeSession: ownership violation — session '${sessionId}' is owned by '${existing.rows[0]!.owning_node_id}', not '${this.#nodeId}' (SI-001)`,
+      );
+    }
+    const record: Record<string, unknown> = {
+      session_id: sessionId,
+      owning_node_id: owningNodeId,
+    };
+    const columns = ["session_id", "owning_node_id", "chain_hash"];
+    const values: unknown[] = [sessionId, owningNodeId, ""];
+    const chainHashIndex = 2;
+    await this.insertWithChain("sessions", record, columns, values, chainHashIndex);
+  }
+
+  /**
+   * Retrieve the owning_node_id for a session_id.
+   *
+   * Returns undefined if no sessions row exists for this session_id.
+   * Does not throw on absence.
+   */
+  async getSessionOwner(sessionId: string): Promise<string | undefined> {
+    const result = await this.#pool.query<{ owning_node_id: string }>(
+      `SELECT owning_node_id FROM sessions WHERE session_id = $1`,
+      [sessionId],
+    );
+    return result.rows[0]?.owning_node_id;
+  }
+
+  /**
+   * Verify a single replicated row's chain hash.
+   *
+   * FEDERATION-001 AC-005/AC-006:
+   *
+   * Pseudocode:
+   *   1. Record start time for durationMs.
+   *   2. Fetch the previous chain hash from the table (row with the highest id < this row's id).
+   *      If none exists, previousHash = CHAIN_GENESIS.
+   *   3. Deserialize the row (BIGINT columns to numbers via deserializeRow).
+   *   4. Compute expectedHash = SHA-256(serialize(deserializedRow) || previousHash).
+   *   5. Compare expectedHash to row["chain_hash"].
+   *   6. On match: log federation.replication.verified at INFO with
+   *      { nodeId, sessionId, leafIndex, chainHash, durationMs }.
+   *      sessionId: row["session_id"] cast to string (UUID text).
+   *      leafIndex: row["id"] cast to number (the row's BIGSERIAL pk — used as leaf index).
+   *   7. On mismatch: log federation.replication.chain_hash_mismatch at ERROR with
+   *      { nodeId, sessionId, leafIndex, expectedHash, receivedHash }.
+   *
+   * @param tableName - The hash-chained table the row belongs to
+   * @param row - The row as returned by the pg driver
+   */
+  async verifyReplicatedRow(tableName: string, row: Record<string, unknown>): Promise<void> {
+    // Runtime guard: tableName flows into SQL via template literal — verify it is in
+    // the known-safe set. HASH_CHAINED_TABLES is the definitive safe list.
+    if (!(HASH_CHAINED_TABLES as readonly string[]).includes(tableName)) {
+      throw new Error(`verifyReplicatedRow: unknown table '${tableName}'`);
+    }
+    const startMs = Date.now();
+    const deserialized = deserializeRow(tableName, row);
+    // Explicit coercion: deserializeRow applies parseInt only for tables declared in BIGINT_COLUMNS.
+    // For robustness, ensure leafIndex is always a number regardless of pg driver output type.
+    const rawId = deserialized["id"];
+    const leafIndex = typeof rawId === "string" ? parseInt(rawId, 10) : (rawId as number);
+    // session_id is a UUID string for tables that have it; use rowId label for tables without it.
+    const sessionId = (deserialized["session_id"] as string | undefined) ?? `${tableName}:${leafIndex}`;
+    const receivedHash = deserialized["chain_hash"] as string;
+
+    // Fetch the previous row's chain_hash — the row with id = this row's id - 1 (or genesis).
+    const prevResult = await this.#pool.query<{ chain_hash: string }>(
+      `SELECT chain_hash FROM ${tableName} WHERE id < $1 ORDER BY id DESC LIMIT 1`,
+      [leafIndex],
+    );
+    const previousHash = prevResult.rows[0]?.chain_hash ?? CHAIN_GENESIS;
+
+    // Compute expected hash from the row's serializable content and the previous hash.
+    const serialized = serializeRecord(deserialized, tableName);
+    const expectedHash = computeChainHash(serialized, previousHash);
+    const durationMs = Date.now() - startMs;
+
+    if (expectedHash === receivedHash) {
+      this.#logger.info("federation.replication.verified", {
+        nodeId: this.#nodeId,
+        sessionId,
+        leafIndex,
+        chainHash: receivedHash,
+        durationMs,
+      });
+    } else {
+      this.#logger.error("federation.replication.chain_hash_mismatch", {
+        nodeId: this.#nodeId,
+        sessionId,
+        leafIndex,
+        expectedHash,
+        receivedHash,
+      });
+      // Throw so callers can halt replication for this session's rows pending operator investigation.
+      throw new Error(
+        `federation.replication.chain_hash_mismatch: table='${tableName}' leafIndex=${leafIndex} expected=${expectedHash} received=${receivedHash}`,
+      );
+    }
+  }
 }
