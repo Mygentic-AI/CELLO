@@ -21,7 +21,7 @@ RUN apt-get update && \
 RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
 
 # Copy workspace root files for pnpm workspace resolution
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json tsconfig.json ./
 COPY packages/interfaces/package.json packages/interfaces/
 COPY packages/protocol-types/package.json packages/protocol-types/
 COPY packages/crypto/package.json packages/crypto/

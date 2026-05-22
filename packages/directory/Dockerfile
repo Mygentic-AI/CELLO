@@ -20,7 +20,7 @@ RUN apt-get update && \
 RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
 
 # Copy workspace root files for pnpm workspace resolution
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json tsconfig.json ./
 COPY packages/interfaces/package.json packages/interfaces/
 COPY packages/protocol-types/package.json packages/protocol-types/
 COPY packages/crypto/package.json packages/crypto/
@@ -53,7 +53,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Flyway CLI
-ARG FLYWAY_VERSION=11.13.2
+ARG FLYWAY_VERSION=10.21.0
 RUN curl -fsSL https://repo1.maven.org/maven2/org/flywaydb/flyway-commandline/${FLYWAY_VERSION}/flyway-commandline-${FLYWAY_VERSION}-linux-x64.tar.gz \
     | tar -xz -C /opt && \
     ln -s /opt/flyway-${FLYWAY_VERSION}/flyway /usr/local/bin/flyway
