@@ -179,11 +179,12 @@ for REGION in "${REGIONS[@]}"; do
     REPLICATION_SECRET_ARNS["${REGION}"]="${EXISTING_SECRET}"
 
     # Retrieve existing password (never echo it)
+    # get-secret-value returns JSON {"username":"...","password":"..."} — parse .password
     REPL_PASS=$(aws secretsmanager get-secret-value \
       --region "${SECRET_REGION}" \
       --secret-id "${SECRET_NAME}" \
       --query "SecretString" \
-      --output text 2>/dev/null || echo "")
+      --output text 2>/dev/null | python3 -c "import sys, json; d=json.load(sys.stdin); print(d['password'])" 2>/dev/null || echo "")
 
     if [[ -z "${REPL_PASS}" ]]; then
       log_error "infra.replication.setup.credentials_mismatch" "{ \"region\": \"${REGION}\", \"secretArn\": \"${EXISTING_SECRET}\" }"
@@ -220,45 +221,6 @@ for REGION in "${REGIONS[@]}"; do
     echo "  Created secret ${SECRET_NAME} in ${REGION} (ARN: ${NEW_SECRET_ARN})"
   fi
 done
-
-# ── Helper: run psql via ECS Exec ────────────────────────────────────────────
-# Runs a psql command on the ECS task in the given region using ECS Exec.
-# The command is passed as a string and executed inside the container.
-#
-# Usage: run_psql_on_node REGION SQL_COMMAND
-# Returns the psql output.
-
-run_psql_on_node() {
-  local region="$1"
-  local sql="$2"
-  local task_id="${TASK_IDS[${region}]}"
-  local task_arn="${TASK_ARNS[${region}]}"
-
-  aws ecs execute-command \
-    --region "${region}" \
-    --cluster "${ECS_CLUSTER_NAME}" \
-    --task "${task_arn}" \
-    --container "cello-directory" \
-    --command "psql \${DATABASE_URL} -c \"${sql}\"" \
-    --interactive \
-    2>/dev/null || true
-}
-
-# ── Helper: get RDS DSN from the ECS task's environment ─────────────────────
-# Reads the DATABASE_URL from the running task to build subscription connection strings.
-# We extract the host/port from the task's environment variables via aws ecs describe-tasks.
-
-get_rds_host() {
-  local region="$1"
-  local task_arn="${TASK_ARNS[${region}]}"
-
-  aws ecs describe-tasks \
-    --region "${region}" \
-    --cluster "${ECS_CLUSTER_NAME}" \
-    --tasks "${task_arn}" \
-    --query "tasks[0].containers[0].environment[?name=='RDS_ENDPOINT'].value" \
-    --output text 2>/dev/null || echo ""
-}
 
 # ── Step 3: Create replication user and publication on each node ───────────────
 
@@ -397,9 +359,11 @@ while true; do
 
   STREAMING_SLOTS=()
 
-  # For each source region, check pg_stat_replication
+  # For each source region, query pg_replication_slots directly for active cello_ slots.
+  # application_name in pg_stat_replication is the subscription name (not the target region),
+  # so we query pg_replication_slots where slot_name LIKE 'cello_%' AND active = 't'.
   for SOURCE_REGION in "${REGIONS[@]}"; do
-    SLOT_QUERY="SELECT application_name, state FROM pg_stat_replication WHERE state = 'streaming';"
+    SLOT_QUERY="SELECT slot_name FROM pg_replication_slots WHERE slot_name LIKE 'cello_%' AND active = 't';"
 
     STAT_OUTPUT=$(aws ecs execute-command \
       --region "${SOURCE_REGION}" \
@@ -410,17 +374,15 @@ while true; do
       --interactive \
       2>/dev/null || echo "")
 
-    # Parse streaming slots from this node
+    # Parse active slot names from this node's pg_replication_slots output
     while IFS= read -r line; do
       if [[ -n "${line}" && "${line}" != "--"* ]]; then
-        # Each streaming subscription appears as the slot name in application_name
-        APP_NAME=$(echo "${line}" | cut -d'|' -f1 | tr -d ' ')
-        if [[ -n "${APP_NAME}" ]]; then
-          SLOT_NAME_FROM_STAT="cello_${ENVIRONMENT}_${SOURCE_REGION}_${APP_NAME}"
-          STREAMING_SLOTS+=("${SOURCE_REGION}:${SLOT_NAME_FROM_STAT}")
+        SLOT_NAME_FROM_SLOTS=$(echo "${line}" | tr -d ' ')
+        if [[ -n "${SLOT_NAME_FROM_SLOTS}" ]]; then
+          STREAMING_SLOTS+=("${SOURCE_REGION}:${SLOT_NAME_FROM_SLOTS}")
 
           # Log per-slot streaming event
-          log_info "infra.replication.setup.slot_streaming" "{ \"slotName\": \"${SLOT_NAME_FROM_STAT}\", \"region\": \"${SOURCE_REGION}\", \"elapsedSeconds\": ${ELAPSED} }"
+          log_info "infra.replication.setup.slot_streaming" "{ \"slotName\": \"${SLOT_NAME_FROM_SLOTS}\", \"region\": \"${SOURCE_REGION}\", \"elapsedSeconds\": ${ELAPSED} }"
         fi
       fi
     done <<< "${STAT_OUTPUT}"

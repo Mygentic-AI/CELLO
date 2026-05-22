@@ -106,24 +106,25 @@ describe("FEDERATION-001A: AC-004 production confirmation gate", () => {
   it("AC-004: non-YES input causes exit 1 (subprocess test)", () => {
     // Run the script with ENVIRONMENT=production and provide bad input
     // Use echo to pipe "NO" as stdin — the script must exit 1
+    // The abort message goes to stderr — redirect 2>&1 to capture both streams.
     let exitCode = 0;
-    let output = "";
+    let combined = "";
     try {
-      output = execSync(
-        `echo "NO" | bash "${SETUP_REPLICATION_SCRIPT}" production us-east-1 eu-central-1 ap-northeast-1`,
+      combined = execSync(
+        `echo "NO" | bash "${SETUP_REPLICATION_SCRIPT}" production us-east-1 eu-central-1 ap-northeast-1 2>&1`,
         { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
       );
       exitCode = 0;
     } catch (err: unknown) {
       const execError = err as { status?: number; stdout?: string; stderr?: string };
       exitCode = execError.status ?? 1;
-      output = execError.stdout ?? "";
+      combined = (execError.stdout ?? "") + (execError.stderr ?? "");
     }
 
     expect(exitCode).toBe(1);
-    // No AWS or psql commands should have run — we just get the abort message
-    expect(output).not.toContain("aws ecs");
-    expect(output).not.toContain("psql");
+    // The abort message must be present — confirming the exit was from the confirmation
+    // gate, not from a later failure (e.g. missing AWS credentials).
+    expect(combined).toContain("Aborted. No replication setup was performed.");
   });
 
   it("AC-004: YES input passes the confirmation gate (subprocess test — exits with non-auth error, not confirmation failure)", () => {
@@ -553,5 +554,30 @@ describe.skip("FEDERATION-001A integration: DB-001 — slot_not_streaming timeou
   // Requires: live ECS + RDS in a state where the subscription exists but won't stream.
   it("DB-001: slot_not_streaming timeout causes exit 1 with error log", () => {
     throw new Error("Deferred — requires live AWS infrastructure in degraded state");
+  });
+});
+
+describe.skip("FEDERATION-001A e2e: SI-002 adversarial — tampered row rejected by replication (deferred to CELLO-FEDERATION-E2E-001)", () => {
+  // Deferred to CELLO-FEDERATION-E2E-001 — requires multi-region infrastructure.
+  //
+  // Adversarial condition: a row in agent_profiles is directly modified at the
+  // database level on one node (bypassing application logic) such that it violates
+  // the hash chain. The modified row must NOT be replicated to peer nodes — or if
+  // replicated, the hash chain verification on peer nodes must reject the row.
+  //
+  // SI-002 invariant: slot names are deterministic — cello_{env}_{source}_{target}.
+  // A tampered replica cannot introduce a forged slot name that would cause the
+  // polling loop to accept a bogus "streaming" status.
+  //
+  // Test plan (live infrastructure required):
+  //   1. Run setup-replication.sh to establish all 6 streaming slots.
+  //   2. Directly UPDATE an agent_profiles row on one source node, altering prev_hash.
+  //   3. Verify that peer nodes detect the hash chain violation and log
+  //      directory.hashchain.violation at ERROR with { region, agentId, detectedAt }.
+  //   4. Verify the tampered row is not silently accepted.
+  it("SI-002: tampered row rejected — hash chain violation detected on peer nodes", () => {
+    throw new Error(
+      "Deferred to CELLO-FEDERATION-E2E-001 — requires multi-region infrastructure",
+    );
   });
 });
