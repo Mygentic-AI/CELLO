@@ -45,7 +45,7 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "Flyway migrations V20 and V21 have been applied to a clean database"
+    given: "Flyway migrations V21 and V22 have been applied to a clean database"
     when: "the schema is inspected via information_schema"
     then: "user_accounts table exists with columns account_id (UUID PK), phone_stub_hash
       (TEXT UNIQUE NOT NULL), email_stub_hash (TEXT), created_at (TIMESTAMPTZ DEFAULT now()),
@@ -144,7 +144,7 @@ security_invariants:
 # ─── Degraded Behavior ──────────────────────────────────────
 degraded_behavior:
   - id: DB-001
-    condition: "While the V20/V21 migrations have not yet been applied (e.g. partial
+    condition: "While the V21/V22 migrations have not yet been applied (e.g. partial
       deployment where schema is behind)"
     fallback: "the directory shall fail at startup with migration.out.of.date logged
       at ERROR with { currentVersion, requiredVersion }; no request is served until

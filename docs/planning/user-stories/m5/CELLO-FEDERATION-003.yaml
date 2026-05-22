@@ -64,7 +64,7 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "The V18 relay registration schema migration has been applied"
+    given: "The V19 relay registration schema migration has been applied"
     when: "the relay_registrations table is inspected"
     then: "the table has columns: id BIGSERIAL PRIMARY KEY,
       relay_id TEXT NOT NULL UNIQUE, public_key_hex TEXT NOT NULL,
@@ -154,12 +154,12 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-008-idempotency
-    given: "The V18 relay registration schema migration has been applied
-      once to a database that already has V1–V17 applied"
+    given: "The V19 relay registration schema migration has been applied
+      once to a database that already has V1–V18 applied"
     when: "flyway migrate is run a second time against the same database"
     then: "flyway exits 0 with no new rows in flyway_schema_history;
       the CREATE TABLE for relay_registrations uses IF NOT EXISTS;
-      running V18 twice is safe — verified by applying V18 twice and
+      running V19 twice is safe — verified by applying V19 twice and
       asserting flyway_schema_history row count does not change on the
       second run"
     test_type: integration

@@ -60,7 +60,7 @@ acceptance_criteria:
     given: "No pending_notifications table exists in M4 migrations
       (PERSIST-015 described it as a future M5 table — it was not
       created in any M4 migration file)"
-    when: "the V19 migration is applied"
+    when: "the V20 migration is applied"
     then: "the pending_notifications table is created with columns:
       notification_id UUID NOT NULL UNIQUE, recipient_agent_id TEXT
       NOT NULL, notification_type TEXT NOT NULL, payload JSONB NOT NULL,
@@ -152,13 +152,13 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-008-idempotency
-    given: "The V19 pending_notifications schema migration has been
-      applied once to a database that already has V1–V18 applied"
+    given: "The V20 pending_notifications schema migration has been
+      applied once to a database that already has V1–V19 applied"
     when: "flyway migrate is run a second time against the same database"
     then: "flyway exits 0 with no new rows in flyway_schema_history;
       the CREATE TABLE for pending_notifications uses IF NOT EXISTS;
-      the CREATE INDEX uses IF NOT EXISTS; running V19 twice is safe —
-      verified by applying V19 twice and asserting flyway_schema_history
+      the CREATE INDEX uses IF NOT EXISTS; running V20 twice is safe —
+      verified by applying V20 twice and asserting flyway_schema_history
       row count does not change on the second run"
     test_type: integration
     component_under_test: directory
@@ -167,7 +167,7 @@ acceptance_criteria:
     given: "A pending_notifications row is inserted via
       PgNotificationQueue.enqueue() without a delivered_at value
       (delivered_at is nullable — it is only set when the notification
-      is delivered, not at enqueue time; per V19 schema, the column
+      is delivered, not at enqueue time; per V20 schema, the column
       definition should omit delivered_at entirely since rows are
       deleted on acknowledgement — but if delivered_at is retained as
       a nullable tracking column, this AC applies)"
