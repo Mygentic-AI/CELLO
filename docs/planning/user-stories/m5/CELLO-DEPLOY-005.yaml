@@ -189,6 +189,26 @@ acceptance_criteria:
     test_type: e2e
     component_under_test: directory
 
+  - id: AC-009-staging-endpoint-config
+    given: "The cello-ecs-directory-{env} CloudFormation stack has been
+      deployed in the dev region (us-east-1) and the staging ECS service
+      is running with an ALB whose DNS name is available as the
+      AlbDnsName output of the stack"
+    when: "the CodePipeline smoke test stage CodeBuild action is
+      inspected"
+    then: "the smoke test CodeBuild action receives the staging directory
+      ALB endpoint URL via a CodePipeline environment variable override
+      (not hardcoded in the buildspec or CodeBuild project definition);
+      the deploy script reads AlbDnsName from the cello-ecs-directory-{env}
+      stack outputs via aws cloudformation describe-stacks and passes it
+      as the STAGING_DIRECTORY_URL environment variable to the
+      CodeBuild action at pipeline setup time; no hardcoded ALB DNS name
+      appears anywhere in infra/ — verified by grepping infra/ for any
+      string matching '.elb.amazonaws.com' and asserting zero results
+      (all ALB URLs are read from stack outputs at deploy time)"
+    test_type: integration
+    component_under_test: directory
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001

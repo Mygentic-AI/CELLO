@@ -153,6 +153,31 @@ acceptance_criteria:
     test_type: unit
     component_under_test: directory
 
+  - id: AC-008-key-generation-script
+    given: "A new CELLO environment has been deployed via infra/deploy.sh
+      and all 12 CloudFormation stacks are in CREATE_COMPLETE status, but
+      the node-private-key secrets in Secrets Manager still contain empty
+      placeholder values"
+    when: "infra/scripts/generate-node-keys.sh {env} {region} is run"
+    then: "a new Ed25519 key pair is generated for the specified environment
+      and region; the private key is stored in Secrets Manager under
+      cello/{env}/directory/node-private-key in that region via
+      aws secretsmanager put-secret-value; the corresponding public key
+      (hex-encoded) is printed to stdout so the operator can record it;
+      if a non-empty value already exists in the secret, the script exits
+      non-zero with 'Key already exists — use --rotate flag to replace'
+      and makes no changes; with --rotate flag, the script overwrites the
+      existing key and prints a WARNING that the directory ECS task must
+      be restarted and peer nodes must be updated before the old key is
+      deactivated; the relay key is generated the same way with
+      cello/{env}/relay/node-private-key; running the script 6 times
+      (once per region per service type: 3 directory + 3 relay) produces
+      6 distinct key pairs — verified by reading all 6 Secrets Manager
+      values from a separate terminal and asserting they are distinct
+      non-empty hex strings"
+    test_type: integration
+    component_under_test: directory
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001

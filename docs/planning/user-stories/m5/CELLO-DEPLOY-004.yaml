@@ -179,6 +179,29 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
+  - id: AC-009-webhook-runbook
+    given: "The infra/deploy.sh script has been run and the
+      github-webhook-receiver Lambda exists with a function URL
+      in us-east-1"
+    when: "the post-deploy setup steps for CELLO CI/CD are read"
+    then: "infra/runbooks/github-webhook-setup.md exists in the
+      repository and documents the following steps in order:
+      (1) retrieve the github-webhook-receiver Lambda function URL
+      from the cello-cicd-{env} CloudFormation stack outputs via
+      aws cloudformation describe-stacks;
+      (2) generate a cryptographically random 32-byte HMAC secret;
+      (3) store the HMAC secret in Secrets Manager under
+      cello/github-webhook-secret via aws secretsmanager put-secret-value;
+      (4) register the webhook in the Mygentic-AI/CELLO GitHub repository
+      settings pointing to the Lambda URL with the HMAC secret and
+      content-type application/json, triggering on push events only;
+      (5) verify the webhook by pushing a test commit and confirming
+      a pipeline execution starts in CodePipeline;
+      the runbook is committed to the repository — verified by reading
+      infra/runbooks/github-webhook-setup.md from a separate process"
+    test_type: unit
+    component_under_test: directory
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
