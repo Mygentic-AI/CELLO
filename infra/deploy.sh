@@ -387,4 +387,63 @@ echo "     docker build -t ${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/cello-r
 echo "  3. Run Flyway migrations against the RDS endpoint: ${RDS_ENDPOINT}"
 echo ""
 
+
+# ── Update infra/STATE.md ─────────────────────────────────────────────────────
+
+update_state() {
+  local state_file="${SCRIPT_DIR}/STATE.md"
+  local today
+  today=$(date -u '+%Y-%m-%d')
+
+  # Read all stack statuses for this environment/region
+  local stack_statuses
+  stack_statuses=$(aws cloudformation describe-stacks     --region "${REGION}"     --query "Stacks[?starts_with(StackName, \`cello-\`)].{Name:StackName,Status:StackStatus}"     --output json 2>/dev/null || echo "[]")
+
+  # Read key outputs
+  local rds_endpoint
+  rds_endpoint=$(aws cloudformation describe-stacks     --region "${REGION}" --stack-name "cello-rds-${ENVIRONMENT}"     --query "Stacks[0].Outputs[?OutputKey=='RdsEndpoint'].OutputValue"     --output text 2>/dev/null || echo "pending")
+
+  local alb_dns
+  alb_dns=$(aws cloudformation describe-stacks     --region "${REGION}" --stack-name "cello-ecs-directory-${ENVIRONMENT}"     --query "Stacks[0].Outputs[?OutputKey=='AlbDnsName'].OutputValue"     --output text 2>/dev/null || echo "pending")
+
+  # Rewrite the state file header and env section
+  # Strategy: append a dated deploy record — full rewrite happens via deploy.sh on each full deploy
+  local marker="### ${ENVIRONMENT} — ${REGION}"
+  if grep -q "${marker}" "${state_file}" 2>/dev/null; then
+    # Update last deployed date in-place using Python for reliable multiline edit
+    python3 - "${state_file}" "${ENVIRONMENT}" "${REGION}" "${today}" "${rds_endpoint}" "${alb_dns}" << 'PYEOF_INNER'
+import sys, re
+
+state_file, env, region, today, rds_endpoint, alb_dns = sys.argv[1:]
+with open(state_file) as f:
+    content = f.read()
+
+# Update last deployed date
+content = re.sub(
+    rf"(### {re.escape(env)} — {re.escape(region)}
+\*Last deployed:) [^
+]+",
+    rf"\1 {today}",
+    content
+)
+
+# Update RDS endpoint if not pending
+if rds_endpoint and rds_endpoint != "pending" and rds_endpoint != "None":
+    content = re.sub(r"\| RDS Endpoint \|[^
+]+", f"| RDS Endpoint | {rds_endpoint} |", content)
+
+# Update ALB if not pending
+if alb_dns and alb_dns != "pending" and alb_dns != "None":
+    content = re.sub(r"\| Directory ALB \|[^
+]+", f"| Directory ALB | {alb_dns} |", content)
+
+with open(state_file, "w") as f:
+    f.write(content)
+PYEOF_INNER
+  fi
+  echo "infra/STATE.md updated."
+}
+
+update_state
+
 log_event "infra.deploy.completed" "{ \"environment\": \"${ENVIRONMENT}\", \"region\": \"${REGION}\", \"totalDurationMs\": ${TOTAL_DURATION_MS}, \"stackCount\": ${STACK_COUNT} }"

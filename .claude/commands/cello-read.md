@@ -19,6 +19,10 @@ Each domain entry tells you: what is decided, where the deep reference lives, wh
 
 Do not start Step 2 until you have read the full file and can answer: which domains are stable, what is deferred, and what is the current readiness status across all 9 domains.
 
+## Step 1b — Read infrastructure state (if working on M5+)
+
+If the session involves anything infrastructure-related — deployment, AWS, IaC, ECS, RDS, CI/CD — read `infra/STATE.md` now. It is the authoritative record of what actually exists in AWS: which stacks are deployed, their current status, and all key resource identifiers (VPC IDs, KMS ARNs, RDS endpoints, ALB DNS names). Do not guess at infrastructure state from code alone.
+
 ## Step 2 — Recent activity
 
 Run: `git log --oneline -15 -- docs/`

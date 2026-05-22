@@ -19,6 +19,10 @@ Set `$MILESTONE` to the lowercase form (e.g. `m3`).
 
 Read `CONTEXT.md` at the repo root. This is the canonical glossary — terms, packages, interfaces. Do not contradict it.
 
+## Step 2a — For M5+ milestones: read infrastructure state
+
+If the target milestone is M5 or later, read `infra/STATE.md` before looking at any story. It records the current real state of AWS infrastructure — which stacks are deployed, their status, and key resource IDs. Any story that touches infrastructure or deploys code to AWS must update `infra/STATE.md` before closing. If you deploy stacks via `./infra/deploy.sh`, STATE.md is updated automatically. If you make any manual AWS change, update STATE.md and commit it.
+
 ## Step 2b — For M4+ milestones: load adapter and observability context
 
 If the target milestone is M4 or later, read these before touching any story:

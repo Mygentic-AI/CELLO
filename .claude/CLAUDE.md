@@ -52,6 +52,20 @@ Full process: `docs/planning/day-0-agent-driven-development-plan.md`
 
 ---
 
+## Infrastructure State — Mandatory
+
+**`infra/STATE.md` is the authoritative record of what exists in AWS.** It lists every deployed stack, its status, last deployed date, and all key resource identifiers.
+
+**You must read `infra/STATE.md`** before any session involving deployment, AWS resources, IaC changes, or anything that depends on knowing what infrastructure exists.
+
+**You must update `infra/STATE.md`** if your session deploys, modifies, or tears down any AWS infrastructure:
+- If you ran `./infra/deploy.sh` — STATE.md is updated automatically.
+- If you made any direct AWS change (console, CLI, manual stack operation) — update STATE.md by hand and commit it before closing the session.
+
+A session that changes AWS infrastructure without updating STATE.md is incomplete. Any agent that skips this is creating exactly the kind of undocumented manual state that IaC exists to prevent.
+
+---
+
 ## M4+ Development Model
 
 M4 introduces external systems (PostgreSQL, KMS, ECS, relay WAL). The inner loop stays fast only with deliberate discipline. See full decisions in `docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md`.
