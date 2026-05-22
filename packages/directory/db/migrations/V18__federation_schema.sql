@@ -11,6 +11,8 @@
 --
 -- Idempotency: every CREATE uses IF NOT EXISTS; every ALTER TABLE ADD COLUMN uses the
 -- DO $$ BEGIN IF NOT EXISTS (...) THEN ALTER TABLE ... ADD COLUMN ...; END IF; END $$ pattern.
+-- Bare GRANT statements are also safe to re-run — PostgreSQL makes GRANT idempotent by design
+-- (re-granting an already-held privilege is a no-op, not an error).
 -- Running V18 twice on the same database is safe and produces no error.
 
 -- ─── sessions table ──────────────────────────────────────────────────────────
@@ -102,23 +104,39 @@ END $$;
 -- V2 created checkpoint_node_signatures as a stub with only (id BIGSERIAL PRIMARY KEY).
 -- V18 adds: checkpoint_id UUID, node_id TEXT, node_signature TEXT, signed_at TIMESTAMPTZ.
 
+-- checkpoint_id: add without FK first (safe for existing stub rows), then add FK constraint separately.
+-- DEFAULT gen_random_uuid() with an inline REFERENCES would assign random UUIDs to any pre-existing
+-- rows and immediately violate the FK when PostgreSQL checks it at statement time.
 DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_name = 'checkpoint_node_signatures' AND column_name = 'checkpoint_id'
   ) THEN
-    ALTER TABLE checkpoint_node_signatures
-      ADD COLUMN checkpoint_id UUID NOT NULL DEFAULT gen_random_uuid()
-      REFERENCES directory_checkpoints(checkpoint_id);
+    ALTER TABLE checkpoint_node_signatures ADD COLUMN checkpoint_id UUID;
   END IF;
 END $$;
 
+-- Add FK constraint separately so it applies only to future rows, not to any pre-existing stub rows.
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE table_name = 'checkpoint_node_signatures'
+      AND constraint_name = 'checkpoint_node_signatures_checkpoint_id_fkey'
+  ) THEN
+    ALTER TABLE checkpoint_node_signatures
+      ADD CONSTRAINT checkpoint_node_signatures_checkpoint_id_fkey
+      FOREIGN KEY (checkpoint_id) REFERENCES directory_checkpoints(checkpoint_id);
+  END IF;
+END $$;
+
+-- node_id and node_signature: nullable for the ADD COLUMN (no default) so pre-existing stub rows
+-- get NULL rather than a misleading empty string. Callers must always supply real values.
 DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_name = 'checkpoint_node_signatures' AND column_name = 'node_id'
   ) THEN
-    ALTER TABLE checkpoint_node_signatures ADD COLUMN node_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE checkpoint_node_signatures ADD COLUMN node_id TEXT;
   END IF;
 END $$;
 
@@ -127,7 +145,7 @@ DO $$ BEGIN
     SELECT 1 FROM information_schema.columns
     WHERE table_name = 'checkpoint_node_signatures' AND column_name = 'node_signature'
   ) THEN
-    ALTER TABLE checkpoint_node_signatures ADD COLUMN node_signature TEXT NOT NULL DEFAULT '';
+    ALTER TABLE checkpoint_node_signatures ADD COLUMN node_signature TEXT;
   END IF;
 END $$;
 

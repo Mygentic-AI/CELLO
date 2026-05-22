@@ -133,6 +133,19 @@ describeIntegration("FEDERATION-001 integration: AC-001 sessions table schema", 
     // chain_hash TEXT NOT NULL
     expect(cols["chain_hash"], "chain_hash column must exist").toBeDefined();
     expect(cols["chain_hash"]!.is_nullable).toBe("NO");
+
+    // Verify UNIQUE constraint on session_id (LOW-3: story AC-001 requires UNIQUE)
+    const uqResult = await superPool.query<{ constraint_name: string }>(
+      `SELECT tc.constraint_name
+       FROM information_schema.table_constraints tc
+       JOIN information_schema.constraint_column_usage ccu
+         ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
+       WHERE tc.table_schema = 'public'
+         AND tc.table_name = 'sessions'
+         AND tc.constraint_type = 'UNIQUE'
+         AND ccu.column_name = 'session_id'`,
+    );
+    expect(uqResult.rows.length, "UNIQUE constraint on sessions.session_id must exist").toBeGreaterThan(0);
   });
 });
 
@@ -243,6 +256,8 @@ describeIntegration("FEDERATION-001 integration: AC-008-idempotency V18 migratio
 
 describeIntegration("FEDERATION-001 integration: AC-009-sessions-round-trip", () => {
   let servicePool: pg.Pool;
+  let superPool: pg.Pool;
+  const writtenSessionIds: string[] = [];
 
   function makeLogger(): Logger {
     return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -250,10 +265,19 @@ describeIntegration("FEDERATION-001 integration: AC-009-sessions-round-trip", ()
 
   beforeAll(async () => {
     configurePgTypes();
+    superPool = new pg.Pool({ connectionString: DATABASE_URL });
     servicePool = new pg.Pool({ connectionString: SERVICE_URL });
   });
 
   afterAll(async () => {
+    // Clean up rows written by this test to maintain isolation across test runs
+    if (writtenSessionIds.length > 0) {
+      await superPool.query(
+        `DELETE FROM sessions WHERE session_id = ANY($1::uuid[])`,
+        [writtenSessionIds],
+      );
+    }
+    await superPool?.end();
     await servicePool?.end();
   });
 
@@ -262,6 +286,7 @@ describeIntegration("FEDERATION-001 integration: AC-009-sessions-round-trip", ()
     const writeStore = new PgDirectoryStore(servicePool, logger, "node-1", "us-east-1");
 
     const sessionId = randomUUID();
+    writtenSessionIds.push(sessionId);
     const owningNodeId = "node-1";
 
     // Write via writeSession
@@ -366,46 +391,51 @@ describeIntegration("FEDERATION-001 integration: SI-001 — non-owning node writ
     await servicePool?.end();
   });
 
-  it("SI-001: attempting to write a sessions row with the same session_id twice is rejected by the unique constraint (non-owning node cannot hijack a session)", async () => {
-    // Adversarial condition: a non-owning node tries to write a sessions row for a session
-    // that already has an owning_node_id set. The unique constraint on session_id prevents
-    // a second INSERT — no other node can take ownership of an established session.
-    const logger = makeLogger();
-    const node1Store = new PgDirectoryStore(servicePool, logger, "node-1", "us-east-1");
+  it("SI-001: application-layer ownership check throws before INSERT when a non-owning node calls writeSession for a session it does not own", async () => {
+    // Adversarial condition: node-2's store (this.#nodeId = 'node-2') calls writeSession for
+    // a session whose owning_node_id in the DB is 'node-1'. The application-layer pre-check
+    // must detect this mismatch and throw an ownership-violation error BEFORE any INSERT.
+    const node1Store = new PgDirectoryStore(servicePool, makeLogger(), "node-1", "us-east-1");
+    const node2Store = new PgDirectoryStore(servicePool, makeLogger(), "node-2", "eu-central-1");
 
     const sessionId = randomUUID();
 
-    // Node 1 writes the session — establishes ownership
+    // Node 1 establishes ownership
     await node1Store.writeSession(sessionId, "node-1");
 
-    // Verify node-1 owns the session
-    const owner = await node1Store.getSessionOwner(sessionId);
-    expect(owner).toBe("node-1");
+    // Node 2 calls writeSession for the same session_id.
+    // The application-layer check sees owning_node_id = 'node-1' ≠ this.#nodeId = 'node-2' → throws.
+    await expect(node2Store.writeSession(sessionId, "node-2")).rejects.toThrow(/ownership violation/);
 
-    // Node 2 tries to write the same session_id — must be rejected
-    const node2Logger = makeLogger();
-    const node2Store = new PgDirectoryStore(servicePool, node2Logger, "node-2", "eu-central-1");
-
-    await expect(node2Store.writeSession(sessionId, "node-2")).rejects.toThrow();
-
-    // Verify no new row was written — session still belongs to node-1
+    // Verify ownership unchanged — still node-1
     const ownerAfterAttempt = await node1Store.getSessionOwner(sessionId);
     expect(ownerAfterAttempt).toBe("node-1");
 
-    // Verify from a separate DB connection (as required by SI-001)
+    // Verify from a separate DB connection (SI-001 requirement)
     const separatePool = new pg.Pool({ connectionString: SERVICE_URL });
     try {
       const separateResult = await separatePool.query<{ owning_node_id: string; count: string }>(
         `SELECT owning_node_id, COUNT(*) as count FROM sessions WHERE session_id = $1 GROUP BY owning_node_id`,
         [sessionId],
       );
-      // Only 1 row in sessions for this session_id — no duplicate
       expect(separateResult.rows).toHaveLength(1);
       expect(separateResult.rows[0]!.owning_node_id).toBe("node-1");
       expect(parseInt(separateResult.rows[0]!.count, 10)).toBe(1);
     } finally {
       await separatePool.end();
     }
+  });
+
+  it("SI-001 (unique constraint path): duplicate session_id INSERT is also rejected by DB unique constraint", async () => {
+    // Second rejection path: same session_id written twice by a store whose #nodeId matches
+    // the existing owning_node_id. The application-layer check passes (same nodeId), but
+    // the unique constraint on session_id prevents a second INSERT.
+    const nodeStore = new PgDirectoryStore(servicePool, makeLogger(), "node-1", "us-east-1");
+    const sessionId = randomUUID();
+
+    await nodeStore.writeSession(sessionId, "node-1");
+    // Second write for same session_id — hits the unique constraint after the ownership check passes
+    await expect(nodeStore.writeSession(sessionId, "node-1")).rejects.toThrow();
   });
 });
 
@@ -480,12 +510,15 @@ describeIntegration("FEDERATION-001 integration: verifyReplicatedRow observabili
     expect(rowResult.rows).toHaveLength(1);
     const tamperedRow = { ...rowResult.rows[0]!, chain_hash: "f".repeat(64) };
 
-    // Call verifyReplicatedRow with the tampered row — hash must mismatch
+    // Call verifyReplicatedRow with the tampered row — hash must mismatch, method must throw
     const verifyLogger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const verifyStore = new PgDirectoryStore(servicePool, verifyLogger, "node-receiver-2", "eu-central-1");
-    await verifyStore.verifyReplicatedRow("sessions", tamperedRow);
+    // verifyReplicatedRow throws on mismatch (HIGH-1: callers must be able to halt replication)
+    await expect(verifyStore.verifyReplicatedRow("sessions", tamperedRow)).rejects.toThrow(
+      /chain_hash_mismatch/,
+    );
 
-    // federation.replication.chain_hash_mismatch must be logged at ERROR
+    // federation.replication.chain_hash_mismatch must be logged at ERROR before the throw
     const errorCalls = (verifyLogger.error as ReturnType<typeof vi.fn>).mock.calls as [string, Record<string, unknown>][];
     const mismatchCall = errorCalls.find(([event]) => event === "federation.replication.chain_hash_mismatch");
     expect(mismatchCall, "federation.replication.chain_hash_mismatch must be logged at ERROR").toBeDefined();

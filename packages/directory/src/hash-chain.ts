@@ -48,6 +48,7 @@ const ALWAYS_EXCLUDED_FROM_CHAIN = new Set([
   "recorded_at",
   "last_run_at",
   "applied_at",
+  "signed_at",
 ]);
 
 /**

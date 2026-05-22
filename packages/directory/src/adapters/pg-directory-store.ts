@@ -908,22 +908,27 @@ export class PgDirectoryStore implements DirectoryStore {
   /**
    * Write a sessions row via the hash chain mechanism.
    *
-   * Pseudocode (FEDERATION-001 AC-009):
-   *   1. Build the record with session_id (UUID) and owning_node_id.
-   *   2. Call insertWithChain("sessions", ...) which:
-   *      a. Acquires pg_advisory_xact_lock on "sessions"
-   *      b. Fetches previous chain_hash (or CHAIN_GENESIS if empty)
-   *      c. Computes chain_hash = SHA-256(serialize(record) || previous_hash)
-   *      d. INSERTs the row
+   * SI-001: application-layer ownership pre-check. If the session_id already exists
+   * in the DB and is owned by a different node, this method throws before attempting
+   * any hash chain write. This prevents a non-owning node from hijacking a session
+   * that belongs to another node (even though the unique constraint also prevents a
+   * duplicate INSERT, the application-layer check produces a clear ownership-violation
+   * error rather than a generic constraint error).
    *
-   * SI-001: the owning_node_id is passed explicitly by the caller; the store does
-   * not infer it. The application layer (directory-node.ts) must check ownership
-   * before calling any hash chain write for a session. Sessions are written only
-   * by the owning node.
-   *
-   * @throws if session_id already exists (SQLSTATE 23505 unique constraint)
+   * @throws OwnershipViolationError if session_id already exists with a different owning_node_id
+   * @throws on DB unique constraint violation if session_id already exists (SQLSTATE 23505)
    */
   async writeSession(sessionId: string, owningNodeId: string): Promise<void> {
+    // SI-001: check existing ownership before any chain write
+    const existing = await this.#pool.query<{ owning_node_id: string }>(
+      `SELECT owning_node_id FROM sessions WHERE session_id = $1`,
+      [sessionId],
+    );
+    if (existing.rows.length > 0 && existing.rows[0]!.owning_node_id !== this.#nodeId) {
+      throw new Error(
+        `writeSession: ownership violation — session '${sessionId}' is owned by '${existing.rows[0]!.owning_node_id}', not '${this.#nodeId}' (SI-001)`,
+      );
+    }
     const record: Record<string, unknown> = {
       session_id: sessionId,
       owning_node_id: owningNodeId,
@@ -978,10 +983,12 @@ export class PgDirectoryStore implements DirectoryStore {
     }
     const startMs = Date.now();
     const deserialized = deserializeRow(tableName, row);
-    const leafIndex = deserialized["id"] as number;
-    // session_id is either a UUID string (sessions table) or absent (other tables).
-    // For observability, use session_id from the row if present; otherwise use the table name.
-    const sessionId = (deserialized["session_id"] as string | undefined) ?? tableName;
+    // Explicit coercion: deserializeRow applies parseInt only for tables declared in BIGINT_COLUMNS.
+    // For robustness, ensure leafIndex is always a number regardless of pg driver output type.
+    const rawId = deserialized["id"];
+    const leafIndex = typeof rawId === "string" ? parseInt(rawId, 10) : (rawId as number);
+    // session_id is a UUID string for tables that have it; use rowId label for tables without it.
+    const sessionId = (deserialized["session_id"] as string | undefined) ?? `${tableName}:${leafIndex}`;
     const receivedHash = deserialized["chain_hash"] as string;
 
     // Fetch the previous row's chain_hash — the row with id = this row's id - 1 (or genesis).
@@ -1012,6 +1019,10 @@ export class PgDirectoryStore implements DirectoryStore {
         expectedHash,
         receivedHash,
       });
+      // Throw so callers can halt replication for this session's rows pending operator investigation.
+      throw new Error(
+        `federation.replication.chain_hash_mismatch: table='${tableName}' leafIndex=${leafIndex} expected=${expectedHash} received=${receivedHash}`,
+      );
     }
   }
 }

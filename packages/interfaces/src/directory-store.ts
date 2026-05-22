@@ -181,10 +181,12 @@ export interface DirectoryStore {
    * On match: logs federation.replication.verified at INFO with
    *   { nodeId, sessionId, leafIndex, chainHash, durationMs }.
    * On mismatch: logs federation.replication.chain_hash_mismatch at ERROR with
-   *   { nodeId, sessionId, leafIndex, expectedHash, receivedHash }.
+   *   { nodeId, sessionId, leafIndex, expectedHash, receivedHash }, then throws so the
+   *   caller can halt replication for this session's rows pending operator investigation.
    *
    * @param tableName - The name of the hash-chained table the row belongs to.
    * @param row - The row as returned by the pg driver (field values are strings/numbers/etc).
+   * @throws if the chain hash does not match (caller must halt replication on throw)
    */
   verifyReplicatedRow(tableName: string, row: Record<string, unknown>): Promise<void>;
 }
