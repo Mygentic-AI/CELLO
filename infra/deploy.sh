@@ -7,20 +7,12 @@
 #   region       AWS region (e.g. us-east-1, eu-central-1, ap-northeast-1)
 #
 # Post-deploy manual steps (one-time per environment):
-#   1. Populate Secrets Manager secrets created by cello-secrets:
-#      - cello/{env}/directory/rds-credentials    (JSON: {username, password})
-#      - cello/{env}/directory/rds-admin-credentials (JSON: {username, password})
-#      - cello/{env}/directory/node-private-key   (Ed25519 hex private key)
-#      - cello/{env}/directory/kms-key-arn        (KMS key ARN from stack output)
-#      - cello/{env}/relay/node-private-key       (Ed25519 hex private key)
-#      - cello/{env}/pipeline/github-hmac-secret  (Random secret for webhook HMAC)
-#      Example: aws secretsmanager put-secret-value \
-#        --secret-id cello/{env}/directory/node-private-key \
-#        --secret-string "$(openssl rand -hex 32)"
-#   2. Seed ECR with stub images (once per environment): ./infra/build-stubs.sh <region>
-#      IMPORTANT: always use build-stubs.sh — never build Docker images locally with plain
-#      docker build. It produces arm64 on Apple Silicon; ECS Fargate requires linux/amd64.
-#   3. Run Flyway migrations against the RDS instance.
+#   1. Populate secrets: ./infra/bootstrap.sh <environment> <region>
+#   2. Run Flyway migrations against the RDS instance.
+#
+# ECR repos and stub images are handled automatically:
+#   - cello-ecr stack creates repos per-region (Step 0)
+#   - Pre-flight check before ECS stacks auto-runs build-stubs.sh if needed
 #
 # All stacks are idempotent — safe to re-run. Stacks with no changes
 # complete silently with no resources recreated.
@@ -66,12 +58,11 @@ ACCOUNT_ID=$(aws sts get-caller-identity \
   --output text \
   --region "${REGION}")
 
-# ECR repos are only in us-east-1 — cross-region image pull until per-region repos exist
-ECR_REGION="us-east-1"
+# ECR repos are created per-region by cello-ecr stack (deployed as Step 0 below).
 # IMAGE_TAG can be overridden: CELLO_IMAGE_TAG=v1.2.3 ./infra/deploy.sh dev us-east-1
 IMAGE_TAG="${CELLO_IMAGE_TAG:-stub}"
-DIR_IMAGE="${ACCOUNT_ID}.dkr.ecr.${ECR_REGION}.amazonaws.com/cello-directory:${IMAGE_TAG}"
-RELAY_IMAGE="${ACCOUNT_ID}.dkr.ecr.${ECR_REGION}.amazonaws.com/cello-relay:${IMAGE_TAG}"
+DIR_IMAGE="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/cello-directory:${IMAGE_TAG}"
+RELAY_IMAGE="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/cello-relay:${IMAGE_TAG}"
 
 # ── VPC CIDR per region (Decision 1 from m5-infrastructure-decisions) ────────
 
@@ -138,9 +129,9 @@ fi
 
 # cello-cicd deploys to us-east-1 only — adjust count per region
 if [[ "${REGION}" == "us-east-1" ]]; then
-  STACK_COUNT=10
+  STACK_COUNT=11
 else
-  STACK_COUNT=9
+  STACK_COUNT=10
 fi
 DEPLOY_START=$(date +%s)
 
@@ -247,8 +238,13 @@ read_output() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# DEPLOYMENT SEQUENCE — 10 stacks in dependency order
+# DEPLOYMENT SEQUENCE — 11 stacks in dependency order
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# ── STEP 0: cello-ecr — ECR repos (no dependencies, must exist before ECS) ──
+
+deploy_stack "cello-ecr-${ENVIRONMENT}" "cello-ecr.yaml" \
+  "Environment=${ENVIRONMENT}"
 
 # ── STEP 1: cello-iam — IAM roles (no dependencies) ──────────────────────────
 
@@ -282,8 +278,30 @@ deploy_stack "cello-rds-${ENVIRONMENT}" "cello-rds.yaml" \
   "Environment=${ENVIRONMENT}" \
   "InstanceClass=${RDS_CLASS}"
 
+# ── STEP 6.5: Pre-flight — ensure container images exist in ECR ──────────────
+# If the image tag doesn't exist, build and push stubs automatically.
+# This prevents ECS tasks from failing to start on a fresh deployment.
+
+echo ""
+echo "── Pre-flight: verifying container images in ECR ─────────────────────"
+
+image_exists() {
+  aws ecr describe-images \
+    --region "${REGION}" \
+    --repository-name "$1" \
+    --image-ids imageTag="${IMAGE_TAG}" \
+    >/dev/null 2>&1
+}
+
+if image_exists "cello-directory" && image_exists "cello-relay"; then
+  echo "  Images exist: cello-directory:${IMAGE_TAG}, cello-relay:${IMAGE_TAG}"
+else
+  echo "  Images not found for tag '${IMAGE_TAG}' — building and pushing stubs..."
+  "${SCRIPT_DIR}/build-stubs.sh" "${REGION}"
+fi
+
 # ── STEP 7: cello-ecs-directory — directory ECS service ──────────────────────
-# depends on: cello-iam, cello-kms, cello-vpc
+# depends on: cello-iam, cello-kms, cello-vpc, cello-ecr
 
 deploy_stack "cello-ecs-directory-${ENVIRONMENT}" "cello-ecs-directory.yaml" \
   "Environment=${ENVIRONMENT}" \
@@ -365,6 +383,7 @@ echo "  ALB DNS name:   ${ALB_DNS_NAME}"
 echo ""
 echo "Stacks deployed:"
 for stack in \
+  "cello-ecr-${ENVIRONMENT}" \
   "cello-iam-${ENVIRONMENT}" \
   "cello-secrets-${ENVIRONMENT}" \
   "cello-vpc-${ENVIRONMENT}" \
@@ -382,11 +401,8 @@ fi
 
 echo ""
 echo "Next steps (one-time, if first deploy):"
-echo "  1. Populate secrets in cello/${ENVIRONMENT}/directory/ and cello/${ENVIRONMENT}/relay/"
-echo "  2. Real images are built by CodeBuild (DEPLOY-004) — not locally."
-echo "     If ECR repos are empty (new environment), seed them first:"
-echo "     ./infra/build-stubs.sh ${REGION}"
-echo "  3. Run Flyway migrations against the RDS endpoint: ${RDS_ENDPOINT}"
+echo "  1. Populate secrets: ./infra/bootstrap.sh ${ENVIRONMENT} ${REGION}"
+echo "  2. Run Flyway migrations against the RDS endpoint: ${RDS_ENDPOINT}"
 echo ""
 
 

@@ -16,6 +16,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 | Stack | Status | Last Deployed |
 |---|---|---|
+| cello-ecr-dev | UPDATE_COMPLETE | 2026-05-22 |
 | cello-iam-dev | CREATE_COMPLETE | 2026-05-22 |
 | cello-secrets-dev | CREATE_COMPLETE | 2026-05-22 |
 | cello-vpc-dev | CREATE_COMPLETE | 2026-05-22 |

@@ -11,11 +11,14 @@ Parameters:
     AllowedValues: [dev, staging, production]
     Description: Deployment environment
 
+Conditions:
+  IsProduction: !Equals [!Ref Environment, production]
+
 Resources:
   AuditLogBucket:
     Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
+    DeletionPolicy: !If [IsProduction, Retain, Delete]
+    UpdateReplacePolicy: !If [IsProduction, Retain, Delete]
     Properties:
       BucketName: !Sub "cello-audit-logs-${Environment}-${AWS::Region}"
       PublicAccessBlockConfiguration:
@@ -70,8 +73,8 @@ Resources:
 
   RelayManifestBucket:
     Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
+    DeletionPolicy: !If [IsProduction, Retain, Delete]
+    UpdateReplacePolicy: !If [IsProduction, Retain, Delete]
     Properties:
       BucketName: !Sub "cello-relay-manifest-${Environment}-${AWS::Region}"
       VersioningConfiguration:
