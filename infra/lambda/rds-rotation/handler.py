@@ -278,6 +278,16 @@ def _set_secret(sm, secret_id: str, token: str) -> None:
         )
         conn.autocommit = True
         with conn.cursor() as cur:
+            # Idempotent: create the role if it doesn't exist yet (first-time bootstrap).
+            # DO block is compatible with all PostgreSQL versions on RDS.
+            cur.execute(
+                "DO $$ BEGIN "
+                "  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN "
+                "    EXECUTE format('CREATE ROLE %%I LOGIN PASSWORD %%L', %s, %s); "
+                "  END IF; "
+                "END $$",
+                (app_user, app_user, new_password),
+            )
             # Use parameterized password to prevent SQL injection.
             # psycopg2 does not support parameters for ALTER ROLE — we use
             # mogrify-style quoting via the Identifier/Literal adapters.
