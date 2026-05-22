@@ -4,6 +4,15 @@
 in us-east-1 (status `CREATE_COMPLETE` or `UPDATE_COMPLETE`). Run `./infra/deploy.sh`
 first if it is not yet deployed.
 
+> **Lambda packaging note:** `infra/lambda/pipeline-filter/pipeline-mappings.json`
+> is a symlink to `infra/pipeline-mappings.json`. When packaging this Lambda for
+> deployment (e.g. via `aws lambda update-function-code`), the zip must resolve the
+> symlink so `/var/task/pipeline-mappings.json` is a real file inside the archive.
+> Use `cp infra/pipeline-mappings.json infra/lambda/pipeline-filter/pipeline-mappings-resolved.json`
+> and reference the resolved copy, **or** use `zip --symlinks` if your zip version
+> follows symlinks. The `buildspec.yml` for the pipeline-filter Lambda (added in
+> INFRA-008) handles this at build time.
+
 ---
 
 ## Step 1 — Retrieve the Lambda function URL

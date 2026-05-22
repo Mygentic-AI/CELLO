@@ -191,7 +191,7 @@ acceptance_criteria:
       aws cloudformation describe-stacks;
       (2) generate a cryptographically random 32-byte HMAC secret;
       (3) store the HMAC secret in Secrets Manager under
-      cello/github-webhook-secret via aws secretsmanager put-secret-value;
+      cello/{env}/pipeline/github-hmac-secret via aws secretsmanager put-secret-value;
       (4) register the webhook in the Mygentic-AI/CELLO GitHub repository
       settings pointing to the Lambda URL with the HMAC secret and
       content-type application/json, triggering on push events only;

@@ -198,13 +198,17 @@ class TestWebhookReceiver(unittest.TestCase):
         with redirect_stdout(buf):
             self._call_handler(event)
         output = buf.getvalue()
-        # At least one JSON log line should contain pipeline.webhook.rejected.
-        found = any(
-            json.loads(line).get("event") == "pipeline.webhook.rejected"
+        # At least one JSON log line should contain pipeline.webhook.rejected with required fields.
+        records = [
+            json.loads(line)
             for line in output.strip().splitlines()
             if line.strip()
-        )
-        self.assertTrue(found, f"Expected pipeline.webhook.rejected in output:\n{output}")
+        ]
+        rejected = [r for r in records if r.get("event") == "pipeline.webhook.rejected"]
+        self.assertTrue(len(rejected) >= 1, f"Expected pipeline.webhook.rejected in output:\n{output}")
+        rec = rejected[0]
+        self.assertIn("reason", rec)
+        self.assertIn("sourceIp", rec)
 
     # ── AC-005 / SI-002: Missing header → 401 ───────────────────────────────
 
