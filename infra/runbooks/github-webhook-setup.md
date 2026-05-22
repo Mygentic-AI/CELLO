@@ -75,9 +75,10 @@ Confirm the command exits with no error and returns the secret ARN.
 4. Click **Add webhook**.
 
 GitHub will immediately send a `ping` event to verify the URL is reachable.
-The ping will be rejected with HTTP 401 by the Lambda because it carries no
-push payload and no HMAC to match — this is expected. GitHub marks the webhook
-as active even when the ping is rejected.
+The Lambda will validate the ping's HMAC (GitHub signs it with the same secret),
+forward it to EventBridge, and the pipeline filter will log `pipeline.filter.no_match`
+because a ping carries no commit paths. No pipelines are triggered — this is expected.
+GitHub marks the webhook as active.
 
 ---
 

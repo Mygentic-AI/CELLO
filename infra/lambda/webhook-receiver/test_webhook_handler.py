@@ -264,6 +264,24 @@ class TestWebhookReceiver(unittest.TestCase):
         self.assertEqual(result["statusCode"], 500)
         _fake_events_client.put_events.assert_not_called()
 
+    # ── Error path: EventBridge partial failure (FailedEntryCount > 0) → 500 ──
+
+    def test_eventbridge_partial_failure_returns_500(self):
+        """put_events FailedEntryCount > 0 returns 500 without marking delivery successful."""
+        _fake_events_client.put_events.return_value = {
+            "FailedEntryCount": 1,
+            "Entries": [{"ErrorCode": "ThrottlingException", "ErrorMessage": "Rate exceeded"}],
+        }
+        body = json.dumps({
+            "ref": "refs/heads/main",
+            "after": "abc123",
+            "repository": {"full_name": "Mygentic-AI/CELLO"},
+            "commits": [],
+        })
+        event = _build_event(body, self.secret)
+        result = self._call_handler(event)
+        self.assertEqual(result["statusCode"], 500)
+
     # ── Observability: pipeline.webhook.received logged on success ───────────
 
     def test_success_logs_webhook_received(self):

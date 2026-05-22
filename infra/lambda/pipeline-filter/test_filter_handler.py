@@ -40,9 +40,6 @@ ALL_CELLO_PIPELINES = [
     "cello-e2e-tests-pipeline",
 ]
 
-MAPPINGS_PATH = os.path.join(os.path.dirname(__file__), "pipeline-mappings.json")
-
-
 def _load_module():
     """Load a fresh instance of the pipeline-filter module with boto3 stubbed."""
     boto3_stub = types.ModuleType("boto3")
@@ -101,11 +98,6 @@ class TestPipelineFilter(unittest.TestCase):
         event = _make_event(["packages/directory/src/index.ts"])
         mod.lambda_handler(event, None)
 
-        triggered_names = [
-            c.kwargs["name"] if c.kwargs else c.args[0]
-            for c in _fake_codepipeline.start_pipeline_execution.call_args_list
-        ]
-        # Also handle positional-style calls.
         triggered_names = [
             args[0] if args else kwargs.get("name")
             for args, kwargs in [

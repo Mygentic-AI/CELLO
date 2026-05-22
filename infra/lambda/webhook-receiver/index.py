@@ -157,7 +157,7 @@ def handler(event: dict, context) -> dict:
     # ── 6. Forward payload to EventBridge ─────────────────────────────────
     event_bus_name = os.environ["EVENT_BUS_NAME"]
     try:
-        _events_client.put_events(
+        resp = _events_client.put_events(
             Entries=[
                 {
                     "Source": "cello.github",
@@ -169,6 +169,17 @@ def handler(event: dict, context) -> dict:
         )
     except Exception as exc:
         _log("error", "pipeline.webhook.forward_failed", reason=str(exc))
+        return {"statusCode": 500, "body": json.dumps({"error": "Failed to forward event"})}
+
+    # put_events returns HTTP 200 even on partial failure — check explicitly.
+    if resp.get("FailedEntryCount", 0) > 0:
+        failed_entry = resp.get("Entries", [{}])[0]
+        _log(
+            "error",
+            "pipeline.webhook.forward_failed",
+            reason=failed_entry.get("ErrorMessage", "unknown"),
+            errorCode=failed_entry.get("ErrorCode"),
+        )
         return {"statusCode": 500, "body": json.dumps({"error": "Failed to forward event"})}
 
     # ── 7. Log success ─────────────────────────────────────────────────────
