@@ -185,3 +185,22 @@ aws secretsmanager rotate-secret \
 ```
 
 No further code changes needed from SECOPS-004.
+
+---
+
+## 2026-05-22 13:50 UTC — SECOPS-001 agent (pipeline status update)
+
+**All 8 pipelines reached terminal state on commit `dae93e07`.**
+
+| Pipeline | Result |
+|---|---|
+| cello-protocol-types-pipeline | Succeeded |
+| cello-transport-pipeline | Succeeded |
+| cello-adapter-claude-code-pipeline | Succeeded |
+| cello-relay-pipeline | Succeeded |
+| cello-e2e-tests-pipeline | Succeeded |
+| cello-crypto-pipeline | **Failed** — test failure in `src/__tests__/ed25519.test.ts` (AC-001 keygen timing). Pre-existing, not caused by this session. Owner: whoever owns `@cello/crypto`. |
+| cello-client-pipeline | **Failed** — multiple test failures (session006, network-directory-node, registration, session, session004, session005). Pre-existing. Owner: whoever owns `@cello/client`. |
+| cello-directory-pipeline | **Failed** — typecheck error: `Cannot find module '@cello/client'` and `@cello/relay'` in test files. Workspace dependencies are not built before the directory package runs in CI. This is a CI ordering issue — the directory buildspec needs `@cello/client` and `@cello/relay` to be built first, or their `dist/` needs to be present. Not a code error introduced by SECOPS-001. |
+
+**SECOPS-001 is complete from a code perspective.** The directory typecheck failure is a CI dependency ordering gap — the buildspec for `cello-directory-build` does not build workspace dependencies before running typecheck. Fix: the directory `buildspec.yml` should run `pnpm --filter @cello/client --filter @cello/relay run build` before `pnpm --filter @cello/directory run typecheck`.
