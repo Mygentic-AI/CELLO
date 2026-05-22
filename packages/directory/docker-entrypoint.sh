@@ -5,25 +5,33 @@
 # aborts the script before the directory service process starts.
 #
 # Flow:
-#   1. Resolve DATABASE_URL (direct or via Secrets Manager ARN)
+#   1. Resolve DATABASE_URL (direct or via Secrets Manager credentials + RDS env vars)
 #   2. Run flyway migrate against the database
 #   3. If flyway exits non-zero → script aborts (set -e), task fails health check
 #   4. If flyway succeeds → exec the directory service process
 #
 # Environment variables:
 #   DATABASE_URL                — direct connection string (used in CELLO_ENV=local)
-#   RDS_CREDENTIALS_SECRET_ARN — Secrets Manager ARN for RDS credentials (used in ECS)
+#   RDS_CREDENTIALS_SECRET_ARN — Secrets Manager ARN for {username, password} (used in ECS)
+#   RDS_ENDPOINT                — RDS hostname (injected from CloudFormation export)
+#   RDS_PORT                    — RDS port (injected from CloudFormation export)
+#   RDS_DB_NAME                 — database name (injected from CloudFormation export)
 #   AWS_REGION                  — AWS region for Secrets Manager calls (default: us-east-1)
 #   CELLO_ENV                   — local | dev | staging | production
 
 set -e
 
 # ─── Resolve DATABASE_URL ──────────────────────────────────────────────────
-# If DATABASE_URL is not set but RDS_CREDENTIALS_SECRET_ARN is, fetch from Secrets Manager
-# using the AWS CLI (available on ECS Fargate via task IAM role).
+# If DATABASE_URL is not set but RDS_CREDENTIALS_SECRET_ARN is, fetch credentials
+# from Secrets Manager using the AWS CLI and combine with RDS_ENDPOINT/PORT/DB_NAME.
 
 if [ -z "$DATABASE_URL" ] && [ -n "$RDS_CREDENTIALS_SECRET_ARN" ]; then
   REGION="${AWS_REGION:-us-east-1}"
+
+  if [ -z "$RDS_ENDPOINT" ] || [ -z "$RDS_PORT" ] || [ -z "$RDS_DB_NAME" ]; then
+    echo '{"event":"migration.failed","level":"error","reason":"RDS_ENDPOINT, RDS_PORT and RDS_DB_NAME are required when using RDS_CREDENTIALS_SECRET_ARN"}'
+    exit 1
+  fi
 
   SECRET_JSON=$(aws secretsmanager get-secret-value \
     --secret-id "$RDS_CREDENTIALS_SECRET_ARN" \
@@ -38,14 +46,11 @@ if [ -z "$DATABASE_URL" ] && [ -n "$RDS_CREDENTIALS_SECRET_ARN" ]; then
 
   DB_USER=$(echo "$SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['username'])")
   DB_PASS=$(echo "$SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['password'])")
-  DB_HOST=$(echo "$SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['host'])")
-  DB_PORT=$(echo "$SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['port'])")
-  DB_NAME=$(echo "$SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['dbname'])")
 
   # URL-encode password for connection string
   DB_PASS_ENCODED=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$DB_PASS")
 
-  DATABASE_URL="postgresql://${DB_USER}:${DB_PASS_ENCODED}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
+  DATABASE_URL="postgresql://${DB_USER}:${DB_PASS_ENCODED}@${RDS_ENDPOINT}:${RDS_PORT}/${RDS_DB_NAME}"
   export DATABASE_URL
 fi
 

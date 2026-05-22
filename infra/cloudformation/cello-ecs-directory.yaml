@@ -81,6 +81,14 @@ Resources:
             # a task restart. The ARN is stable; the value is fetched at runtime.
             - Name: RDS_CREDENTIALS_SECRET_ARN
               Value: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/rds-credentials"
+            - Name: RDS_ENDPOINT
+              Value:
+                Fn::ImportValue: !Sub "cello-${Environment}-rds-endpoint"
+            - Name: RDS_PORT
+              Value:
+                Fn::ImportValue: !Sub "cello-${Environment}-rds-port"
+            - Name: RDS_DB_NAME
+              Value: !Sub "cello_${Environment}"
           Secrets:
             # NODE_PRIVATE_KEY is safe to inject at task launch — it changes only
             # on manual key rotation, which requires a coordinated task restart
