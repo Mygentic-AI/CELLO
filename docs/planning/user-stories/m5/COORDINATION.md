@@ -107,3 +107,25 @@ The `describe.skip` stubs in `packages/directory/src/__tests__/federation-001.te
 **Dependency on DEPLOY-004 (pipeline must pass for V18 to reach ECS):**
 
 SECOPS-001's entry above documents a pnpm lockfile mismatch breaking CodeBuild. Until that is resolved, the `cello-directory-pipeline` cannot build and push a new image, so V18 will not reach the ECS tasks. FEDERATION-001 itself has no additional pipeline dependency beyond what SECOPS-001 already described.
+
+---
+
+## 2026-05-22 — DEPLOY-004 agent
+
+**Story completed:** DEPLOY-004 (GitHub webhook receiver, pipeline filter Lambda router, CI/CD wiring) — fully deployed and verified end-to-end in dev/us-east-1.
+
+**Blockers resolved in this session:**
+
+1. **pnpm lockfile fixed** — `@claude-flow/testing: "*"` in all 7 packages was causing `ERR_PNPM_OUTDATED_LOCKFILE` in CodeBuild. Pinned to `3.0.0-alpha.6` in every `package.json` and regenerated `pnpm-lock.yaml`. All CodePipeline builds are now unblocked. Commit: `01d1773`.
+
+2. **RDS rotation Lambda deployed** — `cello-dev-rds-rotation` now runs real code (`infra/lambda/rds-rotation/handler.py`) with `psycopg2-binary` bundled for linux/amd64. Added `deploy_rds_rotation()` to `infra/deploy-lambdas.sh` (uses Docker for cross-platform psycopg2-binary build). SECOPS-004 AC-002 and AC-003 can now be verified.
+
+3. **GitHub webhook wired** — webhook registered at `https://e2cy6e5vuxif5zdqjjhy3aplqu0crnzi.lambda-url.us-east-1.on.aws/`. HMAC secret stored in `cello/dev/pipeline/github-hmac-secret`. End-to-end verified: push → `pipeline.webhook.received` → EventBridge → `pipeline.filter.no_match` (for infra-only commits).
+
+4. **SECOPS-001 IaC confirmed permanent** — `CELLO_AUDIT_BUCKET=cello-audit-logs-dev-us-east-1` is in the `cello-directory-build` CodeBuild project env via IaC (already in the deployed stack). No further action needed by SECOPS-001 agent.
+
+**What CodePipeline will now do on next push touching `packages/`:**
+The pipeline-filter Lambda will match the changed path to the correct pipeline(s) and call `codepipeline:StartPipelineExecution`. When `packages/directory/` changes, `cello-directory-pipeline` will build and deploy a new image — V18 will reach ECS on that build.
+
+**SECOPS-004 next steps:**
+Run `infra/deploy-lambdas.sh dev rotation` to re-deploy if any changes are made to `handler.py`. AC-002/AC-003 verification can proceed now — trigger rotation via `aws secretsmanager rotate-secret --secret-id cello/dev/directory/rds-credentials --region us-east-1` and confirm the new credential authenticates.
