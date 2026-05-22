@@ -1,0 +1,332 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-FEDERATION-001A
+domain: Federation
+milestone: M5
+actor: DIR
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO infrastructure operator,
+  I want a single parameterized script that sets up PostgreSQL logical
+  replication between all three Directory RDS instances in any CELLO
+  environment by running one command,
+  so that publications, subscriptions, and replication slots are created
+  in a reproducible, idempotent way with no manual psql commands inside
+  the VPC and no knowledge held only in someone's head.
+
+# ─── Background ─────────────────────────────────────────────
+background: >
+  FEDERATION-001 delivered the V18 schema migration that adds owning_node_id,
+  mmr_peaks, and related columns to support multi-node federation. It did not
+  deliver the automation to set up logical replication between the three RDS
+  instances.
+
+  Setting up PostgreSQL logical replication between 3 AWS RDS instances
+  requires a sequence of steps that cannot be performed from outside the VPC:
+  the RDS instances are in private subnets with no public IP and no NAT
+  Gateway. The only network path from the operator's terminal to RDS is via
+  AWS SSM Session Manager port forwarding, which is too fragile for scripted
+  multi-node setup.
+
+  The correct approach for CELLO's architecture is to use ECS Exec
+  (aws ecs execute-command) on a running Directory ECS task. The Directory
+  task already has network access to its region's RDS instance inside the VPC,
+  so it can run psql commands directly. This is the same network path the
+  application uses in production.
+
+  The full setup sequence is:
+  (1) A dedicated replication user (cello_replication) with REPLICATION
+      privilege only — stored in Secrets Manager, separate from cello_service.
+  (2) CREATE PUBLICATION cello_pub FOR TABLE ... on each node, covering all
+      append-only tables.
+  (3) CREATE SUBSCRIPTION cello_sub_from_{source_region} on each of the
+      other two nodes (2 subscriptions per node = 6 total across 3 nodes).
+  (4) Verification that all 6 replication slots reach streaming state.
+
+  Without this automation, there is no reproducible procedure for connecting
+  the nodes. Staging and production would require different manual steps,
+  violating the "same script, different parameters" principle established by
+  DEPLOY-001A. There is also no way to reset or re-create replication state
+  after a node replacement without tribal knowledge of the exact psql
+  incantations required.
+
+  This story delivers infra/setup-replication.sh. No environment's
+  replication shall ever be set up by running psql commands manually.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When an operator runs
+      ./infra/setup-replication.sh dev us-east-1 eu-central-1 ap-northeast-1"
+    action: "the script locates the running Directory ECS task in each region
+      via aws ecs list-tasks; it uses aws ecs execute-command to run psql
+      commands on each task; it creates the cello_replication user on each
+      node if it does not already exist; it creates the publication cello_pub
+      on each node if it does not already exist, covering the append-only
+      tables: agent_profiles, conversation_seals, conversation_seal_staging,
+      directory_checkpoints, checkpoint_node_signatures, relay_registrations,
+      sessions, pending_notifications, user_accounts; it creates two
+      subscriptions on each node to the other two regions using the connection
+      string read from Secrets Manager; it polls pg_stat_replication on each
+      node until all slots reach streaming state or a 60-second timeout
+      elapses; on success it prints a summary table of all 6 replication
+      slot names, their states, and the node they are on; it exits 0"
+
+  - trigger: "When the script is run a second time and all subscriptions
+      already exist"
+    action: "the script detects that the replication user, publication, and
+      subscriptions already exist on each node via IF NOT EXISTS guards and
+      pre-flight queries; it performs no modifications; it polls
+      pg_stat_replication and confirms all slots are in streaming state;
+      it exits 0 with a summary of current replication slot status"
+
+  - trigger: "When an operator runs
+      ./infra/setup-replication.sh production
+        us-east-1 eu-central-1 ap-northeast-1"
+    action: "the script prints 'Configuring replication for PRODUCTION. Type
+      YES to confirm:' and waits for input before executing any AWS or psql
+      command; if the operator types anything other than YES the script exits
+      1 with no changes made"
+
+  - trigger: "When the script cannot find a running Directory ECS task in
+      a region"
+    action: "the script logs infra.replication.setup.task_not_running at
+      ERROR with { region, taskStatus }; it exits 1 without attempting any
+      replication setup on any node; the operator must ensure all Directory
+      ECS tasks are running before executing this script"
+
+  - trigger: "When a replication slot does not reach streaming state within
+      60 seconds of the subscription being created"
+    action: "the script logs infra.replication.setup.slot_not_streaming at
+      ERROR with { slotName, region, elapsedSeconds }; it exits 1 and prints
+      the current state of all slots so the operator can diagnose the issue"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Three Directory ECS tasks are running — one each in us-east-1,
+      eu-central-1, and ap-northeast-1 — with network access to their
+      respective RDS instances; ECS Exec is enabled on each task definition"
+    when: "./infra/setup-replication.sh dev us-east-1 eu-central-1
+      ap-northeast-1 is run for the first time"
+    then: "all 6 replication slots are created:
+      cello_dev_us-east-1_eu-central-1,
+      cello_dev_us-east-1_ap-northeast-1,
+      cello_dev_eu-central-1_us-east-1,
+      cello_dev_eu-central-1_ap-northeast-1,
+      cello_dev_ap-northeast-1_us-east-1,
+      cello_dev_ap-northeast-1_eu-central-1;
+      each slot is in streaming state; verified by querying
+      pg_stat_replication on each node from a separate database connection
+      (not via the script itself) and asserting all 6 slot names and
+      streaming state are present"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-002
+    given: "All 6 replication slots already exist in streaming state for
+      the dev environment"
+    when: "./infra/setup-replication.sh dev us-east-1 eu-central-1
+      ap-northeast-1 is run a second time"
+    then: "the script exits 0 without error; pg_stat_replication on each
+      node still shows exactly the same 6 slot names and streaming state
+      as before; no subscription or publication is modified; verified by
+      comparing the pg_stat_replication output from before and after the
+      second run and asserting identical rows"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "The script has just created subscriptions on all three nodes"
+    when: "the script polls pg_stat_replication during the verification phase"
+    then: "each replication slot reaches streaming state within 60 seconds
+      of subscription creation; the script does not exit before all 6 slots
+      are in streaming state; the script itself reports pass/fail per slot
+      in its summary output — verified by capturing the script's stdout
+      and asserting the summary contains streaming for all 6 slot names
+      and the total elapsed time is under 60 seconds"
+    test_type: e2e
+    component_under_test: directory
+
+  - id: AC-004
+    given: "The script is invoked with Environment=production"
+    when: "the script begins execution"
+    then: "the script prints 'Configuring replication for PRODUCTION. Type
+      YES to confirm:' and waits for input before executing any aws or psql
+      command; if the operator provides any input other than YES the script
+      exits 1 with no changes made; verified by running the script with
+      Environment=production, providing incorrect input, asserting exit code
+      1, and confirming from a separate database connection that no
+      publications, subscriptions, or replication users were created"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-005
+    given: "The setup-replication.sh script is about to create the
+      cello_replication user on a node"
+    when: "the script runs on each region"
+    then: "the replication user credentials are stored in Secrets Manager
+      under cello/{env}/directory/rds-replication-credentials in each
+      region before the replication user is created; the script creates
+      these secrets if they do not exist, generating a random password;
+      the password does not appear in the script's stdout, stderr, or in
+      any CloudWatch log group — verified by inspecting the script output
+      and confirming aws secretsmanager describe-secret returns the secret
+      ARN for each region after the script completes"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "The script has completed successfully for the dev environment"
+    when: "pg_publication, pg_subscription, and pg_replication_slots are
+      queried on each node from a separate database connection"
+    then: "every publication is named cello_pub; every subscription is
+      named cello_sub_from_{source_region} where source_region is the
+      region of the publisher; every replication slot follows the naming
+      convention cello_{env}_{source_region}_{target_region}; no
+      publication, subscription, or slot uses any other naming scheme —
+      verified by running SELECT pubname FROM pg_publication,
+      SELECT subname FROM pg_subscription, and
+      SELECT slot_name FROM pg_replication_slots on each node and asserting
+      exact name matches against the expected set"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "One of the three Directory ECS tasks is not running (STOPPED
+      state) in one region"
+    when: "./infra/setup-replication.sh dev us-east-1 eu-central-1
+      ap-northeast-1 is run"
+    then: "the script exits 1 before executing any psql commands on any
+      node; infra.replication.setup.task_not_running is logged to stderr
+      with { region, taskStatus }; no replication user, publication, or
+      subscription is created on any node — verified by confirming from
+      separate database connections that all three nodes remain unmodified"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The cello_replication user shall have REPLICATION privilege
+      only — no INSERT, UPDATE, DELETE, or DDL on any table; the
+      cello_replication role does NOT need RLS SELECT policies because
+      it reads the WAL stream, not via SELECT"
+    adversarial_condition: "even when it is operationally convenient to
+      grant SELECT to the replication user — the script enforces
+      GRANT REPLICATION TO cello_replication and no other privileges;
+      verified by connecting as cello_replication from a separate process
+      and asserting that SELECT on any CELLO table returns a permission
+      denied error"
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: "Replication slot names shall follow
+      cello_{env}_{source_region}_{target_region} — unique per environment
+      and region pair; no two slots in any environment share a name"
+    adversarial_condition: "even across multiple script runs or when
+      re-running after a partial failure — the naming convention is
+      deterministic and derived only from environment and region arguments;
+      the script never generates random or timestamp-based slot names;
+      verified by asserting the complete set of slot names from
+      pg_replication_slots matches the expected set exactly with no
+      extras"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Degraded Behavior ──────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While a replication slot fails to reach streaming state
+      within the 60-second polling window (e.g. due to network congestion
+      or a restarting RDS instance)"
+    fallback: "the script logs infra.replication.setup.slot_not_streaming at
+      ERROR with { slotName, region, elapsedSeconds } and exits 1; it prints
+      the current state of all slots so the operator can assess partial
+      progress; because the script is idempotent, the operator can re-run it
+      after the condition resolves and only the failed slots will be retried
+      (existing streaming slots are detected and skipped)"
+    test_type: integration
+    component_under_test: directory
+
+  - id: DB-002
+    condition: "While a Secrets Manager secret for the replication credentials
+      already exists with a different password than what is on the RDS instance
+      (e.g. after a manual password rotation)"
+    fallback: "the script detects the existing secret and does not overwrite
+      it; it attempts to use the stored credentials; if the psql connection
+      fails, it logs infra.replication.setup.credentials_mismatch at ERROR
+      with { region, secretArn } and exits 1 with instructions for the
+      operator to rotate the secret manually; it does not overwrite a secret
+      that may be in active use"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: infra.replication.setup.started
+      level: info
+      trigger: "setup-replication.sh begins execution"
+      context_fields: [environment, regions, nodeCount]
+      correlationId: false
+
+    - name: infra.replication.setup.publication_created
+      level: info
+      trigger: "CREATE PUBLICATION cello_pub succeeds on a node"
+      context_fields: [environment, region, tableCount]
+      correlationId: false
+
+    - name: infra.replication.setup.subscription_created
+      level: info
+      trigger: "CREATE SUBSCRIPTION succeeds on a node"
+      context_fields: [environment, targetRegion, sourceRegion, slotName]
+      correlationId: false
+
+    - name: infra.replication.setup.slot_streaming
+      level: info
+      trigger: "a replication slot reaches streaming state"
+      context_fields: [slotName, region, elapsedSeconds]
+      correlationId: false
+
+    - name: infra.replication.setup.completed
+      level: info
+      trigger: "all 6 replication slots are in streaming state"
+      context_fields: [environment, regions, slotCount, totalElapsedSeconds]
+      correlationId: false
+
+  error_events:
+    - name: infra.replication.setup.task_not_running
+      level: error
+      trigger: "a Directory ECS task is not in RUNNING state when the
+        script checks before attempting ECS Exec"
+      context_fields: [region, taskStatus]
+
+    - name: infra.replication.setup.slot_not_streaming
+      level: error
+      trigger: "a replication slot does not reach streaming state within
+        the 60-second polling window"
+      context_fields: [slotName, region, elapsedSeconds]
+
+    - name: infra.replication.setup.credentials_mismatch
+      level: error
+      trigger: "the psql connection using credentials from Secrets Manager
+        fails authentication"
+      context_fields: [region, secretArn]
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Node Operations"
+  discussion_logs:
+    - "2026-05-21_1400_m5-infrastructure-decisions"
+    - "2026-05-16_0900_m4-infrastructure-decisions"
+    - "2026-05-16_0753_development-pipeline-and-local-iteration"
+  milestone_outline: "docs/planning/user-stories/m5/outline.md"
+  depends_on:
+    - CELLO-DEPLOY-001
+    - CELLO-FEDERATION-001
+  blocks:
+    - CELLO-FEDERATION-002

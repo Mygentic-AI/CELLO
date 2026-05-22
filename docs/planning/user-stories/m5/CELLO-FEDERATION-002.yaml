@@ -366,5 +366,6 @@ references:
   depends_on:
     - CELLO-DEPLOY-001
     - CELLO-FEDERATION-001
+    - CELLO-FEDERATION-001A
   blocks:
     - CELLO-FEDERATION-E2E-001
