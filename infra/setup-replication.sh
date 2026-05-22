@@ -266,12 +266,12 @@ for REGION in "${REGIONS[@]}"; do
     --container "cello-directory" \
     --command "${local_user_cmd}" \
     --interactive 2>&1) || {
-      log_error "infra.replication.setup.task_not_running" "{ \"region\": \"${REGION}\", \"step\": \"create_user\" }"
+      log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_user\", \"reason\": \"ecs_exec_failed\" }"
       echo "ERROR: ECS Exec failed in ${REGION} during user creation." >&2
       exit 1
     }
   if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|^psql: error:"; then
-    log_error "infra.replication.setup.task_not_running" "{ \"region\": \"${REGION}\", \"step\": \"create_user\" }"
+    log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_user\", \"reason\": \"psql_error\" }"
     echo "ERROR: psql error during user creation in ${REGION}: ${EXEC_OUTPUT}" >&2
     exit 1
   fi
@@ -289,12 +289,12 @@ for REGION in "${REGIONS[@]}"; do
     --container "cello-directory" \
     --command "psql \${DATABASE_URL} -c \"${local_create_pub_sql}\"" \
     --interactive 2>&1) || {
-      log_error "infra.replication.setup.task_not_running" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\" }"
+      log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\", \"reason\": \"ecs_exec_failed\" }"
       echo "ERROR: ECS Exec failed in ${REGION} during publication creation." >&2
       exit 1
     }
   if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|^psql: error:"; then
-    log_error "infra.replication.setup.task_not_running" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\" }"
+    log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\", \"reason\": \"psql_error\" }"
     echo "ERROR: psql error during publication creation in ${REGION}: ${EXEC_OUTPUT}" >&2
     exit 1
   fi
@@ -331,7 +331,7 @@ for REGION in "${REGIONS[@]}"; do
   fi
 
   if [[ -z "${RDS_HOST}" || "${RDS_HOST}" == "None" ]]; then
-    log_error "infra.replication.setup.task_not_running" "{ \"region\": \"${REGION}\", \"step\": \"rds_host_lookup\" }"
+    log_error "infra.replication.setup.rds_host_not_found" "{ \"region\": \"${REGION}\" }"
     echo "ERROR: Cannot determine RDS hostname for ${REGION}. Check RDS_ENDPOINT env var or cello-rds-${ENVIRONMENT} stack output." >&2
     exit 1
   fi
@@ -379,12 +379,12 @@ for TARGET_REGION in "${REGIONS[@]}"; do
       --container "cello-directory" \
       --command "${local_sub_cmd}" \
       --interactive 2>&1) || {
-        log_error "infra.replication.setup.task_not_running" "{ \"region\": \"${TARGET_REGION}\", \"step\": \"create_subscription\" }"
+        log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${TARGET_REGION}\", \"step\": \"create_subscription\", \"reason\": \"ecs_exec_failed\", \"slotName\": \"${SLOT_NAME}\" }"
         echo "ERROR: ECS Exec failed in ${TARGET_REGION} during subscription creation." >&2
         exit 1
       }
     if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|^psql: error:"; then
-      log_error "infra.replication.setup.task_not_running" "{ \"region\": \"${TARGET_REGION}\", \"step\": \"create_subscription\" }"
+      log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${TARGET_REGION}\", \"step\": \"create_subscription\", \"reason\": \"psql_error\", \"slotName\": \"${SLOT_NAME}\" }"
       echo "ERROR: psql error during subscription creation in ${TARGET_REGION}: ${EXEC_OUTPUT}" >&2
       exit 1
     fi
@@ -406,6 +406,9 @@ echo "── Polling for streaming state on all 6 replication slots ────
 POLL_START=$(date +%s)
 POLL_TIMEOUT=60
 STREAMING_SLOTS=()
+# Tracks which slots have already fired infra.replication.setup.slot_streaming
+# so the event fires exactly once per slot (at first transition to active state).
+LOGGED_SLOTS=()
 
 # Build the expected set of 6 slot names
 EXPECTED_SLOTS=()
@@ -446,8 +449,18 @@ while true; do
         if [[ -n "${SLOT_NAME_FROM_SLOTS}" ]]; then
           STREAMING_SLOTS+=("${SOURCE_REGION}:${SLOT_NAME_FROM_SLOTS}")
 
-          # Log per-slot streaming event
-          log_info "infra.replication.setup.slot_streaming" "{ \"slotName\": \"${SLOT_NAME_FROM_SLOTS}\", \"region\": \"${SOURCE_REGION}\", \"elapsedSeconds\": ${ELAPSED} }"
+          # Log slot_streaming only once per slot — at first transition to active state.
+          ALREADY_LOGGED=false
+          for LOGGED in "${LOGGED_SLOTS[@]:-}"; do
+            if [[ "${LOGGED}" == "${SOURCE_REGION}:${SLOT_NAME_FROM_SLOTS}" ]]; then
+              ALREADY_LOGGED=true
+              break
+            fi
+          done
+          if [[ "${ALREADY_LOGGED}" == "false" ]]; then
+            log_info "infra.replication.setup.slot_streaming" "{ \"slotName\": \"${SLOT_NAME_FROM_SLOTS}\", \"region\": \"${SOURCE_REGION}\", \"elapsedSeconds\": ${ELAPSED} }"
+            LOGGED_SLOTS+=("${SOURCE_REGION}:${SLOT_NAME_FROM_SLOTS}")
+          fi
         fi
       fi
     done <<< "${STAT_OUTPUT}"

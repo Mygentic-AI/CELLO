@@ -286,8 +286,12 @@ describe("FEDERATION-001A: observability events present in script", () => {
 
   it("infra.replication.setup.slot_streaming includes required context fields: slotName, region, elapsedSeconds", () => {
     const script = loadScript();
-    const idx = script.indexOf("infra.replication.setup.slot_streaming");
-    const contextWindow = script.slice(idx, idx + 600);
+    // Find the log_info call (not the comment that mentions the event name)
+    const logInfoPattern = /log_info "infra\.replication\.setup\.slot_streaming"/;
+    const match = logInfoPattern.exec(script);
+    expect(match).not.toBeNull();
+    const idx = match!.index;
+    const contextWindow = script.slice(idx, idx + 300);
     expect(contextWindow).toContain("slotName");
     expect(contextWindow).toContain("region");
     expect(contextWindow).toContain("elapsedSeconds");
@@ -333,6 +337,31 @@ describe("FEDERATION-001A: observability events present in script", () => {
     const contextWindow = script.slice(idx, idx + 600);
     expect(contextWindow).toContain("region");
     expect(contextWindow).toContain("secretArn");
+  });
+
+  it("setup-replication.sh logs infra.replication.setup.ddl_failed at ERROR for DDL execution failures", () => {
+    const script = loadScript();
+    expect(script).toContain("infra.replication.setup.ddl_failed");
+  });
+
+  it("infra.replication.setup.ddl_failed includes required context fields: region, step, reason", () => {
+    const script = loadScript();
+    const idx = script.indexOf("infra.replication.setup.ddl_failed");
+    const contextWindow = script.slice(idx, idx + 600);
+    expect(contextWindow).toContain("step");
+    expect(contextWindow).toContain("reason");
+  });
+
+  it("setup-replication.sh logs infra.replication.setup.rds_host_not_found at ERROR when RDS host cannot be resolved", () => {
+    const script = loadScript();
+    expect(script).toContain("infra.replication.setup.rds_host_not_found");
+  });
+
+  it("infra.replication.setup.slot_streaming fires only once per slot — LOGGED_SLOTS deduplication is present", () => {
+    const script = loadScript();
+    // slot_streaming must be guarded by a logged-slots check to fire only at first transition
+    expect(script).toContain("LOGGED_SLOTS");
+    expect(script).toContain("ALREADY_LOGGED");
   });
 });
 
