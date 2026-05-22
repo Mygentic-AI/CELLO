@@ -237,3 +237,38 @@ The correct approach to pre-build workspace deps before directory typecheck is t
 **ECS service `cello-directory-dev` is still on `cello-directory:stub`.** Flyway has not run. `cello_service` role does not exist. SECOPS-004 AC-002/AC-003 remain blocked.
 
 **Waiting on: DEPLOY-002 or DEPLOY-003** — whichever story adds the Docker build + ECR push + ECS deploy stage to the directory pipeline. Until that exists, the pipeline passing does not result in a new image being deployed to ECS, and Flyway never runs.
+
+---
+
+## 2026-05-22 — FEDERATION-001A agent
+
+**Story completed:** FEDERATION-001A (setup-replication.sh — PostgreSQL logical replication setup) — merged to `main` at commit `cbbc952`. Worktree and branch deleted.
+
+**No deployment step required for this story.** `infra/setup-replication.sh` is an operator script run manually (or by CELLO-FEDERATION-E2E-001 infrastructure). It does not deploy any CloudFormation stacks.
+
+**What was delivered:**
+
+- `infra/setup-replication.sh` — 481-line bash script that sets up PostgreSQL logical replication between all three Directory RDS instances via ECS Exec. Creates `cello_replication` users, publications (`cello_pub`), subscriptions (`cello_sub_from_{region}`), and verifies all 6 slots reach active state within 60 seconds. Idempotency guards prevent duplicate objects. Production gate requires explicit `yes` confirmation.
+- Secrets Manager JSON parsing fixed — `.password` field extracted via `python3 -c "import sys, json; d=json.load(sys.stdin); print(d['password'])"` before use in `CREATE USER` and subscription `CONNECTION` strings.
+- Slot verification uses `pg_replication_slots WHERE slot_name LIKE 'cello_%' AND active = 't'` (not `pg_stat_replication`).
+- 8 observability events registered in the canonical taxonomy in `docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md`.
+- 590-line test suite (static analysis + subprocess). 8 `describe.skip` blocks covering live-AWS ACs.
+
+**Waiting on: multi-region infrastructure (CELLO-FEDERATION-E2E-001)**
+
+The script is correct and approved, but the following ACs cannot be verified without three actual RDS instances:
+- AC-001/AC-002/AC-003: subscription, publication, and slot creation on live RDS
+- AC-004: active slot count verified via `pg_replication_slots`
+- SI-001: idempotency on second run against live RDS
+- SI-002: adversarial path (replication of tampered hash chain row rejected)
+
+The `describe.skip` stubs in `packages/directory/src/__tests__/federation-001a-replication-setup.test.ts` are ready to enable once FEDERATION-E2E-001 provisions the multi-node test environment.
+
+**Usage (once multi-region RDS exists):**
+```bash
+./infra/setup-replication.sh \
+  --environment dev \
+  --regions us-east-1,eu-central-1,ap-southeast-1 \
+  --cluster-name cello-dev-directory \
+  --secret-name cello/dev/directory/replication-credentials
+```
