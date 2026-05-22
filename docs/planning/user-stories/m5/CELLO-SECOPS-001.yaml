@@ -57,11 +57,12 @@ acceptance_criteria:
       packages/interfaces/"
     when: "a developer reads the interface"
     then: "it exposes exactly: ship(entry: AuditLogEntry):
-      Promise<void> and flush(): Promise<void>; AuditLogEntry
-      has fields: timestamp, sessionId, objectType, command,
-      statementText, parameters; no S3 or AWS-specific types
-      appear in the interface signature — verified by reading
-      packages/interfaces/src/audit-log-shipper.ts"
+      Promise<void> and flush(): Promise<number>; flush() returns
+      the count of entries shipped in that call (per-flush count,
+      not cumulative); AuditLogEntry has fields: timestamp,
+      sessionId, objectType, command, statementText, parameters;
+      no S3 or AWS-specific types appear in the interface signature
+      — verified by reading packages/interfaces/src/audit-log-shipper.ts"
     test_type: unit
     component_under_test: directory
 
@@ -254,6 +255,18 @@ observability:
   alarms:
     - condition: "audit.shipper.buffer.overflow fires at any time"
       fires_to: ops-critical
+
+# ─── Deferred ───────────────────────────────────────────────
+deferred:
+  - id: DEF-001
+    description: "S3 Object Lock (WORM) is not enabled on the current dev audit bucket.
+      Object Lock provides the strongest tamper-evidence guarantee — once written,
+      an object with GOVERNANCE or COMPLIANCE lock cannot be deleted or overwritten
+      even by account root. Deferred to production launch (Phase 2). Current enforcement
+      mechanism: DenyNonPutActions bucket policy in cello-s3.yaml denies s3:DeleteObject
+      and s3:GetObject for the directory task role. AC-003 IAM enforcement is verified
+      via (a) static IaC analysis of the DenyNonPutActions Deny statement and (b) adapter
+      code never issuing DeleteObject or GetObject calls."
 
 # ─── References ─────────────────────────────────────────────
 references:

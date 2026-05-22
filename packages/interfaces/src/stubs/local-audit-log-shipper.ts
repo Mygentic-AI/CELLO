@@ -50,7 +50,6 @@ export class LocalAuditLogShipper implements AuditLogShipper {
   readonly #logger: Logger;
   // SI-002: retry queue — entries that failed to write are held here until flush()
   readonly #retryQueue: AuditLogEntry[] = [];
-  #shippedCount = 0;
   #isDegraded = false;
   #retryTimerHandle?: NodeJS.Timeout;
 
@@ -64,7 +63,6 @@ export class LocalAuditLogShipper implements AuditLogShipper {
     const line = JSON.stringify(entry) + "\n";
     try {
       await appendFile(this.#path, line, { flag: "a" });
-      this.#shippedCount++;
     } catch (err) {
       // SI-002: do not silently drop — add to retry queue and re-throw so caller
       // can log audit.ship.failed with the error context
@@ -93,8 +91,7 @@ export class LocalAuditLogShipper implements AuditLogShipper {
 
       // Log the failed ship event with correct fields
       this.#logger.error("audit.ship.failed", {
-        reason: err instanceof Error ? err.message : String(err),
-        entryTimestamp: entry.timestamp,
+        error: err instanceof Error ? err.message : String(err),
       });
 
       throw err;
@@ -129,14 +126,12 @@ export class LocalAuditLogShipper implements AuditLogShipper {
       const line = JSON.stringify(entry) + "\n";
       try {
         await appendFile(this.#path, line, { flag: "a" });
-        this.#shippedCount++;
         successCount++;
         this.#retryQueue.shift(); // Remove successful entry
       } catch (err) {
         // Keep entry in queue and break — will retry on next interval
         this.#logger.error("audit.ship.failed", {
-          reason: err instanceof Error ? err.message : String(err),
-          entryTimestamp: entry.timestamp,
+          error: err instanceof Error ? err.message : String(err),
         });
         break;
       }
@@ -169,6 +164,8 @@ export class LocalAuditLogShipper implements AuditLogShipper {
     // persisted before flush() returns
     // Maximum 3 retry attempts per entry to prevent infinite loops on persistent failures
     const maxRetries = 3;
+    // Per-flush count — entries shipped in this call only (not cumulative)
+    let flushedCount = 0;
 
     while (this.#retryQueue.length > 0) {
       const entry = this.#retryQueue[0];
@@ -182,15 +179,15 @@ export class LocalAuditLogShipper implements AuditLogShipper {
         try {
           // SI-001: flag:'a' — O_APPEND
           await appendFile(this.#path, line, { flag: "a" });
-          this.#shippedCount++;
+          flushedCount++;
           success = true;
         } catch (err) {
           retryCount++;
           if (retryCount >= maxRetries) {
             // Log the permanent failure but don't throw — flush() must complete
             this.#logger.error("audit.ship.retry.exhausted", {
-              reason: err instanceof Error ? err.message : String(err),
-              entryTimestamp: entry.timestamp,
+              attempt: retryCount,
+              error: err instanceof Error ? err.message : String(err),
             });
           }
         }
@@ -199,6 +196,6 @@ export class LocalAuditLogShipper implements AuditLogShipper {
       this.#retryQueue.shift();
     }
 
-    return this.#shippedCount;
+    return flushedCount;
   }
 }

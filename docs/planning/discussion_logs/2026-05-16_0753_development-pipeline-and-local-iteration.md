@@ -183,6 +183,9 @@ logger.info("session.started", { userId, sessionId, principalType })
 - `pipeline.trigger.failed` — level: error; context fields: `{ pipeline, reason }`; correlationId: false; fired by `cello-pipeline-filter` Lambda when `start_pipeline_execution` fails for a specific pipeline; the Lambda continues attempting other matched pipelines (DB-002); added in DEPLOY-004
 - `pipeline.filter.no_match` — level: info; context fields: `{ changedFileCount }`; correlationId: false; fired by `cello-pipeline-filter` Lambda when no changed path matches any mapping — push is silently ignored; added in DEPLOY-004
 - `pipeline.filter.mappings_load_failed` — level: error; context fields: `{ reason }`; correlationId: false; fired by `cello-pipeline-filter` Lambda when `pipeline-mappings.json` cannot be opened or parsed; Lambda returns 500; added in DEPLOY-004
+- `audit.shipper.retry.error` — level: error; context fields: `{ error }`; fired by `S3AuditLogShipper#scheduleRetry` when an unexpected error escapes the `#retryFlush` promise chain; guards the background retry loop from silently dying on unhandled rejections; added in SECOPS-001; package: directory
+- `audit.ship.failed` — level: error; context fields: `{ error }`; fired by `LocalAuditLogShipper.ship()` when the local file write rejects (e.g. path does not exist); the entry is placed in the retry queue before this event fires; added in PERSIST-006/SECOPS-001; package: interfaces/stubs
+- `audit.ship.retry.exhausted` — level: error; context fields: `{ attempt, error }`; fired by `LocalAuditLogShipper.flush()` when a retry queue entry fails to write after `maxRetries` attempts; the entry is discarded after this event; added in PERSIST-006/SECOPS-001; package: interfaces/stubs
 
 ---
 
