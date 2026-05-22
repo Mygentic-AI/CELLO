@@ -87,9 +87,7 @@ Resources:
   RotationLambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: >
-        CELLO RDS rotation Lambda - outbound to RDS port 5432 only.
-        No inbound traffic required (Lambda is invoked by Secrets Manager, not by network).
+      GroupDescription: "CELLO RDS rotation Lambda - outbound to RDS 5432 only"
       VpcId: !ImportValue
         Fn::Sub: "cello-${Environment}-vpc-id"
       SecurityGroupEgress:
