@@ -414,9 +414,9 @@ describe("DEPLOY-002: Dockerfile structure", () => {
     expect(content).toContain("docker-entrypoint.sh");
   });
 
-  it("exposes port 4000", () => {
+  it("exposes port 8080", () => {
     const content = readFileSync(dockerfilePath, "utf-8");
-    expect(content).toContain("EXPOSE 4000");
+    expect(content).toContain("EXPOSE 8080");
   });
 });
 

@@ -95,6 +95,6 @@ RUN chmod +x /app/docker-entrypoint.sh
 RUN useradd -r -s /bin/false cello
 USER cello
 
-EXPOSE 4000
+EXPOSE 8080
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

@@ -71,7 +71,7 @@ const listenAddr = process.env["CELLO_DIRECTORY_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/t
 const relayAddr = process.env["CELLO_RELAY_MULTIADDR"];
 const awsRegion = process.env["AWS_REGION"] ?? "us-east-1";
 const nodeId = process.env["NODE_ID"] ?? (env === "local" ? "local" : awsRegion);
-const healthPort = parseInt(process.env["HEALTH_PORT"] ?? "443", 10);
+const healthPort = parseInt(process.env["HEALTH_PORT"] ?? "8080", 10);
 const startedAt = Date.now();
 
 if (!relayAddr) {
