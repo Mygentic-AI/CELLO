@@ -667,8 +667,7 @@ Delivered the account grouping foundation required by M6 onboarding, M7 portal m
 ## What Remains Open
 
 - **SECOPS-003 AC-002/AC-007** — live request verification (rate-limit trigger, CommonRuleSet COUNT hit) pending manual test
-- **cello-crypto-pipeline** — flaky timing test (`keygen under 50ms`, gets 71ms on cold CodeBuild VMs). Threshold needs raising.
-- **cello-cicd-dev stack** — needs `./infra/deploy.sh dev us-east-1` after DEPLOY-005 merge (pipeline stages not active until redeployed)
+- **FEDERATION-E2E-001** — multi-node live smoke test; milestone close gate
 
 ---
 
