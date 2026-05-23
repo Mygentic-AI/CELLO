@@ -113,6 +113,53 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | SNS Topic — ops-critical | arn:aws:sns:eu-central-1:257394457473:cello-ops-critical-dev |
 | SNS Topic — ops-warning | arn:aws:sns:eu-central-1:257394457473:cello-ops-warning-dev |
 
+### dev — ap-northeast-1
+*Last deployed: 2026-05-23*
+
+| Stack | Status | Last Deployed | Notes |
+|---|---|---|---|
+| cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-iam-dev | CREATE_COMPLETE | 2026-05-23 | Region-scoped role names |
+| cello-secrets-dev | CREATE_COMPLETE | 2026-05-23 | Includes envelope-key placeholder |
+| cello-vpc-dev | CREATE_COMPLETE | 2026-05-23 | CIDR 10.2.0.0/16 |
+| cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-s3-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-rds-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-rotation-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-ecs-directory-dev | CREATE_COMPLETE | 2026-05-23 | Stub image running |
+| cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL |
+| cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-23 | Stub image running |
+| cello-cloudwatch-dev | CREATE_COMPLETE | 2026-05-23 | Alarms only — dashboard skipped (us-east-1 only) |
+| cello-route53-dev | CREATE_COMPLETE | 2026-05-23 | |
+
+#### Key Resources — dev ap-northeast-1
+
+| Resource | Value |
+|---|---|
+| VPC ID | vpc-09a2484e197738d18 |
+| VPC CIDR | 10.2.0.0/16 |
+| Private Subnet A | subnet-044662950bc5caa85 |
+| Private Subnet B | subnet-0bf9a32c30489202b |
+| Public Subnet A | subnet-0f6aff3a5b4bd84fd |
+| Public Subnet B | subnet-058e2b5494b0f94ae |
+| Private Route Table ID | rtb-0e890d359a5e7343c |
+| RDS Security Group | sg-0c2cde157e5d56b6e |
+| ECS Directory Security Group | sg-044abb3a83039a91f |
+| ECS Relay Security Group | sg-0086fe960206120e9 |
+| ALB Security Group | sg-0923b65ca091960c6 |
+| KMS Key ARN | arn:aws:kms:ap-northeast-1:257394457473:key/08735b67-1c27-494c-bb6a-e974c0cc0cff |
+| Audit Log Bucket | cello-audit-logs-dev-ap-northeast-1 |
+| Relay Manifest Bucket | cello-relay-manifest-dev-ap-northeast-1 |
+| RDS Endpoint | cello-dev.cryg2a8say19.ap-northeast-1.rds.amazonaws.com |
+| RDS Port | 5432 |
+| Directory ALB | cello-dir-dev-1435901052.ap-northeast-1.elb.amazonaws.com |
+| Route 53 Record | directory-ap1.cello.mygentic.ai |
+| ECS Cluster | arn:aws:ecs:ap-northeast-1:257394457473:cluster/cello-dev |
+| Directory Node Public Key | 9b4b673a16487ba47363e3eaff844bf68f19736d82967918fb896b813e39b984 |
+| Relay Node Public Key | 2b69812f22e11877f9bb72f855ab332bdb625997aa92bf582ce052f1c6167ca2 |
+| SNS Topic — ops-critical | arn:aws:sns:ap-northeast-1:257394457473:cello-ops-critical-dev |
+| SNS Topic — ops-warning | arn:aws:sns:ap-northeast-1:257394457473:cello-ops-warning-dev |
+
 ### staging — not deployed
 
 ### production — not deployed
