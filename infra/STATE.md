@@ -24,7 +24,8 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-22 | |
 | cello-rds-dev | CREATE_COMPLETE | 2026-05-22 | |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-05-23 | Lambda code fixed to preserve all secret fields on rotation |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-23 | Port 8080, DEV_ENVELOPE_KEY, RELAY_MULTIADDR, AUDIT_BUCKET |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-23 | AlbArn output added (SECOPS-003) |
+| cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL: rate-limit 1000/5min, IP reputation (BLOCK), CommonRuleSet (COUNT); logs to aws-waf-logs-cello-dev (SECOPS-003) |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-22 | |
 | cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-05-23 | 10 alarms with -dev suffix, 2 SNS topics, 1 multi-region dashboard (SECOPS-002) |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-22 | |
@@ -62,6 +63,8 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | SNS Topic — ops-critical | arn:aws:sns:us-east-1:257394457473:cello-ops-critical-dev |
 | SNS Topic — ops-warning | arn:aws:sns:us-east-1:257394457473:cello-ops-warning-dev |
 | CloudWatch Dashboard | cello-operations-dev |
+| WAF WebACL ARN | arn:aws:wafv2:us-east-1:257394457473:regional/webacl/cello-waf-dev/6b71004a-5edd-450b-90f3-d529908502c4 |
+| WAF Log Group | aws-waf-logs-cello-dev (90-day retention) |
 
 ### staging — not deployed
 
