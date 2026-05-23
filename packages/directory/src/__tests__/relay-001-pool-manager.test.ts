@@ -761,6 +761,122 @@ describe("DB-001: S3 unavailable at startup → logs relay.manifest.load.failed 
   });
 });
 
+// ─── AC-013: Empty signing key causes sign-manifest.sh to exit non-zero ──────
+
+describe("AC-013: sign-manifest.sh exits non-zero when signing key is empty", () => {
+  it("exits non-zero with the expected error message when the signing key secret is an empty placeholder", async () => {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { writeFileSync, mkdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const execFileAsync = promisify(execFile);
+
+    const scriptPath = new URL(
+      "../../../../infra/sign-manifest.sh",
+      import.meta.url,
+    ).pathname;
+
+    // Create a temp directory for the relay definitions file
+    const tmpDir = join(tmpdir(), `cello-ac013-test-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
+
+    const relayDefsPath = join(tmpDir, "relays.json");
+    writeFileSync(relayDefsPath, JSON.stringify([{
+      relayId: "aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa1111bbbb2222",
+      endpoint: "wss://relay.example.com",
+      region: "us-east-1",
+      status: "active",
+      healthCheckUrl: "http://10.0.0.1:4000/health",
+    }]));
+
+    // Create a mock aws script that returns the placeholder value
+    const mockAwsPath = join(tmpDir, "aws");
+    writeFileSync(mockAwsPath, `#!/bin/bash
+# Mock aws CLI — returns empty placeholder for secretsmanager, errors for s3
+if [[ "$1" == "secretsmanager" ]]; then
+  echo "PLACEHOLDER_POPULATE_VIA_CLI"
+  exit 0
+fi
+exit 1
+`, { mode: 0o755 });
+
+    try {
+      await execFileAsync("bash", [scriptPath, "dev", "us-east-1", relayDefsPath], {
+        env: {
+          ...process.env,
+          PATH: `${tmpDir}:${process.env["PATH"]}`,
+        },
+      });
+      // If we get here, the script didn't exit non-zero — fail the test
+      expect.fail("sign-manifest.sh should have exited non-zero");
+    } catch (err: unknown) {
+      const execError = err as { code: number; stderr: string };
+      expect(execError.code).not.toBe(0);
+      expect(execError.stderr).toContain(
+        "Signing key is empty — populate cello/dev/directory/node-private-key in Secrets Manager before signing the manifest",
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("exits non-zero when the signing key from Secrets Manager is empty string", async () => {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { writeFileSync, mkdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const execFileAsync = promisify(execFile);
+
+    const scriptPath = new URL(
+      "../../../../infra/sign-manifest.sh",
+      import.meta.url,
+    ).pathname;
+
+    const tmpDir = join(tmpdir(), `cello-ac013-empty-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
+
+    const relayDefsPath = join(tmpDir, "relays.json");
+    writeFileSync(relayDefsPath, JSON.stringify([{
+      relayId: "aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa1111bbbb2222",
+      endpoint: "wss://relay.example.com",
+      region: "us-east-1",
+      status: "active",
+      healthCheckUrl: "http://10.0.0.1:4000/health",
+    }]));
+
+    // Create a mock aws script that returns empty string (simulating empty secret)
+    const mockAwsPath = join(tmpDir, "aws");
+    writeFileSync(mockAwsPath, `#!/bin/bash
+# Mock aws CLI — returns empty for secretsmanager
+if [[ "$1" == "secretsmanager" ]]; then
+  echo ""
+  exit 0
+fi
+exit 1
+`, { mode: 0o755 });
+
+    try {
+      await execFileAsync("bash", [scriptPath, "dev", "us-east-1", relayDefsPath], {
+        env: {
+          ...process.env,
+          PATH: `${tmpDir}:${process.env["PATH"]}`,
+        },
+      });
+      expect.fail("sign-manifest.sh should have exited non-zero");
+    } catch (err: unknown) {
+      const execError = err as { code: number; stderr: string };
+      expect(execError.code).not.toBe(0);
+      expect(execError.stderr).toContain(
+        "Signing key is empty — populate cello/dev/directory/node-private-key in Secrets Manager before signing the manifest",
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
 // ─── AC-014: sign-ed25519.js is deterministic ────────────────────────────────
 
 describe("AC-014: sign-ed25519.js produces deterministic, verifiable signatures", () => {

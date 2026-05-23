@@ -46,6 +46,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SIGN_SCRIPT="${SCRIPT_DIR}/scripts/sign-ed25519.js"
+DERIVE_PUBKEY_SCRIPT="${SCRIPT_DIR}/scripts/derive-pubkey.js"
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
 
@@ -74,6 +75,11 @@ fi
 
 if [[ ! -f "${SIGN_SCRIPT}" ]]; then
   echo "ERROR: sign-ed25519.js not found at: ${SIGN_SCRIPT}" >&2
+  exit 1
+fi
+
+if [[ ! -f "${DERIVE_PUBKEY_SCRIPT}" ]]; then
+  echo "ERROR: derive-pubkey.js not found at: ${DERIVE_PUBKEY_SCRIPT}" >&2
   exit 1
 fi
 
@@ -126,14 +132,8 @@ echo "  Signing key retrieved."
 # ── Derive public key (signedBy field) ────────────────────────────────────────
 
 # Derive the public key from the private key to construct the signedBy field.
-# We use infra/scripts/generate-node-keys.sh's derive_ed25519_public_key_hex logic
-# but inline it here for portability.
-SIGNING_PUBLIC_KEY_HEX=$(node -e "
-  const { ed25519 } = await import('@noble/curves/ed25519.js');
-  const priv = Buffer.from(process.argv[1], 'hex');
-  const pub = ed25519.getPublicKey(priv);
-  process.stdout.write(Buffer.from(pub).toString('hex') + '\n');
-" -- "${SIGNING_KEY}" 2>/dev/null || echo "")
+# Uses derive-pubkey.js which resolves @noble/curves via createRequire (ESM-safe).
+SIGNING_PUBLIC_KEY_HEX=$(node "${DERIVE_PUBKEY_SCRIPT}" "${SIGNING_KEY}" 2>/dev/null || echo "")
 
 if [[ -z "${SIGNING_PUBLIC_KEY_HEX}" ]]; then
   echo "ERROR: failed to derive public key from signing key" >&2
@@ -156,6 +156,12 @@ if [[ -n "${CURRENT_MANIFEST_JSON}" ]]; then
   echo "  Current manifest version: ${CURRENT_VERSION}"
 else
   echo "  No existing manifest — starting at version 1."
+fi
+
+# HIGH-3: Guard against unparseable existing manifest — refuse to reset version
+if [[ -n "${CURRENT_MANIFEST_JSON}" ]] && [[ -z "${CURRENT_VERSION}" || "${CURRENT_VERSION}" == "0" ]]; then
+  echo "ERROR: existing manifest in S3 could not be parsed — refusing to reset version" >&2
+  exit 1
 fi
 
 NEW_VERSION=$((CURRENT_VERSION + 1))

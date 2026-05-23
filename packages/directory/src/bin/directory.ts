@@ -471,7 +471,7 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       // In local mode, manifest load failure is non-fatal — fall back to hardcoded relay
-      logger.warn("relay.manifest.load.failed", { reason: msg, attempt: 1, env });
+      logger.error("relay.manifest.load.failed", { reason: msg, attempt: 5, env });
       mgr.stop();
       return undefined;
     }
@@ -491,7 +491,7 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     // AC-002: manifest load failure in dev/staging/production is fatal
-    logger.error("relay.manifest.load.failed", { reason: msg, attempt: 1, env });
+    logger.error("relay.manifest.load.failed", { reason: msg, attempt: 5, env });
     process.exit(1);
   }
   return mgr;

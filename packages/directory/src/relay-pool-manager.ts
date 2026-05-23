@@ -218,9 +218,11 @@ export class RelayPoolManager {
    */
   async loadManifest(): Promise<void> {
     let raw: Uint8Array | undefined;
+    let lastAttempt = 0;
 
     // DB-001: retry with exponential backoff on S3 failures
     for (let attempt = 1; attempt <= this.#maxLoadAttempts; attempt++) {
+      lastAttempt = attempt;
       try {
         raw = await this.#storage.download("relay-manifest.json");
         break; // success
@@ -239,7 +241,7 @@ export class RelayPoolManager {
 
     if (!raw) {
       const reason = "manifest not found in S3";
-      this.#logger.error("relay.manifest.load.failed", { reason, attempt: this.#maxLoadAttempts });
+      this.#logger.error("relay.manifest.load.failed", { reason, attempt: lastAttempt });
       throw new Error(reason);
     }
 
@@ -293,7 +295,10 @@ export class RelayPoolManager {
   }
 
   /**
-   * Apply a pre-verified manifest to the pool state.
+   * Apply an already-verified manifest to in-memory pool state.
+   * Caller is responsible for verifying the manifest signature before calling.
+   * Use loadManifest() for the full load-verify-apply flow.
+   *
    * Checks version monotonicity (SI-003), updates relay pool state.
    * Called by loadManifest() after signature verification.
    * Exposed for testing (allows testing staleness rejection separately from sig verification).
@@ -367,56 +372,61 @@ export class RelayPoolManager {
   }
 
   /**
-   * Run one round of health checks against all relays.
+   * Run one round of health checks against all relays concurrently.
    * AC-003: logs relay.health.check.passed on success.
    * AC-004: logs relay.health.check.failed on 3 consecutive failures.
    * AC-005: logs relay.pool.recovered on 3 consecutive successes after unavailability.
    */
   async #runHealthChecks(): Promise<void> {
-    for (const relay of this.#currentRelays) {
-      // Draining relays still get health checked (they may still serve existing sessions)
-      // but their availability state doesn't affect assignment
-      const state = this.#failureState.get(relay.relayId);
-      if (!state) continue;
+    await Promise.allSettled(
+      this.#currentRelays.map(relay => this.#pingOne(relay)),
+    );
+  }
 
-      const startTime = Date.now();
-      let result: PingResult;
-      try {
-        result = await this.#pingFn(relay.healthCheckUrl);
-      } catch (err: unknown) {
-        result = { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  /**
+   * Ping a single relay and update its health state.
+   */
+  async #pingOne(relay: RelayManifestEntry): Promise<void> {
+    const state = this.#failureState.get(relay.relayId);
+    if (!state) return;
+
+    const startTime = Date.now();
+    let result: PingResult;
+    try {
+      result = await this.#pingFn(relay.healthCheckUrl);
+    } catch (err: unknown) {
+      result = { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+    const latencyMs = Date.now() - startTime;
+
+    if (result.ok) {
+      state.consecutiveFailures = 0;
+      state.consecutiveSuccesses++;
+
+      // AC-005: relay recovers after failureThreshold consecutive successes
+      if (!state.available && state.consecutiveSuccesses >= this.#failureThreshold) {
+        const downtimeDurationMs = state.unavailableSince !== undefined
+          ? Date.now() - state.unavailableSince
+          : 0;
+        state.available = true;
+        state.unavailableSince = undefined;
+        this.#logger.info("relay.pool.recovered", { relayId: relay.relayId, downtimeDurationMs });
       }
-      const latencyMs = Date.now() - startTime;
 
-      if (result.ok) {
-        state.consecutiveFailures = 0;
-        state.consecutiveSuccesses++;
+      this.#logger.info("relay.health.check.passed", { relayId: relay.relayId, latencyMs });
+    } else {
+      state.consecutiveSuccesses = 0;
+      state.consecutiveFailures++;
 
-        // AC-005: relay recovers after failureThreshold consecutive successes
-        if (!state.available && state.consecutiveSuccesses >= this.#failureThreshold) {
-          const downtimeDurationMs = state.unavailableSince !== undefined
-            ? Date.now() - state.unavailableSince
-            : 0;
-          state.available = true;
-          state.unavailableSince = undefined;
-          this.#logger.info("relay.pool.recovered", { relayId: relay.relayId, downtimeDurationMs });
-        }
-
-        this.#logger.info("relay.health.check.passed", { relayId: relay.relayId, latencyMs });
-      } else {
-        state.consecutiveSuccesses = 0;
-        state.consecutiveFailures++;
-
-        // AC-004: mark unavailable after failureThreshold consecutive failures
-        if (state.available && state.consecutiveFailures >= this.#failureThreshold) {
-          state.available = false;
-          state.unavailableSince = Date.now();
-          this.#logger.warn("relay.health.check.failed", {
-            relayId: relay.relayId,
-            consecutiveFailures: this.#failureThreshold,
-            reason: result.reason ?? "unknown",
-          });
-        }
+      // AC-004: mark unavailable after failureThreshold consecutive failures
+      if (state.available && state.consecutiveFailures >= this.#failureThreshold) {
+        state.available = false;
+        state.unavailableSince = Date.now();
+        this.#logger.warn("relay.health.check.failed", {
+          relayId: relay.relayId,
+          consecutiveFailures: this.#failureThreshold,
+          reason: result.reason ?? "unknown",
+        });
       }
     }
   }
