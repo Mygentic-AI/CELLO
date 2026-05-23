@@ -64,10 +64,18 @@ put_secret_if_empty() {
     return 0
   fi
 
-  aws secretsmanager put-secret-value \
-    --secret-id "${secret_id}" \
-    --secret-string "${secret_value}" \
-    --region "${REGION}" >/dev/null 2>&1
+  # Secret may not exist yet (not created by CloudFormation) — create or update
+  if aws secretsmanager describe-secret --secret-id "${secret_id}" --region "${REGION}" >/dev/null 2>&1; then
+    aws secretsmanager put-secret-value \
+      --secret-id "${secret_id}" \
+      --secret-string "${secret_value}" \
+      --region "${REGION}" >/dev/null 2>&1
+  else
+    aws secretsmanager create-secret \
+      --name "${secret_id}" \
+      --secret-string "${secret_value}" \
+      --region "${REGION}" >/dev/null 2>&1
+  fi
 
   echo "  SET:  ${description}"
 }
@@ -125,7 +133,16 @@ else
   echo "  WARN: KMS key ARN not found — deploy cello-kms stack first"
 fi
 
-# ── 5. GitHub webhook HMAC secret ───────────────────────────────────────────
+# ── 5. Directory envelope key (AES-256) ─────────────────────────────────────
+
+echo "Generating directory envelope key..."
+ENVELOPE_KEY=$(openssl rand -hex 32)
+put_secret_if_empty \
+  "cello/${ENVIRONMENT}/directory/envelope-key" \
+  "${ENVELOPE_KEY}" \
+  "Directory envelope encryption key (AES-256)"
+
+# ── 6. GitHub webhook HMAC secret ───────────────────────────────────────────
 
 echo "Generating GitHub webhook HMAC secret..."
 HMAC_SECRET=$(openssl rand -hex 32)
