@@ -115,10 +115,23 @@ With core infrastructure stable, SECOPS-004 added operational security tooling n
 ### 4. `cello_service` role doesn't exist yet — rotation correctly fails
 
 **Symptom:** After all IAM and credential fixes, rotation failed at `setSecret` with `role "cello_service" does not exist`.  
-**Root cause:** This is not a bug. `cello_service` is created by Flyway migration V18, which only runs when ECS tasks start with the real application image. ECS was still running the stub image because the directory pipeline has no Docker build or ECS deploy stage.  
-**Status:** AC-002 and AC-003 remain blocked on DEPLOY-002/DEPLOY-003 adding a Deploy stage to `cello-directory-pipeline`. Once ECS cycles to the real image and Flyway runs, the rotation can be re-triggered and both ACs verified in minutes.
+**Root cause:** This is not a bug. `cello_service` is created by Flyway migration V18, which only runs when ECS tasks start with the real application image. ECS was still running the stub image because the directory pipeline had no Docker build or ECS deploy stage yet.  
+**Fix:** Blocked until DEPLOY-002/DEPLOY-003 added a Deploy stage to `cello-directory-pipeline`. Once they landed, ECS cycled to the real image, Flyway ran V18, and the role existed.
 
-Stack count is now 12.
+### 5. Pipeline deploy stage overwrites rotation Lambda with CFN placeholder
+
+**Symptom:** After DEPLOY-002/003 deployed real images, rotation failed again with `No module named 'psycopg2'`.  
+**Root cause:** The directory pipeline's deploy stage clones the existing ECS task definition and swaps only the image URI. As a side effect it triggers a CloudFormation update that restores the rotation Lambda to its inline placeholder code, overwriting the real handler previously deployed by `deploy-lambdas.sh`.  
+**Fix:** Re-ran `./infra/deploy-lambdas.sh dev rotation` after the pipeline completed.  
+**Rule:** The rotation Lambda must be redeployed via `deploy-lambdas.sh` after every directory pipeline run until the pipeline itself is updated to deploy `infra/lambda/rds-rotation/`.
+
+**Final result:** All four rotation steps completed on 2026-05-23:
+- `createSecret` — new password stored as AWSPENDING ✓
+- `setSecret` — `ALTER ROLE cello_service PASSWORD '...'` applied ✓
+- `testSecret` — new credential authenticated against RDS ✓
+- `finishSecret` — AWSCURRENT advanced, `secrets.rotation.completed` logged ✓
+
+ECS task undisturbed throughout. AC-002 and AC-003 both verified. Stack count is now 12.
 
 ---
 

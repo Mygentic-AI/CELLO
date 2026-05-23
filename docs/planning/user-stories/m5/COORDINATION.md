@@ -322,3 +322,5 @@ DEPLOY-002/003 deployed real images and Flyway ran V18. Redeployed rotation Lamb
 **SECOPS-004 is fully complete. All ACs verified.**
 
 **Note for future agents:** The `cello-directory-pipeline` deploy stage overwrites the rotation Lambda with the CFN placeholder on every pipeline run. Until the pipeline is updated to also deploy `infra/lambda/rds-rotation/handler.py`, run `./infra/deploy-lambdas.sh dev rotation` after any directory pipeline run to restore real handler code.
+
+**Waiting on: whoever owns the directory pipeline buildspec** — add a step to deploy the rotation Lambda after the ECS deploy step, or add a separate `cello-rotation-pipeline` triggered by changes to `infra/lambda/rds-rotation/`.
