@@ -135,7 +135,7 @@ fi
 # ── Observability helpers ─────────────────────────────────────────────────────
 
 # cello-cicd deploys to us-east-1 only — adjust count per region
-# +1 for cello-rotation (SECOPS-004), +1 for cello-cloudwatch (SECOPS-002)
+# +1 for cello-rotation (SECOPS-004), +1 for cello-waf (SECOPS-003), +1 for cello-cloudwatch (SECOPS-002)
 if [[ "${REGION}" == "us-east-1" ]]; then
   STACK_COUNT=13
 else
@@ -246,7 +246,7 @@ read_output() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# DEPLOYMENT SEQUENCE — 12 stacks in dependency order (13 in us-east-1 with cello-cicd)
+# DEPLOYMENT SEQUENCE — 13 stacks in dependency order (14 in us-east-1 with cello-cicd)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ── STEP 0: cello-ecr — ECR repos (no dependencies, must exist before ECS) ──
@@ -357,6 +357,15 @@ else
   echo "  AlbHostedZoneId:  ${ALB_HOSTED_ZONE_ID}"
 fi
 
+# ── STEP 8a: cello-waf — WAF WebACL associated with directory ALB ────────────
+# depends on: cello-ecs-directory (imports cello-${ENVIRONMENT}-alb-arn via
+# cross-stack reference; CloudFormation enforces ordering automatically)
+# GeoBlockingEnabled defaults to "false" — geo-blocking is a manual operator
+# action, not part of automated deployments. See AC-004, AC-005.
+
+deploy_stack "cello-waf-${ENVIRONMENT}" "cello-waf.yaml" \
+  "Environment=${ENVIRONMENT}"
+
 # ── STEP 9: cello-ecs-relay — relay ECS service ───────────────────────────────
 # depends on: cello-iam, cello-vpc, cello-ecs-directory (for cluster ARN)
 
@@ -427,6 +436,7 @@ for stack in \
   "cello-rds-${ENVIRONMENT}" \
   "cello-rotation-${ENVIRONMENT}" \
   "cello-ecs-directory-${ENVIRONMENT}" \
+  "cello-waf-${ENVIRONMENT}" \
   "cello-ecs-relay-${ENVIRONMENT}" \
   "cello-cloudwatch-${ENVIRONMENT}" \
   "cello-route53-${ENVIRONMENT}"; do
