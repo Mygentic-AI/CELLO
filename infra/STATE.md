@@ -66,6 +66,53 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | WAF WebACL ARN | arn:aws:wafv2:us-east-1:257394457473:regional/webacl/cello-waf-dev/6b71004a-5edd-450b-90f3-d529908502c4 |
 | WAF Log Group | aws-waf-logs-cello-dev (90-day retention) |
 
+### dev — eu-central-1
+*Last deployed: 2026-05-23*
+
+| Stack | Status | Last Deployed | Notes |
+|---|---|---|---|
+| cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-iam-dev | CREATE_COMPLETE | 2026-05-23 | Region-scoped role names (fix: FEDERATION-E2E-001) |
+| cello-secrets-dev | CREATE_COMPLETE | 2026-05-23 | Includes envelope-key placeholder (fix: FEDERATION-E2E-001) |
+| cello-vpc-dev | CREATE_COMPLETE | 2026-05-23 | CIDR 10.1.0.0/16 |
+| cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-s3-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-rds-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-rotation-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-ecs-directory-dev | CREATE_COMPLETE | 2026-05-23 | Stub image running |
+| cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL |
+| cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-23 | Stub image running |
+| cello-cloudwatch-dev | CREATE_COMPLETE | 2026-05-23 | Alarms only — dashboard skipped (us-east-1 only) |
+| cello-route53-dev | CREATE_COMPLETE | 2026-05-23 | |
+
+#### Key Resources — dev eu-central-1
+
+| Resource | Value |
+|---|---|
+| VPC ID | vpc-04305bc6b6fe43406 |
+| VPC CIDR | 10.1.0.0/16 |
+| Private Subnet A | subnet-06e32e9f16fff5a35 |
+| Private Subnet B | subnet-069064d143f5913dc |
+| Public Subnet A | subnet-019bf77e7151de0ed |
+| Public Subnet B | subnet-007407e0ec1beef83 |
+| Private Route Table ID | rtb-0ae553aa68ff6b39c |
+| RDS Security Group | sg-0f8c3f52c03e71d4e |
+| ECS Directory Security Group | sg-03bbc9555ec64bb3b |
+| ECS Relay Security Group | sg-059f34c83eda437f0 |
+| ALB Security Group | sg-03a26d8b34d60b4f7 |
+| KMS Key ARN | arn:aws:kms:eu-central-1:257394457473:key/708cea66-0fa3-4bcb-8120-b98ae5038953 |
+| Audit Log Bucket | cello-audit-logs-dev-eu-central-1 |
+| Relay Manifest Bucket | cello-relay-manifest-dev-eu-central-1 |
+| RDS Endpoint | cello-dev.clu08oy88g6v.eu-central-1.rds.amazonaws.com |
+| RDS Port | 5432 |
+| Directory ALB | cello-dir-dev-1699677837.eu-central-1.elb.amazonaws.com |
+| Route 53 Record | directory-eu1.cello.mygentic.ai |
+| ECS Cluster | arn:aws:ecs:eu-central-1:257394457473:cluster/cello-dev |
+| Directory Node Public Key | 8105b180b753d97b50039a7e94433fd2b419f43d61f9ad7caf2ac15ad5cd1b45 |
+| Relay Node Public Key | 015ffd3a10c58019128806dc94c7c737146f448cdd0a97c6fa05be9cc04471e8 |
+| SNS Topic — ops-critical | arn:aws:sns:eu-central-1:257394457473:cello-ops-critical-dev |
+| SNS Topic — ops-warning | arn:aws:sns:eu-central-1:257394457473:cello-ops-warning-dev |
+
 ### staging — not deployed
 
 ### production — not deployed
@@ -77,8 +124,12 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | Resource | Value | Notes |
 |---|---|---|
 | AWS Account ID | 257394457473 | |
-| ECR repo — directory | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory | us-east-1 only until per-region repos added |
-| ECR repo — relay | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay | us-east-1 only until per-region repos added |
+| ECR repo — directory (us-east-1) | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory | |
+| ECR repo — relay (us-east-1) | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay | |
+| ECR repo — directory (eu-central-1) | 257394457473.dkr.ecr.eu-central-1.amazonaws.com/cello-directory | |
+| ECR repo — relay (eu-central-1) | 257394457473.dkr.ecr.eu-central-1.amazonaws.com/cello-relay | |
+| ECR repo — directory (ap-northeast-1) | 257394457473.dkr.ecr.ap-northeast-1.amazonaws.com/cello-directory | Added by FEDERATION-E2E-001 |
+| ECR repo — relay (ap-northeast-1) | 257394457473.dkr.ecr.ap-northeast-1.amazonaws.com/cello-relay | Added by FEDERATION-E2E-001 |
 | Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:1c68fbb | Built from commit 1c68fbb, deployed 2026-05-23 |
 | Current relay image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay:6e0c50b | Built from commit 6e0c50b, deployed 2026-05-22 |
 | Route 53 Hosted Zone | cello.mygentic.ai | Zone ID read at deploy time via aws route53 list-hosted-zones |
