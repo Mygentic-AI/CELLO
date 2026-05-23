@@ -84,11 +84,13 @@ export interface ICheckpointTransport {
    * Pseudocode:
    *   1. Open a libp2p stream to the peer node at its VPC Peering endpoint:4001.
    *   2. Send the proposal: { checkpointId, checkpointHash, mmrPeaks, identityMerkleRoot, mmrLeafCount }.
-   *   3. The peer independently recomputes the hash and returns { nodeId, signature } if it matches.
+   *   3. The peer independently recomputes the hash and returns { nodeId, signature, publicKeyHex } if it matches.
+   *      publicKeyHex is the peer's Ed25519 public key (hex-encoded) — used by the coordinator to verify
+   *      the signature before counting it toward the threshold (Critical fix: signatures must be verified).
    *   4. If the peer returns a hash mismatch error, throw with the peer's computed hash.
    *   5. If the stream times out (roundTimeoutMs), return null.
    *
-   * @returns The peer's signature response, or null if the round timed out or the peer was unreachable.
+   * @returns The peer's signature response (including its public key for verification), or null if timed out.
    */
   sendCheckpointProposal(
     peerNodeId: string,
@@ -107,6 +109,16 @@ export interface ICheckpointTransport {
    * Used to determine coordinator role and available signing nodes.
    */
   getPeerNodeIds(): Promise<string[]>;
+}
+
+/**
+ * A signature returned by a peer node, including its public key for coordinator-side verification.
+ * Extended from CheckpointSignatureResponse to carry the public key needed by the coordinator
+ * to verify the signature before counting it toward threshold (Critical: prevents forged signatures).
+ */
+export interface CheckpointSignatureWithKey extends CheckpointSignatureResponse {
+  /** Hex-encoded Ed25519 public key of the signing peer — for coordinator-side signature verification. */
+  publicKeyHex: string;
 }
 
 // ─── Batch sort ───────────────────────────────────────────────────────────────
@@ -235,6 +247,17 @@ export class CheckpointCoordinator {
     this.#intervalHandle = setInterval(() => void this.#onTimer(), this.#checkpointIntervalMs);
     // Gap alarm: check every minute
     this.#gapAlarmHandle = setInterval(() => void this.#checkGap(), 60 * 1000);
+  }
+
+  /**
+   * Explicitly check whether the checkpoint gap alarm threshold has been exceeded.
+   *
+   * Exposed as a public method so operator tooling and integration tests can trigger
+   * the gap-alarm check without waiting for the 60-second poll interval.
+   * Production code uses the internal setInterval; this method is the same code path.
+   */
+  async checkGapNow(): Promise<void> {
+    return this.#checkGap();
   }
 
   /** Stop the checkpoint timer and gap alarm. */
@@ -460,15 +483,54 @@ export class CheckpointCoordinator {
             proposalPayload,
             this.#roundTimeoutMs,
           );
-          if (response !== null && !seenNodeIds.has(response.nodeId)) {
-            seenNodeIds.add(response.nodeId);
-            signaturesCollected.push(response);
-            this.#logger.info("federation.checkpoint.signature.received", {
+          if (response === null) return; // timeout or unreachable
+
+          // Critical fix 1: response.nodeId must match the addressed peer.
+          // Prevents a compromised transport from routing to peer A but returning nodeId=B,
+          // consuming B's slot without B actually signing.
+          if (response.nodeId !== peerNodeId) {
+            this.#logger.warn("federation.checkpoint.signature.node_id_mismatch", {
+              checkpointId,
+              addressedPeer: peerNodeId,
+              claimedNodeId: response.nodeId,
+              correlationId,
+            });
+            return;
+          }
+
+          if (seenNodeIds.has(response.nodeId)) return; // SI-001: deduplicate
+
+          // Critical fix 2: verify the signature using the peer's public key (RFC 8032).
+          // A compromised peer can return any string as signature — without verification,
+          // any response would be counted toward the 2-of-3 threshold.
+          const responseWithKey = response as CheckpointSignatureResponse & { publicKeyHex?: string };
+          if (!responseWithKey.publicKeyHex) {
+            this.#logger.warn("federation.checkpoint.signature.missing_pubkey", {
               checkpointId,
               signingNodeId: response.nodeId,
               correlationId,
             });
+            return;
           }
+          const sigBytes = Buffer.from(response.signature, "hex");
+          const pubKeyBytes = Buffer.from(responseWithKey.publicKeyHex, "hex");
+          const isValid = verify(pubKeyBytes, hashBytes, sigBytes);
+          if (!isValid) {
+            this.#logger.warn("federation.checkpoint.signature.invalid", {
+              checkpointId,
+              signingNodeId: response.nodeId,
+              correlationId,
+            });
+            return;
+          }
+
+          seenNodeIds.add(response.nodeId);
+          signaturesCollected.push(response);
+          this.#logger.info("federation.checkpoint.signature.received", {
+            checkpointId,
+            signingNodeId: response.nodeId,
+            correlationId,
+          });
         } catch {
           // Peer unreachable or returned error — skip for this round
         }

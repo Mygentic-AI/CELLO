@@ -1069,7 +1069,10 @@ export class PgDirectoryStore implements DirectoryStore {
         mmr_leaf_count: params.mmrLeafCount,
         peak_hash: params.checkpointHash,   // reuse peak_hash column (V5 compat)
         staged_seal_count: 0,
-        mmr_peaks: JSON.stringify(params.mmrPeaks),
+        // Use the native array here (not JSON.stringify) so the chain hash matches
+        // what the pg driver returns on read-back (JSONB columns come back as parsed JS arrays).
+        // The INSERT uses $5::jsonb with JSON.stringify separately — these are distinct concerns.
+        mmr_peaks: params.mmrPeaks,
         identity_merkle_root: params.identityMerkleRoot,
         checkpoint_hash: params.checkpointHash,
         coordinator_node_id: params.coordinatorNodeId,
@@ -1082,7 +1085,12 @@ export class PgDirectoryStore implements DirectoryStore {
       const serialized = serializeRecord(record, "directory_checkpoints");
       const chainHash = computeChainHash(serialized, previousHash);
 
-      await client.query(
+      // ON CONFLICT DO NOTHING: checkpoint_id is a fresh UUID minted per round — conflicts
+      // cannot occur in normal operation. The clause exists as a crash-recovery guard only:
+      // if the coordinator retries after a crash before clearing staging, the second INSERT
+      // is a no-op and the caller proceeds to clear staging using the already-confirmed row.
+      // checkpointId is always caller-generated via randomUUID() — reuse across rounds never happens.
+      const result = await client.query(
         `INSERT INTO directory_checkpoints
            (checkpoint_id, mmr_leaf_count, peak_hash, staged_seal_count,
             mmr_peaks, identity_merkle_root, checkpoint_hash, coordinator_node_id,
@@ -1101,6 +1109,15 @@ export class PgDirectoryStore implements DirectoryStore {
           chainHash,
         ],
       );
+
+      // If rowCount is 0, checkpoint already exists (crash-recovery path).
+      // Log at WARN so reuse is observable; do not throw — caller clears staging normally.
+      if (result.rowCount === 0) {
+        this.#logger.warn("adapter.checkpoint.already_exists", {
+          tableName: "directory_checkpoints",
+          checkpointId: params.checkpointId,
+        });
+      }
 
       await client.query("COMMIT");
     } catch (err) {

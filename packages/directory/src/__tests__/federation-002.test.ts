@@ -69,13 +69,19 @@
  *   [Integration — tested as part of AC-006 extended scenario]
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { PgDirectoryStore, BIGINT_COLUMNS, STORE_TABLES } from "../adapters/pg-directory-store.js";
 import { MmrStore } from "../mmr-store.js";
-import { sortSealBatch, type SealBatchRow } from "../checkpoint-coordinator.js";
-import { computeCheckpointHash, buildCheckpointTbs } from "@cello/crypto";
+import {
+  CheckpointCoordinator,
+  sortSealBatch,
+  type SealBatchRow,
+  type ICheckpointTransport,
+  type CheckpointSignatureResponse,
+} from "../checkpoint-coordinator.js";
+import { computeCheckpointHash, buildCheckpointTbs, generateKeypair } from "@cello/crypto";
 import { configurePgTypes } from "../pg-type-config.js";
 import type { Logger } from "@cello/interfaces";
 
@@ -477,6 +483,7 @@ describeIntegration("FEDERATION-002 integration: AC-007 checkpoint round timeout
   let superPool: pg.Pool;
   let servicePool: pg.Pool;
   let mmrStore: MmrStore;
+  let pgStore: PgDirectoryStore;
   let logger: Logger;
   let logCalls: Array<{ level: string; event: string; context: unknown }>;
 
@@ -495,6 +502,7 @@ describeIntegration("FEDERATION-002 integration: AC-007 checkpoint round timeout
     logger = loggerAndCalls.logger;
     logCalls = loggerAndCalls.calls;
     mmrStore = new MmrStore(servicePool, logger);
+    pgStore = new PgDirectoryStore(servicePool, logger, "test-node-ac007", "us-east-1");
   });
 
   afterAll(async () => {
@@ -502,7 +510,7 @@ describeIntegration("FEDERATION-002 integration: AC-007 checkpoint round timeout
     await servicePool?.end();
   });
 
-  it("AC-007: skipped round — federation.checkpoint.skipped at WARN with required fields, staging NOT cleared, no new checkpoint row", async () => {
+  it("AC-007: skipped round — real CheckpointCoordinator.runRound() with all-timeout transport logs federation.checkpoint.skipped, staging NOT cleared, no new checkpoint row", async () => {
     // Setup: append 2 seals to staging
     const sessionId1 = randomUUID();
     const sessionId2 = randomUUID();
@@ -516,33 +524,51 @@ describeIntegration("FEDERATION-002 integration: AC-007 checkpoint round timeout
       `SELECT COUNT(*) AS count FROM conversation_seal_staging WHERE session_id = ANY($1)`,
       [[sessionId1, sessionId2]],
     );
-    const countBefore = parseInt(before.rows[0]!.count, 10);
-    expect(countBefore).toBe(2);
+    expect(parseInt(before.rows[0]!.count, 10)).toBe(2);
 
-    // Simulate a skipped round: log the event and verify staging is not cleared
-    const checkpointId = randomUUID();
-    const availableNodes = 1;
-    const requiredThreshold = 2;
-    const correlationId = randomUUID();
+    // Count checkpoint rows before
+    const checkpointsBefore = await servicePool.query<{ count: string }>(
+      "SELECT COUNT(*) AS count FROM directory_checkpoints",
+    );
+    const checkpointCountBefore = parseInt(checkpointsBefore.rows[0]!.count, 10);
 
-    // The CheckpointCoordinator calls this when the round times out:
-    logger.warn("federation.checkpoint.skipped", {
-      checkpointId,
-      availableNodes,
-      requiredThreshold,
-      correlationId,
-    });
+    // Build a stub transport that always returns null (simulates all peers timing out)
+    const timeoutTransport: ICheckpointTransport = {
+      async sendCheckpointProposal() { return null; },
+      async getPeerNodeIds() { return ["test-node-peer-b", "test-node-peer-c"]; },
+    };
 
-    // Verify: event logged with correct fields
+    const keyProvider = generateKeypair();
+
+    const coordinator = new CheckpointCoordinator(
+      pgStore,
+      mmrStore,
+      timeoutTransport,
+      keyProvider,
+      logger,
+      {
+        nodeId: "test-node-ac007", // lowest node_id among [test-node-ac007, test-node-peer-b, test-node-peer-c]
+        checkpointIntervalMs: 600_000,
+        roundTimeoutMs: 1, // 1ms — effectively immediate timeout
+        requiredThreshold: 2,
+        failoverDetectionMs: Infinity, // never failover in this test
+      },
+    );
+
+    // Run a real round — coordinator signs, peers time out → only 1 sig → skipped
+    const result = await coordinator.runRound();
+    expect(result).toBeNull();
+
+    // Verify: federation.checkpoint.skipped logged at WARN with required fields
     const skippedEvent = logCalls.find(
       (c) => c.level === "warn" && c.event === "federation.checkpoint.skipped",
     );
-    expect(skippedEvent).toBeDefined();
+    expect(skippedEvent, "federation.checkpoint.skipped not logged by real coordinator").toBeDefined();
     const ctx = skippedEvent!.context as Record<string, unknown>;
-    expect(ctx["checkpointId"]).toBe(checkpointId);
-    expect(ctx["availableNodes"]).toBe(availableNodes);
-    expect(ctx["requiredThreshold"]).toBe(requiredThreshold);
-    expect(ctx["correlationId"]).toBe(correlationId);
+    expect(ctx["availableNodes"]).toBe(1); // only coordinator's own sig
+    expect(ctx["requiredThreshold"]).toBe(2);
+    expect(typeof ctx["checkpointId"]).toBe("string");
+    expect(typeof ctx["correlationId"]).toBe("string");
 
     // Verify: staging rows still exist (not cleared on skip)
     const after = await servicePool.query<{ count: string }>(
@@ -550,6 +576,12 @@ describeIntegration("FEDERATION-002 integration: AC-007 checkpoint round timeout
       [[sessionId1, sessionId2]],
     );
     expect(parseInt(after.rows[0]!.count, 10)).toBe(2);
+
+    // Verify: no new checkpoint row written
+    const checkpointsAfter = await servicePool.query<{ count: string }>(
+      "SELECT COUNT(*) AS count FROM directory_checkpoints",
+    );
+    expect(parseInt(checkpointsAfter.rows[0]!.count, 10)).toBe(checkpointCountBefore);
 
     // Cleanup
     await superPool.query(
@@ -560,40 +592,116 @@ describeIntegration("FEDERATION-002 integration: AC-007 checkpoint round timeout
 });
 
 describeIntegration("FEDERATION-002 integration: AC-006 hash mismatch — signature withheld", () => {
+  let superPool: pg.Pool;
+  let servicePool: pg.Pool;
   let logger: Logger;
   let logCalls: Array<{ level: string; event: string; context: unknown }>;
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    configurePgTypes();
+    superPool = new pg.Pool({ connectionString: DATABASE_URL });
+    servicePool = new pg.Pool({ connectionString: SERVICE_URL });
+    try {
+      await superPool.query("SELECT 1");
+    } catch (err) {
+      throw new Error(
+        `[FEDERATION-002] CELLO_ENV=local but Postgres is unreachable at ${DATABASE_URL}: ${String(err)}`,
+      );
+    }
     const loggerAndCalls = makeLogger();
     logger = loggerAndCalls.logger;
     logCalls = loggerAndCalls.calls;
   });
 
-  it("AC-006: hash mismatch → federation.checkpoint.proposal.hash_mismatch at ERROR with required fields", () => {
-    // A non-coordinator node independently computes a different hash than what was proposed.
-    // It must log the mismatch and withhold its signature.
-    const nodeId = "test-node-verifier";
-    const checkpointId = randomUUID();
-    const expectedHash = "aa".repeat(32);
-    const receivedHash = "bb".repeat(32);
+  afterAll(async () => {
+    await superPool?.end();
+    await servicePool?.end();
+  });
 
-    // Simulating the verifier's hash mismatch path:
-    logger.error("federation.checkpoint.proposal.hash_mismatch", {
-      nodeId,
+  it("AC-006: real CheckpointCoordinator.verifyAndSign() with corrupted proposal hash → returns null and logs federation.checkpoint.proposal.hash_mismatch at ERROR", async () => {
+    const keyProvider = generateKeypair();
+    const pgStore = new PgDirectoryStore(servicePool, logger, "test-node-verifier", "us-east-1");
+    const mmrStore = new MmrStore(servicePool, logger);
+    const stubTransport: ICheckpointTransport = {
+      async sendCheckpointProposal() { return null; },
+      async getPeerNodeIds() { return []; },
+    };
+
+    const coordinator = new CheckpointCoordinator(
+      pgStore,
+      mmrStore,
+      stubTransport,
+      keyProvider,
+      logger,
+      { nodeId: "test-node-verifier" },
+    );
+
+    const checkpointId = randomUUID();
+    const realPeaks = ["aabb0011", "ccdd0022"];
+    const identity = "ff".repeat(32);
+
+    // Provide a proposal whose checkpointHash is deliberately wrong (does not match peaks/identity/id)
+    const corruptedHash = "de".repeat(32); // does not match computeCheckpointHash(realPeaks, identity, checkpointId)
+
+    const sig = await coordinator.verifyAndSign({
       checkpointId,
-      expectedHash,
-      receivedHash,
+      checkpointHash: corruptedHash,
+      mmrPeaks: realPeaks,
+      identityMerkleRoot: identity,
+      mmrLeafCount: 2,
     });
 
+    // Must return null — signature withheld
+    expect(sig).toBeNull();
+
+    // Must log federation.checkpoint.proposal.hash_mismatch at ERROR with required fields
     const event = logCalls.find(
       (c) => c.level === "error" && c.event === "federation.checkpoint.proposal.hash_mismatch",
     );
-    expect(event).toBeDefined();
+    expect(event, "federation.checkpoint.proposal.hash_mismatch not logged").toBeDefined();
     const ctx = event!.context as Record<string, unknown>;
-    expect(ctx["nodeId"]).toBe(nodeId);
+    expect(ctx["nodeId"]).toBe("test-node-verifier");
     expect(ctx["checkpointId"]).toBe(checkpointId);
-    expect(ctx["expectedHash"]).toBe(expectedHash);
-    expect(ctx["receivedHash"]).toBe(receivedHash);
+    // expectedHash is what the verifier independently computed — must differ from corruptedHash
+    expect(ctx["expectedHash"]).not.toBe(corruptedHash);
+    expect(ctx["receivedHash"]).toBe(corruptedHash);
+  });
+
+  it("AC-006: verifyAndSign with CORRECT hash → returns a non-null signature (happy path)", async () => {
+    const keyProvider = generateKeypair();
+    const pgStore = new PgDirectoryStore(servicePool, logger, "test-node-verifier-ok", "us-east-1");
+    const mmrStore = new MmrStore(servicePool, logger);
+    const stubTransport: ICheckpointTransport = {
+      async sendCheckpointProposal() { return null; },
+      async getPeerNodeIds() { return []; },
+    };
+
+    const coordinator = new CheckpointCoordinator(
+      pgStore,
+      mmrStore,
+      stubTransport,
+      keyProvider,
+      logger,
+      { nodeId: "test-node-verifier-ok" },
+    );
+
+    const checkpointId = randomUUID();
+    const peaks = ["aabb0011"];
+    const identity = "00".repeat(32);
+    const correctHash = computeCheckpointHash(peaks, identity, checkpointId);
+
+    const sig = await coordinator.verifyAndSign({
+      checkpointId,
+      checkpointHash: correctHash,
+      mmrPeaks: peaks,
+      identityMerkleRoot: identity,
+      mmrLeafCount: 1,
+    });
+
+    // Must return a hex-encoded Ed25519 signature (128 chars)
+    expect(sig).not.toBeNull();
+    expect(sig!.length).toBe(128);
+    expect(sig!).toMatch(/^[0-9a-f]{128}$/);
   });
 });
 
@@ -706,35 +814,145 @@ describeIntegration("FEDERATION-002 integration: AC-008-crash-mid-clear — alre
 });
 
 describeIntegration("FEDERATION-002 integration: AC-009 checkpoint gap alarm", () => {
+  let superPool: pg.Pool;
+  let servicePool: pg.Pool;
   let logger: Logger;
   let logCalls: Array<{ level: string; event: string; context: unknown }>;
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    configurePgTypes();
+    superPool = new pg.Pool({ connectionString: DATABASE_URL });
+    servicePool = new pg.Pool({ connectionString: SERVICE_URL });
+    try {
+      await superPool.query("SELECT 1");
+    } catch (err) {
+      throw new Error(
+        `[FEDERATION-002] CELLO_ENV=local but Postgres is unreachable at ${DATABASE_URL}: ${String(err)}`,
+      );
+    }
     const loggerAndCalls = makeLogger();
     logger = loggerAndCalls.logger;
     logCalls = loggerAndCalls.calls;
   });
 
-  it("AC-009: federation.checkpoint.gap at ERROR with required fields when gap exceeds threshold", () => {
-    // Simulate: the gap alarm fires when no checkpoint confirmed within CHECKPOINT_GAP_ALARM_MINUTES.
-    const lastCheckpointId = randomUUID();
-    const lastCheckpointAt = new Date(Date.now() - 65 * 60 * 1000).toISOString(); // 65 minutes ago
-    const gapMinutes = 65;
+  afterAll(async () => {
+    await superPool?.end();
+    await servicePool?.end();
+  });
 
-    logger.error("federation.checkpoint.gap", {
-      lastCheckpointId,
-      lastCheckpointAt,
-      gapMinutes,
-    });
+  it("AC-009: real CheckpointCoordinator.checkGapNow() fires federation.checkpoint.gap at ERROR when last checkpoint is older than CHECKPOINT_GAP_ALARM_MINUTES", async () => {
+    const pgStore = new PgDirectoryStore(servicePool, logger, "test-node-ac009", "us-east-1");
+    const mmrStore = new MmrStore(servicePool, logger);
+    const keyProvider = generateKeypair();
+    const stubTransport: ICheckpointTransport = {
+      async sendCheckpointProposal() { return null; },
+      async getPeerNodeIds() { return []; },
+    };
 
+    // Clear all checkpoint rows so the only row in the table is the 65-minute-old one we insert.
+    // This ensures getLastCheckpointAt() (ORDER BY id DESC LIMIT 1) returns our old row, not a recent one.
+    await superPool.query("DELETE FROM checkpoint_node_signatures WHERE node_id LIKE 'test-node-%'");
+    await superPool.query("DELETE FROM directory_checkpoints WHERE coordinator_node_id LIKE 'test-node-%'");
+
+    // Write an old checkpoint (65 minutes ago) directly so getLastCheckpointAt returns a stale timestamp
+    const oldCheckpointId = randomUUID();
+    const oldTime = new Date(Date.now() - 65 * 60 * 1000); // 65 minutes ago
+    await superPool.query(
+      `INSERT INTO directory_checkpoints
+         (checkpoint_id, mmr_leaf_count, peak_hash, staged_seal_count, chain_hash,
+          mmr_peaks, identity_merkle_root, checkpoint_hash, coordinator_node_id, created_at)
+       VALUES ($1, 0, $2, 0, $3, '[]'::jsonb, $4, $5, 'test-node-ac009', $6)`,
+      [
+        oldCheckpointId,
+        "0".repeat(64),
+        "genesis_chain_hash_ac009",
+        "00".repeat(32),
+        "00".repeat(32),
+        oldTime.toISOString(),
+      ],
+    );
+
+    // Create coordinator with 1-minute gap alarm threshold (default is 30 minutes)
+    const coordinator = new CheckpointCoordinator(
+      pgStore,
+      mmrStore,
+      stubTransport,
+      keyProvider,
+      logger,
+      {
+        nodeId: "test-node-ac009",
+        checkpointGapAlarmMinutes: 1, // 1 minute threshold — the 65-minute-old checkpoint will trigger it
+      },
+    );
+
+    // Call checkGapNow() directly — exercises the real #checkGap code path
+    await coordinator.checkGapNow();
+
+    // Verify: federation.checkpoint.gap logged at ERROR with required fields
     const event = logCalls.find(
       (c) => c.level === "error" && c.event === "federation.checkpoint.gap",
     );
-    expect(event).toBeDefined();
+    expect(event, "federation.checkpoint.gap not logged by real CheckpointCoordinator").toBeDefined();
     const ctx = event!.context as Record<string, unknown>;
-    expect(ctx["lastCheckpointId"]).toBe(lastCheckpointId);
-    expect(ctx["lastCheckpointAt"]).toBe(lastCheckpointAt);
-    expect(ctx["gapMinutes"]).toBe(gapMinutes);
+    expect(ctx["lastCheckpointId"]).toBeDefined();
+    expect(ctx["lastCheckpointAt"]).toBeDefined();
+    expect(typeof ctx["gapMinutes"]).toBe("number");
+    expect(ctx["gapMinutes"] as number).toBeGreaterThanOrEqual(1);
+
+    // Cleanup
+    await superPool.query("DELETE FROM directory_checkpoints WHERE checkpoint_id = $1", [oldCheckpointId]);
+  });
+
+  it("AC-009: checkGapNow() does NOT fire the alarm when last checkpoint is recent", async () => {
+    const pgStore = new PgDirectoryStore(servicePool, logger, "test-node-ac009-ok", "us-east-1");
+    const mmrStore = new MmrStore(servicePool, logger);
+    const keyProvider = generateKeypair();
+    const stubTransport: ICheckpointTransport = {
+      async sendCheckpointProposal() { return null; },
+      async getPeerNodeIds() { return []; },
+    };
+
+    // Write a recent checkpoint (10 seconds ago)
+    const recentCheckpointId = randomUUID();
+    await superPool.query(
+      `INSERT INTO directory_checkpoints
+         (checkpoint_id, mmr_leaf_count, peak_hash, staged_seal_count, chain_hash,
+          mmr_peaks, identity_merkle_root, checkpoint_hash, coordinator_node_id)
+       VALUES ($1, 0, $2, 0, $3, '[]'::jsonb, $4, $5, 'test-node-ac009-ok')
+       ON CONFLICT (checkpoint_id) DO NOTHING`,
+      [
+        recentCheckpointId,
+        "0".repeat(64),
+        "genesis_chain_hash_ac009_recent",
+        "00".repeat(32),
+        "00".repeat(32),
+      ],
+    );
+
+    const logsBefore = [...logCalls];
+
+    const coordinator = new CheckpointCoordinator(
+      pgStore,
+      mmrStore,
+      stubTransport,
+      keyProvider,
+      logger,
+      {
+        nodeId: "test-node-ac009-ok",
+        checkpointGapAlarmMinutes: 30, // 30 minutes — recent checkpoint won't trigger
+      },
+    );
+
+    await coordinator.checkGapNow();
+
+    // No new federation.checkpoint.gap event should have been logged
+    const newGapEvents = logCalls
+      .slice(logsBefore.length)
+      .filter((c) => c.event === "federation.checkpoint.gap");
+    expect(newGapEvents).toHaveLength(0);
+
+    // Cleanup
+    await superPool.query("DELETE FROM directory_checkpoints WHERE checkpoint_id = $1", [recentCheckpointId]);
   });
 });
 
