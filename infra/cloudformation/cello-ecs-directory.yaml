@@ -74,7 +74,7 @@ Resources:
               Value: !Ref Environment
             - Name: NODE_ID
               Value: !Ref AWS::Region
-            - Name: PORT
+            - Name: HEALTH_PORT
               Value: "4000"
             - Name: HOME
               Value: /tmp
