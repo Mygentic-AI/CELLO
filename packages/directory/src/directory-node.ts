@@ -168,6 +168,7 @@ import {
 } from "./frost-dkg-frames.js";
 import { protocolLog, truncId, truncHex } from "./protocol-log.js";
 import type { MmrStore } from "./mmr-store.js";
+import type { RelayPoolManager } from "./relay-pool-manager.js";
 
 export const SIGNALING_PROTOCOL_ID = "/cello/signaling/1.0.0";
 const AUTH_DOMAIN = "CELLO-DIR-AUTH-v1";
@@ -258,6 +259,14 @@ export interface DirectoryNodeOptions {
    * Defaults to InMemoryNotificationQueue when not provided.
    */
   notificationQueue?: NotificationQueue;
+  /**
+   * CELLO-RELAY-001: RelayPoolManager for dynamic relay assignment.
+   * When provided, session_request uses pickRelay() to assign a relay from the
+   * verified manifest instead of the hardcoded relayEndpoint.
+   * If pickRelay() returns null, session_request returns relay_unavailable.
+   * Backward compatible — when absent, relayEndpoint is used as before.
+   */
+  relayPoolManager?: RelayPoolManager;
 }
 
 export class CelloDirectoryNode {
@@ -274,6 +283,8 @@ export class CelloDirectoryNode {
   readonly #mmrStore: MmrStore | undefined;
   // PERSIST-023: NotificationQueue for SEAL_UNILATERAL notifications
   readonly #notificationQueue: NotificationQueue | undefined;
+  // CELLO-RELAY-001: RelayPoolManager for dynamic relay assignment
+  readonly #relayPoolManager: RelayPoolManager | undefined;
 
   // REG-001: forceDkgFailure — test injection for below-threshold DKG simulation
   readonly #forceDkgFailure: boolean;
@@ -397,6 +408,7 @@ export class CelloDirectoryNode {
     this.#deliveryGraceSeconds = opts.deliveryGraceSeconds ?? 600;
     this.#mmrStore = opts.mmrStore;
     this.#notificationQueue = opts.notificationQueue;
+    this.#relayPoolManager = opts.relayPoolManager;
   }
 
   async start(): Promise<void> {
@@ -1030,7 +1042,7 @@ export class CelloDirectoryNode {
           }
           // Run concurrently — ceremony_result frames must be processed by this same loop
           // while #processSessionRequest is suspended awaiting the ceremony round-trip.
-          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), (parsed as { connection_id?: string }).connection_id);
+          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), (parsed as { connection_id?: string }).connection_id, (parsed as { relay_rtt?: Record<string, number> }).relay_rtt);
         } else if (parsed.type === "seal_frost_signature") {
           void this.#processSealFrostSignature(authedPubkeyHex!, parsed);
         } else if (parsed.type === "connection_request") {
@@ -1578,6 +1590,7 @@ export class CelloDirectoryNode {
     initiatorHex: string,
     targetHex: string,
     connectionId?: string,
+    relayRtt?: Record<string, number>,
   ): Promise<void> {
     // OBS-001 AC-008: session request log
     protocolLog("SESS", `Session request: ${truncHex(initiatorHex)} → ${truncHex(targetHex)}`);
@@ -1683,12 +1696,30 @@ export class CelloDirectoryNode {
       // SESSION-004 Step 6: getPrimaryPubkey() — HIGH-4: method on IThresholdSigner interface
       const initiatorPrimaryPubkey = signer.getPrimaryPubkey();
 
+      // CELLO-RELAY-001: Resolve relay endpoint.
+      // When RelayPoolManager is configured, use pickRelay() for dynamic assignment.
+      // Fall back to the hardcoded relayEndpoint for backward compatibility.
+      let resolvedRelayEndpoint = this.#relayEndpoint;
+      if (this.#relayPoolManager) {
+        const picked = this.#relayPoolManager.pickRelay(relayRtt);
+        if (!picked) {
+          // AC-006: all relays unavailable — relay.pool.unavailable already logged by pickRelay()
+          protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: relay_unavailable`);
+          this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "relay_unavailable" }));
+          return;
+        }
+        resolvedRelayEndpoint = {
+          peer_id: picked.peerId ?? picked.relayId,
+          multiaddrs: picked.multiaddrs ?? [picked.endpoint],
+        };
+      }
+
       // SESSION-004 Step 7: Build SessionAssignment with signature_type: 'frost'
       const assignment: SessionAssignment = {
         session_id,
         participant_a: { pubkey: new Uint8Array(initiatorPubkey), peer_id: initiatorInfo.peer_id, multiaddrs: initiatorInfo.multiaddrs },
         participant_b: { pubkey: new Uint8Array(targetPubkey), peer_id: targetInfo.peer_id, multiaddrs: targetInfo.multiaddrs },
-        relay_endpoint: this.#relayEndpoint,
+        relay_endpoint: resolvedRelayEndpoint,
         directory_endpoint: this.#directoryEndpoint,
         session_timestamp,
         directory_pubkey: new Uint8Array(dirPubkey),
@@ -2583,6 +2614,12 @@ export interface CreateDirectoryNodeOptions {
    * for a reconnecting agent over the established signaling stream.
    */
   notificationQueue?: NotificationQueue;
+  /**
+   * CELLO-RELAY-001: RelayPoolManager for dynamic relay assignment from signed manifest.
+   * When provided, session_request uses pickRelay() instead of the hardcoded relayEndpoint.
+   * Backward compatible — when absent, relayEndpoint is used as before.
+   */
+  relayPoolManager?: RelayPoolManager;
 }
 
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{
@@ -2616,6 +2653,7 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     deliveryGraceSeconds: opts.deliveryGraceSeconds,
     mmrStore: opts.mmrStore,
     notificationQueue: opts.notificationQueue,
+    relayPoolManager: opts.relayPoolManager,
   });
   await directory.start();
 

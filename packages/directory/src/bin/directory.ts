@@ -28,6 +28,9 @@
  *   NODE_PRIVATE_KEY                   — required for CELLO_ENV=dev/staging/production; Ed25519 key hex
  *   KMS_KEY_ARN                        — future: KmsEnvelopeKeyProvider (not yet enforced; LocalEnvelopeKeyProvider used as placeholder)
  *   HEALTH_PORT                        — HTTP health check port (default: 443)
+ *   RELAY_MANIFEST_BUCKET              — required for CELLO_ENV=dev/staging/production; S3 bucket for relay pool manifest
+ *   RELAY_MANIFEST_SIGNER_PUBKEY       — required for CELLO_ENV=dev/staging/production; Ed25519 public key hex of manifest signing node
+ *   RELAY_MANIFEST_LOCAL_DIR           — optional for CELLO_ENV=local; local directory for manifest storage (defaults to /tmp/cello-relay-manifest)
  */
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
@@ -53,6 +56,9 @@ import { PendingConnectionRequestTtlSweep } from "../pending-connection-request-
 import { createHealthServer } from "../health-server.js";
 import { logServiceStarted, logServiceStopped, logServiceCrashed, logSecretsUnavailable } from "../service-lifecycle.js";
 import { PgNotificationQueue } from "../adapters/pg-notification-queue.js";
+import { RelayPoolManager } from "../relay-pool-manager.js";
+import type { CloudStorageProvider } from "@cello/interfaces";
+import { LocalCloudStorageProvider } from "@cello/interfaces/stubs";
 
 const env = process.env["CELLO_ENV"];
 const logger = new StdoutLogger();
@@ -436,6 +442,61 @@ const networkRelay = new NetworkRelayAdapter({
 const dirPubkey = await kp.getPublicKey();
 logger.info("adapter.initialised", { adapterName: "DirectoryNode", implementation: "CelloDirectoryNode", env, pubkey: Buffer.from(dirPubkey).toString("hex") });
 
+// ─── CELLO-RELAY-001: RelayPoolManager instantiation ─────────────────────────
+// CELLO_ENV=local  → LocalCloudStorageProvider (filesystem-backed, no AWS)
+//                    Manifest must be manually placed at RELAY_MANIFEST_LOCAL_DIR/relay-manifest.json
+//                    If no manifest file exists, RelayPoolManager is not wired (backward compat)
+// CELLO_ENV=dev+   → S3CloudStorageProvider backed by cello-relay-manifest-{env}-{region}
+//                    RELAY_MANIFEST_BUCKET and RELAY_MANIFEST_SIGNER_PUBKEY are required
+//
+// AC-002: If manifest signature verification fails, the process exits 1.
+// The RelayPoolManager is optional; if absent, the hardcoded relayEndpoint is used.
+let relayPoolManager: RelayPoolManager | undefined;
+relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
+  let storage: CloudStorageProvider;
+
+  if (env === "local") {
+    const manifestDir = process.env["RELAY_MANIFEST_LOCAL_DIR"] ?? "/tmp/cello-relay-manifest";
+    const signerPubkeyHex = process.env["RELAY_MANIFEST_SIGNER_PUBKEY"] ?? "";
+    if (!signerPubkeyHex) {
+      // No signer pubkey configured — skip relay pool manager in local mode (backward compat)
+      logger.info("adapter.initialised", { adapterName: "RelayPoolManager", implementation: "skipped", reason: "RELAY_MANIFEST_SIGNER_PUBKEY not set", env });
+      return undefined;
+    }
+    storage = new LocalCloudStorageProvider(manifestDir);
+    logger.info("adapter.initialised", { adapterName: "RelayPoolManager", implementation: "LocalCloudStorageProvider", env, manifestDir });
+    const mgr = new RelayPoolManager({ storage, signerPublicKeyHex: signerPubkeyHex, logger });
+    try {
+      await mgr.loadManifest();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // In local mode, manifest load failure is non-fatal — fall back to hardcoded relay
+      logger.warn("relay.manifest.load.failed", { reason: msg, attempt: 1, env });
+      mgr.stop();
+      return undefined;
+    }
+    return mgr;
+  }
+
+  // dev/staging/production: S3-backed manifest (required)
+  const manifestBucket = requireEnv("RELAY_MANIFEST_BUCKET");
+  const signerPubkeyHex = requireEnv("RELAY_MANIFEST_SIGNER_PUBKEY");
+  const { S3CloudStorageProvider } = await import("../adapters/s3-cloud-storage-provider.js");
+  storage = new S3CloudStorageProvider(manifestBucket, awsRegion);
+  logger.info("adapter.initialised", { adapterName: "RelayPoolManager", implementation: "S3CloudStorageProvider", env, bucket: manifestBucket, region: awsRegion });
+
+  const mgr = new RelayPoolManager({ storage, signerPublicKeyHex: signerPubkeyHex, logger });
+  try {
+    await mgr.loadManifest();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // AC-002: manifest load failure in dev/staging/production is fatal
+    logger.error("relay.manifest.load.failed", { reason: msg, attempt: 1, env });
+    process.exit(1);
+  }
+  return mgr;
+})();
+
 // ─── Node startup ─────────────────────────────────────────────────────────
 
 let result: Awaited<ReturnType<typeof createDirectoryNode>>;
@@ -450,6 +511,7 @@ try {
     transportPrivateKey,
     mmrStore,
     notificationQueue,
+    relayPoolManager,
   });
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
