@@ -264,6 +264,16 @@ Delivered the production `S3AuditLogShipper` adapter and wired it into the compo
 
 **Final result:** `cello-directory-pipeline` succeeded on commit `9e6f4a5`. All 7 substantive pipelines green. One pre-existing failure: `cello-crypto-pipeline` Ed25519 keygen timing test (71ms vs 50ms threshold on cold CodeBuild VMs — not SECOPS-001 scope).
 
+**AC-003 live verification (2026-05-23):** With ECS running the real directory image, the `cello-dev-directory-task-role` was assumed via STS and all three checks run against the live audit bucket:
+
+| Check | Expected | Result |
+|---|---|---|
+| `s3:DeleteObject` on existing object | AccessDenied | ✅ AccessDenied — explicit deny in `DenyNonPutActions` bucket policy |
+| `s3:PutObject` to new key | Success | ✅ 200 OK |
+| `s3:PutObject` to existing key | Success (Object Lock deferred per DEF-001) | ✅ 200 OK (deferred) |
+
+**SECOPS-001 is closed. All ACs verified.**
+
 ---
 
 ## DEPLOY-002 / DEPLOY-003 — Real Docker Images, Pipeline Build+Deploy, ECS Fargate Live
