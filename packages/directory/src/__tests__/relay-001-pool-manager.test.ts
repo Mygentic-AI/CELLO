@@ -910,3 +910,227 @@ describe("AC-014: sign-ed25519.js produces deterministic, verifiable signatures"
     expect(isValid).toBe(true);
   });
 });
+
+// ─── AC-010: sign-manifest.sh creates version=1 when no manifest exists ──────
+
+describe("AC-010: sign-manifest.sh creates version=1 when no manifest exists", () => {
+  it("creates a new manifest with version=1, valid signature, and success output", async () => {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { writeFileSync, mkdirSync, rmSync, readFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const execFileAsync = promisify(execFile);
+
+    const scriptPath = new URL(
+      "../../../../infra/sign-manifest.sh",
+      import.meta.url,
+    ).pathname;
+
+    const tmpDir = join(tmpdir(), `cello-ac010-test-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
+
+    // Create relay definitions JSON
+    const relayDefsPath = join(tmpDir, "relays.json");
+    writeFileSync(relayDefsPath, JSON.stringify([{
+      relayId: "aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa1111bbbb2222",
+      endpoint: "wss://relay.example.com",
+      region: "us-east-1",
+      status: "active",
+      healthCheckUrl: "http://10.0.0.1:4000/health",
+    }]));
+
+    // Fixed test signing key (32 bytes, seed=42)
+    const testPrivateKeyHex = Buffer.from(signerKeypair.privateKey).toString("hex");
+    const testPublicKeyHex = signerKeypair.publicKeyHex;
+
+    // Path to capture uploaded manifest
+    const manifestUploadPath = join(tmpDir, "uploaded-manifest.json");
+
+    // Create mock aws script
+    const mockAwsPath = join(tmpDir, "aws");
+    writeFileSync(mockAwsPath, `#!/bin/bash
+# Mock aws CLI for AC-010 test
+
+if [[ "$1" == "secretsmanager" ]]; then
+  # Return the test signing key
+  echo "${testPrivateKeyHex}"
+  exit 0
+fi
+
+if [[ "$1" == "s3" && "$2" == "cp" ]]; then
+  # Check if this is a download (from s3://) or upload (to s3://)
+  if [[ "$3" == s3://* ]]; then
+    # Download: no existing manifest (exit 1)
+    exit 1
+  else
+    # Upload: capture stdin to file
+    cat > "${manifestUploadPath}"
+    exit 0
+  fi
+fi
+
+exit 1
+`, { mode: 0o755 });
+
+    try {
+      const result = await execFileAsync("bash", [scriptPath, "dev", "us-east-1", relayDefsPath], {
+        env: {
+          ...process.env,
+          PATH: `${tmpDir}:${process.env["PATH"]}`,
+        },
+      });
+
+      // Verify stdout contains expected success indicators
+      expect(result.stdout).toContain("Version: 1");
+      expect(result.stdout).toContain("s3://cello-relay-manifest-dev-us-east-1/relay-manifest.json");
+      expect(result.stdout).toContain("aws ecs update-service");
+
+      // Verify the uploaded manifest
+      const uploadedManifest = JSON.parse(readFileSync(manifestUploadPath, "utf-8"));
+      expect(uploadedManifest.version).toBe(1);
+      expect(uploadedManifest.signedBy).toBe(testPublicKeyHex);
+      expect(uploadedManifest.relays).toHaveLength(1);
+      expect(uploadedManifest.signature).toMatch(/^[0-9a-f]{128}$/);
+
+      // Verify Ed25519 signature
+      const { version, updatedAt, relays } = uploadedManifest;
+      const body = { version, updatedAt, relays };
+      const canonicalPayload = canonicalJson(body as unknown as Record<string, unknown>);
+      const sigBytes = Buffer.from(uploadedManifest.signature, "hex");
+      const isValid = ed25519.verify(sigBytes, canonicalPayload, signerKeypair.publicKey);
+      expect(isValid).toBe(true);
+
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── AC-011: sign-manifest.sh increments version by exactly 1 ─────────────────
+
+describe("AC-011: sign-manifest.sh increments version by exactly 1", () => {
+  it("increments version from 2 to 3, and from 3 to 4 on subsequent invocations", async () => {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { writeFileSync, mkdirSync, rmSync, readFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const execFileAsync = promisify(execFile);
+
+    const scriptPath = new URL(
+      "../../../../infra/sign-manifest.sh",
+      import.meta.url,
+    ).pathname;
+
+    const tmpDir = join(tmpdir(), `cello-ac011-test-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
+
+    // Create relay definitions JSON
+    const relayDefsPath = join(tmpDir, "relays.json");
+    writeFileSync(relayDefsPath, JSON.stringify([{
+      relayId: "aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa1111bbbb2222",
+      endpoint: "wss://relay.example.com",
+      region: "us-east-1",
+      status: "active",
+      healthCheckUrl: "http://10.0.0.1:4000/health",
+    }]));
+
+    const testPrivateKeyHex = Buffer.from(signerKeypair.privateKey).toString("hex");
+    const testPublicKeyHex = signerKeypair.publicKeyHex;
+
+    // Path to store the "current" manifest (simulating S3 state)
+    const currentManifestPath = join(tmpDir, "current-manifest.json");
+    const manifestUploadPath = join(tmpDir, "uploaded-manifest.json");
+
+    // Build an initial manifest with version=2
+    const relays = [makeRelay("aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa1111bbbb2222")];
+    const initialManifest = buildSignedManifest(
+      signerKeypair.privateKey,
+      testPublicKeyHex,
+      testPublicKeyHex,
+      relays,
+      2,
+      "2026-05-23T10:00:00Z",
+    );
+    writeFileSync(currentManifestPath, JSON.stringify(initialManifest));
+
+    // Create mock aws script (tracks invocation count)
+    const invocationCountPath = join(tmpDir, "invocation-count.txt");
+    writeFileSync(invocationCountPath, "0");
+
+    const mockAwsPath = join(tmpDir, "aws");
+    writeFileSync(mockAwsPath, `#!/bin/bash
+# Mock aws CLI for AC-011 test
+
+if [[ "$1" == "secretsmanager" ]]; then
+  echo "${testPrivateKeyHex}"
+  exit 0
+fi
+
+if [[ "$1" == "s3" && "$2" == "cp" ]]; then
+  if [[ "$3" == s3://* ]]; then
+    # Download: return current manifest
+    cat "${currentManifestPath}"
+    exit 0
+  else
+    # Upload: capture stdin, increment invocation count, update current manifest
+    cat > "${manifestUploadPath}"
+    cp "${manifestUploadPath}" "${currentManifestPath}"
+    COUNT=$(cat "${invocationCountPath}")
+    echo $((COUNT + 1)) > "${invocationCountPath}"
+    exit 0
+  fi
+fi
+
+exit 1
+`, { mode: 0o755 });
+
+    try {
+      // First invocation: version 2 → 3
+      const result1 = await execFileAsync("bash", [scriptPath, "dev", "us-east-1", relayDefsPath], {
+        env: {
+          ...process.env,
+          PATH: `${tmpDir}:${process.env["PATH"]}`,
+        },
+      });
+
+      expect(result1.stdout).toContain("Version: 3");
+      const manifest1 = JSON.parse(readFileSync(manifestUploadPath, "utf-8"));
+      expect(manifest1.version).toBe(3);
+      const updatedAt1 = manifest1.updatedAt;
+
+      // Wait 1 second to ensure different timestamps
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Second invocation: version 3 → 4
+      const result2 = await execFileAsync("bash", [scriptPath, "dev", "us-east-1", relayDefsPath], {
+        env: {
+          ...process.env,
+          PATH: `${tmpDir}:${process.env["PATH"]}`,
+        },
+      });
+
+      expect(result2.stdout).toContain("Version: 4");
+      const manifest2 = JSON.parse(readFileSync(manifestUploadPath, "utf-8"));
+      expect(manifest2.version).toBe(4);
+      const updatedAt2 = manifest2.updatedAt;
+
+      // Verify that updatedAt timestamps are different (monotonic versioning regardless of changes)
+      expect(updatedAt1).not.toBe(updatedAt2);
+
+      // Verify both signatures are valid
+      for (const manifest of [manifest1, manifest2]) {
+        const { version, updatedAt, relays: manifestRelays } = manifest;
+        const body = { version, updatedAt, relays: manifestRelays };
+        const canonicalPayload = canonicalJson(body as unknown as Record<string, unknown>);
+        const sigBytes = Buffer.from(manifest.signature, "hex");
+        const isValid = ed25519.verify(sigBytes, canonicalPayload, signerKeypair.publicKey);
+        expect(isValid).toBe(true);
+      }
+
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
