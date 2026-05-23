@@ -98,6 +98,16 @@ Resources:
                   - s3:PutObject
                 Resource:
                   - !Sub "arn:aws:s3:::cello-audit-logs-${Environment}-${AWS::Region}/*"
+              # ECS Exec (EnableExecuteCommand: true on the service) requires these
+              # ssmmessages permissions on the task role.
+              - Sid: EcsExecSsmMessages
+                Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: "*"
       Tags:
         - Key: Project
           Value: cello
