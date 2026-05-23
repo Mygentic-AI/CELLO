@@ -10,8 +10,8 @@ description: In-progress write-up for M5. Initial deployment issues, IaC gaps fo
 # M5 — Infrastructure Deployment
 
 **Started:** 2026-05-22  
-**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, DEPLOY-005, SECOPS-001, SECOPS-002, SECOPS-003, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002, FEDERATION-003, PERSIST-022, PERSIST-023  
-**Stories open:** ACCOUNT-001, RELAY-001, FEDERATION-E2E-001  
+**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, DEPLOY-005, SECOPS-001, SECOPS-002, SECOPS-003, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002, FEDERATION-003, PERSIST-022, PERSIST-023, RELAY-001, ACCOUNT-001  
+**Stories open:** FEDERATION-E2E-001  
 **Stacks deployed:** 14 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-waf, cello-ecs-relay, cello-route53, cello-cicd, cello-cloudwatch)  
 **Lambdas deployed:** 3 (webhook-receiver, pipeline-filter, rds-rotation)  
 **Pipelines active:** 8 (all green)
@@ -642,9 +642,30 @@ The first double-delivery fix used a coarse `deliveredInMemoryCount > 0` guard t
 
 ---
 
+## ACCOUNT-001 — Account Identity Layer
+
+Delivered the account grouping foundation required by M6 onboarding, M7 portal management, and M8 trust signal aggregation. No deployment step required — V22 and V23 run automatically when ECS tasks restart with the next directory image.
+
+**What was delivered:**
+
+- `V22__user_accounts.sql` — `user_accounts` table: `account_id UUID PRIMARY KEY`, `phone_stub_hash TEXT UNIQUE NOT NULL`, `email_stub_hash TEXT` (nullable), `chain_hash TEXT NOT NULL`, `id BIGSERIAL`. RLS append-only: `cello_service` has INSERT and SELECT only. `email_stub_hash` added to `TABLE_EXTRA_EXCLUDED` in `hash-chain.ts` — nullable at INSERT time means SELECT returns it as NULL while the stored chain_hash was computed without it, causing `verifyChain` to return `{ valid: false }` if not excluded (M4 bug #7 pattern).
+- `V23__agent_profiles_account_id.sql` — nullable `account_id UUID` FK on `agent_profiles` referencing `user_accounts`. NULL = pre-M6 agent. FK constraint enforces referential integrity at the database layer — no application-layer check required (SI-002).
+- `PgDirectoryStore.createAccount()` — hash-chained INSERT via `insertWithChain`. Logs `account.created` on success; logs `account.phone_stub_hash.duplicate` at WARN with the first 8 characters of the hash only on SQLSTATE 23505.
+- `PgDirectoryStore.getAgentsByAccount()` — returns `agent_profiles` rows for a given `account_id`, ordered by `registered_at ASC`. NULL-account rows excluded from all account-scoped queries.
+- `setProfile()` extended with optional `correlationId`; fires `account.agent.linked` only after INSERT confirms success (not before the attempt), and `account.agent.link.failed` at ERROR on SQLSTATE 23503 FK violation.
+- `DirectoryStore` interface and `InMemoryDirectoryStore` stubs updated; `AccountRow` and `CreateAccountParams` exported from `@cello/interfaces`.
+- `bin/directory.ts` — `migration.out.of.date` event fields corrected to `{ currentVersion, requiredVersion }` per story spec (was `appliedVersion`/`expectedVersion`).
+- 4 new events added to canonical taxonomy: `account.created`, `account.phone_stub_hash.duplicate`, `account.agent.linked`, `account.agent.link.failed`.
+- 967-line integration test suite: all 7 ACs, 2 SIs, DB-001, and all 4 observability events verified against a real Postgres instance.
+
+**Migration renumbering:** Originally written as V21/V22. The FEDERATION-002 hotfix took V20; PERSIST-023 renumbered to V21; ACCOUNT-001 renumbered to V22/V23. The rebase over PERSIST-023 required resolving additive conflicts in `hash-chain.ts`, `pg-directory-store.ts`, `schema-completeness.test.ts`, and `COORDINATION.md` — all purely additive, no logic changes.
+
+**Rule reinforced:** Push to origin immediately after each merge, never in batches. Batching multiple merges before pushing triggers all downstream pipelines simultaneously, defeating path-based CI filtering.
+
+---
+
 ## What Remains Open
 
-- **ACCOUNT-001** — migrations renumbered V22/V23; parked branch ready to merge
 - **SECOPS-003 AC-002/AC-007** — live request verification (rate-limit trigger, CommonRuleSet COUNT hit) pending manual test
 - **cello-crypto-pipeline** — flaky timing test (`keygen under 50ms`, gets 71ms on cold CodeBuild VMs). Threshold needs raising.
 - **cello-cicd-dev stack** — needs `./infra/deploy.sh dev us-east-1` after DEPLOY-005 merge (pipeline stages not active until redeployed)
