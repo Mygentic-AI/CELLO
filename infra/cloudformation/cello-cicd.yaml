@@ -20,6 +20,15 @@ Parameters:
   GitHubConnectionArn:
     Type: String
     Description: CodeStar connection ARN for GitHub
+  # DEPLOY-005 AC-009: staging directory ALB DNS name — read from cello-ecs-directory
+  # stack output at deploy time; never hardcoded. deploy.sh populates this from
+  # read_output "cello-ecs-directory-{env}" "AlbDnsName".
+  StagingDirectoryUrl:
+    Type: String
+    Default: "PLACEHOLDER"
+    Description: >
+      DNS name of the staging directory ALB (read from cello-ecs-directory stack outputs
+      by deploy.sh — AC-009 requires this is never hardcoded in this template).
 
 Resources:
   # EventBridge bus for GitHub events
@@ -269,12 +278,15 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/cello-directory"
                   - !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/cello-relay"
-              # ── ECS deploy permissions (DEPLOY-003) ───────────────────────────
+              # ── ECS deploy permissions (DEPLOY-003 + DEPLOY-005) ─────────────────
               # Required for buildspec docker build → ECR push → ECS rolling deploy.
               # RegisterTaskDefinition + UpdateService + DescribeServices/TaskDefinition
               # allow the buildspec to register a new task revision and deploy it.
               # iam:PassRole is required so CodeBuild can pass the ECS task execution
               # role (AmazonECSTaskExecutionRolePolicy) to the new task definition.
+              # DEPLOY-005: adds cross-region ECS deploy (us-east-1, eu-central-1,
+              # ap-northeast-1) in the ProductionDeploy stage. Resource: "*" covers
+              # all clusters and services across all regions under this account.
               - Effect: Allow
                 Action:
                   - ecs:DescribeServices
@@ -290,6 +302,13 @@ Resources:
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-directory-task-role"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-relay-execution-role"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-relay-task-role"
+              # ── CloudFormation read-only for ALB URL (DEPLOY-005 AC-009) ───────────
+              # StagingDeployBuild reads AlbDnsName from cello-ecs-directory stack output
+              # to pass STAGING_DIRECTORY_URL to the smoke test stage.
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                Resource: !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/cello-ecs-directory-${Environment}/*"
       Tags:
         - Key: Project
           Value: cello
@@ -453,6 +472,275 @@ Resources:
         Type: LINUX_CONTAINER
         Image: aws/codebuild/standard:7.0
         ComputeType: BUILD_GENERAL1_SMALL
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+
+  # ── DEPLOY-005: Staging deploy, smoke test, and production deploy CodeBuild projects ──
+
+  # StagingDeployBuild: deploys the built image to the staging ECS service (dev = staging in Phase 1).
+  # This is a separate CodeBuild project from DirectoryBuild to isolate deploy logic from test logic.
+  # Emits: pipeline.staging.deployed (INFO), pipeline.staging.deploy.failed (ERROR)
+  # No VpcConfig — runs outside the VPC, calls ECS API.
+  StagingDeployDirectoryBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cello-staging-deploy-directory-build
+      # P — Pseudocode:
+      # 1. Read STAGING_IMAGE_URI from env (set by CodePipeline from Build stage output)
+      # 2. Run: aws ecs describe-task-definition cello-directory-{env} → clone → swap image URI
+      # 3. Register new task revision
+      # 4. Run: aws ecs update-service --cluster cello-{env} --service cello-directory-{env}
+      # 5. Run: aws ecs wait services-stable (10-minute timeout)
+      # 6. On success: emit pipeline.staging.deployed {pipeline, commitSha, imageDigest, durationMs}
+      # 7. On failure: emit pipeline.staging.deploy.failed {pipeline, commitSha, reason}; exit 1
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - export START_MS=$(date +%s%3N)
+                - |
+                  set -euo pipefail
+                  TASK_DEF=$(aws ecs describe-task-definition \
+                    --task-definition cello-directory-${CELLO_ENV} \
+                    --region us-east-1 \
+                    --query "taskDefinition" --output json)
+                  NEW_TASK_DEF=$(echo $TASK_DEF | jq \
+                    --arg IMAGE "$STAGING_IMAGE_URI" \
+                    '(.containerDefinitions[] | select(.name=="directory") | .image) |= $IMAGE
+                    | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+                  NEW_TASK_ARN=$(aws ecs register-task-definition \
+                    --region us-east-1 \
+                    --cli-input-json "$NEW_TASK_DEF" \
+                    --query "taskDefinition.taskDefinitionArn" --output text)
+                  aws ecs update-service \
+                    --cluster cello-${CELLO_ENV} \
+                    --service cello-directory-${CELLO_ENV} \
+                    --task-definition $NEW_TASK_ARN \
+                    --region us-east-1 || {
+                      echo '{"event":"pipeline.staging.deploy.failed","pipeline":"cello-directory-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"ecs update-service failed"}'
+                      exit 1
+                    }
+                  # Wait for stable state (AC-001: 10-minute timeout = 40 polls * 15s)
+                  aws ecs wait services-stable \
+                    --cluster cello-${CELLO_ENV} \
+                    --services cello-directory-${CELLO_ENV} \
+                    --region us-east-1 || {
+                      echo '{"event":"pipeline.staging.deploy.failed","pipeline":"cello-directory-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"ecs wait services-stable timed out"}'
+                      exit 1
+                    }
+                  END_MS=$(date +%s%3N)
+                  DURATION_MS=$((END_MS - START_MS))
+                  echo '{"timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"pipeline.staging.deployed","pipeline":"cello-directory-pipeline","commitSha":"'${COMMIT_SHA}'","imageDigest":"'${STAGING_IMAGE_URI}'","durationMs":'${DURATION_MS}'}'
+                  # Read AlbDnsName from stack outputs for smoke test (AC-009)
+                  ALB_DNS=$(aws cloudformation describe-stacks \
+                    --region us-east-1 \
+                    --stack-name cello-ecs-directory-${CELLO_ENV} \
+                    --query "Stacks[0].Outputs[?OutputKey=='AlbDnsName'].OutputValue" \
+                    --output text)
+                  echo "STAGING_DIRECTORY_URL=${ALB_DNS}" > /tmp/staging_url.env
+                  cat /tmp/staging_url.env
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - Name: CELLO_ENV
+            Value: !Ref Environment
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+
+  StagingDeployRelayBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cello-staging-deploy-relay-build
+      # P — Pseudocode: same as StagingDeployDirectoryBuild but for relay service
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - export START_MS=$(date +%s%3N)
+                - |
+                  set -euo pipefail
+                  TASK_DEF=$(aws ecs describe-task-definition \
+                    --task-definition cello-relay-${CELLO_ENV} \
+                    --region us-east-1 \
+                    --query "taskDefinition" --output json)
+                  NEW_TASK_DEF=$(echo $TASK_DEF | jq \
+                    --arg IMAGE "$STAGING_IMAGE_URI" \
+                    '(.containerDefinitions[] | select(.name=="relay") | .image) |= $IMAGE
+                    | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+                  NEW_TASK_ARN=$(aws ecs register-task-definition \
+                    --region us-east-1 \
+                    --cli-input-json "$NEW_TASK_DEF" \
+                    --query "taskDefinition.taskDefinitionArn" --output text)
+                  aws ecs update-service \
+                    --cluster cello-${CELLO_ENV} \
+                    --service cello-relay-${CELLO_ENV} \
+                    --task-definition $NEW_TASK_ARN \
+                    --region us-east-1 || {
+                      echo '{"event":"pipeline.staging.deploy.failed","pipeline":"cello-relay-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"ecs update-service failed"}'
+                      exit 1
+                    }
+                  aws ecs wait services-stable \
+                    --cluster cello-${CELLO_ENV} \
+                    --services cello-relay-${CELLO_ENV} \
+                    --region us-east-1 || {
+                      echo '{"event":"pipeline.staging.deploy.failed","pipeline":"cello-relay-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"ecs wait services-stable timed out"}'
+                      exit 1
+                    }
+                  END_MS=$(date +%s%3N)
+                  DURATION_MS=$((END_MS - START_MS))
+                  echo '{"timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"pipeline.staging.deployed","pipeline":"cello-relay-pipeline","commitSha":"'${COMMIT_SHA}'","imageDigest":"'${STAGING_IMAGE_URI}'","durationMs":'${DURATION_MS}'}'
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - Name: CELLO_ENV
+            Value: !Ref Environment
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+
+  # SmokeTestBuild: runs the 8-scenario smoke test suite against the staging ALB.
+  # AC-006: NO VpcConfig — connects to staging via public ALB URL only.
+  # STAGING_DIRECTORY_URL is injected by CodePipeline at action invocation (AC-009).
+  # SI-002: receives SourceOutput artifact from the Build stage — no new build occurs.
+  # Emits: pipeline.staging.smoke_test.passed (INFO), pipeline.staging.smoke_test.failed (ERROR)
+  SmokeTestBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cello-smoke-test-build
+      # P — Pseudocode:
+      # 1. Read STAGING_DIRECTORY_URL from env (injected by CodePipeline, not hardcoded)
+      # 2. Install Node 24 + pnpm
+      # 3. Run: pnpm --filter @cello/e2e-tests run typecheck (compile smoke/run-smoke-tests.ts)
+      # 4. Run: node packages/e2e-tests/dist/smoke/run-smoke-tests.js
+      # 5. Smoke runner emits pipeline.staging.smoke_test.passed or pipeline.staging.smoke_test.failed
+      # 6. Exit code from runner propagates to CodeBuild (non-zero = pipeline fails)
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                nodejs: 24
+              commands:
+                - npm install -g pnpm@10.33.2
+                - pnpm install --frozen-lockfile
+            build:
+              commands:
+                - export START_MS=$(date +%s%3N)
+                - pnpm --filter @cello/crypto run typecheck
+                - pnpm --filter @cello/interfaces run typecheck
+                - pnpm --filter @cello/protocol-types run typecheck
+                - pnpm --filter @cello/transport run typecheck
+                - pnpm --filter @cello/client run typecheck
+                - pnpm --filter @cello/e2e-tests run typecheck
+                # Run smoke tests against the staging ALB URL
+                # STAGING_DIRECTORY_URL is set by CodePipeline EnvironmentVariableOverride
+                - node packages/e2e-tests/dist/smoke/run-smoke-tests.js
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+        # AC-006: NO VpcConfig on this project — smoke test connects via public ALB URL
+        # AC-009: STAGING_DIRECTORY_URL is set here from the StagingDirectoryUrl parameter,
+        # which deploy.sh reads from cello-ecs-directory stack output AlbDnsName.
+        # This is never a hardcoded .elb.amazonaws.com string.
+        EnvironmentVariables:
+          - Name: STAGING_DIRECTORY_URL
+            Value: !Ref StagingDirectoryUrl
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      # AC-006: explicitly no VpcConfig — do not add one
+
+  # ProductionDeployBuild: deploys the same image digest to production ECS services.
+  # SI-002: receives the image URI from Build stage — same digest, no new build.
+  # AC-007: sequential deploy — us-east-1 first, then eu-central-1, then ap-northeast-1.
+  # Each region waits for services-stable before the next region starts (RunOrder in pipeline).
+  # Emits: pipeline.production.deployed (INFO), pipeline.production.deploy.failed (ERROR)
+  ProductionDeployBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cello-production-deploy-build
+      # P — Pseudocode:
+      # 1. Receive DEPLOY_REGION (us-east-1 | eu-central-1 | ap-northeast-1) from env
+      # 2. Receive PROD_IMAGE_URI from env (same digest from Build stage — SI-002)
+      # 3. Receive SERVICE_NAME (cello-directory | cello-relay) from env
+      # 4. export START_MS
+      # 5. Clone task def, swap image, register new revision
+      # 6. aws ecs update-service --region $DEPLOY_REGION
+      # 7. aws ecs wait services-stable --region $DEPLOY_REGION (10-min timeout)
+      # 8. On success: emit pipeline.production.deployed {pipeline, region, commitSha, imageDigest, durationMs}
+      # 9. On failure: emit pipeline.production.deploy.failed {pipeline, region, commitSha, reason}; exit 1
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - export START_MS=$(date +%s%3N)
+                - |
+                  set -euo pipefail
+                  CLUSTER="cello-${CELLO_ENV}"
+                  SERVICE="${SERVICE_NAME}-${CELLO_ENV}"
+                  TASK_FAMILY="${SERVICE_NAME}-${CELLO_ENV}"
+                  CONTAINER_NAME=$(echo ${SERVICE_NAME} | sed 's/cello-//')
+                  TASK_DEF=$(aws ecs describe-task-definition \
+                    --task-definition ${TASK_FAMILY} \
+                    --region ${DEPLOY_REGION} \
+                    --query "taskDefinition" --output json)
+                  NEW_TASK_DEF=$(echo $TASK_DEF | jq \
+                    --arg IMAGE "$PROD_IMAGE_URI" \
+                    --arg CONTAINER "${CONTAINER_NAME}" \
+                    '(.containerDefinitions[] | select(.name==$CONTAINER) | .image) |= $IMAGE
+                    | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+                  NEW_TASK_ARN=$(aws ecs register-task-definition \
+                    --region ${DEPLOY_REGION} \
+                    --cli-input-json "$NEW_TASK_DEF" \
+                    --query "taskDefinition.taskDefinitionArn" --output text)
+                  aws ecs update-service \
+                    --cluster ${CLUSTER} \
+                    --service ${SERVICE} \
+                    --task-definition $NEW_TASK_ARN \
+                    --region ${DEPLOY_REGION} || {
+                      echo '{"event":"pipeline.production.deploy.failed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","reason":"ecs update-service failed"}'
+                      exit 1
+                    }
+                  # Wait up to 10 minutes for stable state before next region starts (AC-007)
+                  aws ecs wait services-stable \
+                    --cluster ${CLUSTER} \
+                    --services ${SERVICE} \
+                    --region ${DEPLOY_REGION} || {
+                      echo '{"event":"pipeline.production.deploy.failed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","reason":"ecs wait services-stable timed out after 10 minutes"}'
+                      exit 1
+                    }
+                  END_MS=$(date +%s%3N)
+                  DURATION_MS=$((END_MS - START_MS))
+                  echo '{"timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"pipeline.production.deployed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","imageDigest":"'${PROD_IMAGE_URI}'","durationMs":'${DURATION_MS}'}'
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - Name: CELLO_ENV
+            Value: !Ref Environment
+          - Name: DEPLOY_REGION
+            Value: "us-east-1"
+          - Name: SERVICE_NAME
+            Value: "cello-directory"
       ServiceRole: !GetAtt CodeBuildRole.Arn
 
   # CodePipelines (one per package)
@@ -695,6 +983,101 @@ Resources:
                 - Name: SourceOutput
               OutputArtifacts:
                 - Name: BuildOutput
+        # DEPLOY-005 Stage 3: Deploy built image to staging ECS (dev = staging in Phase 1)
+        # AC-001: staging deploy uses same image digest from Build stage
+        # AC-005: pipeline halts here if staging deploy fails (smoke test never runs)
+        - Name: StagingDeploy
+          Actions:
+            - Name: StagingDeployAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref StagingDeployDirectoryBuild
+                EnvironmentVariables: >
+                  [{"name":"STAGING_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                   {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
+              InputArtifacts:
+                - Name: BuildOutput
+              OutputArtifacts:
+                - Name: StagingDeployOutput
+        # DEPLOY-005 Stage 4: Smoke test against staging ALB
+        # AC-002: 8-scenario smoke suite runs as separate process (no VPC, no direct DB access)
+        # AC-004/SI-001: production deploy stage will not run if this stage fails
+        # AC-009: STAGING_DIRECTORY_URL injected dynamically (read from stack output in deploy.sh)
+        - Name: SmokeTest
+          Actions:
+            - Name: SmokeTestAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref SmokeTestBuild
+                EnvironmentVariables: >
+                  [{"name":"STAGING_DIRECTORY_URL","value":"#{StagingDeployVariables.ALB_DNS_NAME}","type":"PLAINTEXT"},
+                   {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: SmokeTestOutput
+        # DEPLOY-005 Stage 5: Production deploy — sequential multi-region (AC-003, AC-007)
+        # SI-001: this stage only runs if SmokeTest stage completed with passing status
+        # SI-002: same image URI from Build stage passed through (no new build)
+        # RunOrder ensures sequencing within stage: us-east-1(1) → eu-central-1(2) → ap-northeast-1(3)
+        - Name: ProductionDeploy
+          Actions:
+            - Name: ProductionDeployUsEast1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              RunOrder: 1
+              Configuration:
+                ProjectName: !Ref ProductionDeployBuild
+                EnvironmentVariables: >
+                  [{"name":"DEPLOY_REGION","value":"us-east-1","type":"PLAINTEXT"},
+                   {"name":"SERVICE_NAME","value":"cello-directory","type":"PLAINTEXT"},
+                   {"name":"PROD_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                   {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
+              InputArtifacts:
+                - Name: BuildOutput
+            - Name: ProductionDeployEuCentral1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              RunOrder: 2
+              Configuration:
+                ProjectName: !Ref ProductionDeployBuild
+                EnvironmentVariables: >
+                  [{"name":"DEPLOY_REGION","value":"eu-central-1","type":"PLAINTEXT"},
+                   {"name":"SERVICE_NAME","value":"cello-directory","type":"PLAINTEXT"},
+                   {"name":"PROD_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                   {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
+              InputArtifacts:
+                - Name: BuildOutput
+            - Name: ProductionDeployApNortheast1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              RunOrder: 3
+              Configuration:
+                ProjectName: !Ref ProductionDeployBuild
+                EnvironmentVariables: >
+                  [{"name":"DEPLOY_REGION","value":"ap-northeast-1","type":"PLAINTEXT"},
+                   {"name":"SERVICE_NAME","value":"cello-directory","type":"PLAINTEXT"},
+                   {"name":"PROD_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                   {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
+              InputArtifacts:
+                - Name: BuildOutput
 
   RelayPipeline:
     Type: AWS::CodePipeline::Pipeline
@@ -734,6 +1117,93 @@ Resources:
               InputArtifacts:
                 - Name: SourceOutput
               OutputArtifacts:
+                - Name: BuildOutput
+        # DEPLOY-005: relay pipeline staging deploy + smoke test + production deploy
+        - Name: StagingDeploy
+          Actions:
+            - Name: StagingDeployAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref StagingDeployRelayBuild
+                EnvironmentVariables: >
+                  [{"name":"STAGING_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                   {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
+              InputArtifacts:
+                - Name: BuildOutput
+              OutputArtifacts:
+                - Name: StagingDeployOutput
+        # Relay smoke test: verifies relay health endpoint at port 4000 behind ALB
+        # Note: relay ALB is not exposed externally in Phase 1; smoke test uses directory endpoint
+        - Name: SmokeTest
+          Actions:
+            - Name: SmokeTestAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref SmokeTestBuild
+                EnvironmentVariables: >
+                  [{"name":"STAGING_DIRECTORY_URL","value":"#{StagingDeployVariables.ALB_DNS_NAME}","type":"PLAINTEXT"},
+                   {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: SmokeTestOutput
+        - Name: ProductionDeploy
+          Actions:
+            - Name: ProductionDeployUsEast1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              RunOrder: 1
+              Configuration:
+                ProjectName: !Ref ProductionDeployBuild
+                EnvironmentVariables: >
+                  [{"name":"DEPLOY_REGION","value":"us-east-1","type":"PLAINTEXT"},
+                   {"name":"SERVICE_NAME","value":"cello-relay","type":"PLAINTEXT"},
+                   {"name":"PROD_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                   {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
+              InputArtifacts:
+                - Name: BuildOutput
+            - Name: ProductionDeployEuCentral1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              RunOrder: 2
+              Configuration:
+                ProjectName: !Ref ProductionDeployBuild
+                EnvironmentVariables: >
+                  [{"name":"DEPLOY_REGION","value":"eu-central-1","type":"PLAINTEXT"},
+                   {"name":"SERVICE_NAME","value":"cello-relay","type":"PLAINTEXT"},
+                   {"name":"PROD_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                   {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
+              InputArtifacts:
+                - Name: BuildOutput
+            - Name: ProductionDeployApNortheast1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              RunOrder: 3
+              Configuration:
+                ProjectName: !Ref ProductionDeployBuild
+                EnvironmentVariables: >
+                  [{"name":"DEPLOY_REGION","value":"ap-northeast-1","type":"PLAINTEXT"},
+                   {"name":"SERVICE_NAME","value":"cello-relay","type":"PLAINTEXT"},
+                   {"name":"PROD_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                   {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
+              InputArtifacts:
                 - Name: BuildOutput
 
   E2eTestsPipeline:

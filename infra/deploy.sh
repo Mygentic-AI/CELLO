@@ -394,11 +394,19 @@ deploy_stack "cello-route53-${ENVIRONMENT}" "cello-route53.yaml" \
   "Subdomain=${SUBDOMAIN}"
 
 # ── STEP 12: cello-cicd — CI/CD infrastructure (us-east-1 only) ──────────────
+# DEPLOY-005 AC-009: STAGING_DIRECTORY_URL is read from cello-ecs-directory stack outputs
+# here (ALB_DNS_NAME was already populated in Step 8) and passed to the cello-cicd stack
+# as a parameter. The CodeBuild SmokeTestBuild project receives it via EnvironmentVariables
+# at pipeline invocation time. No ALB DNS name is hardcoded anywhere in infra/.
 
 if [[ "${REGION}" == "us-east-1" ]]; then
+  # Pass STAGING_DIRECTORY_URL from stack output so CodePipeline can inject it into
+  # the smoke test CodeBuild action (AC-009: no hardcoded .elb.amazonaws.com strings)
+  STAGING_DIRECTORY_URL="${ALB_DNS_NAME}"
   deploy_stack "cello-cicd-${ENVIRONMENT}" "cello-cicd.yaml" \
     "Environment=${ENVIRONMENT}" \
-    "GitHubConnectionArn=${GITHUB_CONNECTION_ARN}"
+    "GitHubConnectionArn=${GITHUB_CONNECTION_ARN}" \
+    "StagingDirectoryUrl=${STAGING_DIRECTORY_URL}"
 else
   echo ""
   echo "── Skipping cello-cicd (us-east-1 only, current region: ${REGION}) ──────"

@@ -139,7 +139,7 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # ── Relay task role (application code: Secrets Manager relay key only) ──
+  # ── Relay task role (application code: Secrets Manager relay key + ECS Exec) ──
 
   RelayTaskRole:
     Type: AWS::IAM::Role
@@ -163,6 +163,19 @@ Resources:
                   - secretsmanager:GetSecretValue
                 Resource:
                   - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/relay/node-private-key*"
+              # DEPLOY-005 / inherited DEPLOY-003 AC-007:
+              # ECS Exec (EnableExecuteCommand: true on the service) requires these
+              # ssmmessages permissions on the task role. Without them, exec-command
+              # calls fail with "InvalidParameterException: cannot run in Exec mode".
+              # These 4 actions are the minimum required by the SSM Session Manager plugin.
+              - Sid: EcsExecSsmMessages
+                Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: "*"
       Tags:
         - Key: Project
           Value: cello
