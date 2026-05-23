@@ -407,3 +407,37 @@ The `DenyNonPutActions` statement in `cello-s3.yaml` is live and enforced correc
 Nothing immediately — PERSIST-022 has no downstream dependencies in the M5 migration sequence. PERSIST-023 (V20 migration) remains parked, blocked on FEDERATION-003 (V19) merging first per the Flyway version ordering constraint.
 
 **Active worktrees remaining:** FEDERATION-003, PERSIST-023, ACCOUNT-001 (last two parked).
+
+---
+
+## 2026-05-23 — FEDERATION-003 agent: story closed
+
+**Story completed:** FEDERATION-003 (Relay node registration with directory) — merged to `main` at commit `0d314cf`. Worktree and branch deleted.
+
+**No deployment step required for this story.** V19 (`relay_registrations` table) runs automatically when the ECS directory tasks next start with the new image. No CloudFormation changes.
+
+**What was delivered:**
+
+- `packages/directory/db/migrations/V19__relay_registrations.sql` — `relay_registrations` table, append-only, RLS, `cello_service` INSERT+SELECT only, `chain_hash` computed on each INSERT consistent with M4 hash chain pattern. `deregistered_at` nullable column added to `TABLE_EXTRA_EXCLUDED` (M4 bug #7 guard).
+- `packages/crypto/src/relay-registration.ts` — `buildRelayRegistrationTbs` and `verifyRelayRegistrationSignature` (RFC 8032 Ed25519). SI-003 self-signature: the relay signs `relay_id || public_key_hex || timestamp_BE8` with its Ed25519 private key; the directory verifies against the submitted public key before writing any row.
+- `packages/interfaces/src/directory-store.ts` — `registerRelay()` and `getRelayPublicKey()` on `DirectoryStore` interface; `InMemoryDirectoryStore` stub updated.
+- `packages/directory/src/adapters/pg-directory-store.ts` — both methods implemented; `relay_registrations` in `STORE_TABLES` and `BIGINT_COLUMNS`.
+- `packages/directory/src/directory-node.ts` — `relay_register` and `relay_pubkey_request` handlers wired into `#handleRelayAdminStream` on `/cello/directory-relay/1.0.0`.
+- `packages/relay/src/bin/relay.ts` — startup registration with exponential backoff; sessions blocked until registration succeeds.
+- `packages/relay/src/network-directory-adapter.ts` — `registerWithDirectory()` and `getRelayPublicKey()`.
+- `packages/relay/src/relay-node.ts` — predecessor ACK verification on re-submitted hashes (AC-005/AC-006/SI-002); `RELAY_PREDECESSOR_UNKNOWN` on unknown relayId or failed signature verification — no fallback.
+- `packages/client/src/client.ts` — `getRelayPublicKey()` via authenticated signaling stream (AC-004/DB-002).
+- 6 new canonical events in taxonomy.
+
+**Key lesson for future agents (AC-011):** The AC-011 dist freshness check must be run against the server entrypoint (`dist/directory-node.js` or `dist/bin/directory.js`) — not the adapter file. Running it against `dist/adapters/pg-directory-store.js` passes even when the endpoint is never wired, because the store method exists there regardless. The sprint-reviewer caught this gap as a blocking finding on the first review pass.
+
+**V18 hotfix note:** FEDERATION-002 incorrectly modified V18 after it was applied to dev RDS, causing a Flyway checksum mismatch crash on every new directory container. The fix (commit `649f9ef`) extracted the UNIQUE constraint into V20. PERSIST-023 renumbered V20→V21 (`d593f85`); ACCOUNT-001 renumbered V21/V22→V22/V23. **Rule reinforced: never modify a migration after it has been applied to any environment.**
+
+**What this unblocks:**
+
+- **RELAY-001** — depends on FEDERATION-003. Can now be dispatched.
+- **PERSIST-023** — V19 is now on `main`; the parked PERSIST-023 branch (V21) can merge next per the migration sequence.
+- **ACCOUNT-001** — merges after PERSIST-023 (V22/V23).
+- **FEDERATION-E2E-001** — depends on both FEDERATION-002 and FEDERATION-003.
+
+**Active worktrees:** PERSIST-023, ACCOUNT-001 (both parked; PERSIST-023 merges next).

@@ -11,7 +11,7 @@ description: In-progress write-up for M5. Initial deployment issues, IaC gaps fo
 
 **Started:** 2026-05-22  
 **Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, SECOPS-001, SECOPS-002, SECOPS-003, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002, FEDERATION-003, PERSIST-022  
-**Stories open:** DEPLOY-005, PERSIST-023, ACCOUNT-001  
+**Stories open:** DEPLOY-005, PERSIST-023, ACCOUNT-001, RELAY-001, FEDERATION-E2E-001  
 **Stacks deployed:** 14 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-waf, cello-ecs-relay, cello-route53, cello-cicd, cello-cloudwatch)  
 **Lambdas deployed:** 3 (webhook-receiver, pipeline-filter, rds-rotation)  
 **Pipelines active:** 8 (all green)
@@ -227,6 +227,35 @@ Delivered the checkpoint coordinator and all supporting infrastructure. `Checkpo
 **Deferred to FEDERATION-E2E-001:**
 
 AC-001, AC-002, AC-005 (3-node end-to-end cross-signing with real inter-node transport) cannot be tested in the Docker Compose local environment. The `ICheckpointTransport` production implementation (libp2p streams on port 4001 over VPC Peering) and the wiring of `CheckpointCoordinator` into `server.ts` are both deferred until that story.
+
+---
+
+## FEDERATION-003 — Relay Node Registration with Directory
+
+Delivered relay identity registration: the `relay_registrations` table (V19), the directory endpoint, relay startup registration with backoff, client-side public key lookup, and predecessor ACK verification.
+
+**What was delivered:**
+
+- `packages/directory/db/migrations/V19__relay_registrations.sql` — `relay_registrations` table: `relay_id TEXT NOT NULL UNIQUE`, `public_key_hex TEXT NOT NULL`, `region TEXT NOT NULL`, `registered_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `chain_hash TEXT NOT NULL DEFAULT ''`. `deregistered_at` column is nullable and added to `TABLE_EXTRA_EXCLUDED` in `hash-chain.ts` — a nullable column absent at INSERT time causes `verifyChain` to return `{ valid: false }` if not excluded (M4 bug #7 pattern). Table is append-only with RLS; `cello_service` has INSERT and SELECT only.
+- `packages/crypto/src/relay-registration.ts` — `buildRelayRegistrationTbs` (SHA-256(relay_id_bytes || public_key_hex_bytes || timestamp_BE8)) and `verifyRelayRegistrationSignature` (RFC 8032 Ed25519 verify). SI-003: the relay signs its own registration request body; the directory verifies the signature against the submitted public key — a caller that does not control the private key cannot register under that public key.
+- `packages/interfaces/src/directory-store.ts` — `registerRelay()` and `getRelayPublicKey()` added to the `DirectoryStore` interface; `InMemoryDirectoryStore` stub updated.
+- `packages/directory/src/adapters/pg-directory-store.ts` — `registerRelay()` and `getRelayPublicKey()` implemented; `relay_registrations` added to `STORE_TABLES` and `BIGINT_COLUMNS` (PERSIST-021 static analysis gate). Idempotency: same key → no-op + `relay.already.registered` at INFO; different key for the same `relay_id` → `RELAY_IDENTITY_CONFLICT` + `relay.registration.conflict` at ERROR + ops-critical alarm.
+- `packages/directory/src/directory-node.ts` — `relay_register` and `relay_pubkey_request` frame handlers wired into `#handleRelayAdminStream` over the existing `/cello/directory-relay/1.0.0` protocol. AC-011 dist freshness confirmed: `relay_register` present in `dist/directory-node.js`.
+- `packages/relay/src/bin/relay.ts` — relay registers with directory at startup on exponential backoff. Sessions are blocked until registration succeeds — an unregistered relay cannot issue verifiable ACKs (DB-001).
+- `packages/relay/src/network-directory-adapter.ts` — `registerWithDirectory()` and `getRelayPublicKey()` methods carrying the `relay_register` and `relay_pubkey_request` frames.
+- `packages/relay/src/relay-node.ts` — predecessor ACK verification: when a `hash_submit` carries `predecessor_relay_id`, the relay fetches the predecessor's public key from the directory and verifies the ACK signature before accepting the re-submission (AC-005/AC-006/SI-002). No fallback to accepting unverified ACKs — an unknown `relayId` or a failing signature both produce `RELAY_PREDECESSOR_UNKNOWN`.
+- `packages/client/src/client.ts` — `getRelayPublicKey()` via authenticated signaling stream for client-side ACK verification (AC-004/DB-002).
+- 6 new canonical events in taxonomy: `relay.registered`, `relay.already.registered`, `relay.registration.conflict`, `relay.registration.failed`, `relay.predecessor.unknown`, `relay.pubkey.lookup.failed`.
+
+**Sprint-reviewer finding that shaped the final implementation:**
+
+The first sprint-coder pass correctly implemented the `PgDirectoryStore` methods and the crypto primitives but omitted the directory endpoint wiring, the relay-side registration startup logic, and the client-side lookup — leaving three entire components unimplemented. The AC-011 dist freshness check was run against `dist/adapters/pg-directory-store.js` rather than the server entrypoint (`dist/directory-node.js`), masking the missing wire. The sprint-reviewer caught all three gaps as blocking findings. This is precisely why AC-011 exists: `registerRelay()` in the store with no route to it from the outside world looks complete until the server entrypoint is checked.
+
+**Deferred to RELAY-001 and FEDERATION-E2E-001:**
+
+Re-submission across relay boundaries (AC-005/AC-006) requires a live environment with two relay nodes and real predecessor ACK data. DB-001 backoff behavior is integration-tested; the live behaviour of a relay refusing sessions until registered requires a running directory node and ECS.
+
+**No deployment step required.** V19 runs automatically when ECS directory tasks next start with the new image. RELAY-001 is now unblocked.
 
 ---
 
@@ -470,8 +499,8 @@ Delivered `cello-waf.yaml` — a WAFv2 WebACL (REGIONAL scope) associated with t
   - DEPLOY-003 AC-005: three distinct relayIds across regions
   - DEPLOY-003 AC-006: rolling replacement never drops runningCount below 1
   - DEPLOY-003 AC-007: GET /health on relay port 4000 from inside VPC — requires ECS Exec enablement (prerequisite for DEPLOY-005 in-VPC smoke test tooling anyway)
-- **PERSIST-023** — must renumber its migration V20→V21 before merging (V20 now taken by FEDERATION-002 hotfix)
-- **ACCOUNT-001** — must renumber V21/V22→V22/V23 before merging
+- **PERSIST-023** — migration renumbered V20→V21 (V20 taken by FEDERATION-002 hotfix); parked branch ready to merge
+- **ACCOUNT-001** — migrations renumbered V21/V22→V22/V23 (V21 taken by PERSIST-023); parked branch ready to merge after PERSIST-023
 - **SECOPS-003 AC-002/AC-007** — live request verification (rate-limit trigger, CommonRuleSet COUNT hit) pending manual test
 - **cello-crypto-pipeline** — flaky timing test (`keygen under 50ms`, gets 71ms on cold CodeBuild VMs). Threshold needs raising.
 
