@@ -106,6 +106,10 @@ Resources:
             # It is NOT injected via RDS_CREDENTIALS_SECRET_ARN pattern.
             - Name: NODE_PRIVATE_KEY
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/node-private-key"
+            # DEV_ENVELOPE_KEY: 64-char hex AES-256 key used by LocalEnvelopeKeyProvider
+            # for dev/staging (placeholder until KmsEnvelopeKeyProvider is wired in M5+).
+            - Name: DEV_ENVELOPE_KEY
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/envelope-key"
           LogConfiguration:
             LogDriver: awslogs
             Options:
