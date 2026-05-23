@@ -1,0 +1,199 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO WAF — WAFv2 WebACL associated with the directory ALB.
+  Rules (in priority order):
+    0. Rate-based: 1,000 requests per 5-minute window per IP → BLOCK (HTTP 429)
+    1. AWSManagedRulesAmazonIpReputationList → BLOCK (HTTP 403)
+    2. AWSManagedRulesCommonRuleSet → COUNT (Phase 1 — observe before blocking)
+    3. GeoMatch (optional): blocked country codes → BLOCK (enabled via GeoBlockingEnabled=true)
+  WAF logs are written to CloudWatch Logs group aws-waf-logs-cello-{env} (90-day retention).
+  ALB ARN is imported via cross-stack reference from cello-ecs-directory.
+  SI-002: no parameter to disable WAF or skip the WebACL association.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment
+
+  GeoBlockingEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Set to "true" to activate the geo-match rule. Default is "false".
+      Geo-blocking is a deployment-time operator decision — not hardcoded.
+      Changing this parameter does not require a Lambda redeployment.
+
+  BlockedCountries:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: >
+      Comma-delimited list of ISO 3166-1 alpha-2 country codes to block
+      when GeoBlockingEnabled=true (e.g. "CN,RU"). Ignored when
+      GeoBlockingEnabled=false.
+
+Conditions:
+  GeoBlockingActive: !Equals [!Ref GeoBlockingEnabled, "true"]
+
+Resources:
+
+  # ── WAF CloudWatch Log Group ───────────────────────────────────────────────
+  # WAFv2 log group names MUST start with "aws-waf-logs-" — AWS API requirement.
+  # The story intent "/cello/{env}/waf" cannot be used as the log group name
+  # because WAFv2 rejects any group that doesn't start with "aws-waf-logs-".
+  # The log group exports its name so operators can reference it without
+  # hard-coding the naming convention in monitoring tooling.
+
+  WafLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "aws-waf-logs-cello-${Environment}"
+      RetentionInDays: 90
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── WAFv2 WebACL ───────────────────────────────────────────────────────────
+  # Scope: REGIONAL — this is an ALB, not a CloudFront distribution.
+  # DefaultAction: Allow — only the rules below produce blocks.
+  #
+  # Rule priority layout:
+  #   0 — Rate-based rule (1,000 req / 5 min / IP) — BLOCK → HTTP 429
+  #   1 — IP Reputation list (managed) — BLOCK → HTTP 403
+  #   2 — Common Rule Set (managed) — COUNT (Phase 1, observability)
+  #   3 — Geo-match rule — BLOCK (present only when GeoBlockingActive=true)
+
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "cello-waf-${Environment}"
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "cello-waf-${Environment}"
+        SampledRequestsEnabled: true
+      Rules:
+
+        # Priority 0 — Rate-based rule
+        # Blocks any single IP that exceeds 1,000 requests in a 5-minute
+        # sliding window. AWS WAFv2 rate-based rules enforce a 5-minute
+        # (300-second) evaluation window. The block lasts for the remainder
+        # of the window. Blocked requests return HTTP 429.
+        - Name: RateLimitPerIp
+          Priority: 0
+          Action:
+            Block:
+              CustomResponse:
+                ResponseCode: 429
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "cello-waf-${Environment}-rate-limit"
+            SampledRequestsEnabled: true
+          Statement:
+            RateBasedStatement:
+              Limit: 1000
+              AggregateKeyType: IP
+
+        # Priority 1 — AWS Managed: Amazon IP Reputation List
+        # Blocks requests from IPs on Amazon's curated reputation list
+        # (bots, scrapers, known malicious infrastructure). OverrideAction
+        # is None so the rule's own BLOCK action fires as-is.
+        - Name: AWSManagedRulesAmazonIpReputationList
+          Priority: 1
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "cello-waf-${Environment}-ip-reputation"
+            SampledRequestsEnabled: true
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+
+        # Priority 2 — AWS Managed: Common Rule Set (COUNT mode)
+        # COUNT mode: requests are not blocked; rule hits are counted
+        # and logged. Operators can review the logs before switching
+        # to BLOCK mode in a future CloudFormation parameter update.
+        # This satisfies AC-007 (Phase 1 observability-before-blocking).
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 2
+          OverrideAction:
+            Count: {}
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "cello-waf-${Environment}-common-rules"
+            SampledRequestsEnabled: true
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+
+        # Priority 3 — Geo-match rule (conditional)
+        # Present only when GeoBlockingEnabled=true. When false, this
+        # entire rule is absent from the WebACL (AWS::NoValue) — no
+        # GeoMatchStatement rule fires, satisfying AC-004.
+        - !If
+          - GeoBlockingActive
+          - Name: GeoBlockSelectedCountries
+            Priority: 3
+            Action:
+              Block: {}
+            VisibilityConfig:
+              CloudWatchMetricsEnabled: true
+              MetricName: !Sub "cello-waf-${Environment}-geo-block"
+              SampledRequestsEnabled: true
+            Statement:
+              GeoMatchStatement:
+                CountryCodes: !Ref BlockedCountries
+          - !Ref AWS::NoValue
+
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── WAFv2 WebACL Association ───────────────────────────────────────────────
+  # Associates the WebACL with the directory ALB.
+  # ResourceArn is imported via cross-stack reference from cello-ecs-directory.
+  # CloudFormation enforces ordering: cello-ecs-directory must deploy first.
+  # SI-001: association is IaC-defined — never a manual post-deployment step.
+  # SI-002: no parameter to skip or disable this association.
+
+  WebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !ImportValue
+        Fn::Sub: "cello-${Environment}-alb-arn"
+      WebACLArn: !GetAtt WebACL.Arn
+
+  # ── WAFv2 Logging Configuration ────────────────────────────────────────────
+  # Sends WAF decision logs to the CloudWatch log group defined above.
+  # Log entries include: timestamp, sourceIp, ruleId, action, httpMethod, uri.
+  # DependsOn: WafLogGroup ensures the group exists before WAFv2 tries to
+  # configure it as a log destination.
+
+  LoggingConfiguration:
+    Type: AWS::WAFv2::LoggingConfiguration
+    DependsOn: WafLogGroup
+    Properties:
+      ResourceArn: !GetAtt WebACL.Arn
+      LogDestinationConfigs:
+        - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:aws-waf-logs-cello-${Environment}"
+
+Outputs:
+  WebAclArn:
+    Value: !GetAtt WebACL.Arn
+    Export:
+      Name: !Sub "cello-${Environment}-waf-webacl-arn"
+
+  WafLogGroupName:
+    Value: !Ref WafLogGroup
+    Export:
+      Name: !Sub "cello-${Environment}-waf-log-group"

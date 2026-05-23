@@ -218,3 +218,8 @@ Outputs:
     Value: !GetAtt Alb.CanonicalHostedZoneID
     Export:
       Name: !Sub "cello-${Environment}-alb-hosted-zone-id"
+
+  AlbArn:
+    Value: !Ref Alb
+    Export:
+      Name: !Sub "cello-${Environment}-alb-arn"
