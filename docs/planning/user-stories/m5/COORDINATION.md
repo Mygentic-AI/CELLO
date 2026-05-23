@@ -325,6 +325,27 @@ DEPLOY-002/003 deployed real images and Flyway ran V18. Redeployed rotation Lamb
 
 ---
 
+## 2026-05-23 — FEDERATION-002 agent
+
+**Story completed:** FEDERATION-002 (Checkpoint cross-signing with 2-of-3 threshold and deterministic coordinator failover) — merged to `main` at commit `0842f47`. Worktree and branch deleted.
+
+**No deployment step required for this story.** V18 already applied to dev RDS at ECS startup (DEPLOY-002/003 confirmed schemaVersion=18). The unique constraint FEDERATION-002 added to V18 is idempotent — if V18 runs again it will no-op. The next ECS deploy touching `packages/directory/` carries the new code. `CheckpointCoordinator` is not wired into the composition root and has no production `ICheckpointTransport` implementation by design — inter-node RPC does not exist until FEDERATION-E2E-001.
+
+**What was delivered:**
+
+- `packages/crypto/src/checkpoint.ts` — `buildCheckpointTbs` and `computeCheckpointHash` (FIPS 180-4 SHA-256). Both coordinator and non-coordinator nodes import from `@cello/crypto` (AC-010-canonical-tbs canonical import path).
+- `packages/directory/src/checkpoint-coordinator.ts` — `CheckpointCoordinator`: timer-based rounds, 2-of-3 threshold, Ed25519 peer signature verification, deterministic `sortSealBatch()` (recorded_at ASC, conversation_id ASC), coordinator failover detection, public `checkGapNow()` method.
+- `packages/directory/src/adapters/pg-directory-store.ts` — 8 new methods: `writeCheckpoint`, `getCheckpointById`, `getLastCheckpointAt`, `getLastCheckpointRow`, `getStagingRowsForBatch`, `getCheckpointMmrState`, `clearStagingBatch`, `writeCheckpointSignature`/`getCheckpointSignatures`. `STORE_TABLES` and `BIGINT_COLUMNS` exports updated (PERSIST-021 gate).
+- `packages/interfaces/src/directory-store.ts` — `DirectoryStore` interface extended with all 8 new methods; `InMemoryDirectoryStore` stubs added.
+- `packages/directory/db/migrations/V18__federation_schema.sql` — unique constraint `(checkpoint_id, node_id)` on `checkpoint_node_signatures` (idempotent).
+- 4 new canonical event names: `federation.checkpoint.round.error`, `federation.checkpoint.signature.node_id_mismatch`, `federation.checkpoint.signature.missing_pubkey`, `federation.checkpoint.signature.invalid`.
+
+**Waiting on: FEDERATION-E2E-001**
+
+`CheckpointCoordinator` cannot run production rounds until `ICheckpointTransport` has a real implementation. AC-001, AC-002, AC-005 (3-node end-to-end cross-signing) are deferred to FEDERATION-E2E-001.
+
+---
+
 ## 2026-05-23 — SECOPS-001 agent: story closed
 
 **SECOPS-001 is fully complete. All ACs verified.**

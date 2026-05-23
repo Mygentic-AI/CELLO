@@ -10,7 +10,7 @@ description: In-progress write-up for M5. Initial deployment issues, IaC gaps fo
 # M5 — Infrastructure Deployment
 
 **Started:** 2026-05-22  
-**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, SECOPS-001, SECOPS-004, FEDERATION-001, FEDERATION-001A  
+**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, SECOPS-001, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002  
 **Stories open:** DEPLOY-005, SECOPS-002, SECOPS-003  
 **Stacks deployed:** 12 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-ecs-relay, cello-route53, cello-cicd)  
 **Lambdas deployed:** 3 (webhook-receiver, pipeline-filter, rds-rotation)  
@@ -200,6 +200,31 @@ Delivered the multi-region federation foundation as application code + Flyway mi
 - 620-line integration test suite. Six `describe.skip` stubs deferred to FEDERATION-E2E-001 (requires multi-node RDS with logical replication).
 
 **Dependency:** V18 reaches ECS when the directory pipeline passes and deploys. The `cello_service` role created by V18 unblocks SECOPS-004's rotation verification (AC-002/AC-003).
+
+---
+
+## FEDERATION-002 — Checkpoint Cross-Signing with 2-of-3 Threshold
+
+Delivered the checkpoint coordinator and all supporting infrastructure. No deployment step required — V18 was already applied to dev RDS, the unique constraint addition is idempotent, and `CheckpointCoordinator` is intentionally not wired into the composition root until FEDERATION-E2E-001 provides a real inter-node transport.
+
+**What was delivered:**
+
+- `packages/crypto/src/checkpoint.ts` — `buildCheckpointTbs` and `computeCheckpointHash` (FIPS 180-4 SHA-256). Both functions are exported from `@cello/crypto` so coordinator and non-coordinator nodes share a single canonical TBS construction path (AC-010).
+- `packages/directory/src/checkpoint-coordinator.ts` — `CheckpointCoordinator`: timer-based 10-minute rounds, 2-of-3 threshold, deterministic `sortSealBatch()` (recorded_at ASC, conversation_id ASC per SI-003), Ed25519 peer signature verification before counting toward threshold, coordinator failover detection via checkpoint gap, public `checkGapNow()` for operator tooling. `ICheckpointTransport` and `CheckpointSignatureWithKey` interfaces defined for the production libp2p implementation.
+- `packages/directory/src/adapters/pg-directory-store.ts` — 8 new methods on `PgDirectoryStore` and the `DirectoryStore` interface: `writeCheckpoint`, `getCheckpointById`, `getLastCheckpointAt`, `getLastCheckpointRow`, `getStagingRowsForBatch`, `getCheckpointMmrState`, `clearStagingBatch`, `writeCheckpointSignature`/`getCheckpointSignatures`. `STORE_TABLES` and `BIGINT_COLUMNS` exports updated for the PERSIST-021 static analysis gate.
+- `V18__federation_schema.sql` extended — unique constraint `(checkpoint_id, node_id)` on `checkpoint_node_signatures` enforces SI-001 at the database layer.
+- 4 new event names added to the canonical taxonomy: `federation.checkpoint.round.error`, `federation.checkpoint.signature.node_id_mismatch`, `federation.checkpoint.signature.missing_pubkey`, `federation.checkpoint.signature.invalid`.
+
+**Security fixes applied during code review:**
+
+- *Critical:* Peer signatures now verified with `verify(pubKey, hashBytes, sigBytes)` (RFC 8032) before counting toward threshold. Without this, any peer response string would have been accepted.
+- *Critical:* `response.nodeId` is checked against the addressed peer ID. A compromised transport that routes to peer A but returns `nodeId=B` is rejected — it cannot consume B's threshold slot.
+- *High:* `verifyAndSign()` now calls `this.#store.getCheckpointMmrState()` independently and computes the hash from local state. The coordinator-supplied peaks are not trusted — only the locally observed chain state determines whether the node signs.
+- *High:* Chain hash record uses native arrays (not `JSON.stringify`) to match what PostgreSQL JSONB returns on read-back.
+
+**Deferred to FEDERATION-E2E-001:**
+
+AC-001, AC-002, AC-005 (3-node end-to-end cross-signing with real inter-node transport) cannot be tested in the Docker Compose local environment. The `ICheckpointTransport` production implementation (libp2p streams on port 4001 over VPC Peering) and the wiring of `CheckpointCoordinator` into `server.ts` are both deferred until that story.
 
 ---
 
