@@ -10,11 +10,11 @@ description: In-progress write-up for M5. Initial deployment issues, IaC gaps fo
 # M5 — Infrastructure Deployment
 
 **Started:** 2026-05-22  
-**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, SECOPS-001, SECOPS-002, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002, PERSIST-022  
-**Stories open:** DEPLOY-005, SECOPS-003, FEDERATION-003, PERSIST-023, ACCOUNT-001  
-**Stacks deployed:** 13 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-ecs-relay, cello-route53, cello-cicd, cello-cloudwatch)  
+**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, SECOPS-001, SECOPS-002, SECOPS-003, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002, FEDERATION-003, PERSIST-022  
+**Stories open:** DEPLOY-005, PERSIST-023, ACCOUNT-001  
+**Stacks deployed:** 14 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-waf, cello-ecs-relay, cello-route53, cello-cicd, cello-cloudwatch)  
 **Lambdas deployed:** 3 (webhook-receiver, pipeline-filter, rds-rotation)  
-**Pipelines active:** 8 (both directory and relay green with real images)
+**Pipelines active:** 8 (all green)
 
 ---
 
@@ -205,7 +205,9 @@ Delivered the multi-region federation foundation as application code + Flyway mi
 
 ## FEDERATION-002 — Checkpoint Cross-Signing with 2-of-3 Threshold
 
-Delivered the checkpoint coordinator and all supporting infrastructure. No deployment step required — V18 was already applied to dev RDS, the unique constraint addition is idempotent, and `CheckpointCoordinator` is intentionally not wired into the composition root until FEDERATION-E2E-001 provides a real inter-node transport.
+Delivered the checkpoint coordinator and all supporting infrastructure. `CheckpointCoordinator` is intentionally not wired into the composition root until FEDERATION-E2E-001 provides a real inter-node transport.
+
+**Post-merge hotfix (2026-05-23):** FEDERATION-002 incorrectly appended the `checkpoint_node_signatures` UNIQUE constraint to `V18__federation_schema.sql`, which had already been applied to dev RDS by FEDERATION-001. This caused a Flyway checksum mismatch (`applied=1232519606, local=-599496115`) that crashed every new directory container at startup. Fix: V18 reverted to its FEDERATION-001 state; the constraint extracted to `V20__federation_checkpoint_unique_constraint.sql`. PERSIST-023 renumbers V20→V21; ACCOUNT-001 renumbers V21/V22→V22/V23. **Rule reinforced: never modify a migration file after it has been applied to any environment.**
 
 **What was delivered:**
 
@@ -438,6 +440,28 @@ Pure application code — no CloudFormation, no migration. The CELLO client can 
 
 ---
 
+## SECOPS-003 — WAF + Shield Standard on Directory ALBs
+
+Delivered `cello-waf.yaml` — a WAFv2 WebACL (REGIONAL scope) associated with the directory ALB. Three rules in priority order: rate-based 1,000 req/5-min/IP (BLOCK, HTTP 429), `AWSManagedRulesAmazonIpReputationList` (BLOCK, HTTP 403), `AWSManagedRulesCommonRuleSet` (COUNT — Phase 1 observe-before-block). Geo-blocking available as a CFN parameter (`GeoBlockingEnabled`, default off). WAF logs to `aws-waf-logs-cello-{env}` (90-day retention).
+
+**What was delivered:**
+- `infra/cloudformation/cello-waf.yaml` — new stack, deployed as Step 8a after `cello-ecs-directory`
+- `cello-ecs-directory.yaml` — `AlbArn` output added for cross-stack import
+- `deploy.sh` — Step 8a inserted, `STACK_COUNT` 12→13; stack count comment updated
+- `infra/tests/test_secops_003.py` — 27 structural tests covering all 8 ACs and 2 SIs via CFN YAML parsing
+
+**AC-001 verified (live):** `aws wafv2 get-web-acl-for-resource` confirms WebACL `cello-waf-dev` associated with ALB. All three rules present with correct priorities and actions.
+
+**AC-006 verified (live):** Log group `aws-waf-logs-cello-dev` exists, 90-day retention confirmed.
+
+**WAF WebACL ARN:** `arn:aws:wafv2:us-east-1:257394457473:regional/webacl/cello-waf-dev/6b71004a-5edd-450b-90f3-d529908502c4`
+
+**AC-002 and AC-007 pending:** Require sending live test requests (rate-limit trigger, CommonRuleSet COUNT entry). Manual verification post-deploy.
+
+**Note on log group naming:** WAFv2 requires CloudWatch log group names to start with `aws-waf-logs-`. The story specified `/cello/{env}/waf` which cannot be used — deviation documented in template comments.
+
+---
+
 ## What Remains Open
 
 - **DEPLOY-005** — Production deployment sequencing (staging gate + sequential multi-region rollout). Also owns these deferred ACs from closed stories:
@@ -446,10 +470,10 @@ Pure application code — no CloudFormation, no migration. The CELLO client can 
   - DEPLOY-003 AC-005: three distinct relayIds across regions
   - DEPLOY-003 AC-006: rolling replacement never drops runningCount below 1
   - DEPLOY-003 AC-007: GET /health on relay port 4000 from inside VPC — requires ECS Exec enablement (prerequisite for DEPLOY-005 in-VPC smoke test tooling anyway)
-- **SECOPS-003** — WAF + Shield Standard on directory ALBs
-- **SECOPS-004 AC-002/AC-003** — now unblocked. `cello_service` role created by V18. Rotation can be re-triggered.
+- **PERSIST-023** — must renumber its migration V20→V21 before merging (V20 now taken by FEDERATION-002 hotfix)
+- **ACCOUNT-001** — must renumber V21/V22→V22/V23 before merging
+- **SECOPS-003 AC-002/AC-007** — live request verification (rate-limit trigger, CommonRuleSet COUNT hit) pending manual test
 - **cello-crypto-pipeline** — flaky timing test (`keygen under 50ms`, gets 71ms on cold CodeBuild VMs). Threshold needs raising.
-- **cello-client-pipeline** — test failures (pre-existing, not CI-related)
 
 ---
 
