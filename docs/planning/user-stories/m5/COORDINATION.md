@@ -363,3 +363,19 @@ DEPLOY-002/003 deployed real images and Flyway ran V18. Redeployed rotation Lamb
 The `DenyNonPutActions` statement in `cello-s3.yaml` is live and enforced correctly. Object Lock (overwrite protection) remains deferred to production per DEF-001.
 
 **No further action required from SECOPS-001.**
+
+---
+
+## 2026-05-23 — SECOPS-002 agent: story closed
+
+**SECOPS-002 is fully complete. All ACs verified. Merged to main at commit `7cc2c0f`.**
+
+**What was delivered:**
+
+- `infra/cloudformation/cello-cloudwatch.yaml` — new 880-line CloudFormation template deploying 2 SNS topics (`cello-ops-critical-${Environment}`, `cello-ops-warning-${Environment}`) with email subscriptions, 10 named CloudWatch alarms with `${Environment}` suffix (directory/relay ECS task counts, RDS CPU + storage, checkpoint gap, replication slot inactive, chain hash mismatch, relay pool unavailable, relay manifest invalid, audit shipper buffer full), and one multi-region operations dashboard showing all 3 regions in a single view with 6 panel types each.
+- `infra/deploy.sh` — CloudWatch stack added as Step 10, after `cello-ecs-relay` (Step 9), before `cello-cicd` (Step 11). STACK_COUNT updated from 12 to 13.
+- `infra/STATE.md` — `cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-05-23` added.
+
+**Deployed to dev/us-east-1:** `cello-cloudwatch-dev` reached `UPDATE_COMPLETE`. All 10 alarms exist with `-dev` suffix. SNS topics confirmed with PendingConfirmation subscriptions (requires one-time email confirmation click).
+
+**No further action required from SECOPS-002.** The stack is IaC — no application code, no migration, no separate verification step beyond the stack reaching CREATE_COMPLETE on each environment deploy.

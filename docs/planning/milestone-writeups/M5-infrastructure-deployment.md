@@ -10,9 +10,9 @@ description: In-progress write-up for M5. Initial deployment issues, IaC gaps fo
 # M5 — Infrastructure Deployment
 
 **Started:** 2026-05-22  
-**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, SECOPS-001, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002  
-**Stories open:** DEPLOY-005, SECOPS-002, SECOPS-003  
-**Stacks deployed:** 12 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-ecs-relay, cello-route53, cello-cicd)  
+**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, SECOPS-001, SECOPS-002, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002  
+**Stories open:** DEPLOY-005, SECOPS-003  
+**Stacks deployed:** 13 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-ecs-relay, cello-route53, cello-cicd, cello-cloudwatch)  
 **Lambdas deployed:** 3 (webhook-receiver, pipeline-filter, rds-rotation)  
 **Pipelines active:** 8 (both directory and relay green with real images)
 
@@ -378,6 +378,41 @@ DEPLOY-002 and DEPLOY-003 were delivered together across 2026-05-22 to 2026-05-2
 
 ---
 
+## SECOPS-002 — CloudWatch Alarms and Multi-Region Dashboard
+
+Pure IaC story — no application code, no Flyway migration. The deliverable is a new CloudFormation stack that provisions operational visibility infrastructure.
+
+**What was delivered:**
+
+- `infra/cloudformation/cello-cloudwatch.yaml` — 2 SNS topics (`cello-ops-critical-${Environment}`, `cello-ops-warning-${Environment}`) with email subscriptions, 10 named CloudWatch alarms, and one multi-region operations dashboard.
+
+**The 10 alarms (all suffixed with `-${Environment}` to prevent cross-environment collision):**
+
+| Alarm | Threshold | Routes to |
+|---|---|---|
+| `cello-directory-ecs-task-count` | runningCount < 1 | ops-critical |
+| `cello-relay-ecs-task-count` | runningCount < 1 | ops-critical |
+| `cello-rds-cpu` | > 80% for 5 min | ops-critical |
+| `cello-rds-storage` | < 10GB free | ops-warning |
+| `cello-checkpoint-gap` | no confirmed checkpoint in 30 min | ops-critical |
+| `cello-replication-slot-inactive` | custom metric = 0 | ops-critical |
+| `cello-replication-chain-hash-mismatch` | custom metric ≥ 1 | ops-critical |
+| `cello-relay-pool-unavailable` | custom metric = 0 | ops-critical |
+| `cello-relay-manifest-invalid` | custom metric ≥ 1 | ops-critical |
+| `cello-audit-shipper-buffer-full` | buffer utilization ≥ 90% | ops-warning |
+
+The `cello-checkpoint-gap` alarm uses `TreatMissingData: breaching` — it fires when no `CELLO/Checkpoint` custom metric has been published in 30 minutes. It will remain in ALARM state on the dev environment until FEDERATION-E2E-001 wires `CheckpointCoordinator` into a real inter-node transport and the metric starts flowing.
+
+**Dashboard:** one `AWS::CloudWatch::Dashboard` resource with cross-region JSON widget configuration. All 3 regions (us-east-1, eu-central-1, ap-northeast-1) appear as consecutive panel rows without switching views. Each region shows 6 panels: ECS directory task count, ECS relay task count, RDS CPU utilization, checkpoint confirmation rate, error rate (5xx/min via ALB), replication lag.
+
+**deploy.sh integration:** CloudWatch added as Step 10 in the deploy sequence, after `cello-ecs-relay` (Step 9). Alarm dimensions reference ECS cluster and service names that are constructed via `!Sub` — no `!ImportValue` needed, no new circular dependencies. STACK_COUNT updated from 12 to 13.
+
+**Code review finding fixed:** Initial implementation omitted the `${Environment}` suffix from alarm names. Staging deploying to the same account/region as dev would have failed with a duplicate alarm name conflict. All 10 alarm names now use `!Sub "cello-...-${Environment}"`, consistent with the SNS topic naming in the same template.
+
+**Deployed to dev/us-east-1:** `cello-cloudwatch-dev` at `UPDATE_COMPLETE`. All 10 alarms confirmed present with `-dev` suffix. SNS subscriptions in `PendingConfirmation` state — email confirmation required after first deploy.
+
+---
+
 ## What Remains Open
 
 - **DEPLOY-005** — Production deployment sequencing (staging gate + sequential multi-region rollout). Also owns these deferred ACs from closed stories:
@@ -386,7 +421,6 @@ DEPLOY-002 and DEPLOY-003 were delivered together across 2026-05-22 to 2026-05-2
   - DEPLOY-003 AC-005: three distinct relayIds across regions
   - DEPLOY-003 AC-006: rolling replacement never drops runningCount below 1
   - DEPLOY-003 AC-007: GET /health on relay port 4000 from inside VPC — requires ECS Exec enablement (prerequisite for DEPLOY-005 in-VPC smoke test tooling anyway)
-- **SECOPS-002** — CloudWatch alarms and operational dashboards
 - **SECOPS-003** — WAF + Shield Standard on directory ALBs
 - **SECOPS-004 AC-002/AC-003** — now unblocked. `cello_service` role created by V18. Rotation can be re-triggered.
 - **cello-crypto-pipeline** — flaky timing test (`keygen under 50ms`, gets 71ms on cold CodeBuild VMs). Threshold needs raising.
