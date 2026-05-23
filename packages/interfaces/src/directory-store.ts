@@ -189,4 +189,113 @@ export interface DirectoryStore {
    * @throws if the chain hash does not match (caller must halt replication on throw)
    */
   verifyReplicatedRow(tableName: string, row: Record<string, unknown>): Promise<void>;
+
+  // ─── FEDERATION-002: Checkpoint cross-signing ───────────────────────────
+
+  /**
+   * Write a checkpoint_node_signatures row.
+   *
+   * FEDERATION-002 AC-009-store-tables: records a single node's Ed25519 signature for
+   * a confirmed checkpoint. The (checkpoint_id, node_id) UNIQUE constraint ensures the
+   * same node cannot submit two signatures for the same checkpoint.
+   *
+   * @throws on unique constraint violation (SQLSTATE 23505) — SI-001: same node twice
+   *   does not count toward the threshold.
+   */
+  writeCheckpointSignature(params: {
+    checkpointId: string;
+    nodeId: string;
+    nodeSignature: string;
+  }): Promise<void>;
+
+  /**
+   * Get all checkpoint_node_signatures rows for a checkpoint_id.
+   *
+   * FEDERATION-002 AC-009-store-tables: round-trip read.
+   * BIGSERIAL id is deserialized to number.
+   */
+  getCheckpointSignatures(checkpointId: string): Promise<Array<{
+    id: number;
+    checkpointId: string;
+    nodeId: string;
+    nodeSignature: string;
+  }>>;
+
+  /**
+   * Write a directory_checkpoints row for a confirmed checkpoint.
+   *
+   * FEDERATION-002: append-only, hash-chained. Called by CheckpointCoordinator after
+   * collecting >= requiredThreshold signatures.
+   */
+  writeCheckpoint(params: {
+    checkpointId: string;
+    mmrPeaks: string[];
+    identityMerkleRoot: string;
+    checkpointHash: string;
+    mmrLeafCount: number;
+    coordinatorNodeId: string;
+  }): Promise<void>;
+
+  /**
+   * Retrieve a directory_checkpoints row by checkpoint_id.
+   *
+   * FEDERATION-002: used to verify a checkpoint was committed. Returns undefined if absent.
+   */
+  getCheckpointById(checkpointId: string): Promise<{
+    checkpointId: string;
+    mmrLeafCount: number;
+    checkpointHash: string;
+    coordinatorNodeId: string;
+    mmrPeaks: string[];
+    identityMerkleRoot: string;
+  } | undefined>;
+
+  /**
+   * Get the ISO-8601 timestamp of the most recent confirmed checkpoint.
+   *
+   * FEDERATION-002 AC-009 gap alarm. Returns null if no checkpoints exist.
+   */
+  getLastCheckpointAt(): Promise<string | null>;
+
+  /**
+   * Get the checkpoint_id of the most recent confirmed checkpoint.
+   *
+   * FEDERATION-002 AC-009 gap alarm. Returns null if no checkpoints exist.
+   */
+  getLastCheckpointRow(): Promise<{ checkpointId: string } | null>;
+
+  /**
+   * Get staging rows eligible for the next checkpoint batch.
+   *
+   * FEDERATION-002 AC-008-crash-mid-clear: excludes staging rows whose session has
+   * already been committed to conversation_proof_leaf_checkpoints.
+   *
+   * Returns rows without a checkpoint_id that have not been previously confirmed.
+   */
+  getStagingRowsForBatch(): Promise<Array<{
+    stagingId: string;
+    sessionId: string;
+    recordedAt: string;
+  }>>;
+
+  /**
+   * Get the current MMR state for checkpoint hash computation.
+   *
+   * FEDERATION-002: returns mmrPeaks, identityMerkleRoot, and mmrLeafCount.
+   */
+  getCheckpointMmrState(): Promise<{
+    mmrPeaks: string[];
+    identityMerkleRoot: string;
+    mmrLeafCount: number;
+  }>;
+
+  /**
+   * Delete staging rows by stagingId after a successful checkpoint.
+   *
+   * FEDERATION-002 AC-003: only deletes rows in the current batch (by id),
+   * leaving rows inserted after initiateCheckpoint was called.
+   *
+   * @param stagingIds - Array of staging row IDs to delete.
+   */
+  clearStagingBatch(stagingIds: string[]): Promise<void>;
 }

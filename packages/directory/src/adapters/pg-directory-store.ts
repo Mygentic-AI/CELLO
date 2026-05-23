@@ -78,6 +78,8 @@ export const BIGINT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   directory_nodes: ["id"],
   // FEDERATION-001: sessions table (V18 migration)
   sessions: ["id"],
+  // FEDERATION-002: checkpoint_node_signatures table (V18 migration)
+  checkpoint_node_signatures: ["id"],
 } as const;
 
 /**
@@ -114,6 +116,8 @@ export const STORE_TABLES = [
   "directory_nodes",
   // FEDERATION-001: sessions table added (V18 migration)
   "sessions",
+  // FEDERATION-002: checkpoint_node_signatures table added (V18 migration)
+  "checkpoint_node_signatures",
 ] as const;
 
 export type StoreTables = (typeof STORE_TABLES)[number];
@@ -954,6 +958,348 @@ export class PgDirectoryStore implements DirectoryStore {
       [sessionId],
     );
     return result.rows[0]?.owning_node_id;
+  }
+
+  // ─── FEDERATION-002: Checkpoint cross-signing ────────────────────────────
+
+  /**
+   * Write a checkpoint_node_signatures row.
+   *
+   * FEDERATION-002: records a single node's Ed25519 signature for a confirmed checkpoint.
+   *
+   * SI-001: the (checkpoint_id, node_id) UNIQUE constraint in the DB enforces that the same
+   * node cannot submit two signatures for the same checkpoint. A duplicate INSERT throws
+   * a 23505 unique-violation error — the caller (CheckpointCoordinator) counts only distinct
+   * node_ids toward the threshold.
+   *
+   * NOTE: checkpoint_node_signatures is NOT hash-chained (no chain_hash column).
+   * signed_at is excluded from ALWAYS_EXCLUDED_FROM_CHAIN (already present in hash-chain.ts).
+   *
+   * @param params.checkpointId - The UUID of the checkpoint being signed.
+   * @param params.nodeId - The signing node's node_id.
+   * @param params.nodeSignature - Hex-encoded Ed25519 signature over the checkpoint TBS.
+   */
+  async writeCheckpointSignature(params: {
+    checkpointId: string;
+    nodeId: string;
+    nodeSignature: string;
+  }): Promise<void> {
+    const start = Date.now();
+    await this.#pool.query(
+      `INSERT INTO checkpoint_node_signatures (checkpoint_id, node_id, node_signature)
+       VALUES ($1, $2, $3)`,
+      [params.checkpointId, params.nodeId, params.nodeSignature],
+    );
+    this.#logger.info("adapter.persisted", {
+      tableName: "checkpoint_node_signatures",
+      rowCount: 1,
+      durationMs: Date.now() - start,
+    });
+  }
+
+  /**
+   * Get all checkpoint_node_signatures rows for a given checkpoint_id.
+   *
+   * FEDERATION-002 AC-009-store-tables: round-trip read for writeCheckpointSignature.
+   * BIGSERIAL id is deserialized to number via deserializeRow.
+   *
+   * @param checkpointId - The UUID of the checkpoint.
+   * @returns Array of signature rows, each with id (number), checkpointId, nodeId, nodeSignature.
+   */
+  async getCheckpointSignatures(checkpointId: string): Promise<Array<{
+    id: number;
+    checkpointId: string;
+    nodeId: string;
+    nodeSignature: string;
+  }>> {
+    const result = await this.#pool.query<Record<string, unknown>>(
+      `SELECT id, checkpoint_id, node_id, node_signature
+       FROM checkpoint_node_signatures
+       WHERE checkpoint_id = $1
+       ORDER BY id ASC`,
+      [checkpointId],
+    );
+    return result.rows.map((row) => {
+      const deserialized = deserializeRow<{
+        id: number;
+        checkpoint_id: string;
+        node_id: string;
+        node_signature: string;
+      }>("checkpoint_node_signatures", row);
+      return {
+        id: deserialized.id,
+        checkpointId: deserialized.checkpoint_id,
+        nodeId: deserialized.node_id,
+        nodeSignature: deserialized.node_signature,
+      };
+    });
+  }
+
+  /**
+   * Write a directory_checkpoints row for a confirmed checkpoint.
+   *
+   * FEDERATION-002: called by CheckpointCoordinator after collecting >= requiredThreshold
+   * signatures. The checkpoint row is append-only and hash-chained via insertWithChain.
+   *
+   * @param params.checkpointId - UUID for this checkpoint.
+   * @param params.mmrPeaks - Hex-encoded MMR peak hashes ordered by position ascending.
+   * @param params.identityMerkleRoot - Hex-encoded identity Merkle root.
+   * @param params.checkpointHash - SHA-256(canonical TBS) — computed by computeCheckpointHash.
+   * @param params.mmrLeafCount - Total MMR leaf count at this checkpoint.
+   * @param params.coordinatorNodeId - The node_id of the coordinator for this round.
+   */
+  async writeCheckpoint(params: {
+    checkpointId: string;
+    mmrPeaks: string[];
+    identityMerkleRoot: string;
+    checkpointHash: string;
+    mmrLeafCount: number;
+    coordinatorNodeId: string;
+  }): Promise<void> {
+    // directory_checkpoints is NOT in HASH_CHAINED_TABLES (insertWithChain is for
+    // hash-chained tables only). Use the same manual chain hash pattern as MmrStore.confirmCheckpoint.
+    const start = Date.now();
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('directory_checkpoints'))");
+
+      const record: Record<string, unknown> = {
+        checkpoint_id: params.checkpointId,
+        mmr_leaf_count: params.mmrLeafCount,
+        peak_hash: params.checkpointHash,   // reuse peak_hash column (V5 compat)
+        staged_seal_count: 0,
+        mmr_peaks: JSON.stringify(params.mmrPeaks),
+        identity_merkle_root: params.identityMerkleRoot,
+        checkpoint_hash: params.checkpointHash,
+        coordinator_node_id: params.coordinatorNodeId,
+      };
+
+      const prevRow = await client.query<{ chain_hash: string }>(
+        "SELECT chain_hash FROM directory_checkpoints ORDER BY id DESC LIMIT 1",
+      );
+      const previousHash = prevRow.rows[0]?.chain_hash ?? CHAIN_GENESIS;
+      const serialized = serializeRecord(record, "directory_checkpoints");
+      const chainHash = computeChainHash(serialized, previousHash);
+
+      await client.query(
+        `INSERT INTO directory_checkpoints
+           (checkpoint_id, mmr_leaf_count, peak_hash, staged_seal_count,
+            mmr_peaks, identity_merkle_root, checkpoint_hash, coordinator_node_id,
+            chain_hash)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
+         ON CONFLICT (checkpoint_id) DO NOTHING`,
+        [
+          params.checkpointId,
+          params.mmrLeafCount,
+          params.checkpointHash,
+          0,
+          JSON.stringify(params.mmrPeaks),
+          params.identityMerkleRoot,
+          params.checkpointHash,
+          params.coordinatorNodeId,
+          chainHash,
+        ],
+      );
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => { /* ignore rollback errors */ });
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    this.#logger.info("adapter.persisted", {
+      tableName: "directory_checkpoints",
+      rowCount: 1,
+      durationMs: Date.now() - start,
+    });
+  }
+
+  /**
+   * Retrieve a directory_checkpoints row by checkpoint_id.
+   *
+   * FEDERATION-002: used to verify that a checkpoint was committed.
+   * Returns undefined if no row exists.
+   */
+  async getCheckpointById(checkpointId: string): Promise<{
+    checkpointId: string;
+    mmrLeafCount: number;
+    checkpointHash: string;
+    coordinatorNodeId: string;
+    mmrPeaks: string[];
+    identityMerkleRoot: string;
+  } | undefined> {
+    const result = await this.#pool.query<Record<string, unknown>>(
+      `SELECT checkpoint_id, mmr_leaf_count, checkpoint_hash, coordinator_node_id,
+              mmr_peaks, identity_merkle_root
+       FROM directory_checkpoints
+       WHERE checkpoint_id = $1`,
+      [checkpointId],
+    );
+    if (result.rows.length === 0) return undefined;
+    const row = deserializeRow<{
+      checkpoint_id: string;
+      mmr_leaf_count: number;
+      checkpoint_hash: string;
+      coordinator_node_id: string;
+      mmr_peaks: unknown;
+      identity_merkle_root: string;
+    }>("directory_checkpoints", result.rows[0]!);
+    // mmr_peaks is stored as JSONB — pg driver returns it as a JS value already parsed
+    const mmrPeaks = Array.isArray(row.mmr_peaks)
+      ? (row.mmr_peaks as string[])
+      : (JSON.parse(row.mmr_peaks as string) as string[]);
+    return {
+      checkpointId: row.checkpoint_id,
+      mmrLeafCount: row.mmr_leaf_count,
+      checkpointHash: row.checkpoint_hash,
+      coordinatorNodeId: row.coordinator_node_id,
+      mmrPeaks,
+      identityMerkleRoot: row.identity_merkle_root,
+    };
+  }
+
+  /**
+   * Get the created_at timestamp of the most recent confirmed checkpoint.
+   *
+   * FEDERATION-002 AC-009 gap alarm: used by CheckpointCoordinator to detect
+   * if the last checkpoint is older than CHECKPOINT_GAP_ALARM_MINUTES.
+   *
+   * Returns null if no checkpoint rows exist.
+   */
+  async getLastCheckpointAt(): Promise<string | null> {
+    const result = await this.#pool.query<{ created_at: unknown }>(
+      `SELECT created_at FROM directory_checkpoints ORDER BY id DESC LIMIT 1`,
+    );
+    if (result.rows.length === 0) return null;
+    const value = result.rows[0]!.created_at;
+    // configurePgTypes() overrides TIMESTAMPTZ to return raw strings; however
+    // new Date().toISOString() normalises both formats to ISO-8601.
+    return new Date(value as string | Date).toISOString();
+  }
+
+  /**
+   * Get the checkpoint_id of the most recent confirmed checkpoint.
+   *
+   * FEDERATION-002 AC-009 gap alarm: used by CheckpointCoordinator to include
+   * lastCheckpointId in the federation.checkpoint.gap alarm event.
+   *
+   * Returns null if no checkpoint rows exist.
+   */
+  async getLastCheckpointRow(): Promise<{ checkpointId: string } | null> {
+    const result = await this.#pool.query<{ checkpoint_id: string }>(
+      `SELECT checkpoint_id FROM directory_checkpoints ORDER BY id DESC LIMIT 1`,
+    );
+    if (result.rows.length === 0) return null;
+    return { checkpointId: result.rows[0]!.checkpoint_id };
+  }
+
+  /**
+   * Get staging rows eligible for the next checkpoint batch.
+   *
+   * FEDERATION-002 AC-008-crash-mid-clear: excludes staging rows whose session_id
+   * already appears in conversation_proof_leaf_checkpoints (already committed to a
+   * previous checkpoint). This prevents double-counting seals on coordinator restart
+   * after a crash mid-clear.
+   *
+   * Returns rows without a checkpoint_id (not yet assigned to a checkpoint round)
+   * AND whose session has not been committed to conversation_proof_leaf_checkpoints.
+   *
+   * NOTE: staging rows that were re-inserted after a crash (with checkpoint_id already
+   * set, but referencing a prior checkpoint) are also excluded via the join check.
+   */
+  async getStagingRowsForBatch(): Promise<Array<{
+    stagingId: string;
+    sessionId: string;
+    recordedAt: string;
+  }>> {
+    const result = await this.#pool.query<{
+      id: string;
+      session_id: string;
+      recorded_at: unknown;
+    }>(
+      `SELECT s.id, s.session_id::text, s.recorded_at
+       FROM conversation_seal_staging s
+       WHERE s.checkpoint_id IS NULL
+         AND NOT EXISTS (
+           SELECT 1
+           FROM conversation_proof_leaves l
+           JOIN conversation_proof_leaf_checkpoints lc ON lc.leaf_id = l.id
+           WHERE l.session_id = s.session_id
+         )
+       ORDER BY s.recorded_at ASC, s.session_id ASC`,
+    );
+    return result.rows.map((row) => ({
+      stagingId: String(row.id),
+      sessionId: row.session_id,
+      recordedAt: new Date(row.recorded_at as string | Date).toISOString(),
+    }));
+  }
+
+  /**
+   * Get the current MMR state for checkpoint hash computation.
+   *
+   * FEDERATION-002: returns mmrPeaks (ordered peak hashes), identityMerkleRoot,
+   * and mmrLeafCount from the current confirmed state. The coordinator calls this
+   * to compute the checkpoint hash before broadcasting the proposal.
+   *
+   * mmrPeaks: from the most recent directory_checkpoints row, or [] if none.
+   * identityMerkleRoot: from the most recent directory_checkpoints row, or "00"*32 if none.
+   * mmrLeafCount: from conversation_proof_leaves row count.
+   */
+  async getCheckpointMmrState(): Promise<{
+    mmrPeaks: string[];
+    identityMerkleRoot: string;
+    mmrLeafCount: number;
+  }> {
+    const [checkpointResult, leafCountResult] = await Promise.all([
+      this.#pool.query<{ mmr_peaks: unknown; identity_merkle_root: string }>(
+        `SELECT mmr_peaks, identity_merkle_root
+         FROM directory_checkpoints
+         ORDER BY id DESC LIMIT 1`,
+      ),
+      this.#pool.query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM conversation_proof_leaves`,
+      ),
+    ]);
+
+    const mmrLeafCount = parseInt(leafCountResult.rows[0]!.count, 10);
+
+    if (checkpointResult.rows.length === 0) {
+      return { mmrPeaks: [], identityMerkleRoot: "00".repeat(32), mmrLeafCount };
+    }
+
+    const row = checkpointResult.rows[0]!;
+    const mmrPeaks = Array.isArray(row.mmr_peaks)
+      ? (row.mmr_peaks as string[])
+      : (JSON.parse(row.mmr_peaks as string) as string[]);
+
+    return {
+      mmrPeaks,
+      identityMerkleRoot: row.identity_merkle_root,
+      mmrLeafCount,
+    };
+  }
+
+  /**
+   * Clear staging rows by stagingId after a successful checkpoint.
+   *
+   * FEDERATION-002 AC-003: only rows in the current batch (identified by stagingId) are
+   * cleared. Rows inserted DURING the checkpoint round (after initiateCheckpoint was
+   * called) survive — their stagingId is not in the batch's stagingIds array.
+   *
+   * Uses DELETE ... WHERE id = ANY($1) for atomic batch deletion.
+   *
+   * @param stagingIds - Array of staging row IDs to delete (from getStagingRowsForBatch).
+   */
+  async clearStagingBatch(stagingIds: string[]): Promise<void> {
+    if (stagingIds.length === 0) return;
+    await this.#pool.query(
+      `DELETE FROM conversation_seal_staging WHERE id = ANY($1::bigint[])`,
+      [stagingIds],
+    );
   }
 
   /**

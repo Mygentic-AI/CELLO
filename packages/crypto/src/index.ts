@@ -33,3 +33,6 @@ export { verifyFrostSignature } from "./frost/frost-threshold-signer.js";
 
 // REG-001: re-export ed25519_FROST for DKG coordinator in @cello/client
 export { ed25519_FROST } from "@noble/curves/ed25519.js";
+
+// FEDERATION-002: canonical checkpoint TBS serialization and hash computation
+export { buildCheckpointTbs, computeCheckpointHash } from "./checkpoint.js";

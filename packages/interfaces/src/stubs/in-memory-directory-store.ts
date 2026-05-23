@@ -146,4 +146,73 @@ export class InMemoryDirectoryStore implements DirectoryStore {
   async verifyReplicatedRow(_tableName: string, _row: Record<string, unknown>): Promise<void> {
     // In-memory stub: no-op. Hash chain verification only applies to PgDirectoryStore.
   }
+
+  // ─── FEDERATION-002: Checkpoint cross-signing ────────────────────────────
+
+  async writeCheckpointSignature(_params: {
+    checkpointId: string;
+    nodeId: string;
+    nodeSignature: string;
+  }): Promise<void> {
+    throw new Error("writeCheckpointSignature: not implemented in InMemoryDirectoryStore");
+  }
+
+  async getCheckpointSignatures(_checkpointId: string): Promise<Array<{
+    id: number;
+    checkpointId: string;
+    nodeId: string;
+    nodeSignature: string;
+  }>> {
+    throw new Error("getCheckpointSignatures: not implemented in InMemoryDirectoryStore");
+  }
+
+  async writeCheckpoint(_params: {
+    checkpointId: string;
+    mmrPeaks: string[];
+    identityMerkleRoot: string;
+    checkpointHash: string;
+    mmrLeafCount: number;
+    coordinatorNodeId: string;
+  }): Promise<void> {
+    throw new Error("writeCheckpoint: not implemented in InMemoryDirectoryStore");
+  }
+
+  async getCheckpointById(_checkpointId: string): Promise<{
+    checkpointId: string;
+    mmrLeafCount: number;
+    checkpointHash: string;
+    coordinatorNodeId: string;
+    mmrPeaks: string[];
+    identityMerkleRoot: string;
+  } | undefined> {
+    throw new Error("getCheckpointById: not implemented in InMemoryDirectoryStore");
+  }
+
+  async getLastCheckpointAt(): Promise<string | null> {
+    throw new Error("getLastCheckpointAt: not implemented in InMemoryDirectoryStore");
+  }
+
+  async getLastCheckpointRow(): Promise<{ checkpointId: string } | null> {
+    throw new Error("getLastCheckpointRow: not implemented in InMemoryDirectoryStore");
+  }
+
+  async getStagingRowsForBatch(): Promise<Array<{
+    stagingId: string;
+    sessionId: string;
+    recordedAt: string;
+  }>> {
+    throw new Error("getStagingRowsForBatch: not implemented in InMemoryDirectoryStore");
+  }
+
+  async getCheckpointMmrState(): Promise<{
+    mmrPeaks: string[];
+    identityMerkleRoot: string;
+    mmrLeafCount: number;
+  }> {
+    throw new Error("getCheckpointMmrState: not implemented in InMemoryDirectoryStore");
+  }
+
+  async clearStagingBatch(_stagingIds: string[]): Promise<void> {
+    throw new Error("clearStagingBatch: not implemented in InMemoryDirectoryStore");
+  }
 }
