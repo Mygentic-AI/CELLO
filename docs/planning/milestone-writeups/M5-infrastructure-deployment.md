@@ -11,7 +11,7 @@ description: In-progress write-up for M5. Initial deployment issues, IaC gaps fo
 
 **Started:** 2026-05-22  
 **Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, DEPLOY-005, SECOPS-001, SECOPS-002, SECOPS-003, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002, FEDERATION-003, PERSIST-022, PERSIST-023, RELAY-001, ACCOUNT-001  
-**Stories open:** FEDERATION-E2E-001  
+**Stories open:** FEDERATION-E2E-001 (in progress — Phase 1 infrastructure deployed 2026-05-23)  
 **Stacks deployed:** 14 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-waf, cello-ecs-relay, cello-route53, cello-cicd, cello-cloudwatch)  
 **Lambdas deployed:** 3 (webhook-receiver, pipeline-filter, rds-rotation)  
 **Pipelines active:** 8 (all green)
@@ -664,10 +664,74 @@ Delivered the account grouping foundation required by M6 onboarding, M7 portal m
 
 ---
 
+## FEDERATION-E2E-001 — Multi-Region Deployment and Live Smoke Test (in progress)
+
+**Started:** 2026-05-23
+
+This is the M5 milestone close gate. It does not close until a live multi-node smoke test passes across all three regions.
+
+### Phase 1 — Multi-Region Infrastructure Deployment
+
+eu-central-1 and ap-northeast-1 deployed to CREATE_COMPLETE on 2026-05-23. Four IaC bugs were discovered and fixed during the eu-central-1 first deployment attempt. ap-northeast-1 completed cleanly on the first attempt due to all fixes already being in place.
+
+**IaC bugs found and fixed:**
+
+#### 1. IAM role names not region-scoped — global collision
+
+**Symptom:** `cello-iam-dev` in eu-central-1 failed with `The policy DirectoryPermissions already exists on the role cello-dev-directory-task-role`.
+
+**Root cause:** IAM roles are global in an AWS account. All four task/execution role names in `cello-iam.yaml` and the rotation Lambda role in `cello-rotation.yaml` used only `${Environment}` as a suffix — no region. The us-east-1 roles had been created first; eu-central-1 collided on every role name.
+
+**Fix:** Added `${AWS::Region}` to all five role names (e.g. `cello-dev-us-east-1-directory-task-role`). CloudFormation cross-stack exports remain region-scoped so downstream `!ImportValue` references work without changes.
+
+#### 2. `envelope-key` secret missing from `cello-secrets.yaml`
+
+**Symptom:** ECS directory tasks in eu-central-1 failed to start with `ResourceNotFoundException: Secrets Manager can't find the specified secret cello/dev/directory/envelope-key`.
+
+**Root cause:** The `envelope-key` secret was created manually during DEPLOY-002 in us-east-1 and never added to the IaC. `cello-secrets.yaml` created all other secrets as placeholders but not this one. The `cello-iam.yaml` execution role already had permission to read it — only the secret itself was missing.
+
+**Fix:** Added `DirectoryEnvelopeKey` resource to `cello-secrets.yaml`. Added envelope key generation to `bootstrap.sh` as step 5.
+
+**Rule:** Any secret that ECS tasks reference must be created by `cello-secrets.yaml` as a placeholder. Manually created secrets in one region are invisible to other regions.
+
+#### 3. CloudWatch dashboard name collision across regions
+
+**Symptom:** `cello-cloudwatch-dev` in eu-central-1 failed changeset creation with `AWS::EarlyValidation::ResourceExistenceCheck`. Root cause: `cello-operations-dev` dashboard already existed (created by the us-east-1 stack). `AWS::CloudWatch::Dashboard` names are global — deploying the same dashboard name from a second region collides.
+
+**Fix:** Added `IsPrimaryRegion: !Equals [!Ref AWS::Region, "us-east-1"]` condition to `cello-cloudwatch.yaml`. `OperationsDashboard` and its `DashboardName` output now only deploy from us-east-1. SNS topics and alarms deploy in every region as before.
+
+#### 4. `bootstrap.sh` treated `PLACEHOLDER_POPULATE_VIA_CLI` as a populated value
+
+**Symptom:** After `cello-secrets.yaml` created the `envelope-key` placeholder, `bootstrap.sh` saw `PLACEHOLDER_POPULATE_VIA_CLI` as a non-empty value and skipped it, leaving the secret unpopulated. ECS tasks still failed to start.
+
+**Root cause:** `put_secret_if_empty` only skipped `PLACEHOLDER` (bare), not `PLACEHOLDER_POPULATE_VIA_CLI` (the CloudFormation-generated placeholder value).
+
+**Fix:** Added `PLACEHOLDER_POPULATE_VIA_CLI` to the exclusion list in `put_secret_if_empty`. Also added a `create-secret` fallback for secrets that don't exist as CloudFormation placeholders yet.
+
+**Rule:** `bootstrap.sh` must skip only values that a human or the script itself intentionally wrote. CloudFormation placeholder strings must always be treated as empty.
+
+### Phase 1 — Infrastructure State (2026-05-23)
+
+| Region | Stacks | Status | RDS Endpoint | ALB |
+|---|---|---|---|---|
+| us-east-1 | 14 | All UPDATE/CREATE_COMPLETE | cello-dev.c9iokw02w3f8.us-east-1.rds.amazonaws.com | cello-dir-dev-1136016900.us-east-1.elb.amazonaws.com |
+| eu-central-1 | 12 | All CREATE_COMPLETE | cello-dev.clu08oy88g6v.eu-central-1.rds.amazonaws.com | cello-dir-dev-1699677837.eu-central-1.elb.amazonaws.com |
+| ap-northeast-1 | 12 | All CREATE_COMPLETE | cello-dev.cryg2a8say19.ap-northeast-1.rds.amazonaws.com | cello-dir-dev-1435901052.ap-northeast-1.elb.amazonaws.com |
+
+All regions bootstrapped (secrets populated). Node public keys recorded in `infra/STATE.md`.
+
+### What Remains Open
+
+- VPC Peering between all three regions (required for port 4001 checkpoint cross-signing and port 5432 logical replication) — `cello-vpc-peering.yaml` exists but is not in `deploy.sh`; accepter-side template missing
+- `setup-replication.sh` — PostgreSQL logical replication not yet configured
+- Relay pool manifest — not yet signed and uploaded
+- `ICheckpointTransport` libp2p implementation — `CheckpointCoordinator` not yet wired into production composition root
+- Smoke test scenario expansion — 8 stubs still doing ALB health checks
+
 ## What Remains Open
 
 - **SECOPS-003 AC-002/AC-007** — live request verification (rate-limit trigger, CommonRuleSet COUNT hit) pending manual test
-- **FEDERATION-E2E-001** — multi-node live smoke test; milestone close gate
+- **FEDERATION-E2E-001** — multi-region infrastructure deployed; VPC Peering, replication, manifest, code, and live smoke test remaining
 
 ---
 
