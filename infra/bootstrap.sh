@@ -59,7 +59,7 @@ put_secret_if_empty() {
     --query "SecretString" \
     --output text 2>/dev/null || echo "")
 
-  if [[ -n "${current}" && "${current}" != "PLACEHOLDER" && "${current}" != "" ]]; then
+  if [[ -n "${current}" && "${current}" != "PLACEHOLDER" && "${current}" != "PLACEHOLDER_POPULATE_VIA_CLI" && "${current}" != "" ]]; then
     echo "  SKIP: ${description} (already populated)"
     return 0
   fi
