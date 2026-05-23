@@ -28,14 +28,14 @@
  *   - Constructor takes a plain config object (not an S3Client) so the interface stays clean.
  */
 
-import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, NoSuchKey } from "@aws-sdk/client-s3";
 import type { CloudStorageProvider } from "@cello/interfaces";
 
 /** Configuration for S3CloudStorageProvider. Provided by the composition root. */
 export interface S3CloudStorageConfig {
   /** S3 bucket name. Comes from BACKUP_S3_BUCKET env var, read at composition root. */
   bucket: string;
-  /** AWS region. Comes from AWS_REGION env var, read at composition root. */
+  /** AWS region. Comes from CELLO_AWS_REGION env var (falls back to AWS_REGION), read at composition root. */
   region: string;
 }
 
@@ -86,13 +86,8 @@ export class S3CloudStorageProvider implements CloudStorageProvider {
       const bytes = await (response.Body as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray();
       return bytes;
     } catch (err: unknown) {
-      // Return undefined for the key-not-found case
-      if (
-        err !== null &&
-        typeof err === "object" &&
-        "name" in err &&
-        (err as { name: string }).name === "NoSuchKey"
-      ) {
+      // Return undefined for the key-not-found case (AC-003)
+      if (err instanceof NoSuchKey) {
         return undefined;
       }
       throw err;

@@ -311,9 +311,10 @@ describe("PERSIST-022 SI-002 — corrupted download does not overwrite live data
 
 // ─── AC-006: Two consecutive backups produce different ciphertext ─────────────
 //
-// NOTE: The "nonce freshness" guarantee (SI-002 in PERSIST-011) is inherited
-// by PERSIST-022 through ClientBackup. AC-006 verifies this property continues
-// to hold when S3-style storage is used.
+// NOTE: SI-002 in PERSIST-022 is checksum integrity (the download must pass
+// SHA-256 verification before the live DB is replaced). The nonce freshness
+// property from PERSIST-011 is inherited here via the same ClientBackup
+// implementation; AC-006 verifies it continues to hold with S3-style storage.
 
 describe("PERSIST-022 AC-006 — consecutive backups of same content produce different ciphertext (fresh nonce)", () => {
   let tmpDir: string;
@@ -340,6 +341,8 @@ describe("PERSIST-022 AC-006 — consecutive backups of same content produce dif
     const storage2 = new LocalCloudStorageProvider(join(tmpDir, "storage2"));
     mkdirSync(join(tmpDir, "storage1"), { recursive: true });
     mkdirSync(join(tmpDir, "storage2"), { recursive: true });
+    const localStore1 = new Map<string, Uint8Array>();
+    const localStore2 = new Map<string, Uint8Array>();
 
     const backup1 = new ClientBackup({
       agentId,
@@ -347,6 +350,8 @@ describe("PERSIST-022 AC-006 — consecutive backups of same content produce dif
       dbPath,
       cloudStorage: storage1,
       logger,
+      getMetadata: (key) => Promise.resolve(localStore1.get(key)),
+      setMetadata: (key, val) => { localStore1.set(key, val); return Promise.resolve(); },
     });
 
     const backup2 = new ClientBackup({
@@ -355,13 +360,23 @@ describe("PERSIST-022 AC-006 — consecutive backups of same content produce dif
       dbPath,
       cloudStorage: storage2,
       logger,
+      getMetadata: (key) => Promise.resolve(localStore2.get(key)),
+      setMetadata: (key, val) => { localStore2.set(key, val); return Promise.resolve(); },
     });
 
     await backup1.backup();
     await backup2.backup();
 
-    const blob1 = await storage1.download(`backup/${agentId}/db.enc`);
-    const blob2 = await storage2.download(`backup/${agentId}/db.enc`);
+    // Get the actual storage keys from metadata (backups/{agentId}/{timestamp}.enc)
+    const meta1Bytes = localStore1.get("backup:metadata");
+    const meta2Bytes = localStore2.get("backup:metadata");
+    expect(meta1Bytes).toBeDefined();
+    expect(meta2Bytes).toBeDefined();
+    const meta1 = JSON.parse(Buffer.from(meta1Bytes!).toString("utf8")) as { destinationUrl: string };
+    const meta2 = JSON.parse(Buffer.from(meta2Bytes!).toString("utf8")) as { destinationUrl: string };
+
+    const blob1 = await storage1.download(meta1.destinationUrl);
+    const blob2 = await storage2.download(meta2.destinationUrl);
 
     expect(blob1).toBeDefined();
     expect(blob2).toBeDefined();
@@ -458,6 +473,83 @@ describe("PERSIST-022 DB-001 — upload failure leaves local db file unchanged",
     expect(existsSync(dbPath)).toBe(true);
     const contents = readFileSync(dbPath);
     expect(Buffer.from(contents)).toEqual(Buffer.from(dbContent));
+  });
+});
+
+// ─── Finding 11: GCM auth-tag failure → temp-file cleanup ────────────────────
+//
+// Test the path where the download passes checksum (bytes match the stored SHA-256)
+// but GCM decryption fails (corrupt auth tag). Asserts: restore throws, temp file
+// is not left behind, live DB is unchanged.
+
+describe("PERSIST-022 Finding-11 — GCM decrypt failure cleans up temp file", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+  });
+
+  afterEach(() => {
+    cleanupDir(tmpDir);
+  });
+
+  it("corrupt auth tag (correct SHA-256, wrong GCM tag) → restore throws; temp file absent; live DB unchanged", async () => {
+    const { createHash } = await import("node:crypto");
+    const identityKey = randomBytes(32);
+    const agentId = "agent-persist022-finding11";
+    const originalDbContent = randomBytes(256);
+    const dbPath = join(tmpDir, "live.db");
+    writeFileSync(dbPath, originalDbContent);
+
+    const { logger } = makeSpyLogger();
+
+    // Build a corrupt ciphertext blob that is long enough (> NONCE_BYTES + TAG_BYTES = 28)
+    // to pass the GCM parsing step but has a corrupt auth tag so GCM decryption fails.
+    // We use nonce(12) + corrupt_tag(16) + junk_body(64) — the format matches the expected
+    // wire format but the auth tag is random, so GCM will throw on decipher.final().
+    const corruptBlob = randomBytes(12 + 16 + 64);
+
+    // Compute the SHA-256 of this corrupt blob — this IS the checksum we'll store in metadata.
+    // The restore path checks SHA-256(downloaded) === metadata.checksum.
+    // By storing the corrupt blob's own checksum, we make the checksum pass.
+    const corruptChecksum = createHash("sha256").update(corruptBlob).digest("hex");
+    const storageKey = `backups/${agentId}/fake-timestamp.enc`;
+
+    // Use a storage provider that returns the corrupt blob
+    const corruptStorage: CloudStorageProvider = {
+      upload: () => Promise.reject(new Error("upload not expected")),
+      download: (_key: string) => Promise.resolve(new Uint8Array(corruptBlob)),
+    };
+
+    // Metadata points to the corrupt blob's storage key and has the corrupt blob's checksum
+    const metadataObj = {
+      timestamp: Date.now(),
+      destinationUrl: storageKey,
+      checksum: corruptChecksum,
+    };
+    const localStore = new Map<string, Uint8Array>();
+    localStore.set("backup:metadata", new Uint8Array(Buffer.from(JSON.stringify(metadataObj), "utf8")));
+
+    const restoreInstance = new ClientBackup({
+      agentId,
+      identityKey,
+      dbPath,
+      cloudStorage: corruptStorage,
+      logger,
+      getMetadata: (key) => Promise.resolve(localStore.get(key)),
+      setMetadata: (key, val) => { localStore.set(key, val); return Promise.resolve(); },
+    });
+
+    // Restore must throw: checksum passes but GCM decryption fails (auth tag mismatch)
+    await expect(restoreInstance.restore()).rejects.toThrow();
+
+    // Temp file must not be left behind (SI-003)
+    expect(existsSync(dbPath + ".restore-tmp")).toBe(false);
+
+    // Live DB must be unchanged (SI-003)
+    expect(existsSync(dbPath)).toBe(true);
+    const liveContents = readFileSync(dbPath);
+    expect(Buffer.from(liveContents)).toEqual(Buffer.from(originalDbContent));
   });
 });
 

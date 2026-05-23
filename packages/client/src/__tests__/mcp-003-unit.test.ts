@@ -824,12 +824,14 @@ describe("AC-016: both InMemoryTransport instances register identical tool set (
     const toolsA = sortByName((await mcpA.listTools()).tools);
     const toolsB = sortByName((await mcpB.listTools()).tools);
 
-    // 20 tools total: 9 from MCP-002 + 10 new from MCP-003 + 1 renamed from SESSION-007
+    // 22 tools total: 9 from MCP-002 + 10 new from MCP-003 + 1 renamed from SESSION-007
+    //                 + 2 from PERSIST-022 (cello_backup, cello_restore)
     // cello_receive = any-session default; cello_receive_session = session-locked
     const expectedTools = [
       "cello_accept_connection",
       "cello_await_connection_request",
       "cello_await_session",
+      "cello_backup",
       "cello_close_session",
       "cello_get_inclusion_proof",
       "cello_get_policy",
@@ -844,6 +846,7 @@ describe("AC-016: both InMemoryTransport instances register identical tool set (
       "cello_request_connection",
       "cello_request_more_disclosure",
       "cello_respond_to_disclosure_request",
+      "cello_restore",
       "cello_send",
       "cello_set_policy",
       "cello_status",

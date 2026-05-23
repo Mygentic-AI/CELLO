@@ -526,15 +526,20 @@ export function createMcpServer(
     {
       description:
         "Trigger an immediate encrypted backup of the local CELLO database to cloud storage. " +
-        "Returns ok:true on success. If cloud storage is not configured, returns ok:false with reason 'not_configured'.",
+        "Returns ok:true on success. Returns ok:false with reason if backup fails or is not configured.",
       inputSchema: {},
     },
     async () => {
       if (!clientBackup) {
         return jsonText({ ok: false, reason: "not_configured" });
       }
-      await clientBackup.backup();
-      return jsonText({ ok: true });
+      try {
+        const result = await clientBackup.backup();
+        return jsonText(result);
+      } catch (err: unknown) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return jsonText({ ok: false, reason });
+      }
     },
   );
 

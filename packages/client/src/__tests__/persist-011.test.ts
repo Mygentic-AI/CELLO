@@ -180,18 +180,26 @@ describe("PERSIST-011 AC-002 — AES-256-GCM encryption", () => {
 
     const { logger } = makeSpyLogger();
     const cloudStorage = new LocalCloudStorageProvider(tmpDir);
+    const localStore = new Map<string, Uint8Array>();
     const backup = new ClientBackup({
       agentId,
       identityKey,
       dbPath,
       cloudStorage,
       logger,
+      getMetadata: (key) => Promise.resolve(localStore.get(key)),
+      setMetadata: (key, val) => { localStore.set(key, val); return Promise.resolve(); },
     });
 
     await backup.backup();
 
-    // Download the uploaded ciphertext blob
-    const ciphertextBlob = await cloudStorage.download(`backup/${agentId}/db.enc`);
+    // Get destinationUrl from stored metadata (key is now backups/{agentId}/{timestamp}.enc)
+    const metaBytes = localStore.get("backup:metadata");
+    expect(metaBytes).toBeDefined();
+    const meta = JSON.parse(Buffer.from(metaBytes!).toString("utf8")) as { destinationUrl: string };
+
+    // Download the uploaded ciphertext blob using the actual storage key
+    const ciphertextBlob = await cloudStorage.download(meta.destinationUrl);
     expect(ciphertextBlob).toBeDefined();
     // The blob must not equal the plaintext
     expect(Buffer.from(ciphertextBlob!)).not.toEqual(Buffer.from(plaintext));
@@ -430,7 +438,8 @@ describe("PERSIST-011 AC-004 — backup metadata stored after upload", () => {
     expect(meta.checksum).toMatch(/^[0-9a-f]{64}$/);
 
     // Verify the checksum matches the actual uploaded ciphertext
-    const uploaded = await cloudStorage.download(`backup/${agentId}/db.enc`);
+    // The storage key is meta.destinationUrl (backups/{agentId}/{timestamp}.enc)
+    const uploaded = await cloudStorage.download(meta.destinationUrl);
     expect(uploaded).toBeDefined();
     const expectedChecksum = createHash("sha256").update(uploaded!).digest("hex");
     expect(meta.checksum).toBe(expectedChecksum);
@@ -504,8 +513,11 @@ describe("PERSIST-011 AC-006 — corrupted ciphertext detected at restore", () =
 
     await backup.backup();
 
-    // Corrupt the uploaded ciphertext in cloud storage
-    const storageKey = `backup/${agentId}/db.enc`;
+    // Corrupt the uploaded ciphertext in cloud storage using the destinationUrl from metadata
+    const metaBytes = localStore.get("backup:metadata");
+    expect(metaBytes).toBeDefined();
+    const storedMeta = JSON.parse(Buffer.from(metaBytes!).toString("utf8")) as { destinationUrl: string };
+    const storageKey = storedMeta.destinationUrl;
     const goodCiphertext = await cloudStorage.download(storageKey);
     expect(goodCiphertext).toBeDefined();
     const corrupted = new Uint8Array(goodCiphertext!.length);
@@ -708,8 +720,16 @@ describe("PERSIST-011 SI-002 — fresh random nonce per backup", () => {
     await backup1.backup();
     await backup2.backup();
 
-    const cipher1 = await cloudStorage1.download(`backup/${agentId}/db.enc`);
-    const cipher2 = await cloudStorage2.download(`backup/${agentId}/db.enc`);
+    // Get destinationUrl from metadata — keys are backups/{agentId}/{timestamp}.enc
+    const meta1Bytes = localStore1.get("backup:metadata");
+    const meta2Bytes = localStore2.get("backup:metadata");
+    expect(meta1Bytes).toBeDefined();
+    expect(meta2Bytes).toBeDefined();
+    const meta1 = JSON.parse(Buffer.from(meta1Bytes!).toString("utf8")) as { destinationUrl: string };
+    const meta2 = JSON.parse(Buffer.from(meta2Bytes!).toString("utf8")) as { destinationUrl: string };
+
+    const cipher1 = await cloudStorage1.download(meta1.destinationUrl);
+    const cipher2 = await cloudStorage2.download(meta2.destinationUrl);
 
     expect(cipher1).toBeDefined();
     expect(cipher2).toBeDefined();
@@ -754,8 +774,11 @@ describe("PERSIST-011 SI-003 — corrupt download discarded; local DB not overwr
 
     await backup.backup();
 
-    // Corrupt cloud storage after backup
-    await cloudStorage.upload(`backup/${agentId}/db.enc`, randomBytes(512));
+    // Corrupt cloud storage after backup — use destinationUrl from metadata
+    const metaBytes = localStore.get("backup:metadata");
+    expect(metaBytes).toBeDefined();
+    const storedMeta = JSON.parse(Buffer.from(metaBytes!).toString("utf8")) as { destinationUrl: string };
+    await cloudStorage.upload(storedMeta.destinationUrl, randomBytes(512));
 
     // Restore must fail
     await expect(backup.restore()).rejects.toThrow();

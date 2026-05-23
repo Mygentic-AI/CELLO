@@ -13,11 +13,11 @@
  *   CELLO_ENV                 Deployment environment: local | dev | staging | production
  *   CELLO_DB_PATH             Path to local SQLCipher database (default: ~/.cello/client.db)
  *   BACKUP_S3_BUCKET          S3 bucket for encrypted backups (required for S3 backup)
- *   AWS_REGION                AWS region for S3 (default: eu-west-1)
+ *   CELLO_AWS_REGION          AWS region for S3 (default: eu-west-1; falls back to AWS_REGION)
  *
  * Backup selection (PERSIST-022):
  *   CELLO_ENV=local                        → LocalCloudStorageProvider (filesystem)
- *   CELLO_ENV != local + BACKUP_S3_BUCKET  → S3CloudStorageProvider
+ *   CELLO_ENV != local + BACKUP_S3_BUCKET  → S3CloudStorageProvider (uses CELLO_AWS_REGION or AWS_REGION)
  *   CELLO_ENV != local + no BACKUP_S3_BUCKET → null (no backup; client.backup.not.configured logged)
  */
 
@@ -26,10 +26,21 @@ import { createWriteStream, readFileSync } from "node:fs";
 
 // Tee stderr to a log file for diagnostics (especially [sigstream] instrumentation)
 const stderrLog = createWriteStream("/tmp/cello-mcp-stderr.log", { flags: "a" });
-const origWrite = process.stderr.write.bind(process.stderr);
-process.stderr.write = (chunk: string | Uint8Array, ...args: unknown[]): boolean => {
+const origWrite = process.stderr.write.bind(process.stderr) as typeof process.stderr.write;
+// Override stderr.write to tee output to the log file.
+// We handle only the most common call signature (string/Buffer + optional encoding/callback).
+process.stderr.write = (
+  chunk: string | Uint8Array,
+  encodingOrCb?: BufferEncoding | ((err?: Error | null) => void),
+  cb?: (err?: Error | null) => void,
+): boolean => {
   stderrLog.write(chunk);
-  return (origWrite as (...a: unknown[]) => boolean)(chunk, ...args);
+  if (typeof encodingOrCb === "function") {
+    return origWrite(chunk as string, encodingOrCb);
+  } else if (encodingOrCb !== undefined) {
+    return origWrite(chunk as string, encodingOrCb, cb);
+  }
+  return origWrite(chunk as string);
 };
 import { join } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -49,7 +60,8 @@ const directoryMultiaddr = process.env["CELLO_DIRECTORY_MULTIADDR"];
 const celloEnv = process.env["CELLO_ENV"] ?? "local";
 const dbPath = process.env["CELLO_DB_PATH"] ?? join(homedir(), ".cello", "client.db");
 const backupS3Bucket = process.env["BACKUP_S3_BUCKET"];
-const awsRegion = process.env["AWS_REGION"] ?? "eu-west-1";
+// CELLO_AWS_REGION is the operator-settable variable (AWS_REGION is reserved by ECS/Lambda)
+const awsRegion = process.env["CELLO_AWS_REGION"] ?? process.env["AWS_REGION"] ?? "eu-west-1";
 
 // Load key
 let kp: FileKeyProvider;
@@ -64,15 +76,35 @@ try {
 }
 
 // PERSIST-022: Read identity key (Ed25519 seed) from the key file for backup derivation.
-// Key file format: Magic(4) + version(1) + seed(32) — seed is at bytes 5..37.
-// This is the only place the raw seed is accessed; it is used only for HKDF derivation
-// (backup_key and db_key). It is never stored, never logged, zeroed after ClientBackup construction.
+// Key file format (from packages/crypto/src/ed25519.ts):
+//   Magic[0..3] = [0xce, 0x11, 0x0e, 0x01]  ("CELLO\x01" marker)
+//   version[4]  = 0x01
+//   seed[5..36] = 32-byte Ed25519 seed
+//   Total: 37 bytes (KEY_FILE_SIZE)
+// The seed is used only for HKDF derivation (backup_key and db_key).
+// It is never stored, never logged, and is zeroed after ClientBackup construction.
+const KEY_FILE_MAGIC = new Uint8Array([0xce, 0x11, 0x0e, 0x01]);
+const KEY_FILE_VERSION = 0x01;
+const KEY_FILE_SIZE = 37; // Magic(4) + version(1) + seed(32)
+const SEED_OFFSET = 5;    // KEY_FILE_MAGIC.length + 1
+const SEED_LENGTH = 32;
+
 let identityKeyBytes: Uint8Array | null = null;
 try {
   const rawKeyFile = readFileSync(keyPath);
-  // Magic(4) + version(1) = 5 bytes header; seed occupies bytes [5, 37)
-  if (rawKeyFile.length >= 37) {
-    identityKeyBytes = new Uint8Array(rawKeyFile.slice(5, 37));
+  // Validate exact file size
+  if (rawKeyFile.length === KEY_FILE_SIZE) {
+    // Validate magic bytes to ensure this is a valid CELLO key file
+    const magicOk = KEY_FILE_MAGIC.every((b, i) => rawKeyFile[i] === b);
+    // Validate version byte
+    const versionOk = rawKeyFile[KEY_FILE_MAGIC.length] === KEY_FILE_VERSION;
+    if (magicOk && versionOk) {
+      identityKeyBytes = new Uint8Array(rawKeyFile.slice(SEED_OFFSET, SEED_OFFSET + SEED_LENGTH));
+    } else {
+      process.stderr.write(`cello-mcp: key file has invalid magic bytes or version — backup disabled\n`);
+    }
+  } else {
+    process.stderr.write(`cello-mcp: key file has unexpected size (${rawKeyFile.length} bytes, expected ${KEY_FILE_SIZE}) — backup disabled\n`);
   }
 } catch {
   // Non-fatal: if the key file can't be read for backup derivation, backup is disabled
@@ -123,6 +155,9 @@ if (identityKeyBytes) {
     logger: backupLogger,
     destinationType: celloEnv === "local" ? "local" : (backupS3Bucket ? "s3" : "local"),
   });
+  // Zero the identity key bytes immediately after construction — it must not linger in memory (SI-001)
+  identityKeyBytes.fill(0);
+  identityKeyBytes = null;
 }
 
 // Parse directory endpoint from CELLO_DIRECTORY_MULTIADDR (if set)
@@ -216,51 +251,10 @@ if (primaryPubkey) {
 // (the client binary has no access to the directory's MmrStore). The provider is
 // wired in directory-facing deployments via the server.ts composition root.
 // Passing undefined is a safe fallback — the tools return M1 stub responses.
-const server = createMcpSessionServer(node, client, kp);
+// PERSIST-022: clientBackupInstance passed so cello_backup/cello_restore are registered
+// inside createMcpSessionServer (single canonical registration path).
+const server = createMcpSessionServer(node, client, kp, { clientBackup: clientBackupInstance });
 mcpServer = server;
-
-// PERSIST-022: Register backup/restore MCP tools on the session server.
-// These tools are conditionally wired — if no backup is configured, they return not_configured.
-
-server.registerTool(
-  "cello_backup",
-  {
-    description:
-      "Trigger an immediate encrypted backup of the local CELLO database to cloud storage. " +
-      "Returns ok:true on success. Returns ok:false with reason 'not_configured' if cloud storage is not set up.",
-    inputSchema: {},
-  },
-  async () => {
-    if (!clientBackupInstance) {
-      return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, reason: "not_configured" }) }] };
-    }
-    await clientBackupInstance.backup();
-    return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true }) }] };
-  },
-);
-
-server.registerTool(
-  "cello_restore",
-  {
-    description:
-      "Restore the local CELLO database from the most recent cloud backup. " +
-      "Replaces the local database file only after checksum verification passes. " +
-      "Returns ok:true on success. Returns ok:false with reason if restore fails or is not configured.",
-    inputSchema: {},
-  },
-  async () => {
-    if (!clientBackupInstance) {
-      return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, reason: "not_configured" }) }] };
-    }
-    try {
-      await clientBackupInstance.restore();
-      return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true }) }] };
-    } catch (err: unknown) {
-      const reason = err instanceof Error ? err.message : String(err);
-      return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, reason }) }] };
-    }
-  },
-);
 
 // Connect stdio transport and register handler
 await server.connect(new StdioServerTransport());

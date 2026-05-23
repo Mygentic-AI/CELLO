@@ -22,7 +22,7 @@
  *   [nonce(12)] [auth_tag(16)] [encrypted_plaintext]
  *
  * Backup object key (cloud storage path):
- *   backup/<agentId>/db.enc
+ *   backups/<agentId>/<timestamp>.enc  (timestamp = Date.now() at backup initiation)
  *
  * Backup metadata (stored in ClientStore under 'backup:metadata'):
  *   { timestamp: number, destinationUrl: string, checksum: string }
@@ -157,15 +157,16 @@ export class ClientBackup {
    *      Wire: [nonce(12)] [tag(16)] [ciphertext]
    *   6. Compute SHA-256 of the full blob.
    *   7. Upload blob to cloudStorage.
-   *   8. On failure: log client.backup.upload.failed, return.
+   *   8. On failure: log client.backup.upload.failed, return { ok: false, reason }.
    *   9. Store metadata { timestamp, destinationUrl, checksum } in local store.
    *  10. Log client.backup.completed.
+   *  11. Return { ok: true }.
    */
-  async backup(): Promise<void> {
+  async backup(): Promise<{ ok: true } | { ok: false; reason: string }> {
     // AC-005: no cloud storage destination configured
     if (this.#cloudStorage === null) {
       this.#logger.warn("client.backup.not.configured", { agentId: this.#agentId });
-      return;
+      return { ok: true }; // Not configured is not a failure — warn is sufficient
     }
 
     const startMs = Date.now();
@@ -193,7 +194,8 @@ export class ClientBackup {
     // Compute SHA-256 checksum of the full blob (nonce+tag+ciphertext)
     const checksum = createHash("sha256").update(blob).digest("hex");
 
-    const storageKey = `backup/${this.#agentId}/db.enc`;
+    // AC-002: key includes timestamp for uniqueness — backups/{agentId}/{timestamp}.enc
+    const storageKey = `backups/${this.#agentId}/${startMs}.enc`;
     const destinationUrl = storageKey;
 
     // Upload to cloud storage
@@ -203,7 +205,7 @@ export class ClientBackup {
       const reason = err instanceof Error ? err.message : String(err);
       // SI-001: context contains only { reason, agentId } — no key material
       this.#logger.error("client.backup.upload.failed", { reason, agentId: this.#agentId });
-      return; // local DB is unaffected; next triggered backup retries the full upload
+      return { ok: false, reason }; // local DB is unaffected; next triggered backup retries the full upload
     }
 
     // Store backup metadata in the local store
@@ -223,6 +225,8 @@ export class ClientBackup {
       ciphertextBytes: blob.length,
       durationMs,
     });
+
+    return { ok: true };
   }
 
   /**
@@ -262,10 +266,18 @@ export class ClientBackup {
     const backupKey = deriveBackupKey(this.#identityKey, this.#agentId);
 
     let blob: Uint8Array | undefined;
-    const storageKey = `backup/${this.#agentId}/db.enc`;
     let alreadyLogged = false;
 
     try {
+      // Read stored metadata to get the storage key (destinationUrl).
+      // The storage key is timestamp-based (backups/{agentId}/{timestamp}.enc),
+      // so we must read it from metadata rather than reconstruct it.
+      const storedMeta = await this.#readMetadata();
+
+      // Determine storage key: use destinationUrl from metadata if present,
+      // otherwise fall back to the legacy path for backward compatibility.
+      const storageKey = storedMeta?.destinationUrl ?? `backups/${this.#agentId}/latest.enc`;
+
       // Download and verify
       const downloaded = await this.#cloudStorage.download(storageKey);
       if (downloaded === undefined) {
@@ -278,7 +290,6 @@ export class ClientBackup {
 
       // Verify checksum against stored metadata (SI-003)
       const actualChecksum = createHash("sha256").update(blob).digest("hex");
-      const storedMeta = await this.#readMetadata();
 
       // SI-003: For new-device restores, we compute checksum but have no stored metadata to compare.
       // Proceed with restore but log the condition for observability.
