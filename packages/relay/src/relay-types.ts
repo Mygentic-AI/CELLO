@@ -48,6 +48,25 @@ export interface HashSubmit {
   leaf_kind: number;        // 0x00 (message) or 0x02 (control)
   structure1_cbor: Uint8Array; // canonical CBOR of Structure 1
   sender_signature: Uint8Array; // 64-byte Ed25519 signature — same as inside structure1_cbor
+  /**
+   * FEDERATION-003 AC-005/AC-006/SI-002: Predecessor relay ACK for re-submission.
+   *
+   * When a client re-submits a hash to a new relay after the original relay went down,
+   * the client includes the ACK it received from the predecessor relay. The new relay
+   * uses this to verify the predecessor's signature before issuing its own ACK.
+   *
+   * If predecessor_relay_id is set, the new relay MUST verify the predecessor ACK:
+   *   - Fetch predecessor's public key from directory via getRelayPublicKey(predecessor_relay_id)
+   *   - If not found: reject with RELAY_PREDECESSOR_UNKNOWN (SI-002)
+   *   - Verify Ed25519.verify(pubKey, buildRelayAckTbs(hash, seq, ts), predecessor_relay_signature)
+   *   - If invalid: reject with RELAY_PREDECESSOR_UNKNOWN (SI-002 — no fallback)
+   *
+   * If predecessor_relay_id is absent: treated as a first submission (no predecessor verification).
+   */
+  predecessor_relay_id?: string;
+  predecessor_relay_signature?: Uint8Array; // 64-byte Ed25519 ACK signature from predecessor
+  predecessor_relay_sequence?: number;       // sequence_number from predecessor ACK
+  predecessor_relay_timestamp?: number;      // timestamp from predecessor ACK
 }
 
 export interface LeafDeliver {
@@ -68,7 +87,9 @@ export type HashSubmitErrorReason =
   | "signature_invalid"
   | "sender_mismatch"
   | "last_seen_seq_ahead"
-  | "session_sealed";
+  | "session_sealed"
+  /** FEDERATION-003 AC-006/SI-002: predecessor relay ACK could not be verified */
+  | "RELAY_PREDECESSOR_UNKNOWN";
 
 export interface HashSubmitError {
   type: "hash_submit_error";

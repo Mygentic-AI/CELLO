@@ -72,6 +72,11 @@ const TABLE_EXTRA_EXCLUDED: Record<string, ReadonlySet<string>> = {
   conversation_proof_leaves: new Set([
     "checkpoint_id",          // NULL at INSERT; set via join table at checkpoint confirmation
   ]),
+  // FEDERATION-003: deregistered_at is nullable — only set when a relay is explicitly deregistered,
+  // not at initial registration time. If omitted here, verifyChain returns { valid: false } because
+  // the stored chain_hash was computed without deregistered_at, but SELECT * includes it as NULL.
+  // This is the same M4 bug #7 pattern that broke seal_notarizations in M4 live testing.
+  relay_registrations: new Set(["deregistered_at"]),
 };
 
 function isExcluded(tableName: string, column: string): boolean {
@@ -220,6 +225,8 @@ export const HASH_CHAINED_TABLES = [
   "seal_notarizations",
   "connections",
   "sessions",
+  // FEDERATION-003: relay registrations are hash-chained; deregistered_at excluded via TABLE_EXTRA_EXCLUDED.
+  "relay_registrations",
 ] as const;
 
 export type HashChainedTable = (typeof HASH_CHAINED_TABLES)[number];

@@ -95,7 +95,8 @@ const KNOWN_DYNAMIC_TABLES: readonly string[] = [
   "notification_events",
   "seal_notarizations",
   "connections",  // PERSIST-020: added to HASH_CHAINED_TABLES; registered here per SI-001
-  "sessions",     // FEDERATION-001: added to HASH_CHAINED_TABLES (V18 migration)
+  "sessions",              // FEDERATION-001: added to HASH_CHAINED_TABLES (V18 migration)
+  "relay_registrations",   // FEDERATION-003: added to HASH_CHAINED_TABLES (V19 migration)
 ] as const;
 
 // ─── File paths ───────────────────────────────────────────────────────────────

@@ -36,3 +36,6 @@ export { ed25519_FROST } from "@noble/curves/ed25519.js";
 
 // FEDERATION-002: canonical checkpoint TBS serialization and hash computation
 export { buildCheckpointTbs, computeCheckpointHash } from "./checkpoint.js";
+
+// FEDERATION-003: relay registration TBS and signature verification
+export { buildRelayRegistrationTbs, verifyRelayRegistrationSignature } from "./relay-registration.js";

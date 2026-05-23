@@ -80,6 +80,8 @@ export const BIGINT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   sessions: ["id"],
   // FEDERATION-002: checkpoint_node_signatures table (V18 migration)
   checkpoint_node_signatures: ["id"],
+  // FEDERATION-003: relay_registrations table (V19 migration)
+  relay_registrations: ["id"],
 } as const;
 
 /**
@@ -118,6 +120,8 @@ export const STORE_TABLES = [
   "sessions",
   // FEDERATION-002: checkpoint_node_signatures table added (V18 migration)
   "checkpoint_node_signatures",
+  // FEDERATION-003: relay_registrations table added (V19 migration)
+  "relay_registrations",
 ] as const;
 
 export type StoreTables = (typeof STORE_TABLES)[number];
@@ -1390,5 +1394,73 @@ export class PgDirectoryStore implements DirectoryStore {
         `federation.replication.chain_hash_mismatch: table='${tableName}' leafIndex=${leafIndex} expected=${expectedHash} received=${receivedHash}`,
       );
     }
+  }
+
+  // ─── FEDERATION-003: Relay registration ──────────────────────────────────
+
+  /**
+   * Register a relay node's Ed25519 public key.
+   *
+   * Pseudocode (SPARC Phase P):
+   *   1. SELECT public_key_hex FROM relay_registrations WHERE relay_id = $1.
+   *   2. If row found AND public_key_hex matches: log relay.already.registered at INFO; return.
+   *   3. If row found AND public_key_hex DIFFERS: log relay.registration.conflict at ERROR;
+   *      throw Error("RELAY_IDENTITY_CONFLICT") — SI-001: key is never overwritten.
+   *   4. If no row: call insertWithChain("relay_registrations", record, columns, values, chainHashIndex).
+   *   5. On success: log relay.registered at INFO with { relayId, region }.
+   *
+   * SI-001: relay_registrations is append-only. An existing registration is never overwritten.
+   *   Re-registration with same key → no-op (idempotent). Different key → RELAY_IDENTITY_CONFLICT.
+   *
+   * @throws Error with message containing "RELAY_IDENTITY_CONFLICT" if relayId exists with different key
+   */
+  async registerRelay(params: { relayId: string; publicKeyHex: string; region: string }): Promise<void> {
+    const { relayId, publicKeyHex, region } = params;
+
+    // Check for existing registration
+    const existing = await this.#pool.query<{ public_key_hex: string }>(
+      `SELECT public_key_hex FROM relay_registrations WHERE relay_id = $1`,
+      [relayId],
+    );
+
+    if (existing.rows.length > 0) {
+      const existingKey = existing.rows[0]!.public_key_hex;
+      if (existingKey === publicKeyHex) {
+        // Idempotent re-registration (AC-003) — same key, same relay restarting.
+        this.#logger.info("relay.already.registered", { relayId, region });
+        return;
+      }
+      // SI-001: different key for same relay_id — identity conflict, reject.
+      this.#logger.error("relay.registration.conflict", { relayId, region });
+      throw new Error(`RELAY_IDENTITY_CONFLICT: relay_id '${relayId}' already registered with a different public key`);
+    }
+
+    // New registration — insert via hash chain
+    const record: Record<string, unknown> = {
+      relay_id: relayId,
+      public_key_hex: publicKeyHex,
+      region,
+    };
+    const columns = ["relay_id", "public_key_hex", "region", "chain_hash"];
+    const values: unknown[] = [relayId, publicKeyHex, region, ""];
+    const chainHashIndex = 3;
+
+    await this.insertWithChain("relay_registrations", record, columns, values, chainHashIndex);
+    this.#logger.info("relay.registered", { relayId, region });
+  }
+
+  /**
+   * Retrieve the registered public key hex for a relay by relayId.
+   *
+   * FEDERATION-003 AC-004: returns the public_key_hex for ACK signature verification.
+   * Returns undefined if relayId is not registered.
+   * Does not throw on absence.
+   */
+  async getRelayPublicKey(relayId: string): Promise<string | undefined> {
+    const result = await this.#pool.query<{ public_key_hex: string }>(
+      `SELECT public_key_hex FROM relay_registrations WHERE relay_id = $1`,
+      [relayId],
+    );
+    return result.rows[0]?.public_key_hex;
   }
 }

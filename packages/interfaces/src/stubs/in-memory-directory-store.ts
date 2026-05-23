@@ -215,4 +215,28 @@ export class InMemoryDirectoryStore implements DirectoryStore {
   async clearStagingBatch(_stagingIds: string[]): Promise<void> {
     throw new Error("clearStagingBatch: not implemented in InMemoryDirectoryStore");
   }
+
+  // ─── FEDERATION-003: Relay registration ──────────────────────────────────
+
+  readonly #relayRegistrations = new Map<string, { publicKeyHex: string; region: string }>();
+
+  // Note: InMemoryDirectoryStore has no logger — it is a unit-test stub only.
+  // Observability events (relay.registered, relay.already.registered, relay.registration.conflict)
+  // are emitted by CelloDirectoryNode, which owns the logger. The store layer does not log;
+  // it throws RELAY_IDENTITY_CONFLICT so the caller can log and respond appropriately.
+  async registerRelay(params: { relayId: string; publicKeyHex: string; region: string }): Promise<void> {
+    const existing = this.#relayRegistrations.get(params.relayId);
+    if (existing) {
+      if (existing.publicKeyHex === params.publicKeyHex) {
+        // Idempotent re-registration — no-op
+        return;
+      }
+      throw new Error(`RELAY_IDENTITY_CONFLICT: relay_id '${params.relayId}' already registered with a different public key`);
+    }
+    this.#relayRegistrations.set(params.relayId, { publicKeyHex: params.publicKeyHex, region: params.region });
+  }
+
+  async getRelayPublicKey(relayId: string): Promise<string | undefined> {
+    return this.#relayRegistrations.get(relayId)?.publicKeyHex;
+  }
 }

@@ -230,6 +230,61 @@ if (directoryAdapter) {
   directoryAdapter.connect(relayResult.node);
 }
 
+// ─── FEDERATION-003: Relay registration with directory (AC-002, DB-001) ─────────
+// The relay MUST register before accepting sessions — an unregistered relay cannot
+// issue verifiable ACKs (AC-002). If the directory is unreachable, retry on exponential
+// backoff (DB-001). relay.registration.failed is logged at WARN on each failed attempt.
+// relay.registered or relay.already.registered is logged at INFO on success.
+if (directoryAdapter) {
+  const MAX_ATTEMPTS = 10;
+  const BASE_DELAY_MS = 500;
+
+  let registered = false;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const regResult = await directoryAdapter.registerWithDirectory({
+      relayId,
+      publicKeyHex: relayId, // relayId = hex(pubkey) by convention
+      region: awsRegion,
+      keyProvider: kp,
+    });
+
+    if (regResult.ok) {
+      if (regResult.alreadyRegistered) {
+        logger.info("relay.already.registered", { relayId, region: awsRegion });
+      } else {
+        logger.info("relay.registered", { relayId, region: awsRegion });
+      }
+      registered = true;
+      break;
+    }
+
+    // RELAY_IDENTITY_CONFLICT is unrecoverable — a different key was registered
+    // for this relayId. The relay cannot proceed with this key.
+    if (regResult.reason.includes("RELAY_IDENTITY_CONFLICT")) {
+      logRelayServiceStartFailed(logger, {
+        reason: `relay registration rejected: ${regResult.reason}`,
+        region: awsRegion,
+      });
+      process.exit(1);
+    }
+
+    // DB-001: directory temporarily unreachable — log and backoff
+    logger.warn("relay.registration.failed", { reason: regResult.reason, attempt });
+    if (attempt < MAX_ATTEMPTS) {
+      const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      await new Promise<void>((r) => setTimeout(r, Math.min(delayMs, 30_000)));
+    }
+  }
+
+  if (!registered) {
+    logRelayServiceStartFailed(logger, {
+      reason: "relay registration failed after maximum retry attempts",
+      region: awsRegion,
+    });
+    process.exit(1);
+  }
+}
+
 for (const addr of relayResult.node.listenAddresses()) {
   logger.info("adapter.initialised", { adapterName: "ListenAddr", implementation: String(addr), env: celloEnv });
 }

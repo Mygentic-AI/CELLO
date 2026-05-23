@@ -212,6 +212,15 @@ logger.info("session.started", { userId, sessionId, principalType })
 - `relay.predecessor.unknown` — level: warn; context fields: `{ relayId }`; correlationId: false; fired by `CelloRelayNode.#processHashSubmitLocked` when a `hash_submit` carries `predecessor_relay_id` but the directory adapter cannot find the predecessor's public key, or when the ACK signature does not verify — the submission is rejected with `RELAY_PREDECESSOR_UNKNOWN` in both cases (SI-002: no fallback); added in FEDERATION-003; package: relay
 - `relay.pubkey.lookup.failed` — level: warn; context fields: `{ relayId, reason }`; correlationId: false; fired by `CelloClient.getRelayPublicKey()` when the signaling stream to the directory fails or the directory responds with `relay_pubkey_error`; added in FEDERATION-003; package: client
 
+**Relay Registration** (FEDERATION-003)
+
+- `relay.registered` — level: info; context fields: `{ relayId, region }`; correlationId: false; fired when a relay node successfully registers its Ed25519 public key with the directory at startup; emitted by `PgDirectoryStore.registerRelay()` after a new row is inserted into `relay_registrations`; added in FEDERATION-003; package: directory
+- `relay.already.registered` — level: info; context fields: `{ relayId, region }`; correlationId: false; fired when a relay re-registers with the same key (idempotent restart) — the directory already has a matching row, so registration is a no-op; emitted by `PgDirectoryStore.registerRelay()` when `SELECT` returns a matching row; added in FEDERATION-003; package: directory
+- `relay.registration.conflict` — level: error; context fields: `{ relayId, region }`; correlationId: false; fired when a relay attempts to register a `relayId` that is already registered with a DIFFERENT `public_key_hex` — indicates a key rotation attempt or a compromised identity; triggers the ops-critical alarm; `PgDirectoryStore.registerRelay()` throws `RELAY_IDENTITY_CONFLICT` after logging; added in FEDERATION-003; package: directory
+- `relay.registration.failed` — level: warn; context fields: `{ reason, attempt }`; correlationId: false; fired by the relay binary when the directory is unreachable during startup registration; the relay retries on exponential backoff; the relay does NOT accept sessions until registration succeeds; added in FEDERATION-003; package: relay
+- `relay.predecessor.unknown` — level: warn; context fields: `{ relayId, hashHex }`; correlationId: false; fired by `CelloRelayNode` when a hash re-submission carries a predecessor ACK whose `relayId` is not found in the directory, OR when the ACK signature fails verification — the relay rejects the re-submission with `RELAY_PREDECESSOR_UNKNOWN`; SI-002: no fallback to accepting unverified ACKs; added in FEDERATION-003; package: relay
+- `relay.pubkey.lookup.failed` — level: warn; context fields: `{ relayId, reason }`; correlationId: false; fired by the client when the directory is unreachable while querying a relay's public key for ACK verification; ACK verification is deferred and the hash stays in the pending queue; added in FEDERATION-003; package: client
+
 ---
 
 ## Environment Wiring

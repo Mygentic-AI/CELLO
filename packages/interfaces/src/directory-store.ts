@@ -298,4 +298,33 @@ export interface DirectoryStore {
    * @param stagingIds - Array of staging row IDs to delete.
    */
   clearStagingBatch(stagingIds: string[]): Promise<void>;
+
+  // ─── FEDERATION-003: Relay registration ──────────────────────────────────
+
+  /**
+   * Register a relay node's Ed25519 public key.
+   *
+   * FEDERATION-003 AC-002/AC-003: idempotent by design.
+   *   - If no row exists for relayId: insert a new row and log relay.registered at INFO.
+   *   - If a row exists with the SAME publicKeyHex: no-op, log relay.already.registered at INFO.
+   *   - If a row exists with a DIFFERENT publicKeyHex: throw RELAY_IDENTITY_CONFLICT,
+   *     log relay.registration.conflict at ERROR.
+   *
+   * SI-001: relay_registrations is append-only — the existing key is NEVER overwritten.
+   *
+   * @param params.relayId - The hex-encoded Ed25519 public key of the relay (stable identifier)
+   * @param params.publicKeyHex - 64-char hex of the relay's Ed25519 public key (same as relayId by convention)
+   * @param params.region - AWS region where this relay runs
+   * @throws Error with message containing "RELAY_IDENTITY_CONFLICT" if relayId already exists with a different key
+   */
+  registerRelay(params: { relayId: string; publicKeyHex: string; region: string }): Promise<void>;
+
+  /**
+   * Retrieve the registered public key hex for a relay by its relayId.
+   *
+   * FEDERATION-003 AC-004: used by clients and new relays to verify relay ACK signatures.
+   * Returns undefined if the relayId is not registered.
+   * Does not throw on absence.
+   */
+  getRelayPublicKey(relayId: string): Promise<string | undefined>;
 }
