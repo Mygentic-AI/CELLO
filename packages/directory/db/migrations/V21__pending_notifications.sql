@@ -59,3 +59,18 @@ CREATE POLICY delete_all ON pending_notifications
 
 -- Grant privileges — GRANT is idempotent by design in PostgreSQL
 GRANT INSERT, SELECT, DELETE ON pending_notifications TO cello_service;
+
+-- ─── Alarm implementation note ────────────────────────────────────────────────
+-- The PERSIST-023 story YAML alarm condition reads:
+--   "pending_notifications rows with delivered_at IS NULL and created_at older than 24 hours"
+--
+-- There is NO delivered_at column in this table. Rows are deleted on acknowledgement — they
+-- are never marked delivered. The alarm query must therefore be:
+--
+--   SELECT COUNT(*) FROM pending_notifications
+--   WHERE created_at < now() - INTERVAL '24 hours';
+--
+-- (No delivered_at filter — the absence of a row means it was delivered.)
+-- Any CloudWatch alarm implementing this story must use the above query, not
+-- "WHERE delivered_at IS NULL AND created_at < now() - INTERVAL '24 hours'",
+-- which would fail with "column delivered_at does not exist".

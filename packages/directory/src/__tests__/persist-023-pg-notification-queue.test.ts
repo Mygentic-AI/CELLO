@@ -3,7 +3,7 @@
  *
  * Specification interpretation:
  *
- * AC-001: After the V20 migration is applied, pending_notifications table exists with:
+ * AC-001: After the V21 migration is applied, pending_notifications table exists with:
  *   columns: notification_id UUID NOT NULL UNIQUE, recipient_agent_id TEXT NOT NULL,
  *            notification_type TEXT NOT NULL, payload JSONB NOT NULL,
  *            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -33,7 +33,7 @@
  * AC-007: CELLO_ENV=local selects InMemoryNotificationQueue at the composition root level.
  *   Verified by a unit test that checks which class is exported.
  *
- * AC-008-idempotency: V20 migration CREATE TABLE and CREATE INDEX use IF NOT EXISTS.
+ * AC-008-idempotency: V21 migration CREATE TABLE and CREATE INDEX use IF NOT EXISTS.
  *   Running the migration SQL twice produces no error.
  *
  * AC-009-table-extra-excluded: pending_notifications has no nullable columns NOT set at enqueue
@@ -165,7 +165,7 @@ beforeEach(async () => {
 
 // ─── AC-001: Schema existence and structure ───────────────────────────────────
 
-describeIntegration("PERSIST-023 AC-001: pending_notifications schema after V20 migration", () => {
+describeIntegration("PERSIST-023 AC-001: pending_notifications schema after V21 migration", () => {
   it("AC-001: pending_notifications table exists with required columns and data types", async () => {
     const result = await superPool.query<{ column_name: string; data_type: string; is_nullable: string }>(
       `SELECT column_name, data_type, is_nullable
@@ -448,16 +448,16 @@ describe("PERSIST-023 AC-007: CELLO_ENV=local uses InMemoryNotificationQueue", (
   });
 });
 
-// ─── AC-008-idempotency: V20 migration is idempotent ─────────────────────────
+// ─── AC-008-idempotency: V21 migration is idempotent ─────────────────────────
 
-describeIntegration("PERSIST-023 AC-008-idempotency: V20 migration idempotent", () => {
-  it("AC-008: V20 migration SQL is idempotent (CREATE TABLE IF NOT EXISTS, CREATE INDEX IF NOT EXISTS)", async () => {
-    // AC-008: verify idempotency by running the V20 migration SQL a second time.
+describeIntegration("PERSIST-023 AC-008-idempotency: V21 migration idempotent", () => {
+  it("AC-008: V21 migration SQL is idempotent (CREATE TABLE IF NOT EXISTS, CREATE INDEX IF NOT EXISTS)", async () => {
+    // AC-008: verify idempotency by running the V21 migration SQL a second time.
     // The SQL uses IF NOT EXISTS so running it against an existing schema must not throw.
     // This is the authoritative test for AC-008 — it directly verifies the IF NOT EXISTS clauses.
 
     // Run the same CREATE TABLE IF NOT EXISTS statement again (simulating Flyway re-run).
-    // The SQL must match V20 exactly — IF NOT EXISTS skips the CREATE if the table exists.
+    // The SQL must match V21 exactly — IF NOT EXISTS skips the CREATE if the table exists.
     await expect(
       superPool.query(`
         CREATE TABLE IF NOT EXISTS pending_notifications (
