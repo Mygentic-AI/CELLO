@@ -121,6 +121,7 @@ if (identityKeyBytes) {
     dbPath,
     cloudStorage: cloudStorageForBackup,
     logger: backupLogger,
+    destinationType: celloEnv === "local" ? "local" : (backupS3Bucket ? "s3" : "local"),
   });
 }
 

@@ -25,7 +25,15 @@
  *           bytes, the backup_key hex, or any derived value. Verified by capturing all events
  *           and asserting backupKeyHex is absent from every serialized event.
  *
- *   SI-002: Fresh nonce per backup — same as AC-006, covered together.
+ *   SI-002: A restore operation shall never overwrite the live database until the downloaded
+ *           ciphertext passes SHA-256 checksum verification. Adversarial condition: even when
+ *           the S3 object is truncated or corrupted in transit. Test: perform a real backup
+ *           (storing metadata with correct checksum), then attempt a restore using a provider
+ *           that returns corrupted/truncated bytes. Assert: (a) restore throws, (b) live DB
+ *           file is unchanged, (c) temp file is not left behind.
+ *
+ *   AC-006: Fresh nonce per backup. Two consecutive backups of the same database content →
+ *           two different ciphertext blobs. Separate from SI-002.
  *
  *   DB-001: Upload failure → local database file unaffected. After backup() with a failing
  *           cloud storage adapter, the db file still exists and its bytes are unchanged.
@@ -220,9 +228,14 @@ describe("PERSIST-022 AC-005 — null cloudStorage emits client.backup.not.confi
   });
 });
 
-// ─── AC-006 + SI-002: Two consecutive backups produce different ciphertext ────
+// ─── SI-002: Corrupted download never overwrites live DB ─────────────────────
+//
+// SI-002 adversarial condition: "even when the S3 object is truncated or
+// corrupted in transit — the client writes to a temporary path, verifies the
+// checksum, and only atomically replaces the live database on success; a
+// failed verification discards the temporary file"
 
-describe("PERSIST-022 AC-006/SI-002 — consecutive backups of same content produce different ciphertext", () => {
+describe("PERSIST-022 SI-002 — corrupted download does not overwrite live database", () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -233,7 +246,87 @@ describe("PERSIST-022 AC-006/SI-002 — consecutive backups of same content prod
     cleanupDir(tmpDir);
   });
 
-  it("two consecutive backups of identical db content → different ciphertext blobs (different nonces)", async () => {
+  it("restore with corrupted S3 download → checksum_mismatch thrown; live DB unchanged", async () => {
+    const identityKey = randomBytes(32);
+    const agentId = "agent-persist022-si002";
+    const originalDbContent = randomBytes(256);
+    const dbPath = join(tmpDir, "live.db");
+    writeFileSync(dbPath, originalDbContent);
+
+    const { logger } = makeSpyLogger();
+
+    // Step 1: Perform a real backup so metadata with correct checksum is stored.
+    // Use LocalCloudStorageProvider to store the real ciphertext.
+    const realStorage = new LocalCloudStorageProvider(join(tmpDir, "storage-real"));
+    mkdirSync(join(tmpDir, "storage-real"), { recursive: true });
+
+    const localStore = new Map<string, Uint8Array>();
+
+    const backupInstance = new ClientBackup({
+      agentId,
+      identityKey,
+      dbPath,
+      cloudStorage: realStorage,
+      logger,
+      getMetadata: (key) => Promise.resolve(localStore.get(key)),
+      setMetadata: (key, val) => { localStore.set(key, val); return Promise.resolve(); },
+    });
+
+    await backupInstance.backup();
+    // Verify metadata was stored
+    expect(localStore.has("backup:metadata")).toBe(true);
+
+    // Step 2: Construct a CORRUPTED storage provider that returns truncated/
+    // scrambled bytes instead of the real ciphertext.
+    const corruptedStorage: CloudStorageProvider = {
+      upload: () => Promise.reject(new Error("upload not expected in SI-002 test")),
+      download: (_key: string) => Promise.resolve(new Uint8Array(randomBytes(64))), // wrong bytes
+    };
+
+    // Step 3: Build a restore instance wired to the corrupted storage.
+    // Metadata (with the correct checksum) is in the local store.
+    const restoreInstance = new ClientBackup({
+      agentId,
+      identityKey,
+      dbPath,
+      cloudStorage: corruptedStorage,
+      logger,
+      getMetadata: (key) => Promise.resolve(localStore.get(key)),
+      setMetadata: (key, val) => { localStore.set(key, val); return Promise.resolve(); },
+    });
+
+    // Step 4: Restore must throw due to checksum mismatch (SI-003 enforcement in ClientBackup).
+    await expect(restoreInstance.restore()).rejects.toThrow();
+
+    // Step 5: The live DB file must still exist and contain the original bytes.
+    // If restore atomically renamed a temp file over it, this assertion fails.
+    expect(existsSync(dbPath)).toBe(true);
+    const liveContents = readFileSync(dbPath);
+    expect(Buffer.from(liveContents)).toEqual(Buffer.from(originalDbContent));
+
+    // Step 6: The temp file must not be left behind.
+    expect(existsSync(dbPath + ".restore-tmp")).toBe(false);
+  });
+});
+
+// ─── AC-006: Two consecutive backups produce different ciphertext ─────────────
+//
+// NOTE: The "nonce freshness" guarantee (SI-002 in PERSIST-011) is inherited
+// by PERSIST-022 through ClientBackup. AC-006 verifies this property continues
+// to hold when S3-style storage is used.
+
+describe("PERSIST-022 AC-006 — consecutive backups of same content produce different ciphertext (fresh nonce)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+  });
+
+  afterEach(() => {
+    cleanupDir(tmpDir);
+  });
+
+  it("AC-006: two consecutive backups of identical db content → different ciphertext blobs (different nonces)", async () => {
     const identityKey = randomBytes(32);
     const agentId = "agent-persist022-ac006";
     const plaintext = randomBytes(512);

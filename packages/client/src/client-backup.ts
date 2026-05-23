@@ -102,6 +102,13 @@ export interface ClientBackupOptions {
    * Defaults to no-op if not provided (useful for pure encryption tests).
    */
   verifyRestored?: (dbPath: string) => Promise<void>;
+  /**
+   * PERSIST-022: Storage destination type for observability.
+   * Set by the composition root to "local" or "s3" depending on which
+   * CloudStorageProvider is wired in. Logged in client.backup.completed.
+   * Defaults to "local" for backward compatibility with M4 LocalCloudStorageProvider usage.
+   */
+  destinationType?: "local" | "s3";
 }
 
 // ─── ClientBackup ─────────────────────────────────────────────────────────────
@@ -120,6 +127,7 @@ export class ClientBackup {
   readonly #getMetadata: (key: string) => Promise<Uint8Array | undefined>;
   readonly #setMetadata: (key: string, value: Uint8Array) => Promise<void>;
   readonly #verifyRestored: (dbPath: string) => Promise<void>;
+  readonly #destinationType: "local" | "s3";
 
   constructor(options: ClientBackupOptions) {
     this.#agentId = options.agentId;
@@ -130,6 +138,7 @@ export class ClientBackup {
     this.#getMetadata = options.getMetadata ?? (() => Promise.resolve(undefined));
     this.#setMetadata = options.setMetadata ?? (() => Promise.resolve());
     this.#verifyRestored = options.verifyRestored ?? (() => Promise.resolve());
+    this.#destinationType = options.destinationType ?? "local";
   }
 
   /**
@@ -210,7 +219,7 @@ export class ClientBackup {
 
     this.#logger.info("client.backup.completed", {
       agentId: this.#agentId,
-      destinationType: "local",
+      destinationType: this.#destinationType,
       ciphertextBytes: blob.length,
       durationMs,
     });
