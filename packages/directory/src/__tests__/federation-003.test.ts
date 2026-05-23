@@ -546,37 +546,10 @@ describeIntegration("FEDERATION-003 integration: SI-003 registration signature v
   });
 });
 
-// ─── Observability: relay.registered, relay.already.registered, relay.registration.conflict ──
-
-describe("FEDERATION-003 unit: relay.registered event fields", () => {
-  it("relay.registered is logged with { relayId, region } when first registration succeeds", async () => {
-    // This test verifies the event shape without a DB by inspecting the log event payload.
-    // The full end-to-end registration flow is covered by the integration tests above.
-    // Here we simply verify the event naming and fields match the story ACs.
-    const logger = makeTestLogger();
-    // Simulate the event that registerRelay() must emit on success
-    logger.info("relay.registered", { relayId: "test-relay-id", region: "us-east-1" });
-    const ev = logger.infoEvents.find(([name]) => name === "relay.registered");
-    expect(ev).toBeDefined();
-    expect(ev![1]).toHaveProperty("relayId");
-    expect(ev![1]).toHaveProperty("region");
-  });
-
-  it("relay.already.registered is logged with { relayId, region } on idempotent re-registration", () => {
-    const logger = makeTestLogger();
-    logger.info("relay.already.registered", { relayId: "test-relay-id", region: "us-east-1" });
-    const ev = logger.infoEvents.find(([name]) => name === "relay.already.registered");
-    expect(ev).toBeDefined();
-    expect(ev![1]).toHaveProperty("relayId");
-    expect(ev![1]).toHaveProperty("region");
-  });
-
-  it("relay.registration.conflict is logged at ERROR with { relayId, region } on identity conflict", () => {
-    const logger = makeTestLogger();
-    logger.error("relay.registration.conflict", { relayId: "test-relay-id", region: "us-east-1" });
-    const ev = logger.errorEvents.find(([name]) => name === "relay.registration.conflict");
-    expect(ev).toBeDefined();
-    expect(ev![1]).toHaveProperty("relayId");
-    expect(ev![1]).toHaveProperty("region");
-  });
-});
+// Observability events (relay.registered, relay.already.registered, relay.registration.conflict)
+// are verified in the integration tests above:
+//   - relay.registered: AC-009-store-tables test (registerRelay() round-trip)
+//   - relay.already.registered: SI-001 test (same-key re-registration)
+//   - relay.registration.conflict: SI-001/AC-007 test (different-key re-registration)
+// No separate hollow unit tests are needed — the integration tests call registerRelay() directly
+// and assert the event name and required context fields { relayId, region }.
