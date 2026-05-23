@@ -3914,6 +3914,133 @@ class CelloClientImpl implements CelloClient {
   }
 
   /**
+   * FEDERATION-003 AC-004: Look up a relay's registered public key from the directory.
+   *
+   * Opens a one-shot signaling stream, authenticates, sends relay_pubkey_request,
+   * and returns the public_key_hex for the given relayId.
+   *
+   * DB-002: If the directory is unreachable, returns undefined. The caller is responsible
+   * for retry logic (the hash submission stays in the pending queue).
+   *
+   * Pseudocode (Phase P):
+   *   1. Require directoryEndpoint — return undefined if not configured.
+   *   2. Dial directory and open signaling stream.
+   *   3. Authenticate: read signaling_auth_challenge, sign SHA-256("CELLO-DIR-AUTH-v1" || nonce || pubkey),
+   *      send signaling_auth_response. Read signaling_auth_ok.  RFC 8032, FIPS 180-4.
+   *   4. Send relay_pubkey_request { type, relay_id }.
+   *   5. Read relay_pubkey_response { type, public_key_hex } or relay_pubkey_error { type, reason }.
+   *   6. On relay_pubkey_response: return public_key_hex.
+   *   7. On relay_pubkey_error or any failure: return undefined.
+   *
+   * @param relayId - hex encoding of the relay's Ed25519 public key
+   * @returns the relay's registered public_key_hex, or undefined if not found / unreachable
+   */
+  async getRelayPublicKey(relayId: string): Promise<string | undefined> {
+    if (!this.#directoryEndpoint) return undefined;
+
+    const dirPeerId = this.#directoryEndpoint.peer_id;
+    const dirMultiaddr = this.#directoryEndpoint.multiaddrs[0];
+
+    try {
+      if (dirMultiaddr) {
+        try { await this.#node.dial(dirMultiaddr); } catch { /* already connected */ }
+      }
+
+      let sigStream: Stream;
+      try {
+        sigStream = await this.#node.newStream(dirPeerId, SIGNALING_PROTOCOL_ID);
+      } catch (err: unknown) {
+        this.#logger.warn("relay.pubkey.lookup.failed", { relayId, reason: err instanceof Error ? err.message : "stream_open_failed" });
+        return undefined;
+      }
+
+      const iter = (lp.decode(sigStream) as AsyncIterable<unknown>)[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
+
+      // Auth challenge
+      const { value: challengeRaw, done } = await nextWithTimeout(iter, RELAY_AUTH_TIMEOUT_MS);
+      if (done || challengeRaw === undefined) { sigStream.abort(new Error("dir_auth_error")); this.#logger.warn("relay.pubkey.lookup.failed", { relayId, reason: "no_auth_challenge" }); return undefined; }
+
+      let challengeFrame: Record<string, unknown>;
+      try {
+        challengeFrame = decode(toU8(challengeRaw)) as Record<string, unknown>;
+      } catch { sigStream.abort(new Error("dir_auth_error")); this.#logger.warn("relay.pubkey.lookup.failed", { relayId, reason: "decode_failed" }); return undefined; }
+
+      if (challengeFrame["type"] !== "signaling_auth_challenge") {
+        sigStream.abort(new Error("dir_auth_error")); this.#logger.warn("relay.pubkey.lookup.failed", { relayId, reason: "unexpected_frame" }); return undefined;
+      }
+
+      const nonce = toU8(challengeFrame["nonce"]);
+
+      if (!this.#myPubkeyHex) {
+        const pubkey = await this.#keyProvider.getPublicKey();
+        this.#myPubkeyHex = Buffer.from(pubkey).toString("hex");
+      }
+      const myPubkey = Buffer.from(this.#myPubkeyHex, "hex");
+
+      const domain = Buffer.from(AUTH_DOMAIN_DIR, "utf8");
+      const authMsg = new Uint8Array(Buffer.concat([domain, nonce, myPubkey]));
+      const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
+      const sig = await this.#keyProvider.sign(msgHash);
+
+      sigStream.send(lp.encode.single(CBOR_ENC.encode({
+        type: "signaling_auth_response",
+        pubkey: myPubkey,
+        signature: sig,
+      }) as Uint8Array));
+
+      // Auth ok
+      const { value: ackRaw, done: ackDone } = await nextWithTimeout(iter, RELAY_AUTH_TIMEOUT_MS);
+      if (ackDone || ackRaw === undefined) { sigStream.abort(new Error("dir_auth_error")); this.#logger.warn("relay.pubkey.lookup.failed", { relayId, reason: "no_auth_ack" }); return undefined; }
+      let ackFrame: Record<string, unknown>;
+      try {
+        ackFrame = decode(toU8(ackRaw)) as Record<string, unknown>;
+      } catch { sigStream.abort(new Error("dir_auth_error")); this.#logger.warn("relay.pubkey.lookup.failed", { relayId, reason: "decode_failed" }); return undefined; }
+      if (ackFrame["type"] !== "signaling_auth_ok") {
+        sigStream.abort(new Error("dir_auth_error")); this.#logger.warn("relay.pubkey.lookup.failed", { relayId, reason: "auth_failed" }); return undefined;
+      }
+
+      // Send relay_pubkey_request
+      sigStream.send(lp.encode.single(CBOR_ENC.encode({
+        type: "relay_pubkey_request",
+        relay_id: relayId,
+      }) as Uint8Array));
+
+      // Read relay_pubkey_response or relay_pubkey_error
+      const { value: respRaw, done: respDone } = await nextWithTimeout(iter, RELAY_AUTH_TIMEOUT_MS);
+      if (respDone || respRaw === undefined) {
+        sigStream.abort(new Error("no_response"));
+        this.#logger.warn("relay.pubkey.lookup.failed", { relayId, reason: "no_response" });
+        return undefined;
+      }
+
+      let respFrame: Record<string, unknown>;
+      try {
+        respFrame = decode(toU8(respRaw)) as Record<string, unknown>;
+      } catch {
+        sigStream.abort(new Error("decode_failed"));
+        this.#logger.warn("relay.pubkey.lookup.failed", { relayId, reason: "decode_failed" });
+        return undefined;
+      }
+
+      sigStream.close().catch(() => {});
+
+      if (respFrame["type"] === "relay_pubkey_response") {
+        return respFrame["public_key_hex"] as string | undefined;
+      }
+
+      // relay_pubkey_error (not_found) or unexpected type
+      const errorReason = (respFrame["reason"] as string | undefined) ?? "not_found";
+      if (errorReason !== "not_found") {
+        this.#logger.warn("relay.pubkey.lookup.failed", { relayId, reason: errorReason });
+      }
+      return undefined;
+    } catch (err: unknown) {
+      this.#logger.warn("relay.pubkey.lookup.failed", { relayId, reason: err instanceof Error ? err.message : "unknown" });
+      return undefined;
+    }
+  }
+
+  /**
    * TEST-ONLY escape hatch: inject a pending inbound connection request into state.
    * Used by AC-010 to test max_rounds_reached without going through the full flow.
    */

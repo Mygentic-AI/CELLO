@@ -123,7 +123,12 @@ export function decodeInboundFrame(bytes: Uint8Array): InboundRelayFrame | null 
     if (leaf_kind === null) return null;
     if (!structure1_cbor || structure1_cbor.length === 0) return null;
     if (!sender_signature || sender_signature.length !== 64) return null;
-    return { type: "hash_submit", session_id, leaf_kind, structure1_cbor, sender_signature };
+    // FEDERATION-003 AC-005/AC-006/SI-002: optional predecessor relay ACK fields
+    const predecessor_relay_id = typeof o["predecessor_relay_id"] === "string" ? o["predecessor_relay_id"] : undefined;
+    const predecessor_relay_signature = o["predecessor_relay_signature"] !== undefined ? toUint8Array(o["predecessor_relay_signature"]) ?? undefined : undefined;
+    const predecessor_relay_sequence = typeof o["predecessor_relay_sequence"] === "number" ? o["predecessor_relay_sequence"] : undefined;
+    const predecessor_relay_timestamp = typeof o["predecessor_relay_timestamp"] === "number" ? o["predecessor_relay_timestamp"] : undefined;
+    return { type: "hash_submit", session_id, leaf_kind, structure1_cbor, sender_signature, predecessor_relay_id, predecessor_relay_signature, predecessor_relay_sequence, predecessor_relay_timestamp };
   }
 
   if (o["type"] === "gap_fill_request") {

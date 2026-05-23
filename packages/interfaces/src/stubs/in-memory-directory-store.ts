@@ -220,6 +220,10 @@ export class InMemoryDirectoryStore implements DirectoryStore {
 
   readonly #relayRegistrations = new Map<string, { publicKeyHex: string; region: string }>();
 
+  // Note: InMemoryDirectoryStore has no logger — it is a unit-test stub only.
+  // Observability events (relay.registered, relay.already.registered, relay.registration.conflict)
+  // are emitted by CelloDirectoryNode, which owns the logger. The store layer does not log;
+  // it throws RELAY_IDENTITY_CONFLICT so the caller can log and respond appropriately.
   async registerRelay(params: { relayId: string; publicKeyHex: string; region: string }): Promise<void> {
     const existing = this.#relayRegistrations.get(params.relayId);
     if (existing) {

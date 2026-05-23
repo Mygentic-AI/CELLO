@@ -102,7 +102,7 @@
 import { randomBytes, createHash } from "node:crypto";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner } from "@cello/crypto";
+import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature } from "@cello/crypto";
 
 import type { KeyProvider, LeafInput, IThresholdSigner } from "@cello/crypto";
 import { encodeStructure2, computeGenesisPrevRoot, buildSessionEstablishmentTbs, buildSealTbs } from "@cello/protocol-types";
@@ -436,7 +436,71 @@ export class CelloDirectoryNode {
       if (!requestBytes) { stream.close().catch(() => {}); return; }
 
       const req = cborDecode(requestBytes) as Record<string, unknown>;
-      if (req["type"] !== "seal_submission") {
+      const frameType = req["type"] as string | undefined;
+
+      // ─── relay_register: relay identifies itself at startup (FEDERATION-003) ──
+      // The relay sends its relayId, publicKeyHex, region, timestamp, and a self-signature.
+      // SI-003: we verify the Ed25519 self-signature (relay_id || public_key_hex || timestamp)
+      // before writing to relay_registrations. Only the holder of the private key can sign.
+      if (frameType === "relay_register") {
+        const relayId = req["relay_id"] as string | undefined;
+        const publicKeyHex = req["public_key_hex"] as string | undefined;
+        const region = req["region"] as string | undefined;
+        const timestamp = req["timestamp"] as number | undefined;
+        const signatureRaw = req["signature"] as Uint8Array | undefined;
+
+        if (!relayId || !publicKeyHex || !region || typeof timestamp !== "number" || !signatureRaw) {
+          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_error", reason: "missing_fields" })));
+          await stream.close();
+          return;
+        }
+
+        // SI-003: verify Ed25519 self-signature over SHA-256(relay_id || public_key_hex || timestamp)
+        // Only the relay holding the private key can produce a valid signature over its own publicKeyHex.
+        const sigBytes = signatureRaw instanceof Uint8Array ? signatureRaw : new Uint8Array(signatureRaw as unknown as ArrayBuffer);
+        const signatureValid = await verifyRelayRegistrationSignature(publicKeyHex, relayId, publicKeyHex, timestamp, sigBytes);
+        if (!signatureValid) {
+          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_error", reason: "RELAY_REGISTRATION_UNAUTHORIZED" })));
+          await stream.close();
+          return;
+        }
+
+        try {
+          await this.#store.registerRelay({ relayId, publicKeyHex, region });
+          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_ok" })));
+        } catch (err: unknown) {
+          const reason = err instanceof Error ? err.message : String(err);
+          if (reason.includes("RELAY_IDENTITY_CONFLICT")) {
+            stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_error", reason: "RELAY_IDENTITY_CONFLICT" })));
+          } else {
+            stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_error", reason })));
+          }
+        }
+        await stream.close();
+        return;
+      }
+
+      // ─── relay_pubkey_request: client queries relay public key for ACK verification ──
+      // FEDERATION-003 AC-004: the client sends relay_id and gets back public_key_hex.
+      if (frameType === "relay_pubkey_request") {
+        const relayId = req["relay_id"] as string | undefined;
+        if (!relayId) {
+          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_pubkey_error", reason: "missing_relay_id" })));
+          await stream.close();
+          return;
+        }
+
+        const publicKeyHex = await this.#store.getRelayPublicKey(relayId);
+        if (!publicKeyHex) {
+          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_pubkey_error", reason: "not_found" })));
+        } else {
+          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_pubkey_response", relay_id: relayId, public_key_hex: publicKeyHex })));
+        }
+        await stream.close();
+        return;
+      }
+
+      if (frameType !== "seal_submission") {
         stream.send(lp.encode.single(CBOR_ENC.encode({ type: "error", reason: "unknown_frame_type" })));
         await stream.close();
         return;
@@ -834,6 +898,26 @@ export class CelloDirectoryNode {
           if (ceremonyId && authedPubkeyHex) {
             const delegated = this.#delegatedSigners.get(authedPubkeyHex);
             if (delegated) delegated.resolveFromClient(ceremonyId, sig);
+          }
+          continue;
+        }
+
+        // FEDERATION-003 AC-004: relay_pubkey_request — authenticated clients may query
+        // the directory for a relay's registered public key to verify relay ACK signatures.
+        // Handled before decodeInboundSignalingFrame because that function only knows protocol types.
+        let rawFrameCheck: Record<string, unknown> | null = null;
+        try { rawFrameCheck = cborDecode(frameBytes) as Record<string, unknown>; } catch { /* ignore */ }
+        if (rawFrameCheck?.["type"] === "relay_pubkey_request") {
+          const relayId = rawFrameCheck["relay_id"] as string | undefined;
+          if (!relayId) {
+            stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_pubkey_error", reason: "missing_relay_id" })));
+          } else {
+            const publicKeyHex = await this.#store.getRelayPublicKey(relayId);
+            if (!publicKeyHex) {
+              stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_pubkey_error", reason: "not_found" })));
+            } else {
+              stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_pubkey_response", relay_id: relayId, public_key_hex: publicKeyHex })));
+            }
           }
           continue;
         }

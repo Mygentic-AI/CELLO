@@ -163,11 +163,18 @@ function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
 // ─── CelloRelayNode ────────────────────────────────────────────────────────────
 
 /**
- * DirectoryAdapter: in-process interface the relay calls to trigger seal processing.
+ * DirectoryAdapter: in-process interface the relay calls to trigger seal processing
+ * and to look up predecessor relay public keys for ACK verification (FEDERATION-003).
  * Uses structural typing so relay package does not import @cello/directory.
  */
 export interface DirectoryAdapter {
   processSeal(sessionId: Uint8Array, sealData: import("./relay-types.js").SealData): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /**
+   * FEDERATION-003 AC-005/AC-006: Look up a relay's registered public key by relayId.
+   * Returns undefined if the relayId is not registered.
+   * Used when verifying predecessor relay ACK signatures on re-submission.
+   */
+  getRelayPublicKey?(relayId: string): Promise<string | undefined>;
 }
 
 export interface RelayNodeOptions {
@@ -701,6 +708,53 @@ export class CelloRelayNode {
     const bHex = Buffer.from(state.assignment.participant_b).toString("hex");
     if (senderPubkeyHex !== aHex && senderPubkeyHex !== bHex) {
       await reply("not_a_participant"); return;
+    }
+
+    // FEDERATION-003 AC-005/AC-006/SI-002: If the frame carries a predecessor relay ACK,
+    // verify it before processing. SI-002: MUST NOT fall back to accepting unverified ACKs.
+    // If predecessor_relay_id is present, the full signature verification is mandatory.
+    if (frame.predecessor_relay_id !== undefined) {
+      const predecessorRelayId = frame.predecessor_relay_id;
+      const predecessorSig = frame.predecessor_relay_signature;
+      const predecessorSeq = frame.predecessor_relay_sequence;
+      const predecessorTs = frame.predecessor_relay_timestamp;
+
+      // SI-002: if any predecessor ACK field is missing or the directory adapter lacks
+      // getRelayPublicKey, reject — there is no fallback to accepting unverified ACKs.
+      if (!predecessorSig || predecessorSeq === undefined || predecessorTs === undefined) {
+        await reply("RELAY_PREDECESSOR_UNKNOWN"); return;
+      }
+      if (!this.#directory || !this.#directory.getRelayPublicKey) {
+        // No directory adapter — cannot verify predecessor ACK; reject per SI-002.
+        this.#logger.warn("relay.predecessor.unknown", { relayId: predecessorRelayId, hashHex: "" });
+        await reply("RELAY_PREDECESSOR_UNKNOWN"); return;
+      }
+
+      // Look up the predecessor relay's public key from the directory (AC-005/AC-006).
+      const pubKeyHex = await this.#directory.getRelayPublicKey(predecessorRelayId);
+      if (!pubKeyHex) {
+        // AC-006: predecessor relayId not found in directory.
+        const s1ForLog = decodeStructure1(frame.structure1_cbor);
+        const hashHex = s1ForLog ? Buffer.from(s1ForLog.content_hash).toString("hex").slice(0, 16) : "(unknown)";
+        this.#logger.warn("relay.predecessor.unknown", { relayId: predecessorRelayId, hashHex });
+        await reply("RELAY_PREDECESSOR_UNKNOWN"); return;
+      }
+
+      // Verify the predecessor ACK signature: verify(pubKey, buildRelayAckTbs(contentHash, seq, ts), sig)
+      // The TBS is SHA-256(hash_bytes || seq_BE4 || ts_BE8) per PERSIST-012.
+      const s1Decoded = decodeStructure1(frame.structure1_cbor);
+      if (!s1Decoded) { await reply("signature_invalid"); return; }
+
+      const predecessorTbs = buildRelayAckTbs(s1Decoded.content_hash, predecessorSeq, predecessorTs);
+      const pubKeyBytes = Buffer.from(pubKeyHex, "hex");
+      const sigValid = verify(pubKeyBytes, predecessorTbs, predecessorSig);
+      if (!sigValid) {
+        // SI-002: signature invalid — reject unconditionally, no fallback.
+        const hashHex = Buffer.from(s1Decoded.content_hash).toString("hex").slice(0, 16);
+        this.#logger.warn("relay.predecessor.unknown", { relayId: predecessorRelayId, hashHex });
+        await reply("RELAY_PREDECESSOR_UNKNOWN"); return;
+      }
+      // Predecessor ACK verified — proceed to process the re-submission.
     }
 
     // OBS-001 AC-010: log client joining session on their first submission to this session
