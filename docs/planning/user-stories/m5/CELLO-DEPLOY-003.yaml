@@ -4,9 +4,26 @@ domain: Deployment
 milestone: M5
 actor: DIR
 priority: P0
+status: closed
+closed_date: 2026-05-23
 components:
   - relay
   - directory
+
+# ─── Closure Notes ───────────────────────────────────────────
+# All single-region, non-fault-injection ACs verified 2026-05-23 against dev/us-east-1.
+# Verified: AC-000-* (images built/pushed, ECS updated, Flyway ran, ALB /health 200),
+# AC-001 (relay in private subnet, no public IP, 1/1), AC-002 (relay.service.started
+# logged, relayId matches Secrets Manager public key), AC-003 (relay execution role:
+# GetSecretValue on relay key allowed; kms:Decrypt, s3:PutObject, directory secrets denied;
+# simulate-principal-policy cannot evaluate wildcard ARN suffixes but relay demonstrably
+# started and loaded its key from Secrets Manager), AC-004 (no private key bytes in logs).
+# Deferred to DEPLOY-005:
+#   AC-005 — three distinct relayIds; requires eu-central-1 and ap-northeast-1 deployments.
+#   AC-006 — rolling replacement never drops runningCount below 1; requires observing a live deploy.
+#   AC-007 — GET /health on port 4000 from inside VPC; requires ECS Exec or bastion.
+#             ECS Exec enablement added as a prerequisite to DEPLOY-005 (needed for
+#             in-VPC verification tooling before multi-region smoke tests anyway).
 
 # ─── Intent ─────────────────────────────────────────────────
 story: >

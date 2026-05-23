@@ -4,8 +4,21 @@ domain: Deployment
 milestone: M5
 actor: DIR
 priority: P0
+status: closed
+closed_date: 2026-05-23
 components:
   - directory
+
+# ─── Closure Notes ───────────────────────────────────────────
+# All single-region, non-fault-injection ACs verified 2026-05-23 against dev/us-east-1.
+# Verified: AC-001 (private subnet, no public IP), AC-002 (migration.complete +
+# directory.service.started in CloudWatch, schemaVersion=18), AC-004 (no plaintext
+# secrets in task def), AC-006 (GET /health via ALB returns {status:'ok',nodeId,schemaVersion}),
+# AC-007 (s3:PutObject allowed, s3:DeleteObject+GetObject denied), AC-008 (no secret
+# substrings in CloudWatch logs).
+# Deferred to DEPLOY-005:
+#   AC-003 — fault injection (broken migration file); requires deliberate bad migration deploy.
+#   AC-005 — sequential multi-region deploy; requires eu-central-1 and ap-northeast-1 stacks.
 
 # ─── Intent ─────────────────────────────────────────────────
 story: >

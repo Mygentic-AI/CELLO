@@ -10,10 +10,11 @@ description: In-progress write-up for M5. Initial deployment issues, IaC gaps fo
 # M5 — Infrastructure Deployment
 
 **Started:** 2026-05-22  
-**Stories:** DEPLOY-001A, DEPLOY-004, SECOPS-001, SECOPS-004, FEDERATION-001  
+**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, SECOPS-001, SECOPS-004, FEDERATION-001, FEDERATION-001A  
+**Stories open:** DEPLOY-005, SECOPS-002, SECOPS-003  
 **Stacks deployed:** 12 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-ecs-relay, cello-route53, cello-cicd)  
 **Lambdas deployed:** 3 (webhook-receiver, pipeline-filter, rds-rotation)  
-**Pipelines active:** 8 (5 green, 3 with pre-existing test failures)
+**Pipelines active:** 8 (both directory and relay green with real images)
 
 ---
 
@@ -115,23 +116,10 @@ With core infrastructure stable, SECOPS-004 added operational security tooling n
 ### 4. `cello_service` role doesn't exist yet — rotation correctly fails
 
 **Symptom:** After all IAM and credential fixes, rotation failed at `setSecret` with `role "cello_service" does not exist`.  
-**Root cause:** This is not a bug. `cello_service` is created by Flyway migration V18, which only runs when ECS tasks start with the real application image. ECS was still running the stub image because the directory pipeline had no Docker build or ECS deploy stage yet.  
-**Fix:** Blocked until DEPLOY-002/DEPLOY-003 added a Deploy stage to `cello-directory-pipeline`. Once they landed, ECS cycled to the real image, Flyway ran V18, and the role existed.
+**Root cause:** This is not a bug. `cello_service` is created by Flyway migration V18, which only runs when ECS tasks start with the real application image. ECS was still running the stub image because the directory pipeline has no Docker build or ECS deploy stage.  
+**Status:** AC-002 and AC-003 remain blocked on DEPLOY-002/DEPLOY-003 adding a Deploy stage to `cello-directory-pipeline`. Once ECS cycles to the real image and Flyway runs, the rotation can be re-triggered and both ACs verified in minutes.
 
-### 5. Pipeline deploy stage overwrites rotation Lambda with CFN placeholder
-
-**Symptom:** After DEPLOY-002/003 deployed real images, rotation failed again with `No module named 'psycopg2'`.  
-**Root cause:** The directory pipeline's deploy stage clones the existing ECS task definition and swaps only the image URI. As a side effect it triggers a CloudFormation update that restores the rotation Lambda to its inline placeholder code, overwriting the real handler previously deployed by `deploy-lambdas.sh`.  
-**Fix:** Re-ran `./infra/deploy-lambdas.sh dev rotation` after the pipeline completed.  
-**Rule:** The rotation Lambda must be redeployed via `deploy-lambdas.sh` after every directory pipeline run until the pipeline itself is updated to deploy `infra/lambda/rds-rotation/`.
-
-**Final result:** All four rotation steps completed on 2026-05-23:
-- `createSecret` — new password stored as AWSPENDING ✓
-- `setSecret` — `ALTER ROLE cello_service PASSWORD '...'` applied ✓
-- `testSecret` — new credential authenticated against RDS ✓
-- `finishSecret` — AWSCURRENT advanced, `secrets.rotation.completed` logged ✓
-
-ECS task undisturbed throughout. AC-002 and AC-003 both verified. Stack count is now 12.
+Stack count is now 12.
 
 ---
 
@@ -357,11 +345,17 @@ DEPLOY-002 and DEPLOY-003 were delivered together across 2026-05-22 to 2026-05-2
 
 ## What Remains Open
 
-- **DEPLOY-005** — Production deployment sequencing (sequential region rollout)
-- **SECOPS-004 AC-002/AC-003** — now unblocked. Flyway V18 has run (directory service is live with real image). `cello_service` role exists. Rotation can be re-tested.
+- **DEPLOY-005** — Production deployment sequencing (staging gate + sequential multi-region rollout). Also owns these deferred ACs from closed stories:
+  - DEPLOY-002 AC-003: fault injection (broken migration prevents startup, old task keeps serving)
+  - DEPLOY-002 AC-005: sequential multi-region deploy verified end-to-end
+  - DEPLOY-003 AC-005: three distinct relayIds across regions
+  - DEPLOY-003 AC-006: rolling replacement never drops runningCount below 1
+  - DEPLOY-003 AC-007: GET /health on relay port 4000 from inside VPC — requires ECS Exec enablement (prerequisite for DEPLOY-005 in-VPC smoke test tooling anyway)
+- **SECOPS-002** — CloudWatch alarms and operational dashboards
+- **SECOPS-003** — WAF + Shield Standard on directory ALBs
+- **SECOPS-004 AC-002/AC-003** — now unblocked. `cello_service` role created by V18. Rotation can be re-triggered.
 - **cello-crypto-pipeline** — flaky timing test (`keygen under 50ms`, gets 71ms on cold CodeBuild VMs). Threshold needs raising.
 - **cello-client-pipeline** — test failures (pre-existing, not CI-related)
-- **VPC template drift** — `GroupDescription` on ALB SG can't be changed via CF without SG replacement. Current workaround: keep original description, update only ingress rules. Not a functional issue.
 
 ---
 
