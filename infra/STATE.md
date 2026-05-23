@@ -200,17 +200,10 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | ECR repo `cello-relay` | Done | 2026-05-21 | us-east-1 |
 | Stub images pushed (linux/amd64) | Done | 2026-05-22 | Run `./infra/build-stubs.sh <region>` — never `docker build` directly (arm64 on Apple Silicon breaks ECS) |
 | CodeStar Connection `github-cello-main` | Done | 2026-05-22 | us-east-1, AVAILABLE |
-| Ed25519 key pairs — us-east-1 | Done | 2026-05-22 | Run `./infra/scripts/generate-node-keys.sh dev us-east-1` — eu-central-1 and ap-northeast-1 pending (staging/prod only) |
-| GitHub webhook HMAC secret | Pending | — | Run step 2-4 in infra/runbooks/github-webhook-setup.md |
-
----
-
-## Pending Manual Steps (post-deploy)
-
-After `cello-ecs-directory-dev` and `cello-ecs-relay-dev` deploy:
-1. Generate 3 directory Ed25519 key pairs and populate `cello/dev/directory/node-private-key` in each region's Secrets Manager
-2. Generate 3 relay Ed25519 key pairs and populate `cello/dev/relay/node-private-key` in each region's Secrets Manager
-3. Register GitHub webhook HMAC secret in `cello/dev/pipeline/github-hmac-secret`
+| Ed25519 key pairs — us-east-1 | Done | 2026-05-22 | Run `./infra/scripts/generate-node-keys.sh dev us-east-1` |
+| Ed25519 key pairs — eu-central-1 | Done | 2026-05-23 | Run `./infra/scripts/generate-node-keys.sh dev eu-central-1` |
+| Ed25519 key pairs — ap-northeast-1 | Done | 2026-05-23 | Run `./infra/scripts/generate-node-keys.sh dev ap-northeast-1` |
+| GitHub webhook HMAC secret | Done | 2026-05-22 | Registered per infra/runbooks/github-webhook-setup.md; us-east-1 only |
 
 ---
 
