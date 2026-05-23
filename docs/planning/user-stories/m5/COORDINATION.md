@@ -573,4 +573,52 @@ Expand `runScenario()` switch branches in `packages/e2e-tests/src/smoke/run-smok
 3. Run `./infra/sign-manifest.sh dev us-east-1 <relay-definitions.json>` to sign and upload manifest
 4. Run the printed ECS rolling update command to reload the directory service
 
+---
+
+## 2026-05-23 — ACCOUNT-001 agent: story closed
+
+**Story completed:** ACCOUNT-001 (user_accounts table and account_id FK on agent_profiles) — merged to `main` at commit `875c141`. Worktree and branch deleted.
+
+**No deployment step required for this story.** V22 and V23 migrations run automatically when ECS directory tasks next start with the new image. No CloudFormation changes.
+
+**What was delivered:**
+
+- `packages/directory/db/migrations/V22__user_accounts.sql` — `user_accounts` table: `account_id UUID PRIMARY KEY`, `phone_stub_hash TEXT UNIQUE NOT NULL`, `email_stub_hash TEXT` (nullable), `created_at TIMESTAMPTZ DEFAULT now()`, `chain_hash TEXT NOT NULL`, `id BIGSERIAL` for chain ordering. RLS enabled; `cello_service` has INSERT and SELECT only — no DELETE or UPDATE.
+- `packages/directory/db/migrations/V23__agent_profiles_account_id.sql` — nullable `account_id UUID` FK column on `agent_profiles` referencing `user_accounts.account_id`. NULL = pre-M6 agent with no account.
+- `packages/directory/src/adapters/pg-directory-store.ts` — `createAccount()` (hash-chained INSERT), `getAgentsByAccount()` (registered_at ASC order), `setProfile()` extended with optional `correlationId`; `account.agent.linked` fires only after INSERT confirms — not before the attempt.
+- `packages/interfaces/src/directory-store.ts` — `createAccount()` and `getAgentsByAccount()` added to `DirectoryStore`; `AccountRow` and `CreateAccountParams` exported from `@cello/interfaces`.
+- `hash-chain.ts` — `user_accounts` in `HASH_CHAINED_TABLES`; `email_stub_hash` in `TABLE_EXTRA_EXCLUDED` (nullable at INSERT time — M4 bug #7 guard).
+- `bin/directory.ts` — `migration.out.of.date` event field names corrected to `{ currentVersion, requiredVersion }` per story AC spec.
+- 4 new events added to canonical taxonomy: `account.created`, `account.phone_stub_hash.duplicate`, `account.agent.linked`, `account.agent.link.failed`. `migration.out.of.date` also added.
+- 967-line test suite: all 7 ACs, 2 SIs, DB-001, all 4 observability events — all integration tests against a real Postgres instance.
+
+**Migration renumbering:** The branch was originally at V21/V22. After FEDERATION-003 (V19) and PERSIST-023 (V21, renumbered from V20) both landed on main, ACCOUNT-001 was renumbered V22/V23. The rebase over PERSIST-023 required resolving conflicts in `hash-chain.ts`, `pg-directory-store.ts`, `schema-completeness.test.ts`, and `COORDINATION.md` — all purely additive.
+
+**Lesson reinforced:** Push to origin immediately after each merge. Batching multiple merges before pushing triggers all downstream pipelines simultaneously, defeating path-based CI filtering.
+
 **Phase 1 behavior:** The directory will attempt to load the manifest at startup. If S3 returns 404 (no manifest exists), it logs `relay.manifest.load.failed` at ERROR and falls back to the hardcoded `CELLO_RELAY_MULTIADDR` from `deploy.sh`. This is non-fatal in local/dev — production will require a manifest.
+
+---
+
+## 2026-05-23 — PERSIST-023 agent: story closed
+
+**Story completed:** PERSIST-023 (Database-backed PgNotificationQueue for SEAL_UNILATERAL notifications) — merged to `main` at commit `ae95efc`. Worktree and branch deleted.
+
+**No deployment step required.** V21 (`pending_notifications` table) runs automatically when the ECS directory tasks next start with the new image. The pipeline fires on `packages/directory/**` or `packages/interfaces/**` changes.
+
+**What was delivered:**
+
+- `packages/directory/db/migrations/V21__pending_notifications.sql` — `pending_notifications` table: `notification_id UUID NOT NULL UNIQUE`, `recipient_agent_id TEXT NOT NULL`, `notification_type TEXT NOT NULL`, `payload JSONB NOT NULL`, `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`. No `delivered_at` column — rows are deleted on acknowledgement. Index on `(recipient_agent_id)`. RLS enabled; `cello_service` has INSERT, SELECT, DELETE only — no UPDATE. CREATE TABLE/INDEX IF NOT EXISTS.
+- `packages/interfaces/src/notification-queue.ts` — new `NotificationQueue` interface: `enqueue`, `drainUndelivered` (created_at ASC order), `acknowledge` (idempotent no-op on missing row).
+- `packages/interfaces/src/stubs/in-memory-notification-queue.ts` — `InMemoryNotificationQueue` for `CELLO_ENV=local`. Does not survive restarts by design.
+- `packages/directory/src/adapters/pg-notification-queue.ts` — `PgNotificationQueue` implementing the interface. Logs `pending_notification.queued` on enqueue; `notification.delivered` with `deliveryLatencyMs` on acknowledge.
+- `packages/directory/src/bin/directory.ts` — composition root: `CELLO_ENV=local` → `InMemoryNotificationQueue`; else → `PgNotificationQueue`.
+- `packages/directory/src/directory-node.ts` — `enqueue()` in `#processSealUnilateral` (fire-and-forget, logs `pending_notification.enqueue.failed` on rejection); `drainUndelivered()` + `acknowledge()` on authenticated reconnect (logs `notification.delivery.failed` on stream failure). SI-003 double-delivery prevention: `Set<string>` of session IDs already delivered in-memory gates the Pg drain — matching rows are acked without re-sending.
+- 4 new canonical events in taxonomy: `pending_notification.queued`, `notification.delivered`, `notification.delivery.failed`, `pending_notification.enqueue.failed`.
+- 1,120-line test suite. 25 tests (1 `describe.skip` for AC-003 e2e, deferred to FEDERATION-E2E-001).
+
+**Migration version note:** Originally V20, renumbered to V21 on branch before merge (V20 claimed by FEDERATION-002 hotfix).
+
+**What this unblocks:**
+
+- **ACCOUNT-001** — V21 is now on `main`; the parked branch (V22/V23) can merge next per the migration sequence.

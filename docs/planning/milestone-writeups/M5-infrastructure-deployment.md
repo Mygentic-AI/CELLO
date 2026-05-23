@@ -10,8 +10,8 @@ description: In-progress write-up for M5. Initial deployment issues, IaC gaps fo
 # M5 — Infrastructure Deployment
 
 **Started:** 2026-05-22  
-**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, SECOPS-001, SECOPS-002, SECOPS-003, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002, FEDERATION-003, PERSIST-022  
-**Stories open:** DEPLOY-005, PERSIST-023, ACCOUNT-001, RELAY-001, FEDERATION-E2E-001  
+**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, DEPLOY-005, SECOPS-001, SECOPS-002, SECOPS-003, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002, FEDERATION-003, PERSIST-022, PERSIST-023  
+**Stories open:** ACCOUNT-001, RELAY-001, FEDERATION-E2E-001  
 **Stacks deployed:** 14 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-waf, cello-ecs-relay, cello-route53, cello-cicd, cello-cloudwatch)  
 **Lambdas deployed:** 3 (webhook-receiver, pipeline-filter, rds-rotation)  
 **Pipelines active:** 8 (all green)
@@ -621,10 +621,30 @@ Delivered relay pool management infrastructure: S3-backed signed manifests, cont
 
 ---
 
+## PERSIST-023 — Database-Backed Notification Queue
+
+Delivered the persistent `pending_notifications` table and `PgNotificationQueue` adapter, ensuring SEAL_UNILATERAL notifications survive directory restarts and are deliverable from any directory node via logical replication.
+
+**What was delivered:**
+
+- `V21__pending_notifications.sql` — `pending_notifications` table with RLS, index on `recipient_agent_id`, `cello_service` INSERT/SELECT/DELETE (no UPDATE). No `delivered_at` column — rows are deleted on acknowledgement. Idempotent (IF NOT EXISTS). A comment documents the correct CloudWatch alarm query for long-undelivered rows.
+- `packages/interfaces/src/notification-queue.ts` — new `NotificationQueue` interface: `enqueue`, `drainUndelivered` (created_at ASC), `acknowledge` (idempotent).
+- `packages/interfaces/src/stubs/in-memory-notification-queue.ts` — `InMemoryNotificationQueue` for `CELLO_ENV=local`.
+- `packages/directory/src/adapters/pg-notification-queue.ts` — `PgNotificationQueue`: logs `pending_notification.queued` on write, `notification.delivered` (with `deliveryLatencyMs`) on acknowledge.
+- `packages/directory/src/directory-node.ts` — enqueue on unilateral seal (fire-and-forget); drain + acknowledge on authenticated reconnect. SI-003 double-delivery prevention: a `Set<string>` of session IDs already delivered in-memory gates the Pg drain so a notification is never sent twice in the same process lifecycle.
+- 4 new canonical events in taxonomy: `pending_notification.queued`, `notification.delivered`, `notification.delivery.failed`, `pending_notification.enqueue.failed`.
+
+**Migration renumber:** Originally V20, renumbered to V21 on branch before merge (V20 claimed by the FEDERATION-002 hotfix that extracted the `checkpoint_node_signatures` UNIQUE constraint from the modified V18).
+
+**Notable bug caught during review:**
+
+The first double-delivery fix used a coarse `deliveredInMemoryCount > 0` guard that would acknowledge all Pg rows for an agent whenever any in-memory notification was present — silently dropping notifications from sessions sealed before a restart. The sprint-reviewer caught this as a high-severity finding. The fix replaced the count with a per-session-id `Set<string>`: only Pg rows whose `session_id_hex` was actually delivered in-memory are suppressed; rows for pre-restart sessions are delivered normally.
+
+---
+
 ## What Remains Open
 
-- **PERSIST-023** — migration renumbered V20→V21 (V20 taken by FEDERATION-002 hotfix); parked branch ready to merge
-- **ACCOUNT-001** — migrations renumbered V21/V22→V22/V23 (V21 taken by PERSIST-023); parked branch ready to merge after PERSIST-023
+- **ACCOUNT-001** — migrations renumbered V22/V23; parked branch ready to merge
 - **SECOPS-003 AC-002/AC-007** — live request verification (rate-limit trigger, CommonRuleSet COUNT hit) pending manual test
 - **cello-crypto-pipeline** — flaky timing test (`keygen under 50ms`, gets 71ms on cold CodeBuild VMs). Threshold needs raising.
 - **cello-cicd-dev stack** — needs `./infra/deploy.sh dev us-east-1` after DEPLOY-005 merge (pipeline stages not active until redeployed)
