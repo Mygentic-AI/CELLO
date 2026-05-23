@@ -141,7 +141,9 @@ const store = await (async () => {
     const secret = JSON.parse(resp.SecretString) as {
       username: string; password: string; host: string; port: number; dbname: string;
     };
-    databaseUrl = `postgresql://${secret.username}:${encodeURIComponent(secret.password)}@${secret.host}:${secret.port}/${secret.dbname}?sslmode=require`;
+    // RDS uses AWS-managed certs (self-signed chain). Node's pg v8+ treats sslmode=require
+    // as verify-full. Use no-verify: traffic is encrypted; cert chain is AWS-internal on VPC.
+    databaseUrl = `postgresql://${secret.username}:${encodeURIComponent(secret.password)}@${secret.host}:${secret.port}/${secret.dbname}?sslmode=no-verify`;
   } catch (err: unknown) {
     const reason = err instanceof Error ? err.message : String(err);
     logSecretsUnavailable(logger, { nodeId, region: awsRegion, reason });
