@@ -206,10 +206,9 @@ def _create_secret(sm, secret_id: str, token: str) -> None:
     except sm.exceptions.ResourceNotFoundException:
         pass  # Expected — AWSPENDING does not exist yet
 
-    # Read current secret to get the username
+    # Read current secret — carry forward all fields (host, port, dbname, username)
     current = sm.get_secret_value(SecretId=secret_id, VersionStage="AWSCURRENT")
     current_dict = json.loads(current["SecretString"])
-    username = current_dict["username"]
 
     # Generate a new strong random password (no special characters that break psycopg2 DSN)
     new_password_resp = sm.get_random_password(
@@ -221,7 +220,8 @@ def _create_secret(sm, secret_id: str, token: str) -> None:
     )
     new_password = new_password_resp["RandomPassword"]
 
-    new_secret = json.dumps({"username": username, "password": new_password})
+    # Preserve all existing fields; only rotate the password
+    new_secret = json.dumps({**current_dict, "password": new_password})
 
     sm.put_secret_value(
         SecretId=secret_id,
