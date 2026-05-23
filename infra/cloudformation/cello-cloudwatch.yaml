@@ -881,6 +881,7 @@ Outputs:
       Name: !Sub "cello-${Environment}-ops-warning-topic-arn"
 
   DashboardName:
+    Condition: IsPrimaryRegion
     Value: !Ref OperationsDashboard
     Export:
       Name: !Sub "cello-${Environment}-operations-dashboard"
