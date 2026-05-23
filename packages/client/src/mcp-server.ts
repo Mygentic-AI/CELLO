@@ -270,6 +270,7 @@ import type { SignalRequirement } from "./connection-policy.js";
 import { buildPseudonymBinding, encodeConnectionPackage } from "@cello/protocol-types";
 import type { ConnectionPackage } from "@cello/protocol-types";
 import type { CheckpointStatusProvider } from "@cello/interfaces";
+import type { ClientBackup } from "./client-backup.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -296,9 +297,10 @@ export function createMcpSessionServer(
   node: CelloNode,
   client: CelloClient,
   keyProvider: KeyProvider,
-  opts?: { checkpointStatusProvider?: CheckpointStatusProvider },
+  opts?: { checkpointStatusProvider?: CheckpointStatusProvider; clientBackup?: ClientBackup },
 ): McpServer {
   const checkpointStatusProvider = opts?.checkpointStatusProvider;
+  const clientBackup = opts?.clientBackup;
   const startedAt = Date.now();
 
   // FIFO queue of inbound session assignment events.
@@ -1322,6 +1324,62 @@ export function createMcpSessionServer(
         review_mode: policy.review_mode,
         requirements: policy.requirements,
       });
+    },
+  );
+
+  // ── cello_backup ──────────────────────────────────────────────────────────
+  //
+  // PERSIST-022: Trigger an immediate encrypted backup of the local database.
+  // Returns { ok: true } on success or when not configured (null cloudStorage).
+  // Returns { ok: false, reason } on upload failure or other errors.
+
+  server.registerTool(
+    "cello_backup",
+    {
+      description:
+        "Trigger an immediate encrypted backup of the local CELLO database to cloud storage. " +
+        "Returns ok:true on success. Returns ok:false with reason if backup fails or is not configured.",
+      inputSchema: {},
+    },
+    async () => {
+      if (!clientBackup) {
+        return jsonText({ ok: false, reason: "not_configured" });
+      }
+      try {
+        const result = await clientBackup.backup();
+        return jsonText(result);
+      } catch (err: unknown) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return jsonText({ ok: false, reason });
+      }
+    },
+  );
+
+  // ── cello_restore ─────────────────────────────────────────────────────────
+  //
+  // PERSIST-022: Download and decrypt the backup, replacing the local database file.
+  // On checksum mismatch or decrypt failure the local file is NOT overwritten and restore throws.
+
+  server.registerTool(
+    "cello_restore",
+    {
+      description:
+        "Restore the local CELLO database from the most recent cloud backup. " +
+        "Replaces the local database file only after checksum verification passes. " +
+        "Returns ok:true on success. Returns ok:false with reason if restore fails or is not configured.",
+      inputSchema: {},
+    },
+    async () => {
+      if (!clientBackup) {
+        return jsonText({ ok: false, reason: "not_configured" });
+      }
+      try {
+        await clientBackup.restore();
+        return jsonText({ ok: true });
+      } catch (err: unknown) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return jsonText({ ok: false, reason });
+      }
     },
   );
 

@@ -1,4 +1,6 @@
 export { createClient } from "./client.js";
+export { S3CloudStorageProvider } from "./s3-cloud-storage-provider.js";
+export type { S3CloudStorageConfig } from "./s3-cloud-storage-provider.js";
 export {
   AgentHashQueue,
   buildSignedAckTbs,
