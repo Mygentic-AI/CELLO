@@ -305,3 +305,20 @@ The `describe.skip` stubs in `packages/directory/src/__tests__/federation-001a-r
 - **`DEV_ENVELOPE_KEY`** is injected via ECS Secrets from `cello/dev/directory/envelope-key`. If you add a new secret, add it to both the ECS task definition (`cello-ecs-directory.yaml` Secrets block) AND the IAM role (`cello-iam.yaml` — enumerate the specific ARN, never use wildcards).
 
 **No further action required from DEPLOY-002/DEPLOY-003.**
+
+---
+
+## 2026-05-23 07:30 UTC — SECOPS-004 agent: AC-002 and AC-003 verified — story complete
+
+DEPLOY-002/003 deployed real images and Flyway ran V18. Redeployed rotation Lambda with real handler code (DEPLOY-002/003's pipeline deploy stage had overwritten it with the CFN placeholder). Triggered manual rotation. All four steps completed cleanly:
+
+- `createSecret` — new password stored as AWSPENDING
+- `setSecret` — `ALTER ROLE cello_service PASSWORD '...'` applied successfully
+- `testSecret` — new credential authenticated against RDS ✓
+- `finishSecret` — `secrets.rotation.completed` logged, new version promoted to AWSCURRENT ✓
+
+`LastRotatedDate` is set. ECS task was not restarted — one running task, zero pending, confirming AC-003 (credential pickup without task restart, via `GetSecretValue` at pool refresh time).
+
+**SECOPS-004 is fully complete. All ACs verified.**
+
+**Note for future agents:** The `cello-directory-pipeline` deploy stage overwrites the rotation Lambda with the CFN placeholder on every pipeline run. Until the pipeline is updated to also deploy `infra/lambda/rds-rotation/handler.py`, run `./infra/deploy-lambdas.sh dev rotation` after any directory pipeline run to restore real handler code.
