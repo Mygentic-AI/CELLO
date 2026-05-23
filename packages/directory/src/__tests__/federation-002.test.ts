@@ -79,7 +79,7 @@ import {
   sortSealBatch,
   type SealBatchRow,
   type ICheckpointTransport,
-  type CheckpointSignatureResponse,
+  type CheckpointSignatureWithKey,
 } from "../checkpoint-coordinator.js";
 import { computeCheckpointHash, buildCheckpointTbs, generateKeypair } from "@cello/crypto";
 import { configurePgTypes } from "../pg-type-config.js";
@@ -405,9 +405,7 @@ describeIntegration("FEDERATION-002 integration: AC-003 staging batch clearance"
   let superPool: pg.Pool;
   let servicePool: pg.Pool;
   let mmrStore: MmrStore;
-  let pgStore: PgDirectoryStore;
   let logger: Logger;
-  let logCalls: Array<{ level: string; event: string; context: unknown }>;
 
   beforeAll(async () => {
     configurePgTypes();
@@ -422,9 +420,7 @@ describeIntegration("FEDERATION-002 integration: AC-003 staging batch clearance"
     }
     const loggerAndCalls = makeLogger();
     logger = loggerAndCalls.logger;
-    logCalls = loggerAndCalls.calls;
     mmrStore = new MmrStore(servicePool, logger);
-    pgStore = new PgDirectoryStore(servicePool, logger, "test-node-ac003", "us-east-1");
   });
 
   afterAll(async () => {
@@ -636,18 +632,29 @@ describeIntegration("FEDERATION-002 integration: AC-006 hash mismatch — signat
       { nodeId: "test-node-verifier" },
     );
 
-    const checkpointId = randomUUID();
-    const realPeaks = ["aabb0011", "ccdd0022"];
-    const identity = "ff".repeat(32);
+    // Seed the DB with a known checkpoint so getCheckpointMmrState() returns predictable peaks.
+    const seedCheckpointId = randomUUID();
+    const seedPeaks = ["aabb0011", "ccdd0022"];
+    const seedIdentity = "ff".repeat(32);
+    const seedHash = computeCheckpointHash(seedPeaks, seedIdentity, seedCheckpointId);
+    await pgStore.writeCheckpoint({
+      checkpointId: seedCheckpointId,
+      mmrPeaks: seedPeaks,
+      identityMerkleRoot: seedIdentity,
+      checkpointHash: seedHash,
+      mmrLeafCount: 2,
+      coordinatorNodeId: "test-node-verifier-seed",
+    });
 
-    // Provide a proposal whose checkpointHash is deliberately wrong (does not match peaks/identity/id)
-    const corruptedHash = "de".repeat(32); // does not match computeCheckpointHash(realPeaks, identity, checkpointId)
+    const checkpointId = randomUUID();
+    // corruptedHash does not match computeCheckpointHash(seedPeaks, seedIdentity, checkpointId)
+    const corruptedHash = "de".repeat(32);
 
     const sig = await coordinator.verifyAndSign({
       checkpointId,
       checkpointHash: corruptedHash,
-      mmrPeaks: realPeaks,
-      identityMerkleRoot: identity,
+      mmrPeaks: seedPeaks,
+      identityMerkleRoot: seedIdentity,
       mmrLeafCount: 2,
     });
 
@@ -662,9 +669,12 @@ describeIntegration("FEDERATION-002 integration: AC-006 hash mismatch — signat
     const ctx = event!.context as Record<string, unknown>;
     expect(ctx["nodeId"]).toBe("test-node-verifier");
     expect(ctx["checkpointId"]).toBe(checkpointId);
-    // expectedHash is what the verifier independently computed — must differ from corruptedHash
+    // expectedHash is what the verifier independently computed from local state — must differ from corruptedHash
     expect(ctx["expectedHash"]).not.toBe(corruptedHash);
     expect(ctx["receivedHash"]).toBe(corruptedHash);
+
+    // Cleanup
+    await superPool.query("DELETE FROM directory_checkpoints WHERE checkpoint_id = $1", [seedCheckpointId]);
   });
 
   it("AC-006: verifyAndSign with CORRECT hash → returns a non-null signature (happy path)", async () => {
@@ -685,9 +695,22 @@ describeIntegration("FEDERATION-002 integration: AC-006 hash mismatch — signat
       { nodeId: "test-node-verifier-ok" },
     );
 
-    const checkpointId = randomUUID();
+    // Seed the DB with a known checkpoint so getCheckpointMmrState() returns predictable peaks.
+    const seedCheckpointId = randomUUID();
     const peaks = ["aabb0011"];
     const identity = "00".repeat(32);
+    const seedHash = computeCheckpointHash(peaks, identity, seedCheckpointId);
+    await pgStore.writeCheckpoint({
+      checkpointId: seedCheckpointId,
+      mmrPeaks: peaks,
+      identityMerkleRoot: identity,
+      checkpointHash: seedHash,
+      mmrLeafCount: 1,
+      coordinatorNodeId: "test-node-verifier-ok-seed",
+    });
+
+    const checkpointId = randomUUID();
+    // correctHash computed from the same peaks the DB now holds
     const correctHash = computeCheckpointHash(peaks, identity, checkpointId);
 
     const sig = await coordinator.verifyAndSign({
@@ -702,6 +725,9 @@ describeIntegration("FEDERATION-002 integration: AC-006 hash mismatch — signat
     expect(sig).not.toBeNull();
     expect(sig!.length).toBe(128);
     expect(sig!).toMatch(/^[0-9a-f]{128}$/);
+
+    // Cleanup
+    await superPool.query("DELETE FROM directory_checkpoints WHERE checkpoint_id = $1", [seedCheckpointId]);
   });
 });
 
@@ -747,7 +773,7 @@ describeIntegration("FEDERATION-002 integration: AC-008-crash-mid-clear — alre
     }
 
     const priorCheckpointId = await mmrStore.initiateCheckpoint();
-    const priorPeakHash = await mmrStore.confirmCheckpoint(priorCheckpointId);
+    await mmrStore.confirmCheckpoint(priorCheckpointId);
 
     // Verify that the priorCheckpointId is confirmed (has row in directory_checkpoints)
     const priorCheck = await servicePool.query<{ mmr_leaf_count: string }>(
@@ -1042,6 +1068,116 @@ describeIntegration("FEDERATION-002 integration: writeCheckpoint and getLastChec
 
     // Cleanup
     await superPool.query("DELETE FROM directory_checkpoints WHERE checkpoint_id = $1", [checkpointId]);
+  });
+});
+
+describeIntegration("FEDERATION-002 integration: DB-002 — 2-of-3 success when one node has persistent mismatch", () => {
+  let superPool: pg.Pool;
+  let servicePool: pg.Pool;
+  let mmrStore: MmrStore;
+  let logger: Logger;
+  let logCalls: Array<{ level: string; event: string; context: unknown }>;
+
+  beforeAll(async () => {
+    configurePgTypes();
+    superPool = new pg.Pool({ connectionString: DATABASE_URL });
+    servicePool = new pg.Pool({ connectionString: SERVICE_URL });
+    try {
+      await superPool.query("SELECT 1");
+    } catch (err) {
+      throw new Error(
+        `[FEDERATION-002] CELLO_ENV=local but Postgres is unreachable at ${DATABASE_URL}: ${String(err)}`,
+      );
+    }
+    const loggerAndCalls = makeLogger();
+    logger = loggerAndCalls.logger;
+    logCalls = loggerAndCalls.calls;
+    mmrStore = new MmrStore(servicePool, logger);
+  });
+
+  afterAll(async () => {
+    await superPool?.end();
+    await servicePool?.end();
+  });
+
+  it("DB-002: round confirms with 2-of-3 when peer-c has persistent mismatch (always returns null)", async () => {
+    // Setup: seed 2 staging rows so there is a non-empty batch
+    const sessionId1 = randomUUID();
+    const sessionId2 = randomUUID();
+    const sealRoot1 = randomUUID().replace(/-/g, "");
+    const sealRoot2 = randomUUID().replace(/-/g, "");
+    await mmrStore.appendSeal(sessionId1, sealRoot1 + sealRoot1, "corr-db002-1");
+    await mmrStore.appendSeal(sessionId2, sealRoot2 + sealRoot2, "corr-db002-2");
+
+    const pgStore = new PgDirectoryStore(servicePool, logger, "test-node-db002", "us-east-1");
+    const keyProviderB = generateKeypair();
+    const pubKeyHexB = Buffer.from(await keyProviderB.getPublicKey()).toString("hex");
+
+    // peer-b: signs correctly by computing the hash and signing it
+    // peer-c: persistent mismatch — returns null (simulates local MMR divergence)
+    const transport: ICheckpointTransport = {
+      async getPeerNodeIds() { return ["test-node-peer-b", "test-node-peer-c"]; },
+      async sendCheckpointProposal(peerNodeId, proposal) {
+        if (peerNodeId === "test-node-peer-b") {
+          const { buildCheckpointTbs: btbs } = await import("@cello/crypto");
+          const hashBytes = btbs(proposal.mmrPeaks, proposal.identityMerkleRoot, proposal.checkpointId);
+          const sigBytes = await keyProviderB.sign(hashBytes);
+          return {
+            nodeId: "test-node-peer-b",
+            signature: Buffer.from(sigBytes).toString("hex"),
+            publicKeyHex: pubKeyHexB,
+          } as CheckpointSignatureWithKey;
+        }
+        // peer-c: mismatch — does not sign
+        return null;
+      },
+    };
+
+    const keyProvider = generateKeypair();
+    const coordinator = new CheckpointCoordinator(
+      pgStore,
+      mmrStore,
+      transport,
+      keyProvider,
+      logger,
+      {
+        nodeId: "test-node-db002", // lowest ID → coordinator
+        checkpointIntervalMs: 600_000,
+        roundTimeoutMs: 5_000,
+        requiredThreshold: 2,
+        failoverDetectionMs: Infinity,
+      },
+    );
+
+    const result = await coordinator.runRound();
+
+    // Round must confirm with 2-of-3 (coordinator + peer-b)
+    expect(result, "round should confirm with 2-of-3").not.toBeNull();
+
+    // Confirm the checkpoint row was written
+    const row = await servicePool.query<{ mmr_leaf_count: string }>(
+      "SELECT mmr_leaf_count FROM directory_checkpoints WHERE checkpoint_id = $1",
+      [result],
+    );
+    expect(row.rows).toHaveLength(1);
+
+    // Confirm federation.checkpoint.confirmed was logged
+    const confirmed = logCalls.find(
+      (c) => c.level === "info" && c.event === "federation.checkpoint.confirmed",
+    );
+    expect(confirmed, "federation.checkpoint.confirmed not logged").toBeDefined();
+    const ctx = confirmed!.context as Record<string, unknown>;
+    expect((ctx["signingNodes"] as string[]).sort()).toEqual(
+      ["test-node-db002", "test-node-peer-b"].sort(),
+    );
+
+    // Cleanup — delete signatures before checkpoint (FK constraint)
+    await superPool.query("DELETE FROM checkpoint_node_signatures WHERE checkpoint_id = $1", [result]);
+    await superPool.query("DELETE FROM directory_checkpoints WHERE checkpoint_id = $1", [result]);
+    await superPool.query(
+      "DELETE FROM conversation_seal_staging WHERE session_id = ANY($1)",
+      [[sessionId1, sessionId2]],
+    );
   });
 });
 

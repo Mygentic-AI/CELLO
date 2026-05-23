@@ -19,9 +19,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { Logger } from "@cello/interfaces";
-import { computeCheckpointHash, verify, type KeyProvider } from "@cello/crypto";
-import type { PgDirectoryStore } from "./adapters/pg-directory-store.js";
+import type { Logger, DirectoryStore } from "@cello/interfaces";
+// buildCheckpointTbs: static import — both coordinator and verifier use the same function (AC-010-canonical-tbs)
+import { computeCheckpointHash, buildCheckpointTbs, verify, type KeyProvider } from "@cello/crypto";
 import type { MmrStore } from "./mmr-store.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -188,7 +188,7 @@ export function sortSealBatch(batch: readonly SealBatchRow[]): SealBatchRow[] {
  */
 export class CheckpointCoordinator {
   readonly #nodeId: string;
-  readonly #store: PgDirectoryStore;
+  readonly #store: DirectoryStore;
   readonly #mmrStore: MmrStore;
   readonly #transport: ICheckpointTransport;
   readonly #logger: Logger;
@@ -213,7 +213,7 @@ export class CheckpointCoordinator {
   #running = false;
 
   constructor(
-    store: PgDirectoryStore,
+    store: DirectoryStore,
     mmrStore: MmrStore,
     transport: ICheckpointTransport,
     keyProvider: KeyProvider,
@@ -346,33 +346,34 @@ export class CheckpointCoordinator {
     identityMerkleRoot: string;
     mmrLeafCount: number;
   }): Promise<string | null> {
-    // Step 1: recompute the checkpoint hash from local MMR state
-    // buildCheckpointTbs is imported from @cello/crypto (AC-010-canonical-tbs)
-    const expectedHash = computeCheckpointHash(
-      proposal.mmrPeaks,
-      proposal.identityMerkleRoot,
+    // Step 1: Query local MMR state independently — never trust coordinator-supplied peaks.
+    // A compromised coordinator could propose peaks that don't match the local chain.
+    const localState = await this.#store.getCheckpointMmrState();
+
+    // Step 2: Recompute hash from local state (AC-010-canonical-tbs).
+    const localHash = computeCheckpointHash(
+      localState.mmrPeaks,
+      localState.identityMerkleRoot,
       proposal.checkpointId,
     );
 
-    // Step 2: compare
-    if (expectedHash !== proposal.checkpointHash) {
-      // Step 4: log mismatch at ERROR
+    // Step 3: Compare against coordinator-supplied hash.
+    if (localHash !== proposal.checkpointHash) {
       this.#logger.error("federation.checkpoint.proposal.hash_mismatch", {
         nodeId: this.#nodeId,
         checkpointId: proposal.checkpointId,
-        expectedHash,
+        expectedHash: localHash,
         receivedHash: proposal.checkpointHash,
       });
       return null;
     }
 
-    // Step 3: sign the checkpoint hash bytes (raw 32-byte Uint8Array, not hex string)
+    // Step 4: Sign the checkpoint hash bytes (raw 32-byte Uint8Array, not hex string).
     // RFC 8032: Ed25519 signs the raw message bytes.
-    // The message is the raw 32-byte SHA-256 hash output from buildCheckpointTbs.
-    const { buildCheckpointTbs } = await import("@cello/crypto");
+    // buildCheckpointTbs: static import from @cello/crypto (AC-010-canonical-tbs).
     const hashBytes = buildCheckpointTbs(
-      proposal.mmrPeaks,
-      proposal.identityMerkleRoot,
+      localState.mmrPeaks,
+      localState.identityMerkleRoot,
       proposal.checkpointId,
     );
     const sigBytes = await this.#keyProvider.sign(hashBytes);
@@ -458,8 +459,8 @@ export class CheckpointCoordinator {
     const seenNodeIds = new Set<string>();
 
     // Coordinator signs its own proposal first (RFC 8032)
-    const { buildCheckpointTbs: buildTbs } = await import("@cello/crypto");
-    const hashBytes = buildTbs(mmrPeaks, identityMerkleRoot, checkpointId);
+    // buildCheckpointTbs is the static import from @cello/crypto (AC-010-canonical-tbs)
+    const hashBytes = buildCheckpointTbs(mmrPeaks, identityMerkleRoot, checkpointId);
     const coordinatorSig = await this.#keyProvider.sign(hashBytes);
     const coordinatorSigHex = Buffer.from(coordinatorSig).toString("hex");
     signaturesCollected.push({ nodeId: this.#nodeId, signature: coordinatorSigHex });
