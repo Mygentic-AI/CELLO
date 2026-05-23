@@ -34,7 +34,7 @@ Resources:
   RotationLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "cello-${Environment}-rds-rotation-lambda-role"
+      RoleName: !Sub "cello-${Environment}-${AWS::Region}-rds-rotation-lambda-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:

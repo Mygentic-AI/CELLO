@@ -18,7 +18,7 @@ Resources:
   DirectoryTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "cello-${Environment}-directory-execution-role"
+      RoleName: !Sub "cello-${Environment}-${AWS::Region}-directory-execution-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -61,7 +61,7 @@ Resources:
   DirectoryTaskRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "cello-${Environment}-directory-task-role"
+      RoleName: !Sub "cello-${Environment}-${AWS::Region}-directory-task-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -109,7 +109,7 @@ Resources:
   RelayTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "cello-${Environment}-relay-execution-role"
+      RoleName: !Sub "cello-${Environment}-${AWS::Region}-relay-execution-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -144,7 +144,7 @@ Resources:
   RelayTaskRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "cello-${Environment}-relay-task-role"
+      RoleName: !Sub "cello-${Environment}-${AWS::Region}-relay-task-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
