@@ -195,6 +195,16 @@ deploy_stack() {
   local deploy_output
   local deploy_exit=0
 
+  # Templates larger than 51,200 bytes must be uploaded via S3.
+  # Use the existing cloudformation-templates prefix in the artifacts bucket.
+  local template_size
+  template_size=$(wc -c < "${CFN_DIR}/${template_file}" 2>/dev/null || echo 0)
+  local s3_bucket_arg=""
+  if [[ "${template_size}" -gt 51200 ]]; then
+    local cfn_bucket="cello-audit-logs-${ENVIRONMENT}-${REGION}"
+    s3_bucket_arg="--s3-bucket ${cfn_bucket} --s3-prefix cloudformation-templates"
+  fi
+
   # aws cloudformation deploy exits 255 when there are no changes — that is success.
   deploy_output=$(aws cloudformation deploy \
     --region "${REGION}" \
@@ -202,6 +212,7 @@ deploy_stack() {
     --template-file "${CFN_DIR}/${template_file}" \
     --capabilities CAPABILITY_NAMED_IAM \
     --no-fail-on-empty-changeset \
+    ${s3_bucket_arg} \
     ${param_overrides:+--parameter-overrides ${param_overrides}} \
     2>&1) || deploy_exit=$?
 
