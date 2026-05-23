@@ -167,6 +167,21 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | SNS Topic — ops-critical | arn:aws:sns:ap-northeast-1:257394457473:cello-ops-critical-dev |
 | SNS Topic — ops-warning | arn:aws:sns:ap-northeast-1:257394457473:cello-ops-warning-dev |
 
+### dev — VPC Peering
+*Last deployed: 2026-05-23*
+
+| Stack | Region | Peering Connection ID | Status |
+|---|---|---|---|
+| cello-peering-dev-us-east-1-to-eu-central-1 | us-east-1 | pcx-0b4ae5708cbbdd14f | active |
+| cello-peering-dev-eu-central-1-accepts-us-east-1 | eu-central-1 | pcx-0b4ae5708cbbdd14f | active |
+| cello-peering-dev-us-east-1-to-ap-northeast-1 | us-east-1 | pcx-0908d974387764c34 | active |
+| cello-peering-dev-ap-northeast-1-accepts-us-east-1 | ap-northeast-1 | pcx-0908d974387764c34 | active |
+| cello-peering-dev-eu-central-1-to-ap-northeast-1 | eu-central-1 | pcx-05b4806864753695e | active |
+| cello-peering-dev-ap-northeast-1-accepts-eu-central-1 | ap-northeast-1 | pcx-05b4806864753695e | active |
+
+Ports open between all VPC pairs: 5432 (RDS replication), 4001 (checkpoint cross-signing).
+Deploy with: `./infra/deploy-peering.sh dev`
+
 ### staging — not deployed
 
 ### production — not deployed
