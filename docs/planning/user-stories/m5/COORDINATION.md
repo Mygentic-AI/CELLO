@@ -410,6 +410,22 @@ Nothing immediately — PERSIST-022 has no downstream dependencies in the M5 mig
 
 ---
 
+## 2026-05-23 — DEPLOY-005 agent: second review fixes applied
+
+**All sprint-reviewer findings fixed (all severities).** See details below.
+
+**ACTION REQUIRED after DEPLOY-005 merges to main:**
+
+Run `./infra/deploy.sh dev us-east-1` immediately after merging. The `cello-cicd-dev` stack must be redeployed to pick up:
+
+1. StagingDeploy, SmokeTest, and ProductionDeploy pipeline stages added to DirectoryPipeline and RelayPipeline.
+2. Dead code removal: the `/tmp/staging_url.env` write+cat in `StagingDeployDirectoryBuild` buildspec (the file was created in one container and could never be read by another — now removed).
+3. Build-stage ECS deploy removed from `packages/directory/buildspec.yml` and `packages/relay/buildspec.yml` — the `StagingDeployBuild` project now owns ECS deploy; the Build stage only builds and pushes the image to ECR.
+
+Until this deploy runs, `cello-directory-pipeline` and `cello-relay-pipeline` in dev will still run the old single-stage Build+Deploy flow rather than the new four-stage flow.
+
+---
+
 ## 2026-05-23 — DEPLOY-005 agent: story closed (review fixes applied)
 
 **Story completed:** DEPLOY-005 (Staging deploy + smoke test + production deploy pipeline stages) — implementation committed. Review findings fixed in a second commit. Worktree branch `DEPLOY-005`.

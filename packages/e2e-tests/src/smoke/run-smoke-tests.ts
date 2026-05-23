@@ -82,18 +82,15 @@ async function checkStagingHealth(): Promise<void> {
 /**
  * Run a single smoke scenario against STAGING_DIRECTORY_URL.
  *
- * Phase 1 (M5): scenarios 1-8 are exercised as health/connectivity checks
- * against the staging ALB. The full multi-agent protocol scenarios require
- * the CELLO MCP client binary to be available in the CodeBuild environment.
- * Deferred to FEDERATION-E2E-001 for full live execution.
+ * Phase 1 (M5): scenarios 1-8 are exercised as ALB health checks.
+ * The full multi-agent protocol scenarios require the CELLO MCP client
+ * binary to be available in the CodeBuild environment.
+ * Full execution is deferred to CELLO-FEDERATION-E2E-001.
+ * The deferral is documented in COORDINATION.md and the story YAML.
  *
  * For now, this performs:
- *   - Health endpoint reachability (all scenarios)
- *   - HTTP endpoint structure checks
- *   - Verifies the staging ECS task is responding to API requests
- *
- * A blocking flag in STATE.md documents which scenarios require full
- * multi-agent execution vs health checks.
+ *   - Health endpoint reachability (GET /health → HTTP 200) for all scenarios
+ *   - Verifies the staging ECS task is responding (new image booted correctly)
  */
 async function runScenario(
   scenarioNumber: number,

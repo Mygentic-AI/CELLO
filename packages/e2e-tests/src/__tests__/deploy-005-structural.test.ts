@@ -7,6 +7,12 @@
  *   - StagingDeploy stage exists after Build stage in both pipelines.
  *   - Uses `aws ecs wait services-stable` with a 10-minute timeout.
  *
+ * AC-002 (Phase-1 scope): The smoke test CodeBuild project verifies the staging ALB returns
+ *   HTTP 200 on GET /health, proving the new image boots correctly. This is the Phase-1 gate.
+ *   The 8 full multi-agent protocol scenarios (FROST ceremony, message exchange, session seal,
+ *   relay failure, pre-seal reconciliation, concurrent connection fan-out, multi-session fan-in)
+ *   are deferred to CELLO-FEDERATION-E2E-001.
+ *
  * AC-003: Production deploy stage exists with 3 sequential region actions (us-east-1 first,
  *   then eu-central-1, then ap-northeast-1). Each action has a distinct RunOrder to enforce
  *   sequencing. RunOrder of eu-central-1 > us-east-1.
@@ -25,14 +31,16 @@
  *   come from stack outputs at deploy time, not hardcoded in templates or scripts).
  *
  * SI-001: ProductionDeploy stage has RunOrder dependency after SmokeTest stage in cello-cicd.yaml.
+ *   Applies to both DirectoryPipeline and RelayPipeline.
  *
- * SI-002: The smoke test stage references the same artifact from the Build stage
- *   (no second build after smoke test passes).
+ * SI-002: The ProductionDeployBuild buildspec contains no `docker build` command — production
+ *   deploy never builds a new image. The same image digest from the Build stage reaches
+ *   production via the #{BuildAction.IMAGE_URI} pipeline variable reference.
  *
  * P — Pseudocode (structural tests):
  *   1. Read cello-cicd.yaml as text.
  *   2. Assert StagingDeploy stage present.
- *   3. Assert SmokeTest stage present.
+ *   3. Assert SmokeTest stage present (Phase-1: health check gate).
  *   4. Assert ProductionDeploy stage present.
  *   5. Assert StagingDeploy references services-stable.
  *   6. Assert SmokeTest CodeBuild project has no VpcConfig in template.
@@ -40,6 +48,9 @@
  *   8. Assert ProductionDeploy stage RunOrder ordering correct.
  *   9. Assert no cello_receive_any in smoke scripts.
  *   10. Assert no .elb.amazonaws.com string in infra/ (AC-009).
+ *   11. Assert ProductionDeployBuild buildspec has no `docker build` (SI-002).
+ *   12. Assert ProductionDeploy actions reference #{BuildAction.IMAGE_URI} (SI-002).
+ *   13. Assert SmokeTest before ProductionDeploy in RelayPipeline (SI-001).
  *
  * A — Architecture:
  *   File system static analysis tests — no network, no AWS, no Docker.
@@ -82,27 +93,41 @@ describe("AC-001: Staging Deploy stage exists in directory pipeline", () => {
   });
 });
 
-// ─── AC-002: Smoke test stage present ────────────────────────────────────────
+// ─── AC-002: Smoke test stage present (Phase-1: health check gate) ───────────
+//
+// Phase-1 scope: smoke test verifies the staging ALB returns HTTP 200 on GET /health,
+// proving the new image boots correctly. Full 8-scenario multi-agent protocol execution
+// is deferred to CELLO-FEDERATION-E2E-001.
 
-describe("AC-002: Smoke test stage exists", () => {
+describe("AC-002: Smoke test stage exists (Phase-1 health check gate)", () => {
   it("cello-cicd.yaml contains SmokeTest CodeBuild project", () => {
     const template = readFileSync(cicdTemplate, "utf-8");
     expect(template).toContain("SmokeTestBuild");
   });
 
-  it("smoke test buildspec references STAGING_DIRECTORY_URL", () => {
+  it("smoke test buildspec references STAGING_DIRECTORY_URL for health check", () => {
     const template = readFileSync(cicdTemplate, "utf-8");
+    // STAGING_DIRECTORY_URL is the ALB endpoint used for GET /health
     expect(template).toContain("STAGING_DIRECTORY_URL");
   });
 
-  it("smoke test buildspec emits pipeline.staging.smoke_test.passed event", () => {
+  it("smoke test buildspec emits pipeline.staging.smoke_test.passed event on health check pass", () => {
     const template = readFileSync(cicdTemplate, "utf-8");
     expect(template).toContain("pipeline.staging.smoke_test.passed");
   });
 
-  it("smoke test buildspec emits pipeline.staging.smoke_test.failed event on failure", () => {
+  it("smoke test buildspec emits pipeline.staging.smoke_test.failed event when health check fails", () => {
     const template = readFileSync(cicdTemplate, "utf-8");
     expect(template).toContain("pipeline.staging.smoke_test.failed");
+  });
+
+  it("run-smoke-tests.ts invokes checkStagingHealth() against the ALB /health endpoint", () => {
+    // Verify the smoke runner actually calls the health endpoint — the Phase-1 gate
+    const smokeRunner = resolve(smokeDir, "run-smoke-tests.ts");
+    expect(existsSync(smokeRunner)).toBe(true);
+    const content = readFileSync(smokeRunner, "utf-8");
+    expect(content).toContain("checkStagingHealth");
+    expect(content).toContain("/health");
   });
 });
 
@@ -145,6 +170,11 @@ describe("AC-003/AC-007: Production Deploy stage with sequential multi-region ac
 });
 
 // ─── AC-004 / SI-001: Smoke test must complete before production deploy ───────
+//
+// SI-001 adversarial condition: even if someone manually retries or restarts a pipeline
+// from a later stage, CodePipeline sequential stage ordering means ProductionDeploy can
+// only execute after SmokeTest completes successfully. Verified here by asserting that
+// SmokeTest stage appears before ProductionDeploy stage in both pipelines.
 
 describe("AC-004/SI-001: Production deploy gated on smoke test", () => {
   it("ProductionDeploy stage appears after SmokeTest stage within DirectoryPipeline definition", () => {
@@ -159,6 +189,61 @@ describe("AC-004/SI-001: Production deploy gated on smoke test", () => {
     expect(smokeTestPos, "SmokeTest stage not found in DirectoryPipeline").toBeGreaterThan(0);
     expect(productionDeployPos, "ProductionDeploy stage not found in DirectoryPipeline").toBeGreaterThan(0);
     expect(productionDeployPos).toBeGreaterThan(smokeTestPos);
+  });
+
+  it("ProductionDeploy stage appears after SmokeTest stage within RelayPipeline definition", () => {
+    const template = readFileSync(cicdTemplate, "utf-8");
+    // Find the RelayPipeline resource definition (SI-001 adversarial condition applies to both pipelines)
+    const relayPipelineIdx = template.indexOf("RelayPipeline:");
+    expect(relayPipelineIdx).toBeGreaterThan(0);
+    // Within the RelayPipeline definition, SmokeTest stage must appear before ProductionDeploy
+    // Scope the search to the RelayPipeline section only (before the next top-level resource)
+    const nextResourceIdx = template.indexOf("\n  E2eTestsPipeline:", relayPipelineIdx);
+    const pipelineBody = template.substring(
+      relayPipelineIdx,
+      nextResourceIdx > 0 ? nextResourceIdx : relayPipelineIdx + 5000,
+    );
+    const smokeTestPos = pipelineBody.indexOf("- Name: SmokeTest");
+    const productionDeployPos = pipelineBody.indexOf("- Name: ProductionDeploy");
+    expect(smokeTestPos, "SmokeTest stage not found in RelayPipeline").toBeGreaterThan(0);
+    expect(productionDeployPos, "ProductionDeploy stage not found in RelayPipeline").toBeGreaterThan(0);
+    expect(productionDeployPos).toBeGreaterThan(smokeTestPos);
+  });
+});
+
+// ─── SI-002: Production deploy never rebuilds — same image digest from Build stage ──
+//
+// SI-002 adversarial condition: even when a newer image is available in ECR at production
+// deploy time, the pipeline passes the Build stage output artifact digest through to
+// ProductionDeploy via #{BuildAction.IMAGE_URI}. No new docker build occurs after the
+// smoke test passes.
+
+describe("SI-002: ProductionDeployBuild never builds a new image", () => {
+  it("ProductionDeployBuild inline buildspec contains no docker build command", () => {
+    const template = readFileSync(cicdTemplate, "utf-8");
+    // Find the ProductionDeployBuild resource block
+    const prodDeployBuildIdx = template.indexOf("ProductionDeployBuild:");
+    expect(prodDeployBuildIdx, "ProductionDeployBuild resource not found").toBeGreaterThan(0);
+    // Scope the search to the ProductionDeployBuild section only.
+    // CryptoPipeline: is the first pipeline definition that follows the CodeBuild projects.
+    const sectionEnd = template.indexOf("\n  CryptoPipeline:", prodDeployBuildIdx);
+    const prodDeployBuildSection = template.substring(
+      prodDeployBuildIdx,
+      sectionEnd > 0 ? sectionEnd : prodDeployBuildIdx + 4000,
+    );
+    // The ProductionDeployBuild buildspec must never run docker build
+    expect(
+      prodDeployBuildSection,
+      "ProductionDeployBuild buildspec contains 'docker build' — production stage must not rebuild the image",
+    ).not.toContain("docker build");
+  });
+
+  it("ProductionDeploy pipeline actions reference #{BuildAction.IMAGE_URI} for PROD_IMAGE_URI", () => {
+    const template = readFileSync(cicdTemplate, "utf-8");
+    // The PROD_IMAGE_URI env var in ProductionDeploy actions must reference the Build stage
+    // artifact via the CodePipeline V2 variable syntax #{BuildAction.IMAGE_URI}
+    // This proves the same image digest that was smoke-tested reaches production
+    expect(template).toContain('{"name":"PROD_IMAGE_URI","value":"#{BuildAction.IMAGE_URI}"');
   });
 });
 

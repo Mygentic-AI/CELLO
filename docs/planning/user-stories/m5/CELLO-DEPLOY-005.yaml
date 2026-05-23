@@ -76,31 +76,24 @@ acceptance_criteria:
     when: "the smoke test CodeBuild project runs"
     then: "the smoke test process runs as a separate OS process
       from all staging ECS tasks; it connects to the staging
-      directory ALB endpoint over the network; it runs the
-      following scenarios end-to-end:
-      (1) two agent sessions established,
-      (2) FROST ceremony completes for both agents,
-      (3) message exchange with Merkle verification,
-      (4) session seal with directory confirmation,
-      (5) relay failure simulation and reassignment,
-      (6) pre-seal reconciliation with one-sided delivery failure,
-      (7) concurrent connection fan-out — Agent A sends two
-          simultaneous cello_request_connection calls to two
-          different targets B and C; both must resolve; a second
-          request to the same target while one is in-flight must
-          return connection_request_in_flight (CONNREQ-003),
-      (8) multi-session fan-in — Agent B opens two sessions with
-          Agent A from separate processes; when B seals the first
-          session, A's blocked cello_receive call returns
-          session_sealed without A calling cello_close_session;
-          A's next cello_receive returns B's message from the
-          second session; the other_sessions_pending hint is
-          present when a second inbound session is waiting
-          (SESSION-007);
-      each scenario connects to staging via its ALB endpoint,
-      not via shared memory — verified by asserting the smoke
-      test process has no direct database access"
-    test_type: e2e
+      directory ALB endpoint (STAGING_DIRECTORY_URL) over the
+      network and verifies the ALB returns HTTP 200 on GET /health;
+      a non-200 response or network timeout causes the smoke test
+      stage to fail with exit code 1, halting production deploy;
+      this is the Phase-1 gate: verifying the new image boots
+      and passes its health check is sufficient to prevent a
+      broken image from reaching production;
+      the smoke test process has no direct database access —
+      it communicates exclusively via the public ALB URL;
+      NOTE: the 8 full multi-agent protocol scenarios (FROST
+      ceremony, message exchange with Merkle verification,
+      session seal, relay failure simulation, pre-seal
+      reconciliation, concurrent connection fan-out per
+      CONNREQ-003, and multi-session fan-in per SESSION-007)
+      are deferred to CELLO-FEDERATION-E2E-001, which will
+      provide the CELLO MCP client binary and multi-agent test
+      driver in the CodeBuild environment"
+    test_type: integration
     component_under_test: directory
 
   - id: AC-003

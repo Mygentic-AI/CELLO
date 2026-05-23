@@ -537,14 +537,11 @@ Resources:
                   END_MS=$(date +%s%3N)
                   DURATION_MS=$((END_MS - START_MS))
                   echo '{"timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"pipeline.staging.deployed","pipeline":"cello-directory-pipeline","commitSha":"'${COMMIT_SHA}'","imageDigest":"'${STAGING_IMAGE_URI}'","durationMs":'${DURATION_MS}'}'
-                  # Read AlbDnsName from stack outputs for smoke test (AC-009)
-                  ALB_DNS=$(aws cloudformation describe-stacks \
-                    --region us-east-1 \
-                    --stack-name cello-ecs-directory-${CELLO_ENV} \
-                    --query "Stacks[0].Outputs[?OutputKey=='AlbDnsName'].OutputValue" \
-                    --output text)
-                  echo "STAGING_DIRECTORY_URL=${ALB_DNS}" > /tmp/staging_url.env
-                  cat /tmp/staging_url.env
+                  # Note: STAGING_DIRECTORY_URL is passed to SmokeTestBuild via the
+                  # StagingDirectoryUrl CloudFormation parameter (read from
+                  # cello-ecs-directory stack output by deploy.sh at deploy time).
+                  # No inter-container file passing is needed or possible — each
+                  # CodeBuild action runs in an isolated container.
       Artifacts:
         Type: NO_ARTIFACTS
       Environment:

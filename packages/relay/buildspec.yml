@@ -19,7 +19,7 @@ phases:
       - pnpm --filter @cello/transport run typecheck
       - pnpm --filter @cello/relay run typecheck
       - pnpm --filter @cello/relay run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
-      # ── Docker build → ECR push → ECS deploy (DEPLOY-003) ──────────────────
+      # ── Docker build → ECR push (DEPLOY-003) ────────────────────────────────
       # IMAGE_TAG = first 7 chars of git commit SHA (CodeBuild sets CODEBUILD_RESOLVED_SOURCE_VERSION)
       - export IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
       - export ECR_REPO=257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay
@@ -29,14 +29,6 @@ phases:
       # Build linux/amd64 image (ECS Fargate requires x86_64; CodeBuild may run on arm64)
       - docker build --platform linux/amd64 -t ${IMAGE_URI} -f packages/relay/Dockerfile .
       # Push to ECR
+      # IMAGE_URI is exported above and used by StagingDeploy and ProductionDeploy stages
+      # via #{BuildAction.IMAGE_URI} (DEPLOY-005). ECS deploy is now owned by StagingDeployBuild.
       - docker push ${IMAGE_URI}
-      # ── ECS rolling deploy ─────────────────────────────────────────────────
-      # Retrieve current task definition, update image URI with jq, register new revision.
-      # The old task continues running until ECS drains it;
-      # the new task must pass health check before old task stops (AC-006).
-      - TASK_DEF=$(aws ecs describe-task-definition --task-definition cello-relay-dev --region us-east-1 --query "taskDefinition" --output json)
-      - NEW_TASK_DEF=$(echo $TASK_DEF | jq --arg IMAGE "$IMAGE_URI" '(.containerDefinitions[] | select(.name=="relay") | .image) |= $IMAGE | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
-      - NEW_TASK_ARN=$(aws ecs register-task-definition --region us-east-1 --cli-input-json "$NEW_TASK_DEF" --query "taskDefinition.taskDefinitionArn" --output text)
-      - aws ecs update-service --cluster cello-dev --service cello-relay-dev --task-definition $NEW_TASK_ARN --region us-east-1
-      # Wait for service to stabilise
-      - aws ecs wait services-stable --cluster cello-dev --services cello-relay-dev --region us-east-1
