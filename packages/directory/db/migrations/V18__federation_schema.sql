@@ -160,16 +160,3 @@ DO $$ BEGIN
     ALTER TABLE checkpoint_node_signatures ADD COLUMN signed_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
   END IF;
 END $$;
-
--- UNIQUE constraint: one signature per node per checkpoint (SI-001: same node twice does not count).
-DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.table_constraints
-    WHERE table_name = 'checkpoint_node_signatures'
-      AND constraint_name = 'checkpoint_node_signatures_checkpoint_node_unique'
-  ) THEN
-    ALTER TABLE checkpoint_node_signatures
-      ADD CONSTRAINT checkpoint_node_signatures_checkpoint_node_unique
-      UNIQUE (checkpoint_id, node_id);
-  END IF;
-END $$;
