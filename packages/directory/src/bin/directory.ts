@@ -38,8 +38,8 @@ import pg from "pg";
 import { FileKeyProvider, InMemoryKeyProvider } from "@cello/crypto";
 import { createDirectoryNode } from "../directory-node.js";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
-import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper } from "@cello/interfaces/stubs";
-import type { AuditLogShipper } from "@cello/interfaces";
+import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper, InMemoryNotificationQueue } from "@cello/interfaces/stubs";
+import type { AuditLogShipper, NotificationQueue } from "@cello/interfaces";
 // S3AuditLogShipper is imported dynamically below to avoid loading @aws-sdk/client-s3
 // in CELLO_ENV=local subprocesses where it causes tsx/esm resolution noise.
 import { InMemoryShareStore } from "../share-store.js";
@@ -52,6 +52,7 @@ import { AnalyticsJob } from "../analytics-job.js";
 import { PendingConnectionRequestTtlSweep } from "../pending-connection-request-ttl-sweep.js";
 import { createHealthServer } from "../health-server.js";
 import { logServiceStarted, logServiceStopped, logServiceCrashed, logSecretsUnavailable } from "../service-lifecycle.js";
+import { PgNotificationQueue } from "../adapters/pg-notification-queue.js";
 
 const env = process.env["CELLO_ENV"];
 const logger = new StdoutLogger();
@@ -278,6 +279,41 @@ logger.info("adapter.initialised", { adapterName: "ClientStore", implementation:
 void new InMemoryRelayWal(); // wired in PERSIST-003+
 logger.info("adapter.initialised", { adapterName: "RelayWal", implementation: "InMemoryRelayWal", env });
 
+// ─── PERSIST-023: NotificationQueue instantiation ─────────────────────────────
+// CELLO_ENV=local  → InMemoryNotificationQueue (M4 stub; notifications lost on restart)
+// CELLO_ENV=dev+   → PgNotificationQueue (Postgres-backed; notifications survive restart)
+//
+// AC-007: CELLO_ENV=local MUST use InMemoryNotificationQueue (composition root assertion).
+// AC-002: dev/staging/production use PgNotificationQueue so notifications survive restarts.
+const notificationQueue: NotificationQueue = (() => {
+  if (env === "local") {
+    const q = new InMemoryNotificationQueue();
+    logger.info("adapter.initialised", {
+      adapterName: "NotificationQueue",
+      implementation: "InMemoryNotificationQueue",
+      env,
+    });
+    return q;
+  }
+  // dev/staging/production: PgNotificationQueue (PERSIST-023)
+  // pgPool is guaranteed to be available for dev+ environments (see store instantiation above).
+  if (!pgPool) {
+    logger.error("adapter.config.missing", {
+      missingKey: "DATABASE_URL",
+      adapterName: "PgNotificationQueue",
+      env,
+    });
+    process.exit(1);
+  }
+  const q = new PgNotificationQueue(pgPool, logger);
+  logger.info("adapter.initialised", {
+    adapterName: "NotificationQueue",
+    implementation: "PgNotificationQueue",
+    env,
+  });
+  return q;
+})();
+
 // ─── PERSIST-008: JobScheduler + AnalyticsJob wiring ─────────────────────────
 // The scheduler dispatches "analytics" jobs on EventBridge (dev+) or in-process
 // setTimeout (local). AnalyticsJob.run() is registered as the handler so both
@@ -413,6 +449,7 @@ try {
     shareStore,
     transportPrivateKey,
     mmrStore,
+    notificationQueue,
   });
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
