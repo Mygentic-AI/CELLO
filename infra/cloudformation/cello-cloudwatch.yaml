@@ -1,0 +1,878 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO CloudWatch — alarms and dashboards for all regions.
+  Deploys 10 named alarms per region routed to cello-ops-critical or
+  cello-ops-warning SNS topics, and one multi-region operations dashboard.
+  Deploy order: AFTER cello-ecs-directory and cello-ecs-relay (alarm
+  dimensions reference ECS service metrics that require those stacks first).
+
+  SECOPS-002: AC-001 (10 alarms), AC-002 (directory task count),
+  AC-003 (checkpoint gap), AC-004 (multi-region dashboard),
+  AC-005 (SNS topics with subscriptions), AC-006 (rds-storage ops-warning),
+  AC-007 (all alarms IaC-only), AC-008 (deploy.sh inclusion).
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment
+
+  OpsEmail:
+    Type: String
+    Default: "ops@cello.mygentic.ai"
+    Description: >
+      Email address for ops notifications. This subscription must be
+      confirmed by the recipient after the first deploy. Both SNS topics
+      (ops-critical and ops-warning) send to this address.
+
+  # ── Dashboard cross-region references ────────────────────────────────────────
+  # The dashboard is deployed in the primary region (us-east-1).
+  # It references metrics from all three regions via cross-region widget JSON.
+  # These parameters must be the literal region strings — not ARNs.
+  RegionEast:
+    Type: String
+    Default: "us-east-1"
+    Description: Primary region (us-east-1)
+
+  RegionEurope:
+    Type: String
+    Default: "eu-central-1"
+    Description: Europe region (eu-central-1)
+
+  RegionAsia:
+    Type: String
+    Default: "ap-northeast-1"
+    Description: Asia-Pacific region (ap-northeast-1)
+
+Resources:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # SNS TOPICS — AC-005
+  # Two topics: ops-critical (P1 paging) and ops-warning (lower-priority).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  OpsCriticalTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "cello-ops-critical-${Environment}"
+      DisplayName: !Sub "CELLO Ops Critical (${Environment})"
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  OpsWarningTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "cello-ops-warning-${Environment}"
+      DisplayName: !Sub "CELLO Ops Warning (${Environment})"
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── Subscriptions (at least one per topic — AC-005) ───────────────────────
+  # These are email subscriptions. The recipient must confirm the subscription
+  # by clicking the link in the confirmation email sent by SNS after the first
+  # deploy. Until confirmed, no notifications are delivered.
+
+  OpsCriticalSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref OpsCriticalTopic
+      Protocol: email
+      Endpoint: !Ref OpsEmail
+
+  OpsWarningSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref OpsWarningTopic
+      Protocol: email
+      Endpoint: !Ref OpsEmail
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ALARMS — AC-001, AC-002, AC-003, AC-006, AC-007
+  #
+  # All 10 required alarms. Metric dimensions use !Sub to construct the
+  # correct ECS cluster/service names from the Environment parameter.
+  # No !ImportValue needed — CloudWatch dimensions take string values,
+  # not ARNs. This avoids circular dependencies with the ECS stacks.
+  #
+  # Alarm naming: exactly as specified in AC-001.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── 1. cello-directory-ecs-task-count — AC-002, AC-001 ───────────────────
+  # Fires ops-critical when running task count < 1 for 5 minutes.
+  # Metric: ECS/RunningTaskCount, cluster=cello-${env}, service=cello-directory-${env}
+  # EvaluationPeriods=1 × Period=300s = 5 minutes (AC-002 specifies "5 minutes").
+
+  DirectoryEcsTaskCountAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-directory-ecs-task-count"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO directory ECS running task count dropped below 1.
+        Service: cello-directory-${Environment}, Cluster: cello-${Environment}.
+        Investigate ECS console and CloudWatch Logs for task failures.
+      MetricName: RunningTaskCount
+      Namespace: ECS/ContainerInsights
+      Dimensions:
+        - Name: ClusterName
+          Value: !Sub "cello-${Environment}"
+        - Name: ServiceName
+          Value: !Sub "cello-directory-${Environment}"
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref OpsCriticalTopic
+      OKActions:
+        - !Ref OpsCriticalTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── 2. cello-relay-ecs-task-count — AC-001 ───────────────────────────────
+  # Fires ops-critical when relay running task count < 1.
+
+  RelayEcsTaskCountAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-relay-ecs-task-count"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO relay ECS running task count dropped below 1.
+        Service: cello-relay-${Environment}, Cluster: cello-${Environment}.
+        Investigate ECS console and CloudWatch Logs for task failures.
+      MetricName: RunningTaskCount
+      Namespace: ECS/ContainerInsights
+      Dimensions:
+        - Name: ClusterName
+          Value: !Sub "cello-${Environment}"
+        - Name: ServiceName
+          Value: !Sub "cello-relay-${Environment}"
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref OpsCriticalTopic
+      OKActions:
+        - !Ref OpsCriticalTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── 3. cello-rds-cpu — AC-001 ────────────────────────────────────────────
+  # Fires ops-warning when RDS CPU > 80% for 5 minutes (1 × 300s period).
+  # AC-001 specifies threshold > 80%. Routes to ops-warning (not ops-critical)
+  # per AC-006 context: storage fires warning; by parity, CPU fires warning too.
+
+  RdsCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-rds-cpu"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO RDS CPU utilization exceeded 80% for 5 minutes.
+        Instance: cello-${Environment}. Investigate query performance and connection count.
+      MetricName: CPUUtilization
+      Namespace: AWS/RDS
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub "cello-${Environment}"
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsWarningTopic
+      OKActions:
+        - !Ref OpsWarningTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── 4. cello-rds-storage — AC-001, AC-006 ────────────────────────────────
+  # Fires ops-warning when free storage < 10GB (10737418240 bytes).
+  # AC-006 explicitly confirms this routes to ops-warning.
+
+  RdsStorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-rds-storage"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO RDS free storage dropped below 10GB.
+        Instance: cello-${Environment}. Investigate data growth and consider storage expansion.
+      MetricName: FreeStorageSpace
+      Namespace: AWS/RDS
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub "cello-${Environment}"
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10737418240
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsWarningTopic
+      OKActions:
+        - !Ref OpsWarningTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── 5. cello-checkpoint-gap — AC-001, AC-003 ─────────────────────────────
+  # Fires ops-critical when no federation.checkpoint.confirmed metric is emitted
+  # for 30 minutes (TreatMissingData: breaching on a 30-minute evaluation window).
+  # Custom metric namespace: CELLO/Checkpoint.
+  # On a healthy system this alarm is INSUFFICIENT_DATA (no custom metric published yet)
+  # or OK. It fires only when 30+ minutes of silence occur.
+  # Period=1800s (30min), EvaluationPeriods=1.
+
+  CheckpointGapAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-checkpoint-gap"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] No federation.checkpoint.confirmed event in the last 30 minutes.
+        Region: ${AWS::Region}. Investigate directory nodes for federation health.
+        Last confirmed checkpoint time visible in CELLO operations dashboard.
+      MetricName: ConfirmationsPerPeriod
+      Namespace: CELLO/Checkpoint
+      Dimensions:
+        - Name: Environment
+          Value: !Ref Environment
+        - Name: Region
+          Value: !Ref AWS::Region
+      Statistic: Sum
+      Period: 1800
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref OpsCriticalTopic
+      OKActions:
+        - !Ref OpsCriticalTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── 6. cello-replication-slot-inactive — AC-001 ───────────────────────────
+  # Fires ops-critical when the logical replication slot is inactive.
+  # Custom metric: CELLO/Checkpoint ReplicationSlotActive (0=inactive, 1=active).
+  # Alarm when value = 0. On healthy system: INSUFFICIENT_DATA or OK.
+
+  ReplicationSlotInactiveAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-replication-slot-inactive"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO logical replication slot is inactive.
+        Region: ${AWS::Region}. Investigate RDS replication slot health immediately.
+        An inactive slot causes WAL accumulation and potential storage exhaustion.
+      MetricName: ReplicationSlotActive
+      Namespace: CELLO/Checkpoint
+      Dimensions:
+        - Name: Environment
+          Value: !Ref Environment
+        - Name: Region
+          Value: !Ref AWS::Region
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref OpsCriticalTopic
+      OKActions:
+        - !Ref OpsCriticalTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── 7. cello-replication-chain-hash-mismatch — AC-001 ────────────────────
+  # Fires ops-critical on any hash chain mismatch (tamper detection).
+  # Custom metric: CELLO/Checkpoint HashChainMismatches (count per period).
+  # Any non-zero count is a critical security event.
+
+  ReplicationChainHashMismatchAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-replication-chain-hash-mismatch"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO hash chain mismatch detected.
+        Region: ${AWS::Region}. This is a critical security event — possible tamper.
+        Investigate hash chain integrity immediately. Do not attempt automated recovery.
+      MetricName: HashChainMismatches
+      Namespace: CELLO/Checkpoint
+      Dimensions:
+        - Name: Environment
+          Value: !Ref Environment
+        - Name: Region
+          Value: !Ref AWS::Region
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsCriticalTopic
+      OKActions:
+        - !Ref OpsCriticalTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── 8. cello-relay-pool-unavailable — AC-001 ─────────────────────────────
+  # Fires ops-critical when relay pool availability drops to zero.
+  # Custom metric: CELLO/Relay PoolAvailableCount.
+
+  RelayPoolUnavailableAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-relay-pool-unavailable"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO relay pool has no available relays.
+        Region: ${AWS::Region}. No new sessions can be established.
+        Investigate relay ECS task health and relay manifest.
+      MetricName: PoolAvailableCount
+      Namespace: CELLO/Relay
+      Dimensions:
+        - Name: Environment
+          Value: !Ref Environment
+        - Name: Region
+          Value: !Ref AWS::Region
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref OpsCriticalTopic
+      OKActions:
+        - !Ref OpsCriticalTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── 9. cello-relay-manifest-invalid — AC-001 ─────────────────────────────
+  # Fires ops-critical when the relay manifest fails validation.
+  # Custom metric: CELLO/Relay ManifestValidationErrors (count per period).
+
+  RelayManifestInvalidAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-relay-manifest-invalid"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO relay manifest validation failed.
+        Region: ${AWS::Region}. Relay manifest is corrupt or signature invalid.
+        Agents cannot verify relay assignments. Investigate relay manifest generation.
+      MetricName: ManifestValidationErrors
+      Namespace: CELLO/Relay
+      Dimensions:
+        - Name: Environment
+          Value: !Ref Environment
+        - Name: Region
+          Value: !Ref AWS::Region
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsCriticalTopic
+      OKActions:
+        - !Ref OpsCriticalTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── 10. cello-audit-shipper-buffer-full — AC-001 ─────────────────────────
+  # Fires ops-warning when the audit log shipper buffer is at capacity.
+  # Custom metric: CELLO/Audit ShipperBufferUtilization (percentage 0-100).
+
+  AuditShipperBufferFullAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-audit-shipper-buffer-full"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO audit log shipper buffer utilization exceeded 90%.
+        Region: ${AWS::Region}. Audit logs may be lost if buffer fills completely.
+        Investigate audit shipper throughput and S3 upload errors.
+      MetricName: ShipperBufferUtilization
+      Namespace: CELLO/Audit
+      Dimensions:
+        - Name: Environment
+          Value: !Ref Environment
+        - Name: Region
+          Value: !Ref AWS::Region
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 90
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsWarningTopic
+      OKActions:
+        - !Ref OpsWarningTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # DASHBOARD — AC-004
+  #
+  # Single multi-region dashboard: one row per region (us-east-1, eu-central-1,
+  # ap-northeast-1), 6 panels per region row:
+  #   1. ECS directory task count
+  #   2. ECS relay task count
+  #   3. RDS CPU utilization
+  #   4. Checkpoint confirmation rate (confirmations per hour)
+  #   5. Error rate (5xx responses per minute via ALB)
+  #   6. Replication lag (RDS ReplicaLag metric)
+  #
+  # All three regions visible on one dashboard — no navigation required (AC-004).
+  # Dashboard is deployed in the stack's region. Cross-region widgets reference
+  # all three regions explicitly via the "region" property in widget properties.
+  #
+  # Widget layout: x increments by 8 per panel (6 panels × 8 = width 48, max 24
+  # per row so we use 4 panels per row = width 6 each, 2 rows per region).
+  # Layout: 3 panels top row (x=0,8,16) + 3 panels bottom row (x=0,8,16),
+  # each panel width=8, height=6. Region label widget at top of each section.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  OperationsDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "cello-operations-${Environment}"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+
+            {
+              "type": "text",
+              "x": 0, "y": 0, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "# CELLO Operations — ${Environment}\nAll three regions. Refresh: auto 1 min."
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 1, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## Region: ${RegionEast}"
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 0, "y": 2, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionEast}] Directory Task Count",
+                "region": "${RegionEast}",
+                "metrics": [
+                  ["ECS/ContainerInsights", "RunningTaskCount",
+                   "ClusterName", "cello-${Environment}",
+                   "ServiceName", "cello-directory-${Environment}",
+                   {"region": "${RegionEast}"}]
+                ],
+                "stat": "Minimum",
+                "period": 60,
+                "view": "timeSeries",
+                "annotations": {
+                  "horizontal": [{"value": 1, "label": "Min healthy", "color": "#ff6600"}]
+                }
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 8, "y": 2, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionEast}] Relay Task Count",
+                "region": "${RegionEast}",
+                "metrics": [
+                  ["ECS/ContainerInsights", "RunningTaskCount",
+                   "ClusterName", "cello-${Environment}",
+                   "ServiceName", "cello-relay-${Environment}",
+                   {"region": "${RegionEast}"}]
+                ],
+                "stat": "Minimum",
+                "period": 60,
+                "view": "timeSeries",
+                "annotations": {
+                  "horizontal": [{"value": 1, "label": "Min healthy", "color": "#ff6600"}]
+                }
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 16, "y": 2, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionEast}] RDS CPU %",
+                "region": "${RegionEast}",
+                "metrics": [
+                  ["AWS/RDS", "CPUUtilization",
+                   "DBInstanceIdentifier", "cello-${Environment}",
+                   {"region": "${RegionEast}"}]
+                ],
+                "stat": "Average",
+                "period": 60,
+                "view": "timeSeries",
+                "annotations": {
+                  "horizontal": [{"value": 80, "label": "80% threshold", "color": "#ff6600"}]
+                }
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 0, "y": 8, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionEast}] Checkpoint Confirmations/hr",
+                "region": "${RegionEast}",
+                "metrics": [
+                  ["CELLO/Checkpoint", "ConfirmationsPerPeriod",
+                   "Environment", "${Environment}",
+                   "Region", "${RegionEast}",
+                   {"region": "${RegionEast}", "stat": "Sum", "period": 3600}]
+                ],
+                "stat": "Sum",
+                "period": 3600,
+                "view": "timeSeries"
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 8, "y": 8, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionEast}] Error Rate (5xx/min)",
+                "region": "${RegionEast}",
+                "metrics": [
+                  ["AWS/ApplicationELB", "HTTPCode_Target_5XX_Count",
+                   "LoadBalancer", "app/cello-dir-${Environment}",
+                   {"region": "${RegionEast}", "stat": "Sum", "period": 60}]
+                ],
+                "stat": "Sum",
+                "period": 60,
+                "view": "timeSeries"
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 16, "y": 8, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionEast}] Replication Lag (s)",
+                "region": "${RegionEast}",
+                "metrics": [
+                  ["AWS/RDS", "ReplicaLag",
+                   "DBInstanceIdentifier", "cello-${Environment}",
+                   {"region": "${RegionEast}"}]
+                ],
+                "stat": "Maximum",
+                "period": 60,
+                "view": "timeSeries"
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 15, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## Region: ${RegionEurope}"
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 0, "y": 16, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionEurope}] Directory Task Count",
+                "region": "${RegionEurope}",
+                "metrics": [
+                  ["ECS/ContainerInsights", "RunningTaskCount",
+                   "ClusterName", "cello-${Environment}",
+                   "ServiceName", "cello-directory-${Environment}",
+                   {"region": "${RegionEurope}"}]
+                ],
+                "stat": "Minimum",
+                "period": 60,
+                "view": "timeSeries",
+                "annotations": {
+                  "horizontal": [{"value": 1, "label": "Min healthy", "color": "#ff6600"}]
+                }
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 8, "y": 16, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionEurope}] Relay Task Count",
+                "region": "${RegionEurope}",
+                "metrics": [
+                  ["ECS/ContainerInsights", "RunningTaskCount",
+                   "ClusterName", "cello-${Environment}",
+                   "ServiceName", "cello-relay-${Environment}",
+                   {"region": "${RegionEurope}"}]
+                ],
+                "stat": "Minimum",
+                "period": 60,
+                "view": "timeSeries",
+                "annotations": {
+                  "horizontal": [{"value": 1, "label": "Min healthy", "color": "#ff6600"}]
+                }
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 16, "y": 16, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionEurope}] RDS CPU %",
+                "region": "${RegionEurope}",
+                "metrics": [
+                  ["AWS/RDS", "CPUUtilization",
+                   "DBInstanceIdentifier", "cello-${Environment}",
+                   {"region": "${RegionEurope}"}]
+                ],
+                "stat": "Average",
+                "period": 60,
+                "view": "timeSeries",
+                "annotations": {
+                  "horizontal": [{"value": 80, "label": "80% threshold", "color": "#ff6600"}]
+                }
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 0, "y": 22, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionEurope}] Checkpoint Confirmations/hr",
+                "region": "${RegionEurope}",
+                "metrics": [
+                  ["CELLO/Checkpoint", "ConfirmationsPerPeriod",
+                   "Environment", "${Environment}",
+                   "Region", "${RegionEurope}",
+                   {"region": "${RegionEurope}", "stat": "Sum", "period": 3600}]
+                ],
+                "stat": "Sum",
+                "period": 3600,
+                "view": "timeSeries"
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 8, "y": 22, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionEurope}] Error Rate (5xx/min)",
+                "region": "${RegionEurope}",
+                "metrics": [
+                  ["AWS/ApplicationELB", "HTTPCode_Target_5XX_Count",
+                   "LoadBalancer", "app/cello-dir-${Environment}",
+                   {"region": "${RegionEurope}", "stat": "Sum", "period": 60}]
+                ],
+                "stat": "Sum",
+                "period": 60,
+                "view": "timeSeries"
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 16, "y": 22, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionEurope}] Replication Lag (s)",
+                "region": "${RegionEurope}",
+                "metrics": [
+                  ["AWS/RDS", "ReplicaLag",
+                   "DBInstanceIdentifier", "cello-${Environment}",
+                   {"region": "${RegionEurope}"}]
+                ],
+                "stat": "Maximum",
+                "period": 60,
+                "view": "timeSeries"
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 29, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## Region: ${RegionAsia}"
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 0, "y": 30, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionAsia}] Directory Task Count",
+                "region": "${RegionAsia}",
+                "metrics": [
+                  ["ECS/ContainerInsights", "RunningTaskCount",
+                   "ClusterName", "cello-${Environment}",
+                   "ServiceName", "cello-directory-${Environment}",
+                   {"region": "${RegionAsia}"}]
+                ],
+                "stat": "Minimum",
+                "period": 60,
+                "view": "timeSeries",
+                "annotations": {
+                  "horizontal": [{"value": 1, "label": "Min healthy", "color": "#ff6600"}]
+                }
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 8, "y": 30, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionAsia}] Relay Task Count",
+                "region": "${RegionAsia}",
+                "metrics": [
+                  ["ECS/ContainerInsights", "RunningTaskCount",
+                   "ClusterName", "cello-${Environment}",
+                   "ServiceName", "cello-relay-${Environment}",
+                   {"region": "${RegionAsia}"}]
+                ],
+                "stat": "Minimum",
+                "period": 60,
+                "view": "timeSeries",
+                "annotations": {
+                  "horizontal": [{"value": 1, "label": "Min healthy", "color": "#ff6600"}]
+                }
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 16, "y": 30, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionAsia}] RDS CPU %",
+                "region": "${RegionAsia}",
+                "metrics": [
+                  ["AWS/RDS", "CPUUtilization",
+                   "DBInstanceIdentifier", "cello-${Environment}",
+                   {"region": "${RegionAsia}"}]
+                ],
+                "stat": "Average",
+                "period": 60,
+                "view": "timeSeries",
+                "annotations": {
+                  "horizontal": [{"value": 80, "label": "80% threshold", "color": "#ff6600"}]
+                }
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 0, "y": 36, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionAsia}] Checkpoint Confirmations/hr",
+                "region": "${RegionAsia}",
+                "metrics": [
+                  ["CELLO/Checkpoint", "ConfirmationsPerPeriod",
+                   "Environment", "${Environment}",
+                   "Region", "${RegionAsia}",
+                   {"region": "${RegionAsia}", "stat": "Sum", "period": 3600}]
+                ],
+                "stat": "Sum",
+                "period": 3600,
+                "view": "timeSeries"
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 8, "y": 36, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionAsia}] Error Rate (5xx/min)",
+                "region": "${RegionAsia}",
+                "metrics": [
+                  ["AWS/ApplicationELB", "HTTPCode_Target_5XX_Count",
+                   "LoadBalancer", "app/cello-dir-${Environment}",
+                   {"region": "${RegionAsia}", "stat": "Sum", "period": 60}]
+                ],
+                "stat": "Sum",
+                "period": 60,
+                "view": "timeSeries"
+              }
+            },
+
+            {
+              "type": "metric",
+              "x": 16, "y": 36, "width": 8, "height": 6,
+              "properties": {
+                "title": "[${RegionAsia}] Replication Lag (s)",
+                "region": "${RegionAsia}",
+                "metrics": [
+                  ["AWS/RDS", "ReplicaLag",
+                   "DBInstanceIdentifier", "cello-${Environment}",
+                   {"region": "${RegionAsia}"}]
+                ],
+                "stat": "Maximum",
+                "period": 60,
+                "view": "timeSeries"
+              }
+            }
+
+          ]
+        }
+
+Outputs:
+  OpsCriticalTopicArn:
+    Value: !Ref OpsCriticalTopic
+    Export:
+      Name: !Sub "cello-${Environment}-ops-critical-topic-arn"
+
+  OpsWarningTopicArn:
+    Value: !Ref OpsWarningTopic
+    Export:
+      Name: !Sub "cello-${Environment}-ops-warning-topic-arn"
+
+  DashboardName:
+    Value: !Ref OperationsDashboard
+    Export:
+      Name: !Sub "cello-${Environment}-operations-dashboard"

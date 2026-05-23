@@ -26,6 +26,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-05-23 | Lambda code fixed to preserve all secret fields on rotation |
 | cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-23 | Port 8080, DEV_ENVELOPE_KEY, RELAY_MULTIADDR, AUDIT_BUCKET |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-22 | |
+| cello-cloudwatch-dev | CREATE_COMPLETE | 2026-05-23 | 10 alarms, 2 SNS topics, 1 multi-region dashboard (SECOPS-002) |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-22 | |
 | cello-cicd-dev | UPDATE_COMPLETE | 2026-05-22 | |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
@@ -58,6 +59,9 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | Pipeline Filter Lambda | arn:aws:lambda:us-east-1:257394457473:function:cello-pipeline-filter-dev |
 | Directory Node Public Key | 167ca6b145bfdd3696af8f4befd883c3dc610f4a9c8d52a30f6a22f669dc27b5 |
 | Relay Node Public Key | 8c3a882b15ad39f42044bac2044c76f00535e3ff345767b9fda7b4e665efc4e6 |
+| SNS Topic — ops-critical | arn:aws:sns:us-east-1:257394457473:cello-ops-critical-dev |
+| SNS Topic — ops-warning | arn:aws:sns:us-east-1:257394457473:cello-ops-warning-dev |
+| CloudWatch Dashboard | cello-operations-dev |
 
 ### staging — not deployed
 

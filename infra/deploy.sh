@@ -135,11 +135,11 @@ fi
 # ── Observability helpers ─────────────────────────────────────────────────────
 
 # cello-cicd deploys to us-east-1 only — adjust count per region
-# +1 for cello-rotation (SECOPS-004)
+# +1 for cello-rotation (SECOPS-004), +1 for cello-cloudwatch (SECOPS-002)
 if [[ "${REGION}" == "us-east-1" ]]; then
-  STACK_COUNT=12
+  STACK_COUNT=13
 else
-  STACK_COUNT=11
+  STACK_COUNT=12
 fi
 DEPLOY_START=$(date +%s)
 
@@ -246,7 +246,7 @@ read_output() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# DEPLOYMENT SEQUENCE — 11 stacks in dependency order
+# DEPLOYMENT SEQUENCE — 12 stacks in dependency order (13 in us-east-1 with cello-cicd)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ── STEP 0: cello-ecr — ECR repos (no dependencies, must exist before ECS) ──
@@ -367,7 +367,13 @@ deploy_stack "cello-ecs-relay-${ENVIRONMENT}" "cello-ecs-relay.yaml" \
   "ImageUri=${RELAY_IMAGE}" \
   "DirectoryNodePubkey=${RELAY_DIRECTORY_PUBKEY}"
 
-# ── STEP 10: cello-route53 — Route 53 ALIAS records and ACM certs ────────────
+# ── STEP 10: cello-cloudwatch — CloudWatch alarms and dashboards ──────────────
+# depends on: cello-ecs-directory, cello-ecs-relay (alarm dimensions reference ECS services)
+
+deploy_stack "cello-cloudwatch-${ENVIRONMENT}" "cello-cloudwatch.yaml" \
+  "Environment=${ENVIRONMENT}"
+
+# ── STEP 11: cello-route53 — Route 53 ALIAS records and ACM certs ────────────
 # depends on: cello-ecs-directory (ALB outputs read in Step 8)
 
 deploy_stack "cello-route53-${ENVIRONMENT}" "cello-route53.yaml" \
@@ -378,7 +384,7 @@ deploy_stack "cello-route53-${ENVIRONMENT}" "cello-route53.yaml" \
   "AlbHostedZoneId=${ALB_HOSTED_ZONE_ID}" \
   "Subdomain=${SUBDOMAIN}"
 
-# ── STEP 11: cello-cicd — CI/CD infrastructure (us-east-1 only) ──────────────
+# ── STEP 12: cello-cicd — CI/CD infrastructure (us-east-1 only) ──────────────
 
 if [[ "${REGION}" == "us-east-1" ]]; then
   deploy_stack "cello-cicd-${ENVIRONMENT}" "cello-cicd.yaml" \
@@ -422,6 +428,7 @@ for stack in \
   "cello-rotation-${ENVIRONMENT}" \
   "cello-ecs-directory-${ENVIRONMENT}" \
   "cello-ecs-relay-${ENVIRONMENT}" \
+  "cello-cloudwatch-${ENVIRONMENT}" \
   "cello-route53-${ENVIRONMENT}"; do
   echo "  ${stack}"
 done
