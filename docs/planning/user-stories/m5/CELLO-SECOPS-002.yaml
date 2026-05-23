@@ -57,18 +57,21 @@ acceptance_criteria:
       in all three regions"
     when: "the alarm list is inspected in each region"
     then: "the following alarms exist in each region with state
-      OK or INSUFFICIENT_DATA on a healthy system:
-      cello-directory-ecs-task-count (threshold: runningCount < 1),
-      cello-relay-ecs-task-count (threshold: runningCount < 1),
-      cello-rds-cpu (threshold: > 80% for 5 minutes),
-      cello-rds-storage (threshold: < 10GB free),
-      cello-checkpoint-gap (threshold: no confirmed checkpoint
+      OK or INSUFFICIENT_DATA on a healthy system (alarm names
+      include the environment suffix, e.g. -dev or -staging,
+      to prevent cross-environment name collision when multiple
+      environments deploy to the same account/region):
+      cello-directory-ecs-task-count-{env} (threshold: runningCount < 1),
+      cello-relay-ecs-task-count-{env} (threshold: runningCount < 1),
+      cello-rds-cpu-{env} (threshold: > 80% for 5 minutes),
+      cello-rds-storage-{env} (threshold: < 10GB free),
+      cello-checkpoint-gap-{env} (threshold: no confirmed checkpoint
       in 30 minutes),
-      cello-replication-slot-inactive,
-      cello-replication-chain-hash-mismatch,
-      cello-relay-pool-unavailable,
-      cello-relay-manifest-invalid,
-      cello-audit-shipper-buffer-full —
+      cello-replication-slot-inactive-{env},
+      cello-replication-chain-hash-mismatch-{env},
+      cello-relay-pool-unavailable-{env},
+      cello-relay-manifest-invalid-{env},
+      cello-audit-shipper-buffer-full-{env} —
       verified by calling aws cloudwatch describe-alarms from
       a separate terminal in each region"
     test_type: integration

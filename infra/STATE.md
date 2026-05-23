@@ -26,7 +26,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-05-23 | Lambda code fixed to preserve all secret fields on rotation |
 | cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-23 | Port 8080, DEV_ENVELOPE_KEY, RELAY_MULTIADDR, AUDIT_BUCKET |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-22 | |
-| cello-cloudwatch-dev | CREATE_COMPLETE | 2026-05-23 | 10 alarms, 2 SNS topics, 1 multi-region dashboard (SECOPS-002) |
+| cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-05-23 | 10 alarms with -dev suffix, 2 SNS topics, 1 multi-region dashboard (SECOPS-002) |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-22 | |
 | cello-cicd-dev | UPDATE_COMPLETE | 2026-05-22 | |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
