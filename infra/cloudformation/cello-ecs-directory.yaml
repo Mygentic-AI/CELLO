@@ -67,7 +67,7 @@ Resources:
           Image: !Ref ImageUri
           Essential: true
           PortMappings:
-            - ContainerPort: 443
+            - ContainerPort: 4000
               Protocol: tcp
           Environment:
             - Name: CELLO_ENV
@@ -75,7 +75,7 @@ Resources:
             - Name: NODE_ID
               Value: !Ref AWS::Region
             - Name: PORT
-              Value: "443"
+              Value: "4000"
             - Name: HOME
               Value: /tmp
             - Name: CELLO_RELAY_MULTIADDR
@@ -117,7 +117,7 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: directory
           HealthCheck:
-            Command: ["CMD-SHELL", "curl -f -k https://localhost:443/health || curl -f http://localhost:443/health || exit 1"]
+            Command: ["CMD-SHELL", "curl -f http://localhost:4000/health || exit 1"]
             Interval: 30
             Timeout: 5
             Retries: 3
@@ -145,14 +145,14 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       Name: !Sub "cello-dir-${Environment}"
-      Port: 443
+      Port: 4000
       Protocol: HTTP
       TargetType: ip
       VpcId: !ImportValue
         Fn::Sub: "cello-${Environment}-vpc-id"
       HealthCheckPath: /health
       HealthCheckProtocol: HTTP
-      HealthCheckPort: "443"
+      HealthCheckPort: "4000"
       HealthyThresholdCount: 2
       UnhealthyThresholdCount: 3
       HealthCheckIntervalSeconds: 30
@@ -193,7 +193,7 @@ Resources:
               Fn::Sub: "cello-${Environment}-ecs-directory-sg"
       LoadBalancers:
         - ContainerName: directory
-          ContainerPort: 443
+          ContainerPort: 4000
           TargetGroupArn: !Ref TargetGroup
       Tags:
         - Key: Project
