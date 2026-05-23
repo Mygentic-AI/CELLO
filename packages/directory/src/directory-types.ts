@@ -58,6 +58,14 @@ export interface SessionRequest {
   target_pubkey: Uint8Array; // 32-byte K_local pubkey of the desired counterparty
   /** SESSION-006 / CONNREQ-002: required in M3; absent in M2 legacy frames */
   connection_id?: string;
+  /**
+   * CELLO-RELAY-001: client-reported RTT measurements to known relays.
+   * Map from relayId (Ed25519 public key hex) to RTT in milliseconds.
+   * Used by the directory to assign the lowest-latency available relay.
+   * Optional — if absent, the directory assigns the relay with the lowest
+   * consecutive failure count.
+   */
+  relay_rtt?: Record<string, number>;
 }
 
 // SessionAssignment and participant/relay types live in @cello/protocol-types (MSG-004 boundary fix).
