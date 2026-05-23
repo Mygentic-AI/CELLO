@@ -268,3 +268,40 @@ The `describe.skip` stubs in `packages/directory/src/__tests__/federation-001a-r
 ```bash
 ./infra/setup-replication.sh dev us-east-1 eu-central-1 ap-northeast-1
 ```
+
+---
+
+## 2026-05-23 05:30 UTC — DEPLOY-002/DEPLOY-003 agent
+
+**Stories completed:** DEPLOY-002 (Directory Dockerfile + pipeline deploy stage) and DEPLOY-003 (Relay Dockerfile + pipeline deploy stage) — both pipelines green, both services running real images on ECS Fargate.
+
+**Final deployed state:**
+
+| Service | Image Tag | Pipeline Status |
+|---|---|---|
+| cello-directory-dev | `1c68fbb` | Succeeded |
+| cello-relay-dev | `6e0c50b` | Succeeded |
+
+**What this unblocks:**
+
+1. **SECOPS-004 AC-002/AC-003** — Flyway migrations have run against dev RDS (V18 creates `cello_service` role). The rotation Lambda can now successfully `ALTER ROLE cello_service PASSWORD '...'`. Re-trigger rotation to verify:
+   ```bash
+   aws secretsmanager rotate-secret \
+     --secret-id cello/dev/directory/rds-credentials \
+     --region us-east-1
+   ```
+
+2. **FEDERATION-001** — V18 migration (`federation_schema.sql`) has been applied to RDS. The `sessions`, `checkpoint_node_signatures` columns, and `cello_service` role all exist in the live database.
+
+3. **Any story that needs real infrastructure** — both services are live and healthy. Directory serves HTTP on port 8080 behind the ALB (`cello-dir-dev-1136016900.us-east-1.elb.amazonaws.com`). Relay accepts libp2p connections on port 4000 at `10.0.6.181`.
+
+**Critical facts for agents touching these services:**
+
+- **Health endpoint:** directory listens on port 8080 (not 443, not 4000). Relay health is on port 4000 (same as libp2p transport — the relay muxes both).
+- **Pipeline deploys images only.** If you change ECS env vars, secrets, task CPU/memory, or any other task definition field, you must deploy via `aws cloudformation update-stack` or `./infra/deploy.sh`. The pipeline's buildspec clones the existing task def and only swaps the image URI.
+- **Relay multiaddr for directory config:** `/ip4/10.0.6.181/tcp/4001/p2p/12D3KooWHA2x2XwnhuP8bMStZ27kzUrjpdz6oxgmmG2WdPCd4WCj`. This is set in `deploy.sh` as the default `CELLO_RELAY_MULTIADDR`. The IP is ephemeral (Fargate) but the peer ID is stable (derived from the node private key in Secrets Manager).
+- **Security group:** directory SG allows inbound 8080 from ALB only. If you change the health port again, the SG must be updated in `cello-vpc.yaml` AND deployed (or applied via EC2 API if the VPC stack can't update due to cross-stack export dependency).
+- **`sslmode=no-verify`** for RDS connections. Node pg v8+ promotes `require` to `verify-full`. AWS-managed RDS certs appear as self-signed chains. This is intentional, not a bug.
+- **`DEV_ENVELOPE_KEY`** is injected via ECS Secrets from `cello/dev/directory/envelope-key`. If you add a new secret, add it to both the ECS task definition (`cello-ecs-directory.yaml` Secrets block) AND the IAM role (`cello-iam.yaml` — enumerate the specific ARN, never use wildcards).
+
+**No further action required from DEPLOY-002/DEPLOY-003.**

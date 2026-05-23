@@ -265,14 +265,90 @@ Delivered the production `S3AuditLogShipper` adapter and wired it into the compo
 
 ---
 
+## DEPLOY-002 / DEPLOY-003 — Real Docker Images, Pipeline Build+Deploy, ECS Fargate Live
+
+DEPLOY-002 and DEPLOY-003 were delivered together across 2026-05-22 to 2026-05-23. They replaced the stub container images with real multi-stage Docker builds and wired the pipelines to build, push to ECR, and deploy to ECS Fargate on every push.
+
+**What was delivered:**
+
+- `packages/directory/Dockerfile` — multi-stage build: Node 24-slim (build tools for native addons) → TypeScript compilation → production stage with Flyway CLI, Node runtime, compiled dist, and migrations. Target: `linux/amd64`.
+- `packages/directory/docker-entrypoint.sh` — fetches RDS credentials from Secrets Manager at startup, runs Flyway migrations, then launches the Node app. Creates the `cello_service` PostgreSQL role if it doesn't exist.
+- `packages/relay/Dockerfile` + `packages/relay/docker-entrypoint.sh` — equivalent for the relay service.
+- Buildspec updates for both `cello-directory-build` and `cello-relay-build` — added Docker build, ECR push, `aws ecs register-task-definition` (clones existing task def, swaps image URI), `aws ecs update-service`, and `aws ecs wait services-stable`.
+- Both pipelines now build real images tagged with the git commit SHA and deploy them to ECS without any CloudFormation involvement.
+
+**Final deployed state (2026-05-23):**
+
+| Service | Pipeline | Image Tag | Status |
+|---|---|---|---|
+| cello-directory-dev | cello-directory-pipeline | `1c68fbb` | Succeeded — healthy on port 8080 |
+| cello-relay-dev | cello-relay-pipeline | `6e0c50b` | Succeeded — healthy on port 4000 |
+
+**Bugs found and fixed during deployment:**
+
+### 1. Rotation Lambda discarding host/port/dbname during credential rotation
+
+**Symptom:** Directory task couldn't connect to RDS — `TypeError: Invalid URL` in the connection string builder.  
+**Root cause:** `handler.py` in `_create_secret` was writing `{"username": ..., "password": ...}` to AWSPENDING, discarding `host`, `port`, `dbname` from the current secret.  
+**Fix:** `new_secret = json.dumps({**current_dict, "password": new_password})` — preserves all fields.
+
+### 2. RDS rejects unencrypted connections
+
+**Symptom:** `no pg_hba.conf entry ... no encryption`.  
+**Root cause:** Directory app connected without SSL. RDS enforces `pg_hba.conf` rules requiring SSL.  
+**Fix:** Added `?sslmode=require` to the connection URL.
+
+### 3. Node pg v8+ promotes sslmode=require to verify-full
+
+**Symptom:** `self-signed certificate in certificate chain`.  
+**Root cause:** Node `pg` v8+ treats `sslmode=require` as `verify-full`, attempting to verify the AWS-managed RDS CA cert chain (which appears self-signed).  
+**Fix:** Changed to `?sslmode=no-verify` — traffic is encrypted, but cert chain verification is skipped (acceptable within VPC with AWS-managed certs).
+
+### 4. Missing DEV_ENVELOPE_KEY secret
+
+**Symptom:** App exited with `adapter.config.missing: DEV_ENVELOPE_KEY`.  
+**Root cause:** `LocalEnvelopeKeyProvider` requires a 64-char hex AES-256 key injected at runtime. No secret existed in Secrets Manager.  
+**Fix:** Generated key, stored in `cello/dev/directory/envelope-key`, added to ECS task definition Secrets block, added to IAM role permissions.
+
+### 5. Port conflict — libp2p transport vs health endpoint
+
+**Symptom:** `EADDRINUSE :::4000`.  
+**Root cause:** libp2p transport already binds port 4000. The health HTTP server was also trying to bind 4000.  
+**Fix:** Changed health endpoint to port 8080. Updated `HEALTH_PORT` env var, Dockerfile `EXPOSE`, and test assertions.
+
+### 6. Non-root container can't bind port 443
+
+**Symptom:** `EACCES: permission denied 0.0.0.0:443`.  
+**Root cause:** Container runs as non-root user `cello` (security best practice). Ports below 1024 require root.  
+**Fix:** Changed from 443 to 8080 (unprivileged port).
+
+### 7. Security group blocking ALB health checks on port 8080
+
+**Symptom:** ECS tasks passed container-level health check but failed ALB health check. Tasks cycled endlessly.  
+**Root cause:** `EcsDirectorySecurityGroup` only allowed inbound port 443 from ALB. After switching to port 8080, the ALB couldn't reach the container.  
+**Fix:** Updated SG to allow port 8080. Also added port 80 inbound to ALB SG (for HTTP listener). Note: CF `GroupDescription` change triggers SG replacement — kept original description to allow in-place rule update.
+
+### 8. Pipeline and CF stack competing for ECS service updates
+
+**Symptom:** `aws ecs wait services-stable` timed out after 10 minutes. Multiple deployments competing.  
+**Root cause:** The CF stack update and pipeline both called `aws ecs update-service` at the same time, creating 3 concurrent deployments. The waiter timed out because old deployments were still draining.  
+**Fix:** Waited for CF stack to complete, then re-triggered the pipeline on a clean slate. The `ecs wait` must run when no other deployment is in progress.
+
+**Key architectural decisions:**
+
+- **Pipeline does NOT run CloudFormation.** The buildspec clones the existing task definition via `aws ecs describe-task-definition | jq`, swaps only the image URI, registers the new revision, and calls `update-service`. This is fast (~3 min build + ~2 min stabilization) and avoids CF's 60-minute timeout.
+- **Port separation:** libp2p transport on 4000, HTTP health on 8080. These must never share a port.
+- **CF template changes require direct CF deploy.** Since the pipeline only swaps images, any ECS env var, secret, or task definition change must be deployed via `deploy.sh` or `aws cloudformation update-stack` separately.
+
+---
+
 ## What Remains Open
 
-- **DEPLOY-002** — Directory Dockerfile, entrypoint, health check, Flyway integration (starting now)
-- **DEPLOY-003** — Relay Dockerfile and deployment
 - **DEPLOY-005** — Production deployment sequencing (sequential region rollout)
+- **SECOPS-004 AC-002/AC-003** — now unblocked. Flyway V18 has run (directory service is live with real image). `cello_service` role exists. Rotation can be re-tested.
 - **cello-crypto-pipeline** — flaky timing test (`keygen under 50ms`, gets 71ms on cold CodeBuild VMs). Threshold needs raising.
-- **cello-client-pipeline** — 1 test file failing (pre-existing, not CI-related)
-- **cello-directory-pipeline** — 3 test failures (pre-existing, likely integration tests needing real AWS state)
+- **cello-client-pipeline** — test failures (pre-existing, not CI-related)
+- **VPC template drift** — `GroupDescription` on ALB SG can't be changed via CF without SG replacement. Current workaround: keep original description, update only ingress rules. Not a functional issue.
 
 ---
 
