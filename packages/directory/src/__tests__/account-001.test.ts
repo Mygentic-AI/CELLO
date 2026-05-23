@@ -3,7 +3,7 @@
  *
  * Specification (stated interpretations for each AC):
  *
- * AC-001: V21 + V22 migrations create user_accounts with UUID PK, phone_stub_hash TEXT UNIQUE NOT NULL,
+ * AC-001: V22 + V23 migrations create user_accounts with UUID PK, phone_stub_hash TEXT UNIQUE NOT NULL,
  *   email_stub_hash TEXT (nullable), created_at TIMESTAMPTZ DEFAULT now(), chain_hash TEXT NOT NULL.
  *   agent_profiles gains account_id UUID nullable column with FK to user_accounts.account_id.
  *   Both tables have RLS enabled with insert_only and select_all policies for cello_service.
@@ -146,7 +146,7 @@ describeIntegration(
   () => {
     it("AC-001: user_accounts table exists with correct columns, RLS, policies for cello_service", async () => {
       /*
-       * AC-001: Verify user_accounts was created by V21 migration with:
+       * AC-001: Verify user_accounts was created by V22 migration with:
        *   - account_id UUID PRIMARY KEY
        *   - phone_stub_hash TEXT UNIQUE NOT NULL
        *   - email_stub_hash TEXT (nullable)
@@ -960,7 +960,7 @@ describeIntegration(
       }
 
       // If this fails: run Flyway migrations (docker compose up -d && flyway migrate)
-      // to apply V21 and V22 before running this test suite.
+      // to apply V22 and V23 before running this test suite.
       expect(appliedVersion).toBeGreaterThanOrEqual(expectedVersion);
     });
   },
