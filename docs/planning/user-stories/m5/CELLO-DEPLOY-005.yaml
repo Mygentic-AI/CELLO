@@ -319,3 +319,20 @@ references:
     - CELLO-DEPLOY-004
   blocks:
     - CELLO-FEDERATION-E2E-001
+  inherited_acs: >
+    DEPLOY-005 owns the following ACs deferred from closed stories
+    (verified against dev/us-east-1 but not yet against multi-region
+    or requiring fault injection):
+    - DEPLOY-002 AC-003: broken migration causes task exit non-zero;
+      old task revision continues serving (fault injection required).
+    - DEPLOY-002 AC-005: sequential multi-region deploy — eu-central-1
+      waits for us-east-1 stable state before starting.
+    - DEPLOY-003 AC-005: three relayIds are distinct across regions
+      (requires eu-central-1 and ap-northeast-1 deployed).
+    - DEPLOY-003 AC-006: rolling replacement never drops runningCount
+      below 1 (requires observing a live rolling deploy).
+    - DEPLOY-003 AC-007: GET /health on relay port 4000 verified from
+      inside the VPC. Prerequisite: enable ECS Exec on the relay ECS
+      service (enableExecuteCommand: true in cello-ecs-relay.yaml and
+      the task role must have ssmmessages:* permissions). ECS Exec is
+      needed for in-VPC smoke test tooling regardless.
