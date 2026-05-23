@@ -491,23 +491,29 @@ state_file, env, region, today, rds_endpoint, alb_dns = sys.argv[1:]
 with open(state_file) as f:
     content = f.read()
 
-# Update last deployed date
-content = re.sub(
-    rf"(### {re.escape(env)} — {re.escape(region)}\n\*Last deployed:) [^\n]+",
-    rf"\1 {today}",
-    content
-)
-
-# Update RDS endpoint if not pending
-if rds_endpoint and rds_endpoint != "pending" and rds_endpoint != "None":
-    content = re.sub(r"\| RDS Endpoint \|[^\n]+", f"| RDS Endpoint | {rds_endpoint} |", content)
-
-# Update ALB if not pending
-if alb_dns and alb_dns != "pending" and alb_dns != "None":
-    content = re.sub(r"\| Directory ALB \|[^\n]+", f"| Directory ALB | {alb_dns} |", content)
+# Locate the section for this env/region and update only within it.
+# Strategy: split on section headers, update the matching section, reassemble.
+section_header = f"### {env} — {region}"
+parts = re.split(r"(?=### )", content)
+updated_parts = []
+for part in parts:
+    if part.startswith(section_header):
+        # Update last deployed date
+        part = re.sub(
+            rf"({re.escape(section_header)}\n\*Last deployed:) [^\n]+",
+            rf"\1 {today}",
+            part
+        )
+        # Update RDS endpoint if not pending
+        if rds_endpoint and rds_endpoint != "pending" and rds_endpoint != "None":
+            part = re.sub(r"\| RDS Endpoint \|[^\n]+", f"| RDS Endpoint | {rds_endpoint} |", part)
+        # Update ALB if not pending
+        if alb_dns and alb_dns != "pending" and alb_dns != "None":
+            part = re.sub(r"\| Directory ALB \|[^\n]+", f"| Directory ALB | {alb_dns} |", part)
+    updated_parts.append(part)
 
 with open(state_file, "w") as f:
-    f.write(content)
+    f.write("".join(updated_parts))
 PYEOF_INNER
   fi
   echo "infra/STATE.md updated."

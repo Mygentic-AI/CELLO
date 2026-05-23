@@ -12,13 +12,22 @@ Parameters:
     AllowedValues: [dev, staging, production]
     Description: Deployment environment
 
+Conditions:
+  # us-east-1 roles already exist with non-region-scoped names and are referenced
+  # by live CloudFormation exports — renaming them would break those exports.
+  # Non-primary regions use region-scoped names to avoid IAM global name collision.
+  IsPrimaryRegion: !Equals [!Ref AWS::Region, "us-east-1"]
+
 Resources:
   # ── Directory task execution role (ECS agent: pull images, write logs, read secrets) ──
 
   DirectoryTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "cello-${Environment}-${AWS::Region}-directory-execution-role"
+      RoleName: !If
+        - IsPrimaryRegion
+        - !Sub "cello-${Environment}-directory-execution-role"
+        - !Sub "cello-${Environment}-${AWS::Region}-directory-execution-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -61,7 +70,10 @@ Resources:
   DirectoryTaskRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "cello-${Environment}-${AWS::Region}-directory-task-role"
+      RoleName: !If
+        - IsPrimaryRegion
+        - !Sub "cello-${Environment}-directory-task-role"
+        - !Sub "cello-${Environment}-${AWS::Region}-directory-task-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -119,7 +131,10 @@ Resources:
   RelayTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "cello-${Environment}-${AWS::Region}-relay-execution-role"
+      RoleName: !If
+        - IsPrimaryRegion
+        - !Sub "cello-${Environment}-relay-execution-role"
+        - !Sub "cello-${Environment}-${AWS::Region}-relay-execution-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -154,7 +169,10 @@ Resources:
   RelayTaskRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "cello-${Environment}-${AWS::Region}-relay-task-role"
+      RoleName: !If
+        - IsPrimaryRegion
+        - !Sub "cello-${Environment}-relay-task-role"
+        - !Sub "cello-${Environment}-${AWS::Region}-relay-task-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:

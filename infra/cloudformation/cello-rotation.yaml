@@ -23,6 +23,9 @@ Parameters:
     AllowedValues: [dev, staging, production]
     Description: Deployment environment
 
+Conditions:
+  IsPrimaryRegion: !Equals [!Ref AWS::Region, "us-east-1"]
+
 Resources:
 
   # ── Lambda execution role (least-privilege) ───────────────────────────────
@@ -34,7 +37,10 @@ Resources:
   RotationLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "cello-${Environment}-${AWS::Region}-rds-rotation-lambda-role"
+      RoleName: !If
+        - IsPrimaryRegion
+        - !Sub "cello-${Environment}-rds-rotation-lambda-role"
+        - !Sub "cello-${Environment}-${AWS::Region}-rds-rotation-lambda-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
