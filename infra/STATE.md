@@ -29,7 +29,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-22 | |
 | cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-05-23 | 10 alarms with -dev suffix, 2 SNS topics, 1 multi-region dashboard (SECOPS-002) |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-22 | |
-| cello-cicd-dev | UPDATE_COMPLETE (pending redeploy after DEPLOY-005 merge) | 2026-05-22 | DEPLOY-005 modifies cello-cicd.yaml (StagingDeploy/SmokeTest/ProductionDeploy stages + dead code removal). Run `./infra/deploy.sh dev us-east-1` immediately after DEPLOY-005 merges to main. |
+| cello-cicd-dev | UPDATE_COMPLETE | 2026-05-23 | us-east-1 only — pipelines, webhook receiver, pipeline filter |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
 | Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-22 | |
 
@@ -43,6 +43,11 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | Private Subnet B | subnet-0dba876a5a923404b |
 | Public Subnet A | subnet-00780580ba49e6eb0 |
 | Public Subnet B | subnet-03f5ad4cd18fca4c7 |
+| Private Route Table ID | rtb-0463fe7bcbba06ecb |
+| RDS Security Group | sg-07a7414f0f862067b |
+| ECS Directory Security Group | sg-0cc7f8493f3aff8d8 |
+| ECS Relay Security Group | sg-0cab5bd4ec63f05c7 |
+| ALB Security Group | sg-0b694f5a0dcf0fbbb |
 | KMS Key ARN | arn:aws:kms:us-east-1:257394457473:key/7eb72942-d9f4-4c9a-9494-05bce889a39f |
 | KMS Key ID | 7eb72942-d9f4-4c9a-9494-05bce889a39f |
 | Audit Log Bucket | cello-audit-logs-dev-us-east-1 |
@@ -84,6 +89,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-23 | Stub image running |
 | cello-cloudwatch-dev | CREATE_COMPLETE | 2026-05-23 | Alarms only — dashboard skipped (us-east-1 only) |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-cicd-dev | NOT DEPLOYED | — | CICD pipeline is us-east-1 only |
 
 #### Key Resources — dev eu-central-1
 
@@ -131,6 +137,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-23 | Stub image running |
 | cello-cloudwatch-dev | CREATE_COMPLETE | 2026-05-23 | Alarms only — dashboard skipped (us-east-1 only) |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-23 | |
+| cello-cicd-dev | NOT DEPLOYED | — | CICD pipeline is us-east-1 only |
 
 #### Key Resources — dev ap-northeast-1
 
