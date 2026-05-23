@@ -492,6 +492,10 @@ Resources:
       # 5. Run: aws ecs wait services-stable (10-minute timeout)
       # 6. On success: emit pipeline.staging.deployed {pipeline, commitSha, imageDigest, durationMs}
       # 7. On failure: emit pipeline.staging.deploy.failed {pipeline, commitSha, reason}; exit 1
+      #
+      # NO_SOURCE is correct here: this project performs only AWS API calls (ecs describe-task-definition,
+      # register-task-definition, update-service, wait services-stable) and does not need any repository
+      # source code. The aws CLI and jq are pre-installed in aws/codebuild/standard:7.0.
       Source:
         Type: NO_SOURCE
         BuildSpec: |
@@ -737,10 +741,14 @@ Resources:
         EnvironmentVariables:
           - Name: CELLO_ENV
             Value: !Ref Environment
+          # DEPLOY_REGION and SERVICE_NAME have no meaningful defaults — they are always
+          # overridden by CodePipeline action EnvironmentVariables at runtime.
+          # Setting them to OVERRIDE_AT_RUNTIME makes this intent explicit and prevents
+          # accidental runs against a hardcoded us-east-1 or cello-directory target.
           - Name: DEPLOY_REGION
-            Value: "us-east-1"
+            Value: "OVERRIDE_AT_RUNTIME"
           - Name: SERVICE_NAME
-            Value: "cello-directory"
+            Value: "OVERRIDE_AT_RUNTIME"
       ServiceRole: !GetAtt CodeBuildRole.Arn
 
   # CodePipelines (one per package)
@@ -996,17 +1004,22 @@ Resources:
                 Version: "1"
               Configuration:
                 ProjectName: !Ref StagingDeployDirectoryBuild
+                # #{BuildAction.IMAGE_URI} resolves from the exported-variables declared in
+                # packages/directory/buildspec.yml post_build phase (DEPLOY-005 review fix).
                 EnvironmentVariables: >
-                  [{"name":"STAGING_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                  [{"name":"STAGING_IMAGE_URI","value":"#{BuildAction.IMAGE_URI}","type":"PLAINTEXT"},
                    {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
               InputArtifacts:
                 - Name: BuildOutput
-              OutputArtifacts:
-                - Name: StagingDeployOutput
+              # No OutputArtifacts: StagingDeployDirectoryBuild has Artifacts.Type=NO_ARTIFACTS.
+              # Declaring OutputArtifacts on a NO_ARTIFACTS project causes a pipeline validation error.
         # DEPLOY-005 Stage 4: Smoke test against staging ALB
         # AC-002: 8-scenario smoke suite runs as separate process (no VPC, no direct DB access)
         # AC-004/SI-001: production deploy stage will not run if this stage fails
-        # AC-009: STAGING_DIRECTORY_URL injected dynamically (read from stack output in deploy.sh)
+        # AC-009: STAGING_DIRECTORY_URL is set at the CodeBuild project level from the
+        # StagingDirectoryUrl CloudFormation parameter (deploy.sh reads cello-ecs-directory-{env}
+        # stack output AlbDnsName and passes it as StagingDirectoryUrl at deploy time).
+        # No pipeline-level override is needed — the project env var is already correct.
         - Name: SmokeTest
           Actions:
             - Name: SmokeTestAction
@@ -1018,8 +1031,7 @@ Resources:
               Configuration:
                 ProjectName: !Ref SmokeTestBuild
                 EnvironmentVariables: >
-                  [{"name":"STAGING_DIRECTORY_URL","value":"#{StagingDeployVariables.ALB_DNS_NAME}","type":"PLAINTEXT"},
-                   {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
+                  [{"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
               InputArtifacts:
                 - Name: SourceOutput
               OutputArtifacts:
@@ -1028,6 +1040,7 @@ Resources:
         # SI-001: this stage only runs if SmokeTest stage completed with passing status
         # SI-002: same image URI from Build stage passed through (no new build)
         # RunOrder ensures sequencing within stage: us-east-1(1) → eu-central-1(2) → ap-northeast-1(3)
+        # #{BuildAction.IMAGE_URI} resolves the exported variable from packages/directory/buildspec.yml.
         - Name: ProductionDeploy
           Actions:
             - Name: ProductionDeployUsEast1
@@ -1042,7 +1055,7 @@ Resources:
                 EnvironmentVariables: >
                   [{"name":"DEPLOY_REGION","value":"us-east-1","type":"PLAINTEXT"},
                    {"name":"SERVICE_NAME","value":"cello-directory","type":"PLAINTEXT"},
-                   {"name":"PROD_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                   {"name":"PROD_IMAGE_URI","value":"#{BuildAction.IMAGE_URI}","type":"PLAINTEXT"},
                    {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
               InputArtifacts:
                 - Name: BuildOutput
@@ -1058,7 +1071,7 @@ Resources:
                 EnvironmentVariables: >
                   [{"name":"DEPLOY_REGION","value":"eu-central-1","type":"PLAINTEXT"},
                    {"name":"SERVICE_NAME","value":"cello-directory","type":"PLAINTEXT"},
-                   {"name":"PROD_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                   {"name":"PROD_IMAGE_URI","value":"#{BuildAction.IMAGE_URI}","type":"PLAINTEXT"},
                    {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
               InputArtifacts:
                 - Name: BuildOutput
@@ -1074,7 +1087,7 @@ Resources:
                 EnvironmentVariables: >
                   [{"name":"DEPLOY_REGION","value":"ap-northeast-1","type":"PLAINTEXT"},
                    {"name":"SERVICE_NAME","value":"cello-directory","type":"PLAINTEXT"},
-                   {"name":"PROD_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                   {"name":"PROD_IMAGE_URI","value":"#{BuildAction.IMAGE_URI}","type":"PLAINTEXT"},
                    {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
               InputArtifacts:
                 - Name: BuildOutput
@@ -1129,15 +1142,18 @@ Resources:
                 Version: "1"
               Configuration:
                 ProjectName: !Ref StagingDeployRelayBuild
+                # #{BuildAction.IMAGE_URI} resolves the exported variable from packages/relay/buildspec.yml.
                 EnvironmentVariables: >
-                  [{"name":"STAGING_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                  [{"name":"STAGING_IMAGE_URI","value":"#{BuildAction.IMAGE_URI}","type":"PLAINTEXT"},
                    {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
               InputArtifacts:
                 - Name: BuildOutput
-              OutputArtifacts:
-                - Name: StagingDeployOutput
+              # No OutputArtifacts: StagingDeployRelayBuild has Artifacts.Type=NO_ARTIFACTS.
+              # Declaring OutputArtifacts on a NO_ARTIFACTS project causes a pipeline validation error.
         # Relay smoke test: verifies relay health endpoint at port 4000 behind ALB
         # Note: relay ALB is not exposed externally in Phase 1; smoke test uses directory endpoint
+        # STAGING_DIRECTORY_URL is set at the CodeBuild project level from the StagingDirectoryUrl
+        # CloudFormation parameter — no pipeline-level override needed.
         - Name: SmokeTest
           Actions:
             - Name: SmokeTestAction
@@ -1149,12 +1165,12 @@ Resources:
               Configuration:
                 ProjectName: !Ref SmokeTestBuild
                 EnvironmentVariables: >
-                  [{"name":"STAGING_DIRECTORY_URL","value":"#{StagingDeployVariables.ALB_DNS_NAME}","type":"PLAINTEXT"},
-                   {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
+                  [{"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
               InputArtifacts:
                 - Name: SourceOutput
               OutputArtifacts:
                 - Name: SmokeTestOutput
+        # #{BuildAction.IMAGE_URI} resolves the exported variable from packages/relay/buildspec.yml.
         - Name: ProductionDeploy
           Actions:
             - Name: ProductionDeployUsEast1
@@ -1169,7 +1185,7 @@ Resources:
                 EnvironmentVariables: >
                   [{"name":"DEPLOY_REGION","value":"us-east-1","type":"PLAINTEXT"},
                    {"name":"SERVICE_NAME","value":"cello-relay","type":"PLAINTEXT"},
-                   {"name":"PROD_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                   {"name":"PROD_IMAGE_URI","value":"#{BuildAction.IMAGE_URI}","type":"PLAINTEXT"},
                    {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
               InputArtifacts:
                 - Name: BuildOutput
@@ -1185,7 +1201,7 @@ Resources:
                 EnvironmentVariables: >
                   [{"name":"DEPLOY_REGION","value":"eu-central-1","type":"PLAINTEXT"},
                    {"name":"SERVICE_NAME","value":"cello-relay","type":"PLAINTEXT"},
-                   {"name":"PROD_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                   {"name":"PROD_IMAGE_URI","value":"#{BuildAction.IMAGE_URI}","type":"PLAINTEXT"},
                    {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
               InputArtifacts:
                 - Name: BuildOutput
@@ -1201,7 +1217,7 @@ Resources:
                 EnvironmentVariables: >
                   [{"name":"DEPLOY_REGION","value":"ap-northeast-1","type":"PLAINTEXT"},
                    {"name":"SERVICE_NAME","value":"cello-relay","type":"PLAINTEXT"},
-                   {"name":"PROD_IMAGE_URI","value":"#{BuildVariables.IMAGE_URI}","type":"PLAINTEXT"},
+                   {"name":"PROD_IMAGE_URI","value":"#{BuildAction.IMAGE_URI}","type":"PLAINTEXT"},
                    {"name":"COMMIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]
               InputArtifacts:
                 - Name: BuildOutput

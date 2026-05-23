@@ -1,4 +1,9 @@
 version: 0.2
+# Export IMAGE_URI so downstream pipeline stages (StagingDeploy, ProductionDeploy) can
+# reference it via #{BuildAction.IMAGE_URI} (CodePipeline V2 variable syntax).
+# Without this, #{BuildVariables.IMAGE_URI} references are silently empty.
+exported-variables:
+  - IMAGE_URI
 phases:
   install:
     runtime-versions:

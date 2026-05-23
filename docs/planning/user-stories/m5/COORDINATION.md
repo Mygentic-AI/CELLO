@@ -407,3 +407,41 @@ The `DenyNonPutActions` statement in `cello-s3.yaml` is live and enforced correc
 Nothing immediately — PERSIST-022 has no downstream dependencies in the M5 migration sequence. PERSIST-023 (V20 migration) remains parked, blocked on FEDERATION-003 (V19) merging first per the Flyway version ordering constraint.
 
 **Active worktrees remaining:** FEDERATION-003, PERSIST-023, ACCOUNT-001 (last two parked).
+
+---
+
+## 2026-05-23 — DEPLOY-005 agent: story closed (review fixes applied)
+
+**Story completed:** DEPLOY-005 (Staging deploy + smoke test + production deploy pipeline stages) — implementation committed. Review findings fixed in a second commit. Worktree branch `DEPLOY-005`.
+
+**What was delivered:**
+
+- `infra/cloudformation/cello-cicd.yaml` — StagingDeploy, SmokeTest, and ProductionDeploy stages added to `DirectoryPipeline` and `RelayPipeline`. `StagingDeployDirectoryBuild`, `StagingDeployRelayBuild`, `SmokeTestBuild`, and `ProductionDeployBuild` CodeBuild projects defined.
+- `packages/directory/buildspec.yml` — `exported-variables: [IMAGE_URI]` added at top level so `#{BuildAction.IMAGE_URI}` resolves in downstream pipeline actions.
+- `packages/relay/buildspec.yml` — same `exported-variables: [IMAGE_URI]` fix.
+- `packages/e2e-tests/src/smoke/run-smoke-tests.ts` and `scenarios.ts` — 8-scenario smoke runner emitting `pipeline.staging.smoke_test.passed` / `pipeline.staging.smoke_test.failed`.
+- `packages/e2e-tests/src/__tests__/deploy-005.test.ts` — unit test suite.
+- 9 new canonical event names added to the discussion log taxonomy.
+
+**IMPORTANT: Smoke test scenario deferral (AC-002)**
+
+The 8 AC-002 smoke scenarios are implemented as **ALB health check stubs** in Phase 1. Full multi-agent MCP protocol execution for each scenario requires the CELLO MCP client binary and a multi-agent test driver to be available in the CodeBuild environment. This infrastructure does not exist until FEDERATION-E2E-001.
+
+| Scenario | Phase 1 behavior | Full execution |
+|---|---|---|
+| 1. Two agent sessions established | ALB health check | FEDERATION-E2E-001 |
+| 2. FROST ceremony completes | ALB health check | FEDERATION-E2E-001 |
+| 3. Message exchange with Merkle | ALB health check | FEDERATION-E2E-001 |
+| 4. Session seal with directory | ALB health check | FEDERATION-E2E-001 |
+| 5. Relay failure and reassignment | ALB health check | FEDERATION-E2E-001 |
+| 6. Pre-seal reconciliation | ALB health check | FEDERATION-E2E-001 |
+| 7. Concurrent connection fan-out | ALB health check | FEDERATION-E2E-001 |
+| 8. Multi-session fan-in | ALB health check | FEDERATION-E2E-001 |
+
+The smoke test runner (`run-smoke-tests.ts`) is structured to call `runScenario(number, name)` for each scenario — the per-scenario assertions are the `switch` branches in `runScenario()`. Each branch currently performs a health check and returns. FEDERATION-E2E-001 must expand these branches with real MCP-level assertions.
+
+**What this does NOT block:** The pipeline stages are fully wired and functional. A staging deploy failure halts the pipeline (AC-005). A smoke test failure (ALB unreachable, HTTP non-200, or timeout) halts production deploy (AC-004/SI-001). The health check is a real gate — if the newly deployed ECS task fails its health check, ALB removes it from rotation and the smoke test `/health` call will time out or return 5xx, failing the stage.
+
+**Future work required (FEDERATION-E2E-001):**
+
+Expand `runScenario()` switch branches in `packages/e2e-tests/src/smoke/run-smoke-tests.ts` with real MCP-level protocol assertions for all 8 scenarios.
