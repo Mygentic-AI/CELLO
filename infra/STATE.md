@@ -12,24 +12,24 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 ## Environments
 
 ### dev — us-east-1
-*Last deployed: 2026-05-22
+*Last deployed: 2026-05-23
 
-| Stack | Status | Last Deployed |
-|---|---|---|
-| cello-ecr-dev | UPDATE_COMPLETE | 2026-05-22 |
-| cello-iam-dev | CREATE_COMPLETE | 2026-05-22 |
-| cello-secrets-dev | CREATE_COMPLETE | 2026-05-22 |
-| cello-vpc-dev | CREATE_COMPLETE | 2026-05-22 |
-| cello-kms-dev | CREATE_COMPLETE | 2026-05-22 |
-| cello-s3-dev | CREATE_COMPLETE | 2026-05-22 |
-| cello-rds-dev | CREATE_COMPLETE | 2026-05-22 |
-| cello-rotation-dev | CREATE_COMPLETE | 2026-05-22 |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-22 | RDS_ENDPOINT/PORT/DB_NAME + HOME=/tmp added |
-| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-22 | WAL_DIR + CELLO_DIRECTORY_PUBKEY + HOME=/tmp added |
-| cello-route53-dev | CREATE_COMPLETE | 2026-05-22 |
-| cello-cicd-dev | UPDATE_COMPLETE | 2026-05-22 |
-| Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 |
-| Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-22 |
+| Stack | Status | Last Deployed | Notes |
+|---|---|---|---|
+| cello-ecr-dev | UPDATE_COMPLETE | 2026-05-22 | |
+| cello-iam-dev | UPDATE_COMPLETE | 2026-05-23 | envelope-key secret added |
+| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-22 | |
+| cello-vpc-dev | UPDATE_ROLLBACK_COMPLETE | 2026-05-23 | Template has port 8080 fix but can't deploy due to cross-stack export dependency; SG rules applied manually via EC2 API |
+| cello-kms-dev | CREATE_COMPLETE | 2026-05-22 | |
+| cello-s3-dev | UPDATE_COMPLETE | 2026-05-22 | |
+| cello-rds-dev | CREATE_COMPLETE | 2026-05-22 | |
+| cello-rotation-dev | UPDATE_COMPLETE | 2026-05-23 | Lambda code fixed to preserve all secret fields on rotation |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-23 | Port 8080, DEV_ENVELOPE_KEY, RELAY_MULTIADDR, AUDIT_BUCKET |
+| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-22 | |
+| cello-route53-dev | CREATE_COMPLETE | 2026-05-22 | |
+| cello-cicd-dev | UPDATE_COMPLETE | 2026-05-22 | |
+| Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
+| Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-22 | |
 
 #### Key Resources — dev us-east-1
 
@@ -72,7 +72,8 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | AWS Account ID | 257394457473 | |
 | ECR repo — directory | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory | us-east-1 only until per-region repos added |
 | ECR repo — relay | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay | us-east-1 only until per-region repos added |
-| Current image tag | stub (pending DEPLOY-003 pipeline success) | Pipeline building real images — relay and directory pipelines triggered 2026-05-22 |
+| Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:1c68fbb | Built from commit 1c68fbb, deployed 2026-05-23 |
+| Current relay image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay:6e0c50b | Built from commit 6e0c50b, deployed 2026-05-22 |
 | Route 53 Hosted Zone | cello.mygentic.ai | Zone ID read at deploy time via aws route53 list-hosted-zones |
 | CodeStar Connection (us-east-1) | arn:aws:codeconnections:us-east-1:257394457473:connection/1a7fba2b-dd1d-4ebe-8372-7122b89f56b5 | AVAILABLE — override via CELLO_GITHUB_CONNECTION_ID |
 
