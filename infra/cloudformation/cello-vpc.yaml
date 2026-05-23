@@ -150,7 +150,7 @@ Resources:
   AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: ALB - accepts HTTP/HTTPS from internet
+      GroupDescription: ALB - accepts HTTPS from internet
       VpcId: !Ref Vpc
       SecurityGroupIngress:
         - IpProtocol: tcp

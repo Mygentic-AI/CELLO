@@ -19,7 +19,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-ecr-dev | UPDATE_COMPLETE | 2026-05-22 | |
 | cello-iam-dev | UPDATE_COMPLETE | 2026-05-23 | envelope-key secret added |
 | cello-secrets-dev | UPDATE_COMPLETE | 2026-05-22 | |
-| cello-vpc-dev | UPDATE_ROLLBACK_COMPLETE | 2026-05-23 | Template has port 8080 fix but can't deploy due to cross-stack export dependency; SG rules applied manually via EC2 API |
+| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-23 | Port 8080 for directory SG, port 80+443 for ALB SG |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-22 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-22 | |
 | cello-rds-dev | CREATE_COMPLETE | 2026-05-22 | |
