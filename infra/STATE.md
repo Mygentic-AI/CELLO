@@ -29,7 +29,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-22 | |
 | cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-05-23 | 10 alarms with -dev suffix, 2 SNS topics, 1 multi-region dashboard (SECOPS-002) |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-22 | |
-| cello-cicd-dev | UPDATE_COMPLETE | 2026-05-22 | |
+| cello-cicd-dev | UPDATE_COMPLETE (pending redeploy after DEPLOY-005 merge) | 2026-05-22 | DEPLOY-005 modifies cello-cicd.yaml (StagingDeploy/SmokeTest/ProductionDeploy stages + dead code removal). Run `./infra/deploy.sh dev us-east-1` immediately after DEPLOY-005 merges to main. |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
 | Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-22 | |
 

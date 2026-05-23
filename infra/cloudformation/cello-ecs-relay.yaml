@@ -91,6 +91,12 @@ Resources:
       TaskDefinition: !Ref TaskDefinition
       DesiredCount: 1
       LaunchType: FARGATE
+      # DEPLOY-005 / inherited DEPLOY-003 AC-007:
+      # ECS Exec enables in-VPC health check of relay port 4000 via:
+      #   aws ecs execute-command --cluster cello-{env} --container relay --command "curl -f http://localhost:4000/health"
+      # Also required by DEPLOY-005 in-VPC smoke test tooling.
+      # Requires ssmmessages:* permissions on the relay task role (added in cello-iam.yaml).
+      EnableExecuteCommand: true
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: DISABLED
