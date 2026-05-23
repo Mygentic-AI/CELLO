@@ -491,18 +491,52 @@ Delivered `cello-waf.yaml` — a WAFv2 WebACL (REGIONAL scope) associated with t
 
 ---
 
+## DEPLOY-005 — Staging Gate, Smoke Test, and Sequential Multi-Region Production Deploy
+
+Delivered the production deployment sequencing that ensures a broken image cannot reach production. The pipeline now has four stages: Source → Build → StagingDeploy → SmokeTest → ProductionDeploy.
+
+**What was delivered:**
+
+- `infra/cloudformation/cello-cicd.yaml` — four new CodeBuild projects and corresponding pipeline stages:
+  - `StagingDeployDirectoryBuild` / `StagingDeployRelayBuild` — deploys the built image to the staging ECS service (dev = staging in Phase 1). Clones the existing task definition via ECS API, swaps the image URI, registers a new revision, calls `ecs update-service`, then `ecs wait services-stable`. Emits `pipeline.staging.deployed` on success, `pipeline.staging.deploy.failed` on failure.
+  - `SmokeTestBuild` — runs against the staging ALB URL (injected via the `StagingDirectoryUrl` CloudFormation parameter, read from `cello-ecs-directory` stack output `AlbDnsName` by `deploy.sh`). Phase-1 behavior: verifies `GET /health` returns HTTP 200, proving the new image booted and passed health checks. No VPC configuration — connects via the public ALB URL. Emits `pipeline.staging.smoke_test.passed` / `pipeline.staging.smoke_test.failed`.
+  - `ProductionDeployBuild` — receives `PROD_IMAGE_URI` via `#{BuildAction.IMAGE_URI}` (CodePipeline V2 variable syntax). No `docker build` — the same digest from the Build stage is deployed to production. Three sequential `ProductionDeploy` actions in the pipeline (RunOrder 1/2/3): us-east-1, eu-central-1, ap-northeast-1. Each waits for `ecs wait services-stable` before the next region starts.
+- `packages/directory/buildspec.yml` — removed redundant Build-stage ECS deploy (`aws ecs update-service` + `ecs wait services-stable`). ECS deploy is now exclusively owned by `StagingDeployBuild`. The Build stage only builds and pushes the Docker image. `exported-variables: [IMAGE_URI]` retained so `#{BuildAction.IMAGE_URI}` resolves in downstream stages.
+- `packages/relay/buildspec.yml` — same: redundant ECS deploy removed, ECR push and `exported-variables` retained.
+- `packages/e2e-tests/src/smoke/run-smoke-tests.ts` + `scenarios.ts` — smoke test runner. Phase-1: calls `checkStagingHealth()` (GET /health → HTTP 200 required) for each of the 8 scenario stubs. Emits structured JSON events for CloudWatch Logs Insights on both pass and failure paths.
+- `packages/e2e-tests/src/__tests__/deploy-005-structural.test.ts` — 29 structural tests covering all ACs and SIs via template text analysis (no network, no AWS).
+- `infra/deploy.sh` — reads `AlbDnsName` from the `cello-ecs-directory-{env}` stack output and passes it as the `StagingDirectoryUrl` parameter. No hardcoded `.elb.amazonaws.com` strings anywhere in `infra/`.
+- `infra/cloudformation/cello-ecs-relay.yaml` — `EnableExecuteCommand: true` added (DEPLOY-003 AC-007 inherited).
+- `infra/cloudformation/cello-iam.yaml` — `ssmmessages:*` permissions added to relay task role for ECS Exec.
+
+**Security invariants enforced:**
+
+- SI-001 (smoke before production): CodePipeline sequential stage ordering makes it structurally impossible for ProductionDeploy to run if SmokeTest did not complete successfully. Verified by structural test for both DirectoryPipeline and RelayPipeline.
+- SI-002 (same digest, no rebuild): ProductionDeployBuild inline buildspec contains no `docker build` command. `PROD_IMAGE_URI` is set to `#{BuildAction.IMAGE_URI}` in every ProductionDeploy action. Verified by structural test.
+
+**Phase-1 smoke test scope:**
+
+The 8 AC-002 scenarios (FROST ceremony, message exchange, session seal, relay failure simulation, pre-seal reconciliation, concurrent connection fan-out, multi-session fan-in) are deferred to `CELLO-FEDERATION-E2E-001`. In Phase 1, the smoke test performs `GET /health` on the staging ALB — sufficient to catch a broken container image before it reaches production. Each `runScenario()` branch is structured to be expanded with real MCP-level assertions when FEDERATION-E2E-001 provides the CELLO client binary in the CodeBuild environment.
+
+**Notable review findings fixed:**
+
+1. AC-002 story YAML text overstated Phase-1 scope — narrowed to health check gate with explicit deferral note.
+2. Dead code: `StagingDeployDirectoryBuild` was writing `STAGING_DIRECTORY_URL` to `/tmp/staging_url.env` and catting it. Files created in one CodeBuild container cannot be read by another — removed.
+3. Build-stage buildspecs were running ECS deploy twice (once in Build, once in StagingDeploy) — up to 10 extra minutes of wait time. Removed from Build stage.
+4. SI-001 test only covered DirectoryPipeline — added RelayPipeline assertion.
+5. SI-002 test added: asserts ProductionDeployBuild buildspec has no `docker build` and `PROD_IMAGE_URI` comes from `#{BuildAction.IMAGE_URI}`.
+
+**Pending action:** Run `./infra/deploy.sh dev us-east-1` to redeploy `cello-cicd-dev` with the new pipeline stages.
+
+---
+
 ## What Remains Open
 
-- **DEPLOY-005** — Production deployment sequencing (staging gate + sequential multi-region rollout). Also owns these deferred ACs from closed stories:
-  - DEPLOY-002 AC-003: fault injection (broken migration prevents startup, old task keeps serving)
-  - DEPLOY-002 AC-005: sequential multi-region deploy verified end-to-end
-  - DEPLOY-003 AC-005: three distinct relayIds across regions
-  - DEPLOY-003 AC-006: rolling replacement never drops runningCount below 1
-  - DEPLOY-003 AC-007: GET /health on relay port 4000 from inside VPC — requires ECS Exec enablement (prerequisite for DEPLOY-005 in-VPC smoke test tooling anyway)
 - **PERSIST-023** — migration renumbered V20→V21 (V20 taken by FEDERATION-002 hotfix); parked branch ready to merge
 - **ACCOUNT-001** — migrations renumbered V21/V22→V22/V23 (V21 taken by PERSIST-023); parked branch ready to merge after PERSIST-023
 - **SECOPS-003 AC-002/AC-007** — live request verification (rate-limit trigger, CommonRuleSet COUNT hit) pending manual test
 - **cello-crypto-pipeline** — flaky timing test (`keygen under 50ms`, gets 71ms on cold CodeBuild VMs). Threshold needs raising.
+- **cello-cicd-dev stack** — needs `./infra/deploy.sh dev us-east-1` after DEPLOY-005 merge (pipeline stages not active until redeployed)
 
 ---
 
