@@ -175,8 +175,10 @@ describe("AC-007: M1 tool set registered — no M0-removed tools", () => {
     const tools = (await mcpClient.listTools()).tools as Tool[];
     const names = tools.map((t) => t.name).sort();
 
+    // M1+ tool set: includes cello_backup/cello_restore added by PERSIST-022
     const expectedM1Tools = [
       "cello_await_session",
+      "cello_backup",
       "cello_close_session",
       "cello_get_inclusion_proof",
       "cello_get_sealed_receipt",
@@ -184,6 +186,7 @@ describe("AC-007: M1 tool set registered — no M0-removed tools", () => {
       "cello_list_sessions",
       "cello_receive",
       "cello_receive_session",
+      "cello_restore",
       "cello_send",
       "cello_status",
     ].sort();

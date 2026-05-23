@@ -148,9 +148,10 @@ describe("AC-004: factory produces identical tool names, schemas, wiring under I
     expect(toolsA.map((t) => t.name)).toEqual(toolsB.map((t) => t.name));
     expect(toolsA.map((t) => t.description)).toEqual(toolsB.map((t) => t.description));
     expect(toolsA.map((t) => t.inputSchema)).toEqual(toolsB.map((t) => t.inputSchema));
-    // M1 tool set: cello_receive (any-session default) + cello_receive_session (session-locked)
+    // M1+ tool set: includes cello_backup/cello_restore added by PERSIST-022
     expect(toolsA.map((t) => t.name)).toEqual([
       "cello_await_session",
+      "cello_backup",
       "cello_close_session",
       "cello_get_inclusion_proof",
       "cello_get_sealed_receipt",
@@ -158,6 +159,7 @@ describe("AC-004: factory produces identical tool names, schemas, wiring under I
       "cello_list_sessions",
       "cello_receive",
       "cello_receive_session",
+      "cello_restore",
       "cello_send",
       "cello_status",
     ]);
