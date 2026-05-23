@@ -379,3 +379,31 @@ The `DenyNonPutActions` statement in `cello-s3.yaml` is live and enforced correc
 **Deployed to dev/us-east-1:** `cello-cloudwatch-dev` reached `UPDATE_COMPLETE`. All 10 alarms exist with `-dev` suffix. SNS topics confirmed with PendingConfirmation subscriptions (requires one-time email confirmation click).
 
 **No further action required from SECOPS-002.** The stack is IaC — no application code, no migration, no separate verification step beyond the stack reaching CREATE_COMPLETE on each environment deploy.
+
+---
+
+## 2026-05-23 — PERSIST-022 agent: story closed
+
+**Story completed:** PERSIST-022 (S3CloudStorageProvider and composition root wiring) — merged to `main` at commit `c0c5c80`. Worktree and branch deleted.
+
+**No deployment step required for this story.** PERSIST-022 is application code only — no CloudFormation, no migration. The S3 bucket is operator-configured via `BACKUP_S3_BUCKET` env var; no new IaC resource was added.
+
+**What was delivered:**
+
+- `packages/client/src/s3-cloud-storage-provider.ts` — `S3CloudStorageProvider` implementing `CloudStorageProvider` using `@aws-sdk/client-s3` (`3.1053.0`, exact pin). `upload()` uses `PutObjectCommand`. `download()` uses `GetObjectCommand` with `instanceof NoSuchKey` → `undefined` mapping (not string comparison). No logging in the provider — `ClientBackup` is the observable layer.
+- `packages/client/src/client-backup.ts` — `backup()` return type changed from `void` to `{ ok: true } | { ok: false; reason: string }` so the MCP tool layer can report failure correctly. Storage key changed to `backups/${agentId}/${timestamp}.enc` (AC-002 spec). Restore reads `destinationUrl` from stored metadata rather than reconstructing the key. Speculative new-device-restore path removed (YAGNI — no AC covered it). Non-canonical event names removed; `client.backup.not.configured` reused for the null-storage path.
+- `packages/client/src/mcp-server.ts` — `cello_backup` and `cello_restore` tools registered via `createMcpSessionServer` (single canonical path, consistent with `checkpointStatusProvider` opt pattern). Both tools surface backup/restore result to the MCP response.
+- `packages/adapter-claude-code/src/bin/cello-mcp.ts` — composition root: `CELLO_ENV=local` → `LocalCloudStorageProvider`; non-local + `BACKUP_S3_BUCKET` set → `S3CloudStorageProvider`; unset → `null`. Magic-byte validation on key file seed extraction. `identityKeyBytes` zeroed after `ClientBackup` construction. `CELLO_AWS_REGION` as operator-settable var with `AWS_REGION` fallback (reserved ECS variable — cannot be set by operators directly).
+- 323 tests passing. Full backup→restore roundtrip test. AC-007-dist-freshness test reads `dist/mcp-server.js` and asserts both tool names are present.
+
+**Notable review findings caught before merge:**
+
+1. `backup()` returning `void` on upload failure caused `cello_backup` to return `ok:true` even when the S3 upload failed. The fix required a return-type change and rippled through both MCP registrations.
+2. The storage key `backup/{agentId}/db.enc` did not match the story's specified `backups/{agentId}/{timestamp}.enc` — caught by the sprint-reviewer's AC coverage check.
+3. `AWS_REGION` is a reserved ECS container environment variable and cannot be operator-set — renamed to `CELLO_AWS_REGION` with `AWS_REGION` as automatic fallback per global project rule.
+
+**What this unblocks:**
+
+Nothing immediately — PERSIST-022 has no downstream dependencies in the M5 migration sequence. PERSIST-023 (V20 migration) remains parked, blocked on FEDERATION-003 (V19) merging first per the Flyway version ordering constraint.
+
+**Active worktrees remaining:** FEDERATION-003, PERSIST-023, ACCOUNT-001 (last two parked).

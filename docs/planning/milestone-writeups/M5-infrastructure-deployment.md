@@ -10,8 +10,8 @@ description: In-progress write-up for M5. Initial deployment issues, IaC gaps fo
 # M5 — Infrastructure Deployment
 
 **Started:** 2026-05-22  
-**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, SECOPS-001, SECOPS-002, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002  
-**Stories open:** DEPLOY-005, SECOPS-003  
+**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, SECOPS-001, SECOPS-002, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002, PERSIST-022  
+**Stories open:** DEPLOY-005, SECOPS-003, FEDERATION-003, PERSIST-023, ACCOUNT-001  
 **Stacks deployed:** 13 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-ecs-relay, cello-route53, cello-cicd, cello-cloudwatch)  
 **Lambdas deployed:** 3 (webhook-receiver, pipeline-filter, rds-rotation)  
 **Pipelines active:** 8 (both directory and relay green with real images)
@@ -410,6 +410,31 @@ The `cello-checkpoint-gap` alarm uses `TreatMissingData: breaching` — it fires
 **Code review finding fixed:** Initial implementation omitted the `${Environment}` suffix from alarm names. Staging deploying to the same account/region as dev would have failed with a duplicate alarm name conflict. All 10 alarm names now use `!Sub "cello-...-${Environment}"`, consistent with the SNS topic naming in the same template.
 
 **Deployed to dev/us-east-1:** `cello-cloudwatch-dev` at `UPDATE_COMPLETE`. All 10 alarms confirmed present with `-dev` suffix. SNS subscriptions in `PendingConfirmation` state — email confirmation required after first deploy.
+
+---
+
+## What Remains Open
+
+---
+
+## PERSIST-022 — S3CloudStorageProvider
+
+Pure application code — no CloudFormation, no migration. The CELLO client can now back up its encrypted SQLCipher database to an operator-configured S3 bucket.
+
+**What was delivered:**
+
+- `S3CloudStorageProvider` in `packages/client/src/` — implements the `CloudStorageProvider` interface using `@aws-sdk/client-s3` (exact-pinned `3.1053.0`, no caret). `upload()` uses `PutObjectCommand`; `download()` uses `GetObjectCommand` with `instanceof NoSuchKey` → `undefined` (typed import, not name-string comparison).
+- Composition root wiring in `cello-mcp.ts`: `CELLO_ENV=local` → `LocalCloudStorageProvider`; non-local + `BACKUP_S3_BUCKET` set → `S3CloudStorageProvider`; unset → `null` (`ClientBackup` logs `client.backup.not.configured` at WARN).
+- `cello_backup` and `cello_restore` MCP tools registered via `createMcpSessionServer`.
+- `ClientBackup.backup()` return type changed to `{ ok: true } | { ok: false; reason: string }` — the previous `void` return caused the MCP tool to unconditionally report `ok:true` even when the S3 upload failed.
+- Storage key aligned with AC-002 spec: `backups/${agentId}/${timestamp}.enc` (was `backup/${agentId}/db.enc`).
+- `CELLO_AWS_REGION` as the operator-settable variable with `AWS_REGION` as automatic fallback. `AWS_REGION` is injected by the ECS runtime and cannot be overridden by operators — any story or runbook that instructs operators to *set* `AWS_REGION` is incorrect.
+
+**Key rules reinforced by this story:**
+
+- Exact-pin `@aws-sdk/*` packages. The `^` specifier caused CodeBuild failures twice in earlier M5 stories (supply-chain age policy, pnpm lockfile divergence). Check the npm publish timestamp before pinning — within 24 hours causes pnpm supply-chain policy rejection.
+- `backup()` returning `void` on errors is the right pattern for resilience (the local DB is never affected), but it makes the MCP tool layer blind to failures. Any `void`-returning operation with a success/failure semantic that is surfaced to a caller needs a discriminated union return type.
+- Key file seed extraction by byte offset requires magic-byte validation. `FileKeyProvider` loads the same file — if the format changes, the composition root must not silently use wrong bytes. Validated against `KEY_FILE_MAGIC` and `KEY_FILE_VERSION` constants before trusting `[5, 37)`.
 
 ---
 
