@@ -44,6 +44,11 @@ Parameters:
     Default: "ap-northeast-1"
     Description: Asia-Pacific region (ap-northeast-1)
 
+Conditions:
+  # Dashboard is global — deploy only from us-east-1 to avoid name collision
+  # across regions. Alarms and SNS topics deploy in every region.
+  IsPrimaryRegion: !Equals [!Ref AWS::Region, "us-east-1"]
+
 Resources:
 
   # ═══════════════════════════════════════════════════════════════════════════
@@ -480,6 +485,7 @@ Resources:
 
   OperationsDashboard:
     Type: AWS::CloudWatch::Dashboard
+    Condition: IsPrimaryRegion
     Properties:
       DashboardName: !Sub "cello-operations-${Environment}"
       DashboardBody: !Sub |
