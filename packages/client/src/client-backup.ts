@@ -255,7 +255,7 @@ export class ClientBackup {
   async restore(): Promise<void> {
     // AC-005: no cloud storage destination configured
     if (this.#cloudStorage === null) {
-      this.#logger.warn("client.backup.restore.not.configured", { agentId: this.#agentId });
+      this.#logger.warn("client.backup.not.configured", { agentId: this.#agentId });
       throw new Error("Cloud storage not configured; cannot restore backup");
     }
 
@@ -265,7 +265,6 @@ export class ClientBackup {
     // Derive backup_key — never stored, never logged (SI-001)
     const backupKey = deriveBackupKey(this.#identityKey, this.#agentId);
 
-    let blob: Uint8Array | undefined;
     let alreadyLogged = false;
 
     try {
@@ -274,9 +273,17 @@ export class ClientBackup {
       // so we must read it from metadata rather than reconstruct it.
       const storedMeta = await this.#readMetadata();
 
-      // Determine storage key: use destinationUrl from metadata if present,
-      // otherwise fall back to the legacy path for backward compatibility.
-      const storageKey = storedMeta?.destinationUrl ?? `backups/${this.#agentId}/latest.enc`;
+      // Without stored metadata we cannot verify the checksum — fail immediately.
+      if (storedMeta === undefined) {
+        this.#logger.error("client.backup.restore.failed", {
+          reason: "no_backup_metadata",
+          agentId: this.#agentId,
+        });
+        alreadyLogged = true;
+        throw new Error("no_backup_metadata");
+      }
+
+      const storageKey = storedMeta.destinationUrl;
 
       // Download and verify
       const downloaded = await this.#cloudStorage.download(storageKey);
@@ -286,19 +293,12 @@ export class ClientBackup {
         alreadyLogged = true;
         throw new Error(`Backup not found at ${storageKey}`);
       }
-      blob = downloaded;
+      const blob = downloaded;
 
       // Verify checksum against stored metadata (SI-003)
       const actualChecksum = createHash("sha256").update(blob).digest("hex");
 
-      // SI-003: For new-device restores, we compute checksum but have no stored metadata to compare.
-      // Proceed with restore but log the condition for observability.
-      if (storedMeta === undefined) {
-        this.#logger.warn("client.backup.restore.no.metadata", {
-          agentId: this.#agentId,
-          checksumComputed: actualChecksum,
-        });
-      } else if (storedMeta.checksum !== actualChecksum) {
+      if (storedMeta.checksum !== actualChecksum) {
         // SI-001: no key material in error context
         this.#logger.error("client.backup.restore.failed", {
           reason: "checksum_mismatch",
