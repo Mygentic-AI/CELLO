@@ -530,6 +530,97 @@ The 8 AC-002 scenarios (FROST ceremony, message exchange, session seal, relay fa
 
 ---
 
+## RELAY-001 — Relay Pool Manifest with Health Checks and Latency-Based Session Assignment
+
+Delivered relay pool management infrastructure: S3-backed signed manifests, continuous health checks, and RTT-aware relay assignment. The directory now manages a dynamic relay pool rather than a single hardcoded endpoint.
+
+**What was delivered:**
+
+- `packages/directory/src/relay-pool-manager.ts` (498 lines) — `RelayPoolManager` class: manifest signature verification (Ed25519), S3 download with retry + exponential backoff, 30-second health check loop (concurrent pings, not serial), 3-failure unavailability threshold, 3-success recovery, latency-based relay selection (RTT table from client → lowest-RTT available relay; fallback: lowest consecutive failure count; null if all unavailable).
+- `packages/directory/src/adapters/s3-cloud-storage-provider.ts` (67 lines) — `S3CloudStorageProvider` implementing the `CloudStorageProvider` interface. Uses `@aws-sdk/client-s3` (`3.1053.0`, exact pin). `upload()` via `PutObjectCommand`; `download()` via `GetObjectCommand` with `instanceof NoSuchKey` → `undefined`.
+- `packages/directory/src/directory-node.ts` — session assignment integration: `#processSessionRequest` now calls `relayPoolManager.pickRelay(rttMeasurements)` and uses the selected relay's endpoint in the `SessionAssignment`. If `pickRelay` returns null, sends `relay_unavailable` error (error type already existed in `directory-types.ts`).
+- `packages/directory/src/bin/directory.ts` — composition root wiring: `CELLO_ENV=local` → `InMemoryCloudStorageProvider` (in-memory stub); non-local → `S3CloudStorageProvider` with bucket name `cello-relay-manifest-{env}-{region}`, key `relay-manifest.json`. Manifest signing public key loaded from Secrets Manager (`cello/{env}/directory/node-private-key` → derive public key via `@noble/curves/ed25519`). Backoff/retry on manifest load failure logs `relay.manifest.load.failed` at ERROR with correct attempt counter.
+- `infra/sign-manifest.sh` (235 lines) — operator manifest signing script. Reads current manifest from S3, increments version by 1 (monotonic), signs canonical JSON of `{ version, updatedAt, relays }` (sorted keys, no whitespace, UTF-8) using the directory node's private key from Secrets Manager, uploads the signed manifest. Guard: exits non-zero if signing key is empty/placeholder. Prints manifest version, S3 key, and ECS rolling update command on success. Phase-1 behavior: health checks use the `healthCheckUrl` field in each relay entry (operator populates this with the internal VPC IP + port 4000).
+- `infra/scripts/sign-ed25519.js` (72 lines) — deterministic Ed25519 signing utility used by `sign-manifest.sh`. Takes private key hex and UTF-8 message as argv, outputs signature hex to stdout. Uses `@noble/curves/ed25519` via `createRequire` workaround for ESM compatibility on Node 24.
+- `infra/scripts/derive-pubkey.js` (54 lines) — public key derivation utility. Takes private key hex as argv[1], outputs public key hex to stdout. Used by `sign-manifest.sh` to derive the signing node's public key for inclusion in `signedBy` metadata.
+- 1,136-line test suite (`relay-001-pool-manager.test.ts`) — all 14 ACs covered, all 3 SIs covered, all 8 observability events verified. AC-010, AC-011, AC-013, AC-014 are integration tests that shell out to real bash/node scripts with mocked AWS CLI (proper integration testing — script logic exercised end-to-end, only AWS API mocked).
+
+**Manifest schema:**
+```json
+{
+  "version": 1,
+  "signedBy": "us-east-1",
+  "signature": "<Ed25519 sig hex>",
+  "updatedAt": "2026-05-23T14:30:00Z",
+  "relays": [
+    {
+      "relayId": "<Ed25519 public key hex>",
+      "endpoint": "wss://relay.example.com",
+      "region": "us-east-1",
+      "status": "active",
+      "healthCheckUrl": "http://10.0.1.5:4000/health"
+    }
+  ]
+}
+```
+
+**Signing rules:**
+- `signature` covers canonical JSON of `{ version, updatedAt, relays }` (sorted keys, no whitespace, UTF-8)
+- `signedBy` and `signature` fields excluded from signed payload
+- Signing key: lowest `node_id` directory node's `cello/{env}/directory/node-private-key` from Secrets Manager
+- Version must increment monotonically; stale versions rejected with `relay.manifest.version.stale` logged at WARN
+
+**Observability (8 events):**
+- `relay.manifest.loaded` (INFO) — verified manifest loaded at startup
+- `relay.health.check.passed` (INFO) — relay ping succeeded with latency
+- `relay.pool.recovered` (INFO) — unavailable relay passed 3 consecutive pings
+- `relay.manifest.invalid` (ERROR) — signature verification failed → directory halts
+- `relay.manifest.load.failed` (ERROR) — S3 unavailable, retries with backoff
+- `relay.manifest.version.stale` (WARN) — incoming version ≤ current
+- `relay.health.check.failed` (WARN) — relay failed 3 consecutive pings → unavailable
+- `relay.pool.unavailable` (ERROR) — all relays unavailable → ops-critical alarm
+
+**Security invariants enforced:**
+- SI-001: Manifest without valid Ed25519 signature → directory halts (never falls back to unverified)
+- SI-002: Relay must be in verified manifest AND pass health checks (registration alone insufficient)
+- SI-003: Version never decreases (rollback rejected even with valid signature)
+
+**Three-agent workflow (all findings fixed):**
+1. `cello-sprint-coder` → implemented (SPARC R→C, TDD, gate sequence)
+2. `feature-dev:code-reviewer` → found 2 blocking + 3 high + 2 medium issues
+3. Sprint-coder fix pass → addressed all findings
+4. Sprint-coder second fix → added AC-010/AC-011 integration tests (missing after first pass)
+5. `cello-sprint-reviewer` → APPROVED with zero findings
+
+**Key bugs found and fixed during implementation:**
+
+### 1. `sign-manifest.sh` — `node -e` with top-level `await import()` always fails
+**Symptom:** AC-010 and AC-011 (script integration tests) could never pass — script exits 1 at public key derivation step.  
+**Root cause:** `node -e` runs in CommonJS mode by default. Top-level `await` is a SyntaxError in CJS. The `2>/dev/null || echo ""` masked the error, causing `SIGNING_PUBLIC_KEY_HEX=""` and an immediate exit 1.  
+**Fix:** Created `infra/scripts/derive-pubkey.js` using the same `createRequire` pattern as `sign-ed25519.js`. Script called from `sign-manifest.sh` via `node "${SCRIPT_DIR}/scripts/derive-pubkey.js" "${SIGNING_KEY}"`.
+
+### 2. Health checks running serially — one timed-out relay blocks all others
+**Symptom:** With N relays timing out at 5 seconds each, health check rounds take N×5 seconds.  
+**Root cause:** `for...of` + `await` in `#runHealthChecks()` — serial execution.  
+**Fix:** Extracted per-relay logic into `#pingOne(relay)` and used `Promise.allSettled(this.#currentRelays.map(r => this.#pingOne(r)))`.
+
+### 3. Incorrect `attempt` field in `relay.manifest.load.failed` log
+**Symptom:** When `download()` returns `undefined` (manifest absent), the log shows `attempt: 5` (max attempts) instead of `attempt: 1` (actual attempt).  
+**Root cause:** `download()` returning `undefined` causes loop to break immediately, but post-loop error used `this.#maxLoadAttempts`.  
+**Fix:** Track `lastAttempt` outside loop and log the actual attempt value.
+
+### 4. Silent `CURRENT_VERSION=0` when existing manifest is unparseable
+**Symptom:** Malformed JSON in S3 causes both Python and Node parsers to fail silently, setting `CURRENT_VERSION=0`. New manifest gets `version=1` — a rollback violation.  
+**Root cause:** `|| echo "0"` fallback chain in `sign-manifest.sh`.  
+**Fix:** Guard added: if `CURRENT_MANIFEST_JSON` is non-empty and `CURRENT_VERSION` is empty/0, exit 1 with clear error message.
+
+**No deployment step required for this story.** Application code + operator tooling — no CloudFormation changes. The relay pool manifest is operator-configured (run `sign-manifest.sh` to populate S3). The directory reads it at startup. Relay assignment becomes dynamic after manifest is created.
+
+**What this unblocks:**
+- **FEDERATION-E2E-001** — now has relay pool health checks and dynamic assignment as protocol primitives for the E2E smoke test suite.
+
+---
+
 ## What Remains Open
 
 - **PERSIST-023** — migration renumbered V20→V21 (V20 taken by FEDERATION-002 hotfix); parked branch ready to merge
