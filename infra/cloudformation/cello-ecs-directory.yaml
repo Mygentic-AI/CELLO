@@ -144,7 +144,6 @@ Resources:
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Sub "cello-dir-${Environment}"
       Port: 4000
       Protocol: HTTP
       TargetType: ip
