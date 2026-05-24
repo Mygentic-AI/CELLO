@@ -49,6 +49,11 @@ describe("Libp2pCheckpointTransport", () => {
   let coordinatorNode: Awaited<ReturnType<typeof createNode>>;
   let peerNode: Awaited<ReturnType<typeof createNode>>;
   let peerNodeId: string;
+  // Mutable handler slot — registered once in beforeEach, replaced per test.
+  // libp2p requires the protocol handler to be registered before any stream
+  // is opened on that protocol. A single registered handler that dispatches
+  // to a replaceable function avoids StreamResetError.
+  let activeHandler: ((stream: import("@libp2p/interface").Stream) => Promise<void>) | null = null;
 
   beforeEach(async () => {
     coordinatorKey = new InMemoryKeyProvider(randomBytes(32));
@@ -66,9 +71,16 @@ describe("Libp2pCheckpointTransport", () => {
     await coordinatorNode.start();
     await peerNode.start();
 
-    // Get peer ID before dialing — used to configure transport peers map.
-    // Handlers registered after dial are still valid since libp2p protocol
-    // negotiation happens per-stream, not per-connection.
+    // Register the protocol handler BEFORE dialing so it's available when
+    // the coordinator opens a stream (libp2p resets unknown protocols).
+    await peerNode.handle(CHECKPOINT_PROTOCOL, async (stream) => {
+      if (activeHandler) {
+        await activeHandler(stream);
+      } else {
+        await stream.close();
+      }
+    });
+
     peerNodeId = peerNode.getPeerId();
     const peerAddr = peerNode.listenAddresses()[0];
     await coordinatorNode.dial(peerAddr!);
@@ -84,13 +96,12 @@ describe("Libp2pCheckpointTransport", () => {
   it("returns signature when peer signs the proposal", async () => {
     const peerPubKey = Buffer.from(await peerKey.getPublicKey()).toString("hex");
 
-    await peerNode.handle(CHECKPOINT_PROTOCOL, async (stream) => {
+    activeHandler = async (stream) => {
       const chunks: Uint8Array[] = [];
       for await (const chunk of lp.decode(stream)) {
         chunks.push(chunk as unknown as Uint8Array);
       }
       const proposal = JSON.parse(Buffer.concat(chunks).toString("utf8")) as CheckpointProposal;
-
       const hashBytes = Buffer.from(proposal.checkpointHash, "hex");
       const sig = await peerKey.sign(hashBytes);
       const response = {
@@ -98,11 +109,10 @@ describe("Libp2pCheckpointTransport", () => {
         signature: Buffer.from(sig).toString("hex"),
         publicKeyHex: peerPubKey,
       };
-
       const responseBytes = Buffer.from(JSON.stringify(response), "utf8");
       stream.send(lp.encode.single(responseBytes));
       await stream.close();
-    });
+    };
 
     const transport = new Libp2pCheckpointTransport({
       node: coordinatorNode,
@@ -122,9 +132,9 @@ describe("Libp2pCheckpointTransport", () => {
   // ─── AC: timeout returns null ────────────────────────────────────────────────
 
   it("returns null when peer does not respond within timeoutMs", async () => {
-    await peerNode.handle(CHECKPOINT_PROTOCOL, async (_stream) => {
+    activeHandler = async (_stream) => {
       await new Promise<void>((resolve) => setTimeout(resolve, 10_000));
-    });
+    };
 
     const transport = new Libp2pCheckpointTransport({
       node: coordinatorNode,
@@ -182,14 +192,14 @@ describe("Libp2pCheckpointTransport", () => {
   it("sends proposal as JSON and peer receives all fields", async () => {
     let receivedProposal: CheckpointProposal | null = null;
 
-    await peerNode.handle(CHECKPOINT_PROTOCOL, async (stream) => {
+    activeHandler = async (stream) => {
       const chunks: Uint8Array[] = [];
       for await (const chunk of lp.decode(stream)) {
         chunks.push(chunk as unknown as Uint8Array);
       }
       receivedProposal = JSON.parse(Buffer.concat(chunks).toString("utf8")) as CheckpointProposal;
       await stream.close();
-    });
+    };
 
     const transport = new Libp2pCheckpointTransport({
       node: coordinatorNode,
