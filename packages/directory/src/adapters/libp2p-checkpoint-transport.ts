@@ -106,26 +106,30 @@ export class Libp2pCheckpointTransport implements ICheckpointTransport {
     }
 
     try {
+      // Send proposal as one LP-framed message, then half-close write side.
       stream.send(lp.encode.single(proposalBytes));
       await stream.close();
 
-      const chunks: Uint8Array[] = [];
+      // Read exactly one LP-framed response and break — do NOT exhaust the iterator.
+      // The async iterator races with 'remoteCloseWrite' event delivery: if the
+      // peer's response + FIN arrive before the iterator starts, it would hang
+      // forever waiting for more data. Reading one frame and breaking avoids this.
+      let responseBytes: Uint8Array | null = null;
       for await (const chunk of lp.decode(stream)) {
-        chunks.push(chunk as unknown as Uint8Array);
+        responseBytes = chunk instanceof Uint8Array ? chunk : (chunk as unknown as { slice(): Uint8Array }).slice();
+        break;
       }
 
-      if (chunks.length === 0) {
+      if (responseBytes === null) {
         return null;
       }
 
       const response = JSON.parse(
-        Buffer.concat(chunks).toString("utf8"),
+        Buffer.from(responseBytes).toString("utf8"),
       ) as CheckpointSignatureResponse;
       return response;
     } catch (err: unknown) {
       const reason = err instanceof Error ? err.message : String(err);
-      // eslint-disable-next-line no-console
-      console.error("[DEBUG checkpoint transport error]", peerNodeId, reason, (err as Error).stack ?? "");
       this.#logger.warn("federation.checkpoint.transport.peer.unreachable", {
         peerNodeId,
         checkpointId,

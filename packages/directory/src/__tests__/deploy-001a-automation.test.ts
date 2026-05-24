@@ -278,8 +278,11 @@ describe("DEPLOY-001A: AC-008 production confirmation gate", () => {
 describe("DEPLOY-001A: AC-011 no manual aws cloudformation deploy instructions in infra/", () => {
   it("no .sh file in infra/ (other than deploy.sh) contains manual 'aws cloudformation deploy' commands", () => {
     // Read all .sh files in infra/ root — subdirectory scripts are ok (they're legacy)
+    // deploy-peering.sh is an authorized deployment script added in FEDERATION-E2E-001
+    // for cross-region VPC Peering stacks (not covered by deploy.sh which is single-region).
+    const AUTHORIZED_DEPLOY_SCRIPTS = new Set(["deploy.sh", "deploy-peering.sh"]);
     const infraFiles = readdirSync(INFRA_DIR).filter(
-      (f) => f.endsWith(".sh") && f !== "deploy.sh"
+      (f) => f.endsWith(".sh") && !AUTHORIZED_DEPLOY_SCRIPTS.has(f)
     );
 
     for (const file of infraFiles) {

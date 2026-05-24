@@ -73,11 +73,18 @@ describe("Libp2pCheckpointTransport", () => {
 
     // Register the protocol handler BEFORE dialing so it's available when
     // the coordinator opens a stream (libp2p resets unknown protocols).
-    await peerNode.handle(CHECKPOINT_PROTOCOL, async (stream) => {
+    // IMPORTANT: Use fire-and-forget (void) pattern matching production code
+    // in directory-node.ts. Returning a Promise causes libp2p's middleware chain
+    // to await the handler; if any stream error occurs during that await, the
+    // catch block calls muxedStream.abort() which sends RST to the remote peer.
+    await peerNode.handle(CHECKPOINT_PROTOCOL, (stream) => {
       if (activeHandler) {
-        await activeHandler(stream);
+        void activeHandler(stream).catch((err) => {
+          // eslint-disable-next-line no-console
+          console.error("[TEST peer handler error]", err);
+        });
       } else {
-        await stream.close();
+        void stream.close();
       }
     });
 
@@ -97,11 +104,17 @@ describe("Libp2pCheckpointTransport", () => {
     const peerPubKey = Buffer.from(await peerKey.getPublicKey()).toString("hex");
 
     activeHandler = async (stream) => {
-      const chunks: Uint8Array[] = [];
+      // Read exactly one LP-framed message and break — do NOT exhaust the iterator.
+      // Relying on the iterator ending naturally races with 'remoteCloseWrite' event
+      // delivery (the FIN may arrive before the iterator starts listening).
+      let requestBytes: Uint8Array | null = null;
       for await (const chunk of lp.decode(stream)) {
-        chunks.push(chunk as unknown as Uint8Array);
+        requestBytes = chunk instanceof Uint8Array ? chunk : (chunk as unknown as { slice(): Uint8Array }).slice();
+        break;
       }
-      const proposal = JSON.parse(Buffer.concat(chunks).toString("utf8")) as CheckpointProposal;
+      if (!requestBytes) { await stream.close(); return; }
+
+      const proposal = JSON.parse(Buffer.from(requestBytes).toString("utf8")) as CheckpointProposal;
       const hashBytes = Buffer.from(proposal.checkpointHash, "hex");
       const sig = await peerKey.sign(hashBytes);
       const response = {
@@ -193,11 +206,15 @@ describe("Libp2pCheckpointTransport", () => {
     let receivedProposal: CheckpointProposal | null = null;
 
     activeHandler = async (stream) => {
-      const chunks: Uint8Array[] = [];
+      // Read exactly one LP-framed message and break (same pattern as production).
+      let requestBytes: Uint8Array | null = null;
       for await (const chunk of lp.decode(stream)) {
-        chunks.push(chunk as unknown as Uint8Array);
+        requestBytes = chunk instanceof Uint8Array ? chunk : (chunk as unknown as { slice(): Uint8Array }).slice();
+        break;
       }
-      receivedProposal = JSON.parse(Buffer.concat(chunks).toString("utf8")) as CheckpointProposal;
+      if (requestBytes) {
+        receivedProposal = JSON.parse(Buffer.from(requestBytes).toString("utf8")) as CheckpointProposal;
+      }
       await stream.close();
     };
 
