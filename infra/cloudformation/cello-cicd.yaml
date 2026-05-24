@@ -712,11 +712,12 @@ Resources:
           phases:
             build:
               commands:
-                - export PROD_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/${SERVICE_NAME}-image-uri --query Parameter.Value --output text --region us-east-1)
-                - export COMMIT_SHA=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
-                - export START_MS=$(date +%s%3N)
                 - |
-                  set -euo pipefail
+                  set -e
+                  SSM_SERVICE=$(echo ${SERVICE_NAME} | sed 's/cello-//')
+                  PROD_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/${SSM_SERVICE}-image-uri --query Parameter.Value --output text --region us-east-1)
+                  COMMIT_SHA=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown} | cut -c1-7)
+                  START_MS=$(date +%s%3N)
                   CLUSTER="cello-${CELLO_ENV}"
                   SERVICE="${SERVICE_NAME}-${CELLO_ENV}"
                   TASK_FAMILY="${SERVICE_NAME}-${CELLO_ENV}"
