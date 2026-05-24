@@ -526,11 +526,11 @@ Resources:
           phases:
             build:
               commands:
-                - export STAGING_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/directory-image-uri --query Parameter.Value --output text --region us-east-1)
-                - export COMMIT_SHA=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
-                - export START_MS=$(date +%s%3N)
                 - |
-                  set -euo pipefail
+                  set -eo pipefail
+                  STAGING_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/directory-image-uri --query Parameter.Value --output text --region us-east-1)
+                  COMMIT_SHA=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown} | cut -c1-7)
+                  START_MS=$(date +%s%3N)
                   TASK_DEF=$(aws ecs describe-task-definition \
                     --task-definition cello-directory-${CELLO_ENV} \
                     --region us-east-1 \
@@ -584,11 +584,11 @@ Resources:
           phases:
             build:
               commands:
-                - export STAGING_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/relay-image-uri --query Parameter.Value --output text --region us-east-1)
-                - export COMMIT_SHA=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
-                - export START_MS=$(date +%s%3N)
                 - |
-                  set -euo pipefail
+                  set -eo pipefail
+                  STAGING_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/relay-image-uri --query Parameter.Value --output text --region us-east-1)
+                  COMMIT_SHA=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown} | cut -c1-7)
+                  START_MS=$(date +%s%3N)
                   TASK_DEF=$(aws ecs describe-task-definition \
                     --task-definition cello-relay-${CELLO_ENV} \
                     --region us-east-1 \
