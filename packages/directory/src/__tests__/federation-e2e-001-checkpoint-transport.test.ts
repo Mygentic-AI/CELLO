@@ -66,9 +66,12 @@ describe("Libp2pCheckpointTransport", () => {
     await coordinatorNode.start();
     await peerNode.start();
 
+    // Get peer ID before dialing — used to configure transport peers map.
+    // Handlers registered after dial are still valid since libp2p protocol
+    // negotiation happens per-stream, not per-connection.
+    peerNodeId = peerNode.getPeerId();
     const peerAddr = peerNode.listenAddresses()[0];
     await coordinatorNode.dial(peerAddr!);
-    peerNodeId = peerNode.getPeerId();
   });
 
   afterEach(async () => {
