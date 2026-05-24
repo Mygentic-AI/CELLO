@@ -252,7 +252,10 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:PutObject
-                Resource: !Sub "${ArtifactsBucket.Arn}/*"
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "${ArtifactsBucket.Arn}/*"
+                  - !GetAtt ArtifactsBucket.Arn
               - Effect: Allow
                 Action:
                   - s3:PutObject
