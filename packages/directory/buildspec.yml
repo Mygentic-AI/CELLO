@@ -1,9 +1,9 @@
 version: 0.2
-# Export IMAGE_URI so downstream pipeline stages (StagingDeploy, ProductionDeploy) can
-# reference it via #{BuildAction.IMAGE_URI} (CodePipeline V2 variable syntax).
-# Without this, #{BuildVariables.IMAGE_URI} references are silently empty.
-exported-variables:
-  - IMAGE_URI
+# IMAGE_URI is written to imageUri.txt in the build output artifact so downstream
+# pipeline stages (StagingDeploy, ProductionDeploy) can read it with:
+#   STAGING_IMAGE_URI=$(cat imageUri.txt)
+# This avoids CodePipeline V2 #{BuildAction.IMAGE_URI} variable syntax which
+# CloudFormation rejects during stack CREATE/UPDATE (CFN+CodePipeline V2 bug).
 phases:
   install:
     runtime-versions:
@@ -31,6 +31,11 @@ phases:
       # Build linux/amd64 image (ECS Fargate requires x86_64; CodeBuild may run on arm64)
       - docker build --platform linux/amd64 -t ${IMAGE_URI} -f packages/directory/Dockerfile .
       # Push to ECR
-      # IMAGE_URI is exported above and used by StagingDeploy and ProductionDeploy stages
-      # via #{BuildAction.IMAGE_URI} (DEPLOY-005). ECS deploy is now owned by StagingDeployBuild.
       - docker push ${IMAGE_URI}
+      # Write IMAGE_URI to artifact file for downstream stages (StagingDeploy, ProductionDeploy)
+      - echo -n "${IMAGE_URI}" > imageUri.txt
+artifacts:
+  files:
+    - imageUri.txt
+  secondary-artifacts: {}
+  base-directory: .
