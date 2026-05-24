@@ -277,10 +277,11 @@ describe("DEPLOY-001: AC-007 S3 buckets", () => {
     expect(raw).toContain("DenyNonPutActions");
   });
 
-  it("manifest bucket GetObject policy grants relay task role only — not directory", () => {
+  it("manifest bucket GetObject policy grants relay and directory task roles", () => {
     const raw = loadTemplateRaw("cello-s3.yaml");
-    expect(raw).toContain("AllowRelayGetObject");
-    expect(raw).not.toContain("AllowDirectoryAndRelayGetObject");
+    expect(raw).toContain("AllowRelayAndDirectoryGetObject");
+    expect(raw).toContain("directory-task-role-arn");
+    expect(raw).toContain("relay-task-role-arn");
   });
 });
 
