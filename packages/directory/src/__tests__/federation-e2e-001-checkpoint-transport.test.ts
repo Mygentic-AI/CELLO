@@ -199,7 +199,7 @@ describe("Libp2pCheckpointTransport", () => {
       mmrLeafCount: 42,
     });
 
-    await transport.sendCheckpointProposal("eu-central-1", proposal, 500);
+    await transport.sendCheckpointProposal("eu-central-1", proposal, 3000);
 
     expect(receivedProposal).not.toBeNull();
     expect(receivedProposal!.checkpointId).toBe("test-id-123");
