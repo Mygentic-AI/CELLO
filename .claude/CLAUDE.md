@@ -84,6 +84,8 @@ M4 introduces external systems (PostgreSQL, KMS, ECS, relay WAL). The inner loop
 
 **CI/CD: AWS CodePipeline V2 + Lambda router.** Path-based triggers via `cello-pipeline-filter` Lambda (data-driven JSON mappings config). Native CodePipeline V2 path filtering was evaluated and rejected — coarse glob behavior, tooling lagged API. IaC discipline: everything in AWS exists in IaC; one template per service, environment as parameter.
 
+**NEVER push Docker images from local.** All image pushes happen exclusively through the CI/CD pipeline (CodeBuild). If images need to exist in other regions, use ECR cross-region replication — never `docker push` from a local machine. No exceptions.
+
 ---
 
 ## Slash Commands
