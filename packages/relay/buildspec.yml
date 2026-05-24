@@ -21,8 +21,4 @@ phases:
       - aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 257394457473.dkr.ecr.us-east-1.amazonaws.com
       - docker build --platform linux/amd64 -t ${IMAGE_URI} -f packages/relay/Dockerfile .
       - docker push ${IMAGE_URI}
-      - echo -n "${IMAGE_URI}" > imageUri.txt
-artifacts:
-  files:
-    - imageUri.txt
-  base-directory: .
+      - aws ssm put-parameter --name /cello/${CELLO_ENV}/pipeline/relay-image-uri --value "${IMAGE_URI}" --type String --overwrite --region us-east-1

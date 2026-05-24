@@ -298,17 +298,33 @@ Resources:
                 Action:
                   - iam:PassRole
                 Resource:
+                  # us-east-1 uses original non-region-scoped names (can't rename due to live exports)
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-directory-execution-role"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-directory-task-role"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-relay-execution-role"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-relay-task-role"
+                  # Non-primary regions use region-scoped names (FEDERATION-E2E-001 fix)
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-eu-central-1-directory-execution-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-eu-central-1-directory-task-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-eu-central-1-relay-execution-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-eu-central-1-relay-task-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-ap-northeast-1-directory-execution-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-ap-northeast-1-directory-task-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-ap-northeast-1-relay-execution-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-ap-northeast-1-relay-task-role"
               # ── CloudFormation read-only for ALB URL (DEPLOY-005 AC-009) ───────────
-              # StagingDeployBuild reads AlbDnsName from cello-ecs-directory stack output
-              # to pass STAGING_DIRECTORY_URL to the smoke test stage.
               - Effect: Allow
                 Action:
                   - cloudformation:DescribeStacks
                 Resource: !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/cello-ecs-directory-${Environment}/*"
+              # ── SSM for IMAGE_URI passing between pipeline stages ─────────────────
+              # Build stage writes IMAGE_URI to SSM; StagingDeploy/ProductionDeploy read it.
+              # Scoped to /cello/{env}/pipeline/* — no access to node keys or credentials.
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cello/${Environment}/pipeline/*"
       Tags:
         - Key: Project
           Value: cello
@@ -503,7 +519,7 @@ Resources:
           phases:
             build:
               commands:
-                - export STAGING_IMAGE_URI=$(cat imageUri.txt)
+                - export STAGING_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/directory-image-uri --query Parameter.Value --output text --region us-east-1)
                 - export COMMIT_SHA=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
                 - export START_MS=$(date +%s%3N)
                 - |
@@ -553,15 +569,15 @@ Resources:
     Type: AWS::CodeBuild::Project
     Properties:
       Name: cello-staging-deploy-relay-build
-      # CODEPIPELINE source — reads imageUri.txt from BuildOutput artifact.
+      # NO_SOURCE: IMAGE_URI is read from SSM Parameter Store at runtime.
       Source:
-        Type: CODEPIPELINE
+        Type: NO_SOURCE
         BuildSpec: |
           version: 0.2
           phases:
             build:
               commands:
-                - export STAGING_IMAGE_URI=$(cat imageUri.txt)
+                - export STAGING_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/relay-image-uri --query Parameter.Value --output text --region us-east-1)
                 - export COMMIT_SHA=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
                 - export START_MS=$(date +%s%3N)
                 - |
@@ -681,15 +697,15 @@ Resources:
       # 7. aws ecs wait services-stable --region $DEPLOY_REGION (10-min timeout)
       # 8. On success: emit pipeline.production.deployed {pipeline, region, commitSha, imageDigest, durationMs}
       # 9. On failure: emit pipeline.production.deploy.failed {pipeline, region, commitSha, reason}; exit 1
-      # CODEPIPELINE source — reads imageUri.txt from BuildOutput artifact (SI-002: same digest).
+      # NO_SOURCE: IMAGE_URI is read from SSM Parameter Store at runtime (SI-002: same digest).
       Source:
-        Type: CODEPIPELINE
+        Type: NO_SOURCE
         BuildSpec: |
           version: 0.2
           phases:
             build:
               commands:
-                - export PROD_IMAGE_URI=$(cat imageUri.txt)
+                - export PROD_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/${SERVICE_NAME}-image-uri --query Parameter.Value --output text --region us-east-1)
                 - export COMMIT_SHA=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
                 - export START_MS=$(date +%s%3N)
                 - |
