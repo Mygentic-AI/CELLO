@@ -527,7 +527,7 @@ Resources:
             build:
               commands:
                 - |
-                  set -eo pipefail
+                  set -e
                   STAGING_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/directory-image-uri --query Parameter.Value --output text --region us-east-1)
                   COMMIT_SHA=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown} | cut -c1-7)
                   START_MS=$(date +%s%3N)
@@ -585,7 +585,7 @@ Resources:
             build:
               commands:
                 - |
-                  set -eo pipefail
+                  set -e
                   STAGING_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/relay-image-uri --query Parameter.Value --output text --region us-east-1)
                   COMMIT_SHA=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown} | cut -c1-7)
                   START_MS=$(date +%s%3N)
