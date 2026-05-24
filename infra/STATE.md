@@ -12,7 +12,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 ## Environments
 
 ### dev — us-east-1
-*Last deployed: 2026-05-23
+*Last deployed: 2026-05-24
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -109,9 +109,9 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | KMS Key ARN | arn:aws:kms:eu-central-1:257394457473:key/708cea66-0fa3-4bcb-8120-b98ae5038953 |
 | Audit Log Bucket | cello-audit-logs-dev-eu-central-1 |
 | Relay Manifest Bucket | cello-relay-manifest-dev-eu-central-1 |
-| RDS Endpoint | cello-dev.cryg2a8say19.ap-northeast-1.rds.amazonaws.com |
+| RDS Endpoint | cello-dev.clu08oy88g6v.eu-central-1.rds.amazonaws.com |
 | RDS Port | 5432 |
-| Directory ALB | cello-dir-dev-1435901052.ap-northeast-1.elb.amazonaws.com |
+| Directory ALB | cello-dir-dev-1699677837.eu-central-1.elb.amazonaws.com |
 | Route 53 Record | directory-eu1.cello.mygentic.ai |
 | ECS Cluster | arn:aws:ecs:eu-central-1:257394457473:cluster/cello-dev |
 | Directory Node Public Key | 8105b180b753d97b50039a7e94433fd2b419f43d61f9ad7caf2ac15ad5cd1b45 |
