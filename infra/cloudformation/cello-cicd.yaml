@@ -509,11 +509,10 @@ Resources:
       # 6. On success: emit pipeline.staging.deployed {pipeline, commitSha, imageDigest, durationMs}
       # 7. On failure: emit pipeline.staging.deploy.failed {pipeline, commitSha, reason}; exit 1
       #
-      # CODEPIPELINE source: receives BuildOutput artifact containing imageUri.txt.
-      # IMAGE_URI is read from imageUri.txt (written by DirectoryBuild buildspec).
-      # CloudFormation rejects during stack CREATE/UPDATE.
+      # NO_SOURCE: IMAGE_URI is read from SSM Parameter Store at runtime.
+      # Build stage writes IMAGE_URI to SSM; this project reads it with get-parameter.
       Source:
-        Type: CODEPIPELINE
+        Type: NO_SOURCE
         BuildSpec: |
           version: 0.2
           phases:
