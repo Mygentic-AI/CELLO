@@ -35,3 +35,6 @@ phases:
       # Write IMAGE_URI to SSM for downstream stages (StagingDeploy, ProductionDeploy).
       # Avoids CodePipeline V2 #{BuildAction.IMAGE_URI} syntax which CloudFormation rejects.
       - aws ssm put-parameter --name /cello/${CELLO_ENV}/pipeline/directory-image-uri --value "${IMAGE_URI}" --type String --overwrite --region us-east-1
+artifacts:
+  files:
+    - packages/directory/buildspec.yml

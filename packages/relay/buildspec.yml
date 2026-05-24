@@ -22,3 +22,6 @@ phases:
       - docker build --platform linux/amd64 -t ${IMAGE_URI} -f packages/relay/Dockerfile .
       - docker push ${IMAGE_URI}
       - aws ssm put-parameter --name /cello/${CELLO_ENV}/pipeline/relay-image-uri --value "${IMAGE_URI}" --type String --overwrite --region us-east-1
+artifacts:
+  files:
+    - packages/relay/buildspec.yml
