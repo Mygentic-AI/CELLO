@@ -124,6 +124,8 @@ export class Libp2pCheckpointTransport implements ICheckpointTransport {
       return response;
     } catch (err: unknown) {
       const reason = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.error("[DEBUG checkpoint transport error]", peerNodeId, reason, (err as Error).stack ?? "");
       this.#logger.warn("federation.checkpoint.transport.peer.unreachable", {
         peerNodeId,
         checkpointId,
