@@ -99,6 +99,10 @@ Resources:
                 Fn::ImportValue: !Sub "cello-${Environment}-rds-port"
             - Name: RDS_DB_NAME
               Value: !Sub "cello_${Environment}"
+            - Name: RELAY_MANIFEST_BUCKET
+              Value: !Sub "cello-relay-manifest-${Environment}-${AWS::Region}"
+            - Name: RELAY_MANIFEST_SIGNER_PUBKEY
+              Value: !Sub "{{resolve:ssm:/cello/${Environment}/directory/manifest-signer-pubkey}}"
           Secrets:
             # NODE_PRIVATE_KEY is safe to inject at task launch — it changes only
             # on manual key rotation, which requires a coordinated task restart

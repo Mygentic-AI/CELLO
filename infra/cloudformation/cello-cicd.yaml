@@ -715,7 +715,8 @@ Resources:
                 - |
                   set -e
                   SSM_SERVICE=$(echo ${SERVICE_NAME} | sed 's/cello-//')
-                  PROD_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/${SSM_SERVICE}-image-uri --query Parameter.Value --output text --region us-east-1)
+                  SOURCE_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/${SSM_SERVICE}-image-uri --query Parameter.Value --output text --region us-east-1)
+                  PROD_IMAGE_URI=$(echo "$SOURCE_IMAGE_URI" | sed "s/\.us-east-1\./.${DEPLOY_REGION}./")
                   COMMIT_SHA=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown} | cut -c1-7)
                   START_MS=$(date +%s%3N)
                   CLUSTER="cello-${CELLO_ENV}"

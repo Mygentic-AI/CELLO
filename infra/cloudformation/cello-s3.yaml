@@ -101,15 +101,14 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
-          # Relay task role reads the manifest at startup to verify it and begin health checks.
-          # Directory task role does NOT need GetObject on the manifest bucket per AC-005
-          # (directory has s3:PutObject on audit bucket only).
-          - Sid: AllowRelayGetObject
+          - Sid: AllowRelayAndDirectoryGetObject
             Effect: Allow
             Principal:
               AWS:
                 - !ImportValue
                   Fn::Sub: "cello-${Environment}-relay-task-role-arn"
+                - !ImportValue
+                  Fn::Sub: "cello-${Environment}-directory-task-role-arn"
             Action:
               - s3:GetObject
             Resource: !Sub "${RelayManifestBucket.Arn}/*"
