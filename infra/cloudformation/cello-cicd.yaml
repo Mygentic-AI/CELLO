@@ -988,10 +988,6 @@ Resources:
                 - Name: SourceOutput
               OutputArtifacts:
                 - Name: BuildOutput
-              # V2 variable export: IMAGE_URI is set via exported-variables in buildspec.yml.
-              # Downstream stages reference it as #{BuildAction.IMAGE_URI}.
-              OutputVariables:
-                - IMAGE_URI
         # DEPLOY-005 Stage 3: Deploy built image to staging ECS (dev = staging in Phase 1)
         # AC-001: staging deploy uses same image digest from Build stage
         # AC-005: pipeline halts here if staging deploy fails (smoke test never runs)
@@ -1132,8 +1128,6 @@ Resources:
                 - Name: SourceOutput
               OutputArtifacts:
                 - Name: BuildOutput
-              OutputVariables:
-                - IMAGE_URI
         # DEPLOY-005: relay pipeline staging deploy + smoke test + production deploy
         - Name: StagingDeploy
           Actions:
