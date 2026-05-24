@@ -535,7 +535,7 @@ Resources:
                     --task-definition cello-directory-${CELLO_ENV} \
                     --region us-east-1 \
                     --query "taskDefinition" --output json)
-                  NEW_TASK_DEF=$(echo $TASK_DEF | jq \
+                  NEW_TASK_DEF=$(echo "$TASK_DEF" | jq \
                     --arg IMAGE "$STAGING_IMAGE_URI" \
                     '(.containerDefinitions[] | select(.name=="directory") | .image) |= $IMAGE
                     | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
@@ -593,7 +593,7 @@ Resources:
                     --task-definition cello-relay-${CELLO_ENV} \
                     --region us-east-1 \
                     --query "taskDefinition" --output json)
-                  NEW_TASK_DEF=$(echo $TASK_DEF | jq \
+                  NEW_TASK_DEF=$(echo "$TASK_DEF" | jq \
                     --arg IMAGE "$STAGING_IMAGE_URI" \
                     '(.containerDefinitions[] | select(.name=="relay") | .image) |= $IMAGE
                     | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
@@ -725,7 +725,7 @@ Resources:
                     --task-definition ${TASK_FAMILY} \
                     --region ${DEPLOY_REGION} \
                     --query "taskDefinition" --output json)
-                  NEW_TASK_DEF=$(echo $TASK_DEF | jq \
+                  NEW_TASK_DEF=$(echo "$TASK_DEF" | jq \
                     --arg IMAGE "$PROD_IMAGE_URI" \
                     --arg CONTAINER "${CONTAINER_NAME}" \
                     '(.containerDefinitions[] | select(.name==$CONTAINER) | .image) |= $IMAGE
