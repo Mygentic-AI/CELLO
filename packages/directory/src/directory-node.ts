@@ -102,7 +102,7 @@
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature } from "@cello/crypto";
+import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash } from "@cello/crypto";
 
 import type { KeyProvider, LeafInput, IThresholdSigner } from "@cello/crypto";
 import { encodeStructure2, computeGenesisPrevRoot, buildSessionEstablishmentTbs, buildSealTbs } from "@cello/protocol-types";
@@ -111,7 +111,7 @@ import { createNode } from "@cello/transport";
 import type { CelloNode } from "@cello/transport";
 import type { Stream } from "@libp2p/interface";
 import type { SessionAbandoned, SessionSealed, SessionSealRejected, SealVerified } from "@cello/protocol-types";
-import type { SealNotarization, Logger, NotificationQueue } from "@cello/interfaces";
+import type { SealNotarization, Logger, NotificationQueue, ICheckpointTransport, CheckpointProposal } from "@cello/interfaces";
 import type {
   SessionAssignment,
   SessionAssignmentFrame,
@@ -267,6 +267,13 @@ export interface DirectoryNodeOptions {
    * Backward compatible — when absent, relayEndpoint is used as before.
    */
   relayPoolManager?: RelayPoolManager;
+  /**
+   * FEDERATION-E2E-001: ICheckpointTransport for inter-node checkpoint cross-signing.
+   * When provided, the directory registers a /cello/checkpoint/1.0.0 handler that
+   * independently verifies incoming proposals and signs with the node's Ed25519 key.
+   * When absent, checkpoint signing is disabled (local/test mode).
+   */
+  checkpointTransport?: ICheckpointTransport;
 }
 
 export class CelloDirectoryNode {
@@ -285,6 +292,8 @@ export class CelloDirectoryNode {
   readonly #notificationQueue: NotificationQueue | undefined;
   // CELLO-RELAY-001: RelayPoolManager for dynamic relay assignment
   readonly #relayPoolManager: RelayPoolManager | undefined;
+  // FEDERATION-E2E-001: ICheckpointTransport for inter-node checkpoint signing
+  readonly #checkpointTransport: ICheckpointTransport | undefined;
 
   // REG-001: forceDkgFailure — test injection for below-threshold DKG simulation
   readonly #forceDkgFailure: boolean;
@@ -409,6 +418,7 @@ export class CelloDirectoryNode {
     this.#mmrStore = opts.mmrStore;
     this.#notificationQueue = opts.notificationQueue;
     this.#relayPoolManager = opts.relayPoolManager;
+    this.#checkpointTransport = opts.checkpointTransport;
   }
 
   async start(): Promise<void> {
@@ -424,6 +434,13 @@ export class CelloDirectoryNode {
     await this.#node.handle("/cello/directory-relay/1.0.0", (stream) => {
       void this.#handleRelayAdminStream(stream);
     }, { maxInboundStreams: 64 });
+
+    // FEDERATION-E2E-001: inter-node checkpoint signing on /cello/checkpoint/1.0.0
+    if (this.#checkpointTransport) {
+      await this.#node.handle("/cello/checkpoint/1.0.0", (stream) => {
+        void this.#handleCheckpointStream(stream);
+      }, { maxInboundStreams: 8 });
+    }
 
     // OBS-001 AC-002: directory startup log
     const peerId = truncId(this.#node.getPeerId());
@@ -552,6 +569,71 @@ export class CelloDirectoryNode {
       }
       await stream.close();
     } catch {
+      stream.close().catch(() => {});
+    }
+  }
+
+  // ─── Checkpoint stream handler (/cello/checkpoint/1.0.0) ────────────────────
+  // FEDERATION-E2E-001: Called when a coordinator sends a checkpoint proposal.
+  // This node independently recomputes the checkpoint hash from local chain state
+  // and signs only if it matches — never trusting the coordinator's hash blindly.
+  // (High security fix from FEDERATION-002: verifyAndSign() uses local state)
+
+  async #handleCheckpointStream(stream: Stream): Promise<void> {
+    try {
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of lp.decode(stream)) {
+        chunks.push(chunk as unknown as Uint8Array);
+      }
+      if (chunks.length === 0) {
+        stream.close().catch(() => {});
+        return;
+      }
+
+      const proposal = JSON.parse(
+        Buffer.concat(chunks).toString("utf8"),
+      ) as CheckpointProposal;
+
+      // Independently compute the checkpoint hash from our local chain state.
+      // Do not trust the coordinator-supplied hash — compute from local peaks (SI).
+      const localMmrState = await this.#store.getCheckpointMmrState();
+      const localHash = computeCheckpointHash(
+        localMmrState.mmrPeaks,
+        localMmrState.identityMerkleRoot,
+        proposal.checkpointId,
+      );
+
+      if (localHash !== proposal.checkpointHash) {
+        this.#logger?.error("federation.checkpoint.proposal.hash_mismatch", {
+          checkpointId: proposal.checkpointId,
+          expectedHash: proposal.checkpointHash,
+          receivedHash: localHash,
+        });
+        stream.close().catch(() => {});
+        return;
+      }
+
+      const hashBytes = Buffer.from(localHash, "hex");
+      const sig = await this.#keyProvider.sign(hashBytes);
+      const pubKey = await this.#keyProvider.getPublicKey();
+
+      const response = {
+        nodeId: this.#frostHandler.nodeId,
+        signature: Buffer.from(sig).toString("hex"),
+        publicKeyHex: Buffer.from(pubKey).toString("hex"),
+      };
+
+      const responseBytes = Buffer.from(JSON.stringify(response), "utf8");
+      stream.send(lp.encode.single(responseBytes));
+      await stream.close();
+
+      this.#logger?.info("federation.checkpoint.signature.sent", {
+        checkpointId: proposal.checkpointId,
+        nodeId: response.nodeId,
+      });
+    } catch (err: unknown) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.#logger?.error("federation.checkpoint.transport.handler.error", { reason });
       stream.close().catch(() => {});
     }
   }
@@ -2620,6 +2702,11 @@ export interface CreateDirectoryNodeOptions {
    * Backward compatible — when absent, relayEndpoint is used as before.
    */
   relayPoolManager?: RelayPoolManager;
+  /**
+   * FEDERATION-E2E-001: ICheckpointTransport for inter-node checkpoint cross-signing.
+   * When provided, registers /cello/checkpoint/1.0.0 handler and enables checkpoint signing.
+   */
+  checkpointTransport?: ICheckpointTransport;
 }
 
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{
@@ -2654,6 +2741,7 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     mmrStore: opts.mmrStore,
     notificationQueue: opts.notificationQueue,
     relayPoolManager: opts.relayPoolManager,
+    checkpointTransport: opts.checkpointTransport,
   });
   await directory.start();
 

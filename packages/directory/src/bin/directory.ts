@@ -57,7 +57,10 @@ import { createHealthServer } from "../health-server.js";
 import { logServiceStarted, logServiceStopped, logServiceCrashed, logSecretsUnavailable } from "../service-lifecycle.js";
 import { PgNotificationQueue } from "../adapters/pg-notification-queue.js";
 import { RelayPoolManager } from "../relay-pool-manager.js";
-import type { CloudStorageProvider } from "@cello/interfaces";
+import { CheckpointCoordinator } from "../checkpoint-coordinator.js";
+import { Libp2pCheckpointTransport } from "../adapters/libp2p-checkpoint-transport.js";
+import { InMemoryCheckpointTransport } from "@cello/interfaces/stubs";
+import type { ICheckpointTransport, CloudStorageProvider } from "@cello/interfaces";
 import { LocalCloudStorageProvider } from "@cello/interfaces/stubs";
 
 const env = process.env["CELLO_ENV"];
@@ -497,6 +500,49 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
   return mgr;
 })();
 
+// ─── FEDERATION-E2E-001: CheckpointTransport instantiation ───────────────────
+// CELLO_ENV=local  → InMemoryCheckpointTransport (no peers, no signing)
+// CELLO_ENV=dev+   → Libp2pCheckpointTransport backed by CHECKPOINT_PEER_ADDRS
+//
+// CHECKPOINT_PEER_ADDRS format: "nodeId1=libp2pPeerId1,nodeId2=libp2pPeerId2"
+// Example: "eu-central-1=12D3KooW...,ap-northeast-1=12D3KooW..."
+// The libp2p Peer IDs are the stable transport peer IDs of the peer directory nodes
+// (derived from their persisted transport keys). Find them in infra/STATE.md under
+// each region's directory node description or in CloudWatch logs at startup.
+//
+// In dev/staging/production, if CHECKPOINT_PEER_ADDRS is not set, CheckpointCoordinator
+// is started with no peers — it can still run rounds but will not achieve threshold.
+
+let checkpointTransport: ICheckpointTransport;
+if (env === "local") {
+  checkpointTransport = new InMemoryCheckpointTransport();
+  logger.info("adapter.initialised", { adapterName: "CheckpointTransport", implementation: "InMemoryCheckpointTransport", env });
+} else {
+  // Parse CHECKPOINT_PEER_ADDRS: "eu-central-1=12D3KooW...,ap-northeast-1=12D3KooW..."
+  const peerAddrsRaw = process.env["CHECKPOINT_PEER_ADDRS"] ?? "";
+  const peers = new Map<string, string>();
+  if (peerAddrsRaw) {
+    for (const pair of peerAddrsRaw.split(",")) {
+      const [nodeIdPart, libp2pPeerIdPart] = pair.split("=");
+      if (nodeIdPart && libp2pPeerIdPart) {
+        peers.set(nodeIdPart.trim(), libp2pPeerIdPart.trim());
+      }
+    }
+  }
+  // Transport is instantiated here but the libp2p node isn't started yet.
+  // The transport receives the node reference after createDirectoryNode().
+  // We use a placeholder and swap it in after node creation.
+  checkpointTransport = new InMemoryCheckpointTransport(
+    [...peers.keys()],
+  );
+  logger.info("adapter.initialised", {
+    adapterName: "CheckpointTransport",
+    implementation: "Libp2pCheckpointTransport",
+    env,
+    peerCount: peers.size,
+  });
+}
+
 // ─── Node startup ─────────────────────────────────────────────────────────
 
 let result: Awaited<ReturnType<typeof createDirectoryNode>>;
@@ -512,12 +558,57 @@ try {
     mmrStore,
     notificationQueue,
     relayPoolManager,
+    checkpointTransport,
   });
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
   logger.error("adapter.init.failed", { adapterName: "CelloDirectoryNode", reason: msg });
   process.exit(1);
 }
+
+// FEDERATION-E2E-001: swap InMemoryCheckpointTransport placeholder with
+// Libp2pCheckpointTransport now that the libp2p node is started and has
+// a Peer ID. The transport needs the live node reference for stream dialing.
+if (env !== "local") {
+  const peerAddrsRaw = process.env["CHECKPOINT_PEER_ADDRS"] ?? "";
+  const peers = new Map<string, string>();
+  if (peerAddrsRaw) {
+    for (const pair of peerAddrsRaw.split(",")) {
+      const [nodeIdPart, libp2pPeerIdPart] = pair.split("=");
+      if (nodeIdPart && libp2pPeerIdPart) {
+        peers.set(nodeIdPart.trim(), libp2pPeerIdPart.trim());
+      }
+    }
+  }
+  checkpointTransport = new Libp2pCheckpointTransport({
+    node: result.node,
+    peers,
+    logger,
+  });
+}
+
+// ─── FEDERATION-E2E-001: CheckpointCoordinator instantiation ────────────────
+const checkpointCoordinator = new CheckpointCoordinator(
+  store,
+  mmrStore!,
+  checkpointTransport,
+  kp,
+  logger,
+  {
+    nodeId,
+    checkpointIntervalMs: 10 * 60 * 1000,
+    roundTimeoutMs: 30_000,
+    checkpointGapAlarmMinutes: 30,
+    requiredThreshold: 2,
+  },
+);
+checkpointCoordinator.start();
+logger.info("adapter.initialised", {
+  adapterName: "CheckpointCoordinator",
+  implementation: env === "local" ? "InMemoryCheckpointTransport" : "Libp2pCheckpointTransport",
+  env,
+  nodeId,
+});
 
 try {
   await networkRelay.connect(result.node);
@@ -557,6 +648,7 @@ const shutdown = () => {
   logServiceStopped(logger, { nodeId, region: awsRegion, environment: env, uptimeMs });
 
   healthServer.close();
+  checkpointCoordinator.stop();
   result.stop()
     .then(() => pgPool?.end())
     .then(() => auditLogShipper.flush())

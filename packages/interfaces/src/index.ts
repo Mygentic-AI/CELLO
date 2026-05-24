@@ -12,3 +12,4 @@ export { RELAY_SESSION_UNRECOVERABLE } from "./session-wal.js";
 export type { AuditLogShipper, AuditLogEntry } from "./audit-log-shipper.js";
 export type { CheckpointStatusProvider, SealStagingStatus } from "./checkpoint-status-provider.js";
 export type { NotificationQueue, QueuedNotification } from "./notification-queue.js";
+export type { ICheckpointTransport, CheckpointProposal, CheckpointSignatureResponse } from "./checkpoint-transport.js";

@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import type { Logger, DirectoryStore } from "@cello/interfaces";
 // buildCheckpointTbs: static import — both coordinator and verifier use the same function (AC-010-canonical-tbs)
 import { computeCheckpointHash, buildCheckpointTbs, verify, type KeyProvider } from "@cello/crypto";
+import type { ICheckpointTransport, CheckpointSignatureResponse, CheckpointProposal } from "@cello/interfaces";
 import type { MmrStore } from "./mmr-store.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -39,15 +40,8 @@ export interface SealBatchRow {
   recordedAt: Date;
 }
 
-/**
- * A signature returned by a peer node for a checkpoint proposal.
- */
-export interface CheckpointSignatureResponse {
-  /** The node ID of the signing peer. */
-  nodeId: string;
-  /** Ed25519 signature over the checkpoint hash bytes (hex-encoded). */
-  signature: string;
-}
+// Re-export from interfaces so callers can import from either location.
+export type { ICheckpointTransport, CheckpointSignatureResponse, CheckpointProposal } from "@cello/interfaces";
 
 /**
  * Configuration for CheckpointCoordinator.
@@ -67,59 +61,9 @@ export interface CheckpointCoordinatorConfig {
   requiredThreshold?: number;
 }
 
-/**
- * ICheckpointTransport — inter-node libp2p protocol stream interface.
- *
- * Allows the coordinator to send proposals to peer nodes and receive signatures.
- * The production implementation uses libp2p streams on port 4001 (VPC Peering only).
- * The local/test stub returns a configurable response.
- *
- * Design note: This interface is intentionally narrow — only what FEDERATION-002
- * requires is defined here. Additional protocol messages are added by later stories.
- */
-export interface ICheckpointTransport {
-  /**
-   * Send a checkpoint proposal to a peer node and await its signature.
-   *
-   * Pseudocode:
-   *   1. Open a libp2p stream to the peer node at its VPC Peering endpoint:4001.
-   *   2. Send the proposal: { checkpointId, checkpointHash, mmrPeaks, identityMerkleRoot, mmrLeafCount }.
-   *   3. The peer independently recomputes the hash and returns { nodeId, signature, publicKeyHex } if it matches.
-   *      publicKeyHex is the peer's Ed25519 public key (hex-encoded) — used by the coordinator to verify
-   *      the signature before counting it toward the threshold (Critical fix: signatures must be verified).
-   *   4. If the peer returns a hash mismatch error, throw with the peer's computed hash.
-   *   5. If the stream times out (roundTimeoutMs), return null.
-   *
-   * @returns The peer's signature response (including its public key for verification), or null if timed out.
-   */
-  sendCheckpointProposal(
-    peerNodeId: string,
-    proposal: {
-      checkpointId: string;
-      checkpointHash: string;
-      mmrPeaks: string[];
-      identityMerkleRoot: string;
-      mmrLeafCount: number;
-    },
-    timeoutMs: number,
-  ): Promise<CheckpointSignatureResponse | null>;
-
-  /**
-   * Return the list of currently reachable peer node IDs.
-   * Used to determine coordinator role and available signing nodes.
-   */
-  getPeerNodeIds(): Promise<string[]>;
-}
-
-/**
- * A signature returned by a peer node, including its public key for coordinator-side verification.
- * Extended from CheckpointSignatureResponse to carry the public key needed by the coordinator
- * to verify the signature before counting it toward threshold (Critical: prevents forged signatures).
- */
-export interface CheckpointSignatureWithKey extends CheckpointSignatureResponse {
-  /** Hex-encoded Ed25519 public key of the signing peer — for coordinator-side signature verification. */
-  publicKeyHex: string;
-}
+// CheckpointSignatureWithKey: the base CheckpointSignatureResponse now carries publicKeyHex.
+// This alias preserves backward compatibility for existing tests.
+export type CheckpointSignatureWithKey = CheckpointSignatureResponse;
 
 // ─── Batch sort ───────────────────────────────────────────────────────────────
 

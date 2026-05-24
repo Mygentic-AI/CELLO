@@ -8,3 +8,4 @@ export { InMemorySessionWal } from "./in-memory-session-wal.js";
 export { LocalAuditLogShipper } from "./local-audit-log-shipper.js";
 export { LocalCloudStorageProvider } from "./local-cloud-storage-provider.js";
 export { InMemoryNotificationQueue } from "./in-memory-notification-queue.js";
+export { InMemoryCheckpointTransport } from "./in-memory-checkpoint-transport.js";
