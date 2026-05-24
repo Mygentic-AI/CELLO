@@ -21,17 +21,19 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-secrets-dev | UPDATE_COMPLETE | 2026-05-22 | |
 | cello-vpc-dev | UPDATE_COMPLETE | 2026-05-23 | Port 8080 for directory SG, port 80+443 for ALB SG |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-22 | |
-| cello-s3-dev | UPDATE_COMPLETE | 2026-05-22 | |
+| cello-s3-dev | UPDATE_COMPLETE | 2026-05-24 | Directory task role added to manifest bucket GetObject policy |
 | cello-rds-dev | CREATE_COMPLETE | 2026-05-22 | |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-05-23 | Lambda code fixed to preserve all secret fields on rotation |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-23 | AlbArn output added (SECOPS-003) |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-24 | RELAY_MANIFEST_BUCKET + RELAY_MANIFEST_SIGNER_PUBKEY env vars added |
 | cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL: rate-limit 1000/5min, IP reputation (BLOCK), CommonRuleSet (COUNT); logs to aws-waf-logs-cello-dev (SECOPS-003) |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-22 | |
 | cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-05-23 | 10 alarms with -dev suffix, 2 SNS topics, 1 multi-region dashboard (SECOPS-002) |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-22 | |
-| cello-cicd-dev | UPDATE_COMPLETE | 2026-05-24 | CELLO_ENV added to DirectoryBuild+RelayBuild; s3:ListBucket on artifacts bucket for CodeBuild role |
+| cello-cicd-dev | UPDATE_COMPLETE | 2026-05-24 | CELLO_ENV added to DirectoryBuild+RelayBuild; s3:ListBucket; ProductionDeploy rewrites ECR URI to deploy region |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
 | Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-22 | |
+| ECR Replication (account-level) | CONFIGURED | 2026-05-24 | us-east-1 → eu-central-1 + ap-northeast-1; filter: prefix "cello-" |
+| SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-24 | 167ca6...27b5 (directory node pubkey) |
 
 #### Key Resources — dev us-east-1
 
