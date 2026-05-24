@@ -458,6 +458,8 @@ Resources:
         EnvironmentVariables:
           - Name: CELLO_AUDIT_BUCKET
             Value: cello-audit-logs-dev-us-east-1
+          - Name: CELLO_ENV
+            Value: !Ref Environment
       ServiceRole: !GetAtt CodeBuildRole.Arn
 
   RelayBuild:
@@ -473,6 +475,9 @@ Resources:
         Type: LINUX_CONTAINER
         Image: aws/codebuild/standard:7.0
         ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - Name: CELLO_ENV
+            Value: !Ref Environment
       ServiceRole: !GetAtt CodeBuildRole.Arn
 
   E2eTestsBuild:

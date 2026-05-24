@@ -191,8 +191,10 @@ describe("AC-002 / SI-001: corrupted manifest signature causes loadManifest to r
       signerNodeId,
       relays,
     );
-    // Corrupt the signature
-    manifest.signature = manifest.signature.replace(/[0-9a-f]{2}$/, "00");
+    // Corrupt the signature — flip last byte (XOR with 0xff ensures change even if it ends in "00")
+    const lastByte = parseInt(manifest.signature.slice(-2), 16);
+    const flipped = (lastByte ^ 0xff).toString(16).padStart(2, "0");
+    manifest.signature = manifest.signature.slice(0, -2) + flipped;
 
     const storage = makeInMemoryStorage({
       "relay-manifest.json": new TextEncoder().encode(JSON.stringify(manifest)),
