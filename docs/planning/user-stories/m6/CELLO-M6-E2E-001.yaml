@@ -184,7 +184,7 @@ security_invariants:
     test_type: manual
     component_under_test: transport
     notes: "Static verification via AUDIT-ME.md. Both SIs are verified
-      as part of the AUDIT-ME.md review in REPOSPLIT-001 AC-007."
+      as part of the AUDIT-ME.md review in REPOSPLIT-002 AC-006."
 
 # ─── Observability ──────────────────────────────────────────
 observability:
@@ -201,7 +201,7 @@ references:
   discussion_logs:
     - "2026-05-25_0900_m6-beta-launch-planning"
   depends_on:
-    - CELLO-REPOSPLIT-001
+    - CELLO-REPOSPLIT-002
     - CELLO-OPS-AGENT-001
     - CELLO-OPS-AGENT-005B
     - CELLO-DEMO-001

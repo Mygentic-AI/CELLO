@@ -5,282 +5,150 @@ milestone: M6
 actor: CLIENT
 priority: P0
 components:
-  - client
-  - crypto
-  - transport
-  - protocol-types
   - adapter-claude-code
 
 # ─── Intent ─────────────────────────────────────────────────
 story: >
-  As a CELLO user,
-  I want to install @cello/connect from npm and have my agent
-  connected to the live CELLO network without cloning a repo or
-  running infrastructure,
-  so that adoption requires a single command: claude mcp add cello
-  npx @cello/connect.
+  As the CELLO development team,
+  I want the cello-client repository scaffolded with a working
+  CI pipeline, operator-facing documentation, and the npm publish
+  path cleared before any package code moves,
+  so that REPOSPLIT-002 (extraction and publish) has no structural
+  surprises and the documentation is written against real M6
+  development decisions as they happen rather than reconstructed
+  after the fact.
 
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
-  - trigger: "When a user runs npm install @cello/connect"
-    action: "the package installs with all dependencies resolved;
-      no postinstall scripts; no native compilation required; the
-      production directory and relay endpoints are baked into the
-      package as defaults"
+  - trigger: "When a push is made to the cello-client repository"
+    action: "GitHub Actions CI runs pnpm install → build → typecheck
+      → test → tarball check; the publish step only executes on tagged
+      releases and requires all prior steps to pass"
 
-  - trigger: "When a user runs npx @cello/connect"
-    action: "the MCP server starts and exposes all CELLO tools
-      (cello_register, cello_send, cello_receive, etc.) over the
-      MCP stdio transport; no configuration required for connecting
-      to the live network"
+  - trigger: "When an AI investigator reads AUDIT-ME.md in cello-client"
+    action: "each privacy claim names specific files and code paths that
+      an investigator can verify by reading the named files without prior
+      knowledge of the codebase"
 
-  - trigger: "When the package is inspected by an AI investigator
-      reading AUDIT-ME.md"
-    action: "each privacy claim in AUDIT-ME.md names specific files
-      and code paths; an investigator can verify every claim by
-      reading the named files without prior knowledge of the codebase"
+  - trigger: "When a stranger reads the cello-client README"
+    action: "they can complete the install and quick start in under
+      5 minutes with no prior CELLO knowledge"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "The cello-client repository (github.com/Mygentic-AI/cello-client)"
-    when: "the extraction is complete and pnpm run build is executed
-      from scratch (rm -rf dist/ in all packages first)"
-    then: "all five packages compile without error from a clean slate;
-      TypeScript project references are correctly wired — verified by
-      tsc --build succeeding with zero cached outputs"
+    given: "The cello-client repository"
+    when: "the tsconfig prerequisite fix is committed to trustless-cello"
+    then: "packages/adapter-claude-code/tsconfig.json no longer references
+      { path: '../relay' } or { path: '../directory' }; 'exclude':
+      ['src/__tests__'] is present; pnpm run build in trustless-cello
+      still succeeds with zero errors after the change"
     test_type: integration
-    component_under_test: client
+    component_under_test: adapter-claude-code
+    notes: "This commit lands in trustless-cello, not cello-client.
+      It is the first commit of this story. Must precede all extraction
+      work so the monorepo CI stays green throughout."
 
   - id: AC-002
-    given: "The cello-client repository"
-    when: "pnpm run build is executed at the root"
-    then: "all five packages compile without error; dist/ directories
-      are populated; no dependency on packages that stayed in
-      trustless-cello (directory, relay, e2e-tests) — verified by
-      pnpm why @cello/directory returning 'not found'"
+    given: "The cello-client repository after scaffolding"
+    when: "pnpm install is run at the root"
+    then: "the workspace resolves cleanly; pnpm-workspace.yaml references
+      core/*; root tsconfig.json references all five core/ package paths;
+      vitest.workspace.ts references all five core/ package paths;
+      no package code exists yet — core/ directories contain only
+      package.json and tsconfig.json stubs"
     test_type: integration
     component_under_test: client
 
   - id: AC-003
-    given: "The cello-client repository"
-    when: "pnpm run test is executed at the root"
-    then: "all existing unit tests pass; no test depends on directory
-      or relay packages; no test requires AWS credentials or a running
-      database"
+    given: "The GitHub Actions CI pipeline (.github/workflows/ci.yml)"
+    when: "a push to main occurs with no package code present"
+    then: "CI runs to completion: pnpm install → build → typecheck →
+      test → tarball check; each step exits 0 on an empty workspace;
+      the publish step is present but gated on tags only and does not
+      run on a plain push; NPM_TOKEN is wired in GitHub secrets"
     test_type: integration
     component_under_test: client
+    notes: "CI must be green on a skeleton repo before any code moves.
+      This proves the pipeline works independently of extraction."
 
   - id: AC-004
-    given: "The adapter-claude-code package"
-    when: "the production endpoint configuration is inspected"
-    then: "CELLO_DIRECTORY_URL defaults to the production directory
-      ALB endpoint (known after M5 closes and STATE.md is finalized);
-      this is the only compile-time baked-in endpoint — relay assignment
-      is dynamic, issued per-session by the directory via SessionAssignment,
-      and is never a static constant; CELLO_DIRECTORY_URL is overridable
-      by environment variable"
-    test_type: unit
-    component_under_test: adapter-claude-code
-    notes: "AC-004 requires M5 to be closed and STATE.md finalized to
-      know the real directory endpoint value. CELLO_RELAY_MULTIADDR is
-      not needed — relay multiaddr is dynamically assigned by the directory
-      at session establishment, not baked in. Final sync from trustless-cello
-      HEAD happens just before publish."
-
-  - id: AC-005
-    given: "The package.json#files field (or .npmignore) in the
-      adapter-claude-code package"
-    when: "npm pack --dry-run is run"
-    then: "the tarball manifest contains no files from packages/directory,
-      packages/relay, infra/, or any .env file; SKILL.md is present in
-      the tarball; the package.json#files allowlist is ['dist/', 'package.json',
-      'SKILL.md'] and is the sole enforcement mechanism; CI runs both checks
-      on every PR"
-    test_type: integration
-    component_under_test: adapter-claude-code
-    notes: "Two CI shell steps (not Vitest tests):
-      (1) npm pack --dry-run | grep -E 'directory|relay|infra|.env' must
-      return exit code 1 (no matches);
-      (2) npm pack --dry-run | grep 'SKILL.md' must return exit code 0
-      (present). The files allowlist is the real enforcement; CI verifies it."
-
-  - id: AC-006
-    given: "The cello-client repository CI pipeline (GitHub Actions)"
-    when: "a push to main occurs"
-    then: "CI runs: pnpm install → build → typecheck → test → tarball check
-      (AC-005); the publish step only executes if all prior steps succeed
-      (non-zero exit on any failure prevents publish); publish runs only
-      on tagged releases using NPM_TOKEN from GitHub secrets"
-    test_type: integration
-    component_under_test: client
-
-  - id: AC-007
     given: "AUDIT-ME.md in the cello-client repository root"
     when: "an AI investigator reads it"
-    then: "at minimum these three claims are present with exact file pointers:
-      (1) The relay never sees message content in plaintext — names the Noise
-      encryption setup file and circuit relay fallback code path;
-      (2) K_local never leaves the client process — names key generation
-      and FROST DKG client code;
-      (3) No telemetry, analytics, or phone-home behavior — names the
-      absence of any outbound HTTP calls not to directory/relay;
-      each claim has a 'Verify:' subsection naming 2-4 specific files
-      that exist at the stated paths"
+    then: "at minimum these three claims are present with exact file
+      pointers that will be valid after REPOSPLIT-002 extracts the
+      packages: (1) The relay never sees message content in plaintext
+      — names the Noise encryption setup file and circuit relay fallback
+      code path; (2) K_local never leaves the client process — names key
+      generation and FROST DKG client code; (3) No telemetry, analytics,
+      or phone-home behavior — names the absence of any outbound HTTP
+      calls not to directory/relay; each claim has a Verify: subsection
+      naming 2-4 specific files at paths they will occupy in cello-client"
     test_type: manual
     component_under_test: client
-    notes: "Verification: open AUDIT-ME.md, confirm each claim has a
-      Verify: subsection with 2+ file paths. Confirm each named file
-      exists at the stated path in the repo."
+    notes: "File paths reference the cello-client layout (core/crypto,
+      core/transport, etc.) even though the code has not moved yet.
+      AUDIT-ME.md is a living document — update it as M6 decisions
+      are made. Final verification that named files exist happens in
+      REPOSPLIT-002."
 
-  - id: AC-008
+  - id: AC-005
+    given: "SKILL.md in packages/adapter-claude-code/ (updated in-place
+      in trustless-cello, then copied to cello-client root during
+      REPOSPLIT-002)"
+    when: "an agent reads it"
+    then: "the install command is correct (claude mcp add cello npx
+      @cello/connect); the package name is @cello/connect; tool usage
+      examples are present and accurate for M6 (cello_register,
+      cello_send, cello_receive, cello_status); content is sufficient
+      for an agent to get connected — final polish deferred to later
+      milestones"
+    test_type: manual
+    component_under_test: adapter-claude-code
+
+  - id: AC-006
     given: "The cello-client repository README.md"
-    when: "a stranger reads it"
+    when: "a stranger reads it with no prior CELLO knowledge"
     then: "it contains: one-line install command, what CELLO is (2-3
       sentences), quick start (register + send a message), link to
-      AUDIT-ME.md, link to the main CELLO docs; no jargon unexplained;
-      no reference to the trustless-cello monorepo"
+      AUDIT-ME.md; no jargon unexplained; no reference to the
+      trustless-cello monorepo"
     test_type: manual
     component_under_test: client
-    notes: "Verification: read README cold with no prior CELLO knowledge.
-      Can you complete the quick start in under 5 minutes?"
-
-  - id: AC-009
-    given: "A git diff between the extracted packages and their
-      trustless-cello source at the same HEAD"
-    when: "the diff is inspected AND the full test suite from
-      trustless-cello is run against the extracted code"
-    then: "only structural changes exist (import paths, package.json
-      names, tsconfig references); no behavioral code changes; the
-      test suite from trustless-cello runs without regressions when
-      pointed at the extracted code"
-    test_type: manual
-    component_under_test: client
-
-  - id: AC-010
-    given: "@cello/connect@beta published on npm"
-    when: "npm install @cello/connect@beta is run in a fresh directory
-      (manually, after publish)"
-    then: "the package installs successfully; npx @cello/connect starts
-      the MCP server; the package is published under the @cello scope
-      with the 'beta' dist-tag (not 'latest')"
-    test_type: manual
-    component_under_test: adapter-claude-code
-    notes: "Mitigation D: beta tag only. Promoted to latest in M6-E2E-001.
-      This is a post-publish manual verification, not a CI step."
+    notes: "Verification: read README cold. Can you complete the quick
+      start in under 5 minutes?"
 
 # ─── Security Invariants ────────────────────────────────────
-security_invariants:
-  - id: SI-001
-    statement: "The published package must not contain any server-side
-      code, IaC templates, deployment scripts, or AWS credentials;
-      enforced via package.json#files allowlist in adapter-claude-code"
-    adversarial_condition: "when npm pack --dry-run is run in CI and
-      the output is scanned for forbidden paths (directory, relay, infra,
-      .env), zero matches are returned; the package.json#files field
-      explicitly allowlists only dist/, package.json, and SKILL.md"
-    test_type: integration
-    component_under_test: adapter-claude-code
-    notes: "Enforcement mechanism: package.json#files allowlist.
-      Test: CI shell step (npm pack --dry-run | grep), not Vitest."
-
-  - id: SI-002
-    statement: "The published package must not contain test fixtures
-      that embed real keys, tokens, or secret material"
-    adversarial_condition: "when npm pack --dry-run output is inspected,
-      no file in the tarball contains the pattern '-----BEGIN PRIVATE KEY-----'
-      or any FROST share JSON structure matching { share: { index:, value: } };
-      the package.json#files allowlist ensures test fixtures are excluded"
-    test_type: integration
-    component_under_test: client
-    notes: "Test: extend the CI npm pack --dry-run grep to also scan
-      for private key header patterns."
-
-# ─── Implementation Notes ───────────────────────────────────
-# Derived from pre-implementation investigation and coordinator review.
-# See discussion log: 2026-05-25_1400_reposplit-001-investigation
-implementation_notes:
-  execution_order: >
-    REPOSPLIT-001 executes in two phases. Phase 1 (do immediately, parallel
-    with OPS-AGENT-000): cello-client repo scaffolding, GitHub Actions CI
-    pipeline, AUDIT-ME.md, SKILL.md, and the tsconfig prerequisite fix in
-    trustless-cello. Phase 2 (after all M6 client development is merged to
-    trustless-cello main): extract the five packages, move tests, verify,
-    publish. Do not begin Phase 2 until cello_register and all M6 adapter
-    changes are merged. Rationale: early extraction during active M6 client
-    development creates cross-repo version boundaries and pnpm link friction
-    that adds a new structural problem class during a high-density milestone.
-    See discussion log 2026-05-25_1800_reposplit-timing-scaffold-early-extract-late for the full analysis.
-
-  prerequisite_first_commit: >
-    Before any extraction work: fix packages/adapter-claude-code/tsconfig.json
-    in trustless-cello. Remove { "path": "../relay" } and { "path": "../directory" }
-    from references[]. Add "exclude": ["src/__tests__"]. Commit and push to
-    trustless-cello main so the monorepo CI stays green throughout the split work.
-
-  test_disposition: >
-    Move 14 clean tests to cello-client; leave 12 integration tests in
-    trustless-cello. The 12 integration tests instantiate real in-process
-    directory and relay nodes — they cannot meaningfully run without them
-    and must never be replaced with mocks. AC-003's "no test depends on
-    directory or relay packages" criterion applies to the cello-client repo,
-    not to the trustless-cello file tree.
-    Tests that move: client.test.ts, index.test.ts, mcp-003-unit.test.ts,
-    mcp002.test.ts, persist-009.test.ts, persist-010.test.ts,
-    persist-011.test.ts, persist-012.test.ts,
-    persist-014-reconciliation.test.ts, persist-015-unilateral-seal.test.ts,
-    persist-022.test.ts, session003.test.ts, session007.test.ts,
-    connection-policy.test.ts (moves with @cello/test-fixtures).
-    From adapter-claude-code: adapter-001.test.ts, adapter-002.test.ts,
-    index.test.ts, persist-017-checkpoint-status.test.ts.
-
-  test_fixtures_placement: >
-    @cello/test-fixtures moves to cello-client as a private workspace package
-    (keep "private": true). packages/protocol-types/src/__tests__/ in
-    trustless-cello uses @cello/test-fixtures — those usages must be inlined
-    directly into the protocol-types test files after the move.
-
-  interfaces_placement: >
-    @cello/interfaces stays in trustless-cello. Remove "private": true, add
-    a files allowlist, publish from trustless-cello. cello-client consumes
-    @cello/interfaces as a pinned npm dependency. Moving interfaces to
-    cello-client would force all OPS-AGENT stories (which add server-side
-    interfaces) to open cross-repo PRs against a client repo — wrong direction.
-
-  package_rename: >
-    Rename "name" in packages/adapter-claude-code/package.json from
-    @cello/adapter-claude-code to @cello/connect. pnpm workspace resolution
-    uses the name field. Downstream workspace consumers update their references.
-
-  skill_md: >
-    SKILL.md exists in packages/adapter-claude-code/. Content must be updated:
-    correct install command (claude mcp add cello npx @cello/connect), correct
-    package name, minimal tool usage examples. Content standard for M6 is
-    sufficient-to-connect, not final — it will iterate. Must be in the npm
-    tarball (in files allowlist).
-
-  trustless_cello_post_split: >
-    After extraction, trustless-cello/tsconfig.json references only
-    packages/directory, packages/relay, packages/e2e-tests (plus interfaces
-    and test-fixtures if they stay). The directory and relay tsconfigs must
-    drop relative references to ../crypto, ../interfaces, ../protocol-types,
-    ../transport — those packages are no longer in the monorepo and resolve
-    from npm instead.
-
-  developer_cross_repo_workflow: >
-    After the split, a change in cello-client at HEAD is not visible in
-    trustless-cello e2e-tests until published. Use pnpm link for cross-repo
-    development: symlinks node_modules/@cello/<pkg> to the local cello-client
-    workspace path. Document in cello-client README before this story closes.
+security_invariants: []
 
 # ─── Observability ──────────────────────────────────────────
 observability:
   events: []
   error_events: []
   alarms: []
-  notes: "REPOSPLIT-001 is a packaging and publishing story — no
-    runtime observability beyond what the client packages already emit.
-    Client-side events are defined in existing M0-M4 stories."
+  notes: "REPOSPLIT-001 is scaffolding only — no runtime code ships."
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes:
+  prerequisite_first_commit: >
+    First commit of this story must be the tsconfig fix in trustless-cello
+    (AC-001). Everything else in this story lives in cello-client. Do not
+    begin cello-client work until the tsconfig fix is merged and the
+    trustless-cello CI is green.
+
+  ci_design: >
+    Node 24 LTS. pnpm 10.33.2 (pin to match trustless-cello buildspec.yml).
+    Pipeline: pnpm install → tsc --build → pnpm test (--pool-options.threads.maxThreads=1)
+    → tarball check → publish (tags only). Two tarball CI checks:
+    (1) npm pack --dry-run | grep -E 'directory|relay|infra|.env' exits 1;
+    (2) npm pack --dry-run | grep 'SKILL.md' exits 0.
+
+  audit_me_is_living: >
+    AUDIT-ME.md is written now but will be updated as M6 progresses.
+    When cello_register ships (OPS-AGENT chain), update the K_local claim
+    to name the registration code path. By the time REPOSPLIT-002 runs,
+    AUDIT-ME.md should require no rewrites — only final verification
+    that named files exist at the stated paths.
 
 # ─── References ─────────────────────────────────────────────
 references:
@@ -291,10 +159,7 @@ references:
     - "2026-05-25_1800_reposplit-timing-scaffold-early-extract-late"
   depends_on: []
   blocks:
-    - CELLO-DEMO-001
-    - CELLO-M6-E2E-001
-  notes: "Can begin immediately — zero dependency on M5 close.
-    Structural work (CI, AUDIT-ME.md, README) starts day one.
-    AC-004 (production endpoints) requires M5 STATE.md finalized.
-    Final package sync with trustless-cello HEAD happens just
-    before publish."
+    - CELLO-REPOSPLIT-002
+  notes: "Starts immediately — zero dependency on M5 close or any other
+    M6 story. Closes when CI is green on the scaffold and all documentation
+    ACs pass. REPOSPLIT-002 cannot begin until this story is merged."
