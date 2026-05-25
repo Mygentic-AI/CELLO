@@ -1,0 +1,199 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-OPS-AGENT-000
+domain: OPS-AGENT
+milestone: M6
+actor: DIR
+priority: P0
+components:
+  - interfaces
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO development team,
+  I want all registration interface contracts, TypeScript types,
+  local stubs, and the complete database schema design for the
+  Operations Agent registration state machine produced and
+  reviewed before any parallel implementation begins,
+  so that OPS-AGENT-001 through 005B can implement against
+  stable interfaces with reserved migration version numbers,
+  eliminating the mid-milestone migration renumbering cascade
+  experienced in M4/M5.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When OPS-AGENT-000 is merged to main"
+    action: "the following TypeScript interfaces exist in
+      packages/interfaces/src/ with full type definitions:
+      MessagingChannel, OtpDeliveryProvider, TokenValidator,
+      SecurityAlertProvider; each has a corresponding local
+      stub in packages/interfaces/src/stubs/"
+
+  - trigger: "When OPS-AGENT-000 is merged to main"
+    action: "the pre-authorization token schema is defined as
+      a TypeScript type in packages/interfaces/src/ including:
+      token format (string prefix + random bytes), TTL (24 hours),
+      single-use semantics, consumption timestamp, issuing
+      phone_stub_hash and email_domain"
+
+  - trigger: "When OPS-AGENT-000 is merged to main"
+    action: "the registration state machine states are defined
+      as a TypeScript discriminated union type: INITIAL,
+      AWAITING_CONTACT, PHONE_CONFIRMED, AWAITING_EMAIL,
+      AWAITING_EMAIL_OTP, EMAIL_CONFIRMED, PRE_AUTH_TOKEN_ISSUED,
+      EXPIRED, FAILED"
+
+  - trigger: "When OPS-AGENT-000 is merged to main"
+    action: "complete SQL migration files exist for all tables
+      the registration state machine requires, with Flyway
+      version numbers V24+ explicitly assigned; no downstream
+      story may add a migration not designed here"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The packages/interfaces/src/ directory after merge"
+    when: "MessagingChannel interface is imported by a consumer"
+    then: "the interface exports send(to: string, message: string): Promise<void>,
+      onMessage(handler: (from: string, message: string) => void): void, and
+      resolveIdentity(from: string): Promise<ChannelIdentity>; ChannelIdentity
+      is a discriminated union with channel field ('telegram' | 'whatsapp' | 'cli'),
+      optional phoneNumber, and required channelUserId"
+    test_type: unit
+    component_under_test: interfaces
+
+  - id: AC-002
+    given: "The packages/interfaces/src/ directory after merge"
+    when: "OtpDeliveryProvider interface is imported"
+    then: "the interface exports sendOtp(emailAddress: string, otp: string): Promise<void>
+      and a local stub ConsoleOtpDeliveryProvider that prints to stdout"
+    test_type: unit
+    component_under_test: interfaces
+
+  - id: AC-003
+    given: "The packages/interfaces/src/ directory after merge"
+    when: "TokenValidator interface is imported"
+    then: "the interface exports validateToken(token: string): Promise<TokenValidationResult>
+      where TokenValidationResult is { valid: true, phoneStubHash: string, emailDomain: string }
+      | { valid: false, reason: string }; a local stub DevTokenValidator accepts any
+      token prefixed with 'DEV-' and returns a fixed principal"
+    test_type: unit
+    component_under_test: interfaces
+
+  - id: AC-004
+    given: "The packages/interfaces/src/ directory after merge"
+    when: "SecurityAlertProvider interface is imported"
+    then: "the interface exports sendAlert(accountId: string, alert: SecurityAlert): Promise<void>
+      where SecurityAlert is a discriminated union; a local stub ConsoleSecurityAlertProvider
+      logs to stdout"
+    test_type: unit
+    component_under_test: interfaces
+
+  - id: AC-005
+    given: "The pre-authorization token type definition"
+    when: "imported by OPS-AGENT-001 or OPS-AGENT-002"
+    then: "PreAuthorizationToken type includes: token (string, format 'CELLO-' + 32 random
+      base58 chars), phoneStubHash (string), emailDomain (string), issuedAt (Date),
+      expiresAt (Date, 24h TTL), consumedAt (Date | null); PreAuthorizationTokenRow
+      includes the same plus id (UUID) for database storage"
+    test_type: unit
+    component_under_test: interfaces
+
+  - id: AC-006
+    given: "The registration state machine type definition"
+    when: "imported by OPS-AGENT-002"
+    then: "RegistrationState is a discriminated union on a 'state' field with values:
+      INITIAL, AWAITING_CONTACT, PHONE_CONFIRMED, AWAITING_EMAIL, AWAITING_EMAIL_OTP,
+      EMAIL_CONFIRMED, PRE_AUTH_TOKEN_ISSUED, EXPIRED, FAILED; each variant carries
+      the fields relevant to that state (e.g. AWAITING_EMAIL_OTP carries otpHash,
+      otpExpiresAt, attemptCount); RegistrationRecord wraps the state with id, phoneStubHash,
+      channel, createdAt, updatedAt, expiresAt"
+    test_type: unit
+    component_under_test: interfaces
+
+  - id: AC-007
+    given: "The migration SQL files produced by this story"
+    when: "applied to a fresh PostgreSQL instance via Flyway"
+    then: "all tables required by the registration state machine exist with correct
+      columns, constraints, RLS policies, and indexes; the version numbers are V24
+      and above; no version number conflicts with any existing migration in the
+      repository (V1 through V23)"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-008
+    given: "The migration SQL files and the M6 COORDINATION.md"
+    when: "OPS-AGENT-000 closes"
+    then: "the Migration Version Registry table in docs/planning/user-stories/m6/COORDINATION.md
+      is populated with every migration version number, its story assignment, and
+      table/purpose; this is the authoritative registry — no story may claim a
+      version not listed here"
+    test_type: manual
+    component_under_test: directory
+
+  - id: AC-009
+    given: "All local stubs (CliAdapter, ConsoleOtpDeliveryProvider, DevTokenValidator,
+      ConsoleSecurityAlertProvider)"
+    when: "a consumer instantiates each stub with no configuration"
+    then: "each stub implements its interface with zero external dependencies; the
+      composition root can wire all stubs for CELLO_ENV=local without any secrets,
+      network connections, or AWS credentials"
+    test_type: unit
+    component_under_test: interfaces
+
+  - id: AC-010-integration-gate
+    given: "All interface files, type definitions, stubs, and migration SQL files
+      produced by this story"
+    when: "pnpm run typecheck is run across the workspace AND the migration SQL
+      files are applied to a fresh local PostgreSQL instance"
+    then: "zero type errors across the workspace; Flyway applies all migrations
+      without error; no migration version number V24+ exists in any file outside
+      this story's changes; the COORDINATION.md migration registry is populated"
+    test_type: integration
+    component_under_test: directory
+    notes: "This is the Mitigation B integration gate AC. It must pass before
+      any downstream OPS-AGENT story begins implementation."
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The pre-authorization token format must be unguessable —
+      minimum 192 bits of entropy in the random portion"
+    adversarial_condition: "even when an attacker can observe token format
+      and timing of issuance, brute-forcing a valid token within the 24h TTL
+      must be computationally infeasible"
+    test_type: unit
+    component_under_test: interfaces
+
+  - id: SI-002
+    statement: "Migration SQL must enforce RLS with append-only semantics —
+      cello_service has INSERT and SELECT only on registration tables;
+      no DELETE or UPDATE"
+    adversarial_condition: "even when the application has a SQL injection
+      vulnerability, the database role cannot modify or delete registration
+      records"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events: []
+  error_events: []
+  alarms: []
+  notes: "OPS-AGENT-000 is a design and contract story — no runtime events.
+    Observable events are defined in OPS-AGENT-001 through 004."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M6
+  discussion_logs:
+    - "2026-05-25_0900_m6-beta-launch-planning"
+    - "2026-05-25_1100_m5-retrospective-lessons-learned"
+  depends_on: []
+  blocks:
+    - CELLO-OPS-AGENT-001
+    - CELLO-OPS-AGENT-002
+    - CELLO-OPS-AGENT-003
+    - CELLO-OPS-AGENT-004
+    - CELLO-OPS-AGENT-005A
+    - CELLO-OPS-AGENT-005B
