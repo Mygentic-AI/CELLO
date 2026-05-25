@@ -110,6 +110,15 @@ acceptance_criteria:
     test_type: integration
     component_under_test: operations-agent
 
+  - id: AC-003b
+    given: "A RegistrationRecord in AWAITING_EMAIL state"
+    when: "a message containing 'not an email' (no @ sign) is received"
+    then: "the state remains AWAITING_EMAIL; no OTP is generated or sent;
+      the user receives an error message asking them to provide a valid
+      email address; no database state changes"
+    test_type: unit
+    component_under_test: operations-agent
+
   - id: AC-004
     given: "A RegistrationRecord in AWAITING_EMAIL_OTP state with a
       valid unexpired OTP"
@@ -290,7 +299,6 @@ references:
     - "2026-05-13_1549_onboarding-and-operations-agent-architecture"
   depends_on:
     - CELLO-OPS-AGENT-000
-    - CELLO-OPS-AGENT-001
   blocks:
     - CELLO-OPS-AGENT-003
     - CELLO-OPS-AGENT-004
