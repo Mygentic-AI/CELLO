@@ -44,12 +44,11 @@ behavior:
 acceptance_criteria:
   - id: AC-001
     given: "The cello-client repository (github.com/Mygentic-AI/cello-client)"
-    when: "the extraction is complete"
-    then: "the repo contains: core/protocol-types, core/crypto,
-      core/transport, core/client, core/adapter-claude-code; each
-      package builds independently; the monorepo root has a pnpm
-      workspace config; TypeScript project references are correctly
-      wired"
+    when: "the extraction is complete and pnpm run build is executed
+      from scratch (rm -rf dist/ in all packages first)"
+    then: "all five packages compile without error from a clean slate;
+      TypeScript project references are correctly wired — verified by
+      tsc --build succeeding with zero cached outputs"
     test_type: integration
     component_under_test: client
 
@@ -58,7 +57,8 @@ acceptance_criteria:
     when: "pnpm run build is executed at the root"
     then: "all five packages compile without error; dist/ directories
       are populated; no dependency on packages that stayed in
-      trustless-cello (directory, relay, e2e-tests)"
+      trustless-cello (directory, relay, e2e-tests) — verified by
+      pnpm why @cello/directory returning 'not found'"
     test_type: integration
     component_under_test: client
 
@@ -75,44 +75,55 @@ acceptance_criteria:
     given: "The adapter-claude-code package"
     when: "the production endpoint configuration is inspected"
     then: "CELLO_DIRECTORY_URL defaults to the production directory
-      ALB endpoint; CELLO_RELAY_MULTIADDR defaults to the production
-      relay multiaddr; these are compile-time constants that can be
-      overridden by environment variables"
+      ALB endpoint (known after M5 closes and STATE.md is finalized);
+      CELLO_RELAY_MULTIADDR defaults to the production relay multiaddr;
+      these are compile-time constants overridable by environment variables"
     test_type: unit
     component_under_test: adapter-claude-code
+    notes: "AC-004 requires M5 to be closed and STATE.md finalized to
+      know the real endpoint values. Final sync from trustless-cello HEAD
+      happens just before publish."
 
   - id: AC-005
-    given: "The @cello/connect package on npm"
-    when: "npm install @cello/connect@beta is run in a fresh directory"
-    then: "the package installs successfully; npx @cello/connect starts
-      the MCP server; the package is published under the @cello scope
-      with the 'beta' dist-tag (not 'latest')"
+    given: "The package.json#files field (or .npmignore) in the
+      adapter-claude-code package"
+    when: "npm pack --dry-run is run"
+    then: "the tarball manifest contains no files from packages/directory,
+      packages/relay, infra/, or any .env file; the package.json#files
+      field is the enforcement mechanism; CI runs this check on every PR"
     test_type: integration
     component_under_test: adapter-claude-code
-    notes: "Mitigation D: beta tag only. Promoted to latest in M6-E2E-001."
+    notes: "CI step: npm pack --dry-run | grep -E 'directory|relay|infra|.env'
+      must return exit code 1 (no matches). This is a CI shell step,
+      not a Vitest test."
 
   - id: AC-006
     given: "The cello-client repository CI pipeline (GitHub Actions)"
     when: "a push to main occurs"
-    then: "CI runs: pnpm install → build → typecheck → test → publish
-      (on tagged releases only); publish step uses NPM_TOKEN from
-      GitHub secrets; CI is green before any PR merges"
+    then: "CI runs: pnpm install → build → typecheck → test → tarball check
+      (AC-005); the publish step only executes if all prior steps succeed
+      (non-zero exit on any failure prevents publish); publish runs only
+      on tagged releases using NPM_TOKEN from GitHub secrets"
     test_type: integration
     component_under_test: client
 
   - id: AC-007
     given: "AUDIT-ME.md in the cello-client repository root"
     when: "an AI investigator reads it"
-    then: "at minimum these claims are present with exact file pointers:
-      (1) The relay never sees message content in plaintext — points to
-      Noise encryption setup and circuit relay fallback code;
-      (2) K_local never leaves the client process — points to key
-      generation and FROST DKG client code;
-      (3) No telemetry, analytics, or phone-home behavior — points to
-      the absence of any outbound HTTP calls not to directory/relay;
-      each claim has a 'Verify:' section naming 2-4 specific files"
+    then: "at minimum these three claims are present with exact file pointers:
+      (1) The relay never sees message content in plaintext — names the Noise
+      encryption setup file and circuit relay fallback code path;
+      (2) K_local never leaves the client process — names key generation
+      and FROST DKG client code;
+      (3) No telemetry, analytics, or phone-home behavior — names the
+      absence of any outbound HTTP calls not to directory/relay;
+      each claim has a 'Verify:' subsection naming 2-4 specific files
+      that exist at the stated paths"
     test_type: manual
     component_under_test: client
+    notes: "Verification: open AUDIT-ME.md, confirm each claim has a
+      Verify: subsection with 2+ file paths. Confirm each named file
+      exists at the stated path in the repo."
 
   - id: AC-008
     given: "The cello-client repository README.md"
@@ -123,36 +134,59 @@ acceptance_criteria:
       no reference to the trustless-cello monorepo"
     test_type: manual
     component_under_test: client
+    notes: "Verification: read README cold with no prior CELLO knowledge.
+      Can you complete the quick start in under 5 minutes?"
 
   - id: AC-009
     given: "A git diff between the extracted packages and their
-      trustless-cello source"
-    when: "the diff is inspected"
+      trustless-cello source at the same HEAD"
+    when: "the diff is inspected AND the full test suite from
+      trustless-cello is run against the extracted code"
     then: "only structural changes exist (import paths, package.json
       names, tsconfig references); no behavioral code changes; the
-      extracted code is functionally identical to the monorepo source"
+      test suite from trustless-cello runs without regressions when
+      pointed at the extracted code"
     test_type: manual
     component_under_test: client
+
+  - id: AC-010
+    given: "@cello/connect@beta published on npm"
+    when: "npm install @cello/connect@beta is run in a fresh directory
+      (manually, after publish)"
+    then: "the package installs successfully; npx @cello/connect starts
+      the MCP server; the package is published under the @cello scope
+      with the 'beta' dist-tag (not 'latest')"
+    test_type: manual
+    component_under_test: adapter-claude-code
+    notes: "Mitigation D: beta tag only. Promoted to latest in M6-E2E-001.
+      This is a post-publish manual verification, not a CI step."
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
     statement: "The published package must not contain any server-side
-      code, IaC templates, deployment scripts, or AWS credentials"
-    adversarial_condition: "even when npm pack is run and the tarball
-      is inspected, no file from packages/directory, packages/relay,
-      infra/, or any .env file is present"
-    test_type: unit
+      code, IaC templates, deployment scripts, or AWS credentials;
+      enforced via package.json#files allowlist in adapter-claude-code"
+    adversarial_condition: "when npm pack --dry-run is run in CI and
+      the output is scanned for forbidden paths (directory, relay, infra,
+      .env), zero matches are returned; the package.json#files field
+      explicitly allowlists only the dist/ directory and package.json"
+    test_type: integration
     component_under_test: adapter-claude-code
+    notes: "Enforcement mechanism: package.json#files allowlist.
+      Test: CI shell step (npm pack --dry-run | grep), not Vitest."
 
   - id: SI-002
     statement: "The published package must not contain test fixtures
       that embed real keys, tokens, or secret material"
-    adversarial_condition: "even when the full node_modules tree is
-      inspected, no Ed25519 private key, no FROST share, and no AWS
-      credential appears in any published file"
-    test_type: unit
+    adversarial_condition: "when npm pack --dry-run output is inspected,
+      no file in the tarball contains the pattern '-----BEGIN PRIVATE KEY-----'
+      or any FROST share JSON structure matching { share: { index:, value: } };
+      the package.json#files allowlist ensures test fixtures are excluded"
+    test_type: integration
     component_under_test: client
+    notes: "Test: extend the CI npm pack --dry-run grep to also scan
+      for private key header patterns."
 
 # ─── Observability ──────────────────────────────────────────
 observability:
@@ -174,5 +208,6 @@ references:
     - CELLO-M6-E2E-001
   notes: "Can begin immediately — zero dependency on M5 close.
     Structural work (CI, AUDIT-ME.md, README) starts day one.
+    AC-004 (production endpoints) requires M5 STATE.md finalized.
     Final package sync with trustless-cello HEAD happens just
     before publish."
