@@ -287,35 +287,73 @@ for REGION in "${REGIONS[@]}"; do
   fi
 done
 
+# ── ECS Exec SQL helper ───────────────────────────────────────────────────────
+# ecs_exec_sql REGION TASK_ARN HOST DBNAME B64_PASS SQL_TEXT
+#
+# Runs SQL_TEXT via psql inside the named ECS container using the master
+# credentials supplied as B64_PASS (base64-encoded password string).
+#
+# Quoting strategy — two base64 layers, zero shell quoting of sensitive data:
+#   1. SQL_TEXT  → base64 → B64_SQL  (outer shell)
+#   2. B64_PASS already encoded      (outer shell)
+#   3. Inner command string: echo B64_PASS | base64 -d → PGPASSWORD
+#                            echo B64_SQL  | base64 -d | psql -f /dev/stdin
+#      No -c "..." anywhere — SQL arrives via stdin, never quoted.
+#   4. Inner command string itself → base64 → B64_CMD  (outer shell)
+#   5. ECS Exec --command: sh -c 'echo B64_CMD | base64 -d | sh'
+#      B64_CMD is [A-Za-z0-9+/=] — safe inside single quotes, no expansion.
+#
+# Outputs the raw ECS Exec output. Caller checks for psql/ERROR patterns.
+
+ecs_exec_sql() {
+  local region="$1"
+  local task_arn="$2"
+  local host="$3"
+  local dbname="$4"
+  local b64_pass="$5"
+  local sql_text="$6"
+
+  local b64_sql
+  b64_sql=$(printf '%s' "${sql_text}" | base64 | tr -d '\n')
+
+  # Inner command: decoded via stdin pipeline — no -c quoting, no $$ expansion
+  local inner_cmd
+  inner_cmd="export PGPASSWORD=\$(echo ${b64_pass} | base64 -d) && echo ${b64_sql} | base64 -d | psql -h ${host} -p 5432 -U postgres -d ${dbname} -w -f /dev/stdin"
+
+  local b64_cmd
+  b64_cmd=$(printf '%s' "${inner_cmd}" | base64 | tr -d '\n')
+
+  aws ecs execute-command \
+    --region "${region}" \
+    --cluster "${ECS_CLUSTER_NAME}" \
+    --task "${task_arn}" \
+    --container "directory" \
+    --command "sh -c 'echo ${b64_cmd} | base64 -d | sh'" \
+    --interactive \
+    2>&1
+}
+
 # ── Step 3: Create replication user and publication on each node ───────────────
 
 for REGION in "${REGIONS[@]}"; do
   echo "── Setting up replication user and publication on ${REGION} ──────────"
 
   REPL_PASS="${REPLICATION_PASSWORDS[${REGION}]}"
-
-  # Create the cello_replication user with REPLICATION privilege only (SI-001).
-  # Uses DO $$ block for idempotency — the DO block is universally compatible across PG versions.
-  # SI-001: REPLICATION privilege only — no INSERT, UPDATE, DELETE, DDL, SUPERUSER, CREATEDB.
-  # The master password is passed via PGPASSWORD env var inside the container shell.
   MASTER_PASS="${MASTER_PASSWORDS[${REGION}]}"
   RDS_EP="${RDS_ENDPOINTS[${REGION}]}"
   DB_NAME="${RDS_DB_NAMES[${REGION}]}"
 
-  local_create_user_sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cello_replication') THEN CREATE USER cello_replication WITH REPLICATION LOGIN PASSWORD '${REPL_PASS}'; END IF; END \$\$;"
-  local_user_cmd="sh -c \"PGPASSWORD='${MASTER_PASS}' psql -h ${RDS_EP} -p 5432 -U postgres -d ${DB_NAME} -c '${local_create_user_sql}'\""
+  B64_MASTER=$(printf '%s' "${MASTER_PASS}" | base64 | tr -d '\n')
 
-  EXEC_OUTPUT=$(aws ecs execute-command \
-    --region "${REGION}" \
-    --cluster "${ECS_CLUSTER_NAME}" \
-    --task "${TASK_ARNS[${REGION}]}" \
-    --container "directory" \
-    --command "${local_user_cmd}" \
-    --interactive 2>&1) || {
-      log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_user\", \"reason\": \"ecs_exec_failed\" }"
-      echo "ERROR: ECS Exec failed in ${REGION} during user creation." >&2
-      exit 1
-    }
+  # Create cello_replication user (SI-001: REPLICATION privilege only).
+  # DO $$ block for idempotency — universally compatible across PG 14/15/16/17.
+  CREATE_USER_SQL="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cello_replication') THEN CREATE USER cello_replication WITH REPLICATION LOGIN PASSWORD '${REPL_PASS}'; END IF; END \$\$;"
+
+  EXEC_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${CREATE_USER_SQL}") || {
+    log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_user\", \"reason\": \"ecs_exec_failed\" }"
+    echo "ERROR: ECS Exec failed in ${REGION} during user creation." >&2
+    exit 1
+  }
   if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|^psql: error:"; then
     log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_user\", \"reason\": \"psql_error\" }"
     echo "ERROR: psql error during user creation in ${REGION}: ${EXEC_OUTPUT}" >&2
@@ -325,20 +363,13 @@ for REGION in "${REGIONS[@]}"; do
   echo "  cello_replication user ready on ${REGION}"
 
   # Create publication covering all append-only tables (idempotent).
-  # The publication is checked via pg_publication before creating.
-  local_create_pub_sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'cello_pub') THEN CREATE PUBLICATION cello_pub FOR TABLE ${PUBLICATION_TABLES}; END IF; END \$\$;"
+  CREATE_PUB_SQL="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'cello_pub') THEN CREATE PUBLICATION cello_pub FOR TABLE ${PUBLICATION_TABLES}; END IF; END \$\$;"
 
-  EXEC_OUTPUT=$(aws ecs execute-command \
-    --region "${REGION}" \
-    --cluster "${ECS_CLUSTER_NAME}" \
-    --task "${TASK_ARNS[${REGION}]}" \
-    --container "directory" \
-    --command "sh -c \"PGPASSWORD='${MASTER_PASS}' psql -h ${RDS_EP} -p 5432 -U postgres -d ${DB_NAME} -c '${local_create_pub_sql}'\"" \
-    --interactive 2>&1) || {
-      log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\", \"reason\": \"ecs_exec_failed\" }"
-      echo "ERROR: ECS Exec failed in ${REGION} during publication creation." >&2
-      exit 1
-    }
+  EXEC_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${CREATE_PUB_SQL}") || {
+    log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\", \"reason\": \"ecs_exec_failed\" }"
+    echo "ERROR: ECS Exec failed in ${REGION} during publication creation." >&2
+    exit 1
+  }
   if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|^psql: error:"; then
     log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\", \"reason\": \"psql_error\" }"
     echo "ERROR: psql error during publication creation in ${REGION}: ${EXEC_OUTPUT}" >&2
@@ -386,19 +417,13 @@ for TARGET_REGION in "${REGIONS[@]}"; do
     # PostgreSQL 17+ supports CREATE SUBSCRIPTION IF NOT EXISTS; for compatibility
     # with PG 14/15/16, we use a DO $$ block with a pre-flight check.
     # PGPASSWORD is set inside the container shell so it is not in the AWS CLI argument.
-    local_create_sub_sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_subscription WHERE subname = '${SUB_NAME}') THEN CREATE SUBSCRIPTION ${SUB_NAME} CONNECTION '${CONN_STRING}' PUBLICATION cello_pub WITH (slot_name = '${SLOT_NAME}', copy_data = false); END IF; END \$\$;"
+    CREATE_SUB_SQL="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_subscription WHERE subname = '${SUB_NAME}') THEN CREATE SUBSCRIPTION ${SUB_NAME} CONNECTION '${CONN_STRING}' PUBLICATION cello_pub WITH (slot_name = '${SLOT_NAME}', copy_data = false); END IF; END \$\$;"
     TARGET_MASTER_PASS="${MASTER_PASSWORDS[${TARGET_REGION}]}"
     TARGET_RDS_EP="${RDS_ENDPOINTS[${TARGET_REGION}]}"
     TARGET_DB_NAME="${RDS_DB_NAMES[${TARGET_REGION}]}"
-    local_sub_cmd="sh -c \"PGPASSWORD='${TARGET_MASTER_PASS}' psql -h ${TARGET_RDS_EP} -p 5432 -U postgres -d ${TARGET_DB_NAME} -c '${local_create_sub_sql}'\""
+    B64_TARGET_MASTER=$(printf '%s' "${TARGET_MASTER_PASS}" | base64 | tr -d '\n')
 
-    EXEC_OUTPUT=$(aws ecs execute-command \
-      --region "${TARGET_REGION}" \
-      --cluster "${ECS_CLUSTER_NAME}" \
-      --task "${TASK_ARNS[${TARGET_REGION}]}" \
-      --container "directory" \
-      --command "${local_sub_cmd}" \
-      --interactive 2>&1) || {
+    EXEC_OUTPUT=$(ecs_exec_sql "${TARGET_REGION}" "${TASK_ARNS[${TARGET_REGION}]}" "${TARGET_RDS_EP}" "${TARGET_DB_NAME}" "${B64_TARGET_MASTER}" "${CREATE_SUB_SQL}") || {
         log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${TARGET_REGION}\", \"step\": \"create_subscription\", \"reason\": \"ecs_exec_failed\", \"slotName\": \"${SLOT_NAME}\" }"
         echo "ERROR: ECS Exec failed in ${TARGET_REGION} during subscription creation." >&2
         exit 1
@@ -451,15 +476,12 @@ while true; do
   # application_name in pg_stat_replication is the subscription name (not the target region),
   # so we query pg_replication_slots where slot_name LIKE 'cello_%' AND active = 't'.
   for SOURCE_REGION in "${REGIONS[@]}"; do
+    B64_POLL_PASS=$(printf '%s' "${MASTER_PASSWORDS[${SOURCE_REGION}]}" | base64 | tr -d '\n')
     SLOT_QUERY="SELECT slot_name FROM pg_replication_slots WHERE slot_name LIKE 'cello_%' AND active = 't';"
 
-    STAT_OUTPUT=$(aws ecs execute-command \
-      --region "${SOURCE_REGION}" \
-      --cluster "${ECS_CLUSTER_NAME}" \
-      --task "${TASK_ARNS[${SOURCE_REGION}]}" \
-      --container "directory" \
-      --command "sh -c \"PGPASSWORD='${MASTER_PASSWORDS[${SOURCE_REGION}]}' psql -h ${RDS_ENDPOINTS[${SOURCE_REGION}]} -p 5432 -U postgres -d ${RDS_DB_NAMES[${SOURCE_REGION}]} -t -A -c '${SLOT_QUERY}'\"" \
-      --interactive \
+    STAT_OUTPUT=$(ecs_exec_sql "${SOURCE_REGION}" "${TASK_ARNS[${SOURCE_REGION}]}" \
+      "${RDS_ENDPOINTS[${SOURCE_REGION}]}" "${RDS_DB_NAMES[${SOURCE_REGION}]}" \
+      "${B64_POLL_PASS}" "${SLOT_QUERY}" \
       2>/dev/null || echo "")
 
     # Parse active slot names from this node's pg_replication_slots output
@@ -531,13 +553,11 @@ while true; do
     echo "Current slot states:"
     for SOURCE_REGION in "${REGIONS[@]}"; do
       echo "  ${SOURCE_REGION}:"
-      aws ecs execute-command \
-        --region "${SOURCE_REGION}" \
-        --cluster "${ECS_CLUSTER_NAME}" \
-        --task "${TASK_ARNS[${SOURCE_REGION}]}" \
-        --container "directory" \
-        --command "sh -c \"PGPASSWORD='${MASTER_PASSWORDS[${SOURCE_REGION}]}' psql -h ${RDS_ENDPOINTS[${SOURCE_REGION}]} -p 5432 -U postgres -d ${RDS_DB_NAMES[${SOURCE_REGION}]} -c 'SELECT application_name, state, sent_lsn, write_lsn, flush_lsn, replay_lsn FROM pg_stat_replication;'\"" \
-        --interactive \
+      B64_DIAG_PASS=$(printf '%s' "${MASTER_PASSWORDS[${SOURCE_REGION}]}" | base64 | tr -d '\n')
+      DIAG_SQL="SELECT application_name, state, sent_lsn, write_lsn, flush_lsn, replay_lsn FROM pg_stat_replication;"
+      ecs_exec_sql "${SOURCE_REGION}" "${TASK_ARNS[${SOURCE_REGION}]}" \
+        "${RDS_ENDPOINTS[${SOURCE_REGION}]}" "${RDS_DB_NAMES[${SOURCE_REGION}]}" \
+        "${B64_DIAG_PASS}" "${DIAG_SQL}" \
         2>/dev/null || echo "    (unable to query)"
     done
 
