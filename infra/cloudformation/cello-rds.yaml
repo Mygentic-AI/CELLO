@@ -100,3 +100,9 @@ Outputs:
     Value: !Ref PostgresInstance
     Export:
       Name: !Sub "cello-${Environment}-rds-instance-id"
+
+  RdsMasterSecretArn:
+    Description: ARN of the RDS-managed master user secret (ManageMasterUserPassword)
+    Value: !GetAtt PostgresInstance.MasterUserSecret.SecretArn
+    Export:
+      Name: !Sub "cello-${Environment}-rds-master-secret-arn"

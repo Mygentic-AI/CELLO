@@ -3,14 +3,15 @@ Description: >
   CELLO RDS Credential Rotation - deploys the Secrets Manager multi-user rotation
   Lambda for cello/{env}/directory/rds-credentials.
 
-  Multi-user strategy: the Lambda connects to RDS using the admin credential
-  (cello/{env}/directory/rds-admin-credentials) and updates the cello_service
-  user password via ALTER ROLE.
+  Multi-user strategy: the Lambda connects to RDS using the RDS-managed master
+  secret (created automatically by ManageMasterUserPassword) and updates the
+  cello_service user password via ALTER ROLE.
 
   Security model (SI-003):
-    - The Lambda execution role grants access to BOTH the app and admin credentials.
+    - The Lambda execution role grants access to BOTH the app credential and the
+      RDS-managed master secret.
     - The ECS task role (cello-iam.yaml: DirectoryTaskRole) grants access to the app
-      credential ONLY - it must never access rds-admin-credentials.
+      credential ONLY - it must never access the master secret.
 
   The Lambda runs in VPC private subnets to reach RDS on port 5432.
   A dedicated Lambda security group allows outbound to the RDS security group only.
@@ -29,10 +30,10 @@ Conditions:
 Resources:
 
   # ── Lambda execution role (least-privilege) ───────────────────────────────
-  # This role is granted access to BOTH the app credential and the admin credential.
-  # The admin credential is needed to connect to RDS as the admin user and
+  # This role is granted access to BOTH the app credential and the RDS-managed
+  # master secret. The master secret is needed to connect to RDS as postgres and
   # ALTER ROLE cello_service PASSWORD '<new>'.
-  # SI-003: the ECS task role must NOT have equivalent access to rds-admin-credentials.
+  # SI-003: the ECS task role must NOT have access to the master secret.
 
   RotationLambdaExecutionRole:
     Type: AWS::IAM::Role
@@ -74,15 +75,16 @@ Resources:
                 Action:
                   - secretsmanager:GetRandomPassword
                 Resource: "*"
-              # Admin credential: read AWSCURRENT only (needed for ALTER ROLE)
+              # RDS-managed master secret: read AWSCURRENT only (needed for ALTER ROLE)
+              # This is the secret auto-managed by RDS via ManageMasterUserPassword.
               # SI-003: this permission is NOT granted to the ECS task role
-              - Sid: AdminCredentialReadOnly
+              - Sid: RdsMasterSecretReadOnly
                 Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
                 Resource:
                   - !ImportValue
-                    Fn::Sub: "cello-${Environment}-rds-admin-credentials-arn"
+                    Fn::Sub: "cello-${Environment}-rds-master-secret-arn"
       Tags:
         - Key: Project
           Value: cello
@@ -167,9 +169,12 @@ Resources:
           # RDS_ENDPOINT is the database hostname. Injected at deploy time — never hardcoded.
           RDS_ENDPOINT: !ImportValue
             Fn::Sub: "cello-${Environment}-rds-endpoint"
-          # Admin credential secret ID — rotation Lambda reads this to get admin creds
-          # for ALTER ROLE. The ECS task role does NOT have access to this secret (SI-003).
-          ADMIN_SECRET_ID: !Sub "cello/${Environment}/directory/rds-admin-credentials"
+          # RDS-managed master secret — rotation Lambda reads this to get admin creds
+          # for ALTER ROLE. Uses the secret auto-managed by RDS ManageMasterUserPassword.
+          # Eliminates the manually-populated rds-admin-credentials secret entirely.
+          # The ECS task role does NOT have access to this secret (SI-003).
+          ADMIN_SECRET_ID: !ImportValue
+            Fn::Sub: "cello-${Environment}-rds-master-secret-arn"
           RDS_PORT: "5432"
           # cello_dev for dev, cello_staging for staging, cello_production for production
           RDS_DB_NAME: !Sub "cello_${Environment}"
