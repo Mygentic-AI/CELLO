@@ -35,8 +35,14 @@ behavior:
       pre_authorization_tokens WHERE token = $1 AND consumed_at IS NULL
       AND expires_at > now(); if valid, executes UPDATE SET consumed_at = now()
       WHERE token = $1 AND consumed_at IS NULL (atomic, returns rowCount);
-      if rowCount = 1, proceeds with DKG Round 1; links resulting
-      agent_profile to the account identified by phone_stub_hash"
+      if rowCount = 1, proceeds with DKG Round 1"
+
+  - trigger: "When DKG Round 1 succeeds and an agent_profile is created"
+    action: "the directory looks up accounts WHERE phone_stub_hash = token.phone_stub_hash;
+      if no account exists, creates one (INSERT into accounts); links the new
+      agent_profile to that account; a second registration from the same phone
+      (same phone_stub_hash, new pre-auth token) links to the existing account —
+      one account may have multiple agent_profiles"
 
   - trigger: "When an agent presents a token that has already been consumed
       (rowCount = 0 on the UPDATE)"
@@ -107,6 +113,20 @@ acceptance_criteria:
       correlationId }"
     test_type: integration
     component_under_test: directory
+
+  - id: AC-005b
+    given: "A valid pre-auth token with phone_stub_hash='abc123'"
+    when: "two separate DKG Round 1 flows each consume a different token
+      with the same phone_stub_hash (simulating M6-E2E-001 AC-007: two agents,
+      same account)"
+    then: "after the first flow: one account row exists with phone_stub_hash='abc123';
+      one agent_profile linked to it; after the second flow: the same account row
+      exists (no duplicate created); a second agent_profile is linked to the same
+      account; the accounts table has exactly one row for this phone_stub_hash"
+    test_type: integration
+    component_under_test: directory
+    notes: "Account lookup uses phone_stub_hash from the pre-auth token row.
+      INSERT OR IGNORE / upsert pattern — do not create duplicate accounts."
 
   - id: AC-006
     given: "A token is consumed on presentation (consumed_at set as the
