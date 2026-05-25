@@ -20,8 +20,8 @@ story: >
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
   - trigger: "When deploy.sh is run for the Operations Agent stack"
-    action: "CloudFormation creates the ECS service with a stub
-      container that returns HTTP 200 on the health check endpoint;
+    action: "CloudFormation creates the ECS service with the existing
+      shared stub container (from infra/stub/, pushed via build-stubs.sh);
       the service reaches STABLE state; the ALB health check passes"
 
   - trigger: "When the stub container is running"
@@ -31,46 +31,59 @@ behavior:
       ResourceNotFoundException"
 
   - trigger: "When the Operations Agent security group is created"
-    action: "inbound is restricted to ALB health checks only (if
-      using ALB) or no inbound at all (if using internal service
-      discovery); outbound allows HTTPS to Telegram API, SES, and
-      the directory internal endpoint only — no unrestricted egress"
+    action: "outbound allows HTTPS (443) to 0.0.0.0/0 (Telegram API
+      and SES endpoints); port 8080 to the directory service security
+      group (internal pre-authorize endpoint); no other egress"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "The cello-ecs-operations-agent.yaml CloudFormation template"
-    when: "deploy.sh runs the Operations Agent stack in us-east-1"
-    then: "the stack reaches CREATE_COMPLETE; the ECS service has
-      desiredCount=1 and runningCount=1; the task is HEALTHY"
+    given: "The cello-ecs-operations-agent.yaml CloudFormation template
+      added to deploy.sh as Step 9a (after cello-ecs-directory, before
+      cello-waf)"
+    when: "deploy.sh runs the full sequence in us-east-1"
+    then: "the Operations Agent stack reaches CREATE_COMPLETE; the ECS
+      service has desiredCount=1 and runningCount=1; the task is HEALTHY;
+      the stack consumes VPC/subnet exports from cello-vpc, the task role
+      from cello-iam, and the ECR repo URI from cello-ecr"
     test_type: integration
     component_under_test: infrastructure
+    notes: "Step 9a position: after directory (which provides the internal
+      endpoint the Ops Agent calls) and before WAF/relay (no dependency)."
 
   - id: AC-002
-    given: "The stub container running on ECS"
-    when: "the container starts"
-    then: "it reads PORT from environment (default 8080), binds an
-      HTTP server, and returns 200 on GET /health; no other routes
-      are served; the container logs 'stub: healthy' on startup"
+    given: "The existing shared stub image from infra/stub/"
+    when: "build-stubs.sh is extended with a 'cello-operations-agent' target"
+    then: "build-stubs.sh pushes the shared stub image to the
+      cello-operations-agent ECR repo with tag 'stub' using
+      --platform linux/amd64; the ECS task definition references
+      this image; no new Dockerfile is created for the stub"
     test_type: integration
     component_under_test: infrastructure
+    notes: "Reuses the existing stub pattern. Never docker push from local.
+      build-stubs.sh is the only mechanism for stub image pushes."
 
   - id: AC-003
     given: "The ECS task definition references secrets from Secrets Manager"
     when: "the task launches"
     then: "all secret ARNs resolve without ResourceNotFoundException:
-      telegram-bot-token, ses-credentials, directory-api-key; the task
-      role IAM policy grants secretsmanager:GetSecretValue on exactly
-      these ARNs (no wildcards)"
+      cello/{env}/ops-agent/telegram-bot-token,
+      cello/{env}/ops-agent/ses-credentials,
+      cello/{env}/ops-agent/directory-api-key;
+      the task role IAM policy grants secretsmanager:GetSecretValue
+      on exactly these three ARNs (no wildcards)"
     test_type: integration
     component_under_test: infrastructure
 
   - id: AC-004
-    given: "The Operations Agent ECR repository"
-    when: "the stub image is built and pushed"
-    then: "the image exists in the cello-operations-agent ECR repo
-      with tag 'stub'; the ECS task definition references this image;
-      the image is built FROM alpine:3.20 with curl for health checks"
+    given: "bootstrap.sh"
+    when: "run in a new region"
+    then: "bootstrap.sh provisions the three Operations Agent secrets
+      (telegram-bot-token, ses-credentials, directory-api-key) as
+      PLACEHOLDER values under the path convention
+      cello/{env}/ops-agent/{secret-name}; existing secret handling
+      for directory/relay is unchanged; the put_secret_if_empty function
+      treats PLACEHOLDER_POPULATE_VIA_CLI as empty (existing fix)"
     test_type: integration
     component_under_test: infrastructure
 
@@ -84,40 +97,61 @@ acceptance_criteria:
     test_type: integration
     component_under_test: infrastructure
     notes: "Telegram and SES IPs are not enumerable; HTTPS egress
-      to 0.0.0.0/0 is acceptable for a service that only calls
-      known APIs. The application-level code constrains actual usage."
+      to 0.0.0.0/0 is acceptable. Application code constrains usage."
 
   - id: AC-006
     given: "The cello-ecs-operations-agent.yaml template and cello-iam.yaml"
     when: "reviewed for IAM permissions"
-    then: "the task role has ONLY: secretsmanager:GetSecretValue on
-      enumerated secret ARNs, logs:CreateLogStream + logs:PutLogEvents
-      on the log group, and ecs:ExecuteCommand for debugging; no S3,
-      no KMS, no RDS — the Operations Agent does not touch any of
-      these services"
+    then: "the Operations Agent task role (added to cello-iam.yaml following
+      the existing pattern for directory/relay task roles) has ONLY:
+      secretsmanager:GetSecretValue on the three enumerated secret ARNs,
+      logs:CreateLogStream + logs:PutLogEvents on the log group, and
+      ecs:ExecuteCommand for debugging; no S3, no KMS, no RDS"
     test_type: manual
     component_under_test: infrastructure
+    notes: "Task role lives in cello-iam.yaml (centralized pattern).
+      Exported for cross-stack reference by cello-ecs-operations-agent.yaml."
 
   - id: AC-007
     given: "deploy.sh with the Operations Agent stack added"
-    when: "deploy.sh is run in a new region (eu-central-1)"
+    when: "deploy.sh is run in a new region (eu-central-1) after
+      bootstrap.sh has been run in that region"
     then: "the stack creates successfully on first attempt with no
-      manual intervention; all secrets must be pre-populated via
-      bootstrap.sh; the region-expansion-in-one-variable goal is
-      maintained"
+      manual intervention; bootstrap.sh provisioned all three secrets;
+      the region-expansion-in-one-variable goal is maintained"
     test_type: integration
     component_under_test: infrastructure
-    notes: "If this AC fails, the fix must be in IaC — no manual
-      region setup steps allowed"
 
   - id: AC-008
     given: "infra/STATE.md"
-    when: "the Operations Agent stack is deployed"
+    when: "the Operations Agent stack is deployed (AC-001 passes)"
     then: "STATE.md is updated with the new stack name, status,
       deployment date, and key resource identifiers (ECS service ARN,
-      ECR repo URI, security group ID)"
+      ECR repo URI, security group ID); this update happens immediately
+      after 005A, not deferred to 005B"
     test_type: manual
     component_under_test: infrastructure
+
+  - id: AC-009
+    given: "cello-cloudwatch.yaml"
+    when: "the CloudWatch stack is redeployed after the Operations Agent
+      ECS service exists"
+    then: "a new alarm 'cello-operations-agent-ecs-task-count-{env}'
+      is created; fires to ops-critical when runningCount < 1"
+    test_type: integration
+    component_under_test: infrastructure
+
+  - id: AC-010-integration-gate
+    given: "The Operations Agent ECS service running with the stub container
+      in us-east-1, all secrets resolving, health check passing"
+    when: "the deployment is verified"
+    then: "ECS service is STABLE with runningCount=1; STATE.md is updated;
+      CloudWatch alarm exists; bootstrap.sh handles the new secrets in
+      a fresh region; this AC is blocking — OPS-AGENT-005B may not begin
+      until this is verified and merged"
+    test_type: integration
+    component_under_test: infrastructure
+    notes: "This is the Mitigation A gate. Infra is proven; 005B wires app code."
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
@@ -137,8 +171,8 @@ security_invariants:
       it communicates with the directory only via the internal HTTP API"
     adversarial_condition: "even if the container is compromised, the
       attacker cannot connect to RDS because the security group has no
-      inbound rule for the Operations Agent, and no database credentials
-      are available to the task role"
+      egress rule to port 5432, and no database credentials are available
+      to the task role"
     test_type: manual
     component_under_test: infrastructure
 
@@ -149,7 +183,7 @@ observability:
   alarms:
     - condition: "ECS runningCount < 1 for cello-operations-agent service"
       fires_to: ops-critical
-      notes: "Added to cello-cloudwatch.yaml when 005A deploys"
+      notes: "Added to cello-cloudwatch.yaml in AC-009"
   notes: "005A is infrastructure-only. Application observability events
     are defined in OPS-AGENT-001 through 004 and wired in 005B."
 
