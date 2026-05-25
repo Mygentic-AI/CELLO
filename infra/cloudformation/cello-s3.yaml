@@ -112,6 +112,17 @@ Resources:
             Action:
               - s3:GetObject
             Resource: !Sub "${RelayManifestBucket.Arn}/*"
+          - Sid: AllowRelayAndDirectoryListBucket
+            Effect: Allow
+            Principal:
+              AWS:
+                - !ImportValue
+                  Fn::Sub: "cello-${Environment}-relay-task-role-arn"
+                - !ImportValue
+                  Fn::Sub: "cello-${Environment}-directory-task-role-arn"
+            Action:
+              - s3:ListBucket
+            Resource: !GetAtt RelayManifestBucket.Arn
 
 Outputs:
   AuditLogBucketName:
