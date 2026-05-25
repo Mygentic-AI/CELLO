@@ -338,6 +338,23 @@ else
   "${SCRIPT_DIR}/build-stubs.sh" "${REGION}"
 fi
 
+# ── STEP 6.6: Ensure SSM parameters exist for ECS task definitions ──────────
+# The manifest-signer-pubkey is derived from the directory node private key.
+# It's consumed by cello-ecs-directory.yaml via ssm:resolve. Created here so
+# deploy.sh is self-contained — no manual SSM parameter creation required.
+
+echo ""
+echo "── Ensuring SSM parameters exist ───────────────────────────────────"
+
+aws ssm put-parameter \
+  --name "/cello/${ENVIRONMENT}/directory/manifest-signer-pubkey" \
+  --value "${RELAY_DIRECTORY_PUBKEY}" \
+  --type String \
+  --overwrite \
+  --region "${REGION}" \
+  --output text --query Version >/dev/null 2>&1 \
+  && echo "  /cello/${ENVIRONMENT}/directory/manifest-signer-pubkey: OK"
+
 # ── STEP 7: cello-ecs-directory — directory ECS service ──────────────────────
 # depends on: cello-iam, cello-kms, cello-vpc, cello-ecr
 
