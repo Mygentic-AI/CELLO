@@ -12,38 +12,48 @@ story: >
   As the CELLO Directory,
   I want an internal pre-authorization API that issues single-use
   tokens after the Operations Agent confirms phone and email
-  verification,
-  so that agents can present a token during FROST DKG to prove
-  a real human authorized the registration, without the Operations
-  Agent ever touching key material.
+  verification, and a token consumption check in the FROST DKG
+  Round 1 handler,
+  so that agents can present a token during DKG to prove a real
+  human authorized the registration, without the Operations Agent
+  ever touching key material.
 
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
   - trigger: "When the Operations Agent calls POST /internal/pre-authorize
       with a valid internal API key, phone_stub_hash, and email_domain"
     action: "the directory generates a pre-authorization token (format:
-      'CELLO-' + 32 base58 random characters, minimum 192 bits entropy),
+      'CELLO-' + 33 base58 random characters, >= 193 bits entropy),
       stores it in the pre_authorization_tokens table with issued_at,
-      expires_at (24h TTL), phone_stub_hash, email_domain, and
-      consumed_at = NULL; returns the token string to the caller"
+      expires_at (24h TTL), phone_stub_hash, email_domain, registration_id,
+      and consumed_at = NULL; returns the token string to the caller"
 
-  - trigger: "When an agent presents a valid, unconsumed, unexpired
-      pre-authorization token during FROST DKG initiation"
-    action: "the directory marks the token consumed (consumed_at = now()),
-      permits the DKG to proceed, and links the resulting agent_profile
-      to the account identified by phone_stub_hash"
+  - trigger: "When an agent sends a FROST DKG Round 1 frame with a
+      preAuthToken field populated"
+    action: "the directory's FrostDirectoryHandler validates the token
+      as its first operation before any crypto computation: queries
+      pre_authorization_tokens WHERE token = $1 AND consumed_at IS NULL
+      AND expires_at > now(); if valid, executes UPDATE SET consumed_at = now()
+      WHERE token = $1 AND consumed_at IS NULL (atomic, returns rowCount);
+      if rowCount = 1, proceeds with DKG Round 1; links resulting
+      agent_profile to the account identified by phone_stub_hash"
 
-  - trigger: "When an agent presents a token that has already been consumed"
-    action: "the directory rejects the DKG initiation with error
-      PRE_AUTH_TOKEN_CONSUMED; the token cannot be reused"
+  - trigger: "When an agent presents a token that has already been consumed
+      (rowCount = 0 on the UPDATE)"
+    action: "the directory rejects the DKG Round 1 frame with error
+      PRE_AUTH_TOKEN_CONSUMED; no crypto computation occurs"
 
-  - trigger: "When an agent presents a token that has expired (older than 24h)"
-    action: "the directory rejects the DKG initiation with error
-      PRE_AUTH_TOKEN_EXPIRED"
+  - trigger: "When an agent presents a token that has expired"
+    action: "the directory rejects the DKG Round 1 frame with error
+      PRE_AUTH_TOKEN_EXPIRED; no crypto computation occurs"
 
   - trigger: "When POST /internal/pre-authorize is called without a valid
       internal API key"
     action: "the directory returns HTTP 401 Unauthorized; no token is issued"
+
+  - trigger: "When a DKG Round 1 frame arrives without a preAuthToken field"
+    action: "the directory rejects with PRE_AUTH_TOKEN_MISSING; this makes
+      pre-authorization mandatory for all new registrations after M6 deploys"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -52,16 +62,19 @@ acceptance_criteria:
       valid internal API key configured"
     when: "POST /internal/pre-authorize is called with phone_stub_hash
       and email_domain"
-    then: "a 200 response is returned containing a token string matching
-      the format 'CELLO-' followed by 32 base58 characters; the token
-      is stored in the pre_authorization_tokens table with consumed_at NULL"
+    then: "a 200 response is returned with JSON body { token: '<CELLO-...>',
+      expiresAt: '<ISO-8601>' }; the token matches 'CELLO-' + 33 base58
+      characters; a row exists in pre_authorization_tokens with
+      consumed_at = NULL"
     test_type: integration
     component_under_test: directory
 
   - id: AC-002
     given: "A valid unconsumed token exists in the database"
-    when: "the token is presented during FROST DKG initiation"
-    then: "the DKG proceeds; the token's consumed_at is set to now();
+    when: "a FROST DKG Round 1 frame is sent over the /cello/frost/1.0.0
+      libp2p stream with preAuthToken = that token"
+    then: "the FrostDirectoryHandler consumes the token (consumed_at set),
+      proceeds with DKG Round 1 crypto, and returns a valid Round 1 response;
       preauth.token.consumed is logged at INFO with { tokenId, agentId,
       correlationId }"
     test_type: integration
@@ -69,19 +82,19 @@ acceptance_criteria:
 
   - id: AC-003
     given: "A token that was consumed in AC-002"
-    when: "the same token is presented a second time during FROST DKG"
-    then: "DKG is rejected with PRE_AUTH_TOKEN_CONSUMED error;
-      preauth.token.reuse.rejected is logged at WARN with { tokenId,
-      correlationId }"
+    when: "the same token is sent in a second DKG Round 1 frame"
+    then: "DKG is rejected with PRE_AUTH_TOKEN_CONSUMED error; no crypto
+      computation occurs; preauth.token.reuse.rejected is logged at WARN
+      with { tokenId, correlationId }"
     test_type: integration
     component_under_test: directory
 
   - id: AC-004
     given: "A token issued 25 hours ago (past 24h TTL)"
-    when: "the token is presented during FROST DKG"
-    then: "DKG is rejected with PRE_AUTH_TOKEN_EXPIRED error;
-      preauth.token.expired is logged at WARN with { tokenId,
-      correlationId }"
+    when: "the token is sent in a DKG Round 1 frame"
+    then: "DKG is rejected with PRE_AUTH_TOKEN_EXPIRED error; no crypto
+      computation occurs; preauth.token.expired is logged at WARN with
+      { tokenId, correlationId }"
     test_type: integration
     component_under_test: directory
 
@@ -90,28 +103,43 @@ acceptance_criteria:
       or an invalid API key"
     when: "the request reaches the directory"
     then: "HTTP 401 is returned; no token row is created;
-      preauth.auth.failed is logged at WARN with { remoteAddr }"
+      preauth.auth.failed is logged at WARN with { remoteAddr,
+      correlationId }"
     test_type: integration
     component_under_test: directory
 
   - id: AC-006
-    given: "A token is consumed on presentation (not on DKG success)"
-    when: "the DKG fails after token consumption (e.g. network error
-      during round 2)"
-    then: "the token remains consumed; the operator must request a new
-      token via the bot; this prevents token reuse after partial DKG
-      state is created"
+    given: "A token is consumed on presentation (consumed_at set as the
+      first operation in the Round 1 handler)"
+    when: "the DKG fails after token consumption (injected via a stubbed
+      FrostDirectoryHandler that returns an error after the token
+      consumption call succeeds)"
+    then: "the token remains consumed; a new Round 1 frame with the same
+      token returns PRE_AUTH_TOKEN_CONSUMED; the operator must request a
+      new token via the bot"
+    test_type: integration
+    component_under_test: directory
+    notes: "Failure injection: stub the crypto computation after token
+      consumption to return { ok: false, reason: 'DKG_ROUND1_FAILED' }.
+      This verifies consumption-on-presentation, not consumption-on-success."
+
+  - id: AC-007
+    given: "A DKG Round 1 frame arrives without a preAuthToken field"
+    when: "the FrostDirectoryHandler processes the frame"
+    then: "the frame is rejected with PRE_AUTH_TOKEN_MISSING error;
+      no agent is registered; preauth.token.missing is logged at WARN"
     test_type: integration
     component_under_test: directory
 
-  - id: AC-007-integration-gate
+  - id: AC-008-integration-gate
     given: "The directory running locally with all M6 migrations applied
-      (V24 through the version claimed by this story)"
+      (V1–V23 pre-applied, then V24+ from OPS-AGENT-000 applied on top)"
     when: "the full pre-authorization flow is exercised: issue token,
-      consume token, attempt reuse, attempt expired token"
-    then: "all four operations produce correct results; Flyway reports
-      zero checksum errors on any migration V24 through V[N-1]; this
-      AC is blocking — no downstream story may begin implementation
+      consume via Round 1 frame, attempt reuse, attempt expired token,
+      attempt missing token"
+    then: "all five operations produce correct results; Flyway reports
+      zero checksum errors on all migrations V1 through the version
+      claimed by this story; no downstream story may begin implementation
       until this story's integration gate AC is verified and merged"
     test_type: integration
     component_under_test: directory
@@ -120,12 +148,18 @@ acceptance_criteria:
 security_invariants:
   - id: SI-001
     statement: "The /internal/pre-authorize endpoint must not be
-      reachable from the public internet"
-    adversarial_condition: "even when an attacker has the directory's
-      public ALB URL, requests to /internal/* paths are rejected at
-      the ALB or WAF layer before reaching the application"
+      reachable from the public internet — enforced at the application
+      layer by API key validation and at the infrastructure layer by
+      ALB listener rules (deployed in OPS-AGENT-005A)"
+    adversarial_condition: "even when an attacker sends a request to
+      /internal/pre-authorize without a valid API key, the directory
+      returns 401 and creates no token; the ALB routing rule (005A)
+      provides defense-in-depth by rejecting /internal/* paths before
+      they reach the application"
     test_type: integration
     component_under_test: directory
+    notes: "Application-layer API key check tested here. ALB routing
+      rule tested in OPS-AGENT-005A."
 
   - id: SI-002
     statement: "Token consumption is atomic — no race condition can
@@ -153,28 +187,39 @@ observability:
       trigger: "POST /internal/pre-authorize succeeds"
       context_fields: [tokenId, phoneStubHashPrefix, emailDomain, correlationId]
       correlationId: true
+      notes: "phoneStubHashPrefix = first 8 hex characters of the hash"
 
     - name: preauth.token.consumed
       level: info
-      trigger: "Token consumed during FROST DKG initiation"
+      trigger: "Token consumed during FROST DKG Round 1"
       context_fields: [tokenId, agentId, correlationId]
       correlationId: true
 
   error_events:
     - name: preauth.token.reuse.rejected
       level: warn
-      trigger: "Already-consumed token presented"
+      trigger: "Already-consumed token presented in Round 1 frame"
       context_fields: [tokenId, correlationId]
 
     - name: preauth.token.expired
       level: warn
-      trigger: "Expired token presented"
+      trigger: "Expired token presented in Round 1 frame"
       context_fields: [tokenId, correlationId]
+
+    - name: preauth.token.missing
+      level: warn
+      trigger: "DKG Round 1 frame without preAuthToken field"
+      context_fields: [remoteAgentId, correlationId]
 
     - name: preauth.auth.failed
       level: warn
       trigger: "Invalid or missing API key on /internal/pre-authorize"
-      context_fields: [remoteAddr]
+      context_fields: [remoteAddr, correlationId]
+
+    - name: preauth.token.issue.failed
+      level: error
+      trigger: "Token generation or database insert failed"
+      context_fields: [reason, correlationId]
 
   alarms:
     - condition: "preauth.auth.failed rate > 10 per minute"
@@ -189,5 +234,6 @@ references:
   depends_on:
     - CELLO-OPS-AGENT-000
   blocks:
+    - CELLO-OPS-AGENT-002
     - CELLO-OPS-AGENT-005B
     - CELLO-M6-E2E-001
