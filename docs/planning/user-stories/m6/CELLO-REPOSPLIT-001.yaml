@@ -76,26 +76,34 @@ acceptance_criteria:
     when: "the production endpoint configuration is inspected"
     then: "CELLO_DIRECTORY_URL defaults to the production directory
       ALB endpoint (known after M5 closes and STATE.md is finalized);
-      CELLO_RELAY_MULTIADDR defaults to the production relay multiaddr;
-      these are compile-time constants overridable by environment variables"
+      this is the only compile-time baked-in endpoint — relay assignment
+      is dynamic, issued per-session by the directory via SessionAssignment,
+      and is never a static constant; CELLO_DIRECTORY_URL is overridable
+      by environment variable"
     test_type: unit
     component_under_test: adapter-claude-code
     notes: "AC-004 requires M5 to be closed and STATE.md finalized to
-      know the real endpoint values. Final sync from trustless-cello HEAD
-      happens just before publish."
+      know the real directory endpoint value. CELLO_RELAY_MULTIADDR is
+      not needed — relay multiaddr is dynamically assigned by the directory
+      at session establishment, not baked in. Final sync from trustless-cello
+      HEAD happens just before publish."
 
   - id: AC-005
     given: "The package.json#files field (or .npmignore) in the
       adapter-claude-code package"
     when: "npm pack --dry-run is run"
     then: "the tarball manifest contains no files from packages/directory,
-      packages/relay, infra/, or any .env file; the package.json#files
-      field is the enforcement mechanism; CI runs this check on every PR"
+      packages/relay, infra/, or any .env file; SKILL.md is present in
+      the tarball; the package.json#files allowlist is ['dist/', 'package.json',
+      'SKILL.md'] and is the sole enforcement mechanism; CI runs both checks
+      on every PR"
     test_type: integration
     component_under_test: adapter-claude-code
-    notes: "CI step: npm pack --dry-run | grep -E 'directory|relay|infra|.env'
-      must return exit code 1 (no matches). This is a CI shell step,
-      not a Vitest test."
+    notes: "Two CI shell steps (not Vitest tests):
+      (1) npm pack --dry-run | grep -E 'directory|relay|infra|.env' must
+      return exit code 1 (no matches);
+      (2) npm pack --dry-run | grep 'SKILL.md' must return exit code 0
+      (present). The files allowlist is the real enforcement; CI verifies it."
 
   - id: AC-006
     given: "The cello-client repository CI pipeline (GitHub Actions)"
@@ -170,7 +178,7 @@ security_invariants:
     adversarial_condition: "when npm pack --dry-run is run in CI and
       the output is scanned for forbidden paths (directory, relay, infra,
       .env), zero matches are returned; the package.json#files field
-      explicitly allowlists only the dist/ directory and package.json"
+      explicitly allowlists only dist/, package.json, and SKILL.md"
     test_type: integration
     component_under_test: adapter-claude-code
     notes: "Enforcement mechanism: package.json#files allowlist.
@@ -188,6 +196,71 @@ security_invariants:
     notes: "Test: extend the CI npm pack --dry-run grep to also scan
       for private key header patterns."
 
+# ─── Implementation Notes ───────────────────────────────────
+# Derived from pre-implementation investigation and coordinator review.
+# See discussion log: 2026-05-25_1400_reposplit-001-investigation
+implementation_notes:
+  prerequisite_first_commit: >
+    Before any extraction work: fix packages/adapter-claude-code/tsconfig.json
+    in trustless-cello. Remove { "path": "../relay" } and { "path": "../directory" }
+    from references[]. Add "exclude": ["src/__tests__"]. Commit and push to
+    trustless-cello main so the monorepo CI stays green throughout the split work.
+
+  test_disposition: >
+    Move 14 clean tests to cello-client; leave 12 integration tests in
+    trustless-cello. The 12 integration tests instantiate real in-process
+    directory and relay nodes — they cannot meaningfully run without them
+    and must never be replaced with mocks. AC-003's "no test depends on
+    directory or relay packages" criterion applies to the cello-client repo,
+    not to the trustless-cello file tree.
+    Tests that move: client.test.ts, index.test.ts, mcp-003-unit.test.ts,
+    mcp002.test.ts, persist-009.test.ts, persist-010.test.ts,
+    persist-011.test.ts, persist-012.test.ts,
+    persist-014-reconciliation.test.ts, persist-015-unilateral-seal.test.ts,
+    persist-022.test.ts, session003.test.ts, session007.test.ts,
+    connection-policy.test.ts (moves with @cello/test-fixtures).
+    From adapter-claude-code: adapter-001.test.ts, adapter-002.test.ts,
+    index.test.ts, persist-017-checkpoint-status.test.ts.
+
+  test_fixtures_placement: >
+    @cello/test-fixtures moves to cello-client as a private workspace package
+    (keep "private": true). packages/protocol-types/src/__tests__/ in
+    trustless-cello uses @cello/test-fixtures — those usages must be inlined
+    directly into the protocol-types test files after the move.
+
+  interfaces_placement: >
+    @cello/interfaces stays in trustless-cello. Remove "private": true, add
+    a files allowlist, publish from trustless-cello. cello-client consumes
+    @cello/interfaces as a pinned npm dependency. Moving interfaces to
+    cello-client would force all OPS-AGENT stories (which add server-side
+    interfaces) to open cross-repo PRs against a client repo — wrong direction.
+
+  package_rename: >
+    Rename "name" in packages/adapter-claude-code/package.json from
+    @cello/adapter-claude-code to @cello/connect. pnpm workspace resolution
+    uses the name field. Downstream workspace consumers update their references.
+
+  skill_md: >
+    SKILL.md exists in packages/adapter-claude-code/. Content must be updated:
+    correct install command (claude mcp add cello npx @cello/connect), correct
+    package name, minimal tool usage examples. Content standard for M6 is
+    sufficient-to-connect, not final — it will iterate. Must be in the npm
+    tarball (in files allowlist).
+
+  trustless_cello_post_split: >
+    After extraction, trustless-cello/tsconfig.json references only
+    packages/directory, packages/relay, packages/e2e-tests (plus interfaces
+    and test-fixtures if they stay). The directory and relay tsconfigs must
+    drop relative references to ../crypto, ../interfaces, ../protocol-types,
+    ../transport — those packages are no longer in the monorepo and resolve
+    from npm instead.
+
+  developer_cross_repo_workflow: >
+    After the split, a change in cello-client at HEAD is not visible in
+    trustless-cello e2e-tests until published. Use pnpm link for cross-repo
+    development: symlinks node_modules/@cello/<pkg> to the local cello-client
+    workspace path. Document in cello-client README before this story closes.
+
 # ─── Observability ──────────────────────────────────────────
 observability:
   events: []
@@ -202,6 +275,7 @@ references:
   milestone: M6
   discussion_logs:
     - "2026-05-25_0900_m6-beta-launch-planning"
+    - "2026-05-25_1400_reposplit-001-investigation"
   depends_on: []
   blocks:
     - CELLO-DEMO-001
