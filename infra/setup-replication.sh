@@ -303,7 +303,7 @@ for REGION in "${REGIONS[@]}"; do
   DB_NAME="${RDS_DB_NAMES[${REGION}]}"
 
   local_create_user_sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cello_replication') THEN CREATE USER cello_replication WITH REPLICATION LOGIN PASSWORD '${REPL_PASS}'; END IF; END \$\$;"
-  local_user_cmd="PGPASSWORD='${MASTER_PASS}' psql -h ${RDS_EP} -p 5432 -U postgres -d ${DB_NAME} -c \"${local_create_user_sql}\""
+  local_user_cmd="sh -c \"PGPASSWORD='${MASTER_PASS}' psql -h ${RDS_EP} -p 5432 -U postgres -d ${DB_NAME} -c '${local_create_user_sql}'\""
 
   EXEC_OUTPUT=$(aws ecs execute-command \
     --region "${REGION}" \
@@ -333,7 +333,7 @@ for REGION in "${REGIONS[@]}"; do
     --cluster "${ECS_CLUSTER_NAME}" \
     --task "${TASK_ARNS[${REGION}]}" \
     --container "directory" \
-    --command "PGPASSWORD='${MASTER_PASS}' psql -h ${RDS_EP} -p 5432 -U postgres -d ${DB_NAME} -c \"${local_create_pub_sql}\"" \
+    --command "sh -c \"PGPASSWORD='${MASTER_PASS}' psql -h ${RDS_EP} -p 5432 -U postgres -d ${DB_NAME} -c '${local_create_pub_sql}'\"" \
     --interactive 2>&1) || {
       log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\", \"reason\": \"ecs_exec_failed\" }"
       echo "ERROR: ECS Exec failed in ${REGION} during publication creation." >&2
@@ -390,7 +390,7 @@ for TARGET_REGION in "${REGIONS[@]}"; do
     TARGET_MASTER_PASS="${MASTER_PASSWORDS[${TARGET_REGION}]}"
     TARGET_RDS_EP="${RDS_ENDPOINTS[${TARGET_REGION}]}"
     TARGET_DB_NAME="${RDS_DB_NAMES[${TARGET_REGION}]}"
-    local_sub_cmd="PGPASSWORD='${TARGET_MASTER_PASS}' psql -h ${TARGET_RDS_EP} -p 5432 -U postgres -d ${TARGET_DB_NAME} -c \"${local_create_sub_sql}\""
+    local_sub_cmd="sh -c \"PGPASSWORD='${TARGET_MASTER_PASS}' psql -h ${TARGET_RDS_EP} -p 5432 -U postgres -d ${TARGET_DB_NAME} -c '${local_create_sub_sql}'\""
 
     EXEC_OUTPUT=$(aws ecs execute-command \
       --region "${TARGET_REGION}" \
@@ -458,7 +458,7 @@ while true; do
       --cluster "${ECS_CLUSTER_NAME}" \
       --task "${TASK_ARNS[${SOURCE_REGION}]}" \
       --container "directory" \
-      --command "PGPASSWORD='${MASTER_PASSWORDS[${SOURCE_REGION}]}' psql -h ${RDS_ENDPOINTS[${SOURCE_REGION}]} -p 5432 -U postgres -d ${RDS_DB_NAMES[${SOURCE_REGION}]} -t -A -c \"${SLOT_QUERY}\"" \
+      --command "sh -c \"PGPASSWORD='${MASTER_PASSWORDS[${SOURCE_REGION}]}' psql -h ${RDS_ENDPOINTS[${SOURCE_REGION}]} -p 5432 -U postgres -d ${RDS_DB_NAMES[${SOURCE_REGION}]} -t -A -c '${SLOT_QUERY}'\"" \
       --interactive \
       2>/dev/null || echo "")
 
@@ -536,7 +536,7 @@ while true; do
         --cluster "${ECS_CLUSTER_NAME}" \
         --task "${TASK_ARNS[${SOURCE_REGION}]}" \
         --container "directory" \
-        --command "PGPASSWORD='${MASTER_PASSWORDS[${SOURCE_REGION}]}' psql -h ${RDS_ENDPOINTS[${SOURCE_REGION}]} -p 5432 -U postgres -d ${RDS_DB_NAMES[${SOURCE_REGION}]} -c \"SELECT application_name, state, sent_lsn, write_lsn, flush_lsn, replay_lsn FROM pg_stat_replication;\"" \
+        --command "sh -c \"PGPASSWORD='${MASTER_PASSWORDS[${SOURCE_REGION}]}' psql -h ${RDS_ENDPOINTS[${SOURCE_REGION}]} -p 5432 -U postgres -d ${RDS_DB_NAMES[${SOURCE_REGION}]} -c 'SELECT application_name, state, sent_lsn, write_lsn, flush_lsn, replay_lsn FROM pg_stat_replication;'\"" \
         --interactive \
         2>/dev/null || echo "    (unable to query)"
     done
