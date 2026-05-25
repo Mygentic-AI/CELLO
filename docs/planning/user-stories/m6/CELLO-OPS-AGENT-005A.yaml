@@ -1,0 +1,171 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-OPS-AGENT-005A
+domain: OPS-AGENT
+milestone: M6
+actor: INFRA
+priority: P0
+components:
+  - infrastructure
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO infrastructure operator,
+  I want the Operations Agent deployment infrastructure (ECR repo,
+  ECS task definition, Secrets Manager wiring, security groups,
+  IAM roles) proven with a stub container returning HTTP 200,
+  so that the deployment path is verified before any application
+  code touches it — separating "infra works" from "code works"
+  and eliminating the DEPLOY-003 fix-loop pattern.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When deploy.sh is run for the Operations Agent stack"
+    action: "CloudFormation creates the ECS service with a stub
+      container that returns HTTP 200 on the health check endpoint;
+      the service reaches STABLE state; the ALB health check passes"
+
+  - trigger: "When the stub container is running"
+    action: "the ECS task has access to all required secrets via
+      Secrets Manager (Telegram bot token, SES credentials, directory
+      API key) — verified by the task starting without
+      ResourceNotFoundException"
+
+  - trigger: "When the Operations Agent security group is created"
+    action: "inbound is restricted to ALB health checks only (if
+      using ALB) or no inbound at all (if using internal service
+      discovery); outbound allows HTTPS to Telegram API, SES, and
+      the directory internal endpoint only — no unrestricted egress"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The cello-ecs-operations-agent.yaml CloudFormation template"
+    when: "deploy.sh runs the Operations Agent stack in us-east-1"
+    then: "the stack reaches CREATE_COMPLETE; the ECS service has
+      desiredCount=1 and runningCount=1; the task is HEALTHY"
+    test_type: integration
+    component_under_test: infrastructure
+
+  - id: AC-002
+    given: "The stub container running on ECS"
+    when: "the container starts"
+    then: "it reads PORT from environment (default 8080), binds an
+      HTTP server, and returns 200 on GET /health; no other routes
+      are served; the container logs 'stub: healthy' on startup"
+    test_type: integration
+    component_under_test: infrastructure
+
+  - id: AC-003
+    given: "The ECS task definition references secrets from Secrets Manager"
+    when: "the task launches"
+    then: "all secret ARNs resolve without ResourceNotFoundException:
+      telegram-bot-token, ses-credentials, directory-api-key; the task
+      role IAM policy grants secretsmanager:GetSecretValue on exactly
+      these ARNs (no wildcards)"
+    test_type: integration
+    component_under_test: infrastructure
+
+  - id: AC-004
+    given: "The Operations Agent ECR repository"
+    when: "the stub image is built and pushed"
+    then: "the image exists in the cello-operations-agent ECR repo
+      with tag 'stub'; the ECS task definition references this image;
+      the image is built FROM alpine:3.20 with curl for health checks"
+    test_type: integration
+    component_under_test: infrastructure
+
+  - id: AC-005
+    given: "The Operations Agent security group"
+    when: "egress rules are inspected"
+    then: "outbound is restricted to: HTTPS (443) to 0.0.0.0/0
+      (Telegram API and SES endpoints are distributed); port 8080 to
+      the directory service security group (internal pre-authorize
+      endpoint); no other egress is permitted"
+    test_type: integration
+    component_under_test: infrastructure
+    notes: "Telegram and SES IPs are not enumerable; HTTPS egress
+      to 0.0.0.0/0 is acceptable for a service that only calls
+      known APIs. The application-level code constrains actual usage."
+
+  - id: AC-006
+    given: "The cello-ecs-operations-agent.yaml template and cello-iam.yaml"
+    when: "reviewed for IAM permissions"
+    then: "the task role has ONLY: secretsmanager:GetSecretValue on
+      enumerated secret ARNs, logs:CreateLogStream + logs:PutLogEvents
+      on the log group, and ecs:ExecuteCommand for debugging; no S3,
+      no KMS, no RDS — the Operations Agent does not touch any of
+      these services"
+    test_type: manual
+    component_under_test: infrastructure
+
+  - id: AC-007
+    given: "deploy.sh with the Operations Agent stack added"
+    when: "deploy.sh is run in a new region (eu-central-1)"
+    then: "the stack creates successfully on first attempt with no
+      manual intervention; all secrets must be pre-populated via
+      bootstrap.sh; the region-expansion-in-one-variable goal is
+      maintained"
+    test_type: integration
+    component_under_test: infrastructure
+    notes: "If this AC fails, the fix must be in IaC — no manual
+      region setup steps allowed"
+
+  - id: AC-008
+    given: "infra/STATE.md"
+    when: "the Operations Agent stack is deployed"
+    then: "STATE.md is updated with the new stack name, status,
+      deployment date, and key resource identifiers (ECS service ARN,
+      ECR repo URI, security group ID)"
+    test_type: manual
+    component_under_test: infrastructure
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The Operations Agent task role must not have access
+      to any CELLO key material (node private keys, envelope keys,
+      FROST shares)"
+    adversarial_condition: "even if the Operations Agent container is
+      compromised, the attacker cannot read directory or relay private
+      keys from Secrets Manager because the IAM policy does not grant
+      access to those secret ARNs"
+    test_type: manual
+    component_under_test: infrastructure
+
+  - id: SI-002
+    statement: "The Operations Agent has no direct database access —
+      it communicates with the directory only via the internal HTTP API"
+    adversarial_condition: "even if the container is compromised, the
+      attacker cannot connect to RDS because the security group has no
+      inbound rule for the Operations Agent, and no database credentials
+      are available to the task role"
+    test_type: manual
+    component_under_test: infrastructure
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events: []
+  error_events: []
+  alarms:
+    - condition: "ECS runningCount < 1 for cello-operations-agent service"
+      fires_to: ops-critical
+      notes: "Added to cello-cloudwatch.yaml when 005A deploys"
+  notes: "005A is infrastructure-only. Application observability events
+    are defined in OPS-AGENT-001 through 004 and wired in 005B."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M6
+  discussion_logs:
+    - "2026-05-25_0900_m6-beta-launch-planning"
+    - "2026-05-25_1100_m5-retrospective-lessons-learned"
+  depends_on:
+    - CELLO-OPS-AGENT-000
+    - CELLO-OPS-AGENT-003
+    - CELLO-OPS-AGENT-004
+  blocks:
+    - CELLO-OPS-AGENT-005B
+  notes: "This story exists specifically to prevent the DEPLOY-003
+    pattern. Prove infra works with a stub. Only then wire app code
+    in 005B. The same agent session should execute both 005A and 005B
+    to maintain context continuity."
