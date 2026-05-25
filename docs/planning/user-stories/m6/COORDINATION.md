@@ -17,10 +17,35 @@ Read this file at the start of every session. Append, never overwrite.
 
 M6 migrations start at **V24**. All version numbers are reserved by OPS-AGENT-000 before parallel implementation begins. No story may claim a migration version not listed here.
 
-| Version | Story | Table/Purpose |
-|---|---|---|
-| V24+ | OPS-AGENT-000 | Reserved — schema design produced by OPS-AGENT-000 |
+| Version | File | Story | Description |
+|---------|------|-------|-------------|
+| V24 | V24__registrations.sql | OPS-AGENT-000 | registrations table — registration state machine |
+| V25 | V25__pre_authorization_tokens.sql | OPS-AGENT-000 | pre_authorization_tokens — pre-auth token single-use store |
 
-This table is populated when OPS-AGENT-000 closes.
+---
+
+## 2026-05-25 15:55 UTC — OPS-AGENT-000: story closed
+
+Story completed: OPS-AGENT-000 — interfaces, types, stubs, migrations.
+
+**Delivered:**
+- `MessagingChannel` interface + `CliAdapter` stub (`packages/interfaces/src/`)
+- `OtpDeliveryProvider` interface + `ConsoleOtpDeliveryProvider` stub
+- `TokenValidator` interface + `DevTokenValidator` stub (accepts `DEV-` prefix)
+- `PreAuthorizationClient` interface + `LocalPreAuthorizationClient` stub (`DEV-CELLO-` + 16 hex)
+- `SecurityAlertProvider` interface + `ConsoleSecurityAlertProvider` stub
+- `RegistrationState` discriminated union (9 states) + `RegistrationRecord` type
+- `PreAuthorizationToken` + `PreAuthorizationTokenRow` types
+- V24 migration: `registrations` table with partial UNIQUE index, RLS (no DELETE)
+- V25 migration: `pre_authorization_tokens` table with UNIQUE(token), FK to registrations, RLS (no DELETE)
+
+**All downstream stories may now proceed:**
+- OPS-AGENT-001: use `PreAuthorizationClient`, `PreAuthorizationToken`, `PreAuthorizationTokenRow`, V25 table
+- OPS-AGENT-002: use `RegistrationState`, `RegistrationRecord`, V24 table
+- OPS-AGENT-003: implement `TelegramAdapter` satisfying `MessagingChannel`
+- OPS-AGENT-004: implement `SesOtpDeliveryProvider` satisfying `OtpDeliveryProvider`
+- OPS-AGENT-005A: use V24/V25 migrations in IaC; no new migration versions required from this story
+
+Migration Version Registry updated above.
 
 ---

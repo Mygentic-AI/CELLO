@@ -1,0 +1,39 @@
+/**
+ * TokenValidator — interface for validating pre-authorization tokens presented
+ * by agents during FROST DKG.
+ *
+ * Phase A — Architecture note:
+ *   The directory node calls this interface when an agent presents a token
+ *   during cello_register(). The concrete validator (directory DB lookup vs
+ *   dev stub) is hidden behind this boundary.
+ *
+ *   Local stub: DevTokenValidator (accepts 'DEV-' prefix tokens, returns a
+ *               fixed principal — no network or DB dependency)
+ *   Production implementation: DirectoryTokenValidator (M6 OPS-AGENT-001)
+ */
+
+/**
+ * TokenValidationResult — result of validating a pre-authorization token.
+ * Discriminated on `valid`.
+ *
+ * On success, returns the phone stub hash and email domain that were recorded
+ * when the token was issued — these are used to associate the new agent profile
+ * with the correct operator identity.
+ */
+export type TokenValidationResult =
+  | { valid: true; phoneStubHash: string; emailDomain: string }
+  | { valid: false; reason: string };
+
+/**
+ * TokenValidator — validates a pre-authorization token and returns
+ * the associated principal identity on success.
+ */
+export interface TokenValidator {
+  /**
+   * Validate a pre-authorization token.
+   * Returns { valid: true, phoneStubHash, emailDomain } on success.
+   * Returns { valid: false, reason } on any failure (expired, consumed, not found, malformed).
+   * Never throws — validation failures are encoded in the return type.
+   */
+  validateToken(token: string): Promise<TokenValidationResult>;
+}
