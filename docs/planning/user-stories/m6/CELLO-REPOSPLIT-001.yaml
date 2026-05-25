@@ -1,0 +1,178 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-REPOSPLIT-001
+domain: REPOSPLIT
+milestone: M6
+actor: CLIENT
+priority: P0
+components:
+  - client
+  - crypto
+  - transport
+  - protocol-types
+  - adapter-claude-code
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a CELLO user,
+  I want to install @cello/connect from npm and have my agent
+  connected to the live CELLO network without cloning a repo or
+  running infrastructure,
+  so that adoption requires a single command: claude mcp add cello
+  npx @cello/connect.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a user runs npm install @cello/connect"
+    action: "the package installs with all dependencies resolved;
+      no postinstall scripts; no native compilation required; the
+      production directory and relay endpoints are baked into the
+      package as defaults"
+
+  - trigger: "When a user runs npx @cello/connect"
+    action: "the MCP server starts and exposes all CELLO tools
+      (cello_register, cello_send, cello_receive, etc.) over the
+      MCP stdio transport; no configuration required for connecting
+      to the live network"
+
+  - trigger: "When the package is inspected by an AI investigator
+      reading AUDIT-ME.md"
+    action: "each privacy claim in AUDIT-ME.md names specific files
+      and code paths; an investigator can verify every claim by
+      reading the named files without prior knowledge of the codebase"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The cello-client repository (github.com/Mygentic-AI/cello-client)"
+    when: "the extraction is complete"
+    then: "the repo contains: core/protocol-types, core/crypto,
+      core/transport, core/client, core/adapter-claude-code; each
+      package builds independently; the monorepo root has a pnpm
+      workspace config; TypeScript project references are correctly
+      wired"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-002
+    given: "The cello-client repository"
+    when: "pnpm run build is executed at the root"
+    then: "all five packages compile without error; dist/ directories
+      are populated; no dependency on packages that stayed in
+      trustless-cello (directory, relay, e2e-tests)"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-003
+    given: "The cello-client repository"
+    when: "pnpm run test is executed at the root"
+    then: "all existing unit tests pass; no test depends on directory
+      or relay packages; no test requires AWS credentials or a running
+      database"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-004
+    given: "The adapter-claude-code package"
+    when: "the production endpoint configuration is inspected"
+    then: "CELLO_DIRECTORY_URL defaults to the production directory
+      ALB endpoint; CELLO_RELAY_MULTIADDR defaults to the production
+      relay multiaddr; these are compile-time constants that can be
+      overridden by environment variables"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-005
+    given: "The @cello/connect package on npm"
+    when: "npm install @cello/connect@beta is run in a fresh directory"
+    then: "the package installs successfully; npx @cello/connect starts
+      the MCP server; the package is published under the @cello scope
+      with the 'beta' dist-tag (not 'latest')"
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: "Mitigation D: beta tag only. Promoted to latest in M6-E2E-001."
+
+  - id: AC-006
+    given: "The cello-client repository CI pipeline (GitHub Actions)"
+    when: "a push to main occurs"
+    then: "CI runs: pnpm install → build → typecheck → test → publish
+      (on tagged releases only); publish step uses NPM_TOKEN from
+      GitHub secrets; CI is green before any PR merges"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-007
+    given: "AUDIT-ME.md in the cello-client repository root"
+    when: "an AI investigator reads it"
+    then: "at minimum these claims are present with exact file pointers:
+      (1) The relay never sees message content in plaintext — points to
+      Noise encryption setup and circuit relay fallback code;
+      (2) K_local never leaves the client process — points to key
+      generation and FROST DKG client code;
+      (3) No telemetry, analytics, or phone-home behavior — points to
+      the absence of any outbound HTTP calls not to directory/relay;
+      each claim has a 'Verify:' section naming 2-4 specific files"
+    test_type: manual
+    component_under_test: client
+
+  - id: AC-008
+    given: "The cello-client repository README.md"
+    when: "a stranger reads it"
+    then: "it contains: one-line install command, what CELLO is (2-3
+      sentences), quick start (register + send a message), link to
+      AUDIT-ME.md, link to the main CELLO docs; no jargon unexplained;
+      no reference to the trustless-cello monorepo"
+    test_type: manual
+    component_under_test: client
+
+  - id: AC-009
+    given: "A git diff between the extracted packages and their
+      trustless-cello source"
+    when: "the diff is inspected"
+    then: "only structural changes exist (import paths, package.json
+      names, tsconfig references); no behavioral code changes; the
+      extracted code is functionally identical to the monorepo source"
+    test_type: manual
+    component_under_test: client
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The published package must not contain any server-side
+      code, IaC templates, deployment scripts, or AWS credentials"
+    adversarial_condition: "even when npm pack is run and the tarball
+      is inspected, no file from packages/directory, packages/relay,
+      infra/, or any .env file is present"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: SI-002
+    statement: "The published package must not contain test fixtures
+      that embed real keys, tokens, or secret material"
+    adversarial_condition: "even when the full node_modules tree is
+      inspected, no Ed25519 private key, no FROST share, and no AWS
+      credential appears in any published file"
+    test_type: unit
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events: []
+  error_events: []
+  alarms: []
+  notes: "REPOSPLIT-001 is a packaging and publishing story — no
+    runtime observability beyond what the client packages already emit.
+    Client-side events are defined in existing M0-M4 stories."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M6
+  discussion_logs:
+    - "2026-05-25_0900_m6-beta-launch-planning"
+  depends_on: []
+  blocks:
+    - CELLO-DEMO-001
+    - CELLO-M6-E2E-001
+  notes: "Can begin immediately — zero dependency on M5 close.
+    Structural work (CI, AUDIT-ME.md, README) starts day one.
+    Final package sync with trustless-cello HEAD happens just
+    before publish."
