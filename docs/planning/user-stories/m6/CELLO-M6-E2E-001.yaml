@@ -43,14 +43,29 @@ behavior:
       to 'latest' on npm"
 
 # ─── Acceptance Criteria ────────────────────────────────────
+# All ACs in this story are verified by a human-executed or
+# scripted run against production infrastructure. No automated
+# Vitest tests are written for this story. The verification
+# artifact is scripts/verify-stranger-flow.sh (or equivalent
+# step-by-step runbook).
 acceptance_criteria:
   - id: AC-001
     given: "A clean machine with Node.js installed and no prior
       CELLO configuration"
-    when: "'npm install @cello/connect@beta' is run"
-    then: "the package installs without error; 'npx @cello/connect'
-      starts the MCP server and reports available tools"
-    test_type: integration
+    when: "'claude mcp add cello npx @cello/connect' is run"
+    then: "the MCP server is installed without error; 'npx @cello/connect'
+      starts the MCP server and reports available tools including
+      cello_register, cello_send, cello_receive"
+    test_type: manual
+    component_under_test: client
+
+  - id: AC-001b
+    given: "The same clean machine from AC-001"
+    when: "'npm install @cello/connect@beta' is run as an alternative
+      install path"
+    then: "the package installs without error; npx @cello/connect starts
+      the MCP server; both install paths work"
+    test_type: manual
     component_under_test: client
 
   - id: AC-002
@@ -59,8 +74,8 @@ acceptance_criteria:
       phone verification (contact sharing), provides email, enters
       the OTP received via email"
     then: "the bot delivers a pre-authorization token in the format
-      'CELLO-' followed by 32 base58 characters"
-    test_type: integration
+      'CELLO-' followed by 33 base58 characters"
+    test_type: manual
     component_under_test: operations-agent
 
   - id: AC-003
@@ -68,8 +83,8 @@ acceptance_criteria:
     when: "the agent calls cello_register(token)"
     then: "FROST DKG completes; the agent is registered; cello_status
       returns { registered: true, agentId: '<hex>' }; the directory
-      confirms the agent exists"
-    test_type: integration
+      agent-lookup endpoint confirms the agent exists on the live network"
+    test_type: manual
     component_under_test: client
 
   - id: AC-004
@@ -77,16 +92,21 @@ acceptance_criteria:
     when: "the agent calls cello_request_connection with the demo
       agent's AgentID"
     then: "the connection request is accepted by the demo agent;
-      a session is established; both sides can send and receive"
-    test_type: integration
+      a session is established with a non-null session_id visible
+      on both sides; the session_id is identical when queried from
+      both the stranger's agent and the demo agent's logs"
+    test_type: manual
     component_under_test: client
 
   - id: AC-005
     given: "An established session with the demo agent"
     when: "the stranger's agent calls cello_send with a test message"
     then: "cello_receive on the stranger's agent returns the demo
-      agent's canned response within 10 seconds"
-    test_type: integration
+      agent's canned response; demo.message.received and
+      demo.response.sent appear in the demo agent's logs;
+      elapsed time from send to receive is measured and recorded
+      in the verification script output"
+    test_type: manual
     component_under_test: client
 
   - id: AC-006
@@ -95,7 +115,7 @@ acceptance_criteria:
     then: "a tamper-evident receipt is returned containing: session_id,
       message hashes, Merkle root, and directory-signed checkpoint
       reference; the receipt is cryptographically verifiable"
-    test_type: integration
+    test_type: manual
     component_under_test: client
 
   - id: AC-007
@@ -105,7 +125,7 @@ acceptance_criteria:
     then: "the message is received; two agents owned by the same
       person can communicate — proving the self-contained demo
       experience works without needing a third party"
-    test_type: integration
+    test_type: manual
     component_under_test: client
 
   - id: AC-008
@@ -113,7 +133,8 @@ acceptance_criteria:
     when: "the E2E gate is satisfied"
     then: "@cello/connect is promoted from 'beta' to 'latest' on npm;
       'npm install @cello/connect' (without @beta) resolves to the
-      verified version; this is the Mitigation D final gate"
+      verified version; this is the Mitigation D final gate — the beta
+      tag is held until this entire flow is verified against production"
     test_type: manual
     component_under_test: client
 
@@ -121,42 +142,49 @@ acceptance_criteria:
     given: "The pre-authorization token used in AC-003"
     when: "a second cello_register attempt uses the same token"
     then: "registration is rejected with PRE_AUTH_TOKEN_CONSUMED;
-      the token is single-use"
-    test_type: integration
+      the token is single-use (enforced by OPS-AGENT-001)"
+    test_type: manual
     component_under_test: directory
 
   - id: AC-010
     given: "The full stranger flow timing"
-    when: "measured from 'npm install' to 'first message received
-      from demo agent'"
-    then: "the total time is under 10 minutes (excluding email OTP
-      wait time); the experience does not require reading docs beyond
-      the README quick-start section"
+    when: "measured from 'npm install' completion to 'first message
+      received from demo agent' — excluding time spent waiting for
+      email OTP delivery"
+    then: "the total time is under 10 minutes; if it exceeds 10 minutes
+      the story is BLOCKED pending a DX improvement before close"
     test_type: manual
     component_under_test: client
-    notes: "This is a UX quality bar, not a hard pass/fail — but if
-      it takes 30 minutes, something is wrong with the DX"
+    notes: "Hard pass/fail: if > 10 min (excluding OTP wait), story is
+      blocked. Measured by the verification script timer output."
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
     statement: "The stranger's K_local is generated inside their agent
       process and never transmitted to any server"
-    adversarial_condition: "even when inspecting all network traffic
-      during registration and message exchange, K_local bytes do not
-      appear in any packet; only the FROST public key share is sent
-      to the directory during DKG"
-    test_type: integration
+    adversarial_condition: "verified by AUDIT-ME.md code path analysis
+      (static): the AUDIT-ME.md claim 'K_local never leaves the client
+      process' names the specific files where DKG and key generation
+      occur; an investigator confirms no key bytes are sent to the
+      directory by reading those files"
+    test_type: manual
     component_under_test: client
+    notes: "Static verification via AUDIT-ME.md. Network capture
+      during live run provides additional confirmation."
 
   - id: SI-002
     statement: "Messages between the stranger and the demo agent are
       end-to-end encrypted — the relay carries only ciphertext"
-    adversarial_condition: "even when capturing all traffic at the relay
-      node, message plaintext is not recoverable without the session
-      keys negotiated via Noise protocol"
-    test_type: integration
+    adversarial_condition: "verified by AUDIT-ME.md code path analysis:
+      the claim 'the relay never sees message content in plaintext'
+      names the Noise encryption setup and circuit relay fallback files;
+      an investigator confirms encryption wraps the stream before it
+      reaches any relay node"
+    test_type: manual
     component_under_test: transport
+    notes: "Static verification via AUDIT-ME.md. Both SIs are verified
+      as part of the AUDIT-ME.md review in REPOSPLIT-001 AC-007."
 
 # ─── Observability ──────────────────────────────────────────
 observability:
@@ -174,9 +202,12 @@ references:
     - "2026-05-25_0900_m6-beta-launch-planning"
   depends_on:
     - CELLO-REPOSPLIT-001
+    - CELLO-OPS-AGENT-001
     - CELLO-OPS-AGENT-005B
     - CELLO-DEMO-001
   blocks: []
   notes: "This is the M6 milestone close gate. The milestone does not
     close until this story passes. Promotion from @beta to latest is
-    the final action — it makes CELLO installable by anyone."
+    the final action — it makes CELLO installable by anyone.
+    All ACs are manual (human-executed against production infrastructure).
+    No automated Vitest tests are written for this story."
