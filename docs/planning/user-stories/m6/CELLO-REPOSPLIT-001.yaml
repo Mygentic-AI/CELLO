@@ -210,7 +210,7 @@ implementation_notes:
     changes are merged. Rationale: early extraction during active M6 client
     development creates cross-repo version boundaries and pnpm link friction
     that adds a new structural problem class during a high-density milestone.
-    See discussion log 2026-05-25_1500_reposplit-timing-scaffold-early-extract-late for the full analysis.
+    See discussion log 2026-05-25_1800_reposplit-timing-scaffold-early-extract-late for the full analysis.
 
   prerequisite_first_commit: >
     Before any extraction work: fix packages/adapter-claude-code/tsconfig.json
@@ -288,7 +288,7 @@ references:
   discussion_logs:
     - "2026-05-25_0900_m6-beta-launch-planning"
     - "2026-05-25_1400_reposplit-001-investigation"
-    - "2026-05-25_1500_reposplit-timing-scaffold-early-extract-late"
+    - "2026-05-25_1800_reposplit-timing-scaffold-early-extract-late"
   depends_on: []
   blocks:
     - CELLO-DEMO-001
