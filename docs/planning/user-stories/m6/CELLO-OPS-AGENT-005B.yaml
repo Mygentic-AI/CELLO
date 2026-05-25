@@ -1,0 +1,195 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-OPS-AGENT-005B
+domain: OPS-AGENT
+milestone: M6
+actor: OPS
+priority: P0
+components:
+  - operations-agent
+  - infrastructure
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Operations Agent,
+  I want the real application code (state machine, TelegramAdapter,
+  email OTP service, directory client) wired into the proven ECS
+  deployment from 005A,
+  so that the full registration ceremony is live and accepting
+  Telegram registrations in production.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the Operations Agent container starts with the
+      real application image"
+    action: "it loads configuration from environment variables and
+      Secrets Manager, initializes the TelegramAdapter with the
+      production bot token, connects to PostgreSQL for state machine
+      persistence, and begins long-polling the Telegram Bot API"
+
+  - trigger: "When the container passes the health check"
+    action: "it has successfully: connected to PostgreSQL, verified
+      Flyway migrations are at the expected version, initialized the
+      TelegramAdapter long-polling connection, and loaded all secrets"
+
+  - trigger: "When a Telegram user sends /start to the production bot"
+    action: "the full registration ceremony begins: INITIAL →
+      AWAITING_CONTACT → PHONE_CONFIRMED → AWAITING_EMAIL →
+      AWAITING_EMAIL_OTP → EMAIL_CONFIRMED → PRE_AUTH_TOKEN_ISSUED;
+      the pre-authorization token is delivered to the user"
+
+  - trigger: "When the ECS service is updated with a new image"
+    action: "rolling deployment ensures the old task drains before
+      the new task starts; in-flight registrations are recovered from
+      PostgreSQL on the new task's startup"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "OPS-AGENT-005A has proven the deployment path (stub healthy)"
+    when: "the real application Docker image is built and deployed
+      via the pipeline"
+    then: "the ECS service reaches STABLE with the real image; the
+      task is HEALTHY; health check confirms PostgreSQL connectivity,
+      migration version, and Telegram API reachability"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-002
+    given: "The Operations Agent is running with the production
+      Telegram bot token"
+    when: "a real Telegram user sends /start to the bot"
+    then: "the bot responds with a welcome message and a
+      request_contact keyboard button; a RegistrationRecord is
+      created in PostgreSQL"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-003
+    given: "The Operations Agent running in production"
+    when: "a full registration flow is completed (phone + email verified)"
+    then: "the directory's POST /internal/pre-authorize is called
+      successfully; a pre-authorization token is returned and delivered
+      to the user via Telegram; the token has the correct format
+      ('CELLO-' + 32 base58 chars)"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-004
+    given: "A registration in AWAITING_EMAIL_OTP state"
+    when: "the ECS task is killed (simulating deployment or crash)"
+    then: "the new task recovers the in-flight registration from
+      PostgreSQL; the user can provide their OTP without restarting;
+      registration.state.recovered is logged on startup"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-005
+    given: "The Operations Agent's connection to the directory
+      internal API"
+    when: "the directory is unreachable (simulated by blocking the
+      security group rule temporarily)"
+    then: "the state machine reaches EMAIL_CONFIRMED but fails to
+      obtain a token; the user receives an error message asking them
+      to try again later; registration.preauth.request.failed is
+      logged at ERROR with { registrationId, correlationId };
+      the registration remains in EMAIL_CONFIRMED state (not lost)"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-006
+    given: "The Operations Agent Docker image"
+    when: "the Dockerfile is inspected"
+    then: "multi-stage build: Node 24-slim build stage → production
+      stage with only compiled dist/, node_modules (production only),
+      and Flyway CLI; runs as non-root user; EXPOSE 8080; no dev
+      dependencies in final image"
+    test_type: manual
+    component_under_test: operations-agent
+
+  - id: AC-007
+    given: "The Operations Agent pipeline (cello-operations-agent-pipeline)"
+    when: "a push to packages/operations-agent/ is detected"
+    then: "the pipeline builds the Docker image, pushes to ECR,
+      deploys to staging ECS, runs smoke test (health + Telegram
+      connectivity), and proceeds to production deploy on success"
+    test_type: integration
+    component_under_test: infrastructure
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The Operations Agent never handles, generates, or
+      transmits cryptographic key material (K_local, FROST shares,
+      node private keys)"
+    adversarial_condition: "even when inspecting all code paths in
+      the Operations Agent, no import from @cello/crypto key generation
+      or FROST modules exists; the only crypto operations are OTP
+      hashing (SHA-256) and token format validation"
+    test_type: unit
+    component_under_test: operations-agent
+
+  - id: SI-002
+    statement: "The directory API key used by the Operations Agent
+      grants access only to POST /internal/pre-authorize — not to
+      any other directory endpoint"
+    adversarial_condition: "even when the Operations Agent is compromised
+      and the API key is extracted, the attacker cannot call registration,
+      session, or checkpoint endpoints on the directory"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: ops_agent.started
+      level: info
+      trigger: "Container passes health check and begins accepting messages"
+      context_fields: [version, region, migrationVersion]
+      correlationId: false
+
+    - name: ops_agent.telegram.connected
+      level: info
+      trigger: "TelegramAdapter successfully polls getUpdates"
+      context_fields: [botUsername]
+      correlationId: false
+
+  error_events:
+    - name: ops_agent.startup.failed
+      level: error
+      trigger: "Container fails to start (missing secret, DB unreachable, migration mismatch)"
+      context_fields: [reason, component]
+      correlationId: false
+
+    - name: registration.preauth.request.failed
+      level: error
+      trigger: "Directory pre-authorization API call fails"
+      context_fields: [registrationId, httpStatus, correlationId]
+      correlationId: true
+
+  alarms:
+    - condition: "ops_agent.startup.failed count > 0"
+      fires_to: ops-critical
+      notes: "Any startup failure means the bot is down"
+
+    - condition: "registration.preauth.request.failed count > 5 per hour"
+      fires_to: ops-warning
+      notes: "Directory may be unreachable or rate-limiting"
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M6
+  discussion_logs:
+    - "2026-05-25_0900_m6-beta-launch-planning"
+    - "2026-05-25_1100_m5-retrospective-lessons-learned"
+  depends_on:
+    - CELLO-OPS-AGENT-001
+    - CELLO-OPS-AGENT-002
+    - CELLO-OPS-AGENT-003
+    - CELLO-OPS-AGENT-004
+    - CELLO-OPS-AGENT-005A
+  blocks:
+    - CELLO-M6-E2E-001
+  notes: "This story should be executed by the same agent session that
+    completed 005A — context continuity eliminates re-orientation cost.
+    All application code was already written and tested in 001-004;
+    this story is purely about wiring it into the proven deployment."
