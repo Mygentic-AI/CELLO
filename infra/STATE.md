@@ -12,7 +12,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 ## Environments
 
 ### dev — us-east-1
-*Last deployed: 2026-05-24
+*Last deployed: 2026-05-25
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
@@ -24,9 +24,9 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-24 | Directory task role added to manifest bucket GetObject policy |
 | cello-rds-dev | CREATE_COMPLETE | 2026-05-22 | |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-05-23 | Lambda code fixed to preserve all secret fields on rotation |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-24 | RELAY_MANIFEST_BUCKET + RELAY_MANIFEST_SIGNER_PUBKEY env vars added |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-25 | RELAY_MANIFEST env vars; real image in us-east-1; eu-central-1 blocked by RDS credential mismatch |
 | cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL: rate-limit 1000/5min, IP reputation (BLOCK), CommonRuleSet (COUNT); logs to aws-waf-logs-cello-dev (SECOPS-003) |
-| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-22 | |
+| cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-25 | Real image deployed via pipeline (commit 1af5c16) to all 3 regions |
 | cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-05-23 | 10 alarms with -dev suffix, 2 SNS topics, 1 multi-region dashboard (SECOPS-002) |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-22 | |
 | cello-cicd-dev | UPDATE_COMPLETE | 2026-05-24 | CELLO_ENV added to DirectoryBuild+RelayBuild; s3:ListBucket; ProductionDeploy rewrites ECR URI to deploy region |
