@@ -354,7 +354,7 @@ for REGION in "${REGIONS[@]}"; do
   # RDS master user needs rds_replication role to grant REPLICATION attribute.
   # Grant it first (idempotent), then CREATE USER. If user already exists, ALTER password.
   GRANT_REPL_SQL="GRANT rds_replication TO postgres;"
-  ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${GRANT_REPL_SQL}" >/dev/null 2>&1 || true
+  _GRANT_OUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${GRANT_REPL_SQL}" 2>&1) || true
 
   CREATE_USER_SQL="CREATE USER cello_replication WITH REPLICATION LOGIN PASSWORD '${REPL_PASS}';"
   EXEC_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${CREATE_USER_SQL}" 2>&1)
