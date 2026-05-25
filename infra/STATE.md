@@ -21,15 +21,15 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-secrets-dev | UPDATE_COMPLETE | 2026-05-22 | |
 | cello-vpc-dev | UPDATE_COMPLETE | 2026-05-23 | Port 8080 for directory SG, port 80+443 for ALB SG |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-22 | |
-| cello-s3-dev | UPDATE_COMPLETE | 2026-05-24 | Directory task role added to manifest bucket GetObject policy |
+| cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | s3:ListBucket added for relay+directory task roles |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-05-25 | Now uses RDS-managed master secret (no manual admin creds) |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-25 | RELAY_MANIFEST env vars; real image in us-east-1; eu-central-1 blocked by RDS credential mismatch |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-25 | Real image deployed via pipeline to all 3 regions; manifest fallback enabled |
 | cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL: rate-limit 1000/5min, IP reputation (BLOCK), CommonRuleSet (COUNT); logs to aws-waf-logs-cello-dev (SECOPS-003) |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-25 | Real image deployed via pipeline (commit 1af5c16) to all 3 regions |
 | cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-05-23 | 10 alarms with -dev suffix, 2 SNS topics, 1 multi-region dashboard (SECOPS-002) |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-22 | |
-| cello-cicd-dev | UPDATE_COMPLETE | 2026-05-24 | CELLO_ENV added to DirectoryBuild+RelayBuild; s3:ListBucket; ProductionDeploy rewrites ECR URI to deploy region |
+| cello-cicd-dev | UPDATE_COMPLETE | 2026-05-25 | 15-min rolloutState poll in ProductionDeploy; CELLO_ENV; ECR URI rewrite |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
 | Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-22 | |
 | ECR Replication (account-level) | CONFIGURED | 2026-05-24 | us-east-1 → eu-central-1 + ap-northeast-1; filter: prefix "cello-" |

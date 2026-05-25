@@ -691,3 +691,34 @@ The `cello_service` user password in Secrets Manager (`cello/dev/directory/rds-c
 - Rotation triggered in ap-northeast-1 — `cello_service` created with real password ✓
 
 **Next step:** Retrigger directory pipeline to deploy real images to eu-central-1 and ap-northeast-1 via ProductionDeploy.
+
+---
+
+## 2026-05-25 07:45 UTC — FEDERATION-E2E-001: Directory pipeline FULLY GREEN
+
+**cello-directory-pipeline succeeded — all 5 stages, all 3 regions.** Execution `66c5ea87`.
+
+| Stage | Status |
+|---|---|
+| Source | Succeeded |
+| Build | Succeeded |
+| StagingDeploy | Succeeded |
+| SmokeTest | Succeeded |
+| ProductionDeploy | Succeeded (us-east-1, eu-central-1, ap-northeast-1) |
+
+**IaC fixes shipped to achieve this (all committed to main):**
+
+1. `cello-s3.yaml` — added `s3:ListBucket` on manifest bucket ARN for relay+directory task roles (AWS SDK needs ListBucket to return NoSuchKey instead of AccessDenied).
+2. `handler.py` (rotation Lambda) — `_create_secret` now injects host/port/dbname from environment variables as base fields (the initial RDS-managed secret only has username/password).
+3. `cello-cicd.yaml` — replaced `aws ecs wait services-stable` (hard 10-min limit) with custom 15-minute poll loop checking ECS deployment `rolloutState` (secondary regions exceed 10 min due to ALB deregistration delay).
+4. `directory.ts` — graceful fallback when relay manifest doesn't exist yet in S3. Missing manifest → return undefined → use CELLO_RELAY_MULTIADDR. Invalid/corrupt manifest still fatal.
+
+**Both pipelines now fully green:**
+- cello-relay-pipeline: COMPLETE (all 3 regions)
+- cello-directory-pipeline: COMPLETE (all 3 regions)
+
+**Remaining for FEDERATION-E2E-001:**
+- PostgreSQL logical replication setup (`setup-replication.sh`)
+- Live smoke test verification (all 3 regions)
+- Code review and sprint review
+- Milestone close gate
