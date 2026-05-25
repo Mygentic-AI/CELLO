@@ -186,9 +186,18 @@ describe("PERSIST-003 AC-007 / SI-002: migration lint", () => {
         .replace(/\/\*[\s\S]*?\*\//g, "");
 
       // Match UPDATE as a DML statement: UPDATE followed by whitespace and a table name.
-      // This distinguishes "UPDATE tbl SET ..." from "REVOKE UPDATE, DELETE" or
-      // "GRANT UPDATE" where UPDATE is a privilege keyword, not DML.
-      if (/\bUPDATE\s+\w/i.test(stripped)) {
+      // This distinguishes "UPDATE tbl SET ..." from privilege keywords and policy syntax:
+      //   - "REVOKE UPDATE, DELETE"  — UPDATE followed by comma/space-comma
+      //   - "GRANT INSERT, SELECT, UPDATE ON tbl TO role"  — UPDATE followed by ON
+      //   - "GRANT UPDATE (col)"  — UPDATE followed by (
+      //   - "FOR UPDATE TO cello_service USING..."  — UPDATE followed by TO (RLS policy syntax)
+      //   - "SELECT ... FOR UPDATE OF tbl"  — UPDATE followed by OF (locking clause)
+      // Negative lookaheads:
+      //   (?!ON\b)   excludes "UPDATE ON" (GRANT privilege syntax)
+      //   (?!TO\b)   excludes "UPDATE TO" (CREATE POLICY FOR UPDATE TO role syntax)
+      //   (?!OF\b)   excludes "UPDATE OF" (SELECT FOR UPDATE OF locking syntax)
+      //   (?!\s*[,(]) excludes "UPDATE (col)" and "UPDATE," (privilege list position)
+      if (/\bUPDATE\s+(?!ON\b)(?!TO\b)(?!OF\b)(?!\s*[,(])\w/i.test(stripped)) {
         violations.push(file);
       }
     }
