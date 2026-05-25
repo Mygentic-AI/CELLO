@@ -80,6 +80,82 @@ For each protocol step or component behavior the E2E story requires:
 - Does a method exist to store/produce this data? → Who calls it in the live flow? Name the caller explicitly.
 - Is a field described in the output shape? → Which AC describes how it gets populated, not just that it's present?
 
+## Database Schema Stories (M5+ rules)
+
+If the story introduces new database tables or modifies existing ones, apply these rules extracted from the M5 retrospective:
+
+### Rule 1: Thoroughly Assess Schema Requirements
+
+During the Architecture phase, reason through **all use cases** that will touch the table — not just the immediate story's requirements.
+
+**Example from M5:** FEDERATION-001 created `checkpoint_node_signatures` without the `UNIQUE (checkpoint_id, node_id)` constraint. Only when FEDERATION-002 implemented coordinator logic did the gap surface. By then V18 was applied and parallel stories had claimed later version numbers, forcing cascading renumbers.
+
+**The question to ask:** "If three nodes are cross-signing, what prevents duplicate signatures?" should have been asked in FEDERATION-001, not discovered in FEDERATION-002.
+
+**For schema stories, the Architecture phase must:**
+1. List every operation the table will support (not just what this story needs)
+2. Identify all uniqueness constraints by reasoning through conflict scenarios
+3. Specify indexes for every query pattern (not just the obvious one)
+4. Check foreign key relationships with all related tables (including ones not in this milestone)
+5. Validate RLS policies cover all access patterns (read-only observers, multi-tenant isolation, append-only constraints)
+
+### Mitigation C: Schema-Complete-First for Parallel Milestones
+
+If the milestone has parallel stories that will all touch the database, **one story must produce the complete schema design before any parallel implementation begins.**
+
+**M6 example:** OPS-AGENT-000 is a P0 design story that:
+- Defines all TypeScript interfaces
+- Writes all migration SQL for the registration state machine
+- Reserves all migration version numbers (V24+)
+- Populates the Migration Version Registry in COORDINATION.md
+- Gates all downstream stories (001-005B) on AC-010 passing
+
+This eliminates reactive mid-milestone migrations and version number conflicts.
+
+### Mitigation B: Integration Gate ACs with Flyway Verification
+
+Every database story that adds or modifies migrations must include a blocking integration gate AC as its final acceptance criterion.
+
+**Standard AC language for migration stories:**
+
+```yaml
+- id: AC-[N]-integration-gate
+  given: "All migration SQL files produced by this story"
+  when: "applied to a local PostgreSQL instance that already has all prior
+    M{N} migrations applied (V1 through V[N-1])"
+  then: "Flyway reports zero checksum errors on any migration; the new
+    migration(s) apply cleanly; all tables, indexes, constraints, and RLS
+    policies are created as specified"
+  test_type: integration
+  component_under_test: directory
+  notes: "This is the Mitigation B integration gate AC. It must pass before
+    this branch merges. No downstream story may begin implementation until
+    this story's integration gate AC is verified and the story is merged."
+```
+
+**Key constraint:** The AC runs against an environment with prior migrations **already applied** — not a fresh database. A fresh database will not catch the FEDERATION-002 pattern where a previously-applied migration gets modified.
+
+### Migration Version Registry (parallel milestones only)
+
+For milestones with parallel database work, the COORDINATION.md must include a Migration Version Registry table:
+
+```markdown
+## Migration Version Registry
+
+M{N} migrations start at **V{X}**. All version numbers are reserved by
+{SCHEMA-DESIGN-STORY-ID} before parallel implementation begins. No story
+may claim a migration version not listed here.
+
+| Version | Story | Table/Purpose |
+|---|---|---|
+| V{X} | {STORY-ID} | {table_name} — {purpose} |
+| V{X+1} | {STORY-ID} | {table_name} — {purpose} |
+```
+
+The schema-design story (e.g., OPS-AGENT-000) populates this registry as part of its integration gate AC. No downstream story may add a migration not listed here.
+
+---
+
 ## Observability ACs (mandatory from M4)
 
 Every story that touches M4+ code must include explicit observability acceptance criteria. Observability is not an implementation detail — it is a first-class AC like any other.
@@ -135,6 +211,9 @@ For each story, run through the Definition of Ready checklist from `user-story-f
 - [ ] **(M4+)** Every error path has a named error event with sufficient diagnostic context
 - [ ] **(M4+)** New failure modes introduced by this story have a corresponding alarm threshold AC
 - [ ] **(M4+)** All event names appear in (or are proposed additions to) the event taxonomy in [[2026-05-16_0753_development-pipeline-and-local-iteration]]
+- [ ] **(M5+ schema stories)** If the story adds or modifies database tables, the Architecture phase reasoning is documented in the story notes: all operations the table supports, uniqueness constraints with conflict scenarios, indexes for all query patterns, foreign key relationships, RLS policy coverage
+- [ ] **(M5+ parallel milestones with DB changes)** If the milestone has parallel database work, one P0 schema-design story exists that reserves all migration version numbers and populates the Migration Version Registry in COORDINATION.md before any parallel implementation begins
+- [ ] **(M5+ migration stories)** The story includes a blocking integration gate AC that applies migrations to a PostgreSQL instance with all prior migrations already applied and verifies zero Flyway checksum errors
 
 ## What the shared fixture already covers
 
