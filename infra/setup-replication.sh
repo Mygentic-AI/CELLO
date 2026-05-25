@@ -318,7 +318,9 @@ ecs_exec_sql() {
 
   # Inner command: decoded via stdin pipeline — no -c quoting, no $$ expansion
   local inner_cmd
-  inner_cmd="export PGPASSWORD=\$(echo ${b64_pass} | base64 -d) && echo ${b64_sql} | base64 -d | psql -h ${host} -p 5432 -U postgres -d ${dbname} -w -f /dev/stdin"
+  # -v ON_ERROR_STOP=1: psql exits non-zero on any SQL error, so aws ecs execute-command
+  # also returns non-zero and the caller's || { exit 1 } fires correctly.
+  inner_cmd="export PGPASSWORD=\$(echo ${b64_pass} | base64 -d) && echo ${b64_sql} | base64 -d | psql -h ${host} -p 5432 -U postgres -d ${dbname} -w -v ON_ERROR_STOP=1 -f /dev/stdin"
 
   local b64_cmd
   b64_cmd=$(printf '%s' "${inner_cmd}" | base64 | tr -d '\n')
@@ -346,34 +348,51 @@ for REGION in "${REGIONS[@]}"; do
   B64_MASTER=$(printf '%s' "${MASTER_PASS}" | base64 | tr -d '\n')
 
   # Create cello_replication user (SI-001: REPLICATION privilege only).
-  # DO $$ block for idempotency — universally compatible across PG 14/15/16/17.
-  CREATE_USER_SQL="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cello_replication') THEN CREATE USER cello_replication WITH REPLICATION LOGIN PASSWORD '${REPL_PASS}'; END IF; END \$\$;"
+  # Pre-flight SELECT then bare CREATE USER — DO $$ blocks are idiomatic but
+  # CREATE ROLE/USER inside DO $$ is actually fine (unlike CREATE SUBSCRIPTION).
+  # Using SELECT-then-CREATE anyway for consistency and explicit idempotency.
+  CHECK_USER_SQL="SELECT COUNT(*) FROM pg_roles WHERE rolname = 'cello_replication';"
+  USER_COUNT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${CHECK_USER_SQL}" 2>&1 \
+    | grep -E '^[[:space:]]*[0-9]+[[:space:]]*$' | tr -d ' ' || echo "0")
 
-  EXEC_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${CREATE_USER_SQL}") || {
-    log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_user\", \"reason\": \"ecs_exec_failed\" }"
-    echo "ERROR: ECS Exec failed in ${REGION} during user creation." >&2
-    exit 1
-  }
-  if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|^psql: error:"; then
-    log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_user\", \"reason\": \"psql_error\" }"
-    echo "ERROR: psql error during user creation in ${REGION}: ${EXEC_OUTPUT}" >&2
-    exit 1
+  if [[ "${USER_COUNT}" != "0" ]]; then
+    echo "  cello_replication user already exists on ${REGION} — skipping."
+  else
+    CREATE_USER_SQL="CREATE USER cello_replication WITH REPLICATION LOGIN PASSWORD '${REPL_PASS}';"
+    EXEC_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${CREATE_USER_SQL}") || {
+      log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_user\", \"reason\": \"ecs_exec_failed\" }"
+      echo "ERROR: ECS Exec failed in ${REGION} during user creation." >&2
+      exit 1
+    }
+    if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|^psql: error:"; then
+      log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_user\", \"reason\": \"psql_error\" }"
+      echo "ERROR: psql error during user creation in ${REGION}: ${EXEC_OUTPUT}" >&2
+      exit 1
+    fi
   fi
 
   echo "  cello_replication user ready on ${REGION}"
 
   # Create publication covering all append-only tables (idempotent).
-  CREATE_PUB_SQL="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'cello_pub') THEN CREATE PUBLICATION cello_pub FOR TABLE ${PUBLICATION_TABLES}; END IF; END \$\$;"
+  # CREATE PUBLICATION IF NOT EXISTS is PG17+; use SELECT-then-CREATE for PG 14/15/16 compat.
+  CHECK_PUB_SQL="SELECT COUNT(*) FROM pg_publication WHERE pubname = 'cello_pub';"
+  PUB_COUNT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${CHECK_PUB_SQL}" 2>&1 \
+    | grep -E '^[[:space:]]*[0-9]+[[:space:]]*$' | tr -d ' ' || echo "0")
 
-  EXEC_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${CREATE_PUB_SQL}") || {
-    log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\", \"reason\": \"ecs_exec_failed\" }"
-    echo "ERROR: ECS Exec failed in ${REGION} during publication creation." >&2
-    exit 1
-  }
-  if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|^psql: error:"; then
-    log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\", \"reason\": \"psql_error\" }"
-    echo "ERROR: psql error during publication creation in ${REGION}: ${EXEC_OUTPUT}" >&2
-    exit 1
+  if [[ "${PUB_COUNT}" != "0" ]]; then
+    echo "  Publication cello_pub already exists on ${REGION} — skipping."
+  else
+    CREATE_PUB_SQL="CREATE PUBLICATION cello_pub FOR TABLE ${PUBLICATION_TABLES};"
+    EXEC_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${CREATE_PUB_SQL}") || {
+      log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\", \"reason\": \"ecs_exec_failed\" }"
+      echo "ERROR: ECS Exec failed in ${REGION} during publication creation." >&2
+      exit 1
+    }
+    if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|^psql: error:"; then
+      log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\", \"reason\": \"psql_error\" }"
+      echo "ERROR: psql error during publication creation in ${REGION}: ${EXEC_OUTPUT}" >&2
+      exit 1
+    fi
   fi
 
   log_info "infra.replication.setup.publication_created" "{ \"environment\": \"${ENVIRONMENT}\", \"region\": \"${REGION}\", \"tableCount\": ${TABLE_COUNT} }"
@@ -411,31 +430,40 @@ for TARGET_REGION in "${REGIONS[@]}"; do
     # The password is stored in pg_subscription (readable by postgres superusers only).
     CONN_STRING="host=${SOURCE_HOST} port=5432 dbname=cello_${ENVIRONMENT} user=cello_replication password=${SOURCE_PASS} sslmode=require"
 
-    echo "  Creating subscription ${SUB_NAME} (slot: ${SLOT_NAME}) on ${TARGET_REGION}..."
-
-    # Idempotent subscription creation: check pg_subscription before creating.
-    # PostgreSQL 17+ supports CREATE SUBSCRIPTION IF NOT EXISTS; for compatibility
-    # with PG 14/15/16, we use a DO $$ block with a pre-flight check.
-    # PGPASSWORD is set inside the container shell so it is not in the AWS CLI argument.
-    CREATE_SUB_SQL="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_subscription WHERE subname = '${SUB_NAME}') THEN CREATE SUBSCRIPTION ${SUB_NAME} CONNECTION '${CONN_STRING}' PUBLICATION cello_pub WITH (slot_name = '${SLOT_NAME}', copy_data = false); END IF; END \$\$;"
+    # Idempotent: CREATE SUBSCRIPTION cannot run inside a DO $$ block (PostgreSQL
+    # silently ignores it inside a transaction). Pre-flight SELECT, then bare CREATE.
     TARGET_MASTER_PASS="${MASTER_PASSWORDS[${TARGET_REGION}]}"
     TARGET_RDS_EP="${RDS_ENDPOINTS[${TARGET_REGION}]}"
     TARGET_DB_NAME="${RDS_DB_NAMES[${TARGET_REGION}]}"
     B64_TARGET_MASTER=$(printf '%s' "${TARGET_MASTER_PASS}" | base64 | tr -d '\n')
 
-    EXEC_OUTPUT=$(ecs_exec_sql "${TARGET_REGION}" "${TASK_ARNS[${TARGET_REGION}]}" "${TARGET_RDS_EP}" "${TARGET_DB_NAME}" "${B64_TARGET_MASTER}" "${CREATE_SUB_SQL}") || {
-        log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${TARGET_REGION}\", \"step\": \"create_subscription\", \"reason\": \"ecs_exec_failed\", \"slotName\": \"${SLOT_NAME}\" }"
-        echo "ERROR: ECS Exec failed in ${TARGET_REGION} during subscription creation." >&2
-        exit 1
-      }
-    if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|^psql: error:"; then
-      log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${TARGET_REGION}\", \"step\": \"create_subscription\", \"reason\": \"psql_error\", \"slotName\": \"${SLOT_NAME}\" }"
-      echo "ERROR: psql error during subscription creation in ${TARGET_REGION}: ${EXEC_OUTPUT}" >&2
-      exit 1
-    fi
+    CHECK_SQL="SELECT COUNT(*) FROM pg_subscription WHERE subname = '${SUB_NAME}';"
+    SUB_COUNT=$(ecs_exec_sql "${TARGET_REGION}" "${TASK_ARNS[${TARGET_REGION}]}" \
+      "${TARGET_RDS_EP}" "${TARGET_DB_NAME}" "${B64_TARGET_MASTER}" "${CHECK_SQL}" 2>&1 \
+      | grep -E '^[[:space:]]*[0-9]+[[:space:]]*$' | tr -d ' ' || echo "0")
 
-    log_info "infra.replication.setup.subscription_created" "{ \"environment\": \"${ENVIRONMENT}\", \"targetRegion\": \"${TARGET_REGION}\", \"sourceRegion\": \"${SOURCE_REGION}\", \"slotName\": \"${SLOT_NAME}\" }"
-    echo "  Subscription ${SUB_NAME} ready on ${TARGET_REGION}"
+    if [[ "${SUB_COUNT}" != "0" ]]; then
+      echo "  Subscription ${SUB_NAME} already exists on ${TARGET_REGION} — skipping."
+      log_info "infra.replication.setup.subscription_created" "{ \"environment\": \"${ENVIRONMENT}\", \"targetRegion\": \"${TARGET_REGION}\", \"sourceRegion\": \"${SOURCE_REGION}\", \"slotName\": \"${SLOT_NAME}\" }"
+    else
+      echo "  Creating subscription ${SUB_NAME} (slot: ${SLOT_NAME}) on ${TARGET_REGION}..."
+      CREATE_SUB_SQL="CREATE SUBSCRIPTION ${SUB_NAME} CONNECTION '${CONN_STRING}' PUBLICATION cello_pub WITH (slot_name = '${SLOT_NAME}', copy_data = false);"
+
+      EXEC_OUTPUT=$(ecs_exec_sql "${TARGET_REGION}" "${TASK_ARNS[${TARGET_REGION}]}" \
+        "${TARGET_RDS_EP}" "${TARGET_DB_NAME}" "${B64_TARGET_MASTER}" "${CREATE_SUB_SQL}") || {
+          log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${TARGET_REGION}\", \"step\": \"create_subscription\", \"reason\": \"ecs_exec_failed\", \"slotName\": \"${SLOT_NAME}\" }"
+          echo "ERROR: ECS Exec failed in ${TARGET_REGION} during subscription creation." >&2
+          exit 1
+        }
+      if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|^psql: error:"; then
+        log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${TARGET_REGION}\", \"step\": \"create_subscription\", \"reason\": \"psql_error\", \"slotName\": \"${SLOT_NAME}\" }"
+        echo "ERROR: psql error during subscription creation in ${TARGET_REGION}: ${EXEC_OUTPUT}" >&2
+        exit 1
+      fi
+
+      log_info "infra.replication.setup.subscription_created" "{ \"environment\": \"${ENVIRONMENT}\", \"targetRegion\": \"${TARGET_REGION}\", \"sourceRegion\": \"${SOURCE_REGION}\", \"slotName\": \"${SLOT_NAME}\" }"
+      echo "  Subscription ${SUB_NAME} created on ${TARGET_REGION}"
+    fi
   done
 done
 
