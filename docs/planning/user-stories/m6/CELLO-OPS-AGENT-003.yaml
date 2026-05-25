@@ -20,8 +20,8 @@ story: >
 behavior:
   - trigger: "When the TelegramAdapter is instantiated with a bot token"
     action: "it connects to the Telegram Bot API via long-polling
-      (getUpdates) and begins receiving messages; webhook mode is
-      supported but not required for M6"
+      (getUpdates) and begins receiving messages; logs
+      telegram.polling.started at INFO with { botUsername }"
 
   - trigger: "When an inbound message arrives from a Telegram user"
     action: "the adapter normalizes it to the MessagingChannel
@@ -48,34 +48,49 @@ behavior:
   - trigger: "When the Telegram Bot API returns an error"
     action: "the adapter logs telegram.api.error at WARN with
       { method, errorCode, description } and propagates the error
-      to the caller"
+      to the caller; the polling loop continues on the next cycle"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "A TelegramAdapter configured with a Telegram sandbox bot token"
-    when: "a test user sends /start to the bot"
+    given: "A TelegramAdapter configured with a Telegram sandbox bot token
+      (api.telegram.org/bot<token>/test)"
+    when: "a test user sends /start to the bot via the sandbox"
     then: "the onMessage callback fires with from = test user's ID and
-      message = '/start'; the state machine receives the normalized message"
+      message = '/start'; the adapter's internal HTTP client made a
+      getUpdates call to api.telegram.org that returned an update with
+      a Telegram-assigned update_id (integer > 0); telegram.message.received
+      is logged at DEBUG with { fromId, messageLength }"
     test_type: integration
     component_under_test: operations-agent
-    notes: "Uses Telegram test API at api.telegram.org/bot<token>/test"
+    notes: "Transport-level observable: the update_id in the getUpdates
+      response is a Telegram-assigned integer that cannot be synthesized
+      by a local stub."
 
   - id: AC-002
-    given: "The state machine has sent a request_contact keyboard"
-    when: "the test user taps the contact sharing button"
-    then: "a contact event is received; resolveIdentity() returns
-      channel = 'telegram', phoneNumber = the test user's phone,
-      channelUserId = test user's ID; contact.user_id == message.from.id
-      is verified server-side by Telegram"
+    given: "The state machine has sent a request_contact keyboard via
+      the Telegram sandbox"
+    when: "the test user taps the contact sharing button in the sandbox"
+    then: "a contact event is received via getUpdates containing a
+      'contact' field with user_id set by Telegram server-side;
+      resolveIdentity() returns channel = 'telegram',
+      phoneNumber = the test user's phone, channelUserId = test user's ID;
+      the contact event's update_id is a Telegram-assigned sequential
+      integer following the prior update; telegram.contact.verified is
+      logged at INFO with { fromId, correlationId }"
     test_type: integration
     component_under_test: operations-agent
+    notes: "Transport-level observable: contact.user_id is set server-side
+      by Telegram — a local stub cannot produce a valid contact event
+      with matching user_id unless it controls the Telegram API."
 
   - id: AC-003
     given: "The state machine calls send() with a text reply"
     when: "the Telegram Bot API processes the sendMessage call"
-    then: "the test user receives the message; the adapter resolves
-      the send() promise without error"
+    then: "the sendMessage HTTP POST returns a Telegram message_id
+      (integer > 0) in the response; the adapter resolves the send()
+      promise with the message_id; the test user receives the message
+      in the sandbox"
     test_type: integration
     component_under_test: operations-agent
 
@@ -85,69 +100,91 @@ acceptance_criteria:
     then: "phoneNumber is undefined in the returned ChannelIdentity;
       the state machine does not advance past AWAITING_CONTACT;
       telegram.contact.mismatch is logged at WARN with
-      { fromId, contactUserId }"
-    test_type: integration
+      { fromId, contactUserId, correlationId }"
+    test_type: unit
     component_under_test: operations-agent
+    notes: "Unit test: constructs a Telegram update object where
+      contact.user_id = 9999 and message.from.id = 1234. Verifies
+      the adapter returns phoneNumber = undefined."
 
   - id: AC-005
-    given: "The Telegram Bot API is unreachable (network error)"
+    given: "The Telegram Bot API is unreachable (mocked HTTP client
+      returns connection refused)"
     when: "send() is called"
     then: "the promise rejects with a descriptive error; the state
       machine does not transition; telegram.api.error is logged at
-      WARN with { method: 'sendMessage', errorCode, description };
-      the adapter remains connected and retries on the next poll cycle"
+      WARN with { method: 'sendMessage', errorCode: 'ECONNREFUSED',
+      description, correlationId }"
     test_type: unit
     component_under_test: operations-agent
 
   - id: AC-006
-    given: "The TelegramAdapter using the sandbox bot"
+    given: "The TelegramAdapter using the sandbox bot, connected to
+      real local PostgreSQL with M6 migrations applied"
     when: "a full registration flow is driven from /start through
-      phone verification to the email prompt"
+      phone verification to the email prompt via the Telegram sandbox"
     then: "the state machine advances from INITIAL → AWAITING_CONTACT
-      → PHONE_CONFIRMED → AWAITING_EMAIL using only the TelegramAdapter
-      (not CliAdapter); all messages are exchanged via the Telegram
-      sandbox API"
+      → PHONE_CONFIRMED → AWAITING_EMAIL; at least 2 sendMessage HTTP
+      calls were made to the sandbox endpoint (verified via adapter
+      instrumentation); at least 2 getUpdates responses contained
+      Telegram-assigned update_ids; the database row reflects
+      state = AWAITING_EMAIL with phone_stub_hash populated"
     test_type: integration
     component_under_test: operations-agent
-    notes: "This is the partial E2E flow for this story's boundary"
+    notes: "This is the partial E2E flow for this story's boundary.
+      Transport-level observables: sendMessage call count and
+      update_id presence confirm the real Telegram API was used."
 
   - id: AC-007-integration-gate
     given: "The Operations Agent running with TelegramAdapter against
-      the Telegram sandbox, real local PostgreSQL with all M6 migrations
-      applied"
+      the Telegram sandbox, real local PostgreSQL with V1–V23 pre-applied
+      then V24+ applied on top"
     when: "a registration is driven from /start through phone
       verification to AWAITING_EMAIL state via the sandbox bot"
-    then: "the state machine state is persisted in Postgres; Flyway
-      reports zero checksum errors on any migration V24 through V[N-1];
-      this AC is blocking — no downstream story may begin implementation
-      until this story's integration gate is verified and merged"
+    then: "the state machine state is persisted in Postgres;
+      the TelegramAdapter made real HTTP calls to api.telegram.org
+      (verified by adapter call count instrumentation returning >= 4
+      total HTTP calls: getUpdates + sendMessage pairs); Flyway
+      reports zero checksum errors on all migrations V1 through the
+      version claimed by this story; no downstream story may begin
+      implementation until this AC is verified and merged"
     test_type: integration
     component_under_test: operations-agent
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
-    statement: "Phone verification relies on Telegram's server-side
-      contact.user_id binding — not on the phone number string alone"
-    adversarial_condition: "even when an attacker sends a fabricated
-      contact event with a spoofed phone number, the contact.user_id
-      check fails because Telegram sets user_id server-side and the
-      attacker cannot forge it"
+    statement: "The adapter does not trust the phone number string in
+      a contact event unless contact.user_id equals message.from.id"
+    adversarial_condition: "a test constructs a contact update where
+      contact.user_id = 9999 and message.from.id = 1234 with a phone
+      number present; the adapter must return phoneNumber = undefined
+      and the state machine must not advance past AWAITING_CONTACT"
     test_type: unit
     component_under_test: operations-agent
+    notes: "This is the adapter-testable portion of the phone verification
+      invariant. Telegram's server-side guarantee that user_id is unforgeable
+      is a platform property we rely on but cannot independently test."
 
   - id: SI-002
     statement: "The bot token is never logged, included in error
       messages, or exposed in any observable event"
     adversarial_condition: "even when telegram.api.error events are
       shipped to CloudWatch, the bot token is not present in any
-      context field"
+      context field — verified by scanning all log calls in the adapter
+      for the token string pattern"
     test_type: unit
     component_under_test: operations-agent
 
 # ─── Observability ──────────────────────────────────────────
 observability:
   events:
+    - name: telegram.polling.started
+      level: info
+      trigger: "TelegramAdapter successfully begins getUpdates polling"
+      context_fields: [botUsername]
+      correlationId: false
+
     - name: telegram.message.received
       level: debug
       trigger: "Inbound message from Telegram user"
