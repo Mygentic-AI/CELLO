@@ -744,13 +744,23 @@ Resources:
                       echo '{"event":"pipeline.production.deploy.failed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","reason":"ecs update-service failed"}'
                       exit 1
                     }
-                  aws ecs wait services-stable \
-                    --cluster ${CLUSTER} \
-                    --services ${SERVICE} \
-                    --region ${DEPLOY_REGION} || {
-                      echo '{"event":"pipeline.production.deploy.failed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","reason":"ecs wait services-stable timed out after 10 minutes"}'
+                  WAIT_ATTEMPTS=0
+                  MAX_WAIT_ATTEMPTS=60
+                  while [ $WAIT_ATTEMPTS -lt $MAX_WAIT_ATTEMPTS ]; do
+                    DEPLOY_STATUS=$(aws ecs describe-services --cluster ${CLUSTER} --services ${SERVICE} --region ${DEPLOY_REGION} --query 'services[0].deployments[?status==`PRIMARY`].rolloutState' --output text)
+                    if [ "$DEPLOY_STATUS" = "COMPLETED" ]; then
+                      break
+                    elif [ "$DEPLOY_STATUS" = "FAILED" ]; then
+                      echo '{"event":"pipeline.production.deploy.failed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","reason":"ecs deployment rollout failed"}'
                       exit 1
-                    }
+                    fi
+                    WAIT_ATTEMPTS=$((WAIT_ATTEMPTS + 1))
+                    sleep 15
+                  done
+                  if [ $WAIT_ATTEMPTS -ge $MAX_WAIT_ATTEMPTS ]; then
+                    echo '{"event":"pipeline.production.deploy.failed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","reason":"ecs wait services-stable timed out after 15 minutes"}'
+                    exit 1
+                  fi
                   END_MS=$(date +%s%3N)
                   DURATION_MS=$((END_MS - START_MS))
                   echo '{"timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"pipeline.production.deployed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","imageDigest":"'${PROD_IMAGE_URI}'","durationMs":'${DURATION_MS}'}'
