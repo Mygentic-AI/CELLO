@@ -451,7 +451,7 @@ while true; do
       --cluster "${ECS_CLUSTER_NAME}" \
       --task "${TASK_ARNS[${SOURCE_REGION}]}" \
       --container "directory" \
-      --command "psql \${DATABASE_URL} -t -A -c \"${SLOT_QUERY}\"" \
+      --command "PGPASSWORD='${MASTER_PASSWORDS[${SOURCE_REGION}]}' psql -h ${RDS_ENDPOINTS[${SOURCE_REGION}]} -p 5432 -U postgres -d ${RDS_DB_NAMES[${SOURCE_REGION}]} -t -A -c \"${SLOT_QUERY}\"" \
       --interactive \
       2>/dev/null || echo "")
 
@@ -529,7 +529,7 @@ while true; do
         --cluster "${ECS_CLUSTER_NAME}" \
         --task "${TASK_ARNS[${SOURCE_REGION}]}" \
         --container "directory" \
-        --command "psql \${DATABASE_URL} -c \"SELECT application_name, state, sent_lsn, write_lsn, flush_lsn, replay_lsn FROM pg_stat_replication;\"" \
+        --command "PGPASSWORD='${MASTER_PASSWORDS[${SOURCE_REGION}]}' psql -h ${RDS_ENDPOINTS[${SOURCE_REGION}]} -p 5432 -U postgres -d ${RDS_DB_NAMES[${SOURCE_REGION}]} -c \"SELECT application_name, state, sent_lsn, write_lsn, flush_lsn, replay_lsn FROM pg_stat_replication;\"" \
         --interactive \
         2>/dev/null || echo "    (unable to query)"
     done
