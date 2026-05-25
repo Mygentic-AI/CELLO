@@ -512,7 +512,7 @@ while true; do
          [[ "${line}" == "("*")" ]]; then
         continue
       fi
-      SLOT_NAME_FROM_SLOTS=$(echo "${line}" | tr -d ' ')
+      SLOT_NAME_FROM_SLOTS=$(echo "${line}" | tr -d ' \r\n')
       if [[ -n "${SLOT_NAME_FROM_SLOTS}" && "${SLOT_NAME_FROM_SLOTS}" == cello_* ]]; then
         STREAMING_SLOTS+=("${SOURCE_REGION}:${SLOT_NAME_FROM_SLOTS}")
 
