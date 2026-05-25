@@ -200,6 +200,18 @@ security_invariants:
 # Derived from pre-implementation investigation and coordinator review.
 # See discussion log: 2026-05-25_1400_reposplit-001-investigation
 implementation_notes:
+  execution_order: >
+    REPOSPLIT-001 executes in two phases. Phase 1 (do immediately, parallel
+    with OPS-AGENT-000): cello-client repo scaffolding, GitHub Actions CI
+    pipeline, AUDIT-ME.md, SKILL.md, and the tsconfig prerequisite fix in
+    trustless-cello. Phase 2 (after all M6 client development is merged to
+    trustless-cello main): extract the five packages, move tests, verify,
+    publish. Do not begin Phase 2 until cello_register and all M6 adapter
+    changes are merged. Rationale: early extraction during active M6 client
+    development creates cross-repo version boundaries and pnpm link friction
+    that adds a new structural problem class during a high-density milestone.
+    See docs/planning/reposplit-timing-decision.md for the full analysis.
+
   prerequisite_first_commit: >
     Before any extraction work: fix packages/adapter-claude-code/tsconfig.json
     in trustless-cello. Remove { "path": "../relay" } and { "path": "../directory" }
