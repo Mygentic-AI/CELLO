@@ -195,8 +195,6 @@ references:
     - "2026-05-25_1100_m5-retrospective-lessons-learned"
   depends_on:
     - CELLO-OPS-AGENT-000
-    - CELLO-OPS-AGENT-003
-    - CELLO-OPS-AGENT-004
   blocks:
     - CELLO-OPS-AGENT-005B
   notes: "This story exists specifically to prevent the DEPLOY-003
