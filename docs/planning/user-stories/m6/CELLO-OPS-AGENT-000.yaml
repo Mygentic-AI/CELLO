@@ -72,7 +72,7 @@ schema_assessment:
         - "created_at TIMESTAMPTZ NOT NULL DEFAULT now()"
         - "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
         - "expires_at TIMESTAMPTZ NOT NULL"
-        - "chain_hash TEXT NOT NULL"
+        - "chain_hash TEXT NOT NULL — SHA-256(previous_chain_hash || id || state || updated_at); root is SHA-256(id); allows post-hoc verification that state history was not tampered with"
       uniqueness:
         - "UNIQUE (phone_stub_hash) WHERE state NOT IN ('EXPIRED', 'FAILED', 'PRE_AUTH_TOKEN_ISSUED')"
         - "Conflict scenario: operator restarts registration — old record must be in terminal state before new one is created"
@@ -80,12 +80,13 @@ schema_assessment:
         - "idx_registrations_phone_stub_hash ON registrations(phone_stub_hash)"
         - "idx_registrations_state_expires ON registrations(state, expires_at) WHERE state NOT IN ('EXPIRED', 'FAILED', 'PRE_AUTH_TOKEN_ISSUED')"
         - "idx_registrations_channel_user ON registrations(channel, channel_user_id)"
-      rls: "cello_service: INSERT, SELECT only; no DELETE or UPDATE"
+      rls: "cello_service: INSERT, SELECT, UPDATE; no DELETE"
       query_patterns:
         - "SELECT by phone_stub_hash WHERE state NOT IN terminal — resume flow"
         - "SELECT by channel + channel_user_id — match inbound message to record"
         - "SELECT WHERE state NOT IN terminal AND expires_at < now() — expiry cleanup"
         - "INSERT on new registration"
+        - "UPDATE SET state, state_data, updated_at, otp_hash, otp_salt, otp_expires_at, otp_attempt_count, email_domain WHERE id = $1 — state transitions; no DELETE ever"
 
     - name: pre_authorization_tokens
       purpose: "Stores issued pre-auth tokens awaiting agent presentation during FROST DKG"
@@ -98,7 +99,7 @@ schema_assessment:
         - "issued_at TIMESTAMPTZ NOT NULL DEFAULT now()"
         - "expires_at TIMESTAMPTZ NOT NULL"
         - "consumed_at TIMESTAMPTZ"
-        - "chain_hash TEXT NOT NULL"
+        - "chain_hash TEXT NOT NULL — SHA-256(previous_chain_hash || id || token || issued_at); root is SHA-256(id); same scheme as registrations table"
       uniqueness:
         - "UNIQUE (token) — ensures single-use via UPDATE ... WHERE consumed_at IS NULL returning rowCount"
         - "Conflict scenario: two agents present same token concurrently — only one UPDATE returns rowCount=1"
@@ -192,6 +193,19 @@ acceptance_criteria:
     test_type: unit
     component_under_test: interfaces
 
+  - id: AC-006b
+    given: "The chain_hash column definition and the TypeScript state machine code"
+    when: "a registration transitions through two states"
+    then: "chain_hash on the second UPDATE equals SHA-256(prior_chain_hash || id || new_state ||
+      new_updated_at); the root record's chain_hash equals SHA-256(id); the migration SQL includes
+      a trigger or application-layer note specifying the computation; an investigator can recompute
+      the hash from the database row values and confirm they match"
+    test_type: unit
+    component_under_test: operations-agent
+    notes: "chain_hash is tamper-evidence for registration records — not the full CELLO hash chain
+      protocol. Extends the append-only audit trail to state history. A manual UPDATE to the state
+      column breaks chain integrity, detectable by any verifier."
+
   - id: AC-007
     given: "The migration SQL files produced by this story"
     when: "applied to a local PostgreSQL instance that already has V1 through V23 applied"
@@ -249,12 +263,14 @@ security_invariants:
     component_under_test: interfaces
 
   - id: SI-002
-    statement: "Migration SQL must enforce RLS with append-only semantics —
-      cello_service has INSERT and SELECT only on registration tables;
-      no DELETE or UPDATE (except consumed_at on pre_authorization_tokens)"
+    statement: "Migration SQL must enforce RLS with no-DELETE semantics —
+      cello_service has INSERT, SELECT, and UPDATE on registration tables
+      but never DELETE; the state machine updates rows in-place as states
+      transition; the audit trail is preserved because rows are never removed"
     adversarial_condition: "even when the application has a SQL injection
-      vulnerability, the database role cannot modify or delete registration
-      records (only mark tokens consumed)"
+      vulnerability, the database role cannot delete registration or token
+      records; manual deletion by an attacker would be detectable via
+      chain_hash verification"
     test_type: integration
     component_under_test: directory
 
