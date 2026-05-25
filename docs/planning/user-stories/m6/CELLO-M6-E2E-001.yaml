@@ -1,0 +1,182 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M6-E2E-001
+domain: E2E
+milestone: M6
+actor: USER
+priority: P0
+components:
+  - client
+  - operations-agent
+  - demo-agent
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a stranger who read about CELLO on Reddit,
+  I want to install the client, register my agent via Telegram,
+  and exchange messages with the demo agent — all without cloning
+  a repo or running infrastructure,
+  so that I can verify CELLO works end-to-end in under 10 minutes.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a stranger runs 'claude mcp add cello npx @cello/connect'"
+    action: "the MCP server is installed and available; no errors;
+      no configuration required beyond the install command"
+
+  - trigger: "When the stranger messages the Telegram bot and
+      completes the registration ceremony"
+    action: "they receive a pre-authorization token; they set
+      CELLO_REGISTRATION_TOKEN in their environment; their agent
+      calls cello_register(token); FROST DKG completes; the agent
+      is registered on the network"
+
+  - trigger: "When the stranger's agent sends a message to the
+      demo agent's AgentID"
+    action: "the demo agent responds with the canned string;
+      the stranger's agent receives the response via cello_receive;
+      the conversation has a tamper-evident record verifiable via
+      cello_get_sealed_receipt"
+
+  - trigger: "When all of the above succeeds"
+    action: "@cello/connect is promoted from the 'beta' dist-tag
+      to 'latest' on npm"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A clean machine with Node.js installed and no prior
+      CELLO configuration"
+    when: "'npm install @cello/connect@beta' is run"
+    then: "the package installs without error; 'npx @cello/connect'
+      starts the MCP server and reports available tools"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-002
+    given: "The @cello/connect MCP server running on the clean machine"
+    when: "the user messages the production Telegram bot, completes
+      phone verification (contact sharing), provides email, enters
+      the OTP received via email"
+    then: "the bot delivers a pre-authorization token in the format
+      'CELLO-' followed by 32 base58 characters"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-003
+    given: "A pre-authorization token set as CELLO_REGISTRATION_TOKEN"
+    when: "the agent calls cello_register(token)"
+    then: "FROST DKG completes; the agent is registered; cello_status
+      returns { registered: true, agentId: '<hex>' }; the directory
+      confirms the agent exists"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-004
+    given: "A newly registered agent"
+    when: "the agent calls cello_request_connection with the demo
+      agent's AgentID"
+    then: "the connection request is accepted by the demo agent;
+      a session is established; both sides can send and receive"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-005
+    given: "An established session with the demo agent"
+    when: "the stranger's agent calls cello_send with a test message"
+    then: "cello_receive on the stranger's agent returns the demo
+      agent's canned response within 10 seconds"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-006
+    given: "A completed message exchange with the demo agent"
+    when: "cello_get_sealed_receipt is called"
+    then: "a tamper-evident receipt is returned containing: session_id,
+      message hashes, Merkle root, and directory-signed checkpoint
+      reference; the receipt is cryptographically verifiable"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-007
+    given: "The stranger registers a SECOND agent (same account,
+      different CELLO_REGISTRATION_TOKEN from a second bot flow)"
+    when: "agent-2 sends a message to agent-1"
+    then: "the message is received; two agents owned by the same
+      person can communicate — proving the self-contained demo
+      experience works without needing a third party"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-008
+    given: "AC-001 through AC-007 all pass"
+    when: "the E2E gate is satisfied"
+    then: "@cello/connect is promoted from 'beta' to 'latest' on npm;
+      'npm install @cello/connect' (without @beta) resolves to the
+      verified version; this is the Mitigation D final gate"
+    test_type: manual
+    component_under_test: client
+
+  - id: AC-009
+    given: "The pre-authorization token used in AC-003"
+    when: "a second cello_register attempt uses the same token"
+    then: "registration is rejected with PRE_AUTH_TOKEN_CONSUMED;
+      the token is single-use"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-010
+    given: "The full stranger flow timing"
+    when: "measured from 'npm install' to 'first message received
+      from demo agent'"
+    then: "the total time is under 10 minutes (excluding email OTP
+      wait time); the experience does not require reading docs beyond
+      the README quick-start section"
+    test_type: manual
+    component_under_test: client
+    notes: "This is a UX quality bar, not a hard pass/fail — but if
+      it takes 30 minutes, something is wrong with the DX"
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The stranger's K_local is generated inside their agent
+      process and never transmitted to any server"
+    adversarial_condition: "even when inspecting all network traffic
+      during registration and message exchange, K_local bytes do not
+      appear in any packet; only the FROST public key share is sent
+      to the directory during DKG"
+    test_type: integration
+    component_under_test: client
+
+  - id: SI-002
+    statement: "Messages between the stranger and the demo agent are
+      end-to-end encrypted — the relay carries only ciphertext"
+    adversarial_condition: "even when capturing all traffic at the relay
+      node, message plaintext is not recoverable without the session
+      keys negotiated via Noise protocol"
+    test_type: integration
+    component_under_test: transport
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events: []
+  error_events: []
+  alarms: []
+  notes: "M6-E2E-001 is a verification story, not a code story.
+    It exercises observability events defined in all upstream stories.
+    No new events are introduced."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M6
+  discussion_logs:
+    - "2026-05-25_0900_m6-beta-launch-planning"
+  depends_on:
+    - CELLO-REPOSPLIT-001
+    - CELLO-OPS-AGENT-005B
+    - CELLO-DEMO-001
+  blocks: []
+  notes: "This is the M6 milestone close gate. The milestone does not
+    close until this story passes. Promotion from @beta to latest is
+    the final action — it makes CELLO installable by anyone."
