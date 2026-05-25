@@ -1,0 +1,190 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-OPS-AGENT-003
+domain: OPS-AGENT
+milestone: M6
+actor: OPS
+priority: P0
+components:
+  - operations-agent
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Operations Agent,
+  I want a TelegramAdapter implementing the MessagingChannel interface
+  that handles Telegram Bot API interactions including phone verification
+  via contact.user_id,
+  so that the registration state machine can drive a real Telegram
+  conversation without knowing Telegram-specific details.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the TelegramAdapter is instantiated with a bot token"
+    action: "it connects to the Telegram Bot API via long-polling
+      (getUpdates) and begins receiving messages; webhook mode is
+      supported but not required for M6"
+
+  - trigger: "When an inbound message arrives from a Telegram user"
+    action: "the adapter normalizes it to the MessagingChannel
+      onMessage callback format: from = Telegram user ID (string),
+      message = message text"
+
+  - trigger: "When send() is called with a text message"
+    action: "the adapter calls sendMessage on the Telegram Bot API;
+      for the AWAITING_CONTACT state, it sends a ReplyKeyboardMarkup
+      with a request_contact button"
+
+  - trigger: "When a contact sharing event is received"
+    action: "resolveIdentity() returns a ChannelIdentity with
+      channel = 'telegram', phoneNumber = contact.phone_number
+      (if contact.user_id matches message.from.id), and
+      channelUserId = message.from.id as string"
+
+  - trigger: "When contact.user_id does not match message.from.id
+      (user shared someone else's contact)"
+    action: "resolveIdentity() returns a ChannelIdentity with
+      phoneNumber = undefined; the state machine treats this as
+      a failed verification and re-prompts"
+
+  - trigger: "When the Telegram Bot API returns an error"
+    action: "the adapter logs telegram.api.error at WARN with
+      { method, errorCode, description } and propagates the error
+      to the caller"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A TelegramAdapter configured with a Telegram sandbox bot token"
+    when: "a test user sends /start to the bot"
+    then: "the onMessage callback fires with from = test user's ID and
+      message = '/start'; the state machine receives the normalized message"
+    test_type: integration
+    component_under_test: operations-agent
+    notes: "Uses Telegram test API at api.telegram.org/bot<token>/test"
+
+  - id: AC-002
+    given: "The state machine has sent a request_contact keyboard"
+    when: "the test user taps the contact sharing button"
+    then: "a contact event is received; resolveIdentity() returns
+      channel = 'telegram', phoneNumber = the test user's phone,
+      channelUserId = test user's ID; contact.user_id == message.from.id
+      is verified server-side by Telegram"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-003
+    given: "The state machine calls send() with a text reply"
+    when: "the Telegram Bot API processes the sendMessage call"
+    then: "the test user receives the message; the adapter resolves
+      the send() promise without error"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-004
+    given: "A contact event where contact.user_id != message.from.id"
+    when: "resolveIdentity() is called"
+    then: "phoneNumber is undefined in the returned ChannelIdentity;
+      the state machine does not advance past AWAITING_CONTACT;
+      telegram.contact.mismatch is logged at WARN with
+      { fromId, contactUserId }"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-005
+    given: "The Telegram Bot API is unreachable (network error)"
+    when: "send() is called"
+    then: "the promise rejects with a descriptive error; the state
+      machine does not transition; telegram.api.error is logged at
+      WARN with { method: 'sendMessage', errorCode, description };
+      the adapter remains connected and retries on the next poll cycle"
+    test_type: unit
+    component_under_test: operations-agent
+
+  - id: AC-006
+    given: "The TelegramAdapter using the sandbox bot"
+    when: "a full registration flow is driven from /start through
+      phone verification to the email prompt"
+    then: "the state machine advances from INITIAL → AWAITING_CONTACT
+      → PHONE_CONFIRMED → AWAITING_EMAIL using only the TelegramAdapter
+      (not CliAdapter); all messages are exchanged via the Telegram
+      sandbox API"
+    test_type: integration
+    component_under_test: operations-agent
+    notes: "This is the partial E2E flow for this story's boundary"
+
+  - id: AC-007-integration-gate
+    given: "The Operations Agent running with TelegramAdapter against
+      the Telegram sandbox, real local PostgreSQL with all M6 migrations
+      applied"
+    when: "a registration is driven from /start through phone
+      verification to AWAITING_EMAIL state via the sandbox bot"
+    then: "the state machine state is persisted in Postgres; Flyway
+      reports zero checksum errors on any migration V24 through V[N-1];
+      this AC is blocking — no downstream story may begin implementation
+      until this story's integration gate is verified and merged"
+    test_type: integration
+    component_under_test: operations-agent
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "Phone verification relies on Telegram's server-side
+      contact.user_id binding — not on the phone number string alone"
+    adversarial_condition: "even when an attacker sends a fabricated
+      contact event with a spoofed phone number, the contact.user_id
+      check fails because Telegram sets user_id server-side and the
+      attacker cannot forge it"
+    test_type: unit
+    component_under_test: operations-agent
+
+  - id: SI-002
+    statement: "The bot token is never logged, included in error
+      messages, or exposed in any observable event"
+    adversarial_condition: "even when telegram.api.error events are
+      shipped to CloudWatch, the bot token is not present in any
+      context field"
+    test_type: unit
+    component_under_test: operations-agent
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: telegram.message.received
+      level: debug
+      trigger: "Inbound message from Telegram user"
+      context_fields: [fromId, messageLength, correlationId]
+      correlationId: true
+      notes: "Message content never logged — only length"
+
+    - name: telegram.contact.verified
+      level: info
+      trigger: "contact.user_id matches message.from.id"
+      context_fields: [fromId, correlationId]
+      correlationId: true
+
+  error_events:
+    - name: telegram.contact.mismatch
+      level: warn
+      trigger: "contact.user_id does not match message.from.id"
+      context_fields: [fromId, contactUserId, correlationId]
+
+    - name: telegram.api.error
+      level: warn
+      trigger: "Telegram Bot API returns an error response"
+      context_fields: [method, errorCode, description, correlationId]
+
+  alarms:
+    - condition: "telegram.api.error count > 50 per 5 minutes"
+      fires_to: ops-warning
+      notes: "Telegram API may be rate-limiting or experiencing outage"
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M6
+  discussion_logs:
+    - "2026-05-25_0900_m6-beta-launch-planning"
+  depends_on:
+    - CELLO-OPS-AGENT-000
+    - CELLO-OPS-AGENT-002
+  blocks:
+    - CELLO-OPS-AGENT-005B
+    - CELLO-M6-E2E-001
