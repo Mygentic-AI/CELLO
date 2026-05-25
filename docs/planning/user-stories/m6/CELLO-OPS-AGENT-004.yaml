@@ -21,14 +21,9 @@ behavior:
   - trigger: "When OtpDeliveryProvider.sendOtp() is called with an
       email address and a 6-digit OTP string"
     action: "the service sends an email via AWS SES to the given
-      address containing the OTP; the email is plain text with a
-      clear subject line ('Your CELLO verification code'); the OTP
-      is the only actionable content"
-
-  - trigger: "When sendOtp() is called for the same email address
-      for the 6th time within a rolling 1-hour window"
-    action: "the send is refused; sendOtp() throws a RateLimitError;
-      no SES API call is made; registration.otp.rate_limited is logged"
+      address containing the OTP; the email is plain text with
+      subject 'Your CELLO verification code'; the OTP is the only
+      actionable content"
 
   - trigger: "When SES returns a permanent failure (bounce, complaint)"
     action: "sendOtp() throws a DeliveryError with the SES error
@@ -46,32 +41,37 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "SES configured in eu-west-1 with production access and a
-      verified sender identity"
-    when: "sendOtp() is called with a valid email address"
-    then: "the recipient receives an email within 30 seconds containing
-      exactly the 6-digit OTP; the email subject is 'Your CELLO
-      verification code'; the from address is a verified CELLO domain"
+    given: "SES configured in eu-west-1 with a verified sender identity
+      and a verified sandbox recipient address"
+    when: "sendOtp() is called with the verified recipient address"
+    then: "SES returns a MessageId without error (delivery accepted);
+      the email subject is 'Your CELLO verification code'; the from
+      address is a verified CELLO domain identity; otp.delivery.sent
+      is logged at INFO with { emailDomain, messageId, correlationId }"
     test_type: integration
     component_under_test: operations-agent
-    notes: "Integration test uses SES sandbox (verified recipient only)"
+    notes: "Integration test uses SES sandbox (verified recipient only).
+      Inbox delivery time is not machine-verifiable — only SES acceptance."
 
   - id: AC-002
-    given: "sendOtp() has been called 5 times for user@example.com
-      within the last hour"
-    when: "a 6th call is made for the same address"
-    then: "RateLimitError is thrown; no SES API call is made; the
-      rate limit counter is per email address, not per registration;
-      registration.otp.rate_limited is logged at WARN"
-    test_type: integration
+    given: "The in-memory rate limit counter shows 5 sends for
+      user@example.com within the last hour"
+    when: "a 6th sendOtp() call is made for the same address"
+    then: "RateLimitError is thrown before any SES API call is made;
+      the rate limit counter is per email address, per process;
+      a process restart resets the counter (acceptable for 1-hour window)"
+    test_type: unit
     component_under_test: operations-agent
+    notes: "Rate limit state is in-memory per-process. No Postgres table.
+      The state machine (OPS-AGENT-002) checks the rate limit before
+      calling sendOtp() and owns the registration.otp.rate_limited event."
 
   - id: AC-003
     given: "The rate limit window has expired (>1 hour since first send)"
     when: "sendOtp() is called for the same email address"
     then: "the send succeeds; the rate limit counter has reset;
       the rolling window starts fresh"
-    test_type: integration
+    test_type: unit
     component_under_test: operations-agent
 
   - id: AC-004
@@ -87,7 +87,8 @@ acceptance_criteria:
     given: "SES returns a throttling error on the first attempt"
     when: "the service retries after 1 second"
     then: "if the retry succeeds, the OTP is delivered normally and
-      otp.delivery.retried is logged at INFO; if the retry also fails,
+      otp.delivery.retried is logged at INFO with { emailDomain,
+      retryDelayMs: 1000, correlationId }; if the retry also fails,
       DeliveryError is thrown"
     test_type: unit
     component_under_test: operations-agent
@@ -104,24 +105,29 @@ acceptance_criteria:
   - id: AC-007
     given: "The OTP generated is a 6-digit numeric string"
     when: "100 OTPs are generated"
-    then: "all are exactly 6 digits (000000–999999); generated via
-      crypto.randomInt(0, 1000000) — not Math.random(); leading zeros
-      are preserved (format: padStart(6, '0'))"
+    then: "all are exactly 6 digits (000000–999999); leading zeros
+      are preserved; the generator uses a CSPRNG (not Math.random()),
+      verified by SI-001"
     test_type: unit
     component_under_test: operations-agent
+    notes: "Implementation uses crypto.randomInt(0, 1000000) with
+      padStart(6, '0'). The AC verifies observable behavior (format);
+      SI-001 verifies the CSPRNG property."
 
   - id: AC-008-integration-gate
     given: "The Operations Agent running with real SES sandbox
-      credentials in eu-west-1 and real local PostgreSQL with all
-      M6 migrations applied"
+      credentials in eu-west-1 and real local PostgreSQL with
+      V1–V23 pre-applied then V24+ applied on top"
     when: "an OTP is sent to a verified sandbox recipient, the correct
-      OTP is submitted, an expired OTP is submitted, and a 6th send
-      within one hour is attempted"
-    then: "delivery succeeds; correct OTP advances state; expired OTP
-      is rejected; 6th send returns rate-limit error; Flyway reports
-      zero checksum errors on any migration V24 through V[N-1]; this
-      AC is blocking — no downstream story may begin implementation
-      until this story's integration gate is verified and merged"
+      OTP is submitted (via the state machine with CliAdapter), an
+      expired OTP is submitted, and a 6th send within one hour is
+      attempted"
+    then: "SES accepts delivery (MessageId returned); correct OTP
+      advances state; expired OTP is rejected; 6th send returns
+      rate-limit error from the state machine; Flyway reports zero
+      checksum errors on all migrations V1 through the version claimed
+      by this story; no downstream story may begin implementation
+      until this AC is verified and merged"
     test_type: integration
     component_under_test: operations-agent
 
@@ -130,8 +136,9 @@ security_invariants:
   - id: SI-001
     statement: "The OTP is generated using a cryptographically secure
       random number generator — not Math.random()"
-    adversarial_condition: "even when an attacker observes the timing
-      and frequency of OTP generation, they cannot predict future OTPs"
+    adversarial_condition: "even when an attacker has observed all prior
+      OTPs generated by the system, they cannot predict the next OTP with
+      better than 1-in-1,000,000 probability"
     test_type: unit
     component_under_test: operations-agent
 
@@ -139,19 +146,23 @@ security_invariants:
     statement: "The full email address is never logged — only the
       domain portion (emailDomain) appears in observable events"
     adversarial_condition: "even when CloudWatch logs are compromised,
-      no individual email address is recoverable from OTP service events"
+      no individual email address is recoverable from OTP service events;
+      verified by scanning all log calls for the full address string"
     test_type: unit
     component_under_test: operations-agent
 
   - id: SI-003
     statement: "SES credentials are loaded from Secrets Manager at
-      runtime — never hardcoded or present in environment variable
-      values visible in ECS task definitions"
-    adversarial_condition: "even when an attacker reads the ECS task
-      definition via the AWS API, they obtain only the secret ARN,
-      not the credential values"
+      runtime via the composition root — never hardcoded or present
+      in environment variable values"
+    adversarial_condition: "the composition root reads SES credentials
+      via SecretsManager client, not via process.env; verified by unit
+      test asserting the SES client is constructed with credentials
+      from the injected secret, not from environment"
     test_type: unit
     component_under_test: operations-agent
+    notes: "The ECS task definition structure (secret ARN vs env var value)
+      is verified in OPS-AGENT-005A as an IaC concern."
 
 # ─── Observability ──────────────────────────────────────────
 observability:
@@ -175,16 +186,15 @@ observability:
       context_fields: [emailDomain, sesErrorType, correlationId]
       correlationId: true
 
-    - name: registration.otp.rate_limited
-      level: warn
-      trigger: "6th send attempt within rolling 1-hour window"
-      context_fields: [emailDomain, sendCount, windowStartedAt, correlationId]
-      correlationId: true
-
   alarms:
     - condition: "otp.delivery.failed count > 5 per hour"
       fires_to: ops-warning
       notes: "SES deliverability issue or malformed email addresses"
+
+  notes: "registration.otp.rate_limited is owned by OPS-AGENT-002 (state
+    machine layer). The OTP delivery provider throws RateLimitError; the
+    state machine catches it and emits the event with registrationId context.
+    This story does not emit registration.otp.rate_limited directly."
 
 # ─── References ─────────────────────────────────────────────
 references:
@@ -198,4 +208,7 @@ references:
     - CELLO-OPS-AGENT-005B
     - CELLO-M6-E2E-001
   notes: "Hard dependency on SES eu-west-1 production access approval.
-    Submit request day one of M6 — bootstrap checklist item."
+    Submit request day one of M6 — bootstrap checklist item.
+    Rate limit counter is in-memory per-process — no Postgres table needed.
+    This was a deliberate decision to avoid adding a reactive migration
+    mid-milestone (Mitigation C compliance)."
