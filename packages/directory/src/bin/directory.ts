@@ -493,7 +493,14 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
     await mgr.loadManifest();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    // AC-002: manifest load failure in dev/staging/production is fatal
+    if (msg.includes("manifest not found")) {
+      // FEDERATION-E2E-001: secondary regions may not have a manifest yet.
+      // Fall back to CELLO_RELAY_MULTIADDR — the relay pool manager is non-operational.
+      logger.info("relay.manifest.not_found", { env, reason: "no manifest published yet, using CELLO_RELAY_MULTIADDR fallback" });
+      mgr.stop();
+      return undefined;
+    }
+    // Corrupt, invalid signature, or persistent network error is still fatal
     logger.error("relay.manifest.load.failed", { reason: msg, attempt: 5, env });
     process.exit(1);
   }
