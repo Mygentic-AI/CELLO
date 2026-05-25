@@ -351,29 +351,34 @@ for REGION in "${REGIONS[@]}"; do
   B64_MASTER=$(printf '%s' "${MASTER_PASS}" | base64 | tr -d '\n')
 
   # Create cello_replication user (SI-001: REPLICATION privilege only).
-  # RDS master user needs rds_replication role to grant REPLICATION attribute.
-  # Grant it first (idempotent), then CREATE USER. If user already exists, ALTER password.
-  GRANT_REPL_SQL="GRANT rds_replication TO postgres;"
-  _GRANT_OUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${GRANT_REPL_SQL}" 2>&1) || true
-
-  CREATE_USER_SQL="CREATE USER cello_replication WITH REPLICATION LOGIN PASSWORD '${REPL_PASS}';"
+  # In RDS, CREATE USER ... WITH REPLICATION is forbidden — even for rds_superuser.
+  # The RDS pattern: CREATE USER without REPLICATION, then GRANT rds_replication TO user.
+  CREATE_USER_SQL="CREATE USER cello_replication WITH LOGIN PASSWORD '${REPL_PASS}';"
   EXEC_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${CREATE_USER_SQL}" 2>&1)
   if echo "${EXEC_OUTPUT}" | grep -q "already exists"; then
-    # User exists — reset password to current Secrets Manager value
     ALTER_USER_SQL="ALTER USER cello_replication WITH PASSWORD '${REPL_PASS}';"
     EXEC_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${ALTER_USER_SQL}" 2>&1)
-    if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|psql:.* ERROR:"; then
+    if echo "${EXEC_OUTPUT}" | grep -qE "psql:.* ERROR:"; then
       log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"alter_user\", \"reason\": \"psql_error\" }"
       echo "ERROR: psql error during user password reset in ${REGION}: ${EXEC_OUTPUT}" >&2
       exit 1
     fi
     echo "  cello_replication user password synced on ${REGION}"
-  elif echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|psql:.* ERROR:"; then
+  elif echo "${EXEC_OUTPUT}" | grep -qE "psql:.* ERROR:"; then
     log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_user\", \"reason\": \"psql_error\" }"
     echo "ERROR: psql error during user creation in ${REGION}: ${EXEC_OUTPUT}" >&2
     exit 1
   else
     echo "  cello_replication user created on ${REGION}"
+  fi
+
+  # Grant rds_replication role — required for logical replication on RDS
+  GRANT_REPL_SQL="GRANT rds_replication TO cello_replication;"
+  EXEC_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${GRANT_REPL_SQL}" 2>&1)
+  if echo "${EXEC_OUTPUT}" | grep -qE "psql:.* ERROR:" && ! echo "${EXEC_OUTPUT}" | grep -q "already"; then
+    log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"grant_replication\", \"reason\": \"psql_error\" }"
+    echo "ERROR: psql error during rds_replication grant in ${REGION}: ${EXEC_OUTPUT}" >&2
+    exit 1
   fi
 
   # Create publication covering all append-only tables.
