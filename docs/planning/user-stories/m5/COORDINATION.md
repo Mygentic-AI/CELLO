@@ -622,3 +622,51 @@ Expand `runScenario()` switch branches in `packages/e2e-tests/src/smoke/run-smok
 **What this unblocks:**
 
 - **ACCOUNT-001** — V21 is now on `main`; the parked branch (V22/V23) can merge next per the migration sequence.
+
+---
+
+## 2026-05-25 06:00 UTC — FEDERATION-E2E-001 agent: in progress
+
+**Story status:** Active. This is the final M5 story — live multi-region deployment and smoke test.
+
+**What has been accomplished:**
+
+1. **Relay pipeline: COMPLETE.** All 5 stages succeeded (Source → Build → StagingDeploy → SmokeTest → ProductionDeploy). Real Docker images running in all 3 regions (us-east-1, eu-central-1, ap-northeast-1).
+
+2. **Directory pipeline: PARTIALLY COMPLETE.**
+   - us-east-1: ProductionDeploy **succeeded** — real image running.
+   - eu-central-1: ProductionDeploy **FAILED** — RDS `cello_service` password authentication failed. Root cause below.
+   - ap-northeast-1: Not yet attempted (blocked by eu-central-1 failure).
+
+3. **IaC fixes already landed on `main`:**
+   - `infra/cloudformation/cello-ecs-directory.yaml` — added `RELAY_MANIFEST_BUCKET` and `RELAY_MANIFEST_SIGNER_PUBKEY` env vars.
+   - `infra/cloudformation/cello-s3.yaml` — bucket policy grants GetObject to both relay AND directory task roles.
+   - `infra/cloudformation/cello-cicd.yaml` — ProductionDeploy buildspec rewrites ECR URI from us-east-1 to target region (uses ECR cross-region replication).
+   - `packages/directory/src/__tests__/deploy-001-iac-validation.test.ts` — updated to match new Sid.
+   - ECR cross-region replication configured: us-east-1 → eu-central-1 + ap-northeast-1 (prefix filter: `cello-`).
+   - SSM parameter `/cello/dev/directory/manifest-signer-pubkey` created in us-east-1.
+
+**Current blocker: RDS credentials in eu-central-1 (and ap-northeast-1)**
+
+The `cello_service` user password in Secrets Manager (`cello/dev/directory/rds-credentials`) does not match what's set on the RDS instance. The root cause chain:
+
+1. `cello-rotation.yaml` deploys the rotation Lambda with **inline placeholder code** (raises `NotImplementedError`). The real handler at `infra/lambda/rds-rotation/handler.py` is deployed separately by `infra/deploy-lambdas.sh`.
+2. `deploy-lambdas.sh` hardcodes `REGION="us-east-1"` — it was **never run** against eu-central-1 or ap-northeast-1.
+3. Even if the Lambda had real code, `rds-admin-credentials` in eu-central-1/ap-northeast-1 has a **placeholder password** (`PLACEHOLDER_POPULATE_VIA_CLI`) that doesn't match the RDS-managed master password.
+4. The rotation Lambda uses admin creds to `ALTER ROLE cello_service` — with a placeholder admin password, it cannot connect to RDS.
+
+**Planned IaC fix (awaiting user approval):**
+
+1. **`cello-rds.yaml`** — Export `MasterUserSecret.SecretArn` from the RDS stack so the rotation Lambda can reference the real managed master secret directly.
+2. **`cello-rotation.yaml`** — Change `ADMIN_SECRET_ID` env var from `cello/{env}/directory/rds-admin-credentials` to the RDS-managed master secret ARN (imported from cello-rds). Grant the Lambda IAM role `secretsmanager:GetSecretValue` on that managed secret. This eliminates the manually-populated `rds-admin-credentials` secret entirely.
+3. **`deploy-lambdas.sh`** — Accept a region parameter (or loop over all configured regions) so the rotation Lambda gets real code in every region.
+4. **After deploy:** Trigger rotation in eu-central-1 and ap-northeast-1 to create `cello_service` user and set password. The rotation Lambda's `setSecret` step already handles `CREATE ROLE IF NOT EXISTS` + `ALTER ROLE ... PASSWORD`.
+
+**Why this approach meets the region-expansion goal:** Deploying to a new region requires only running `deploy.sh` (creates RDS with managed master secret → creates rotation Lambda → Lambda references managed secret directly) + `deploy-lambdas.sh` (uploads real handler code) + trigger rotation (creates and configures `cello_service`). No manual credential syncing.
+
+**Remaining work after credentials are fixed:**
+- Retrigger directory pipeline → verify eu-central-1 and ap-northeast-1 ProductionDeploy succeed
+- Run `infra/setup-replication.sh dev us-east-1 eu-central-1 ap-northeast-1` for PostgreSQL logical replication
+- Live smoke test verification (all 3 regions)
+- Code review and sprint review
+- Milestone close gate
