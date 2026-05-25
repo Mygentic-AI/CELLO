@@ -94,7 +94,7 @@ These rules are extracted from the M5 retrospective (`docs/planning/discussion_l
 
 ### Migration Integrity
 
-1. **Never modify a migration file after it has been applied to any environment.** Extract changes to a new migration. A modified migration causes Flyway checksum mismatches that crash every container until manually resolved.
+1. **Thoroughly assess schema requirements before writing the migration.** The FEDERATION-002 incident wasn't caused by modifying V18 — it was caused by FEDERATION-001 shipping V18 incomplete. When FEDERATION-002 discovered the missing UNIQUE constraint, V18 was already applied and parallel stories had claimed V20/V21/V22. Extracting to V20 forced renumbering cascades. Rule: during the Architecture phase, validate the schema design against all stories that will use it. If a migration is incomplete, the cost isn't local — it's borne by every downstream story. Never modify an applied migration; but more importantly, get it right the first time.
 
 2. **Push to origin immediately after each merge.** Never batch multiple merges before pushing — this triggers all downstream pipelines simultaneously and defeats path-based CI filtering.
 

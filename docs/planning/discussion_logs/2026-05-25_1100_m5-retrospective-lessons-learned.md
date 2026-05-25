@@ -51,6 +51,23 @@ Flyway checksum mismatch (applied=1232519606, local=-599496115)
 
 Every new directory container crashed at startup from that point forward.
 
+### The Real Root Cause — Incomplete Schema Assessment
+
+The immediate cause was modifying V18 after it was applied. But the deeper cause was **FEDERATION-001 shipped V18 incomplete.**
+
+FEDERATION-001 created the `checkpoint_node_signatures` table without the `UNIQUE (checkpoint_id, node_id)` constraint. Only when FEDERATION-002 implemented the actual coordinator logic did the missing constraint surface. By then:
+- V18 was already applied to dev RDS
+- PERSIST-023 had claimed V20
+- ACCOUNT-001 had claimed V21/V22
+- All three stories were in parallel worktrees
+
+The fix required extracting the constraint to a new V20 migration, which forced:
+- PERSIST-023 renumbering V20→V21
+- ACCOUNT-001 renumbering V21/V22→V22/V23
+- Three-way rebase conflicts
+
+**The pattern:** FEDERATION-001 didn't fully assess what the federation schema needed before writing V18. The constraint should have been caught during FEDERATION-001's Architecture phase by reasoning through: "if three nodes are cross-signing, what prevents duplicate signatures?" The cost of an incomplete migration isn't local — it's borne by every parallel story that has to renumber.
+
 ### Why It Surfaced Inside DEPLOY-002/DEPLOY-003
 
 FEDERATION-002 was already closed and merged when the breakage appeared. It surfaced inside the deployment stories because those were the first stories to run real Flyway migrations against a running database. The originating story was done; the debugging happened in the wrong place.
@@ -70,7 +87,9 @@ The fix required:
 4. ACCOUNT-001 renumbering V21/V22→V22/V23
 5. Three-way rebase conflicts resolved across `hash-chain.ts`, `pg-directory-store.ts`, `schema-completeness.test.ts`, and `COORDINATION.md`
 
-**Rule reinforced:** Never modify a migration file after it has been applied to any environment. Ever. The migration file is append-only the moment Flyway records its checksum.
+**Rules extracted:**
+1. **Thoroughly assess schema requirements before writing the migration.** During the Architecture phase, reason through all use cases that will touch the table. "If three nodes are cross-signing, what prevents duplicate signatures?" should have been asked in FEDERATION-001, not discovered in FEDERATION-002.
+2. **Never modify a migration file after it has been applied.** The migration is append-only the moment Flyway records its checksum. But more importantly: get it right the first time, because the cost of incompleteness is borne by every parallel story.
 
 ---
 
@@ -199,7 +218,7 @@ The built-in wait commands are convenience wrappers, not production deployment t
 
 From the M5 retrospective, the following rules apply to all future milestones:
 
-1. **Never modify a migration file after it has been applied to any environment.** Extract changes to a new migration.
+1. **Thoroughly assess schema requirements before writing the migration.** Reason through all use cases during Architecture phase. The cost of an incomplete migration is borne by every parallel story. Never modify an applied migration; more importantly, get it right the first time.
 2. **Push to origin immediately after each merge.** Never batch merges before pushing — simultaneous pipeline triggers defeat path-based CI filtering.
 3. **Every parallel milestone gets a COORDINATION.md.** Format and read discipline are mandatory.
 4. **Milestone write-ups are incremental.** Each story appends a section when it closes.
