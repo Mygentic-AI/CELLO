@@ -24,7 +24,8 @@ behavior:
     action: "it loads configuration from environment variables and
       Secrets Manager, initializes the TelegramAdapter with the
       production bot token, connects to PostgreSQL for state machine
-      persistence, and begins long-polling the Telegram Bot API"
+      persistence, and begins long-polling the Telegram Bot API;
+      logs ops_agent.started at INFO once health check passes"
 
   - trigger: "When the container passes the health check"
     action: "it has successfully: connected to PostgreSQL, verified
@@ -40,7 +41,7 @@ behavior:
   - trigger: "When the ECS service is updated with a new image"
     action: "rolling deployment ensures the old task drains before
       the new task starts; in-flight registrations are recovered from
-      PostgreSQL on the new task's startup"
+      PostgreSQL on the new task's startup via registration.state.recovered"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -49,8 +50,9 @@ acceptance_criteria:
     when: "the real application Docker image is built and deployed
       via the pipeline"
     then: "the ECS service reaches STABLE with the real image; the
-      task is HEALTHY; health check confirms PostgreSQL connectivity,
-      migration version, and Telegram API reachability"
+      task is HEALTHY; the health check endpoint confirms PostgreSQL
+      connectivity, migration version match, and Telegram API reachability
+      (ops_agent.telegram.connected logged)"
     test_type: integration
     component_under_test: operations-agent
 
@@ -60,7 +62,8 @@ acceptance_criteria:
     when: "a real Telegram user sends /start to the bot"
     then: "the bot responds with a welcome message and a
       request_contact keyboard button; a RegistrationRecord is
-      created in PostgreSQL"
+      created in PostgreSQL with state = AWAITING_CONTACT;
+      registration.started is logged at INFO"
     test_type: integration
     component_under_test: operations-agent
 
@@ -68,9 +71,10 @@ acceptance_criteria:
     given: "The Operations Agent running in production"
     when: "a full registration flow is completed (phone + email verified)"
     then: "the directory's POST /internal/pre-authorize is called
-      successfully; a pre-authorization token is returned and delivered
-      to the user via Telegram; the token has the correct format
-      ('CELLO-' + 32 base58 chars)"
+      successfully via the real PreAuthorizationClient; a pre-authorization
+      token is returned and delivered to the user via Telegram;
+      the token has format 'CELLO-' + 33 base58 chars;
+      registration.completed is logged at INFO with { registrationId, tokenId }"
     test_type: integration
     component_under_test: operations-agent
 
@@ -78,31 +82,37 @@ acceptance_criteria:
     given: "A registration in AWAITING_EMAIL_OTP state"
     when: "the ECS task is killed (simulating deployment or crash)"
     then: "the new task recovers the in-flight registration from
-      PostgreSQL; the user can provide their OTP without restarting;
-      registration.state.recovered is logged on startup"
+      PostgreSQL; registration.state.recovered is logged at INFO with
+      { registrationId, state: 'AWAITING_EMAIL_OTP' }; exactly one
+      RegistrationRecord row exists; the user can provide their OTP
+      without restarting"
     test_type: integration
     component_under_test: operations-agent
 
   - id: AC-005
     given: "The Operations Agent's connection to the directory
-      internal API"
-    when: "the directory is unreachable (simulated by blocking the
-      security group rule temporarily)"
+      internal API (staging only — do not modify production security groups)"
+    when: "the directory endpoint returns connection refused (mocked
+      via temporary URL override in staging task environment)"
     then: "the state machine reaches EMAIL_CONFIRMED but fails to
       obtain a token; the user receives an error message asking them
       to try again later; registration.preauth.request.failed is
-      logged at ERROR with { registrationId, correlationId };
+      logged at ERROR with { registrationId, httpStatus, correlationId };
       the registration remains in EMAIL_CONFIRMED state (not lost)"
     test_type: integration
     component_under_test: operations-agent
+    notes: "Test in staging only. Use URL override, not security group
+      modification, to avoid operational risk."
 
   - id: AC-006
     given: "The Operations Agent Docker image"
     when: "the Dockerfile is inspected"
     then: "multi-stage build: Node 24-slim build stage → production
-      stage with only compiled dist/, node_modules (production only),
-      and Flyway CLI; runs as non-root user; EXPOSE 8080; no dev
-      dependencies in final image"
+      stage with only compiled dist/, node_modules (production only);
+      runs as non-root user cello; EXPOSE 8080; no dev dependencies
+      in final image; no import of @cello/crypto key generation or
+      FROST modules present in the bundle (verifiable via
+      pnpm why @cello/crypto in the production dependencies)"
     test_type: manual
     component_under_test: operations-agent
 
@@ -110,33 +120,51 @@ acceptance_criteria:
     given: "The Operations Agent pipeline (cello-operations-agent-pipeline)"
     when: "a push to packages/operations-agent/ is detected"
     then: "the pipeline builds the Docker image, pushes to ECR,
-      deploys to staging ECS, runs smoke test (health + Telegram
-      connectivity), and proceeds to production deploy on success"
+      deploys to staging ECS, runs smoke test (GET /health returns 200
+      AND getMe call to Telegram API succeeds), and proceeds to
+      production deploy on success"
     test_type: integration
     component_under_test: infrastructure
+
+  - id: AC-008-integration-gate
+    given: "The Operations Agent ECS service running the real application
+      image in staging, PostgreSQL connected, Telegram bot responding"
+    when: "a full registration ceremony is driven end-to-end:
+      /start → contact sharing → email → OTP → pre-auth token delivered"
+    then: "the complete ceremony succeeds; the pre-authorization token
+      is delivered via Telegram; the ECS service remains STABLE;
+      Flyway reports zero checksum errors on all M6 migrations
+      (V24 through the version claimed by this story) when applied on
+      top of a pre-populated V1–V23 database; M6-E2E-001 may not begin
+      until this AC is verified and merged"
+    test_type: integration
+    component_under_test: operations-agent
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
-    statement: "The Operations Agent never handles, generates, or
-      transmits cryptographic key material (K_local, FROST shares,
-      node private keys)"
-    adversarial_condition: "even when inspecting all code paths in
-      the Operations Agent, no import from @cello/crypto key generation
-      or FROST modules exists; the only crypto operations are OTP
-      hashing (SHA-256) and token format validation"
+    statement: "The Operations Agent bundle contains no CELLO key
+      generation or FROST participation code"
+    adversarial_condition: "even when an attacker achieves code execution
+      in the Operations Agent process, they cannot generate a FROST share
+      or sign as a directory node because those modules are not reachable
+      from the Operations Agent's dependency graph; verified by enumerating
+      all reachable imports and asserting @cello/crypto key generation and
+      FROST modules are absent"
     test_type: unit
     component_under_test: operations-agent
 
   - id: SI-002
     statement: "The directory API key used by the Operations Agent
-      grants access only to POST /internal/pre-authorize — not to
-      any other directory endpoint"
+      grants access only to POST /internal/pre-authorize; the
+      DirectoryClient wrapper only exposes requestToken() and no
+      other directory method"
     adversarial_condition: "even when the Operations Agent is compromised
       and the API key is extracted, the attacker cannot call registration,
-      session, or checkpoint endpoints on the directory"
-    test_type: integration
-    component_under_test: directory
+      session, or checkpoint endpoints; verified by unit test asserting
+      the DirectoryClient has exactly one public method"
+    test_type: unit
+    component_under_test: operations-agent
 
 # ─── Observability ──────────────────────────────────────────
 observability:
@@ -153,10 +181,19 @@ observability:
       context_fields: [botUsername]
       correlationId: false
 
+    - name: registration.state.recovered
+      level: info
+      trigger: "In-flight registration loaded from Postgres on restart"
+      context_fields: [registrationId, state]
+      correlationId: false
+      notes: "Inherited from OPS-AGENT-002. Emitted here on first real
+        ECS restart. No correlationId available at startup recovery time."
+
   error_events:
     - name: ops_agent.startup.failed
       level: error
-      trigger: "Container fails to start (missing secret, DB unreachable, migration mismatch)"
+      trigger: "Container fails to start (missing secret, DB unreachable,
+        migration mismatch)"
       context_fields: [reason, component]
       correlationId: false
 
@@ -192,4 +229,6 @@ references:
   notes: "This story should be executed by the same agent session that
     completed 005A — context continuity eliminates re-orientation cost.
     All application code was already written and tested in 001-004;
-    this story is purely about wiring it into the proven deployment."
+    this story is purely about wiring it into the proven deployment.
+    The directory must be deployed with OPS-AGENT-001's preAuthToken
+    field handling active before AC-003 can be exercised."
