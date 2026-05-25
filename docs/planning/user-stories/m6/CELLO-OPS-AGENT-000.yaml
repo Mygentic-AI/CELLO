@@ -26,8 +26,8 @@ behavior:
     action: "the following TypeScript interfaces exist in
       packages/interfaces/src/ with full type definitions:
       MessagingChannel, OtpDeliveryProvider, TokenValidator,
-      SecurityAlertProvider; each has a corresponding local
-      stub in packages/interfaces/src/stubs/"
+      PreAuthorizationClient, SecurityAlertProvider; each has a
+      corresponding local stub in packages/interfaces/src/stubs/"
 
   - trigger: "When OPS-AGENT-000 is merged to main"
     action: "the pre-authorization token schema is defined as
@@ -48,6 +48,75 @@ behavior:
       the registration state machine requires, with Flyway
       version numbers V24+ explicitly assigned; no downstream
       story may add a migration not designed here"
+
+# ─── Schema Assessment (Architecture Phase) ────────────────
+# This section documents the complete schema design reasoning
+# per the M5 retrospective rule: "thoroughly assess schema
+# requirements before writing the migration."
+schema_assessment:
+  tables:
+    - name: registrations
+      purpose: "Stores in-flight and completed registration state machine records"
+      columns:
+        - "id UUID PRIMARY KEY DEFAULT gen_random_uuid()"
+        - "phone_stub_hash TEXT NOT NULL"
+        - "channel TEXT NOT NULL CHECK (channel IN ('telegram', 'whatsapp', 'cli'))"
+        - "channel_user_id TEXT NOT NULL"
+        - "state TEXT NOT NULL"
+        - "state_data JSONB NOT NULL DEFAULT '{}'"
+        - "email_domain TEXT"
+        - "otp_hash TEXT"
+        - "otp_salt TEXT"
+        - "otp_expires_at TIMESTAMPTZ"
+        - "otp_attempt_count INTEGER NOT NULL DEFAULT 0"
+        - "created_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+        - "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+        - "expires_at TIMESTAMPTZ NOT NULL"
+        - "chain_hash TEXT NOT NULL"
+      uniqueness:
+        - "UNIQUE (phone_stub_hash) WHERE state NOT IN ('EXPIRED', 'FAILED', 'PRE_AUTH_TOKEN_ISSUED')"
+        - "Conflict scenario: operator restarts registration — old record must be in terminal state before new one is created"
+      indexes:
+        - "idx_registrations_phone_stub_hash ON registrations(phone_stub_hash)"
+        - "idx_registrations_state_expires ON registrations(state, expires_at) WHERE state NOT IN ('EXPIRED', 'FAILED', 'PRE_AUTH_TOKEN_ISSUED')"
+        - "idx_registrations_channel_user ON registrations(channel, channel_user_id)"
+      rls: "cello_service: INSERT, SELECT only; no DELETE or UPDATE"
+      query_patterns:
+        - "SELECT by phone_stub_hash WHERE state NOT IN terminal — resume flow"
+        - "SELECT by channel + channel_user_id — match inbound message to record"
+        - "SELECT WHERE state NOT IN terminal AND expires_at < now() — expiry cleanup"
+        - "INSERT on new registration"
+
+    - name: pre_authorization_tokens
+      purpose: "Stores issued pre-auth tokens awaiting agent presentation during FROST DKG"
+      columns:
+        - "id UUID PRIMARY KEY DEFAULT gen_random_uuid()"
+        - "token TEXT NOT NULL UNIQUE"
+        - "phone_stub_hash TEXT NOT NULL"
+        - "email_domain TEXT NOT NULL"
+        - "registration_id UUID NOT NULL REFERENCES registrations(id)"
+        - "issued_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+        - "expires_at TIMESTAMPTZ NOT NULL"
+        - "consumed_at TIMESTAMPTZ"
+        - "chain_hash TEXT NOT NULL"
+      uniqueness:
+        - "UNIQUE (token) — ensures single-use via UPDATE ... WHERE consumed_at IS NULL returning rowCount"
+        - "Conflict scenario: two agents present same token concurrently — only one UPDATE returns rowCount=1"
+      indexes:
+        - "idx_pre_auth_tokens_token ON pre_authorization_tokens(token)"
+        - "idx_pre_auth_tokens_expires ON pre_authorization_tokens(expires_at) WHERE consumed_at IS NULL"
+      rls: "cello_service: INSERT, SELECT, UPDATE (consumed_at only); no DELETE"
+      fk: "registration_id → registrations(id)"
+      query_patterns:
+        - "SELECT by token WHERE consumed_at IS NULL AND expires_at > now() — validate"
+        - "UPDATE SET consumed_at = now() WHERE token = $1 AND consumed_at IS NULL — atomic consume"
+        - "SELECT WHERE expires_at < now() AND consumed_at IS NULL — cleanup expired"
+
+  notes: >
+    OTP rate limiting is in-memory per-process (not Postgres-backed).
+    A process restart resets the rate limit counter — acceptable for
+    registration rate limiting where the window is 1 hour and restarts
+    are infrequent. No table required.
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -80,22 +149,34 @@ acceptance_criteria:
     test_type: unit
     component_under_test: interfaces
 
+  - id: AC-003b
+    given: "The packages/interfaces/src/ directory after merge"
+    when: "PreAuthorizationClient interface is imported"
+    then: "the interface exports requestToken(phoneStubHash: string, emailDomain: string):
+      Promise<{ token: string }>; a local stub LocalPreAuthorizationClient returns a
+      token in the format 'DEV-CELLO-' + 16 hex chars; the stub requires no network
+      connection or configuration"
+    test_type: unit
+    component_under_test: interfaces
+
   - id: AC-004
     given: "The packages/interfaces/src/ directory after merge"
     when: "SecurityAlertProvider interface is imported"
     then: "the interface exports sendAlert(accountId: string, alert: SecurityAlert): Promise<void>
-      where SecurityAlert is a discriminated union; a local stub ConsoleSecurityAlertProvider
-      logs to stdout"
+      where SecurityAlert is a discriminated union with at minimum variants
+      FALLBACK_CANARY and REGISTRATION_COMPLETE; a local stub
+      ConsoleSecurityAlertProvider logs to stdout"
     test_type: unit
     component_under_test: interfaces
 
   - id: AC-005
     given: "The pre-authorization token type definition"
     when: "imported by OPS-AGENT-001 or OPS-AGENT-002"
-    then: "PreAuthorizationToken type includes: token (string, format 'CELLO-' + 32 random
-      base58 chars), phoneStubHash (string), emailDomain (string), issuedAt (Date),
-      expiresAt (Date, 24h TTL), consumedAt (Date | null); PreAuthorizationTokenRow
-      includes the same plus id (UUID) for database storage"
+    then: "PreAuthorizationToken type includes: token (string, format 'CELLO-' + 33 random
+      base58 chars, yielding >= 193 bits of entropy), phoneStubHash (string),
+      emailDomain (string), issuedAt (Date), expiresAt (Date, 24h TTL),
+      consumedAt (Date | null); PreAuthorizationTokenRow includes the same plus
+      id (UUID) and registrationId (UUID) for database storage"
     test_type: unit
     component_under_test: interfaces
 
@@ -106,18 +187,19 @@ acceptance_criteria:
       INITIAL, AWAITING_CONTACT, PHONE_CONFIRMED, AWAITING_EMAIL, AWAITING_EMAIL_OTP,
       EMAIL_CONFIRMED, PRE_AUTH_TOKEN_ISSUED, EXPIRED, FAILED; each variant carries
       the fields relevant to that state (e.g. AWAITING_EMAIL_OTP carries otpHash,
-      otpExpiresAt, attemptCount); RegistrationRecord wraps the state with id, phoneStubHash,
-      channel, createdAt, updatedAt, expiresAt"
+      otpExpiresAt, attemptCount); RegistrationRecord wraps the state with id,
+      phoneStubHash, channel, channelUserId, createdAt, updatedAt, expiresAt"
     test_type: unit
     component_under_test: interfaces
 
   - id: AC-007
     given: "The migration SQL files produced by this story"
-    when: "applied to a fresh PostgreSQL instance via Flyway"
-    then: "all tables required by the registration state machine exist with correct
-      columns, constraints, RLS policies, and indexes; the version numbers are V24
-      and above; no version number conflicts with any existing migration in the
-      repository (V1 through V23)"
+    when: "applied to a local PostgreSQL instance that already has V1 through V23 applied"
+    then: "all tables specified in the schema_assessment section exist with correct
+      columns, constraints, RLS policies, and indexes verifiable via information_schema
+      and pg_indexes queries; the version numbers are V24 and above; no existing
+      migration file (V1 through V23) has been modified — Flyway reports zero
+      checksum errors on all prior migrations"
     test_type: integration
     component_under_test: directory
 
@@ -133,7 +215,7 @@ acceptance_criteria:
 
   - id: AC-009
     given: "All local stubs (CliAdapter, ConsoleOtpDeliveryProvider, DevTokenValidator,
-      ConsoleSecurityAlertProvider)"
+      LocalPreAuthorizationClient, ConsoleSecurityAlertProvider)"
     when: "a consumer instantiates each stub with no configuration"
     then: "each stub implements its interface with zero external dependencies; the
       composition root can wire all stubs for CELLO_ENV=local without any secrets,
@@ -145,20 +227,21 @@ acceptance_criteria:
     given: "All interface files, type definitions, stubs, and migration SQL files
       produced by this story"
     when: "pnpm run typecheck is run across the workspace AND the migration SQL
-      files are applied to a fresh local PostgreSQL instance"
-    then: "zero type errors across the workspace; Flyway applies all migrations
-      without error; no migration version number V24+ exists in any file outside
-      this story's changes; the COORDINATION.md migration registry is populated"
+      files are applied to a local PostgreSQL instance that already has V1–V23 applied"
+    then: "zero type errors across the workspace; Flyway reports zero checksum errors
+      on V1–V23; V24+ migrations apply cleanly on top; no migration version number
+      V24+ exists in any file outside this story's changes; the COORDINATION.md
+      migration registry is populated; no downstream OPS-AGENT story may begin
+      implementation until this AC is verified and the story is merged"
     test_type: integration
     component_under_test: directory
-    notes: "This is the Mitigation B integration gate AC. It must pass before
-      any downstream OPS-AGENT story begins implementation."
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
     statement: "The pre-authorization token format must be unguessable —
-      minimum 192 bits of entropy in the random portion"
+      minimum 192 bits of entropy in the random portion (33 base58 chars
+      yields ~193 bits)"
     adversarial_condition: "even when an attacker can observe token format
       and timing of issuance, brute-forcing a valid token within the 24h TTL
       must be computationally infeasible"
@@ -168,10 +251,10 @@ security_invariants:
   - id: SI-002
     statement: "Migration SQL must enforce RLS with append-only semantics —
       cello_service has INSERT and SELECT only on registration tables;
-      no DELETE or UPDATE"
+      no DELETE or UPDATE (except consumed_at on pre_authorization_tokens)"
     adversarial_condition: "even when the application has a SQL injection
       vulnerability, the database role cannot modify or delete registration
-      records"
+      records (only mark tokens consumed)"
     test_type: integration
     component_under_test: directory
 
