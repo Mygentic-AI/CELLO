@@ -33,7 +33,24 @@ behavior:
   - trigger: "When the Operations Agent security group is created"
     action: "outbound allows HTTPS (443) to 0.0.0.0/0 (Telegram API
       and SES endpoints); port 8080 to the directory service security
-      group (internal pre-authorize endpoint); no other egress"
+      group (internal pre-authorize endpoint); port 5432 to the RDS
+      security group (direct database access for registrations and
+      pre_authorization_tokens via cello_ops_agent role); no other egress"
+
+  - trigger: "When the Operations Agent ECS task is placed"
+    action: "it is placed in a public subnet with AssignPublicIp: ENABLED,
+      giving it a direct route to the public internet for Telegram Bot API
+      (api.telegram.org) and SES calls; no inbound security group rules
+      exist so the public IP creates no new attack surface; private subnets
+      have no NAT gateway by design (cello-vpc.yaml) so a public subnet
+      is required for external HTTP egress"
+
+  - trigger: "When the Operations Agent ECS service is deployed or updated"
+    action: "ECS uses DeploymentConfiguration MinimumHealthyPercent=0,
+      MaximumPercent=100, stopping the old task before starting the new
+      one — enforcing at-most-one active getUpdates poller per bot token
+      at all times; a 30-second gap during deploys is acceptable for a
+      registration bot"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -45,11 +62,16 @@ acceptance_criteria:
     then: "the Operations Agent stack reaches CREATE_COMPLETE; the ECS
       service has desiredCount=1 and runningCount=1; the task is HEALTHY;
       the stack consumes VPC/subnet exports from cello-vpc, the task role
-      from cello-iam, and the ECR repo URI from cello-ecr"
+      from cello-iam, and the ECR repo URI from cello-ecr; the ECS service
+      NetworkConfiguration.AwsvpcConfiguration uses a public subnet (one of
+      the existing ALB public subnets from cello-vpc) and AssignPublicIp: ENABLED;
+      DeploymentConfiguration has MinimumHealthyPercent=0 and MaximumPercent=100"
     test_type: integration
     component_under_test: infrastructure
     notes: "Step 9a position: after directory (which provides the internal
-      endpoint the Ops Agent calls) and before WAF/relay (no dependency)."
+      endpoint the Ops Agent calls) and before WAF/relay (no dependency).
+      Public subnet required for Telegram/SES egress — no NAT gateway exists
+      in cello-vpc by design."
 
   - id: AC-002
     given: "The existing shared stub image from infra/stub/"
@@ -69,23 +91,59 @@ acceptance_criteria:
     then: "all secret ARNs resolve without ResourceNotFoundException:
       cello/{env}/ops-agent/telegram-bot-token,
       cello/{env}/ops-agent/ses-credentials,
-      cello/{env}/ops-agent/directory-api-key;
+      cello/{env}/ops-agent/directory-api-key,
+      cello/{env}/ops-agent/rds-credentials (the cello_ops_agent database
+      role credential — INSERT/SELECT/UPDATE on registrations and
+      pre_authorization_tokens only, not the cello_service role);
       the task role IAM policy grants secretsmanager:GetSecretValue
-      on exactly these three ARNs (no wildcards)"
+      on exactly these four ARNs (no wildcards)"
     test_type: integration
     component_under_test: infrastructure
 
   - id: AC-004
     given: "bootstrap.sh"
     when: "run in a new region"
-    then: "bootstrap.sh provisions the three Operations Agent secrets
-      (telegram-bot-token, ses-credentials, directory-api-key) as
-      PLACEHOLDER values under the path convention
+    then: "bootstrap.sh provisions all four Operations Agent secrets
+      (telegram-bot-token, ses-credentials, directory-api-key,
+      rds-credentials) as PLACEHOLDER values under the path convention
       cello/{env}/ops-agent/{secret-name}; existing secret handling
       for directory/relay is unchanged; the put_secret_if_empty function
-      treats PLACEHOLDER_POPULATE_VIA_CLI as empty (existing fix)"
+      treats PLACEHOLDER_POPULATE_VIA_CLI as empty (existing fix);
+      the rds-credentials secret is populated by the same rotation Lambda
+      pattern used for cello_service (OPS-AGENT-000 schema_assessment
+      defines the cello_ops_agent role)"
     test_type: integration
     component_under_test: infrastructure
+
+  - id: AC-004b
+    given: "The ECS task running in a public subnet with AssignPublicIp: ENABLED"
+    when: "the stub container starts and the health check runs"
+    then: "the ECS task has a routable path to api.telegram.org — confirmed
+      by curl https://api.telegram.org (or equivalent) returning HTTP 200
+      from within the task; this is the internet egress smoke test that
+      validates the public subnet + public IP routing path before app code
+      is wired in OPS-AGENT-005B"
+    test_type: integration
+    component_under_test: infrastructure
+    notes: "Verify via ECS Exec: aws ecs execute-command --command 'curl -s
+      https://api.telegram.org' — must return a non-connection-error response.
+      Without this, OPS-AGENT-003 TelegramAdapter will fail silently at
+      the TCP layer."
+
+  - id: AC-004c
+    given: "The ECS service definition in cello-ecs-operations-agent.yaml"
+    when: "the DeploymentConfiguration is inspected"
+    then: "MinimumHealthyPercent=0 and MaximumPercent=100; the service
+      description returned by aws ecs describe-services confirms these values;
+      during a service update, ECS stops the running task before starting
+      the new one (verified by observing task count = 0 briefly in CloudWatch
+      metrics during a test deploy)"
+    test_type: integration
+    component_under_test: infrastructure
+    notes: "At-most-one constraint for Telegram long-polling. Two simultaneous
+      pollers on the same bot token cause undefined behavior (updates delivered
+      to one task at random, some dropped or duplicated). Standard ECS pattern
+      for single-instance workers."
 
   - id: AC-005
     given: "The Operations Agent security group"
@@ -93,24 +151,32 @@ acceptance_criteria:
     then: "outbound is restricted to: HTTPS (443) to 0.0.0.0/0
       (Telegram API and SES endpoints are distributed); port 8080 to
       the directory service security group (internal pre-authorize
-      endpoint); no other egress is permitted"
+      endpoint); port 5432 to the RDS security group (cello_ops_agent
+      database credential for registrations and pre_authorization_tokens);
+      no other egress is permitted; no inbound rules exist"
     test_type: integration
     component_under_test: infrastructure
     notes: "Telegram and SES IPs are not enumerable; HTTPS egress
-      to 0.0.0.0/0 is acceptable. Application code constrains usage."
+      to 0.0.0.0/0 is acceptable. Application code constrains usage.
+      Port 5432 egress uses the same RDS security group reference pattern
+      as cello-ecs-directory.yaml."
 
   - id: AC-006
     given: "The cello-ecs-operations-agent.yaml template and cello-iam.yaml"
     when: "reviewed for IAM permissions"
     then: "the Operations Agent task role (added to cello-iam.yaml following
       the existing pattern for directory/relay task roles) has ONLY:
-      secretsmanager:GetSecretValue on the three enumerated secret ARNs,
+      secretsmanager:GetSecretValue on the four enumerated secret ARNs
+      (telegram-bot-token, ses-credentials, directory-api-key, rds-credentials),
       logs:CreateLogStream + logs:PutLogEvents on the log group, and
-      ecs:ExecuteCommand for debugging; no S3, no KMS, no RDS"
+      ecs:ExecuteCommand for debugging; no S3, no KMS, no IAM,
+      no access to directory/relay secret ARNs"
     test_type: manual
     component_under_test: infrastructure
     notes: "Task role lives in cello-iam.yaml (centralized pattern).
-      Exported for cross-stack reference by cello-ecs-operations-agent.yaml."
+      Exported for cross-stack reference by cello-ecs-operations-agent.yaml.
+      The rds-credentials secret stores the cello_ops_agent PostgreSQL role
+      password — not the cello_service password."
 
   - id: AC-007
     given: "deploy.sh with the Operations Agent stack added"
@@ -167,12 +233,17 @@ security_invariants:
     component_under_test: infrastructure
 
   - id: SI-002
-    statement: "The Operations Agent has no direct database access —
-      it communicates with the directory only via the internal HTTP API"
-    adversarial_condition: "even if the container is compromised, the
-      attacker cannot connect to RDS because the security group has no
-      egress rule to port 5432, and no database credentials are available
-      to the task role"
+    statement: "The Operations Agent database role (cello_ops_agent) has
+      access ONLY to the registrations and pre_authorization_tokens tables —
+      no access to agent_profiles, sessions, conversation_chains,
+      checkpoints, or any key material table"
+    adversarial_condition: "even if the Operations Agent container is
+      compromised, the attacker's database credential (cello_ops_agent) cannot
+      read or write agent_profiles, sessions, or key material; cannot delete
+      any row (no-DELETE semantics enforced by RLS); cannot escalate to
+      cello_service permissions; verified by: SELECT 1 FROM agent_profiles
+      as cello_ops_agent — must return permission denied (AC-007b in
+      OPS-AGENT-000 is the authoritative test)"
     test_type: manual
     component_under_test: infrastructure
 

@@ -151,6 +151,29 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
+  - id: AC-009
+    given: "All existing tests that exercise FROST DKG Round 1 in the
+      monorepo (packages/e2e-tests, packages/client, packages/directory)"
+    when: "OPS-AGENT-001 is merged to main and the directory enforces
+      PRE_AUTH_TOKEN_MISSING rejection"
+    then: "every test that constructs a DKG Round 1 frame or calls
+      cello_register() is updated to include preAuthToken: 'DEV-test-token';
+      the session fixture (packages/e2e-tests/src/session-fixture.ts) is
+      updated to include preAuthToken in all DKG flows so tests that create
+      agents via FROST DKG inherit the fix automatically; the composition
+      root wires DevTokenValidator (from OPS-AGENT-000) when CELLO_ENV=local,
+      accepting any token prefixed with 'DEV-'; all 8 CI package pipelines
+      pass with zero test failures after this change lands on main"
+    test_type: integration
+    component_under_test: directory
+    notes: "Call sites to update: packages/client/src/network-directory-node.ts
+      (FrostDkgRound1Request construction), packages/directory/src/frost-dkg-frames.ts
+      (encoder), packages/e2e-tests/src/session-fixture.ts (fixture).
+      Any test that creates an agent via cello_register() is affected.
+      Failure to include this AC means the pipeline surprises 005B with
+      47 failing tests — the exact pattern the M5 retrospective identified
+      as the root cause of fix-loops."
+
   - id: AC-008-integration-gate
     given: "The directory running locally with all M6 migrations applied
       (V1–V23 pre-applied, then V24+ from OPS-AGENT-000 applied on top)"

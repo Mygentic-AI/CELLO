@@ -50,6 +50,14 @@ behavior:
       { method, errorCode, description } and propagates the error
       to the caller; the polling loop continues on the next cycle"
 
+  - trigger: "When the TelegramAdapter restarts after a process stop or
+      ECS task replacement"
+    action: "the adapter resumes getUpdates polling with offset =
+      last_processed_update_id + 1; updates that arrived during the
+      switchover window are processed exactly once; no update is
+      reprocessed because the offset is advanced immediately after
+      successful delivery to the onMessage callback"
+
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
@@ -135,6 +143,24 @@ acceptance_criteria:
       Transport-level observables: sendMessage call count and
       update_id presence confirm the real Telegram API was used."
 
+  - id: AC-006b
+    given: "A TelegramAdapter that has processed update_id=100, then is
+      stopped and restarted (simulating an ECS task replacement)"
+    when: "the restarted adapter makes its first getUpdates call"
+    then: "the call uses offset=101 (last_processed_update_id + 1);
+      Telegram does not re-deliver update 100; the adapter does not call
+      the onMessage callback with a duplicate message; this is verified
+      by: (1) recording the update_id from the first getUpdates response,
+      (2) stopping the adapter, (3) starting a new TelegramAdapter instance
+      with the persisted offset state, (4) confirming getUpdates is called
+      with the correct offset parameter"
+    test_type: unit
+    component_under_test: operations-agent
+    notes: "The offset state must survive in-process restart. In production
+      the at-most-one ECS deploy constraint (OPS-AGENT-005A AC-004c) means
+      only one adapter instance is ever active; this AC covers the offset
+      mechanics independently."
+
   - id: AC-007-integration-gate
     given: "The Operations Agent running with TelegramAdapter against
       the staging bot (@CelloConnectStagingBot), real local PostgreSQL
@@ -175,6 +201,21 @@ security_invariants:
       for the token string pattern"
     test_type: unit
     component_under_test: operations-agent
+
+  - id: SI-003
+    statement: "The TelegramAdapter must use an advancing getUpdates offset
+      to prevent duplicate processing of updates across restarts"
+    adversarial_condition: "even when the ECS task is replaced and a new
+      adapter instance starts with offset=0 (regression: offset not persisted),
+      in-flight updates that Telegram already delivered are not processed a
+      second time; verified by AC-006b — a restarted adapter with the correct
+      persisted offset never re-fires onMessage for an already-processed update_id"
+    test_type: unit
+    component_under_test: operations-agent
+    notes: "This is an at-most-once delivery invariant for inbound Telegram
+      messages. Critically paired with OPS-AGENT-005A AC-004c
+      (at-most-one ECS task): together they prevent both duplicate delivery
+      and message loss during deploys."
 
 # ─── Observability ──────────────────────────────────────────
 observability:
