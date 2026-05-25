@@ -53,9 +53,9 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "A TelegramAdapter configured with a Telegram sandbox bot token
-      (api.telegram.org/bot<token>/test)"
-    when: "a test user sends /start to the bot via the sandbox"
+    given: "A TelegramAdapter configured with the staging bot token
+      (@CelloConnectStagingBot, standard api.telegram.org endpoint)"
+    when: "a test user sends /start to the staging bot"
     then: "the onMessage callback fires with from = test user's ID and
       message = '/start'; the adapter's internal HTTP client made a
       getUpdates call to api.telegram.org that returned an update with
@@ -65,12 +65,12 @@ acceptance_criteria:
     component_under_test: operations-agent
     notes: "Transport-level observable: the update_id in the getUpdates
       response is a Telegram-assigned integer that cannot be synthesized
-      by a local stub."
+      by a local stub. Staging bot is isolated from production users."
 
   - id: AC-002
     given: "The state machine has sent a request_contact keyboard via
-      the Telegram sandbox"
-    when: "the test user taps the contact sharing button in the sandbox"
+      the staging bot"
+    when: "the test user taps the contact sharing button"
     then: "a contact event is received via getUpdates containing a
       'contact' field with user_id set by Telegram server-side;
       resolveIdentity() returns channel = 'telegram',
@@ -90,7 +90,7 @@ acceptance_criteria:
     then: "the sendMessage HTTP POST returns a Telegram message_id
       (integer > 0) in the response; the adapter resolves the send()
       promise with the message_id; the test user receives the message
-      in the sandbox"
+      via the staging bot"
     test_type: integration
     component_under_test: operations-agent
 
@@ -119,13 +119,13 @@ acceptance_criteria:
     component_under_test: operations-agent
 
   - id: AC-006
-    given: "The TelegramAdapter using the sandbox bot, connected to
-      real local PostgreSQL with M6 migrations applied"
+    given: "The TelegramAdapter using the staging bot (@CelloConnectStagingBot),
+      connected to real local PostgreSQL with M6 migrations applied"
     when: "a full registration flow is driven from /start through
-      phone verification to the email prompt via the Telegram sandbox"
+      phone verification to the email prompt via the staging bot"
     then: "the state machine advances from INITIAL → AWAITING_CONTACT
       → PHONE_CONFIRMED → AWAITING_EMAIL; at least 2 sendMessage HTTP
-      calls were made to the sandbox endpoint (verified via adapter
+      calls were made to api.telegram.org (verified via adapter
       instrumentation); at least 2 getUpdates responses contained
       Telegram-assigned update_ids; the database row reflects
       state = AWAITING_EMAIL with phone_stub_hash populated"
@@ -137,10 +137,10 @@ acceptance_criteria:
 
   - id: AC-007-integration-gate
     given: "The Operations Agent running with TelegramAdapter against
-      the Telegram sandbox, real local PostgreSQL with V1–V23 pre-applied
-      then V24+ applied on top"
+      the staging bot (@CelloConnectStagingBot), real local PostgreSQL
+      with V1–V23 pre-applied then V24+ applied on top"
     when: "a registration is driven from /start through phone
-      verification to AWAITING_EMAIL state via the sandbox bot"
+      verification to AWAITING_EMAIL state via the staging bot"
     then: "the state machine state is persisted in Postgres;
       the TelegramAdapter made real HTTP calls to api.telegram.org
       (verified by adapter call count instrumentation returning >= 4

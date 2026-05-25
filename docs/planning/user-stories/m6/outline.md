@@ -296,7 +296,7 @@ Publish as `@cello/connect@beta`, not `latest`. Promote to `latest` only as an e
 | SES DNS records (DKIM + MAIL FROM) | Done (2026-05-25) | 3 DKIM CNAMEs + MX/TXT for `mail.mygentic.ai` |
 | Production Telegram bot (BotFather) | Done (2026-05-25) | `@CelloConnectBot` — token in Secrets Manager `cello/ops-agent/telegram-bot-token` |
 | Staging Telegram bot (BotFather) | Done (2026-05-25) | `@CelloConnectStagingBot` — token in Secrets Manager `cello/ops-agent/telegram-bot-token-staging` |
-| Telegram sandbox bot (test API) | Pending | `api.telegram.org/bot<token>/test` |
+| Telegram sandbox bot (test API) | N/A | Staging bot (`@CelloConnectStagingBot`) satisfies all OPS-AGENT-003 integration ACs — separate sandbox not needed |
 | npm `@cello` scope configured | Pending | Required for REPOSPLIT-001 publish |
 
 ---
