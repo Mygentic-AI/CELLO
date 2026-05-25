@@ -140,6 +140,13 @@ for REGION in "${REGIONS[@]}"; do
     --region "${REGION}" \
     --query "Exports[?Name=='cello-${ENVIRONMENT}-rds-endpoint'].Value" \
     --output text 2>/dev/null)
+
+  if [[ -z "${RDS_EP}" || "${RDS_EP}" == "None" ]]; then
+    log_error "infra.replication.setup.rds_host_not_found" "{ \"region\": \"${REGION}\" }"
+    echo "ERROR: Cannot determine RDS hostname for ${REGION}. Check cello-rds-${ENVIRONMENT} stack exports." >&2
+    exit 1
+  fi
+
   RDS_ENDPOINTS["${REGION}"]="${RDS_EP}"
   RDS_DB_NAMES["${REGION}"]="cello_${ENVIRONMENT}"
 done
