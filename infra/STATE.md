@@ -22,8 +22,8 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-vpc-dev | UPDATE_COMPLETE | 2026-05-23 | Port 8080 for directory SG, port 80+443 for ALB SG |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-22 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-24 | Directory task role added to manifest bucket GetObject policy |
-| cello-rds-dev | CREATE_COMPLETE | 2026-05-22 | |
-| cello-rotation-dev | UPDATE_COMPLETE | 2026-05-23 | Lambda code fixed to preserve all secret fields on rotation |
+| cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
+| cello-rotation-dev | UPDATE_COMPLETE | 2026-05-25 | Now uses RDS-managed master secret (no manual admin creds) |
 | cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-25 | RELAY_MANIFEST env vars; real image in us-east-1; eu-central-1 blocked by RDS credential mismatch |
 | cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL: rate-limit 1000/5min, IP reputation (BLOCK), CommonRuleSet (COUNT); logs to aws-waf-logs-cello-dev (SECOPS-003) |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-25 | Real image deployed via pipeline (commit 1af5c16) to all 3 regions |
@@ -74,24 +74,26 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | WAF Log Group | aws-waf-logs-cello-dev (90-day retention) |
 
 ### dev — eu-central-1
-*Last deployed: 2026-05-23
+*Last deployed: 2026-05-25
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
 | cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-iam-dev | CREATE_COMPLETE | 2026-05-23 | Region-scoped role names (fix: FEDERATION-E2E-001) |
-| cello-secrets-dev | CREATE_COMPLETE | 2026-05-23 | Includes envelope-key placeholder (fix: FEDERATION-E2E-001) |
+| cello-iam-dev | CREATE_COMPLETE | 2026-05-23 | Region-scoped role names |
+| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-25 | |
 | cello-vpc-dev | CREATE_COMPLETE | 2026-05-23 | CIDR 10.1.0.0/16 |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-s3-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-rds-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-rotation-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-ecs-directory-dev | CREATE_COMPLETE | 2026-05-23 | Stub image running |
+| cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | Directory+relay task roles in manifest bucket policy |
+| cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
+| cello-rotation-dev | UPDATE_COMPLETE | 2026-05-25 | Now uses RDS-managed master secret (no manual admin creds) |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-25 | RELAY_MANIFEST env vars added |
 | cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL |
-| cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-23 | Stub image running |
+| cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-23 | Real image via pipeline (ECR replication) |
 | cello-cloudwatch-dev | CREATE_COMPLETE | 2026-05-23 | Alarms only — dashboard skipped (us-east-1 only) |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-cicd-dev | NOT DEPLOYED | — | CICD pipeline is us-east-1 only |
+| Lambda: cello-dev-rds-rotation | DEPLOYED (real code) | 2026-05-25 | Real handler + psycopg2-binary; uses RDS-managed master secret |
+| SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-25 | 167ca6...27b5 |
 
 #### Key Resources — dev eu-central-1
 
@@ -122,24 +124,26 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | SNS Topic — ops-warning | arn:aws:sns:eu-central-1:257394457473:cello-ops-warning-dev |
 
 ### dev — ap-northeast-1
-*Last deployed: 2026-05-23
+*Last deployed: 2026-05-25
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
 | cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-iam-dev | CREATE_COMPLETE | 2026-05-23 | Region-scoped role names |
-| cello-secrets-dev | CREATE_COMPLETE | 2026-05-23 | Includes envelope-key placeholder |
+| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-25 | |
 | cello-vpc-dev | CREATE_COMPLETE | 2026-05-23 | CIDR 10.2.0.0/16 |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-s3-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-rds-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-rotation-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-ecs-directory-dev | CREATE_COMPLETE | 2026-05-23 | Stub image running |
+| cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | Directory+relay task roles in manifest bucket policy |
+| cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
+| cello-rotation-dev | UPDATE_COMPLETE | 2026-05-25 | Now uses RDS-managed master secret (no manual admin creds) |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-25 | RELAY_MANIFEST env vars added |
 | cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL |
-| cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-23 | Stub image running |
+| cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-23 | Real image via pipeline (ECR replication) |
 | cello-cloudwatch-dev | CREATE_COMPLETE | 2026-05-23 | Alarms only — dashboard skipped (us-east-1 only) |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-cicd-dev | NOT DEPLOYED | — | CICD pipeline is us-east-1 only |
+| Lambda: cello-dev-rds-rotation | DEPLOYED (real code) | 2026-05-25 | Real handler + psycopg2-binary; uses RDS-managed master secret |
+| SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-25 | 167ca6...27b5 |
 
 #### Key Resources — dev ap-northeast-1
 
