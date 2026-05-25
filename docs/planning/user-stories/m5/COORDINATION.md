@@ -722,3 +722,51 @@ The `cello_service` user password in Secrets Manager (`cello/dev/directory/rds-c
 - Live smoke test verification (all 3 regions)
 - Code review and sprint review
 - Milestone close gate
+
+---
+
+## 2026-05-25 17:00 UTC — FEDERATION-E2E-001: Replication FULLY WORKING + Smoke Test PASSED
+
+**PostgreSQL logical replication is live and verified across all 3 regions.**
+
+### What was accomplished:
+
+1. **Replication setup script fixed** — `setup-replication.sh` now fully works end-to-end. Three critical issues found and fixed:
+   - `origin = none` required on CREATE SUBSCRIPTION (prevents circular replication crash loops)
+   - `GRANT SELECT` on publication tables to `cello_replication` (WAL sender requires read access)
+   - VPC peering DNS resolution (`AllowDnsResolutionFromRemoteVpc=true`) must be enabled (RDS resolves peer hostnames to public IPs without it)
+
+2. **Staggered sequences configured** — all BIGSERIAL sequences on publication tables set to INCREMENT BY 3 with region-specific offsets (us-east-1: 1/4/7, eu-central-1: 2/5/8, ap-northeast-1: 3/6/9). Prevents PK collisions in multi-master writes.
+
+3. **Live smoke test PASSED** — inserted uniquely-identifiable rows from each of the 3 regions and verified all rows appeared in all 3 regions within 5 seconds:
+
+| Origin Region | ID | us-east-1 | eu-central-1 | ap-northeast-1 |
+|---|---|---|---|---|
+| us-east-1 | 7 | (local) | replicated | replicated |
+| eu-central-1 | 8 | replicated | (local) | replicated |
+| ap-northeast-1 | 9 | replicated | replicated | (local) |
+
+### All 6 replication slots confirmed active and streaming:
+
+| Source | Slot | Target | State |
+|---|---|---|---|
+| us-east-1 | cello_dev_us_east_1_eu_central_1 | eu-central-1 | active |
+| us-east-1 | cello_dev_us_east_1_ap_northeast_1 | ap-northeast-1 | active |
+| eu-central-1 | cello_dev_eu_central_1_us_east_1 | us-east-1 | active |
+| eu-central-1 | cello_dev_eu_central_1_ap_northeast_1 | ap-northeast-1 | active |
+| ap-northeast-1 | cello_dev_ap_northeast_1_us_east_1 | us-east-1 | active |
+| ap-northeast-1 | cello_dev_ap_northeast_1_eu_central_1 | eu-central-1 | active |
+
+### Infrastructure changes made (all IaC-documented):
+
+- VPC peering: `AllowDnsResolutionFromRemoteVpc=true` on all 6 peering sides (3 connections × requester+accepter)
+- Secrets Manager: `cello/dev/directory/rds-replication-credentials` in all 3 regions
+- RDS: `cello_replication` user with `rds_replication` grant + SELECT on all publication tables
+- STATE.md updated with full replication section
+
+### Remaining for M5 close:
+
+- Code review of `setup-replication.sh`
+- Sprint review of FEDERATION-E2E-001
+- Update milestone write-up
+- Milestone close gate (smoke test already passed)

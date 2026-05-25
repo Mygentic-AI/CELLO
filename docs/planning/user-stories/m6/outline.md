@@ -197,7 +197,7 @@ Responds to CELLO messages with a fixed string: "CELLO message received. Your co
 - Locked-down EC2, no egress except CELLO MCP tools
 - `@cello/connect` installed, registered on the network
 - Near-zero attack surface
-- Fully independent from the OPS-AGENT chain — depends only on REPOSPLIT-001
+- Fully independent from the OPS-AGENT chain — depends only on REPOSPLIT-002
 
 IronClaw and Hermes are extensible multi-channel agents with attack surface. A demo agent that echoes a canned response has near-zero attack surface by construction.
 
@@ -208,7 +208,8 @@ IronClaw and Hermes are extensible multi-channel agents with attack surface. A d
 ### Domains and Stories
 
 **REPOSPLIT domain**
-- `REPOSPLIT-001`: Extract client packages to cello-client repo, wire CI pipeline, production endpoint baked in, `AUDIT-ME.md`, publish as `@cello/connect@beta`
+- `REPOSPLIT-001`: Scaffold cello-client repo — pnpm workspace, GitHub Actions CI pipeline, `AUDIT-ME.md`, `SKILL.md`, `README.md`, tsconfig prerequisite fix in trustless-cello. No package code moves. Starts immediately.
+- `REPOSPLIT-002`: Extract the five client packages, move 14 clean tests, apply package rename, files allowlist, production directory endpoint. Publish as `@cello/connect@beta`. Begins after REPOSPLIT-001 merges AND all M6 client development is merged to trustless-cello main.
 
 **OPS-AGENT domain**
 - `OPS-AGENT-000`: Registration interface contracts — `MessagingChannel`, `OtpDeliveryProvider`, `TokenValidator`, `SecurityAlertProvider` interfaces; pre-authorization token schema; registration state machine states as TypeScript types; local stubs for all interfaces; **complete schema design** for all tables the state machine requires (migration version numbers V24+ reserved here)
@@ -228,20 +229,22 @@ IronClaw and Hermes are extensible multi-channel agents with attack surface. A d
 ### Dependency Graph
 
 ```
-OPS-AGENT-000 → OPS-AGENT-001 ───────────────────────────────────────────────┐
+REPOSPLIT-001 → REPOSPLIT-002 ───────────────────────────────────────────────┐
+OPS-AGENT-000 → OPS-AGENT-001 ───────────────────────────────────────────────┤
               → OPS-AGENT-002 → OPS-AGENT-003 ┐                               │
               →                 OPS-AGENT-004 ┘→ OPS-AGENT-005B ──────────── M6-E2E-001
               → OPS-AGENT-005A ────────────────────────────────→ OPS-AGENT-005B
-REPOSPLIT-001 → DEMO-001 (code) ─────────────────────────────────────────────↗
+REPOSPLIT-002 → DEMO-001 (code) ─────────────────────────────────────────────↗
               OPS-AGENT-005B → DEMO-001 (registration / AC-000) ─────────────↗
 ```
 
 **Parallel from day one:**
-- REPOSPLIT-001 structural work (CI, AUDIT-ME.md, README) — starts immediately, zero dependency on M5 close
+- REPOSPLIT-001 (scaffold) — starts immediately, zero dependency on M5 close or any other story
 - OPS-AGENT-000 — starts immediately, zero dependency on M5 close
 - OPS-AGENT-001, OPS-AGENT-002, and OPS-AGENT-005A — all parallel after OPS-AGENT-000 merges
 - OPS-AGENT-003 and OPS-AGENT-004 — parallel after OPS-AGENT-002 merges
-- DEMO-001 code (AC-001 through AC-007) — parallel with entire OPS-AGENT chain, depends only on REPOSPLIT-001
+- REPOSPLIT-002 — begins after REPOSPLIT-001 merges AND all M6 client changes merged to main
+- DEMO-001 code (AC-001 through AC-007) — parallel with entire OPS-AGENT chain, depends only on REPOSPLIT-002
 - DEMO-001 registration (AC-000) — requires OPS-AGENT-005B deployed (bot live in production)
 
 ---
@@ -282,7 +285,7 @@ story's integration gate AC is verified and the story is merged.
 
 OPS-AGENT-000 produces the complete schema design for all tables the registration state machine requires, with migration version numbers V24+ explicitly reserved. No reactive migrations added mid-milestone.
 
-### Mitigation D — Beta Publish Gate in REPOSPLIT-001 (resolves REPOSPLIT complexity risk)
+### Mitigation D — Beta Publish Gate in REPOSPLIT-002 (resolves REPOSPLIT complexity risk)
 
 Publish as `@cello/connect@beta`, not `latest`. Promote to `latest` only as an explicit AC in M6-E2E-001 after full stranger flow is verified.
 
@@ -296,8 +299,8 @@ Publish as `@cello/connect@beta`, not `latest`. Promote to `latest` only as an e
 | SES DNS records (DKIM + MAIL FROM) | Done (2026-05-25) | 3 DKIM CNAMEs + MX/TXT for `mail.mygentic.ai` |
 | Production Telegram bot (BotFather) | Done (2026-05-25) | `@CelloConnectBot` — token in Secrets Manager `cello/ops-agent/telegram-bot-token` |
 | Staging Telegram bot (BotFather) | Done (2026-05-25) | `@CelloConnectStagingBot` — token in Secrets Manager `cello/ops-agent/telegram-bot-token-staging` |
-| Telegram sandbox bot (test API) | Pending | `api.telegram.org/bot<token>/test` |
-| npm `@cello` scope configured | Pending | Required for REPOSPLIT-001 publish |
+| Telegram sandbox bot (test API) | N/A | Staging bot (`@CelloConnectStagingBot`) satisfies all OPS-AGENT-003 integration ACs — separate sandbox not needed |
+| npm `@cello` scope configured | Pending | Required for REPOSPLIT-002 publish |
 
 ---
 

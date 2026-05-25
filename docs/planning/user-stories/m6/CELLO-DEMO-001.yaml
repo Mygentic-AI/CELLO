@@ -208,12 +208,12 @@ references:
   discussion_logs:
     - "2026-05-25_0900_m6-beta-launch-planning"
   depends_on:
-    - CELLO-REPOSPLIT-001
+    - CELLO-REPOSPLIT-002
     - CELLO-OPS-AGENT-005B
   blocks:
     - CELLO-M6-E2E-001
   notes: "The demo agent code (AC-001 through AC-007) depends only on
-    REPOSPLIT-001 and can be implemented immediately. However, AC-000
+    REPOSPLIT-002 and can be implemented immediately. However, AC-000
     (registration of the demo agent identity) requires OPS-AGENT-005B
     to be deployed — the pre-auth token flow must be live before the
     demo agent can register. DEMO-001 cannot close until both the code

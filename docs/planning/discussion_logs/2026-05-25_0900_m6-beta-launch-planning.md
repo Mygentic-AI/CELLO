@@ -255,6 +255,10 @@ The Flyway check runs against an environment with prior migrations already appli
 - Implementation roadmap (`docs/planning/implementation-roadmap.md`) to be updated with revised milestone sequence M6–M15
 - M6 story YAMLs to be written: REPOSPLIT-001, OPS-AGENT-000 through 005B, DEMO-001, M6-E2E-001
 
+## Related Analysis
+
+- [[2026-05-25_1400_reposplit-001-investigation]] — full pre-implementation investigation for REPOSPLIT-001: test dependency problem, interfaces/test-fixtures placement decisions, cello-client repo state, CI pipeline design, AC-004 endpoint gaps, SI enforcement, post-split trustless-cello state, and prerequisites checklist
+
 ---
 
 ## Current Infrastructure State

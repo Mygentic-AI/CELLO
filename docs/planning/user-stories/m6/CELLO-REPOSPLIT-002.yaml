@@ -1,0 +1,228 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-REPOSPLIT-002
+domain: REPOSPLIT
+milestone: M6
+actor: CLIENT
+priority: P0
+components:
+  - client
+  - crypto
+  - transport
+  - protocol-types
+  - adapter-claude-code
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a CELLO user,
+  I want to install @cello/connect from npm and have my agent
+  connected to the live CELLO network without cloning a repo or
+  running infrastructure,
+  so that adoption requires a single command:
+  claude mcp add cello npx @cello/connect.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a user runs npm install @cello/connect"
+    action: "the package installs with all dependencies resolved;
+      no postinstall scripts; no native compilation required; the
+      production directory endpoint is baked in as a default;
+      relay assignment is dynamic and issued per-session by the
+      directory — no relay multiaddr is baked in"
+
+  - trigger: "When a user runs npx @cello/connect"
+    action: "the MCP server starts and exposes all CELLO tools
+      (cello_register, cello_send, cello_receive, etc.) over the
+      MCP stdio transport; no configuration required for connecting
+      to the live network"
+
+  - trigger: "When the package is inspected by an AI investigator
+      reading AUDIT-ME.md"
+    action: "each privacy claim in AUDIT-ME.md names specific files
+      at their actual paths in cello-client; the investigator can
+      verify every claim by reading the named files"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The cello-client repository after package extraction"
+    when: "pnpm run build is executed from a clean slate
+      (rm -rf dist/ in all packages first)"
+    then: "all five packages compile without error; TypeScript project
+      references are correctly wired; tsc --build succeeds with zero
+      cached outputs; no dependency on packages that stayed in
+      trustless-cello (directory, relay, e2e-tests) — verified by
+      pnpm why @cello/directory returning 'not found'"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-002
+    given: "The cello-client repository after package extraction"
+    when: "pnpm run test is executed at the root"
+    then: "all 14 moved unit tests pass; no test imports from
+      @cello/directory or @cello/relay; no test requires AWS
+      credentials or a running database;
+      --pool-options.threads.maxThreads=1 is set"
+    test_type: integration
+    component_under_test: client
+    notes: "The 12 integration tests that instantiate real in-process
+      directory and relay nodes remain in trustless-cello — they are
+      not moved. This AC covers only the 14 clean tests."
+
+  - id: AC-003
+    given: "The adapter-claude-code package after extraction"
+    when: "the production endpoint configuration is inspected"
+    then: "CELLO_DIRECTORY_URL defaults to the production directory
+      ALB endpoint from STATE.md; this is the only compile-time
+      baked-in endpoint; CELLO_DIRECTORY_URL is overridable by
+      environment variable; no CELLO_RELAY_MULTIADDR constant exists
+      — relay multiaddr is dynamically assigned per-session"
+    test_type: unit
+    component_under_test: adapter-claude-code
+    notes: "Requires M5 STATE.md finalized and production directory
+      endpoint known. This is the last AC to be implemented — all
+      structural work proceeds without it."
+
+  - id: AC-004
+    given: "The adapter-claude-code package.json after extraction"
+    when: "npm pack --dry-run is run"
+    then: "the tarball manifest contains no files from directory,
+      relay, infra/, or any .env file; SKILL.md is present in the
+      tarball; the files allowlist is ['dist/', 'package.json',
+      'SKILL.md']; both CI checks pass:
+      (1) grep -E 'directory|relay|infra|.env' returns exit code 1;
+      (2) grep 'SKILL.md' returns exit code 0"
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-005
+    given: "A diff between extracted packages and trustless-cello
+      source at the same HEAD commit"
+    when: "the diff is inspected"
+    then: "only structural changes exist: import paths, package.json
+      names, tsconfig references; zero behavioral code changes; the
+      trustless-cello integration test suite runs without regressions
+      when pointed at the extracted code via pnpm link"
+    test_type: manual
+    component_under_test: client
+
+  - id: AC-006
+    given: "AUDIT-ME.md in cello-client"
+    when: "final verification after extraction"
+    then: "every file path named in AUDIT-ME.md exists at the stated
+      path in cello-client; each Verify: subsection names 2-4 files
+      that exist and contain the described code"
+    test_type: manual
+    component_under_test: client
+    notes: "AUDIT-ME.md was written in REPOSPLIT-001 and updated
+      throughout M6. This AC is a final path-existence check, not
+      a rewrite."
+
+  - id: AC-007
+    given: "@cello/connect@beta published on npm"
+    when: "npm install @cello/connect@beta is run in a fresh directory"
+    then: "the package installs successfully; npx @cello/connect starts
+      the MCP server; cello_status returns directory_reachable: true
+      and a valid own_pubkey; the package is published under the @cello
+      scope with the 'beta' dist-tag (not 'latest')"
+    test_type: manual
+    component_under_test: adapter-claude-code
+    notes: "Mitigation D: beta tag only. Promoted to latest in
+      M6-E2E-001 after the full stranger flow passes. The
+      directory_reachable: true check is the smoke test — it confirms
+      the baked-in production endpoint is correct and the published
+      package functions against the live network."
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The published package must not contain any server-side
+      code, IaC templates, deployment scripts, or AWS credentials"
+    adversarial_condition: "npm pack --dry-run output scanned for
+      forbidden paths (directory, relay, infra, .env) returns zero
+      matches; package.json#files allowlist is the enforcement mechanism"
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: SI-002
+    statement: "The published package must not contain test fixtures
+      that embed real keys, tokens, or secret material"
+    adversarial_condition: "no file in the tarball contains
+      '-----BEGIN PRIVATE KEY-----' or any FROST share JSON structure
+      matching { share: { index:, value: } }; the files allowlist
+      excludes all src/ content"
+    test_type: integration
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events: []
+  error_events: []
+  alarms: []
+  notes: "REPOSPLIT-002 is a packaging and publishing story — no new
+    runtime observability. Client-side events are defined in M0-M4
+    stories."
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes:
+  timing: >
+    Do not begin REPOSPLIT-002 until cello_register and all M6 adapter
+    changes are merged to trustless-cello main. Extracting a moving
+    target creates cross-repo version boundary friction. The extraction
+    is a one-time operation on a stable snapshot.
+
+  test_disposition: >
+    14 clean tests move to cello-client. 12 integration tests stay in
+    trustless-cello. Tests that move: client.test.ts, index.test.ts,
+    mcp-003-unit.test.ts, mcp002.test.ts, persist-009.test.ts,
+    persist-010.test.ts, persist-011.test.ts, persist-012.test.ts,
+    persist-014-reconciliation.test.ts, persist-015-unilateral-seal.test.ts,
+    persist-022.test.ts, session003.test.ts, session007.test.ts,
+    connection-policy.test.ts (moves with @cello/test-fixtures).
+    From adapter-claude-code: adapter-001.test.ts, adapter-002.test.ts,
+    index.test.ts, persist-017-checkpoint-status.test.ts.
+
+  test_fixtures: >
+    @cello/test-fixtures moves to cello-client as a private workspace
+    package. packages/protocol-types/src/__tests__/ in trustless-cello
+    uses @cello/test-fixtures — inline those usages directly into the
+    protocol-types test files after the move.
+
+  interfaces: >
+    @cello/interfaces stays in trustless-cello. cello-client consumes
+    it as a pinned npm dependency. Remove "private": true from
+    @cello/interfaces and add a files allowlist before this story begins.
+
+  package_rename: >
+    Rename "name" in adapter-claude-code/package.json from
+    @cello/adapter-claude-code to @cello/connect before extraction.
+    Do this in trustless-cello first so workspace consumers update
+    their references cleanly.
+
+  trustless_cello_post_split: >
+    After extraction: update trustless-cello/tsconfig.json to reference
+    only packages/directory, packages/relay, packages/e2e-tests.
+    Update directory and relay tsconfigs to drop relative references
+    to ../crypto, ../interfaces, ../protocol-types, ../transport —
+    those packages now resolve from npm.
+
+  cross_repo_dev: >
+    Document pnpm link workflow in cello-client README before closing.
+    Use pnpm link for developing across both repos simultaneously after
+    the split.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M6
+  discussion_logs:
+    - "2026-05-25_0900_m6-beta-launch-planning"
+    - "2026-05-25_1400_reposplit-001-investigation"
+    - "2026-05-25_1800_reposplit-timing-scaffold-early-extract-late"
+  depends_on:
+    - CELLO-REPOSPLIT-001
+  blocks:
+    - CELLO-DEMO-001
+    - CELLO-M6-E2E-001
+  notes: "Begins after REPOSPLIT-001 is merged AND all M6 client
+    development (cello_register, registration flow) is merged to
+    trustless-cello main. AC-003 (production endpoint) requires M5
+    STATE.md finalized — implement last."

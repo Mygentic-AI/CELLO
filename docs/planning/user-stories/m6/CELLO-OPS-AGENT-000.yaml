@@ -113,6 +113,30 @@ schema_assessment:
         - "UPDATE SET consumed_at = now() WHERE token = $1 AND consumed_at IS NULL — atomic consume"
         - "SELECT WHERE expires_at < now() AND consumed_at IS NULL — cleanup expired"
 
+  database_roles:
+    - name: cello_ops_agent
+      purpose: "Dedicated PostgreSQL role for the Operations Agent ECS task.
+        Scoped to registration tables only — the Operations Agent must never
+        have access to agent_profiles, sessions, conversation_chains,
+        checkpoints, or any key material table."
+      grants:
+        - "GRANT INSERT, SELECT, UPDATE ON registrations TO cello_ops_agent"
+        - "GRANT INSERT, SELECT, UPDATE ON pre_authorization_tokens TO cello_ops_agent"
+      explicit_denials:
+        - "No GRANT on agent_profiles, sessions, conversation_chains,
+          checkpoint_node_signatures, directory_checkpoints, or any other table"
+        - "No DELETE on any table — same no-DELETE semantics as cello_service"
+      rls_note: "RLS policies on registrations and pre_authorization_tokens
+        must explicitly list cello_ops_agent alongside cello_service as
+        permitted roles. The existing cello_service grants do not carry over."
+      migration_note: "CREATE ROLE cello_ops_agent WITH LOGIN must be in the
+        migration SQL. The password is set by the rotation Lambda using the
+        same pattern as cello_service. A new secret
+        cello/{env}/ops-agent/rds-credentials is provisioned in OPS-AGENT-005A."
+      verification: "After migration: attempt SELECT 1 FROM agent_profiles as
+        cello_ops_agent — must return permission denied. SELECT 1 FROM
+        registrations as cello_ops_agent — must succeed."
+
   notes: >
     OTP rate limiting is in-memory per-process (not Postgres-backed).
     A process restart resets the rate limit counter — acceptable for
@@ -217,6 +241,21 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
+  - id: AC-007b
+    given: "The migration SQL files after being applied to a local PostgreSQL instance"
+    when: "the cello_ops_agent role is exercised"
+    then: "SELECT 1 FROM registrations as cello_ops_agent succeeds;
+      SELECT 1 FROM pre_authorization_tokens as cello_ops_agent succeeds;
+      SELECT 1 FROM agent_profiles as cello_ops_agent returns permission denied;
+      SELECT 1 FROM sessions as cello_ops_agent returns permission denied;
+      DELETE FROM registrations WHERE false as cello_ops_agent returns
+      permission denied (no-DELETE enforced)"
+    test_type: integration
+    component_under_test: directory
+    notes: "This AC exists because the Operations Agent will have a real
+      database credential in production. The scope boundary must be
+      enforced at the database level, not just assumed from application code."
+
   - id: AC-008
     given: "The migration SQL files and the M6 COORDINATION.md"
     when: "OPS-AGENT-000 closes"
@@ -245,8 +284,9 @@ acceptance_criteria:
     then: "zero type errors across the workspace; Flyway reports zero checksum errors
       on V1–V23; V24+ migrations apply cleanly on top; no migration version number
       V24+ exists in any file outside this story's changes; the COORDINATION.md
-      migration registry is populated; no downstream OPS-AGENT story may begin
-      implementation until this AC is verified and the story is merged"
+      migration registry is populated; cello_ops_agent role exists with correct grants
+      (AC-007b passes); no downstream OPS-AGENT story may begin implementation until
+      this AC is verified and the story is merged"
     test_type: integration
     component_under_test: directory
 
@@ -263,14 +303,16 @@ security_invariants:
     component_under_test: interfaces
 
   - id: SI-002
-    statement: "Migration SQL must enforce RLS with no-DELETE semantics —
-      cello_service has INSERT, SELECT, and UPDATE on registration tables
-      but never DELETE; the state machine updates rows in-place as states
-      transition; the audit trail is preserved because rows are never removed"
-    adversarial_condition: "even when the application has a SQL injection
-      vulnerability, the database role cannot delete registration or token
-      records; manual deletion by an attacker would be detectable via
-      chain_hash verification"
+    statement: "Migration SQL must enforce RLS with no-DELETE semantics and
+      a scoped cello_ops_agent role. cello_ops_agent has INSERT, SELECT, and
+      UPDATE on registrations and pre_authorization_tokens only — no access
+      to agent_profiles, sessions, conversation_chains, checkpoints, or any
+      key material table. cello_service retains its existing grants."
+    adversarial_condition: "even if the Operations Agent container is
+      compromised, the attacker's database credential (cello_ops_agent) cannot
+      read or write agent_profiles, sessions, or key material; cannot delete
+      any row; cannot escalate to cello_service permissions. Verified by
+      AC-007b permission-denied assertions."
     test_type: integration
     component_under_test: directory
 

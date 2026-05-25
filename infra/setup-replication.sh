@@ -14,11 +14,17 @@
 #
 # What this script does:
 #   1. Validates that all 3 Directory ECS tasks are running before touching any DB
-#   2. For each node: creates the cello_replication user with REPLICATION privilege only
+#   2. For each node: creates the cello_replication user with REPLICATION privilege + SELECT
 #   3. For each node: creates publication cello_pub covering all append-only tables
-#   4. For each node: creates 2 subscriptions (one per peer node)
+#   4. For each node: creates 2 subscriptions (one per peer, origin=none to prevent loops)
 #   5. Polls pg_replication_slots until all 6 slots are active (60s timeout)
 #   6. Prints summary table and exits 0
+#
+# Prerequisites (not automated by this script):
+#   - VPC peering with DNS resolution enabled (AllowDnsResolutionFromRemoteVpc=true)
+#   - RDS security groups allow port 5432 from peer VPC CIDRs
+#   - RDS parameter group: rds.logical_replication=1, wal_level=logical (reboot required)
+#   - Staggered sequences (INCREMENT BY 3) must be set via a migration or post-setup step
 #
 # All operations are idempotent — safe to re-run. Existing objects are detected
 # via pre-flight queries and skipped.
@@ -381,6 +387,17 @@ for REGION in "${REGIONS[@]}"; do
     exit 1
   fi
 
+  # Grant SELECT on publication tables to cello_replication.
+  # Required: the WAL sender reads table data during initial sync and needs SELECT.
+  GRANT_SELECT_SQL="GRANT SELECT ON ${PUBLICATION_TABLES} TO cello_replication;"
+  EXEC_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${GRANT_SELECT_SQL}" 2>&1)
+  if echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|psql:.* ERROR:"; then
+    log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"grant_select\", \"reason\": \"psql_error\" }"
+    echo "ERROR: psql error during GRANT SELECT in ${REGION}: ${EXEC_OUTPUT}" >&2
+    exit 1
+  fi
+  echo "  GRANT SELECT on publication tables to cello_replication — done"
+
   # Create publication covering all append-only tables.
   # Idempotent: if publication exists, skip. If not, create.
   CREATE_PUB_SQL="CREATE PUBLICATION cello_pub FOR TABLE ${PUBLICATION_TABLES};"
@@ -438,7 +455,7 @@ for TARGET_REGION in "${REGIONS[@]}"; do
     B64_TARGET_MASTER=$(printf '%s' "${TARGET_MASTER_PASS}" | base64 | tr -d '\n')
 
     echo "  Creating subscription ${SUB_NAME} (slot: ${SLOT_NAME}) on ${TARGET_REGION}..."
-    CREATE_SUB_SQL="CREATE SUBSCRIPTION ${SUB_NAME} CONNECTION '${CONN_STRING}' PUBLICATION cello_pub WITH (slot_name = '${SLOT_NAME}', copy_data = false);"
+    CREATE_SUB_SQL="CREATE SUBSCRIPTION ${SUB_NAME} CONNECTION '${CONN_STRING}' PUBLICATION cello_pub WITH (slot_name = '${SLOT_NAME}', copy_data = false, origin = none);"
 
     EXEC_OUTPUT=$(ecs_exec_sql "${TARGET_REGION}" "${TASK_ARNS[${TARGET_REGION}]}" \
       "${TARGET_RDS_EP}" "${TARGET_DB_NAME}" "${B64_TARGET_MASTER}" "${CREATE_SUB_SQL}" 2>&1)
@@ -512,7 +529,7 @@ while true; do
          [[ "${line}" == "("*")" ]]; then
         continue
       fi
-      SLOT_NAME_FROM_SLOTS=$(echo "${line}" | tr -d ' ')
+      SLOT_NAME_FROM_SLOTS=$(echo "${line}" | tr -d ' \r\n')
       if [[ -n "${SLOT_NAME_FROM_SLOTS}" && "${SLOT_NAME_FROM_SLOTS}" == cello_* ]]; then
         STREAMING_SLOTS+=("${SOURCE_REGION}:${SLOT_NAME_FROM_SLOTS}")
 

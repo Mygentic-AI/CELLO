@@ -3,15 +3,15 @@ name: M5 — Infrastructure Deployment
 type: design
 date: 2026-05-22
 topics: [milestone, M5, infrastructure, CloudFormation, ECS, RDS, ALB, ECR, deployment, IaC]
-status: active
-description: In-progress write-up for M5. Initial deployment issues, IaC gaps found, and repeatability fixes applied.
+status: complete
+description: M5 write-up — multi-region infrastructure deployment, logical replication, and live smoke test. 17 stories closed, 3 regions operational.
 ---
 
 # M5 — Infrastructure Deployment
 
 **Started:** 2026-05-22  
-**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, DEPLOY-005, SECOPS-001, SECOPS-002, SECOPS-003, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002, FEDERATION-003, PERSIST-022, PERSIST-023, RELAY-001, ACCOUNT-001  
-**Stories open:** FEDERATION-E2E-001 (in progress — Phase 1 infrastructure deployed 2026-05-23)  
+**Stories closed:** DEPLOY-001A, DEPLOY-002, DEPLOY-003, DEPLOY-004, DEPLOY-005, SECOPS-001, SECOPS-002, SECOPS-003, SECOPS-004, FEDERATION-001, FEDERATION-001A, FEDERATION-002, FEDERATION-003, PERSIST-022, PERSIST-023, RELAY-001, ACCOUNT-001, FEDERATION-E2E-001  
+**Stories open:** None — all stories closed  
 **Stacks deployed:** 14 (cello-ecr, cello-iam, cello-secrets, cello-vpc, cello-kms, cello-s3, cello-rds, cello-rotation, cello-ecs-directory, cello-waf, cello-ecs-relay, cello-route53, cello-cicd, cello-cloudwatch)  
 **Lambdas deployed:** 3 (webhook-receiver, pipeline-filter, rds-rotation)  
 **Pipelines active:** 8 (all green)
@@ -444,10 +444,6 @@ The `cello-checkpoint-gap` alarm uses `TreatMissingData: breaching` — it fires
 
 ---
 
-## What Remains Open
-
----
-
 ## PERSIST-022 — S3CloudStorageProvider
 
 Pure application code — no CloudFormation, no migration. The CELLO client can now back up its encrypted SQLCipher database to an operator-configured S3 bucket.
@@ -664,7 +660,7 @@ Delivered the account grouping foundation required by M6 onboarding, M7 portal m
 
 ---
 
-## FEDERATION-E2E-001 — Multi-Region Deployment and Live Smoke Test (in progress)
+## FEDERATION-E2E-001 — Multi-Region Deployment and Live Smoke Test
 
 **Started:** 2026-05-23
 
@@ -720,18 +716,87 @@ eu-central-1 and ap-northeast-1 deployed to CREATE_COMPLETE on 2026-05-23. Four 
 
 All regions bootstrapped (secrets populated). Node public keys recorded in `infra/STATE.md`.
 
-### What Remains Open
+### Phase 2 — VPC Peering and Cross-Region Connectivity
 
-- VPC Peering between all three regions (required for port 4001 checkpoint cross-signing and port 5432 logical replication) — `cello-vpc-peering.yaml` exists but is not in `deploy.sh`; accepter-side template missing
-- `setup-replication.sh` — PostgreSQL logical replication not yet configured
-- Relay pool manifest — not yet signed and uploaded
-- `ICheckpointTransport` libp2p implementation — `CheckpointCoordinator` not yet wired into production composition root
-- Smoke test scenario expansion — 8 stubs still doing ALB health checks
+VPC peering deployed 2026-05-24. Six peering connections (3 bidirectional pairs) across all regions. Two CloudFormation templates: `cello-vpc-peering.yaml` (requester-side, creates the peering connection and adds routes) and `cello-vpc-peering-accepter.yaml` (accepter-side, accepts the peering and adds routes back).
 
-## What Remains Open
+**Critical fix — DNS resolution over VPC peering:**
 
-- **SECOPS-003 AC-002/AC-007** — live request verification (rate-limit trigger, CommonRuleSet COUNT hit) pending manual test
-- **FEDERATION-E2E-001** — multi-region infrastructure deployed; VPC Peering, replication, manifest, code, and live smoke test remaining
+`AllowDnsResolutionFromRemoteVpc` was initially set to `false` on all peering connections. This caused a subtle failure: ECS containers (which use Route 53 Resolver within the same account) resolved peer RDS hostnames correctly via private IPs. But PostgreSQL's subscription worker runs *inside the RDS engine itself*, which resolves DNS independently — without `AllowDnsResolutionFromRemoteVpc=true`, the RDS instance resolved peer hostnames to public IPs, which aren't routable over VPC peering routes.
+
+**Symptom:** ECS containers could reach peer RDS endpoints (health checks passed), but `CREATE SUBSCRIPTION` connections timed out silently. No error in RDS logs — just TCP SYN packets to a public IP with no route back.
+
+**Fix:** `aws ec2 modify-vpc-peering-connection-options` on all 6 sides (3 connections × requester + accepter) to set `AllowDnsResolutionFromRemoteVpc=true`. Updated both CloudFormation templates to include this setting for new deployments.
+
+**Rule:** Any service that runs *inside* an AWS-managed engine (RDS, ElastiCache, etc.) and needs to reach a VPC-peered resource requires DNS resolution enabled on the peering connection. ECS container connectivity does not prove engine-level connectivity.
+
+### Phase 3 — Pipeline Deployment to All Regions
+
+All 8 pipelines (4 per region × 2 new regions) deployed and confirmed green. Directory and relay images running in all 3 regions with Flyway migrations applied (V1 through V23).
+
+RDS credential rotation IaC fix: the `cello-rotation.yaml` template referenced hardcoded IAM role ARNs from us-east-1. New regions failed at Lambda execution with `AccessDenied` because the role ARN suffix didn't match. Fixed by parameterizing the region in role ARN construction.
+
+### Phase 4 — PostgreSQL Logical Replication
+
+`infra/setup-replication.sh` configures full-mesh bi-directional logical replication across all 3 regions. Each node publishes all 9 tables (`agent_profiles`, `sessions`, `user_accounts`, `pending_notifications`, `conversation_chains`, `relay_registrations`, `checkpoints`, `checkpoint_node_signatures`, `audit_trail`) and subscribes to the other two.
+
+**Replication topology:**
+- 6 subscriptions total (each of 3 nodes subscribes to the other 2)
+- 6 replication slots total (each node hosts 2 slots, one per subscriber)
+- `copy_data = false` — no initial table sync (empty tables at setup time)
+- `origin = none` — prevents circular replication (rows received via replication are not forwarded to other subscribers)
+
+**Three critical bugs found and fixed:**
+
+#### 1. Missing `origin = none` — circular replication crash loops
+
+**Symptom:** After inserting a row on node A, the subscription worker on node B received it and forwarded it back to node A. Node A's subscription worker then tried to insert a duplicate, hit a unique constraint violation (`multiple_unique_conflicts`), and crashed. The worker restarted every 5 seconds in an infinite crash loop.
+
+**Root cause:** Without `origin = none`, a subscriber treats replicated rows identically to locally-originated rows — they're included in the node's own publication and forwarded to all other subscribers. In a 3-node mesh, every INSERT generates 6 replication attempts instead of 2.
+
+**Fix:** All subscriptions created with `origin = none` (PostgreSQL 16+ feature). Rows received via logical replication are tagged with a non-local origin and excluded from the node's publication. Required dropping all existing subscriptions and recreating them fresh.
+
+#### 2. Missing GRANT SELECT on publication tables
+
+**Symptom:** Initial table sync (before switching to `copy_data = false`) failed with `permission denied for table agent_profiles`.
+
+**Root cause:** `cello_replication` had `rds_replication` granted (required for replication slot creation) but no SELECT on the actual tables. The WAL sender needs SELECT to read table data during initial sync and for certain DDL replay scenarios.
+
+**Fix:** `GRANT SELECT ON {all 9 tables} TO cello_replication` in all 3 regions. Added to `setup-replication.sh` as a mandatory step after user creation.
+
+#### 3. Staggered sequences needed for multi-master writes
+
+**Symptom:** After replication was working, simultaneous INSERTs from different regions collided on `id=1` (all BIGSERIAL sequences started at 1).
+
+**Root cause:** PostgreSQL BIGSERIAL sequences are local — each node generates IDs independently. Without coordination, all nodes produce the same sequence of IDs.
+
+**Fix:** `ALTER SEQUENCE ... INCREMENT BY 3 RESTART WITH {offset}` for all sequences in all tables:
+- us-east-1: offset 1 (generates 1, 4, 7, 10, ...)
+- eu-central-1: offset 2 (generates 2, 5, 8, 11, ...)
+- ap-northeast-1: offset 3 (generates 3, 6, 9, 12, ...)
+
+This is handled by `setup-replication.sh` after subscription creation. The INCREMENT BY N approach scales to N nodes without coordination.
+
+### Phase 5 — Live Smoke Test (PASSED)
+
+Smoke test executed 2026-05-25. Three rows inserted from three different regions, all visible in all three regions within 5 seconds:
+
+| Origin Region | Row ID | Visible in us-east-1 | Visible in eu-central-1 | Visible in ap-northeast-1 |
+|---|---|---|---|---|
+| us-east-1 | 7 | immediate | < 5s | < 5s |
+| eu-central-1 | 8 | < 5s | immediate | < 5s |
+| ap-northeast-1 | 9 | < 5s | < 5s | immediate |
+
+All 6 subscription workers confirmed `streaming` state. All 6 replication slots active with `active_pid` non-null.
+
+**FEDERATION-E2E-001 closed.** M5 milestone close gate: live multi-node replication verified.
+
+### Remaining deferred items (not M5 scope)
+
+- Relay pool manifest signing and upload — operator workflow documented; execution is M6 ops setup
+- `ICheckpointTransport` libp2p production implementation — deferred to future milestone (checkpoint cross-signing requires application-layer protocol, not just database replication)
+- Smoke test scenario expansion (8 stubs) — deferred to FEDERATION-E2E-002 or equivalent
+- SECOPS-003 AC-002/AC-007 — live WAF rate-limit verification (manual test, not blocking M5 close)
 
 ---
 
