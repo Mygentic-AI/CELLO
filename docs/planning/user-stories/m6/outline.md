@@ -97,7 +97,8 @@ M6 introduces external dependencies behind interfaces with local stubs, followin
 | `MessagingChannel` | `CliAdapter` — reads from stdin, writes to stdout | `TelegramAdapter` |
 | `OtpDeliveryProvider` | Prints OTP to console | AWS SES email delivery |
 | `SecurityAlertProvider` | Logs alert locally | Routes to operator's active messaging channel |
-| `TokenValidator` | Hardcoded dev token → fixed Principal | Directory JWT validation |
+| `TokenValidator` | `DevTokenValidator` — accepts 'DEV-' prefix | Directory validates token during FROST DKG |
+| `PreAuthorizationClient` | `LocalPreAuthorizationClient` — returns 'DEV-CELLO-' + hex | `DirectoryPreAuthorizationClient` — calls POST /internal/pre-authorize |
 
 **`MessagingChannel` interface** — single interface, multiple implementations. The state machine engine and all business logic import `MessagingChannel` only. The engine does not know whether it is talking to Telegram, CLI, or a future WhatsApp adapter.
 
@@ -227,18 +228,21 @@ IronClaw and Hermes are extensible multi-channel agents with attack surface. A d
 ### Dependency Graph
 
 ```
-OPS-AGENT-000 → OPS-AGENT-001 ──────────────────────────────────────────────┐
-              → OPS-AGENT-002 → OPS-AGENT-003 ┐                              │
-                                OPS-AGENT-004 ┘→ OPS-AGENT-005A → 005B ──── M6-E2E-001
-REPOSPLIT-001 → DEMO-001 ────────────────────────────────────────────────────↗
+OPS-AGENT-000 → OPS-AGENT-001 ───────────────────────────────────────────────┐
+              → OPS-AGENT-002 → OPS-AGENT-003 ┐                               │
+              →                 OPS-AGENT-004 ┘→ OPS-AGENT-005B ──────────── M6-E2E-001
+              → OPS-AGENT-005A ────────────────────────────────→ OPS-AGENT-005B
+REPOSPLIT-001 → DEMO-001 (code) ─────────────────────────────────────────────↗
+              OPS-AGENT-005B → DEMO-001 (registration / AC-000) ─────────────↗
 ```
 
 **Parallel from day one:**
 - REPOSPLIT-001 structural work (CI, AUDIT-ME.md, README) — starts immediately, zero dependency on M5 close
 - OPS-AGENT-000 — starts immediately, zero dependency on M5 close
-- OPS-AGENT-001 and OPS-AGENT-002 — parallel after OPS-AGENT-000 merges
+- OPS-AGENT-001, OPS-AGENT-002, and OPS-AGENT-005A — all parallel after OPS-AGENT-000 merges
 - OPS-AGENT-003 and OPS-AGENT-004 — parallel after OPS-AGENT-002 merges
-- DEMO-001 — parallel with entire OPS-AGENT chain, depends only on REPOSPLIT-001
+- DEMO-001 code (AC-001 through AC-007) — parallel with entire OPS-AGENT chain, depends only on REPOSPLIT-001
+- DEMO-001 registration (AC-000) — requires OPS-AGENT-005B deployed (bot live in production)
 
 ---
 
@@ -327,7 +331,7 @@ New internal endpoint added to the directory in M6:
 
 1. `@cello/connect@beta` published on npm and installable
 2. Telegram bot-first registration: operator messages bot → phone verified via `contact.user_id` → email OTP verified → pre-authorization token delivered → agent calls `cello_register(token)` → FROST DKG completes → agent registered
-3. Token consumption: pre-authorization token consumed on first use; second attempt returns `INVALID_TOKEN`
+3. Token consumption: pre-authorization token consumed on first use; second attempt returns `PRE_AUTH_TOKEN_CONSUMED`
 4. State machine restart: kill Operations Agent mid-registration at `AWAITING_EMAIL_OTP` → restart → operator resumes from same state
 5. Demo agent responds to CELLO messages with canned response
 6. Full stranger flow: install `@cello/connect` → register via bot → exchange messages with demo agent → verify record
