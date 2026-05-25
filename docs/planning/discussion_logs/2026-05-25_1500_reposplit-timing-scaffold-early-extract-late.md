@@ -1,13 +1,13 @@
 ---
-name: Repo Split Timing Decision
-type: decision
+name: REPOSPLIT Timing — Scaffold Early, Extract Late
+type: discussion
 date: 2026-05-25
 status: active
-topics: [reposplit, cello-client, timing, decision]
-description: Should we extract the client packages to a separate repo early in M6, or after M6 client development is complete? Written for a reader with no prior CELLO context.
+topics: [reposplit, cello-client, timing, m6, npm-publish, decision]
+description: Analysis and confirmed decision on when to split client packages into cello-client. Covers full CELLO context for a new reader, both timing approaches with tradeoffs, and the confirmed hybrid approach — scaffold cello-client immediately, extract packages after M6 client development is complete.
 ---
 
-# Repo Split Timing: Early or Late?
+# REPOSPLIT Timing — Scaffold Early, Extract Late
 
 ## Background: What CELLO Is
 
