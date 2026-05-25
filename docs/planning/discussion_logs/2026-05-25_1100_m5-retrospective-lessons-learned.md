@@ -137,6 +137,64 @@ For M6, OPS-AGENT-005A and 005B are sequential by design. The same agent session
 
 ---
 
+## Additional M5 Patterns — IaC Parity, Deployment Methodology, and ECS Timeouts
+
+### The IaC Parity Rule
+
+M5 surfaced multiple instances where infrastructure was manually fixed but IaC wasn't immediately updated:
+
+1. **Envelope key secret** — manually created in us-east-1, not in IaC. Fixed in FEDERATION-E2E-001: added `DirectoryEnvelopeKey` resource to `cello-secrets.yaml` and step 5 to `bootstrap.sh`.
+2. **IAM role names without region suffix** — caused global collision when deploying to eu-central-1 and ap-northeast-1. Fixed by adding `${AWS::Region}` to all role names in `cello-iam.yaml`.
+3. **CloudWatch dashboard name collision** — global resource attempted from multiple regions. Fixed with `IsPrimaryRegion` condition; dashboard only deploys from us-east-1.
+4. **`bootstrap.sh` treating `PLACEHOLDER_POPULATE_VIA_CLI` as populated** — fixed by adding to exclusion list in `put_secret_if_empty`.
+5. **Rotation Lambda handler** — deployed manually via `deploy-lambdas.sh`, overwritten by pipeline on every directory deploy. Fixed by making `deploy-lambdas.sh` deploy to all regions and adding region parameter support.
+
+Each manual fix worked locally but violated the region-expansion goal: deploying to a brand-new region with zero manual steps.
+
+**Rule 7:** After any manual AWS fix, update the IaC template and redeploy through the pipeline. Never leave "works but isn't in IaC" state. The region-expansion goal requires every fix to pass the test: "would this work in a brand-new region with zero manual steps?"
+
+### The Foreground Deployment Rule
+
+Early M5 sessions attempted to use background agents for deployment work. This pattern was abandoned after multiple failures: agents lose the context thread, can't trace errors back through prior decisions, and miss real-time ECS service events that explain stalled deploys.
+
+The working pattern that emerged:
+- Deployment work (CloudFormation, ECS, pipeline monitoring) stays in foreground
+- Code writing stays in foreground
+- Only read-only reviewers (`code-reviewer`, `sprint-reviewer`) may be dispatched as subagents
+- Long-running pipeline monitoring uses the loop skill (cron) with 3-minute intervals, not bash sleep loops
+
+**Rule 8:** Deployment and code work stay in foreground. Use cron loop skill to monitor long pipelines. Only read-only reviewers may be subagents.
+
+### The ECS ALB Deployment Timeout Pattern
+
+FEDERATION-E2E-001 hit the same ProductionDeploy timeout failure three times before the fix landed:
+
+**Symptom:** `aws ecs wait services-stable` returns timeout error after exactly 10 minutes, even though ECS tasks are RUNNING and HEALTHY.
+
+**Root cause:** `aws ecs wait` has a hard-coded 10-minute maximum that cannot be extended via flags. ALB target deregistration delay (default 300 seconds per target) causes multi-region deployments to exceed this limit — especially when deploying to 3 regions sequentially.
+
+**Fix:** Replace `aws ecs wait services-stable` with a custom poll loop that checks the ECS deployment `rolloutState` field every 30 seconds for up to 15 minutes:
+
+```bash
+for i in {1..30}; do
+  STATE=$(aws ecs describe-services --cluster $CLUSTER --services $SERVICE \
+    --query 'services[0].deployments[0].rolloutState' --output text)
+  if [ "$STATE" = "COMPLETED" ]; then
+    echo "Deployment complete"
+    exit 0
+  fi
+  sleep 30
+done
+echo "Timeout after 15 minutes"
+exit 1
+```
+
+The built-in wait commands are convenience wrappers, not production deployment tools.
+
+**Rule 9:** ECS ALB deployments exceed `aws ecs wait` 10-min timeout. Use custom `rolloutState` poll loops with 15-minute maximum.
+
+---
+
 ## Summary of Rules Extracted
 
 From the M5 retrospective, the following rules apply to all future milestones:
@@ -147,6 +205,9 @@ From the M5 retrospective, the following rules apply to all future milestones:
 4. **Milestone write-ups are incremental.** Each story appends a section when it closes.
 5. **Integration gate ACs run against an environment with prior migrations already applied.** A fresh database does not catch migration modification.
 6. **Schema design is complete before parallel implementation begins.** OPS-AGENT-000 is the M6 enforcement of this rule.
+7. **After any manual AWS fix, update IaC and redeploy.** Every fix must pass: "would this work in a brand-new region with zero manual steps?"
+8. **Deployment and code work stay in foreground.** Use cron loop skill to monitor long pipelines. Only read-only reviewers may be subagents.
+9. **ECS ALB deployments exceed `aws ecs wait` 10-min timeout.** Use custom `rolloutState` poll loops with 15-minute maximum.
 
 ---
 
