@@ -670,3 +670,24 @@ The `cello_service` user password in Secrets Manager (`cello/dev/directory/rds-c
 - Live smoke test verification (all 3 regions)
 - Code review and sprint review
 - Milestone close gate
+
+---
+
+## 2026-05-25 05:20 UTC — FEDERATION-E2E-001 agent: credentials fixed via IaC
+
+**RDS credential rotation now works in all 3 regions.** The fix was entirely IaC-based:
+
+1. `cello-rds.yaml` — added `RdsMasterSecretArn` output (exports the RDS-managed master secret ARN).
+2. `cello-rotation.yaml` — `ADMIN_SECRET_ID` now imports the RDS-managed master secret directly (eliminates manually-populated `rds-admin-credentials`). IAM policy updated.
+3. `deploy-lambdas.sh` — `rotation` target now deploys to all 3 regions by default.
+4. `deploy.sh` — Step 6.6 creates `/cello/{env}/directory/manifest-signer-pubkey` SSM parameter automatically.
+
+**Deployed and verified:**
+- `deploy.sh dev eu-central-1` — all 12 stacks succeeded
+- `deploy.sh dev ap-northeast-1` — all 12 stacks succeeded
+- `deploy.sh dev us-east-1` — all 13 stacks succeeded
+- `deploy-lambdas.sh dev rotation` — real handler code in all 3 regions
+- Rotation triggered in eu-central-1 — `cello_service` created with real password ✓
+- Rotation triggered in ap-northeast-1 — `cello_service` created with real password ✓
+
+**Next step:** Retrigger directory pipeline to deploy real images to eu-central-1 and ap-northeast-1 via ProductionDeploy.
