@@ -31,10 +31,36 @@ behavior:
     action: "it loads its identity from a key file, connects to the
       CELLO network via @cello/connect using HTTPS (443) to reach
       the production directory ALB and relay circuit relay path,
-      and begins listening for inbound sessions"
+      begins listening for inbound sessions, and logs demo.started
+      at INFO once the connection is established"
+
+  - trigger: "When the demo agent identity does not exist or has been lost"
+    action: "the demo agent operator (Mygentic team) goes through the
+      standard Telegram registration ceremony: messages the production
+      bot, completes phone + email verification, receives a pre-auth
+      token, sets CELLO_REGISTRATION_TOKEN, and calls cello_register(token);
+      the resulting identity key file is stored securely and backed up;
+      this proves the demo agent registration path exercises the same
+      code path as any stranger's registration"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
+  - id: AC-000
+    given: "The production CELLO network with OPS-AGENT-005B deployed
+      (pre-auth token flow active)"
+    when: "the Mygentic team registers the demo agent via the Telegram bot"
+    then: "the full registration ceremony completes: phone verified,
+      email OTP verified, pre-auth token delivered; cello_register(token)
+      is called from the EC2 instance; FROST DKG completes; cello_status
+      returns { registered: true, agentId: '<hex>' }; the identity key
+      file is stored at the configured path; this AgentID is published
+      in the CELLO README quick-start docs"
+    test_type: manual
+    component_under_test: demo-agent
+    notes: "The demo agent registers via the same path as any stranger.
+      If the key is lost, re-registration via the bot is the recovery path.
+      Back up the key file immediately after registration."
+
   - id: AC-001
     given: "An EC2 instance with @cello/connect installed and a
       registered agent identity"
@@ -99,8 +125,8 @@ acceptance_criteria:
     then: "a systemd unit file exists at /etc/systemd/system/cello-demo.service
       and is enabled (systemctl is-enabled returns enabled); systemd
       restarts the process automatically; the agent reconnects to the
-      CELLO network; demo.connection.failed followed by a successful
-      ops_agent.started (or equivalent) is observable in journalctl"
+      CELLO network; demo.connection.failed followed by demo.started
+      is observable in journalctl"
     test_type: manual
     component_under_test: demo-agent
     notes: "The systemd unit is provisioned by the EC2 user-data script
@@ -143,6 +169,13 @@ security_invariants:
 # ─── Observability ──────────────────────────────────────────
 observability:
   events:
+    - name: demo.started
+      level: info
+      trigger: "Demo agent successfully connects to the CELLO network and begins listening"
+      context_fields: [agentId, directoryUrl]
+      correlationId: false
+      notes: "Logged once on startup after cello_status confirms registered=true."
+
     - name: demo.message.received
       level: info
       trigger: "Inbound message received from any agent"
@@ -176,8 +209,12 @@ references:
     - "2026-05-25_0900_m6-beta-launch-planning"
   depends_on:
     - CELLO-REPOSPLIT-001
+    - CELLO-OPS-AGENT-005B
   blocks:
     - CELLO-M6-E2E-001
-  notes: "Fully independent from the OPS-AGENT chain. Depends only
-    on @cello/connect being installable (REPOSPLIT-001). Can be
-    implemented in a single session — no complex dependencies."
+  notes: "The demo agent code (AC-001 through AC-007) depends only on
+    REPOSPLIT-001 and can be implemented immediately. However, AC-000
+    (registration of the demo agent identity) requires OPS-AGENT-005B
+    to be deployed — the pre-auth token flow must be live before the
+    demo agent can register. DEMO-001 cannot close until both the code
+    is complete and the demo agent is registered on the production network."
