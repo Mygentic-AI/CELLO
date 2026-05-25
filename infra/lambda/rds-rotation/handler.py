@@ -220,8 +220,22 @@ def _create_secret(sm, secret_id: str, token: str) -> None:
     )
     new_password = new_password_resp["RandomPassword"]
 
-    # Preserve all existing fields; only rotate the password
-    new_secret = json.dumps({**current_dict, "password": new_password})
+    # Ensure connection fields are always present (they may be missing from the
+    # initial CloudFormation placeholder which only has username+password).
+    # The Lambda's environment variables are the authoritative source for these values.
+    rds_endpoint = _get_rds_endpoint()
+    rds_port = int(os.environ.get("RDS_PORT", "5432"))
+    db_name = os.environ.get("RDS_DB_NAME", "postgres")
+
+    base_fields = {
+        "username": current_dict.get("username", "cello_service"),
+        "host": rds_endpoint,
+        "port": rds_port,
+        "dbname": db_name,
+    }
+
+    # Merge: base_fields provide defaults, current_dict overrides, password is new
+    new_secret = json.dumps({**base_fields, **current_dict, "password": new_password})
 
     sm.put_secret_value(
         SecretId=secret_id,
