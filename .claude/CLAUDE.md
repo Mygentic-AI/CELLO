@@ -88,6 +88,36 @@ M4 introduces external systems (PostgreSQL, KMS, ECS, relay WAL). The inner loop
 
 ---
 
+## Operational Discipline — M5 Rules
+
+These rules are extracted from the M5 retrospective (`docs/planning/discussion_logs/2026-05-25_1100_m5-retrospective-lessons-learned.md`). They are mandatory, not optional.
+
+### Migration Integrity
+
+1. **Never modify a migration file after it has been applied to any environment.** Extract changes to a new migration. A modified migration causes Flyway checksum mismatches that crash every container until manually resolved.
+
+2. **Push to origin immediately after each merge.** Never batch multiple merges before pushing — this triggers all downstream pipelines simultaneously and defeats path-based CI filtering.
+
+3. **Integration gate ACs run against an environment with prior migrations already applied.** A fresh database does not catch migration modification patterns. Each story's final AC must verify Flyway reports zero checksum errors on all prior migrations (V1 through V[N-1]).
+
+4. **Schema design is complete before parallel implementation begins.** For multi-story milestones with database changes, one story (e.g., OPS-AGENT-000) produces the complete schema design and reserves all migration version numbers before any parallel work starts. No reactive mid-milestone migrations.
+
+### Coordination and Documentation
+
+5. **Every parallel milestone gets a COORDINATION.md.** Format: date/time, agent/story identity, what is blocked and why, what has already been done, what the other agent needs to do. Read it at the start of every session. Append, never overwrite. Location: `docs/planning/user-stories/m{N}/COORDINATION.md`.
+
+6. **Milestone write-ups are incremental.** Write `docs/planning/milestone-writeups/M{N}-{slug}.md` as a living document. Each story appends a section when it closes. Format: what was delivered, bugs found and fixed (Symptom / Root cause / Fix / Rule), what this unblocks. The write-up is archaeology done in real time, not a post-hoc summary.
+
+### Infrastructure Discipline
+
+7. **After any manual AWS fix, update IaC and redeploy.** Never leave "works but isn't in IaC" state. Every fix must pass the region-expansion test: "would this work in a brand-new region with zero manual steps?" Examples from M5: envelope key secrets, IAM role region suffixes, CloudWatch dashboard conditions, bootstrap placeholder handling.
+
+8. **Deployment and code work stay in foreground.** Use the loop skill (cron) with 3-minute intervals to monitor long-running pipelines. Only read-only reviewers (`code-reviewer`, `sprint-reviewer`) may be dispatched as subagents. Background agents lose the context thread and miss real-time ECS service events.
+
+9. **ECS ALB deployments exceed `aws ecs wait` 10-minute timeout.** The built-in wait command has a hard 10-minute limit that cannot be extended. ALB target deregistration delay (300 seconds per target) causes multi-region deployments to exceed this. Use custom poll loops checking the ECS deployment `rolloutState` field every 30 seconds for up to 15 minutes.
+
+---
+
 ## Slash Commands
 
 - **`/cello-read`** — Use at session start. Loads current project state without reading everything.
