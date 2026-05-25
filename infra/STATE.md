@@ -19,7 +19,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-ecr-dev | UPDATE_COMPLETE | 2026-05-22 | |
 | cello-iam-dev | UPDATE_COMPLETE | 2026-05-23 | envelope-key secret added |
 | cello-secrets-dev | UPDATE_COMPLETE | 2026-05-22 | |
-| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-23 | Port 8080 for directory SG, port 80+443 for ALB SG |
+| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-25 | Port 8080 for directory SG, port 80+443 for ALB SG; SSM+SSMMessages VPC endpoints added |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-22 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | s3:ListBucket added for relay+directory task roles |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
@@ -34,6 +34,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-22 | |
 | ECR Replication (account-level) | CONFIGURED | 2026-05-24 | us-east-1 → eu-central-1 + ap-northeast-1; filter: prefix "cello-" |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-24 | 167ca6...27b5 (directory node pubkey) |
+| Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | Replication user password (alphanumeric, 32-char) |
 
 #### Key Resources — dev us-east-1
 
@@ -81,7 +82,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-iam-dev | CREATE_COMPLETE | 2026-05-23 | Region-scoped role names |
 | cello-secrets-dev | UPDATE_COMPLETE | 2026-05-25 | |
-| cello-vpc-dev | CREATE_COMPLETE | 2026-05-23 | CIDR 10.1.0.0/16 |
+| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-25 | CIDR 10.1.0.0/16; SSM+SSMMessages VPC endpoints added |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | Directory+relay task roles in manifest bucket policy |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
@@ -94,6 +95,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-cicd-dev | NOT DEPLOYED | — | CICD pipeline is us-east-1 only |
 | Lambda: cello-dev-rds-rotation | DEPLOYED (real code) | 2026-05-25 | Real handler + psycopg2-binary; uses RDS-managed master secret |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-25 | 167ca6...27b5 |
+| Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | Replication user password (alphanumeric, 32-char) |
 
 #### Key Resources — dev eu-central-1
 
@@ -131,7 +133,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-iam-dev | CREATE_COMPLETE | 2026-05-23 | Region-scoped role names |
 | cello-secrets-dev | UPDATE_COMPLETE | 2026-05-25 | |
-| cello-vpc-dev | CREATE_COMPLETE | 2026-05-23 | CIDR 10.2.0.0/16 |
+| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-25 | CIDR 10.2.0.0/16; SSM+SSMMessages VPC endpoints added |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | Directory+relay task roles in manifest bucket policy |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
@@ -144,6 +146,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-cicd-dev | NOT DEPLOYED | — | CICD pipeline is us-east-1 only |
 | Lambda: cello-dev-rds-rotation | DEPLOYED (real code) | 2026-05-25 | Real handler + psycopg2-binary; uses RDS-managed master secret |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-25 | 167ca6...27b5 |
+| Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | Replication user password (alphanumeric, 32-char) |
 
 #### Key Resources — dev ap-northeast-1
 
@@ -188,6 +191,30 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 Ports open between all VPC pairs: 5432 (RDS replication), 4001 (checkpoint cross-signing).
 Deploy with: `./infra/deploy-peering.sh dev`
 
+### dev — Logical Replication
+*Last configured: 2026-05-25*
+
+All RDS instances have `wal_level = logical` and `rds.logical_replication = 1` (parameter group, rebooted).
+
+| Component | us-east-1 | eu-central-1 | ap-northeast-1 |
+|---|---|---|---|
+| Replication user | `cello_replication` (GRANT rds_replication) | `cello_replication` | `cello_replication` |
+| Publication | `cello_pub` (9 tables) | `cello_pub` (9 tables) | `cello_pub` (9 tables) |
+| Subscriptions (inbound) | from eu-central-1, from ap-northeast-1 | from us-east-1, from ap-northeast-1 | from us-east-1, from eu-central-1 |
+
+**Replication Slots (6 total, all streaming):**
+
+| Source Region | Slot Name | Target Region | State |
+|---|---|---|---|
+| us-east-1 | cello_dev_us_east_1_eu_central_1 | eu-central-1 | streaming |
+| us-east-1 | cello_dev_us_east_1_ap_northeast_1 | ap-northeast-1 | streaming |
+| eu-central-1 | cello_dev_eu_central_1_us_east_1 | us-east-1 | streaming |
+| eu-central-1 | cello_dev_eu_central_1_ap_northeast_1 | ap-northeast-1 | streaming |
+| ap-northeast-1 | cello_dev_ap_northeast_1_us_east_1 | us-east-1 | streaming |
+| ap-northeast-1 | cello_dev_ap_northeast_1_eu_central_1 | eu-central-1 | streaming |
+
+Setup with: `./infra/setup-replication.sh dev`
+
 ### staging — not deployed
 
 ### production — not deployed
@@ -205,7 +232,7 @@ Deploy with: `./infra/deploy-peering.sh dev`
 | ECR repo — relay (eu-central-1) | 257394457473.dkr.ecr.eu-central-1.amazonaws.com/cello-relay | |
 | ECR repo — directory (ap-northeast-1) | 257394457473.dkr.ecr.ap-northeast-1.amazonaws.com/cello-directory | Added by FEDERATION-E2E-001 |
 | ECR repo — relay (ap-northeast-1) | 257394457473.dkr.ecr.ap-northeast-1.amazonaws.com/cello-relay | Added by FEDERATION-E2E-001 |
-| Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:1c68fbb | Built from commit 1c68fbb, deployed 2026-05-23 |
+| Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:1c68fbb | Built from commit 1c68fbb, deployed 2026-05-23; includes postgresql-client for ECS Exec SQL |
 | Current relay image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay:6e0c50b | Built from commit 6e0c50b, deployed 2026-05-22 |
 | Route 53 Hosted Zone | cello.mygentic.ai | Zone ID read at deploy time via aws route53 list-hosted-zones |
 | CodeStar Connection (us-east-1) | arn:aws:codeconnections:us-east-1:257394457473:connection/1a7fba2b-dd1d-4ebe-8372-7122b89f56b5 | AVAILABLE — override via CELLO_GITHUB_CONNECTION_ID |
