@@ -1,0 +1,163 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-DEMO-001
+domain: DEMO
+milestone: M6
+actor: CLIENT
+priority: P0
+components:
+  - demo-agent
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a stranger evaluating CELLO,
+  I want a demo agent already registered on the network that
+  responds to my messages,
+  so that I can verify the protocol works end-to-end without
+  needing a second party or running my own second agent.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a registered CELLO agent sends a message to
+      the demo agent's AgentID"
+    action: "the demo agent receives the message via cello_receive
+      and responds with a fixed string: 'CELLO message received.
+      Your conversation is sealed and tamper-evident.'"
+
+  - trigger: "When a connection request is received"
+    action: "the demo agent accepts all incoming connection requests
+      automatically (no manual approval required for the demo)"
+
+  - trigger: "When the demo agent starts"
+    action: "it loads its identity from a key file, connects to the
+      CELLO network via @cello/connect, and begins listening for
+      inbound sessions"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An EC2 instance with @cello/connect installed and a
+      registered agent identity"
+    when: "the demo agent process starts"
+    then: "it connects to the production directory and relay; it
+      appears as reachable in the directory; cello_status shows
+      the agent as online"
+    test_type: integration
+    component_under_test: demo-agent
+
+  - id: AC-002
+    given: "The demo agent is running and reachable"
+    when: "another registered CELLO agent sends a message"
+    then: "the demo agent receives the message and responds with
+      the canned string within 5 seconds; the response is delivered
+      to the sender via cello_receive"
+    test_type: integration
+    component_under_test: demo-agent
+
+  - id: AC-003
+    given: "The demo agent is running"
+    when: "a connection request arrives from any registered agent"
+    then: "the request is accepted automatically; no manual
+      intervention required; the session is established and messages
+      can flow"
+    test_type: integration
+    component_under_test: demo-agent
+
+  - id: AC-004
+    given: "The EC2 instance security group"
+    when: "network rules are inspected"
+    then: "inbound: SSH from a management IP only (for deployment);
+      outbound: HTTPS (443) to the CELLO directory ALB, TCP 4000
+      to the CELLO relay, and nothing else; no unrestricted egress;
+      no inbound from the public internet on any service port"
+    test_type: manual
+    component_under_test: demo-agent
+
+  - id: AC-005
+    given: "The demo agent code"
+    when: "inspected for external dependencies"
+    then: "no LLM backend (no Bedrock, no OpenAI, no Anthropic API);
+      no HTTP server exposed; no database; the only dependencies are
+      @cello/connect and Node.js standard library; the response is a
+      hardcoded string constant"
+    test_type: manual
+    component_under_test: demo-agent
+
+  - id: AC-006
+    given: "The demo agent process"
+    when: "it crashes or is killed"
+    then: "a systemd unit (or equivalent) restarts it automatically;
+      it reconnects to the CELLO network and resumes listening;
+      no manual intervention required"
+    test_type: integration
+    component_under_test: demo-agent
+
+  - id: AC-007
+    given: "The demo agent's AgentID"
+    when: "published in the @cello/connect README or quick-start docs"
+    then: "a stranger who just installed @cello/connect can send a
+      message to this AgentID and receive the canned response,
+      proving the full protocol works: connection request → session
+      establishment → encrypted message exchange → response"
+    test_type: integration
+    component_under_test: demo-agent
+    notes: "This AC is verified as part of M6-E2E-001"
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The demo agent's private key material must not be
+      extractable from the EC2 instance by an external attacker"
+    adversarial_condition: "even when the demo agent's AgentID is
+      public and its EC2 instance IP is discoverable, the key file
+      is readable only by the demo-agent system user (chmod 600)
+      and the instance has no inbound service ports"
+    test_type: manual
+    component_under_test: demo-agent
+
+  - id: SI-002
+    statement: "The demo agent must not store or log message content
+      from conversations"
+    adversarial_condition: "even when hundreds of strangers message
+      the demo agent, no message content persists on disk or appears
+      in logs; only the canned response is generated"
+    test_type: unit
+    component_under_test: demo-agent
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: demo.message.received
+      level: info
+      trigger: "Inbound message received from any agent"
+      context_fields: [senderAgentId, sessionId]
+      correlationId: false
+      notes: "Message content is never logged"
+
+    - name: demo.response.sent
+      level: info
+      trigger: "Canned response sent"
+      context_fields: [recipientAgentId, sessionId]
+      correlationId: false
+
+  error_events:
+    - name: demo.connection.failed
+      level: error
+      trigger: "Failed to connect to CELLO network on startup"
+      context_fields: [reason]
+
+  alarms: []
+  notes: "Demo agent is a best-effort service. No pager-level alarms.
+    Monitor via periodic health check from a cron job."
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M6
+  discussion_logs:
+    - "2026-05-25_0900_m6-beta-launch-planning"
+  depends_on:
+    - CELLO-REPOSPLIT-001
+  blocks:
+    - CELLO-M6-E2E-001
+  notes: "Fully independent from the OPS-AGENT chain. Depends only
+    on @cello/connect being installable (REPOSPLIT-001). Can be
+    implemented in a single session — no complex dependencies."
