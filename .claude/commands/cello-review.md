@@ -18,11 +18,13 @@ Read in this order:
 2. `CONTEXT.md` at the repo root — canonical glossary; any term used differently is a bug
 3. `docs/planning/user-stories/{milestone}/CELLO-{STORY-ID}.yaml` — the story being reviewed
 4. The implementation files named in the story's `components` field
+5. **For M5+ parallel milestones:** `docs/planning/user-stories/{milestone}/COORDINATION.md` — check if this story's completion unblocks others or if it references migration version numbers from the registry
 
 If the story depends on other stories (`depends_on`), note which interfaces/types those stories define — the implementation must use them, not reinvent them.
 
 **For M4+ stories also read:**
 - `docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md` — the canonical event taxonomy and Logger interface. Every log event in the implementation must be checked against the taxonomy in this document.
+- `docs/planning/discussion_logs/2026-05-25_1100_m5-retrospective-lessons-learned.md` — M5 operational discipline rules (migration integrity, IaC parity, deployment methodology)
 
 ---
 
@@ -143,6 +145,8 @@ Confirm the implementation agent ran the full Phase C gate sequence:
 - [ ] Story ID present in commit message
 - [ ] **(M4+)** Observability implementation check passed (Step 4c)
 - [ ] **(M4+ stories touching Postgres)** Integration tests ran with `CELLO_ENV=local` — not skipped
+- [ ] **(M5+ migration stories)** Integration gate AC passed — migrations applied to PostgreSQL instance with all prior migrations already applied, zero Flyway checksum errors
+- [ ] **(M5+ infrastructure stories)** `infra/STATE.md` updated with any deployed stacks, modified resources, or AWS changes
 
 **Integration test verification (M4+ stories touching any Postgres-backed path):**
 
@@ -160,11 +164,27 @@ If any commit in this story's history touches production code outside a story-dr
 
 ---
 
+## Step 7 — M5+ migration and infrastructure checks
+
+**For stories that add or modify database migrations:**
+- [ ] Does the story include a blocking integration gate AC that applies migrations to a PostgreSQL instance with all prior migrations already applied (not fresh)?
+- [ ] Does the integration gate AC verify zero Flyway checksum errors?
+- [ ] If this is a parallel milestone with database work, is the migration version number listed in the Migration Version Registry in COORDINATION.md?
+- [ ] Does the migration file include idempotent guards (CREATE TABLE IF NOT EXISTS, DO $$ BEGIN IF NOT EXISTS)?
+- [ ] For stories that add new tables: does the Architecture phase reasoning cover all operations, uniqueness constraints, indexes, foreign keys, and RLS policies — not just this story's immediate needs?
+
+**For stories that deploy infrastructure or modify AWS resources:**
+- [ ] Is `infra/STATE.md` updated with deployed stacks, modified resources, or any manual AWS changes?
+- [ ] If the story involved a manual AWS fix followed by an IaC update, does the fix pass the region-expansion test: "would this work in a brand-new region with zero manual steps?"
+- [ ] If the story deploys ECS services behind an ALB, does it use custom `rolloutState` poll loops instead of `aws ecs wait services-stable` (which has a hard 10-minute timeout)?
+
+---
+
 ## Reporting format
 
 Report findings using severity levels:
 
-- **[blocking]** — must be fixed before this story is considered done. AC not covered, SI negative test missing, transport-path assertion missing for integration/e2e protocol ACs, package boundary violation, gate sequence failure. For M4+ stories: observability event name mismatch, missing required context fields, `console.log` in implementation code, dropped correlationId.
+- **[blocking]** — must be fixed before this story is considered done. AC not covered, SI negative test missing, transport-path assertion missing for integration/e2e protocol ACs, package boundary violation, gate sequence failure. For M4+ stories: observability event name mismatch, missing required context fields, `console.log` in implementation code, dropped correlationId. For M5+ migration stories: integration gate AC missing or Flyway checksum errors present. For M5+ infrastructure stories: STATE.md not updated.
 - **[high]** — security surface, key material leak path, or correctness bug. Must be fixed before the next story begins.
 - **[medium]** — code quality, naming, style inconsistency with the rest of the codebase. Fix before milestone close.
 - **[low]** — informational. Report to user; does not block.

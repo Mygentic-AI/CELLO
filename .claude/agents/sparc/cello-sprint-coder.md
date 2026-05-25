@@ -43,11 +43,13 @@ Read in this order before writing a single line of code:
 
 1. `CONTEXT.md` at the repo root — canonical glossary. Any term you use differently is a bug.
 2. `docs/planning/user-stories/{milestone}/outline.md` — milestone scope and dependency graph.
-3. `docs/planning/user-stories/{milestone}/CELLO-{STORY-ID}.yaml` — the story being implemented.
-4. `docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md` — adapter inventory, Logger interface, event taxonomy, composition root pattern. Every external dependency is behind an interface defined here.
-5. `packages/interfaces/` — read the interface files relevant to this story.
-6. Every file listed in the story's `components` field — understand what already exists before touching anything.
-7. **For M5+ stories that touch infrastructure, IaC, deployment, or AWS:** read `infra/STATE.md`. It is the authoritative record of what actually exists in AWS — deployed stacks, statuses, resource IDs. Do not guess at infrastructure state from code alone.
+3. `docs/planning/user-stories/{milestone}/COORDINATION.md` — **M5+ parallel milestones only.** Fan-in mechanism for cross-story dependencies and blockers. Check Migration Version Registry if this story adds migrations.
+4. `docs/planning/user-stories/{milestone}/CELLO-{STORY-ID}.yaml` — the story being implemented.
+5. `docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md` — adapter inventory, Logger interface, event taxonomy, composition root pattern. Every external dependency is behind an interface defined here.
+6. `docs/planning/discussion_logs/2026-05-25_1100_m5-retrospective-lessons-learned.md` — **M5+ only.** Migration integrity, IaC parity, deployment methodology rules.
+7. `packages/interfaces/` — read the interface files relevant to this story.
+8. Every file listed in the story's `components` field — understand what already exists before touching anything.
+9. **For M5+ stories that touch infrastructure, IaC, deployment, or AWS:** read `infra/STATE.md`. It is the authoritative record of what actually exists in AWS — deployed stacks, statuses, resource IDs. Do not guess at infrastructure state from code alone.
 
 **Infrastructure state obligation:** If this story deploys CloudFormation stacks, modifies AWS resources, or calls `./infra/deploy.sh`, you must update `infra/STATE.md` before committing. Running `./infra/deploy.sh` updates STATE.md automatically. Manual AWS changes must be reflected in STATE.md by hand. A story that changes AWS infrastructure without updating STATE.md is incomplete — this is a blocking finding in the reviewer.
 
@@ -84,6 +86,15 @@ Write pseudocode in code comments for every non-trivial function before implemen
 ### A — Architecture
 
 Define or confirm TypeScript interfaces before writing implementation. Interfaces belong in `packages/interfaces/` — do not define them inline in an implementation package. Check whether the interface already exists before creating a new one.
+
+**M5+ database schema stories:** If this story adds or modifies database tables, reason through **all operations** the table will support during this phase — not just what the immediate ACs require. Ask:
+- What operations will this table support? (Not just what this story needs)
+- What uniqueness constraints prevent conflict scenarios?
+- What indexes support all query patterns?
+- What foreign key relationships exist with related tables (including ones not in this milestone)?
+- Do RLS policies cover all access patterns (read-only observers, multi-tenant isolation, append-only)?
+
+Document this reasoning in a comment block at the top of the migration file or in the story notes. Incomplete schema discovered later forces cascading renumbers.
 
 ### R — Refinement (TDD — absolute rule)
 
@@ -124,6 +135,8 @@ CELLO_ENV=local DATABASE_URL=postgresql://postgres:dev@localhost:5433/cello_dev 
 **This is not optional.** A run without `CELLO_ENV=local` silently skips all `describeIntegration` blocks. If the test output contains any line matching `skipped` on a test that should be an integration test, the gate has not been executed — stop and rerun with the correct env vars.
 
 Docker Compose must be running before this step: `docker compose up -d` from the repo root.
+
+**M5+ migration stories:** If this story adds or modifies migrations, the integration gate AC requires applying migrations to a PostgreSQL instance with **all prior migrations already applied** (not fresh). Verify zero Flyway checksum errors. This catches the FEDERATION-002 pattern where a previously-applied migration gets modified.
 
 **Step C-3: Lint and typecheck**
 ```bash

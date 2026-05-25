@@ -105,6 +105,45 @@ log_info "infra.replication.setup.started" "{ \"environment\": \"${ENVIRONMENT}\
 ECS_CLUSTER_NAME="cello-${ENVIRONMENT}"
 ECS_SERVICE_NAME="cello-directory-${ENVIRONMENT}"
 
+# ── Fetch RDS master credentials per region ──────────────────────────────────
+# Replication setup requires postgres superuser. The RDS-managed master secret
+# is fetched here (not inside the container) so psql commands are self-contained.
+
+declare -A MASTER_PASSWORDS
+declare -A RDS_ENDPOINTS
+declare -A RDS_DB_NAMES
+
+for REGION in "${REGIONS[@]}"; do
+  # Get RDS master secret ARN from CloudFormation export
+  MASTER_SECRET_ARN=$(aws cloudformation list-exports \
+    --region "${REGION}" \
+    --query "Exports[?Name=='cello-${ENVIRONMENT}-rds-master-secret-arn'].Value" \
+    --output text 2>/dev/null)
+
+  if [[ -z "${MASTER_SECRET_ARN}" || "${MASTER_SECRET_ARN}" == "None" ]]; then
+    log_error "infra.replication.setup.master_secret_not_found" "{ \"region\": \"${REGION}\" }"
+    echo "ERROR: Cannot find RDS master secret ARN export in ${REGION}." >&2
+    exit 1
+  fi
+
+  SECRET_JSON=$(aws secretsmanager get-secret-value \
+    --region "${REGION}" \
+    --secret-id "${MASTER_SECRET_ARN}" \
+    --query "SecretString" \
+    --output text)
+
+  MASTER_PASS=$(echo "${SECRET_JSON}" | python3 -c "import json,sys; print(json.load(sys.stdin)['password'])")
+  MASTER_PASSWORDS["${REGION}"]="${MASTER_PASS}"
+
+  # Get RDS endpoint from CloudFormation export
+  RDS_EP=$(aws cloudformation list-exports \
+    --region "${REGION}" \
+    --query "Exports[?Name=='cello-${ENVIRONMENT}-rds-endpoint'].Value" \
+    --output text 2>/dev/null)
+  RDS_ENDPOINTS["${REGION}"]="${RDS_EP}"
+  RDS_DB_NAMES["${REGION}"]="cello_${ENVIRONMENT}"
+done
+
 # Tables covered by the publication (all append-only tables, AC behavior)
 PUBLICATION_TABLES="agent_profiles,conversation_seals,conversation_seal_staging,directory_checkpoints,checkpoint_node_signatures,relay_registrations,sessions,pending_notifications,user_accounts"
 TABLE_COUNT=$(echo "${PUBLICATION_TABLES}" | tr ',' '\n' | wc -l | tr -d ' ')
@@ -249,21 +288,21 @@ for REGION in "${REGIONS[@]}"; do
   REPL_PASS="${REPLICATION_PASSWORDS[${REGION}]}"
 
   # Create the cello_replication user with REPLICATION privilege only (SI-001).
-  # Uses DO $$ block for idempotency — PostgreSQL 15 introduced CREATE ROLE IF NOT EXISTS
-  # but RDS may be on earlier versions; the DO block is universally compatible.
+  # Uses DO $$ block for idempotency — the DO block is universally compatible across PG versions.
   # SI-001: REPLICATION privilege only — no INSERT, UPDATE, DELETE, DDL, SUPERUSER, CREATEDB.
-  # The CREATE USER password must appear in the SQL literal — PostgreSQL has no env var
-  # equivalent for role passwords. The --command arg is the ECS Exec trust boundary;
-  # keep CloudTrail logging disabled (ECS Exec execute-command-configuration LogConfiguration
-  # is not enabled in the cello CFN templates).
+  # The master password is passed via PGPASSWORD env var inside the container shell.
+  MASTER_PASS="${MASTER_PASSWORDS[${REGION}]}"
+  RDS_EP="${RDS_ENDPOINTS[${REGION}]}"
+  DB_NAME="${RDS_DB_NAMES[${REGION}]}"
+
   local_create_user_sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cello_replication') THEN CREATE USER cello_replication WITH REPLICATION LOGIN PASSWORD '${REPL_PASS}'; END IF; END \$\$;"
-  local_user_cmd="PGPASSWORD='${REPL_PASS}' psql \${DATABASE_URL} -c \"${local_create_user_sql}\""
+  local_user_cmd="PGPASSWORD='${MASTER_PASS}' psql -h ${RDS_EP} -p 5432 -U postgres -d ${DB_NAME} -c \"${local_create_user_sql}\""
 
   EXEC_OUTPUT=$(aws ecs execute-command \
     --region "${REGION}" \
     --cluster "${ECS_CLUSTER_NAME}" \
     --task "${TASK_ARNS[${REGION}]}" \
-    --container "cello-directory" \
+    --container "directory" \
     --command "${local_user_cmd}" \
     --interactive 2>&1) || {
       log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_user\", \"reason\": \"ecs_exec_failed\" }"
@@ -286,8 +325,8 @@ for REGION in "${REGIONS[@]}"; do
     --region "${REGION}" \
     --cluster "${ECS_CLUSTER_NAME}" \
     --task "${TASK_ARNS[${REGION}]}" \
-    --container "cello-directory" \
-    --command "psql \${DATABASE_URL} -c \"${local_create_pub_sql}\"" \
+    --container "directory" \
+    --command "PGPASSWORD='${MASTER_PASS}' psql -h ${RDS_EP} -p 5432 -U postgres -d ${DB_NAME} -c \"${local_create_pub_sql}\"" \
     --interactive 2>&1) || {
       log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\", \"reason\": \"ecs_exec_failed\" }"
       echo "ERROR: ECS Exec failed in ${REGION} during publication creation." >&2
@@ -309,35 +348,7 @@ done
 # Subscription naming: cello_sub_from_{source_sanitized}  e.g. cello_sub_from_us_east_1
 # Region hyphens are replaced by underscores — PostgreSQL identifiers must match [a-z0-9_]+
 
-# Build connection strings per region using replication credentials from Secrets Manager
-declare -A RDS_HOSTS
-
-for REGION in "${REGIONS[@]}"; do
-  # Extract RDS hostname from the task's container environment
-  RDS_HOST=$(aws ecs describe-tasks \
-    --region "${REGION}" \
-    --cluster "${ECS_CLUSTER_NAME}" \
-    --tasks "${TASK_ARNS[${REGION}]}" \
-    --query "tasks[0].containers[?name=='cello-directory'].environment[?name=='RDS_ENDPOINT'].value" \
-    --output text 2>/dev/null || echo "")
-
-  if [[ -z "${RDS_HOST}" || "${RDS_HOST}" == "None" ]]; then
-    # Fallback: read from CloudFormation stack output
-    RDS_HOST=$(aws cloudformation describe-stacks \
-      --region "${REGION}" \
-      --stack-name "cello-rds-${ENVIRONMENT}" \
-      --query "Stacks[0].Outputs[?OutputKey=='RdsEndpoint'].OutputValue" \
-      --output text 2>/dev/null || echo "")
-  fi
-
-  if [[ -z "${RDS_HOST}" || "${RDS_HOST}" == "None" ]]; then
-    log_error "infra.replication.setup.rds_host_not_found" "{ \"region\": \"${REGION}\" }"
-    echo "ERROR: Cannot determine RDS hostname for ${REGION}. Check RDS_ENDPOINT env var or cello-rds-${ENVIRONMENT} stack output." >&2
-    exit 1
-  fi
-
-  RDS_HOSTS["${REGION}"]="${RDS_HOST}"
-done
+# RDS endpoints already fetched above in RDS_ENDPOINTS associative array.
 
 for TARGET_REGION in "${REGIONS[@]}"; do
   echo "── Creating subscriptions on ${TARGET_REGION} ────────────────────────"
@@ -351,7 +362,7 @@ for TARGET_REGION in "${REGIONS[@]}"; do
     # PostgreSQL slot/subscription names must match [a-z0-9_]+ — sanitize region hyphens to underscores.
     SLOT_NAME="cello_${ENVIRONMENT}_${SOURCE_REGION//-/_}_${TARGET_REGION//-/_}"
     SUB_NAME="cello_sub_from_${SOURCE_REGION//-/_}"
-    SOURCE_HOST="${RDS_HOSTS[${SOURCE_REGION}]}"
+    SOURCE_HOST="${RDS_ENDPOINTS[${SOURCE_REGION}]}"
     SOURCE_PASS="${REPLICATION_PASSWORDS[${SOURCE_REGION}]}"
 
     # Build the subscription connection string. The password must be in CONN_STRING because
@@ -369,14 +380,16 @@ for TARGET_REGION in "${REGIONS[@]}"; do
     # with PG 14/15/16, we use a DO $$ block with a pre-flight check.
     # PGPASSWORD is set inside the container shell so it is not in the AWS CLI argument.
     local_create_sub_sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_subscription WHERE subname = '${SUB_NAME}') THEN CREATE SUBSCRIPTION ${SUB_NAME} CONNECTION '${CONN_STRING}' PUBLICATION cello_pub WITH (slot_name = '${SLOT_NAME}', copy_data = false); END IF; END \$\$;"
-    # Pass password via PGPASSWORD env var inside the container — never in the SQL or CLI args.
-    local_sub_cmd="PGPASSWORD='${SOURCE_PASS}' psql \${DATABASE_URL} -c \"${local_create_sub_sql}\""
+    TARGET_MASTER_PASS="${MASTER_PASSWORDS[${TARGET_REGION}]}"
+    TARGET_RDS_EP="${RDS_ENDPOINTS[${TARGET_REGION}]}"
+    TARGET_DB_NAME="${RDS_DB_NAMES[${TARGET_REGION}]}"
+    local_sub_cmd="PGPASSWORD='${TARGET_MASTER_PASS}' psql -h ${TARGET_RDS_EP} -p 5432 -U postgres -d ${TARGET_DB_NAME} -c \"${local_create_sub_sql}\""
 
     EXEC_OUTPUT=$(aws ecs execute-command \
       --region "${TARGET_REGION}" \
       --cluster "${ECS_CLUSTER_NAME}" \
       --task "${TASK_ARNS[${TARGET_REGION}]}" \
-      --container "cello-directory" \
+      --container "directory" \
       --command "${local_sub_cmd}" \
       --interactive 2>&1) || {
         log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${TARGET_REGION}\", \"step\": \"create_subscription\", \"reason\": \"ecs_exec_failed\", \"slotName\": \"${SLOT_NAME}\" }"
@@ -437,7 +450,7 @@ while true; do
       --region "${SOURCE_REGION}" \
       --cluster "${ECS_CLUSTER_NAME}" \
       --task "${TASK_ARNS[${SOURCE_REGION}]}" \
-      --container "cello-directory" \
+      --container "directory" \
       --command "psql \${DATABASE_URL} -t -A -c \"${SLOT_QUERY}\"" \
       --interactive \
       2>/dev/null || echo "")
@@ -515,7 +528,7 @@ while true; do
         --region "${SOURCE_REGION}" \
         --cluster "${ECS_CLUSTER_NAME}" \
         --task "${TASK_ARNS[${SOURCE_REGION}]}" \
-        --container "cello-directory" \
+        --container "directory" \
         --command "psql \${DATABASE_URL} -c \"SELECT application_name, state, sent_lsn, write_lsn, flush_lsn, replay_lsn FROM pg_stat_replication;\"" \
         --interactive \
         2>/dev/null || echo "    (unable to query)"

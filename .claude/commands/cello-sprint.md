@@ -23,7 +23,13 @@ Read `CONTEXT.md` at the repo root. This is the canonical glossary — terms, pa
 
 If the target milestone is M5 or later, read `infra/STATE.md` before looking at any story. It records the current real state of AWS infrastructure — which stacks are deployed, their status, and key resource IDs. Any story that touches infrastructure or deploys code to AWS must update `infra/STATE.md` before closing. If you deploy stacks via `./infra/deploy.sh`, STATE.md is updated automatically. If you make any manual AWS change, update STATE.md and commit it.
 
-## Step 2b — For M4+ milestones: load adapter and observability context
+## Step 2b — For M5+ milestones: read COORDINATION.md
+
+If the target milestone is M5 or later AND has parallel story execution, read `docs/planning/user-stories/{milestone}/COORDINATION.md` before looking at any story. This is the fan-in mechanism — each agent appends structured entries when they have blockers, dependencies, or completed work that others need to know about.
+
+Pay special attention to the Migration Version Registry table (if present) — it lists which migration version numbers are reserved by which stories. No story may claim a version not listed there.
+
+## Step 2c — For M4+ milestones: load adapter and observability context
 
 If the target milestone is M4 or later, read these before touching any story:
 
@@ -91,6 +97,13 @@ One paragraph per milestone. What was proved. What infrastructure exists.
 - **Observability ACs are first-class.** Every story has named log events, required context fields, and correlationId threading for async flows. `/cello-review` Step 4c will verify implementation matches ACs exactly. `console.log` in implementation code is a blocking finding.
 - **Interface names are precise.** `EnvelopeKeyProvider` encrypts K_server_X shares (KMS, M4). `SigningKeyProvider` signs with Ed25519 (client-side, M0). Using the wrong one is a type error and a security error.
 - **Smoke test definition grows with each milestone.** The M4 smoke test minimum: migrations applied cleanly, app starts, basic authenticated request succeeds, `EnvelopeKeyProvider` encrypt/decrypt roundtrip works. Add to the milestone close gate, do not replace it.
+
+**M5+ additional constraints (from retrospective):**
+- **Schema assessment before migration.** For stories that add database tables, the Architecture phase must reason through all operations the table will support, uniqueness constraints, indexes, foreign keys, and RLS policies — not just what this story needs. Incomplete schema discovered later forces cascading renumbers.
+- **Integration gate ACs verify prior migrations.** Migration stories must include a blocking integration gate AC that applies migrations to a PostgreSQL instance with all prior migrations already applied and verifies zero Flyway checksum errors.
+- **IaC parity.** After any manual AWS fix, update the IaC template and redeploy. Never leave "works but isn't in IaC" state. Every fix must pass: "would this work in a brand-new region with zero manual steps?"
+- **Foreground deployment.** Deployment and code work stay in foreground. Use cron loop skill to monitor long pipelines. Only read-only reviewers may be subagents.
+- **Push immediately after merge.** Never batch multiple merges before pushing — simultaneous pipeline triggers defeat path-based CI filtering.
 
 ### Using the shared fixture
 
