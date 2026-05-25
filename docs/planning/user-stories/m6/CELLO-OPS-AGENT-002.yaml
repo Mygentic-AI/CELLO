@@ -1,0 +1,259 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-OPS-AGENT-002
+domain: OPS-AGENT
+milestone: M6
+actor: OPS
+priority: P0
+components:
+  - operations-agent
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Operations Agent,
+  I want a PostgreSQL-backed registration state machine that
+  drives the Telegram registration ceremony from first contact
+  through pre-authorization token delivery,
+  so that in-flight registrations survive process restarts,
+  enforce timeouts, and produce a pre-authorization token only
+  after both phone and email are verified.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a new message arrives from a phone_stub_hash
+      with no existing in-flight registration"
+    action: "the state machine creates a new RegistrationRecord
+      in INITIAL state, immediately transitions to AWAITING_CONTACT,
+      and sends a request_contact keyboard button to the user"
+
+  - trigger: "When the state machine is in AWAITING_CONTACT and
+      a contact sharing event is received with contact.user_id
+      matching message.from.id"
+    action: "the state machine transitions to PHONE_CONFIRMED,
+      stores the verified phone number hash, and prompts for
+      email address"
+
+  - trigger: "When the state machine is in AWAITING_EMAIL and
+      a message containing a valid email address is received"
+    action: "the state machine generates a 6-digit OTP, delegates
+      delivery to the OtpDeliveryProvider, transitions to
+      AWAITING_EMAIL_OTP, and informs the user an OTP was sent"
+
+  - trigger: "When the state machine is in AWAITING_EMAIL_OTP and
+      the correct OTP is provided within 15 minutes"
+    action: "the state machine transitions to EMAIL_CONFIRMED,
+      calls the directory pre-authorization API, receives a token,
+      transitions to PRE_AUTH_TOKEN_ISSUED, and delivers the token
+      to the user via the messaging channel"
+
+  - trigger: "When the state machine is in AWAITING_EMAIL_OTP and
+      an incorrect OTP is provided"
+    action: "the attempt counter increments; after 3 failed attempts
+      the current OTP is invalidated and the user must request a
+      new send; the state remains AWAITING_EMAIL_OTP"
+
+  - trigger: "When any state has been idle for 7 days"
+    action: "the state machine transitions to EXPIRED; the
+      phone_stub_hash is eligible for a new registration"
+
+  - trigger: "When the Operations Agent process restarts"
+    action: "all in-flight registrations are recovered from
+      PostgreSQL; the state machine resumes from the persisted
+      state without requiring the user to start over"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A fresh PostgreSQL instance with M6 migrations applied
+      and the state machine engine running with CliAdapter"
+    when: "a simulated user sends a first message"
+    then: "a RegistrationRecord row is created in the database with
+      state = AWAITING_CONTACT; the outbound message includes a
+      request for phone contact sharing"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-002
+    given: "A RegistrationRecord in AWAITING_CONTACT state"
+    when: "a contact event arrives with contact.user_id == from.id"
+    then: "state transitions to PHONE_CONFIRMED; phone_stub_hash is
+      stored; updatedAt is refreshed; the outbound message prompts
+      for email address"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-003
+    given: "A RegistrationRecord in AWAITING_EMAIL state"
+    when: "a message containing 'user@example.com' arrives"
+    then: "OtpDeliveryProvider.sendOtp() is called with the email
+      address and a 6-digit numeric string; state transitions to
+      AWAITING_EMAIL_OTP with otpExpiresAt set to now + 15 minutes;
+      the outbound message confirms OTP was sent"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-004
+    given: "A RegistrationRecord in AWAITING_EMAIL_OTP state with a
+      valid unexpired OTP"
+    when: "the correct 6-digit OTP is provided"
+    then: "state transitions to EMAIL_CONFIRMED; the directory
+      pre-authorization API is called; the returned token is delivered
+      to the user; state transitions to PRE_AUTH_TOKEN_ISSUED"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-005
+    given: "A RegistrationRecord in AWAITING_EMAIL_OTP state"
+    when: "3 incorrect OTP attempts are made"
+    then: "the current OTP is invalidated; the user is informed they
+      must request a new OTP; attemptCount is reset; the state remains
+      AWAITING_EMAIL_OTP (not a new state — same state, new OTP cycle)"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-006
+    given: "A RegistrationRecord in AWAITING_EMAIL_OTP state"
+    when: "the OTP is provided after 15 minutes have elapsed"
+    then: "the OTP is rejected as expired regardless of correctness;
+      the user is informed and can request a new send;
+      registration.otp.expired is logged at INFO"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-007
+    given: "A RegistrationRecord in AWAITING_EMAIL_OTP state"
+    when: "the Operations Agent process is killed and restarted"
+    then: "on restart the state machine loads the record from PostgreSQL;
+      the user can continue by providing the OTP without restarting the
+      registration; no duplicate RegistrationRecord is created"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-008
+    given: "A RegistrationRecord in any state that has been idle for 7 days"
+    when: "the expiry check runs (either periodic or on next message)"
+    then: "the record transitions to EXPIRED; a new message from the same
+      phone_stub_hash starts a fresh registration from INITIAL;
+      registration.expired is logged at INFO with { registrationId }"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-009
+    given: "The email OTP rate limit of 5 sends per hour per email address"
+    when: "a 6th OTP send is requested within the same hour"
+    then: "the send is refused; the user is informed of the rate limit;
+      registration.otp.rate_limited is logged at WARN with
+      { emailDomain, correlationId }"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-010-integration-gate
+    given: "The Operations Agent running locally with CliAdapter and real
+      local PostgreSQL, all M6 migrations applied (V24 through this
+      story's version)"
+    when: "the full registration flow is driven from INITIAL to
+      PRE_AUTH_TOKEN_ISSUED using the CliAdapter, then the process is
+      killed and restarted, then resumption is verified"
+    then: "complete flow succeeds end-to-end against real Postgres;
+      restart recovery works; the pre-auth token returned by the
+      directory stub (DevTokenValidator) matches expected format;
+      Flyway reports zero checksum errors on any migration V24 through
+      V[N-1]; this AC is blocking — no downstream story may begin
+      implementation until this story's integration gate is verified
+      and merged"
+    test_type: integration
+    component_under_test: operations-agent
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The OTP hash is stored in the database, never the
+      plaintext OTP — a database breach does not reveal valid OTPs"
+    adversarial_condition: "even when an attacker reads all rows in the
+      registration table, they cannot derive a valid OTP from the stored
+      hash (SHA-256 of OTP + per-record salt)"
+    test_type: unit
+    component_under_test: operations-agent
+
+  - id: SI-002
+    statement: "Phone numbers are never stored — only the phone_stub_hash
+      (SHA-256 of normalized phone number)"
+    adversarial_condition: "even when an attacker has full database access,
+      no phone number is recoverable from stored data"
+    test_type: unit
+    component_under_test: operations-agent
+
+  - id: SI-003
+    statement: "The state machine must not allow skipping verification steps —
+      no transition from INITIAL to EMAIL_CONFIRMED without passing through
+      PHONE_CONFIRMED"
+    adversarial_condition: "even when a crafted message attempts to provide
+      an email OTP without having completed phone verification, the state
+      machine rejects the input based on current state"
+    test_type: unit
+    component_under_test: operations-agent
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: registration.started
+      level: info
+      trigger: "New RegistrationRecord created"
+      context_fields: [registrationId, channel, correlationId]
+      correlationId: true
+
+    - name: registration.phone.verified
+      level: info
+      trigger: "State transitions to PHONE_CONFIRMED"
+      context_fields: [registrationId, channel, correlationId]
+      correlationId: true
+
+    - name: registration.email.verified
+      level: info
+      trigger: "State transitions to EMAIL_CONFIRMED"
+      context_fields: [registrationId, emailDomain, correlationId]
+      correlationId: true
+
+    - name: registration.completed
+      level: info
+      trigger: "State transitions to PRE_AUTH_TOKEN_ISSUED"
+      context_fields: [registrationId, tokenId, correlationId]
+      correlationId: true
+
+  error_events:
+    - name: registration.otp.expired
+      level: info
+      trigger: "Expired OTP submitted"
+      context_fields: [registrationId, correlationId]
+
+    - name: registration.otp.rate_limited
+      level: warn
+      trigger: "6th OTP send attempt within one hour"
+      context_fields: [registrationId, emailDomain, correlationId]
+
+    - name: registration.expired
+      level: info
+      trigger: "7-day idle timeout"
+      context_fields: [registrationId]
+
+    - name: registration.state.recovered
+      level: info
+      trigger: "In-flight registration loaded from Postgres on restart"
+      context_fields: [registrationId, state, correlationId]
+
+  alarms:
+    - condition: "registration.otp.rate_limited count > 20 per hour"
+      fires_to: ops-warning
+      notes: "Potential abuse — someone cycling through email addresses"
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M6
+  discussion_logs:
+    - "2026-05-25_0900_m6-beta-launch-planning"
+    - "2026-05-13_1549_onboarding-and-operations-agent-architecture"
+  depends_on:
+    - CELLO-OPS-AGENT-000
+  blocks:
+    - CELLO-OPS-AGENT-003
+    - CELLO-OPS-AGENT-004
+    - CELLO-OPS-AGENT-005B
