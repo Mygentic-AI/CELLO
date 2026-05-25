@@ -1,0 +1,201 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-OPS-AGENT-004
+domain: OPS-AGENT
+milestone: M6
+actor: OPS
+priority: P0
+components:
+  - operations-agent
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Operations Agent,
+  I want an email OTP service implementing the OtpDeliveryProvider
+  interface via AWS SES,
+  so that registration email verification can be completed with a
+  6-digit code delivered to the operator's inbox, enforcing expiry
+  and rate limits.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When OtpDeliveryProvider.sendOtp() is called with an
+      email address and a 6-digit OTP string"
+    action: "the service sends an email via AWS SES to the given
+      address containing the OTP; the email is plain text with a
+      clear subject line ('Your CELLO verification code'); the OTP
+      is the only actionable content"
+
+  - trigger: "When sendOtp() is called for the same email address
+      for the 6th time within a rolling 1-hour window"
+    action: "the send is refused; sendOtp() throws a RateLimitError;
+      no SES API call is made; registration.otp.rate_limited is logged"
+
+  - trigger: "When SES returns a permanent failure (bounce, complaint)"
+    action: "sendOtp() throws a DeliveryError with the SES error
+      type; otp.delivery.failed is logged at ERROR with { emailDomain,
+      sesErrorType, correlationId }"
+
+  - trigger: "When SES returns a transient failure (throttling)"
+    action: "the service retries once after 1 second; if the retry
+      also fails, sendOtp() throws a DeliveryError"
+
+  - trigger: "When CELLO_ENV=local"
+    action: "ConsoleOtpDeliveryProvider is used instead — prints the
+      OTP to stdout; no SES dependency required for local development"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "SES configured in eu-west-1 with production access and a
+      verified sender identity"
+    when: "sendOtp() is called with a valid email address"
+    then: "the recipient receives an email within 30 seconds containing
+      exactly the 6-digit OTP; the email subject is 'Your CELLO
+      verification code'; the from address is a verified CELLO domain"
+    test_type: integration
+    component_under_test: operations-agent
+    notes: "Integration test uses SES sandbox (verified recipient only)"
+
+  - id: AC-002
+    given: "sendOtp() has been called 5 times for user@example.com
+      within the last hour"
+    when: "a 6th call is made for the same address"
+    then: "RateLimitError is thrown; no SES API call is made; the
+      rate limit counter is per email address, not per registration;
+      registration.otp.rate_limited is logged at WARN"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-003
+    given: "The rate limit window has expired (>1 hour since first send)"
+    when: "sendOtp() is called for the same email address"
+    then: "the send succeeds; the rate limit counter has reset;
+      the rolling window starts fresh"
+    test_type: integration
+    component_under_test: operations-agent
+
+  - id: AC-004
+    given: "SES returns a bounce notification for the email address"
+    when: "sendOtp() processes the SES response"
+    then: "DeliveryError is thrown with type = 'bounce'; the OTP
+      is not considered delivered; otp.delivery.failed is logged at
+      ERROR with { emailDomain, sesErrorType: 'Bounce', correlationId }"
+    test_type: unit
+    component_under_test: operations-agent
+
+  - id: AC-005
+    given: "SES returns a throttling error on the first attempt"
+    when: "the service retries after 1 second"
+    then: "if the retry succeeds, the OTP is delivered normally and
+      otp.delivery.retried is logged at INFO; if the retry also fails,
+      DeliveryError is thrown"
+    test_type: unit
+    component_under_test: operations-agent
+
+  - id: AC-006
+    given: "CELLO_ENV=local and no SES credentials configured"
+    when: "sendOtp() is called via ConsoleOtpDeliveryProvider"
+    then: "the OTP is printed to stdout in a clearly formatted line;
+      no network call is made; the state machine proceeds as if
+      delivery succeeded"
+    test_type: unit
+    component_under_test: operations-agent
+
+  - id: AC-007
+    given: "The OTP generated is a 6-digit numeric string"
+    when: "100 OTPs are generated"
+    then: "all are exactly 6 digits (000000–999999); generated via
+      crypto.randomInt(0, 1000000) — not Math.random(); leading zeros
+      are preserved (format: padStart(6, '0'))"
+    test_type: unit
+    component_under_test: operations-agent
+
+  - id: AC-008-integration-gate
+    given: "The Operations Agent running with real SES sandbox
+      credentials in eu-west-1 and real local PostgreSQL with all
+      M6 migrations applied"
+    when: "an OTP is sent to a verified sandbox recipient, the correct
+      OTP is submitted, an expired OTP is submitted, and a 6th send
+      within one hour is attempted"
+    then: "delivery succeeds; correct OTP advances state; expired OTP
+      is rejected; 6th send returns rate-limit error; Flyway reports
+      zero checksum errors on any migration V24 through V[N-1]; this
+      AC is blocking — no downstream story may begin implementation
+      until this story's integration gate is verified and merged"
+    test_type: integration
+    component_under_test: operations-agent
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The OTP is generated using a cryptographically secure
+      random number generator — not Math.random()"
+    adversarial_condition: "even when an attacker observes the timing
+      and frequency of OTP generation, they cannot predict future OTPs"
+    test_type: unit
+    component_under_test: operations-agent
+
+  - id: SI-002
+    statement: "The full email address is never logged — only the
+      domain portion (emailDomain) appears in observable events"
+    adversarial_condition: "even when CloudWatch logs are compromised,
+      no individual email address is recoverable from OTP service events"
+    test_type: unit
+    component_under_test: operations-agent
+
+  - id: SI-003
+    statement: "SES credentials are loaded from Secrets Manager at
+      runtime — never hardcoded or present in environment variable
+      values visible in ECS task definitions"
+    adversarial_condition: "even when an attacker reads the ECS task
+      definition via the AWS API, they obtain only the secret ARN,
+      not the credential values"
+    test_type: unit
+    component_under_test: operations-agent
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: otp.delivery.sent
+      level: info
+      trigger: "SES accepts the email for delivery"
+      context_fields: [emailDomain, messageId, correlationId]
+      correlationId: true
+
+    - name: otp.delivery.retried
+      level: info
+      trigger: "First SES call throttled, retry succeeded"
+      context_fields: [emailDomain, retryDelayMs, correlationId]
+      correlationId: true
+
+  error_events:
+    - name: otp.delivery.failed
+      level: error
+      trigger: "SES returns permanent failure or retry also fails"
+      context_fields: [emailDomain, sesErrorType, correlationId]
+      correlationId: true
+
+    - name: registration.otp.rate_limited
+      level: warn
+      trigger: "6th send attempt within rolling 1-hour window"
+      context_fields: [emailDomain, sendCount, windowStartedAt, correlationId]
+      correlationId: true
+
+  alarms:
+    - condition: "otp.delivery.failed count > 5 per hour"
+      fires_to: ops-warning
+      notes: "SES deliverability issue or malformed email addresses"
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M6
+  discussion_logs:
+    - "2026-05-25_0900_m6-beta-launch-planning"
+  depends_on:
+    - CELLO-OPS-AGENT-000
+    - CELLO-OPS-AGENT-002
+  blocks:
+    - CELLO-OPS-AGENT-005B
+    - CELLO-M6-E2E-001
+  notes: "Hard dependency on SES eu-west-1 production access approval.
+    Submit request day one of M6 — bootstrap checklist item."
