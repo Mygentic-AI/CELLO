@@ -325,6 +325,8 @@ ecs_exec_sql() {
   local b64_cmd
   b64_cmd=$(printf '%s' "${inner_cmd}" | base64 | tr -d '\n')
 
+  # </dev/null prevents the session-manager-plugin from blocking on stdin
+  # when this function is called inside $(...) subshells.
   aws ecs execute-command \
     --region "${region}" \
     --cluster "${ECS_CLUSTER_NAME}" \
@@ -332,7 +334,7 @@ ecs_exec_sql() {
     --container "directory" \
     --command "sh -c 'echo ${b64_cmd} | base64 -d | sh'" \
     --interactive \
-    2>&1
+    </dev/null 2>&1
 }
 
 # ── Step 3: Create replication user and publication on each node ───────────────
