@@ -29,8 +29,9 @@ behavior:
 
   - trigger: "When the demo agent starts"
     action: "it loads its identity from a key file, connects to the
-      CELLO network via @cello/connect, and begins listening for
-      inbound sessions"
+      CELLO network via @cello/connect using HTTPS (443) to reach
+      the production directory ALB and relay circuit relay path,
+      and begins listening for inbound sessions"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -38,17 +39,22 @@ acceptance_criteria:
     given: "An EC2 instance with @cello/connect installed and a
       registered agent identity"
     when: "the demo agent process starts"
-    then: "it connects to the production directory and relay; it
-      appears as reachable in the directory; cello_status shows
-      the agent as online"
+    then: "cello_status returns { registered: true, agentId: '<hex>' };
+      AND a query to the production directory agent-lookup endpoint
+      confirms the demo agent's AgentID is present and marked reachable;
+      demo.connection.failed has not been logged"
     test_type: integration
     component_under_test: demo-agent
+    notes: "Transport-level observable: the directory agent-lookup
+      confirms the agent registered over the real network, not just
+      that a local process returned a value."
 
   - id: AC-002
-    given: "The demo agent is running and reachable"
+    given: "The demo agent is running and reachable on the network"
     when: "another registered CELLO agent sends a message"
-    then: "the demo agent receives the message and responds with
-      the canned string within 5 seconds; the response is delivered
+    then: "the demo agent receives the message; demo.message.received
+      is logged at INFO; the demo agent responds with the canned string;
+      demo.response.sent is logged at INFO; the response is delivered
       to the sender via cello_receive"
     test_type: integration
     component_under_test: demo-agent
@@ -56,9 +62,10 @@ acceptance_criteria:
   - id: AC-003
     given: "The demo agent is running"
     when: "a connection request arrives from any registered agent"
-    then: "the request is accepted automatically; no manual
-      intervention required; the session is established and messages
-      can flow"
+    then: "the request is accepted automatically; the session is
+      established with a non-null session_id; cello_status on the
+      connecting agent shows the session_id matching what the demo
+      agent sees; messages can flow in both directions"
     test_type: integration
     component_under_test: demo-agent
 
@@ -66,11 +73,15 @@ acceptance_criteria:
     given: "The EC2 instance security group"
     when: "network rules are inspected"
     then: "inbound: SSH from a management IP only (for deployment);
-      outbound: HTTPS (443) to the CELLO directory ALB, TCP 4000
-      to the CELLO relay, and nothing else; no unrestricted egress;
-      no inbound from the public internet on any service port"
+      outbound: HTTPS (443) to 0.0.0.0/0 only — all CELLO connectivity
+      (directory ALB, relay via circuit relay path) goes over HTTPS;
+      no outbound port 4000 (that is the relay's internal VPC health
+      check port, not accessible from EC2 outside the VPC)"
     test_type: manual
     component_under_test: demo-agent
+    notes: "The demo agent on EC2 reaches the relay via the libp2p
+      circuit relay path through the directory ALB over HTTPS (443).
+      Port 4000 is internal VPC only per CONTEXT.md."
 
   - id: AC-005
     given: "The demo agent code"
@@ -85,22 +96,26 @@ acceptance_criteria:
   - id: AC-006
     given: "The demo agent process"
     when: "it crashes or is killed"
-    then: "a systemd unit (or equivalent) restarts it automatically;
-      it reconnects to the CELLO network and resumes listening;
-      no manual intervention required"
-    test_type: integration
+    then: "a systemd unit file exists at /etc/systemd/system/cello-demo.service
+      and is enabled (systemctl is-enabled returns enabled); systemd
+      restarts the process automatically; the agent reconnects to the
+      CELLO network; demo.connection.failed followed by a successful
+      ops_agent.started (or equivalent) is observable in journalctl"
+    test_type: manual
     component_under_test: demo-agent
+    notes: "The systemd unit is provisioned by the EC2 user-data script
+      or an Ansible playbook — not a manual step. Verified by:
+      sudo systemctl kill cello-demo && sleep 5 && systemctl is-active
+      cello-demo (should return 'active')."
 
   - id: AC-007
-    given: "The demo agent's AgentID"
-    when: "published in the @cello/connect README or quick-start docs"
-    then: "a stranger who just installed @cello/connect can send a
-      message to this AgentID and receive the canned response,
-      proving the full protocol works: connection request → session
-      establishment → encrypted message exchange → response"
+    given: "The demo agent's AgentID published in README or quick-start docs"
+    when: "a stranger who just installed @cello/connect sends a message"
+    then: "the stranger's agent receives the canned response, proving
+      the full protocol works; this AC is verified as part of M6-E2E-001;
+      DEMO-001 cannot be marked closed until M6-E2E-001 passes"
     test_type: integration
     component_under_test: demo-agent
-    notes: "This AC is verified as part of M6-E2E-001"
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
@@ -110,7 +125,7 @@ security_invariants:
     adversarial_condition: "even when the demo agent's AgentID is
       public and its EC2 instance IP is discoverable, the key file
       is readable only by the demo-agent system user (chmod 600)
-      and the instance has no inbound service ports"
+      and the instance has no inbound service ports open"
     test_type: manual
     component_under_test: demo-agent
 
@@ -119,7 +134,9 @@ security_invariants:
       from conversations"
     adversarial_condition: "even when hundreds of strangers message
       the demo agent, no message content persists on disk or appears
-      in logs; only the canned response is generated"
+      in logs; only the canned response is generated; verified by
+      asserting the receive handler does not pass message content
+      to any logger or file write"
     test_type: unit
     component_under_test: demo-agent
 
@@ -131,19 +148,22 @@ observability:
       trigger: "Inbound message received from any agent"
       context_fields: [senderAgentId, sessionId]
       correlationId: false
-      notes: "Message content is never logged"
+      notes: "Message content is never logged. Add to canonical event
+        taxonomy in the pipeline discussion log at story close."
 
     - name: demo.response.sent
       level: info
       trigger: "Canned response sent"
       context_fields: [recipientAgentId, sessionId]
       correlationId: false
+      notes: "Add to canonical event taxonomy at story close."
 
   error_events:
     - name: demo.connection.failed
       level: error
       trigger: "Failed to connect to CELLO network on startup"
-      context_fields: [reason]
+      context_fields: [reason, directoryUrl, relayMultiaddr]
+      notes: "Add to canonical event taxonomy at story close."
 
   alarms: []
   notes: "Demo agent is a best-effort service. No pager-level alarms.
