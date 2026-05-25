@@ -351,9 +351,11 @@ for REGION in "${REGIONS[@]}"; do
   B64_MASTER=$(printf '%s' "${MASTER_PASS}" | base64 | tr -d '\n')
 
   # Create cello_replication user (SI-001: REPLICATION privilege only).
-  # Idempotent: CREATE USER + ALTER in one statement. If the user already exists,
-  # CREATE fails but ALTER resets the password to match Secrets Manager.
-  # We try CREATE first; if it fails with "already exists", run ALTER instead.
+  # RDS master user needs rds_replication role to grant REPLICATION attribute.
+  # Grant it first (idempotent), then CREATE USER. If user already exists, ALTER password.
+  GRANT_REPL_SQL="GRANT rds_replication TO postgres;"
+  ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${GRANT_REPL_SQL}" >/dev/null 2>&1 || true
+
   CREATE_USER_SQL="CREATE USER cello_replication WITH REPLICATION LOGIN PASSWORD '${REPL_PASS}';"
   EXEC_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${CREATE_USER_SQL}" 2>&1)
   if echo "${EXEC_OUTPUT}" | grep -q "already exists"; then
