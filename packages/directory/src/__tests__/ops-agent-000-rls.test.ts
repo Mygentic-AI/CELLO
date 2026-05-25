@@ -43,18 +43,15 @@ const opsAgentUrl = DATABASE_URL.replace(
 const describeIntegration = isLocal ? describe : describe.skip;
 
 let opsAgentPool: pg.Pool;
-let superPool: pg.Pool;
 
 beforeAll(async () => {
   if (!isLocal) return;
-  superPool = new pg.Pool({ connectionString: DATABASE_URL });
   opsAgentPool = new pg.Pool({ connectionString: opsAgentUrl });
 });
 
 afterAll(async () => {
   if (!isLocal) return;
   await opsAgentPool?.end();
-  await superPool?.end();
 });
 
 // ─── Helper: attempt a query and return the pg error code, or null on success ───

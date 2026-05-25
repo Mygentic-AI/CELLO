@@ -21,6 +21,7 @@ M6 migrations start at **V24**. All version numbers are reserved by OPS-AGENT-00
 |---------|------|-------|-------------|
 | V24 | V24__registrations.sql | OPS-AGENT-000 | registrations table — registration state machine |
 | V25 | V25__pre_authorization_tokens.sql | OPS-AGENT-000 | pre_authorization_tokens — pre-auth token single-use store |
+| V26 | V26__cello_ops_agent_role.sql | OPS-AGENT-000 | cello_ops_agent role — scoped INSERT/SELECT/UPDATE on registrations and pre_authorization_tokens |
 
 ---
 
