@@ -300,7 +300,7 @@ Publish as `@cello/connect@beta`, not `latest`. Promote to `latest` only as an e
 | Production Telegram bot (BotFather) | Done (2026-05-25) | `@CelloConnectBot` — token in Secrets Manager `cello/ops-agent/telegram-bot-token` |
 | Staging Telegram bot (BotFather) | Done (2026-05-25) | `@CelloConnectStagingBot` — token in Secrets Manager `cello/ops-agent/telegram-bot-token-staging` |
 | Telegram sandbox bot (test API) | N/A | Staging bot (`@CelloConnectStagingBot`) satisfies all OPS-AGENT-003 integration ACs — separate sandbox not needed |
-| npm `@cello` scope configured | Pending | Required for REPOSPLIT-002 publish |
+| npm `@cello-protocol` scope | Done (2026-05-26) | Org created; `NPM_TOKEN` in cello-client GitHub Secrets; **expires 2026-08-24** |
 
 ---
 
