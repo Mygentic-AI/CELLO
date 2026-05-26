@@ -5,6 +5,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --build",
@@ -12,9 +15,11 @@
     "lint": "eslint src"
   },
   "dependencies": {
-    "@cello-protocol/interfaces": "workspace:*"
+    "@cello-protocol/interfaces": "workspace:*",
+    "pg": "8.18.0"
   },
   "devDependencies": {
-    "@types/node": "^25.6.2"
+    "@types/node": "^25.6.2",
+    "@types/pg": "8.20.0"
   }
 }

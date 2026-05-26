@@ -50,7 +50,7 @@ export type RegistrationState =
   | { state: "AWAITING_EMAIL" }
   | {
       state: "AWAITING_EMAIL_OTP";
-      /** bcrypt/argon2 hash of the OTP — stored in the record, compared at verification */
+      /** SHA-256(otp + salt) hex — stored in the record, compared at verification (SI-001) */
       otpHash: string;
       /** When this OTP expires (15-minute window) */
       otpExpiresAt: Date;
