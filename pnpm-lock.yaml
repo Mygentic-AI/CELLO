@@ -60,15 +60,12 @@ importers:
         specifier: ^4.4.2
         version: 4.4.2
     devDependencies:
-      '@cello-protocol/directory':
-        specifier: workspace:*
-        version: link:../directory
-      '@cello-protocol/relay':
-        specifier: workspace:*
-        version: link:../relay
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
         version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+      '@types/node':
+        specifier: ^25.6.2
+        version: 25.6.2
       cbor-x:
         specifier: ^1.6.0
         version: 1.6.4

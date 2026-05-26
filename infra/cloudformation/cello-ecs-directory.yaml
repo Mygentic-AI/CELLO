@@ -67,7 +67,14 @@ Resources:
           Image: !Ref ImageUri
           Essential: true
           PortMappings:
+            # Port 8080: libp2p WebSocket listener (REPOSPLIT-001 AC-007).
+            # ALB forwards external port 80 → container port 8080 (WS upgrade).
             - ContainerPort: 8080
+              Protocol: tcp
+            # Port 9090: health check HTTP server. Not exposed via ALB.
+            # ECS health checks and ALB target group health checks use this port.
+            # Separated from port 8080 so the WS listener can own port 8080.
+            - ContainerPort: 9090
               Protocol: tcp
           Environment:
             - Name: CELLO_ENV
@@ -75,7 +82,12 @@ Resources:
             - Name: NODE_ID
               Value: !Ref AWS::Region
             - Name: HEALTH_PORT
-              Value: "8080"
+              Value: "9090"
+            # REPOSPLIT-001 AC-007: explicit WS listen address so this is visible in IaC
+            # and a new-region deploy works without manual steps.
+            # Port 8080 matches the ALB target group (HTTP forward → container 8080).
+            - Name: CELLO_DIRECTORY_WS_LISTEN_ADDR
+              Value: "/ip4/0.0.0.0/tcp/8080/ws"
             - Name: HOME
               Value: /tmp
             - Name: CELLO_RELAY_MULTIADDR
@@ -121,7 +133,9 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: directory
           HealthCheck:
-            Command: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+            # REPOSPLIT-001 AC-007: health server moved to port 9090 so port 8080 is
+            # free for the libp2p WebSocket listener.
+            Command: ["CMD-SHELL", "curl -f http://localhost:9090/health || exit 1"]
             Interval: 30
             Timeout: 5
             Retries: 3
@@ -141,6 +155,12 @@ Resources:
       SecurityGroups:
         - !ImportValue
           Fn::Sub: "cello-${Environment}-alb-sg"
+      # REPOSPLIT-001 AC-007: 300-second idle timeout so long-lived WebSocket
+      # connections (libp2p sessions) are not silently dropped by the ALB.
+      # AWS default is 60 seconds, which drops idle WebSocket connections.
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: "300"
       Tags:
         - Key: Project
           Value: cello
@@ -148,6 +168,8 @@ Resources:
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
+      # REPOSPLIT-001 AC-007: port 8080 is the libp2p WebSocket listener.
+      # ALB forwards external port 80 → container port 8080 for WS connections.
       Port: 8080
       Protocol: HTTP
       TargetType: ip
@@ -155,7 +177,9 @@ Resources:
         Fn::Sub: "cello-${Environment}-vpc-id"
       HealthCheckPath: /health
       HealthCheckProtocol: HTTP
-      HealthCheckPort: "8080"
+      # REPOSPLIT-001 AC-007: health check uses port 9090 (health server port)
+      # because port 8080 is now owned by the libp2p WebSocket listener.
+      HealthCheckPort: "9090"
       HealthyThresholdCount: 2
       UnhealthyThresholdCount: 3
       HealthCheckIntervalSeconds: 30
