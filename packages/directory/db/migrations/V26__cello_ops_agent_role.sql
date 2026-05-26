@@ -108,6 +108,6 @@ GRANT INSERT, SELECT, UPDATE ON pre_authorization_tokens TO cello_ops_agent;
 -- Explicitly revoke DELETE to enforce append-only semantics (SI-002)
 REVOKE DELETE ON pre_authorization_tokens FROM cello_ops_agent;
 
--- Set dev password for local environment. Production password is set by the
--- rotation Lambda (cello/{env}/ops-agent/rds-credentials, provisioned in OPS-AGENT-005A).
-ALTER ROLE cello_ops_agent PASSWORD 'cello_ops_agent_dev';
+-- Password is set by docker/postgres/initdb/01-dev-role-passwords.sql (local)
+-- or the rotation Lambda cello/{env}/ops-agent/rds-credentials (production, OPS-AGENT-005A).
+-- Never stored in migration SQL.

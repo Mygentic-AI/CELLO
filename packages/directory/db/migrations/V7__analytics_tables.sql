@@ -23,7 +23,7 @@
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cello_analytics') THEN
-    CREATE ROLE cello_analytics LOGIN PASSWORD 'cello_analytics_dev'; -- dev-only; production role provisioned by IaC
+    CREATE ROLE cello_analytics LOGIN; -- password set by docker/postgres/initdb/ (local) or rotation Lambda (production)
   END IF;
 END;
 $$;

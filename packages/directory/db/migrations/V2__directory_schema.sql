@@ -26,7 +26,7 @@
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cello_service') THEN
-    CREATE ROLE cello_service LOGIN PASSWORD 'cello_service_dev'; -- dev-only; production role provisioned by IaC, not Flyway
+    CREATE ROLE cello_service LOGIN; -- password set by docker/postgres/initdb/ (local) or rotation Lambda (production)
   END IF;
 END;
 $$;
