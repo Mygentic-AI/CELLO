@@ -411,6 +411,7 @@ describeIntegration("RegistrationEngine integration", () => {
     const rateLimitedEvent = loggerState.events.find((e) => e.event === "registration.otp.rate_limited");
     expect(rateLimitedEvent).toBeDefined();
     expect(rateLimitedEvent?.method).toBe("warn");
+    expect(rateLimitedEvent?.context?.registrationId).toBeDefined();
     expect(rateLimitedEvent?.context?.emailDomain).toBe("example.com");
     expect(rateLimitedEvent?.context?.sendCount).toBeGreaterThanOrEqual(5);
     expect(rateLimitedEvent?.context?.correlationId).toBeDefined();

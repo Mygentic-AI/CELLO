@@ -71,11 +71,6 @@ export type RegistrationRow = {
   chain_hash: string;
 };
 
-// ─── Terminal states ──────────────────────────────────────────────────────────
-// The IN clause values are inlined as string literals in SQL for pg parameterization
-// compatibility. Named constant kept for documentation purposes.
-// const TERMINAL_STATES = ["EXPIRED", "FAILED", "PRE_AUTH_TOKEN_ISSUED"] as const;
-
 // ─── Chain hash computation ───────────────────────────────────────────────────
 
 /**

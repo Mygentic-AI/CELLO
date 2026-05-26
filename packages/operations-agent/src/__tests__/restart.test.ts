@@ -112,8 +112,11 @@ describeIntegration("restart recovery (AC-007, AC-010)", () => {
     });
     await engine1.start();
 
+    // Use userId-derived phone to avoid phone_stub_hash unique constraint conflicts
+    // across test runs when a prior run left an active record.
+    const phone1 = `+1${userId.replace(/\D/g, "").slice(0, 10).padEnd(10, "0")}`;
     await ch1.inject(userId, "hello");
-    await ch1.inject(userId, `CONTACT:${userId}:+447911999888`);
+    await ch1.inject(userId, `CONTACT:${userId}:${phone1}`);
     await ch1.inject(userId, "restart@example.com");
 
     // Verify we're in AWAITING_EMAIL_OTP
@@ -197,8 +200,9 @@ describeIntegration("restart recovery (AC-007, AC-010)", () => {
     await engine1.start();
 
     // Drive through full flow
+    const phone2 = `+1${userId.replace(/\D/g, "").slice(0, 10).padEnd(10, "0")}`;
     await ch1.inject(userId, "start");
-    await ch1.inject(userId, `CONTACT:${userId}:+447911555444`);
+    await ch1.inject(userId, `CONTACT:${userId}:${phone2}`);
     await ch1.inject(userId, "operator@mycompany.io");
 
     // Pause before completing OTP — simulate restart here

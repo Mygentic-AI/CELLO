@@ -266,7 +266,7 @@ export class RegistrationStateMachine {
     const emailDomain = extractEmailDomain(email);
 
     // Check OTP rate limit (AC-009)
-    const rateLimited = this.#checkAndIncrementRateLimit(emailDomain, record.id, correlationId);
+    const rateLimited = this.#checkAndIncrementRateLimit(emailDomain, from, record.id, correlationId);
     if (rateLimited) {
       return record;
     }
@@ -397,7 +397,7 @@ export class RegistrationStateMachine {
    * Returns true if rate-limited (caller should abort), false if within limit.
    * Emits registration.otp.rate_limited at WARN if limit exceeded.
    */
-  #checkAndIncrementRateLimit(emailDomain: string, registrationId: string, correlationId: string): boolean {
+  #checkAndIncrementRateLimit(emailDomain: string, channelUserId: string, registrationId: string, correlationId: string): boolean {
     const now = new Date();
     const entry = this.#rateLimitMap.get(emailDomain);
 
@@ -417,7 +417,7 @@ export class RegistrationStateMachine {
           correlationId,
         });
         this.#deps.channel
-          .send(registrationId, "Too many verification code requests. Please wait before trying again.")
+          .send(channelUserId, "Too many verification code requests. Please wait before trying again.")
           .catch(() => {/* ignore send error */});
         return true;
       }
@@ -431,5 +431,3 @@ export class RegistrationStateMachine {
   }
 }
 
-// Export OTP_TTL_MS and REGISTRATION_TTL_MS for use in tests
-export { OTP_TTL_MS, REGISTRATION_TTL_MS };
