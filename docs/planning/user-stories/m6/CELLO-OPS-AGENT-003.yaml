@@ -50,6 +50,16 @@ behavior:
       { method, errorCode, description } and propagates the error
       to the caller; the polling loop continues on the next cycle"
 
+  - trigger: "When getUpdates returns HTTP 409 Conflict"
+    action: "the adapter logs telegram.poller.conflict at ERROR with
+      { botUsername } and the process exits with code 1; this indicates
+      another instance is already polling the same bot token — running
+      two pollers causes undefined behavior (updates delivered randomly,
+      some dropped); the ECS service restarts the task, and the
+      DeploymentConfiguration (MinimumHealthyPercent=0) ensures only
+      one task is active; this is the safety net for template errors,
+      accidental scale-up, or manual desiredCount changes"
+
   - trigger: "When the TelegramAdapter confirms processing of an update"
     action: "it calls getUpdates with offset = update_id + 1 on the
       NEXT poll cycle, which tells Telegram's server to mark all updates
@@ -145,6 +155,21 @@ acceptance_criteria:
     notes: "This is the partial E2E flow for this story's boundary.
       Transport-level observables: sendMessage call count and
       update_id presence confirm the real Telegram API was used."
+
+  - id: AC-006c
+    given: "A TelegramAdapter that receives HTTP 409 Conflict from getUpdates
+      (simulated via mocked HTTP client)"
+    when: "the polling loop processes the 409 response"
+    then: "telegram.poller.conflict is logged at ERROR with { botUsername };
+      the process exits with code 1; no further getUpdates calls are made;
+      the exit allows ECS to restart the task (which will succeed once the
+      competing poller stops)"
+    test_type: unit
+    component_under_test: operations-agent
+    notes: "Safety net for the at-most-one constraint. Even with
+      MinimumHealthyPercent=0 in ECS, human error (manual scale-up, template
+      typo) could run two tasks. The adapter fails-fast rather than silently
+      competing for updates."
 
   - id: AC-006b
     given: "A TelegramAdapter that has processed update_id=100"
@@ -252,6 +277,13 @@ observability:
       level: warn
       trigger: "contact.user_id does not match message.from.id"
       context_fields: [fromId, contactUserId, correlationId]
+
+    - name: telegram.poller.conflict
+      level: error
+      trigger: "getUpdates returns HTTP 409 — another instance is polling"
+      context_fields: [botUsername]
+      correlationId: false
+      notes: "Process exits after logging. ECS restarts the task."
 
     - name: telegram.api.error
       level: warn

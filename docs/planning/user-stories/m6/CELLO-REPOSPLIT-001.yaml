@@ -124,6 +124,40 @@ acceptance_criteria:
     notes: "Verification: read README cold. Can you complete the quick
       start in under 5 minutes?"
 
+  - id: AC-007
+    given: "The production directory ALB (cello-dir-dev-*.elb.amazonaws.com)
+      and a client machine outside the VPC (developer laptop or demo EC2)"
+    when: "a libp2p WebSocket dial is attempted from outside the VPC to
+      the directory ALB on port 443 (or 80)"
+    then: "the connection succeeds; the libp2p handshake (Noise XX) completes;
+      the client can open a stream on /cello/frost/1.0.0 or /cello/session/1.0.0;
+      the directory responds to protocol frames; this confirms the full
+      transport path: external client → ALB → directory container (WebSocket);
+      the deliverable is a working CELLO_DIRECTORY_URL (ALB hostname) that
+      REPOSPLIT-002 AC-003 can bake in as the production endpoint"
+    test_type: integration
+    component_under_test: transport
+    notes: "This resolves the transport_path_prerequisite documented in
+      REPOSPLIT-002. The current directory listens on TCP:4000 (libp2p) which
+      is NOT ALB-accessible. To pass this AC, the directory must be configured
+      to listen on a WebSocket multiaddr that the ALB can forward to.
+
+      Implementation options (choose one):
+      (1) Directory adds a /ws listener on port 8080 alongside the health server.
+          ALB already forwards port 80 → 8080. WebSocket upgrade goes through the
+          existing HTTP listener. Client dials /dns4/<alb>/tcp/80/ws/p2p/<peerID>.
+      (2) Second ALB listener on port 443 (HTTPS) with WebSocket support, forwarding
+          to a new container port (e.g. 4000/ws). Client uses wss://.
+      (3) Separate relay ALB exposing the relay's libp2p port. Client dials relay
+          directly, bypasses circuit relay entirely.
+
+      Option (1) is simplest — reuses existing ALB, existing port mapping, existing
+      security group rules. The relay remains VPC-internal; the directory acts as
+      circuit relay (already configured via circuitRelayServer() in transport/node.ts).
+
+      This AC blocks REPOSPLIT-002 AC-003, DEMO-001 AC-004b, and M6-E2E-001.
+      Must complete before any of those stories can pass."
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants: []
 

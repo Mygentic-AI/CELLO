@@ -25,10 +25,15 @@ behavior:
       subject 'Your CELLO verification code'; the OTP is the only
       actionable content"
 
-  - trigger: "When SES returns a permanent failure (bounce, complaint)"
-    action: "sendOtp() throws a DeliveryError with the SES error
-      type; otp.delivery.failed is logged at ERROR with { emailDomain,
-      sesErrorType, correlationId }"
+  - trigger: "When SES returns a permanent failure (hard bounce)"
+    action: "sendOtp() throws a DeliveryError with sesErrorType = 'Bounce';
+      otp.delivery.failed is logged at ERROR with { emailDomain,
+      sesErrorType, correlationId }; the state machine (OPS-AGENT-002) catches
+      this and transitions back to AWAITING_EMAIL (not AWAITING_EMAIL_OTP),
+      prompting the user to provide a different email address; the bounced
+      address is never retried in this registration — a second attempt with
+      the same bounced address within the same registration returns an
+      immediate error without calling SES"
 
   - trigger: "When SES returns a transient failure (throttling)"
     action: "the service retries once after 1 second; if the retry
@@ -75,13 +80,23 @@ acceptance_criteria:
     component_under_test: operations-agent
 
   - id: AC-004
-    given: "SES returns a bounce notification for the email address"
+    given: "SES returns a hard bounce for the email address"
     when: "sendOtp() processes the SES response"
     then: "DeliveryError is thrown with type = 'bounce'; the OTP
       is not considered delivered; otp.delivery.failed is logged at
-      ERROR with { emailDomain, sesErrorType: 'Bounce', correlationId }"
+      ERROR with { emailDomain, sesErrorType: 'Bounce', correlationId };
+      the state machine transitions back to AWAITING_EMAIL (not
+      AWAITING_EMAIL_OTP) and prompts for a different address; a
+      second sendOtp() call with the same bounced address within the
+      same registration returns an immediate DeliveryError without
+      calling SES (prevents repeated bounces from the same bad address)"
     test_type: unit
     component_under_test: operations-agent
+    notes: "SES has a reputation system. Repeated hard bounces can trigger
+      account review and domain suspension. The bounced-address check is
+      per-registration (in-memory set). A new registration for the same
+      phone_stub_hash may retry the address — the SES bounce rate metric
+      handles the aggregate case."
 
   - id: AC-005
     given: "SES returns a throttling error on the first attempt"

@@ -303,6 +303,23 @@ acceptance_criteria:
       conflicting structures. 005B expects a specific Dockerfile and pipeline
       that nobody explicitly designed. This AC prevents that."
 
+  - id: AC-012
+    given: "setup-replication.sh in infra/"
+    when: "OPS-AGENT-000 is merged"
+    then: "the PUBLICATION_TABLES variable in setup-replication.sh includes
+      registrations and pre_authorization_tokens; the GRANT SELECT section
+      includes both tables for the cello_replication role; when
+      setup-replication.sh is run against a database with V24+ applied,
+      ALTER PUBLICATION cello_pub ADD TABLE and GRANT SELECT execute
+      without error"
+    test_type: integration
+    component_under_test: directory
+    notes: "The story that creates the tables must also update the replication
+      tooling. This is design-time work (updating the script). Execution on
+      live nodes happens in OPS-AGENT-005B AC-007b deployment sequence.
+      Without this, 005B discovers the missing publication update at deploy
+      time — same as M5 FEDERATION-001 shipping incomplete V18."
+
   - id: AC-010-integration-gate
     given: "All interface files, type definitions, stubs, migration SQL files,
       and the packages/operations-agent/ scaffold produced by this story"

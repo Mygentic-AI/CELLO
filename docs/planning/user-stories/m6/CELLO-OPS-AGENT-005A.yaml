@@ -291,26 +291,36 @@ acceptance_criteria:
       path-pattern /internal/* + source-ip NOT 10.0.0.0/16 → fixed-response 403.
       Default rule (path /internal/* from VPC) → forward to target group.
       The Ops Agent uses the ALB on port 80/443, not direct task:8080.
-      AC-009b remains valid as a layer-4 SG smoke test for the direct path."
+      AC-009b remains valid as a layer-4 SG smoke test for the direct path.
+
+      VPC routing note: The Ops Agent has AssignPublicIp: ENABLED (public subnet),
+      but intra-VPC traffic to an ALB always uses the source task's private IP,
+      not its public IP. The source-ip condition (10.0.0.0/16) correctly matches
+      the Ops Agent's private IP. If AC-009b returns 403, the source-ip condition
+      is misconfigured — debug by checking the ALB access logs for the source IP."
 
   - id: AC-009e
     given: "The cello_ops_agent role created by Flyway V25 (no password)"
-    when: "the Operations Agent ECS service is deployed for the first time"
-    then: "the initial password is set BEFORE the Ops Agent task launches;
-      deploy.sh must: (1) deploy the directory stack first (Flyway creates
-      the role via V25), (2) trigger manual rotation via
-      'aws secretsmanager rotate-secret --secret-id cello/{env}/ops-agent/rds-credentials'
-      BEFORE deploying cello-ecs-operations-agent, (3) only then deploy the
-      Ops Agent stack; verified by: the Ops Agent task connects to PostgreSQL
-      on first attempt without health check failures"
+    when: "deploy.sh deploys the Operations Agent stack for the first time
+      in any region"
+    then: "deploy.sh contains automated first-deploy detection: after the
+      directory stack deploys (Flyway creates the role), deploy.sh checks
+      if cello/{env}/ops-agent/rds-credentials still contains
+      PLACEHOLDER_POPULATE_VIA_CLI; if so, it triggers
+      'aws secretsmanager rotate-secret' and polls until rotation completes
+      (SecretVersionStage AWSCURRENT changes) BEFORE deploying the
+      cello-ecs-operations-agent stack; this logic is in deploy.sh code,
+      not a manual runbook step; verified by: running deploy.sh in a fresh
+      region — the Ops Agent connects on first attempt without health check
+      failures; the region-expansion test passes ('zero manual steps')"
     test_type: integration
     component_under_test: infrastructure
     notes: "Same class as M5 SECOPS-004 bug #4: role exists but has no usable
-      password. The rotation Lambda sets the password using the admin credential.
-      On subsequent deploys this AC is a no-op (password already set). Only
-      the FIRST deploy requires explicit rotation trigger between directory
-      and ops-agent stack deployments. deploy.sh can detect first-deploy by
-      checking if the secret value is still PLACEHOLDER_POPULATE_VIA_CLI."
+      password. On subsequent deploys (secret value is not PLACEHOLDER), the
+      rotation check is skipped — idempotent. The rotation Lambda sets the
+      password using the RDS admin credential. This MUST be automated code
+      in deploy.sh — not prose or a runbook — to satisfy M5 rule 7:
+      'would this work in a brand-new region with zero manual steps?'"
 
   - id: AC-010-integration-gate
     given: "The Operations Agent ECS service running with the stub container
