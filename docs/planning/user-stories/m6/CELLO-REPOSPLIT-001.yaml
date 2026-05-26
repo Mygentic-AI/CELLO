@@ -219,6 +219,15 @@ observability:
 
 # ─── Implementation Notes ───────────────────────────────────
 implementation_notes:
+  cello_client_repo: >
+    The cello-client repository already exists at
+    github.com/Mygentic-AI/cello-client and is cloned locally at
+    /Users/andrep/Documents/code/cello-client. It has been reset to a
+    clean single-commit stub (2026-05-26) containing only README.md and
+    .claude/CLAUDE.md. There is no prior structure to preserve — build
+    everything from scratch per the ACs. Work directly in this existing
+    repo; do not initialize a new one.
+
   prerequisite_first_commit: >
     First commit of this story must be the tsconfig fix in trustless-cello
     (AC-001). Everything else in this story lives in cello-client. Do not
