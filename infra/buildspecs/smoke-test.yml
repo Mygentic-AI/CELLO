@@ -1,0 +1,18 @@
+version: 0.2
+phases:
+  install:
+    runtime-versions:
+      nodejs: 24
+    commands:
+      - npm install -g pnpm@10.33.2
+      - pnpm install --frozen-lockfile
+  build:
+    commands:
+      - export START_MS=$(date +%s%3N)
+      - pnpm --filter @cello-protocol/crypto run typecheck
+      - pnpm --filter @cello-protocol/interfaces run typecheck
+      - pnpm --filter @cello-protocol/protocol-types run typecheck
+      - pnpm --filter @cello-protocol/transport run typecheck
+      - pnpm --filter @cello-protocol/client run typecheck
+      - pnpm --filter @cello-protocol/e2e-tests run typecheck
+      - node packages/e2e-tests/dist/smoke/run-smoke-tests.js

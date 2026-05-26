@@ -509,60 +509,21 @@ Resources:
     Properties:
       Name: cello-staging-deploy-directory-build
       # P — Pseudocode:
-      # 1. Read STAGING_IMAGE_URI from env (set by CodePipeline from Build stage output)
+      # 1. Read STAGING_IMAGE_URI from SSM (written by Build stage)
       # 2. Run: aws ecs describe-task-definition cello-directory-{env} → clone → swap image URI
       # 3. Register new task revision
       # 4. Run: aws ecs update-service --cluster cello-{env} --service cello-directory-{env}
-      # 5. Run: aws ecs wait services-stable (10-minute timeout)
+      # 5. Poll rolloutState every 15s until COMPLETED or FAILED (up to 15 minutes)
       # 6. On success: emit pipeline.staging.deployed {pipeline, commitSha, imageDigest, durationMs}
       # 7. On failure: emit pipeline.staging.deploy.failed {pipeline, commitSha, reason}; exit 1
       #
-      # NO_SOURCE: IMAGE_URI is read from SSM Parameter Store at runtime.
-      # Build stage writes IMAGE_URI to SSM; this project reads it with get-parameter.
+      # CODEPIPELINE source: buildspec lives in repo so it updates on git push.
+      # IMAGE_URI is read from SSM Parameter Store at runtime (not from source artifact).
       Source:
-        Type: NO_SOURCE
-        BuildSpec: |
-          version: 0.2
-          phases:
-            build:
-              commands:
-                - |
-                  set -e
-                  STAGING_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/directory-image-uri --query Parameter.Value --output text --region us-east-1)
-                  COMMIT_SHA=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown} | cut -c1-7)
-                  START_MS=$(date +%s%3N)
-                  TASK_DEF=$(aws ecs describe-task-definition \
-                    --task-definition cello-directory-${CELLO_ENV} \
-                    --region us-east-1 \
-                    --query "taskDefinition" --output json)
-                  NEW_TASK_DEF=$(echo "$TASK_DEF" | jq \
-                    --arg IMAGE "$STAGING_IMAGE_URI" \
-                    '(.containerDefinitions[] | select(.name=="directory") | .image) |= $IMAGE
-                    | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
-                  NEW_TASK_ARN=$(aws ecs register-task-definition \
-                    --region us-east-1 \
-                    --cli-input-json "$NEW_TASK_DEF" \
-                    --query "taskDefinition.taskDefinitionArn" --output text)
-                  aws ecs update-service \
-                    --cluster cello-${CELLO_ENV} \
-                    --service cello-directory-${CELLO_ENV} \
-                    --task-definition $NEW_TASK_ARN \
-                    --region us-east-1 || {
-                      echo '{"event":"pipeline.staging.deploy.failed","pipeline":"cello-directory-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"ecs update-service failed"}'
-                      exit 1
-                    }
-                  aws ecs wait services-stable \
-                    --cluster cello-${CELLO_ENV} \
-                    --services cello-directory-${CELLO_ENV} \
-                    --region us-east-1 || {
-                      echo '{"event":"pipeline.staging.deploy.failed","pipeline":"cello-directory-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"ecs wait services-stable timed out"}'
-                      exit 1
-                    }
-                  END_MS=$(date +%s%3N)
-                  DURATION_MS=$((END_MS - START_MS))
-                  echo '{"timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"pipeline.staging.deployed","pipeline":"cello-directory-pipeline","commitSha":"'${COMMIT_SHA}'","imageDigest":"'${STAGING_IMAGE_URI}'","durationMs":'${DURATION_MS}'}'
+        Type: CODEPIPELINE
+        BuildSpec: infra/buildspecs/staging-deploy-directory.yml
       Artifacts:
-        Type: NO_ARTIFACTS
+        Type: CODEPIPELINE
       Environment:
         Type: LINUX_CONTAINER
         Image: aws/codebuild/standard:7.0
@@ -576,51 +537,13 @@ Resources:
     Type: AWS::CodeBuild::Project
     Properties:
       Name: cello-staging-deploy-relay-build
-      # NO_SOURCE: IMAGE_URI is read from SSM Parameter Store at runtime.
+      # CODEPIPELINE source: buildspec lives in repo so it updates on git push.
+      # IMAGE_URI is read from SSM Parameter Store at runtime (not from source artifact).
       Source:
-        Type: NO_SOURCE
-        BuildSpec: |
-          version: 0.2
-          phases:
-            build:
-              commands:
-                - |
-                  set -e
-                  STAGING_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/relay-image-uri --query Parameter.Value --output text --region us-east-1)
-                  COMMIT_SHA=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown} | cut -c1-7)
-                  START_MS=$(date +%s%3N)
-                  TASK_DEF=$(aws ecs describe-task-definition \
-                    --task-definition cello-relay-${CELLO_ENV} \
-                    --region us-east-1 \
-                    --query "taskDefinition" --output json)
-                  NEW_TASK_DEF=$(echo "$TASK_DEF" | jq \
-                    --arg IMAGE "$STAGING_IMAGE_URI" \
-                    '(.containerDefinitions[] | select(.name=="relay") | .image) |= $IMAGE
-                    | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
-                  NEW_TASK_ARN=$(aws ecs register-task-definition \
-                    --region us-east-1 \
-                    --cli-input-json "$NEW_TASK_DEF" \
-                    --query "taskDefinition.taskDefinitionArn" --output text)
-                  aws ecs update-service \
-                    --cluster cello-${CELLO_ENV} \
-                    --service cello-relay-${CELLO_ENV} \
-                    --task-definition $NEW_TASK_ARN \
-                    --region us-east-1 || {
-                      echo '{"event":"pipeline.staging.deploy.failed","pipeline":"cello-relay-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"ecs update-service failed"}'
-                      exit 1
-                    }
-                  aws ecs wait services-stable \
-                    --cluster cello-${CELLO_ENV} \
-                    --services cello-relay-${CELLO_ENV} \
-                    --region us-east-1 || {
-                      echo '{"event":"pipeline.staging.deploy.failed","pipeline":"cello-relay-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"ecs wait services-stable timed out"}'
-                      exit 1
-                    }
-                  END_MS=$(date +%s%3N)
-                  DURATION_MS=$((END_MS - START_MS))
-                  echo '{"timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"pipeline.staging.deployed","pipeline":"cello-relay-pipeline","commitSha":"'${COMMIT_SHA}'","imageDigest":"'${STAGING_IMAGE_URI}'","durationMs":'${DURATION_MS}'}'
+        Type: CODEPIPELINE
+        BuildSpec: infra/buildspecs/staging-deploy-relay.yml
       Artifacts:
-        Type: NO_ARTIFACTS
+        Type: CODEPIPELINE
       Environment:
         Type: LINUX_CONTAINER
         Image: aws/codebuild/standard:7.0
@@ -646,29 +569,10 @@ Resources:
       # 4. Run: node packages/e2e-tests/dist/smoke/run-smoke-tests.js
       # 5. Smoke runner emits pipeline.staging.smoke_test.passed or pipeline.staging.smoke_test.failed
       # 6. Exit code from runner propagates to CodeBuild (non-zero = pipeline fails)
+      # CODEPIPELINE source: buildspec lives in repo so it updates on git push.
       Source:
         Type: CODEPIPELINE
-        BuildSpec: |
-          version: 0.2
-          phases:
-            install:
-              runtime-versions:
-                nodejs: 24
-              commands:
-                - npm install -g pnpm@10.33.2
-                - pnpm install --frozen-lockfile
-            build:
-              commands:
-                - export START_MS=$(date +%s%3N)
-                - pnpm --filter @cello-protocol/crypto run typecheck
-                - pnpm --filter @cello-protocol/interfaces run typecheck
-                - pnpm --filter @cello-protocol/protocol-types run typecheck
-                - pnpm --filter @cello-protocol/transport run typecheck
-                - pnpm --filter @cello-protocol/client run typecheck
-                - pnpm --filter @cello-protocol/e2e-tests run typecheck
-                # Run smoke tests against the staging ALB URL
-                # STAGING_DIRECTORY_URL is set by CodePipeline EnvironmentVariableOverride
-                - node packages/e2e-tests/dist/smoke/run-smoke-tests.js
+        BuildSpec: infra/buildspecs/smoke-test.yml
       Artifacts:
         Type: CODEPIPELINE
       Environment:
@@ -688,7 +592,7 @@ Resources:
   # ProductionDeployBuild: deploys the same image digest to production ECS services.
   # SI-002: receives the image URI from Build stage — same digest, no new build.
   # AC-007: sequential deploy — us-east-1 first, then eu-central-1, then ap-northeast-1.
-  # Each region waits for services-stable before the next region starts (RunOrder in pipeline).
+  # Each region polls rolloutState before the next region starts (RunOrder in pipeline).
   # Emits: pipeline.production.deployed (INFO), pipeline.production.deploy.failed (ERROR)
   ProductionDeployBuild:
     Type: AWS::CodeBuild::Project
@@ -701,71 +605,16 @@ Resources:
       # 4. export START_MS
       # 5. Clone task def, swap image, register new revision
       # 6. aws ecs update-service --region $DEPLOY_REGION
-      # 7. aws ecs wait services-stable --region $DEPLOY_REGION (10-min timeout)
+      # 7. Poll rolloutState every 15s until COMPLETED or FAILED (up to 15 minutes)
       # 8. On success: emit pipeline.production.deployed {pipeline, region, commitSha, imageDigest, durationMs}
       # 9. On failure: emit pipeline.production.deploy.failed {pipeline, region, commitSha, reason}; exit 1
-      # NO_SOURCE: IMAGE_URI is read from SSM Parameter Store at runtime (SI-002: same digest).
+      # CODEPIPELINE source: buildspec lives in repo so it updates on git push.
+      # IMAGE_URI is read from SSM Parameter Store at runtime (SI-002: same digest).
       Source:
-        Type: NO_SOURCE
-        BuildSpec: |
-          version: 0.2
-          phases:
-            build:
-              commands:
-                - |
-                  set -e
-                  SSM_SERVICE=$(echo ${SERVICE_NAME} | sed 's/cello-//')
-                  SOURCE_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/${SSM_SERVICE}-image-uri --query Parameter.Value --output text --region us-east-1)
-                  PROD_IMAGE_URI=$(echo "$SOURCE_IMAGE_URI" | sed "s/\.us-east-1\./.${DEPLOY_REGION}./")
-                  COMMIT_SHA=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown} | cut -c1-7)
-                  START_MS=$(date +%s%3N)
-                  CLUSTER="cello-${CELLO_ENV}"
-                  SERVICE="${SERVICE_NAME}-${CELLO_ENV}"
-                  TASK_FAMILY="${SERVICE_NAME}-${CELLO_ENV}"
-                  CONTAINER_NAME=$(echo ${SERVICE_NAME} | sed 's/cello-//')
-                  TASK_DEF=$(aws ecs describe-task-definition \
-                    --task-definition ${TASK_FAMILY} \
-                    --region ${DEPLOY_REGION} \
-                    --query "taskDefinition" --output json)
-                  NEW_TASK_DEF=$(echo "$TASK_DEF" | jq \
-                    --arg IMAGE "$PROD_IMAGE_URI" \
-                    --arg CONTAINER "${CONTAINER_NAME}" \
-                    '(.containerDefinitions[] | select(.name==$CONTAINER) | .image) |= $IMAGE
-                    | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
-                  NEW_TASK_ARN=$(aws ecs register-task-definition \
-                    --region ${DEPLOY_REGION} \
-                    --cli-input-json "$NEW_TASK_DEF" \
-                    --query "taskDefinition.taskDefinitionArn" --output text)
-                  aws ecs update-service \
-                    --cluster ${CLUSTER} \
-                    --service ${SERVICE} \
-                    --task-definition $NEW_TASK_ARN \
-                    --region ${DEPLOY_REGION} || {
-                      echo '{"event":"pipeline.production.deploy.failed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","reason":"ecs update-service failed"}'
-                      exit 1
-                    }
-                  WAIT_ATTEMPTS=0
-                  MAX_WAIT_ATTEMPTS=60
-                  while [ $WAIT_ATTEMPTS -lt $MAX_WAIT_ATTEMPTS ]; do
-                    DEPLOY_STATUS=$(aws ecs describe-services --cluster ${CLUSTER} --services ${SERVICE} --region ${DEPLOY_REGION} --query 'services[0].deployments[?status==`PRIMARY`].rolloutState' --output text)
-                    if [ "$DEPLOY_STATUS" = "COMPLETED" ]; then
-                      break
-                    elif [ "$DEPLOY_STATUS" = "FAILED" ]; then
-                      echo '{"event":"pipeline.production.deploy.failed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","reason":"ecs deployment rollout failed"}'
-                      exit 1
-                    fi
-                    WAIT_ATTEMPTS=$((WAIT_ATTEMPTS + 1))
-                    sleep 15
-                  done
-                  if [ $WAIT_ATTEMPTS -ge $MAX_WAIT_ATTEMPTS ]; then
-                    echo '{"event":"pipeline.production.deploy.failed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","reason":"ecs wait services-stable timed out after 15 minutes"}'
-                    exit 1
-                  fi
-                  END_MS=$(date +%s%3N)
-                  DURATION_MS=$((END_MS - START_MS))
-                  echo '{"timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"pipeline.production.deployed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","imageDigest":"'${PROD_IMAGE_URI}'","durationMs":'${DURATION_MS}'}'
+        Type: CODEPIPELINE
+        BuildSpec: infra/buildspecs/production-deploy.yml
       Artifacts:
-        Type: NO_ARTIFACTS
+        Type: CODEPIPELINE
       Environment:
         Type: LINUX_CONTAINER
         Image: aws/codebuild/standard:7.0
@@ -1037,8 +886,9 @@ Resources:
               Configuration:
                 ProjectName: !Ref StagingDeployDirectoryBuild
               InputArtifacts:
-                - Name: BuildOutput
-              # No OutputArtifacts: StagingDeployDirectoryBuild has Artifacts.Type=NO_ARTIFACTS.
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: StagingDeployDirectoryOutput
         # DEPLOY-005 Stage 4: Smoke test against staging ALB
         # AC-002: 8-scenario smoke suite runs as separate process (no VPC, no direct DB access)
         # AC-004/SI-001: production deploy stage will not run if this stage fails
@@ -1062,7 +912,7 @@ Resources:
                 - Name: SmokeTestOutput
         # DEPLOY-005 Stage 5: Production deploy — sequential multi-region (AC-003, AC-007)
         # SI-001: this stage only runs if SmokeTest stage completed with passing status
-        # SI-002: same image URI from Build stage artifact (imageUri.txt) — no new build
+        # SI-002: same image URI from SSM (same digest, no new build)
         # RunOrder ensures sequencing within stage: us-east-1(1) → eu-central-1(2) → ap-northeast-1(3)
         - Name: ProductionDeploy
           Actions:
@@ -1079,7 +929,7 @@ Resources:
                   [{"name":"DEPLOY_REGION","value":"us-east-1","type":"PLAINTEXT"},
                    {"name":"SERVICE_NAME","value":"cello-directory","type":"PLAINTEXT"}]
               InputArtifacts:
-                - Name: BuildOutput
+                - Name: SourceOutput
             - Name: ProductionDeployEuCentral1
               ActionTypeId:
                 Category: Build
@@ -1093,7 +943,7 @@ Resources:
                   [{"name":"DEPLOY_REGION","value":"eu-central-1","type":"PLAINTEXT"},
                    {"name":"SERVICE_NAME","value":"cello-directory","type":"PLAINTEXT"}]
               InputArtifacts:
-                - Name: BuildOutput
+                - Name: SourceOutput
             - Name: ProductionDeployApNortheast1
               ActionTypeId:
                 Category: Build
@@ -1107,7 +957,7 @@ Resources:
                   [{"name":"DEPLOY_REGION","value":"ap-northeast-1","type":"PLAINTEXT"},
                    {"name":"SERVICE_NAME","value":"cello-directory","type":"PLAINTEXT"}]
               InputArtifacts:
-                - Name: BuildOutput
+                - Name: SourceOutput
 
   RelayPipeline:
     Type: AWS::CodePipeline::Pipeline
@@ -1160,9 +1010,9 @@ Resources:
               Configuration:
                 ProjectName: !Ref StagingDeployRelayBuild
               InputArtifacts:
-                - Name: BuildOutput
-              # No OutputArtifacts: StagingDeployRelayBuild has Artifacts.Type=NO_ARTIFACTS.
-              # Declaring OutputArtifacts on a NO_ARTIFACTS project causes a pipeline validation error.
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: StagingDeployRelayOutput
         # Relay smoke test: verifies relay health endpoint at port 4000 behind ALB
         # Note: relay ALB is not exposed externally in Phase 1; smoke test uses directory endpoint
         # STAGING_DIRECTORY_URL is set at the CodeBuild project level from the StagingDirectoryUrl
@@ -1196,7 +1046,7 @@ Resources:
                   [{"name":"DEPLOY_REGION","value":"us-east-1","type":"PLAINTEXT"},
                    {"name":"SERVICE_NAME","value":"cello-relay","type":"PLAINTEXT"}]
               InputArtifacts:
-                - Name: BuildOutput
+                - Name: SourceOutput
             - Name: ProductionDeployEuCentral1
               ActionTypeId:
                 Category: Build
@@ -1210,7 +1060,7 @@ Resources:
                   [{"name":"DEPLOY_REGION","value":"eu-central-1","type":"PLAINTEXT"},
                    {"name":"SERVICE_NAME","value":"cello-relay","type":"PLAINTEXT"}]
               InputArtifacts:
-                - Name: BuildOutput
+                - Name: SourceOutput
             - Name: ProductionDeployApNortheast1
               ActionTypeId:
                 Category: Build
@@ -1224,7 +1074,7 @@ Resources:
                   [{"name":"DEPLOY_REGION","value":"ap-northeast-1","type":"PLAINTEXT"},
                    {"name":"SERVICE_NAME","value":"cello-relay","type":"PLAINTEXT"}]
               InputArtifacts:
-                - Name: BuildOutput
+                - Name: SourceOutput
 
   E2eTestsPipeline:
     Type: AWS::CodePipeline::Pipeline

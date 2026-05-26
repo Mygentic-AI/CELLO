@@ -1,0 +1,56 @@
+version: 0.2
+phases:
+  build:
+    commands:
+      - |
+        set -e
+        SSM_SERVICE=$(echo ${SERVICE_NAME} | sed 's/cello-//')
+        SOURCE_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/${SSM_SERVICE}-image-uri --query Parameter.Value --output text --region us-east-1)
+        PROD_IMAGE_URI=$(echo "$SOURCE_IMAGE_URI" | sed "s/\.us-east-1\./.${DEPLOY_REGION}./")
+        COMMIT_SHA=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown} | cut -c1-7)
+        START_MS=$(date +%s%3N)
+        CLUSTER="cello-${CELLO_ENV}"
+        SERVICE="${SERVICE_NAME}-${CELLO_ENV}"
+        TASK_FAMILY="${SERVICE_NAME}-${CELLO_ENV}"
+        CONTAINER_NAME=$(echo ${SERVICE_NAME} | sed 's/cello-//')
+        TASK_DEF=$(aws ecs describe-task-definition \
+          --task-definition ${TASK_FAMILY} \
+          --region ${DEPLOY_REGION} \
+          --query "taskDefinition" --output json)
+        NEW_TASK_DEF=$(echo "$TASK_DEF" | jq \
+          --arg IMAGE "$PROD_IMAGE_URI" \
+          --arg CONTAINER "${CONTAINER_NAME}" \
+          '(.containerDefinitions[] | select(.name==$CONTAINER) | .image) |= $IMAGE
+          | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+        NEW_TASK_ARN=$(aws ecs register-task-definition \
+          --region ${DEPLOY_REGION} \
+          --cli-input-json "$NEW_TASK_DEF" \
+          --query "taskDefinition.taskDefinitionArn" --output text)
+        aws ecs update-service \
+          --cluster ${CLUSTER} \
+          --service ${SERVICE} \
+          --task-definition $NEW_TASK_ARN \
+          --region ${DEPLOY_REGION} || {
+            echo '{"event":"pipeline.production.deploy.failed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","reason":"ecs update-service failed"}'
+            exit 1
+          }
+        WAIT_ATTEMPTS=0
+        MAX_WAIT_ATTEMPTS=60
+        while [ $WAIT_ATTEMPTS -lt $MAX_WAIT_ATTEMPTS ]; do
+          DEPLOY_STATUS=$(aws ecs describe-services --cluster ${CLUSTER} --services ${SERVICE} --region ${DEPLOY_REGION} --query 'services[0].deployments[?status==`PRIMARY`].rolloutState' --output text)
+          if [ "$DEPLOY_STATUS" = "COMPLETED" ]; then
+            break
+          elif [ "$DEPLOY_STATUS" = "FAILED" ]; then
+            echo '{"event":"pipeline.production.deploy.failed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","reason":"ecs deployment rollout failed"}'
+            exit 1
+          fi
+          WAIT_ATTEMPTS=$((WAIT_ATTEMPTS + 1))
+          sleep 15
+        done
+        if [ $WAIT_ATTEMPTS -ge $MAX_WAIT_ATTEMPTS ]; then
+          echo '{"event":"pipeline.production.deploy.failed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","reason":"ecs wait services-stable timed out after 15 minutes"}'
+          exit 1
+        fi
+        END_MS=$(date +%s%3N)
+        DURATION_MS=$((END_MS - START_MS))
+        echo '{"timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"pipeline.production.deployed","pipeline":"'${SERVICE_NAME}'-pipeline","region":"'${DEPLOY_REGION}'","commitSha":"'${COMMIT_SHA}'","imageDigest":"'${PROD_IMAGE_URI}'","durationMs":'${DURATION_MS}'}'

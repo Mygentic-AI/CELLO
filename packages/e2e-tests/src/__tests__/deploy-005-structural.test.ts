@@ -5,7 +5,7 @@
  *
  * AC-001: Staging deploy stage present in cello-directory-pipeline and cello-relay-pipeline.
  *   - StagingDeploy stage exists after Build stage in both pipelines.
- *   - Uses `aws ecs wait services-stable` with a 10-minute timeout.
+ *   - Uses rolloutState poll loop in infra/buildspecs/staging-deploy-{directory,relay}.yml.
  *
  * AC-002 (Phase-1 scope): The smoke test CodeBuild project verifies the staging ALB returns
  *   HTTP 200 on GET /health, proving the new image boots correctly. This is the Phase-1 gate.
@@ -35,14 +35,14 @@
  *
  * SI-002: The ProductionDeployBuild buildspec contains no `docker build` command — production
  *   deploy never builds a new image. The same image digest from the Build stage reaches
- *   production via the #{BuildAction.IMAGE_URI} pipeline variable reference.
+ *   production via SSM Parameter Store (written by Build stage, read by ProductionDeploy).
  *
  * P — Pseudocode (structural tests):
  *   1. Read cello-cicd.yaml as text.
  *   2. Assert StagingDeploy stage present.
  *   3. Assert SmokeTest stage present (Phase-1: health check gate).
  *   4. Assert ProductionDeploy stage present.
- *   5. Assert StagingDeploy references services-stable.
+ *   5. Assert StagingDeploy buildspec files use rolloutState poll loop (not aws ecs wait).
  *   6. Assert SmokeTest CodeBuild project has no VpcConfig in template.
  *   7. Assert ProductionDeploy references all 3 regions.
  *   8. Assert ProductionDeploy stage RunOrder ordering correct.
@@ -86,10 +86,16 @@ describe("AC-001: Staging Deploy stage exists in directory pipeline", () => {
     expect(template).toContain("StagingDeployBuild");
   });
 
-  it("cello-cicd.yaml contains services-stable wait in staging deploy", () => {
-    const template = readFileSync(cicdTemplate, "utf-8");
-    // The staging deploy buildspec must reference services-stable
-    expect(template).toContain("services-stable");
+  it("staging deploy buildspecs use rolloutState poll loop (not aws ecs wait with 10-min limit)", () => {
+    const buildspecsDir = resolve(infraDir, "buildspecs");
+    const directoryBuildspec = readFileSync(resolve(buildspecsDir, "staging-deploy-directory.yml"), "utf-8");
+    const relayBuildspec = readFileSync(resolve(buildspecsDir, "staging-deploy-relay.yml"), "utf-8");
+    // Must use the rolloutState poll loop, not the hard-limited aws ecs wait
+    expect(directoryBuildspec).toContain("rolloutState");
+    expect(relayBuildspec).toContain("rolloutState");
+    // Must NOT use the 10-minute-limited aws ecs wait command
+    expect(directoryBuildspec).not.toContain("aws ecs wait services-stable");
+    expect(relayBuildspec).not.toContain("aws ecs wait services-stable");
   });
 });
 
@@ -111,14 +117,17 @@ describe("AC-002: Smoke test stage exists (Phase-1 health check gate)", () => {
     expect(template).toContain("STAGING_DIRECTORY_URL");
   });
 
-  it("smoke test buildspec emits pipeline.staging.smoke_test.passed event on health check pass", () => {
-    const template = readFileSync(cicdTemplate, "utf-8");
-    expect(template).toContain("pipeline.staging.smoke_test.passed");
+  it("smoke runner emits pipeline.staging.smoke_test.passed event on health check pass", () => {
+    // Events are emitted from scenarios.ts (not from the buildspec file)
+    const scenariosFile = resolve(repoRoot, "packages/e2e-tests/src/smoke/scenarios.ts");
+    const content = readFileSync(scenariosFile, "utf-8");
+    expect(content).toContain("pipeline.staging.smoke_test.passed");
   });
 
-  it("smoke test buildspec emits pipeline.staging.smoke_test.failed event when health check fails", () => {
-    const template = readFileSync(cicdTemplate, "utf-8");
-    expect(template).toContain("pipeline.staging.smoke_test.failed");
+  it("smoke runner emits pipeline.staging.smoke_test.failed event when health check fails", () => {
+    const scenariosFile = resolve(repoRoot, "packages/e2e-tests/src/smoke/scenarios.ts");
+    const content = readFileSync(scenariosFile, "utf-8");
+    expect(content).toContain("pipeline.staging.smoke_test.failed");
   });
 
   it("run-smoke-tests.ts invokes checkStagingHealth() against the ALB /health endpoint", () => {
@@ -239,12 +248,11 @@ describe("SI-002: ProductionDeployBuild never builds a new image", () => {
   });
 
   it("ProductionDeploy reads IMAGE_URI from SSM (same digest as staging — SI-002)", () => {
-    const template = readFileSync(cicdTemplate, "utf-8");
-    // The production deploy reads IMAGE_URI from SSM Parameter Store — the same parameter
-    // that the Build stage wrote after pushing to ECR. This proves the same image digest
-    // that was smoke-tested reaches production (no rebuild).
-    expect(template).toContain("ssm get-parameter");
-    expect(template).toContain("image-uri");
+    // The production deploy buildspec reads IMAGE_URI from SSM Parameter Store — the same
+    // parameter the Build stage wrote after pushing to ECR. Same image digest, no rebuild.
+    const prodBuildspec = readFileSync(resolve(infraDir, "buildspecs/production-deploy.yml"), "utf-8");
+    expect(prodBuildspec).toContain("ssm get-parameter");
+    expect(prodBuildspec).toContain("image-uri");
   });
 });
 
