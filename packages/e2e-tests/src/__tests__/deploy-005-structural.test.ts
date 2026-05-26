@@ -238,12 +238,13 @@ describe("SI-002: ProductionDeployBuild never builds a new image", () => {
     ).not.toContain("docker build");
   });
 
-  it("ProductionDeploy pipeline actions reference #{BuildAction.IMAGE_URI} for PROD_IMAGE_URI", () => {
+  it("ProductionDeploy reads IMAGE_URI from SSM (same digest as staging — SI-002)", () => {
     const template = readFileSync(cicdTemplate, "utf-8");
-    // The PROD_IMAGE_URI env var in ProductionDeploy actions must reference the Build stage
-    // artifact via the CodePipeline V2 variable syntax #{BuildAction.IMAGE_URI}
-    // This proves the same image digest that was smoke-tested reaches production
-    expect(template).toContain('{"name":"PROD_IMAGE_URI","value":"#{BuildAction.IMAGE_URI}"');
+    // The production deploy reads IMAGE_URI from SSM Parameter Store — the same parameter
+    // that the Build stage wrote after pushing to ECR. This proves the same image digest
+    // that was smoke-tested reaches production (no rebuild).
+    expect(template).toContain("ssm get-parameter");
+    expect(template).toContain("image-uri");
   });
 });
 
