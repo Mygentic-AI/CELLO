@@ -244,12 +244,15 @@ async function dkgRound1WithNode(
   agentPubkeyHex: string,
   epochId: string,
   signers: { min: number; max: number },
+  preAuthToken?: string,
 ): Promise<DkgRound1Broadcast> {
   const frame = CBOR_ENC.encode({
     type: "frost_dkg_round1_request",
     agentPubkey: agentPubkeyHex,
     epochId,
     signers,
+    // OPS-AGENT-001: include preAuthToken when present (mandatory in M6+)
+    ...(preAuthToken !== undefined ? { preAuthToken } : {}),
   });
   const stream = await node.openStream();
   try {
@@ -520,6 +523,8 @@ export async function runNetworkDkg(
     threshold: number;
     participants: number;
     directoryNodes: NetworkDirectoryNode[];
+    /** OPS-AGENT-001: Pre-authorization token to present in Round 1 frame. */
+    preAuthToken?: string;
   },
 ): Promise<{ signer: FrostThresholdSigner; primaryPubkey: Uint8Array }> {
   const agentPubkeyHex = Buffer.from(agentPubkey).toString("hex");
@@ -546,7 +551,7 @@ export async function runNetworkDkg(
   // Directory nodes run round1 in parallel
   const nodeRound1Broadcasts = await Promise.all(
     opts.directoryNodes.map((node) =>
-      dkgRound1WithNode(node, agentPubkeyHex, epochId, signers)
+      dkgRound1WithNode(node, agentPubkeyHex, epochId, signers, opts.preAuthToken)
     )
   );
 

@@ -41,10 +41,12 @@ import pg from "pg";
 import { FileKeyProvider, InMemoryKeyProvider } from "@cello-protocol/crypto";
 import { createDirectoryNode } from "../directory-node.js";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
-import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper, InMemoryNotificationQueue } from "@cello-protocol/interfaces/stubs";
-import type { AuditLogShipper, NotificationQueue } from "@cello-protocol/interfaces";
+import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper, InMemoryNotificationQueue, DevTokenValidator } from "@cello-protocol/interfaces/stubs";
+import type { AuditLogShipper, NotificationQueue, TokenValidator } from "@cello-protocol/interfaces";
 // S3AuditLogShipper is imported dynamically below to avoid loading @aws-sdk/client-s3
 // in CELLO_ENV=local subprocesses where it causes tsx/esm resolution noise.
+import { createInternalApiServer } from "../internal-api-server.js";
+import { PgTokenValidator } from "../adapters/pg-token-validator.js";
 import { InMemoryShareStore } from "../share-store.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { EncryptedPgShareStore } from "../encrypted-share-store.js";
@@ -550,6 +552,66 @@ if (env === "local") {
   });
 }
 
+// ─── OPS-AGENT-001: TokenValidator + Internal API server ─────────────────────
+// CELLO_ENV=local  → DevTokenValidator (accepts any 'DEV-' prefix token; no DB)
+// CELLO_ENV=dev+   → PgTokenValidator (Postgres-backed, atomic consumption)
+//
+// INTERNAL_API_KEY is required in dev/staging/production.
+// In local mode, if INTERNAL_API_KEY is set, the internal API server is started.
+// If not set in local mode, internal API server is skipped (backward compat).
+//
+// OPS-AGENT-001 AC-001: POST /internal/pre-authorize is served by createInternalApiServer.
+// OPS-AGENT-001 AC-006: TokenValidator is passed to createDirectoryNode so DKG Round 1
+//                       consumes the token as the FIRST operation before any FROST crypto.
+
+const tokenValidator: TokenValidator = (() => {
+  if (env === "local") {
+    const v = new DevTokenValidator();
+    logger.info("adapter.initialised", { adapterName: "TokenValidator", implementation: "DevTokenValidator", env });
+    return v;
+  }
+  // dev/staging/production: PgTokenValidator backed by pre_authorization_tokens table
+  if (!pgPool) {
+    logger.error("adapter.config.missing", {
+      missingKey: "DATABASE_URL",
+      adapterName: "PgTokenValidator",
+      env,
+    });
+    process.exit(1);
+  }
+  const v = new PgTokenValidator(pgPool, logger);
+  logger.info("adapter.initialised", { adapterName: "TokenValidator", implementation: "PgTokenValidator", env });
+  return v;
+})();
+
+// Internal API server: POST /internal/pre-authorize
+// Required env: INTERNAL_API_KEY (any non-empty string used as the bearer key)
+// Local: optional (skip if INTERNAL_API_KEY not set; backward compat for existing tests)
+// Dev/staging/production: required
+const internalApiKey = process.env["INTERNAL_API_KEY"];
+const internalApiPort = parseInt(process.env["INTERNAL_API_PORT"] ?? "8081", 10);
+
+if (!internalApiKey && env !== "local") {
+  logger.error("adapter.config.missing", { missingKey: "INTERNAL_API_KEY", env });
+  process.exit(1);
+}
+
+if (internalApiKey && pgPool) {
+  const internalApiServer = createInternalApiServer({
+    pool: pgPool,
+    internalApiKey,
+    logger,
+  });
+  internalApiServer.listen(internalApiPort, () => {
+    logger.info("adapter.initialised", {
+      adapterName: "InternalApiServer",
+      implementation: "http",
+      env,
+      port: internalApiPort,
+    });
+  });
+}
+
 // ─── Node startup ─────────────────────────────────────────────────────────
 
 let result: Awaited<ReturnType<typeof createDirectoryNode>>;
@@ -566,6 +628,8 @@ try {
     notificationQueue,
     relayPoolManager,
     checkpointTransport,
+    tokenValidator,
+    pgPool: pgPool ?? undefined,
   });
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);

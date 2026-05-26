@@ -30,7 +30,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import pg from "pg";
 import { createHash, randomBytes } from "node:crypto";
-import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 // ─── Integration guard ────────────────────────────────────────────────────────

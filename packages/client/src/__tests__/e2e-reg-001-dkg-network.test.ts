@@ -126,6 +126,7 @@ describe("AC-006: 2-of-3 FROST DKG over real /cello/frost/1.0.0 libp2p streams",
       threshold: 2,
       participants: 3, // directory node count; client is the +1 coordinator
       directoryNodes: networkNodes,
+      preAuthToken: "DEV-test-token",
     });
 
     // (a) primaryPubkey is 32 bytes (Ed25519 group key)

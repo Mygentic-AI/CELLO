@@ -211,7 +211,7 @@ export interface CelloClient {
    *
    * REG-001 AC-001, AC-002, AC-008, AC-010.
    */
-  register(phoneStub: string): Promise<import("@cello-protocol/protocol-types").RegistrationState | { error: string }>;
+  register(phoneStub: string, preAuthToken?: string): Promise<import("@cello-protocol/protocol-types").RegistrationState | { error: string }>;
 
   /**
    * Return the cached registration state, or null if not yet registered.

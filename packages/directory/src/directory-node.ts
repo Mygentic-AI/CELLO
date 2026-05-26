@@ -111,7 +111,7 @@ import { createNode } from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import type { SessionAbandoned, SessionSealed, SessionSealRejected, SealVerified } from "@cello-protocol/protocol-types";
-import type { SealNotarization, Logger, NotificationQueue, ICheckpointTransport, CheckpointProposal } from "@cello-protocol/interfaces";
+import type { SealNotarization, Logger, NotificationQueue, ICheckpointTransport, CheckpointProposal, TokenValidator } from "@cello-protocol/interfaces";
 import type {
   SessionAssignment,
   SessionAssignmentFrame,
@@ -167,6 +167,7 @@ import {
   encodeFrostDkgRound3Response,
 } from "./frost-dkg-frames.js";
 import { protocolLog, truncId, truncHex } from "./protocol-log.js";
+import { linkAgentToAccount } from "./pre-auth-token-repository.js";
 import type { MmrStore } from "./mmr-store.js";
 import type { RelayPoolManager } from "./relay-pool-manager.js";
 
@@ -274,6 +275,22 @@ export interface DirectoryNodeOptions {
    * When absent, checkpoint signing is disabled (local/test mode).
    */
   checkpointTransport?: ICheckpointTransport;
+  /**
+   * OPS-AGENT-001: TokenValidator for pre-authorization token gate on DKG Round 1.
+   * When provided, the directory consumes the preAuthToken from the Round 1 frame
+   * as the FIRST operation before any FROST crypto computation.
+   * When absent (backward compat for existing tests), token gate is skipped.
+   * CELLO_ENV=local: use DevTokenValidator (accepts any 'DEV-' prefix token).
+   * CELLO_ENV=dev+: use DirectoryTokenValidator backed by pre_authorization_tokens table.
+   */
+  tokenValidator?: TokenValidator;
+  /**
+   * OPS-AGENT-001: Postgres pool for account deduplication (AC-005b).
+   * When provided alongside tokenValidator, the directory links the new agent_profile
+   * to an account after successful DKG Round 1, creating one if needed.
+   * When absent, account linking is skipped (backward compat).
+   */
+  pgPool?: import("pg").Pool;
 }
 
 export class CelloDirectoryNode {
@@ -294,6 +311,13 @@ export class CelloDirectoryNode {
   readonly #relayPoolManager: RelayPoolManager | undefined;
   // FEDERATION-E2E-001: ICheckpointTransport for inter-node checkpoint signing
   readonly #checkpointTransport: ICheckpointTransport | undefined;
+  // OPS-AGENT-001: TokenValidator for pre-authorization gate on DKG Round 1
+  readonly #tokenValidator: TokenValidator | undefined;
+  // OPS-AGENT-001: Postgres pool for account deduplication (AC-005b)
+  readonly #pgPool: import("pg").Pool | undefined;
+  // OPS-AGENT-001: stash phone_stub_hash from consumed token for account linking after DKG completes
+  // agentPubkeyHex → { phoneStubHash, emailDomain }
+  readonly #pendingPreAuthData = new Map<string, { phoneStubHash: string; emailDomain: string }>();
 
   // REG-001: forceDkgFailure — test injection for below-threshold DKG simulation
   readonly #forceDkgFailure: boolean;
@@ -419,6 +443,8 @@ export class CelloDirectoryNode {
     this.#notificationQueue = opts.notificationQueue;
     this.#relayPoolManager = opts.relayPoolManager;
     this.#checkpointTransport = opts.checkpointTransport;
+    this.#tokenValidator = opts.tokenValidator;
+    this.#pgPool = opts.pgPool;
   }
 
   async start(): Promise<void> {
@@ -762,6 +788,71 @@ export class CelloDirectoryNode {
       const dkgReq = decodeFrostDkgRequest(requestBytes);
       if (dkgReq) {
         if (dkgReq.type === "frost_dkg_round1_request") {
+          // OPS-AGENT-001: Token gate — FIRST operation before any crypto computation.
+          // Token must be consumed before any FROST crypto begins (AC-006: consumption-on-presentation).
+          // If tokenValidator is wired, the preAuthToken is mandatory.
+          if (this.#tokenValidator) {
+            const correlationId = Buffer.from(randomBytes(16)).toString("hex");
+            const token = dkgReq.preAuthToken;
+            const agentId = truncHex(dkgReq.agentPubkey);
+
+            // AC-007: missing token → reject immediately
+            if (!token || token.length === 0) {
+              this.#logger?.warn("preauth.token.missing", {
+                remoteAgentId: agentId,
+                correlationId,
+              });
+              stream.send(lp.encode.single(CBOR_ENC.encode({
+                type: "preauth_error",
+                reason: "PRE_AUTH_TOKEN_MISSING",
+              })));
+              await stream.close();
+              return;
+            }
+
+            // Validate+consume token (atomic for Pg path, no-op for DevTokenValidator)
+            const validationResult = await this.#tokenValidator.validateToken(token);
+            if (!validationResult.valid) {
+              const reason = validationResult.reason;
+              // Map rejection reasons to canonical error codes
+              let errorCode: string;
+              if (reason.includes("CONSUMED") || reason === "PRE_AUTH_TOKEN_CONSUMED") {
+                errorCode = "PRE_AUTH_TOKEN_CONSUMED";
+                this.#logger?.warn("preauth.token.reuse.rejected", { tokenId: token.slice(0, 16), correlationId });
+              } else if (reason.includes("EXPIRED") || reason === "PRE_AUTH_TOKEN_EXPIRED") {
+                errorCode = "PRE_AUTH_TOKEN_EXPIRED";
+                this.#logger?.warn("preauth.token.expired", { tokenId: token.slice(0, 16), correlationId });
+              } else {
+                errorCode = "PRE_AUTH_TOKEN_MISSING";
+                this.#logger?.warn("preauth.token.missing", { remoteAgentId: agentId, correlationId });
+              }
+              stream.send(lp.encode.single(CBOR_ENC.encode({
+                type: "preauth_error",
+                reason: errorCode,
+              })));
+              await stream.close();
+              return;
+            }
+
+            // AC-002: token consumed successfully — log the event
+            this.#logger?.info("preauth.token.consumed", {
+              tokenId: validationResult.tokenId,
+              agentId,
+              correlationId,
+            });
+
+            // AC-005b: after successful DKG, link agent_profile to account
+            // This is done after DKG completes (see post-round3 path), but we
+            // stash the token metadata here for use after DKG completes.
+            // Note: account linking happens in #processRegisterRequest after
+            // dkg_complete is received — we store the phone_stub_hash for that.
+            // For now, we store it in a per-agent map that #processRegisterRequest reads.
+            this.#pendingPreAuthData.set(dkgReq.agentPubkey, {
+              phoneStubHash: validationResult.phoneStubHash,
+              emailDomain: validationResult.emailDomain,
+            });
+          }
+
           const result = await this.#frostHandler.dkgRound1(
             dkgReq.agentPubkey,
             dkgReq.epochId,
@@ -1395,6 +1486,25 @@ export class CelloDirectoryNode {
       agent_id: agentId,
     };
     this.#store.setProfile(profile);
+
+    // OPS-AGENT-001 AC-005b: Account deduplication — link agent_profile to account.
+    // This runs fire-and-forget: account linking failure does not block registration.
+    if (this.#pgPool) {
+      const preAuthData = this.#pendingPreAuthData.get(frame.k_local_pubkey);
+      this.#pendingPreAuthData.delete(frame.k_local_pubkey);
+      if (preAuthData) {
+        void linkAgentToAccount(this.#pgPool, {
+          agentProfileId: agentId,
+          phoneStubHash: preAuthData.phoneStubHash,
+        }).catch((err: unknown) => {
+          const reason = err instanceof Error ? err.message : String(err);
+          this.#logger?.error("preauth.account.link.failed", {
+            agentId,
+            reason,
+          });
+        });
+      }
+    }
 
     // OBS-001 AC-004: agent registered log
     protocolLog("REG", `Agent ${truncHex(frame.k_local_pubkey)} registered — primary_pubkey ${truncHex(primaryPubkeyFromDkg)}`);
@@ -2707,6 +2817,22 @@ export interface CreateDirectoryNodeOptions {
    * When provided, registers /cello/checkpoint/1.0.0 handler and enables checkpoint signing.
    */
   checkpointTransport?: ICheckpointTransport;
+  /**
+   * OPS-AGENT-001: TokenValidator for pre-authorization token gate on DKG Round 1.
+   * When provided, the directory consumes the preAuthToken from the Round 1 frame
+   * as the FIRST operation before any FROST crypto computation.
+   * When absent (backward compat for existing tests), token gate is skipped.
+   * CELLO_ENV=local: use DevTokenValidator (accepts any 'DEV-' prefix token).
+   * CELLO_ENV=dev+: use PgTokenValidator backed by pre_authorization_tokens table.
+   */
+  tokenValidator?: TokenValidator;
+  /**
+   * OPS-AGENT-001: Postgres pool for account deduplication (AC-005b).
+   * When provided alongside tokenValidator, the directory links the new agent_profile
+   * to an account after successful DKG Round 1, creating one if needed.
+   * When absent, account linking is skipped (backward compat).
+   */
+  pgPool?: import("pg").Pool;
 }
 
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{
@@ -2742,6 +2868,8 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     notificationQueue: opts.notificationQueue,
     relayPoolManager: opts.relayPoolManager,
     checkpointTransport: opts.checkpointTransport,
+    tokenValidator: opts.tokenValidator,
+    pgPool: opts.pgPool,
   });
   await directory.start();
 

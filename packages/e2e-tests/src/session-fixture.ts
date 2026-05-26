@@ -362,15 +362,17 @@ export async function createSessionFixture(
   // ── Optional registration ──────────────────────────────────────────────────
   let primaryPubkeyA: string | undefined;
   if (opts.register) {
-    const regA = await clientA.register(`+${Buffer.from(randomBytes(5)).toString("hex")}`);
+    // OPS-AGENT-001: pass preAuthToken so tests remain compatible when tokenValidator is wired.
+    // DevTokenValidator accepts any 'DEV-' prefixed token in CELLO_ENV=local.
+    const regA = await clientA.register(`+${Buffer.from(randomBytes(5)).toString("hex")}`, "DEV-test-token");
     if ("error" in regA) throw new Error(`Agent A registration failed: ${(regA as { error: string }).error}`);
     primaryPubkeyA = regA.primary_pubkey;
 
-    const regB = await clientB.register(`+${Buffer.from(randomBytes(5)).toString("hex")}`);
+    const regB = await clientB.register(`+${Buffer.from(randomBytes(5)).toString("hex")}`, "DEV-test-token");
     if ("error" in regB) throw new Error(`Agent B registration failed: ${(regB as { error: string }).error}`);
 
     if (agentCFixture) {
-      const regC = await agentCFixture.client.register(`+${Buffer.from(randomBytes(5)).toString("hex")}`);
+      const regC = await agentCFixture.client.register(`+${Buffer.from(randomBytes(5)).toString("hex")}`, "DEV-test-token");
       if ("error" in regC) throw new Error(`Agent C registration failed: ${(regC as { error: string }).error}`);
       agentCFixture = { ...agentCFixture, primaryPubkey: regC.primary_pubkey };
     }

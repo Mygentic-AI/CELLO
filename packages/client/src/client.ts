@@ -3062,7 +3062,7 @@ class CelloClientImpl implements CelloClient {
    *
    * Crypto refs: NIST FIPS 204 (ML-DSA-44), RFC 9591 (FROST), FIPS 180-4 (SHA-256)
    */
-  async register(phoneStub: string): Promise<RegistrationState | { error: string }> {
+  async register(phoneStub: string, preAuthToken?: string): Promise<RegistrationState | { error: string }> {
     // Step 1: already registered — return error
     if (this.#registrationState) {
       return { error: "already_registered" };
@@ -3160,6 +3160,7 @@ class CelloClientImpl implements CelloClient {
         threshold,
         participants,
         directoryNodes: [dirNode],
+        preAuthToken,
       });
       dkgPrimaryPubkeyHex = Buffer.from(dkgResult.primaryPubkey).toString("hex");
       // Store the threshold signer so ceremony_request frames can be handled.

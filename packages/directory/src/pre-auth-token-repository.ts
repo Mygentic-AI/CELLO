@@ -33,8 +33,6 @@ import type { Logger } from "@cello-protocol/interfaces";
 export const BASE58_ALPHABET =
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-const BASE58_ALPHABET_SET = new Set(BASE58_ALPHABET);
-
 // ─── Token generation ─────────────────────────────────────────────────────────
 
 /**

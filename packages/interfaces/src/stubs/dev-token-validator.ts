@@ -39,6 +39,7 @@ export class DevTokenValidator implements TokenValidator {
         valid: true,
         phoneStubHash: DEV_PHONE_STUB_HASH,
         emailDomain: DEV_EMAIL_DOMAIN,
+        tokenId: "dev-token",
       };
     }
     return {

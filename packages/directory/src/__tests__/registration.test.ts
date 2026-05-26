@@ -187,6 +187,7 @@ async function doRegister(
     threshold: dkgReadyFrame["threshold"] as number,
     participants: dkgReadyFrame["participants"] as number,
     directoryNodes: [dirNode],
+    preAuthToken: "DEV-test-token",
   });
   const primaryPubkeyHex = Buffer.from(dkgResult.primaryPubkey).toString("hex");
 

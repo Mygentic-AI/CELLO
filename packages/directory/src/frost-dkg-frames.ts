@@ -32,6 +32,8 @@ export function encodeFrostDkgRound1Request(req: FrostDkgRound1Request): Uint8Ar
     agentPubkey: req.agentPubkey,
     epochId: req.epochId,
     signers: req.signers,
+    // OPS-AGENT-001: include preAuthToken when present (mandatory in M6+)
+    ...(req.preAuthToken !== undefined ? { preAuthToken: req.preAuthToken } : {}),
   });
 }
 
@@ -100,7 +102,9 @@ export function decodeFrostDkgRequest(
     const epochId = typeof o["epochId"] === "string" ? o["epochId"] : null;
     const signers = parseSigners(o["signers"]);
     if (!agentPubkey || !epochId || !signers) return null;
-    return { type: "frost_dkg_round1_request", agentPubkey, epochId, signers };
+    // OPS-AGENT-001: preAuthToken is optional for backward compat; mandatory enforcement is in the handler
+    const preAuthToken = typeof o["preAuthToken"] === "string" ? o["preAuthToken"] : undefined;
+    return { type: "frost_dkg_round1_request", agentPubkey, epochId, signers, preAuthToken };
   }
 
   if (o["type"] === "frost_dkg_round2_request") {
