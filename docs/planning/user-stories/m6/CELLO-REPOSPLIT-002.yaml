@@ -43,6 +43,25 @@ behavior:
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
+  - id: AC-000
+    given: "The @cello/interfaces package in trustless-cello with 'private'
+      removed and files allowlist added (done in REPOSPLIT-001 AC-001)"
+    when: "npm publish is run for @cello/interfaces"
+    then: "@cello/interfaces@<version> is published to npm; npm info
+      @cello/interfaces returns a valid package listing; cello-client's
+      package.json references this exact version as a pinned dependency;
+      pnpm install in cello-client resolves @cello/interfaces from npm
+      (not a workspace link); this AC must pass BEFORE any extraction
+      work begins — cello-client cannot build without @cello/interfaces
+      available on npm"
+    test_type: integration
+    component_under_test: client
+    notes: "This is the prerequisite that converts @cello/interfaces from
+      a private workspace package to a public npm dependency. The publish
+      happens once from trustless-cello. After this, server-side stories
+      can modify interfaces via normal PRs to trustless-cello without
+      cross-repo friction."
+
   - id: AC-001
     given: "The cello-client repository after package extraction"
     when: "pnpm run build is executed from a clean slate

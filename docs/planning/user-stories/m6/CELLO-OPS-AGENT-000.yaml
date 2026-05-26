@@ -81,6 +81,16 @@ schema_assessment:
         - "idx_registrations_state_expires ON registrations(state, expires_at) WHERE state NOT IN ('EXPIRED', 'FAILED', 'PRE_AUTH_TOKEN_ISSUED')"
         - "idx_registrations_channel_user ON registrations(channel, channel_user_id)"
       rls: "cello_service: INSERT, SELECT, UPDATE; no DELETE"
+      replication_safety: >
+        UNIQUE (phone_stub_hash) partial index is safe ONLY because the Operations
+        Agent is deployed as a single instance in us-east-1. Partial unique indexes
+        are enforced locally per-node in logical replication — they do NOT prevent
+        cross-region duplicates. If multi-region Ops Agent deployment is ever
+        required, this constraint must be replaced with either: (1) an
+        application-level pre-INSERT query across all regions, or (2) a
+        registrations table sharded by owning_region (analogous to session
+        ownership in FEDERATION-001). DO NOT deploy Ops Agent writers to multiple
+        regions without addressing this. Same class as M5 BIGSERIAL collision.
       query_patterns:
         - "SELECT by phone_stub_hash WHERE state NOT IN terminal — resume flow"
         - "SELECT by channel + channel_user_id — match inbound message to record"

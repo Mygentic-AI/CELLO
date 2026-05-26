@@ -161,6 +161,22 @@ acceptance_criteria:
       Port 5432 egress uses the same RDS security group reference pattern
       as cello-ecs-directory.yaml."
 
+  - id: AC-005b
+    given: "The cello-rds security group (or cello-vpc.yaml)"
+    when: "inbound rules are inspected"
+    then: "port 5432 inbound from the Operations Agent security group is
+      present (added via cross-stack import of the Ops Agent SG, same
+      pattern as the existing directory task SG inbound rule); verified by:
+      ECS Exec from the Ops Agent task running
+      'pg_isready -h <rds-endpoint> -p 5432 -U cello_ops_agent' returns
+      'accepting connections'; if it returns timeout, the RDS SG inbound
+      rule is missing"
+    test_type: integration
+    component_under_test: infrastructure
+    notes: "The Ops Agent egress rule (AC-005) and the RDS inbound rule
+      (this AC) are BOTH required for TCP connectivity. Specifying only
+      the egress side was the same bug class as M5 DEPLOY-001."
+
   - id: AC-006
     given: "The cello-ecs-operations-agent.yaml template and cello-iam.yaml"
     when: "reviewed for IAM permissions"
@@ -242,6 +258,44 @@ acceptance_criteria:
       OPS-AGENT-000 migration_note already specifies: 'The password is
       set by the rotation Lambda using the same pattern as cello_service.'
       This AC makes that requirement testable."
+
+  - id: AC-009d
+    given: "The directory ALB listener rules in cello-ecs-directory.yaml"
+    when: "a request to /internal/pre-authorize arrives from a source IP
+      outside the VPC CIDR (10.0.0.0/16)"
+    then: "HTTP 403 is returned by the ALB (fixed-response rule); when the
+      same request arrives from within the VPC CIDR, it reaches the directory
+      container and returns 401 (no API key); the Ops Agent task definition
+      sets DIRECTORY_INTERNAL_URL via !Sub of the directory ALB DNS name
+      (e.g. http://${DirectoryALBDnsName}/internal/pre-authorize); no
+      Cloud Map, ECS Service Connect, or task-IP lookup is needed — the
+      ALB is always reachable within the VPC and provides a stable DNS name"
+    test_type: integration
+    component_under_test: infrastructure
+    notes: "Implementation: add an ALB listener rule in cello-ecs-directory.yaml:
+      path-pattern /internal/* + source-ip NOT 10.0.0.0/16 → fixed-response 403.
+      Default rule (path /internal/* from VPC) → forward to target group.
+      The Ops Agent uses the ALB on port 80/443, not direct task:8080.
+      AC-009b remains valid as a layer-4 SG smoke test for the direct path."
+
+  - id: AC-009e
+    given: "The cello_ops_agent role created by Flyway V25 (no password)"
+    when: "the Operations Agent ECS service is deployed for the first time"
+    then: "the initial password is set BEFORE the Ops Agent task launches;
+      deploy.sh must: (1) deploy the directory stack first (Flyway creates
+      the role via V25), (2) trigger manual rotation via
+      'aws secretsmanager rotate-secret --secret-id cello/{env}/ops-agent/rds-credentials'
+      BEFORE deploying cello-ecs-operations-agent, (3) only then deploy the
+      Ops Agent stack; verified by: the Ops Agent task connects to PostgreSQL
+      on first attempt without health check failures"
+    test_type: integration
+    component_under_test: infrastructure
+    notes: "Same class as M5 SECOPS-004 bug #4: role exists but has no usable
+      password. The rotation Lambda sets the password using the admin credential.
+      On subsequent deploys this AC is a no-op (password already set). Only
+      the FIRST deploy requires explicit rotation trigger between directory
+      and ops-agent stack deployments. deploy.sh can detect first-deploy by
+      checking if the secret value is still PLACEHOLDER_POPULATE_VIA_CLI."
 
   - id: AC-010-integration-gate
     given: "The Operations Agent ECS service running with the stub container
