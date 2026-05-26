@@ -1513,6 +1513,7 @@ export class CelloDirectoryNode {
       if (preAuthData) {
         void linkAgentToAccount(this.#pgPool, {
           agentProfileId: agentId,
+          kLocalPubkey: frame.k_local_pubkey,
           phoneStubHash: preAuthData.phoneStubHash,
         }).catch((err: unknown) => {
           const reason = err instanceof Error ? err.message : String(err);

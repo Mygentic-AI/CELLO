@@ -356,6 +356,8 @@ export async function validatePreAuthTokenForDkg(
 export interface LinkAgentToAccountParams {
   /** The UUID of the agent_profiles row (from the profile just created) */
   agentProfileId: string;
+  /** The agent's k_local_pubkey hex — used to UPDATE agent_profiles.account_id */
+  kLocalPubkey: string;
   /** phone_stub_hash from the consumed pre-authorization token */
   phoneStubHash: string;
   /** Optional email stub hash */
@@ -363,26 +365,29 @@ export interface LinkAgentToAccountParams {
 }
 
 /**
- * Look up or create an account for the given phone_stub_hash, then return the account_id.
+ * Look up or create an account for the given phone_stub_hash, link the agent_profile
+ * to it by setting account_id, then return the account_id.
  *
  * Pseudocode (AC-005b):
  *   1. SELECT account_id FROM user_accounts WHERE phone_stub_hash = $1
- *   2. If found: return account_id (same phone → same account)
+ *   2. If found: use that account_id (same phone → same account)
  *   3. If not found:
  *      a. Generate a new UUID for account_id
  *      b. Compute chain_hash = SHA-256(account_id || phone_stub_hash)
  *      c. INSERT INTO user_accounts (account_id, phone_stub_hash, chain_hash, ...)
  *         ON CONFLICT (phone_stub_hash) DO NOTHING
  *      d. SELECT again (handles race where two parallel inserts both get NOT_FOUND)
- *   4. Return account_id
+ *   4. UPDATE agent_profiles SET account_id = $account_id WHERE k_local_pubkey = $kLocalPubkey
+ *   5. Return account_id
  *
  * This implements the INSERT OR IGNORE pattern for account deduplication.
+ * The UPDATE in step 4 closes the gap where agent_profiles.account_id would stay NULL.
  */
 export async function linkAgentToAccount(
   pool: pg.Pool,
   params: LinkAgentToAccountParams,
 ): Promise<string> {
-  const { phoneStubHash } = params;
+  const { phoneStubHash, kLocalPubkey } = params;
 
   // Step 1: Try to find existing account
   const existing = await pool.query<{ account_id: string }>(
@@ -390,38 +395,50 @@ export async function linkAgentToAccount(
     [phoneStubHash],
   );
 
+  let accountId: string;
+
   if (existing.rows.length > 0) {
-    return existing.rows[0]!.account_id;
-  }
+    accountId = existing.rows[0]!.account_id;
+  } else {
+    // Step 2: No account — create one
+    accountId = randomUUID();
+    const chainHash = createHash("sha256")
+      .update(accountId)
+      .update(phoneStubHash)
+      .digest("hex");
 
-  // Step 2: No account — create one
-  const accountId = randomUUID();
-  const chainHash = createHash("sha256")
-    .update(accountId)
-    .update(phoneStubHash)
-    .digest("hex");
+    try {
+      await pool.query(
+        `INSERT INTO user_accounts (account_id, phone_stub_hash, email_stub_hash, chain_hash)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (phone_stub_hash) DO NOTHING`,
+        [accountId, phoneStubHash, params.emailStubHash ?? null, chainHash],
+      );
+    } catch {
+      // Swallow errors — the subsequent SELECT will handle any race condition
+    }
 
-  try {
-    await pool.query(
-      `INSERT INTO user_accounts (account_id, phone_stub_hash, email_stub_hash, chain_hash)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (phone_stub_hash) DO NOTHING`,
-      [accountId, phoneStubHash, params.emailStubHash ?? null, chainHash],
+    // Step 3: Read back the canonical account_id (handles race conditions)
+    const readback = await pool.query<{ account_id: string }>(
+      "SELECT account_id FROM user_accounts WHERE phone_stub_hash = $1",
+      [phoneStubHash],
     );
-  } catch {
-    // Swallow errors — the subsequent SELECT will handle any race condition
+
+    if (readback.rows.length === 0) {
+      throw new Error(`[pre-auth-token-repository] Failed to create or find account for phone_stub_hash ${phoneStubHash.slice(0, 8)}...`);
+    }
+
+    accountId = readback.rows[0]!.account_id;
   }
 
-  // Step 3: Read back the canonical account_id (handles race conditions)
-  const readback = await pool.query<{ account_id: string }>(
-    "SELECT account_id FROM user_accounts WHERE phone_stub_hash = $1",
-    [phoneStubHash],
+  // Step 4: Link the agent_profile to the account by setting account_id.
+  // Uses k_local_pubkey (the agent's unique identifier in agent_profiles) as the WHERE clause.
+  // This is the core of AC-005b — without this UPDATE, agent_profiles.account_id stays NULL.
+  await pool.query(
+    "UPDATE agent_profiles SET account_id = $1 WHERE k_local_pubkey = $2",
+    [accountId, kLocalPubkey],
   );
 
-  if (readback.rows.length === 0) {
-    throw new Error(`[pre-auth-token-repository] Failed to create or find account for phone_stub_hash ${phoneStubHash.slice(0, 8)}...`);
-  }
-
-  return readback.rows[0]!.account_id;
+  return accountId;
 }
 

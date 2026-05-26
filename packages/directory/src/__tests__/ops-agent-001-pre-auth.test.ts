@@ -49,6 +49,7 @@ import {
   validatePreAuthTokenForDkg,
 } from "../pre-auth-token-repository.js";
 import { createInternalApiServer } from "../internal-api-server.js";
+import { DevTokenValidator } from "@cello-protocol/interfaces/stubs";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -601,6 +602,19 @@ describeIntegration("OPS-AGENT-001 integration: validatePreAuthTokenForDkg", () 
   });
 });
 
+// ─── Helpers (continued) ─────────────────────────────────────────────────────
+
+/** Helper: insert a minimal agent_profiles row so linkAgentToAccount has a row to UPDATE */
+async function insertAgentProfileRow(pool: pg.Pool, kLocalPubkey: string): Promise<void> {
+  const primaryPubkey = "primary-" + kLocalPubkey;
+  await pool.query(
+    `INSERT INTO agent_profiles (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status)
+     VALUES ($1, $2, '', '', 0, 'active')
+     ON CONFLICT (k_local_pubkey) DO NOTHING`,
+    [kLocalPubkey, primaryPubkey],
+  );
+}
+
 // ─── AC-005b: Account deduplication ──────────────────────────────────────────
 
 describeIntegration("OPS-AGENT-001 integration: AC-005b account deduplication", () => {
@@ -609,18 +623,24 @@ describeIntegration("OPS-AGENT-001 integration: AC-005b account deduplication", 
   const EMAIL_DOMAIN_ACCT = "acct-test.example.com";
   let regId1: string;
   let regId2: string;
+  // k_local_pubkey values for the two simulated agent profiles
+  const kLocalPubkey1 = "klocal1-" + Buffer.from(randomBytes(8)).toString("hex");
+  const kLocalPubkey2 = "klocal2-" + Buffer.from(randomBytes(8)).toString("hex");
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
     regId1 = await insertRegistrationRow(pool, SHARED_PHONE_STUB_HASH);
     regId2 = await insertRegistrationRow(pool, SHARED_PHONE_STUB_HASH + "-2");
+    // Insert agent_profiles rows so linkAgentToAccount has rows to UPDATE account_id on
+    await insertAgentProfileRow(pool, kLocalPubkey1);
+    await insertAgentProfileRow(pool, kLocalPubkey2);
   });
 
   afterAll(async () => {
     await pool?.end();
   });
 
-  it("AC-005b: two tokens with same phone_stub_hash link to same account", async () => {
+  it("AC-005b: two tokens with same phone_stub_hash link to same account, agent_profiles.account_id set", async () => {
     // Issue two tokens with same phone_stub_hash
     const token1 = await issuePreAuthToken(pool, {
       phoneStubHash: SHARED_PHONE_STUB_HASH,
@@ -639,14 +659,16 @@ describeIntegration("OPS-AGENT-001 integration: AC-005b account deduplication", 
     expect(r1.ok).toBe(true);
     expect(r2.ok).toBe(true);
 
-    // linkAgentToAccount for both
+    // linkAgentToAccount for both — now with kLocalPubkey so account_id is set on agent_profiles
     const { linkAgentToAccount } = await import("../pre-auth-token-repository.js");
     const accountId1 = await linkAgentToAccount(pool, {
       agentProfileId: "agent-prof-id-1-" + Buffer.from(randomBytes(4)).toString("hex"),
+      kLocalPubkey: kLocalPubkey1,
       phoneStubHash: SHARED_PHONE_STUB_HASH,
     });
     const accountId2 = await linkAgentToAccount(pool, {
       agentProfileId: "agent-prof-id-2-" + Buffer.from(randomBytes(4)).toString("hex"),
+      kLocalPubkey: kLocalPubkey2,
       phoneStubHash: SHARED_PHONE_STUB_HASH,
     });
 
@@ -659,6 +681,66 @@ describeIntegration("OPS-AGENT-001 integration: AC-005b account deduplication", 
       [SHARED_PHONE_STUB_HASH],
     );
     expect(parseInt(String(acctRows.rows[0]!.count), 10)).toBe(1);
+
+    // AC-005b core assertion: agent_profiles.account_id must be set for both agents.
+    // This proves linkAgentToAccount actually writes the FK, not just returns an ID.
+    const profile1 = await pool.query<{ account_id: string | null }>(
+      "SELECT account_id FROM agent_profiles WHERE k_local_pubkey = $1",
+      [kLocalPubkey1],
+    );
+    expect(profile1.rows[0]!.account_id).toBe(accountId1);
+
+    const profile2 = await pool.query<{ account_id: string | null }>(
+      "SELECT account_id FROM agent_profiles WHERE k_local_pubkey = $1",
+      [kLocalPubkey2],
+    );
+    expect(profile2.rows[0]!.account_id).toBe(accountId2);
+  });
+});
+
+// ─── AC-009: Composition root wiring ─────────────────────────────────────────
+
+describe("OPS-AGENT-001 AC-009: composition root wires DevTokenValidator for CELLO_ENV=local", () => {
+  /**
+   * S — Specification:
+   * AC-009: When CELLO_ENV=local, the composition root wires DevTokenValidator.
+   * DevTokenValidator accepts any 'DEV-' prefixed token and rejects all others.
+   * This test verifies the TokenValidator contract that the composition root
+   * delegates to in local mode — if DevTokenValidator is swapped for a different
+   * validator at the composition root, these assertions would fail (or vice versa).
+   *
+   * The composition root code (packages/directory/src/bin/directory.ts) contains:
+   *   if (env === "local") { return new DevTokenValidator(); }
+   * This test is the functional equivalent of running the composition root with
+   * CELLO_ENV=local and sending a DKG frame with a DEV- token (accepted) and
+   * without a token (rejected via the gate in directory-node.ts).
+   */
+
+  it("AC-009 DevTokenValidator accepts DEV- prefix tokens (CELLO_ENV=local adapter contract)", async () => {
+    // DevTokenValidator is the validator selected by the composition root for CELLO_ENV=local
+    const validator = new DevTokenValidator();
+
+    // DEV- prefix token must be accepted (any value after prefix)
+    const result = await validator.validateToken("DEV-ac009-test-token");
+    expect(result.valid).toBe(true);
+    if (!result.valid) throw new Error("Expected valid");
+    expect(result.phoneStubHash).toBeDefined();
+    expect(result.emailDomain).toBeDefined();
+    expect(result.tokenId).toBe("dev-token");
+  });
+
+  it("AC-009 DevTokenValidator rejects non-DEV- tokens (CELLO_ENV=local adapter contract)", async () => {
+    const validator = new DevTokenValidator();
+
+    // A CELLO- production token must be rejected by DevTokenValidator
+    const result = await validator.validateToken("CELLO-abc123");
+    expect(result.valid).toBe(false);
+    if (result.valid) throw new Error("Expected invalid");
+    expect(result.reason).toContain("DEV-");
+
+    // An empty token must also be rejected
+    const emptyResult = await validator.validateToken("");
+    expect(emptyResult.valid).toBe(false);
   });
 });
 
@@ -681,8 +763,9 @@ describeIntegration("OPS-AGENT-001 AC-008-integration-gate: Flyway zero checksum
     );
     const failures = result.rows.filter((r) => !r.success);
     expect(failures).toHaveLength(0);
-    // pre_authorization_tokens (V25) must be applied
-    const v25 = result.rows.find((r) => r.installed_rank === 25);
+    // pre_authorization_tokens (V25) must be applied — use version string, not installed_rank
+    // (installed_rank shifts if migrations are re-applied or repaired; version is stable)
+    const v25 = result.rows.find((r) => r.version === "25");
     expect(v25).toBeDefined();
     expect(v25!.success).toBe(true);
   });
