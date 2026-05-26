@@ -31,6 +31,11 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+-- Schema-level access is required before any table grants take effect.
+-- Without this, PostgreSQL returns 42501: permission denied for schema public
+-- even when the role has explicit table grants.
+GRANT USAGE ON SCHEMA public TO cello_ops_agent;
+
 -- ─── registrations: cello_ops_agent policies ──────────────────────────────
 
 DO $$ BEGIN
