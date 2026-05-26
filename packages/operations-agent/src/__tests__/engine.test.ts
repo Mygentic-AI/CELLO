@@ -123,7 +123,7 @@ describeIntegration("RegistrationEngine integration", () => {
       preAuth: new LocalPreAuthorizationClient(),
       logger: loggerState.logger,
       channelType: "cli",
-      // In test context, engine errors are logged via loggerState and visible in event assertions
+      onError: (err) => { throw err; },
     });
     await engine.start();
   });
@@ -201,10 +201,17 @@ describeIntegration("RegistrationEngine integration", () => {
 
   // ─── AC-002b ─────────────────────────────────────────────────────────────────
 
-  it("AC-002b: contact prompt re-sent when AWAITING_CONTACT sweep runs; state stays AWAITING_CONTACT", async () => {
+  it("AC-002b: contact prompt re-sent when AWAITING_CONTACT sweep runs; state stays AWAITING_CONTACT; updatedAt refreshed", async () => {
     await channelState.injectMessage(userId, "hello");
 
+    const repo = new RegistrationRepository(pool);
+    const beforeRecord = await repo.findActiveByChannelUser("cli", userId);
+    const originalUpdatedAt = beforeRecord!.updatedAt;
+    const originalExpiresAt = beforeRecord!.expiresAt;
     const sentBefore = channelState.sent.length;
+
+    // Small delay to ensure updated_at changes
+    await new Promise((r) => setTimeout(r, 10));
 
     // Trigger contact prompt sweep manually
     await engine.triggerContactPromptSweep();
@@ -213,9 +220,12 @@ describeIntegration("RegistrationEngine integration", () => {
     expect(sentAfter).toBeGreaterThan(sentBefore);
 
     // State should still be AWAITING_CONTACT
-    const repo = new RegistrationRepository(pool);
     const record = await repo.findActiveByChannelUser("cli", userId);
     expect(record?.state).toBe("AWAITING_CONTACT");
+
+    // updatedAt and expiresAt must be refreshed in DB (AC-002b explicit requirement)
+    expect(record!.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt.getTime());
+    expect(record!.expiresAt.getTime()).toBeGreaterThan(originalExpiresAt.getTime());
   });
 
   // ─── AC-003 ─────────────────────────────────────────────────────────────────
@@ -413,7 +423,8 @@ describeIntegration("RegistrationEngine integration", () => {
     expect(rateLimitedEvent?.method).toBe("warn");
     expect(rateLimitedEvent?.context?.registrationId).toBeDefined();
     expect(rateLimitedEvent?.context?.emailDomain).toBe("example.com");
-    expect(rateLimitedEvent?.context?.sendCount).toBeGreaterThanOrEqual(5);
+    // sendCount is the number of successful sends when the limit was reached (5 successful, 6th refused)
+    expect(rateLimitedEvent?.context?.sendCount).toBe(5);
     expect(rateLimitedEvent?.context?.correlationId).toBeDefined();
   });
 });

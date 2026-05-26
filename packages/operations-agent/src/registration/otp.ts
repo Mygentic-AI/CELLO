@@ -22,7 +22,7 @@
  * prevents rainbow table attacks on the small 6-digit OTP space.
  */
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 /**
  * Generate a cryptographically random 6-digit OTP string.
@@ -54,9 +54,9 @@ export function hashOtp(otp: string, salt: string): string {
 
 /**
  * Verify a candidate OTP against its stored hash and salt.
- * Timing-safe string comparison is not required here because the 15-minute expiry
- * and 3-attempt lockout are the primary defenses against brute force.
+ * Uses timingSafeEqual to prevent timing side-channel attacks.
  */
 export function verifyOtp(candidateOtp: string, salt: string, storedHash: string): boolean {
-  return hashOtp(candidateOtp, salt) === storedHash;
+  const candidateHash = hashOtp(candidateOtp, salt);
+  return timingSafeEqual(Buffer.from(candidateHash, "utf8"), Buffer.from(storedHash, "utf8"));
 }

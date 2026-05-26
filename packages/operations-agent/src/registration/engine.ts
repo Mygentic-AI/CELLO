@@ -150,7 +150,10 @@ export class RegistrationEngine {
         from,
       );
 
-      // Derive phone_stub_hash for new registrations
+      // Derive initial phone_stub_hash for the insert placeholder.
+      // For Telegram, identity.phoneNumber is the real number from contact.user_id verification.
+      // For CLI (dev/test), resolveIdentity returns no phoneNumber — we hash `from` (the channelUserId)
+      // as a placeholder. The real phone hash is written to DB on the PHONE_CONFIRMED transition.
       const identity = await this.#opts.channel.resolveIdentity(from);
       const phoneNumber = "phoneNumber" in identity ? (identity.phoneNumber ?? from) : from;
       const phoneStubHash = hashPhone(normalizePhone(phoneNumber));
@@ -192,10 +195,20 @@ export class RegistrationEngine {
   // ─── Periodic sweeps ───────────────────────────────────────────────────────
 
   async #runContactPromptSweep(): Promise<void> {
-    // Re-prompt all records stuck in AWAITING_CONTACT for > contactInterval
-    for (const [, record] of this.#activeRecords) {
+    // Re-prompt all records stuck in AWAITING_CONTACT for > contactInterval.
+    // Refresh the in-memory map entry after each re-prompt so that the updated
+    // expiresAt is reflected — otherwise the expiry check in #handleInboundMessage
+    // would see the stale (pre-touch) value and falsely expire valid registrations.
+    for (const [userId, record] of this.#activeRecords) {
       if (record.state === "AWAITING_CONTACT") {
         await this.#stateMachine.resendContactPrompt(record);
+        const refreshed = await this.#repository.findActiveByChannelUser(
+          this.#opts.channelType,
+          userId,
+        );
+        if (refreshed) {
+          this.#activeRecords.set(userId, refreshed);
+        }
       }
     }
   }

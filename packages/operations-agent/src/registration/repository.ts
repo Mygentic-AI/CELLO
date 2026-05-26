@@ -43,7 +43,7 @@
  *   Inputs are UTF-8 strings; new_updated_at uses ISO 8601 format.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import type { RegistrationRecord, RegistrationState } from "@cello-protocol/interfaces";
 
@@ -239,10 +239,6 @@ export class RegistrationRepository {
     state: string;
     expiresAt: Date;
   }): Promise<RegistrationRecord> {
-    // We need the UUID to compute the root chain hash.
-    // Use a two-step approach: INSERT ... RETURNING id, then update is not needed
-    // because we generate the UUID in application code to compute the root chain hash.
-    const { randomUUID } = await import("node:crypto");
     const id = randomUUID();
     const now = new Date();
     const chainHash = computeRootChainHash(id);
@@ -277,6 +273,7 @@ export class RegistrationRepository {
     id: string,
     newState: string,
     updates: {
+      phoneStubHash?: string;
       emailDomain?: string | null;
       otpHash?: string | null;
       otpSalt?: string | null;
@@ -303,19 +300,21 @@ export class RegistrationRepository {
          state = $1,
          updated_at = $2,
          chain_hash = $3,
-         email_domain = COALESCE($4, email_domain),
-         otp_hash = $5,
-         otp_salt = $6,
-         otp_expires_at = $7,
-         otp_attempt_count = COALESCE($8, otp_attempt_count),
-         state_data = COALESCE($9, state_data),
-         expires_at = COALESCE($10, expires_at)
-       WHERE id = $11
+         phone_stub_hash = COALESCE($4, phone_stub_hash),
+         email_domain = COALESCE($5, email_domain),
+         otp_hash = $6,
+         otp_salt = $7,
+         otp_expires_at = $8,
+         otp_attempt_count = COALESCE($9, otp_attempt_count),
+         state_data = COALESCE($10, state_data),
+         expires_at = COALESCE($11, expires_at)
+       WHERE id = $12
        RETURNING *`,
       [
         newState,
         now,
         newChainHash,
+        updates.phoneStubHash !== undefined ? updates.phoneStubHash : null,
         updates.emailDomain !== undefined ? updates.emailDomain : null,
         updates.otpHash !== undefined ? updates.otpHash : null,
         updates.otpSalt !== undefined ? updates.otpSalt : null,
@@ -364,10 +363,10 @@ export class RegistrationRepository {
   }
 
   /**
-   * Refresh updatedAt for a record without changing state (AWAITING_CONTACT re-prompt).
-   * Also extends expiresAt to prevent 7-day expiry from firing right after a re-prompt.
+   * Refresh updatedAt and expiresAt for a record without changing state.
+   * Used for AWAITING_CONTACT re-prompts to prevent 7-day expiry.
    */
-  async touchUpdatedAt(id: string, newExpiresAt: Date): Promise<void> {
+  async touchTimestamps(id: string, newExpiresAt: Date): Promise<void> {
     const prevResult = await this.#pool.query<RegistrationRow>(
       `SELECT chain_hash, state FROM registrations WHERE id = $1`,
       [id],

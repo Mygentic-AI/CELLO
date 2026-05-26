@@ -190,7 +190,7 @@ export class RegistrationStateMachine {
   async resendContactPrompt(record: RegistrationRecord): Promise<void> {
     const { repository, channel } = this.#deps;
     const newExpiresAt = new Date(Date.now() + REGISTRATION_TTL_MS);
-    await repository.touchUpdatedAt(record.id, newExpiresAt);
+    await repository.touchTimestamps(record.id, newExpiresAt);
     await channel.send(
       record.channelUserId,
       "Please share your phone number using the button below to continue registration.",
@@ -224,9 +224,9 @@ export class RegistrationStateMachine {
       const normalized = normalizePhone(phoneNumber);
       const phoneStubHash = hashPhone(normalized);
 
-      // Transition to PHONE_CONFIRMED
+      // Transition to PHONE_CONFIRMED — write the verified phone_stub_hash to DB (C-001 fix)
       const phoneConfirmed = await repository.transition(record.id, "PHONE_CONFIRMED", {
-        // phone_stub_hash was set on insert, but update it in case it was a placeholder
+        phoneStubHash,
       });
 
       logger.info("registration.phone.verified", {
@@ -240,8 +240,7 @@ export class RegistrationStateMachine {
 
       await channel.send(from, "Phone verified! Please provide your email address.");
 
-      // Return the updated record (AWAITING_EMAIL state)
-      return { ...awaitingEmail, phoneStubHash };
+      return awaitingEmail;
     }
 
     // Not a contact event — re-prompt
@@ -321,7 +320,7 @@ export class RegistrationStateMachine {
     // Fetch salt from DB (not in RegistrationRecord — design decision)
     const salt = await repository.getOtpSalt(record.id);
     if (!salt) {
-      await channel.send(from, "Internal error — please restart registration.");
+      await channel.send(from, "Verification failed. Please provide your email address again to receive a new code.");
       return record;
     }
 
