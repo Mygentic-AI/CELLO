@@ -31,8 +31,6 @@
     "zod": "^4.4.2"
   },
   "devDependencies": {
-    "@cello-protocol/directory": "workspace:*",
-    "@cello-protocol/relay": "workspace:*",
     "@types/node": "^25.6.2",
     "@claude-flow/testing": "3.0.0-alpha.6",
     "cbor-x": "^1.6.0",

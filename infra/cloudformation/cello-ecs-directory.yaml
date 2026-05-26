@@ -83,6 +83,11 @@ Resources:
               Value: !Ref AWS::Region
             - Name: HEALTH_PORT
               Value: "9090"
+            # REPOSPLIT-001 AC-007: explicit WS listen address so this is visible in IaC
+            # and a new-region deploy works without manual steps.
+            # Port 8080 matches the ALB target group (HTTP forward → container 8080).
+            - Name: CELLO_DIRECTORY_WS_LISTEN_ADDR
+              Value: "/ip4/0.0.0.0/tcp/8080/ws"
             - Name: HOME
               Value: /tmp
             - Name: CELLO_RELAY_MULTIADDR

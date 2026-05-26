@@ -116,9 +116,9 @@ describe.skipIf(!ALB_HOST)("REPOSPLIT-001 AC-007 — WebSocket transport path th
     let circuitAddr: string | null = null;
     while (Date.now() < deadline) {
       const addrs = nodeA.listenAddresses();
-      const relayAddr = addrs.find((a: string) => a.includes("p2p-circuit") || a.includes("circuit"));
+      const relayAddr = addrs.find((a: unknown) => String(a).includes("p2p-circuit") || String(a).includes("circuit"));
       if (relayAddr) {
-        circuitAddr = relayAddr;
+        circuitAddr = String(relayAddr);
         break;
       }
       await new Promise((r) => setTimeout(r, 500));

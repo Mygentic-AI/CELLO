@@ -27,7 +27,7 @@
  *   RDS_CREDENTIALS_SECRET_ARN         — required for CELLO_ENV=dev/staging/production; Secrets Manager ARN
  *   NODE_PRIVATE_KEY                   — required for CELLO_ENV=dev/staging/production; Ed25519 key hex
  *   KMS_KEY_ARN                        — future: KmsEnvelopeKeyProvider (not yet enforced; LocalEnvelopeKeyProvider used as placeholder)
- *   HEALTH_PORT                        — HTTP health check port (default: 443)
+ *   HEALTH_PORT                        — HTTP health check port (default: 9090)
  *   RELAY_MANIFEST_BUCKET              — required for CELLO_ENV=dev/staging/production; S3 bucket for relay pool manifest
  *   RELAY_MANIFEST_SIGNER_PUBKEY       — required for CELLO_ENV=dev/staging/production; Ed25519 public key hex of manifest signing node
  *   RELAY_MANIFEST_LOCAL_DIR           — optional for CELLO_ENV=local; local directory for manifest storage (defaults to /tmp/cello-relay-manifest)

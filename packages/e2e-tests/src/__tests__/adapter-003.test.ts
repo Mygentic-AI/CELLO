@@ -19,6 +19,15 @@
  *
  * M-003: SI-001 — session_request wire frame test limitation documented.
  *
+ * H-002: relay_unavailable path — covered in packages/directory/src/__tests__/directory-node.test.ts
+ *         AC-007: relay.recordAssignment rejection returns relay_unavailable to initiator.
+ *         DB-001: relay unavailable path via client layer.
+ *
+ * SI-002 (MCP-layer): cello_initiate_session ok:true response contains no private key fields.
+ *         Verified here using real session fixture (client.initiateSession succeeds).
+ *         Complements SI-002 in obs-001.test.ts (logger output check) and the unit-layer
+ *         check in adapter-claude-code/src/__tests__/adapter-003.test.ts (SI-001 frame check).
+ *
  * These tests use in-process libp2p nodes, real directory, and real relay.
  */
 
@@ -242,6 +251,48 @@ describe("AC-001 (ADAPTER-003): full directory signaling path — A initiates vi
       if (bSession) {
         expect(Buffer.from(bSession.counterparty_pubkey).toString("hex")).toBe(fix.agentA.pubkeyHex);
       }
+    }
+  }, 25_000);
+});
+
+// ─── SI-002 (MCP-layer): no private key fields in cello_initiate_session response ──
+
+describe("SI-002 (MCP-layer): cello_initiate_session ok:true response contains no private key fields", () => {
+  it("SI-002: initiateSession ok result has ok, sessionId — no private_key, signature, or key_bytes", async () => {
+    // Use the session fixture with bootstrapB so B's signaling stream is pre-authenticated.
+    const fix = await createSessionFixture({ bootstrapB: true });
+    fix.directory.registerThresholdSigner(fix.agentA.pubkeyHex, fix.signerA);
+    scope.addCleanup(fix.stopAll);
+
+    // Authenticate B by having it try an offline peer (opens signaling stream)
+    const offlineKp = generateKeypair();
+    const offlinePubkey = await offlineKp.getPublicKey();
+    const offlinePubkeyHex = Buffer.from(offlinePubkey).toString("hex");
+    const bAuthResult = await fix.agentB.client.initiateSession(offlinePubkeyHex, {
+      directoryPeerId: fix.dirPeerId,
+      directoryMultiaddr: fix.dirMultiaddrs[0],
+      timeoutMs: 5_000,
+    });
+    expect(bAuthResult.ok).toBe(false);
+
+    // A initiates to B
+    const resultA = await fix.agentA.client.initiateSession(fix.agentB.pubkeyHex, {
+      directoryPeerId: fix.dirPeerId,
+      directoryMultiaddr: fix.dirMultiaddrs[0],
+      timeoutMs: 15_000,
+    });
+
+    // SI-002: the result object must not contain private key fields
+    expect(resultA.ok).toBe(true);
+    const resultKeys = Object.keys(resultA).sort();
+    expect(resultKeys).not.toContain("private_key");
+    expect(resultKeys).not.toContain("signature");
+    expect(resultKeys).not.toContain("key_bytes");
+    expect(resultKeys).not.toContain("secret");
+    // Must have the expected ok fields only
+    expect(resultKeys).toContain("ok");
+    if (resultA.ok) {
+      expect(resultKeys).toContain("sessionId");
     }
   }, 25_000);
 });

@@ -175,6 +175,12 @@ Resources:
           FromPort: 8080
           ToPort: 8080
           SourceSecurityGroupId: !Ref AlbSecurityGroup
+        # Port 9090: health check HTTP server. ALB target group health checks hit this port.
+        # REPOSPLIT-001 AC-007: health server moved to 9090 so port 8080 is free for libp2p WS.
+        - IpProtocol: tcp
+          FromPort: 9090
+          ToPort: 9090
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
       Tags:
         - Key: Name
           Value: !Sub "cello-ecs-directory-sg-${Environment}"
