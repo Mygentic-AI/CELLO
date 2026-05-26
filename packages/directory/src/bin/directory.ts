@@ -78,10 +78,16 @@ function requireEnv(key: string): string {
 const keyPath = process.env["CELLO_DIRECTORY_KEY_FILE"] ?? join(homedir(), ".cello", "directory-key");
 const transportKeyPath = process.env["CELLO_DIRECTORY_TRANSPORT_KEY_FILE"] ?? join(homedir(), ".cello", "directory-transport-key");
 const listenAddr = process.env["CELLO_DIRECTORY_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/tcp/4000";
+// AC-007 (REPOSPLIT-001): WebSocket listen address for ALB path.
+// Default: /ip4/0.0.0.0/tcp/8080/ws (port 8080 matches the ALB target group).
+// Set CELLO_DIRECTORY_WS_LISTEN_ADDR="" to disable the WS listener.
+const wsListenAddr = process.env["CELLO_DIRECTORY_WS_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/tcp/8080/ws";
 const relayAddr = process.env["CELLO_RELAY_MULTIADDR"];
 const awsRegion = process.env["AWS_REGION"] ?? "us-east-1";
 const nodeId = process.env["NODE_ID"] ?? (env === "local" ? "local" : awsRegion);
-const healthPort = parseInt(process.env["HEALTH_PORT"] ?? "8080", 10);
+// AC-007 (REPOSPLIT-001): health server moved to port 9090 so port 8080 is free for
+// the libp2p WS listener. ALB target group health check updated to port 9090.
+const healthPort = parseInt(process.env["HEALTH_PORT"] ?? "9090", 10);
 const startedAt = Date.now();
 
 if (!relayAddr) {
@@ -554,9 +560,15 @@ if (env === "local") {
 
 let result: Awaited<ReturnType<typeof createDirectoryNode>>;
 try {
+  // AC-007 (REPOSPLIT-001): include the WS listen address so the directory
+  // is reachable from outside the VPC through the ALB on port 80/ws.
+  const listenAddresses = wsListenAddr
+    ? [listenAddr, wsListenAddr]
+    : [listenAddr];
+
   result = await createDirectoryNode({
     keyProvider: kp,
-    listenAddresses: [listenAddr],
+    listenAddresses,
     relay: networkRelay,
     relayEndpoint: { peer_id: relayPeerId, multiaddrs: [relayAddr] },
     store,
