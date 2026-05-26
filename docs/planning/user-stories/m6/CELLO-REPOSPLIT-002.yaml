@@ -229,6 +229,30 @@ implementation_notes:
     Use pnpm link for developing across both repos simultaneously after
     the split.
 
+  transport_path_prerequisite: >
+    CRITICAL: AC-003 bakes in CELLO_DIRECTORY_URL (an HTTP ALB URL). But
+    the current adapter code uses CELLO_DIRECTORY_MULTIADDR (a raw libp2p
+    multiaddr) to dial the directory on TCP port 4000. The directory's
+    libp2p port is NOT exposed through the ALB — only port 8080 (health/REST)
+    is load-balanced. The relay is on a private IP (10.x.x.x:4001) with no
+    external path.
+
+    Before this story can ship a working @cello/connect package, the transport
+    path from external clients must be resolved. Options:
+    (1) Directory listens on a WebSocket multiaddr on port 8080 alongside the
+        health server, ALB forwards WebSocket upgrades to it; client uses the
+        directory as a circuit relay to reach the relay node.
+    (2) A relay ALB is created (new IaC) exposing the relay's libp2p port
+        externally; directory returns the relay ALB multiaddr in session
+        assignments instead of the private IP.
+    (3) The adapter is refactored to use HTTP REST for signaling (register,
+        session request) and WebSocket only for data streams.
+
+    This is a transport-layer spike that must resolve BEFORE REPOSPLIT-002
+    begins AC-003/AC-007. All M0-M4 tests pass because they run in-process
+    or on localhost — the VPC network topology was never exercised by an
+    external client. See also DEMO-001 AC-001b (WebSocket verification).
+
 # ─── References ─────────────────────────────────────────────
 references:
   milestone: M6

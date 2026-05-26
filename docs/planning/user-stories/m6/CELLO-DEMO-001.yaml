@@ -109,6 +109,29 @@ acceptance_criteria:
       circuit relay path through the directory ALB over HTTPS (443).
       Port 4000 is internal VPC only per CONTEXT.md."
 
+  - id: AC-004b
+    given: "The demo agent EC2 instance with only HTTPS (443) outbound"
+    when: "npx @cello/connect is started and cello_status is called"
+    then: "cello_status returns directory_reachable: true; the libp2p
+      connection from the EC2 instance to the directory ALB succeeds
+      via WebSocket over HTTPS (443); if this fails with connection
+      refused or timeout, the transport path from external clients to
+      the directory is broken — the directory ALB must support WebSocket
+      upgrade, and the directory must listen on a WebSocket multiaddr;
+      additionally, when cello_send is called, the message reaches the
+      relay (relay.message.forwarded visible in the relay's CloudWatch
+      logs within 10 seconds) — confirming the full data path from
+      external client → directory → relay works"
+    test_type: integration
+    component_under_test: demo-agent
+    notes: "This is the transport path verification that catches the Gap 1
+      finding: all M0-M4 tests run in-process or on localhost. This AC is
+      the first time an external client exercises the real VPC network
+      topology. If it fails, the REPOSPLIT-002 transport_path_prerequisite
+      note describes the resolution options. This AC MUST pass before
+      M6-E2E-001 begins — discovering a broken transport path at the E2E
+      gate is too late."
+
   - id: AC-005
     given: "The demo agent code"
     when: "inspected for external dependencies"
@@ -217,4 +240,8 @@ references:
     (registration of the demo agent identity) requires OPS-AGENT-005B
     to be deployed — the pre-auth token flow must be live before the
     demo agent can register. DEMO-001 cannot close until both the code
-    is complete and the demo agent is registered on the production network."
+    is complete and the demo agent is registered on the production network.
+    The EC2 instance is manually provisioned (not IaC) — acceptable for M6
+    given single-purpose, low-criticality. Document the provisioning steps
+    in a runbook (user-data script or Ansible playbook) so re-creation
+    is repeatable without institutional knowledge."

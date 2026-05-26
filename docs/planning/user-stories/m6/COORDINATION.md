@@ -24,3 +24,13 @@ M6 migrations start at **V24**. All version numbers are reserved by OPS-AGENT-00
 This table is populated when OPS-AGENT-000 closes.
 
 ---
+
+## Constraints
+
+**CONSTRAINT: registrations table single-writer assumption.** The Operations Agent writes only from us-east-1. The partial unique index `UNIQUE (phone_stub_hash) WHERE state NOT IN (terminal)` is enforced locally per-node in logical replication — it does NOT prevent cross-region duplicates. Multi-region Ops Agent deployment requires schema redesign. See OPS-AGENT-000 `replication_safety` note.
+
+**CONSTRAINT: npm @cello scope.** Must be claimed on Day 0 before any publish work begins. If contested, fallback to `@cello-protocol/interfaces` and `@cello-protocol/connect`. REPOSPLIT-002 AC-000 is blocked until this is resolved.
+
+**CONSTRAINT: External client → directory/relay transport path.** The directory's libp2p port (4000) is NOT exposed through the ALB. The relay is on a private IP with no external path. All M0-M4 tests ran in-process. Before REPOSPLIT-002 AC-003 or DEMO-001 AC-004b can pass, the transport layer must support external clients connecting via WebSocket through the ALB. See REPOSPLIT-002 `transport_path_prerequisite` implementation note for resolution options.
+
+---

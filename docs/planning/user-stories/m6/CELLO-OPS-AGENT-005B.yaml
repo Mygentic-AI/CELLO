@@ -128,7 +128,7 @@ acceptance_criteria:
 
   - id: AC-007b
     given: "M6 migrations deployed to all 3 regions (us-east-1, eu-central-1,
-      eu-west-2) and the replication publication cello_pub"
+      ap-northeast-1) and the replication publication cello_pub"
     when: "pg_publication_tables is queried on each node"
     then: "registrations and pre_authorization_tokens are present in
       cello_pub on all 3 nodes; a pre-auth token INSERT on us-east-1 is
@@ -144,7 +144,17 @@ acceptance_criteria:
       us-east-1 cannot be consumed by a directory in eu-central-1 — the
       row doesn't exist there. Same pattern as M5 FEDERATION-001 publication
       setup. GRANT SELECT ON registrations, pre_authorization_tokens TO
-      cello_replication must also be applied (WAL sender needs SELECT)."
+      cello_replication must also be applied (WAL sender needs SELECT).
+
+      SEQUENCING: This AC must complete BEFORE the Operations Agent ECS task
+      is deployed. deploy.sh must: (1) deploy directory stacks in all regions
+      (Flyway creates tables), (2) run setup-replication.sh with updated
+      PUBLICATION_TABLES on all 3 nodes, (3) verify cross-region replication
+      by INSERT on us-east-1 → SELECT on eu-central-1 within 5s, (4) THEN
+      deploy the Operations Agent stack. If the Ops Agent starts before
+      replication is active, tokens issued on us-east-1 will not be
+      consumable on other regions — PRE_AUTH_TOKEN_MISSING for agents whose
+      DKG lands on a non-us-east-1 directory."
 
   - id: AC-008-integration-gate
     given: "The Operations Agent ECS service running the real application

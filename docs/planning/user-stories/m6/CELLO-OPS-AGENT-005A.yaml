@@ -85,6 +85,21 @@ acceptance_criteria:
     notes: "Reuses the existing stub pattern. Never docker push from local.
       build-stubs.sh is the only mechanism for stub image pushes."
 
+  - id: AC-002b
+    given: "cello-cicd.yaml and the pipeline-filter config"
+    when: "a push to packages/operations-agent/ occurs"
+    then: "a cello-operations-agent-pipeline exists in cello-cicd.yaml with
+      the same Build→StagingDeploy→SmokeTest→ProductionDeploy structure as
+      the directory/relay pipelines; the pipeline-filter config maps
+      packages/operations-agent/ to this pipeline; buildspec.yml exists in
+      packages/operations-agent/ with: pnpm install, typecheck, test, Docker
+      build, ECR push steps; on first run, the pipeline builds the image and
+      pushes to the cello-operations-agent ECR repo"
+    test_type: integration
+    component_under_test: infrastructure
+    notes: "The pipeline must exist before 005B can deploy the real image.
+      Without it, there is no automated path from code change to deployment."
+
   - id: AC-003
     given: "The ECS task definition references secrets from Secrets Manager"
     when: "the task launches"

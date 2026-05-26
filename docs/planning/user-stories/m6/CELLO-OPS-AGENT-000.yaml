@@ -286,9 +286,26 @@ acceptance_criteria:
     test_type: unit
     component_under_test: interfaces
 
+  - id: AC-011
+    given: "The trustless-cello monorepo"
+    when: "OPS-AGENT-000 is merged"
+    then: "packages/operations-agent/ exists with: package.json (name:
+      @cello/operations-agent, dependencies on @cello/interfaces),
+      tsconfig.json (project references to ../interfaces), vitest.config.ts,
+      and a src/index.ts stub that exports nothing; the package is registered
+      in pnpm-workspace.yaml; pnpm install at the repo root resolves it;
+      pnpm --filter @cello/operations-agent run typecheck exits 0;
+      OPS-AGENT-002/003/004 implementors have a ready package to write into"
+    test_type: integration
+    component_under_test: operations-agent
+    notes: "Without this, the first coder to implement OPS-AGENT-002 creates
+      the package structure ad hoc. Parallel stories (003, 004) may create
+      conflicting structures. 005B expects a specific Dockerfile and pipeline
+      that nobody explicitly designed. This AC prevents that."
+
   - id: AC-010-integration-gate
-    given: "All interface files, type definitions, stubs, and migration SQL files
-      produced by this story"
+    given: "All interface files, type definitions, stubs, migration SQL files,
+      and the packages/operations-agent/ scaffold produced by this story"
     when: "pnpm run typecheck is run across the workspace AND the migration SQL
       files are applied to a local PostgreSQL instance that already has V1–V23 applied"
     then: "zero type errors across the workspace; Flyway reports zero checksum errors
