@@ -151,6 +151,7 @@ async function doRegister(
     threshold: dkgReadyFrame["threshold"] as number,
     participants: dkgReadyFrame["participants"] as number,
     directoryNodes: [netDirNode],
+    preAuthToken: "DEV-test-token",
   });
   const primaryPubkeyHex = Buffer.from(dkgResult.primaryPubkey).toString("hex");
   sendFrame(stream, CBOR_ENC.encode({ type: "dkg_complete", primary_pubkey: primaryPubkeyHex }));

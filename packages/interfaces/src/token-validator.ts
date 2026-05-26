@@ -19,10 +19,16 @@
  * On success, returns the phone stub hash and email domain that were recorded
  * when the token was issued — these are used to associate the new agent profile
  * with the correct operator identity.
+ *
+ * OPS-AGENT-001: tokenId is the database UUID of the token row.
+ * Used for observability (preauth.token.consumed, preauth.token.reuse.rejected,
+ * preauth.token.expired events).
+ * For DevTokenValidator (CELLO_ENV=local), tokenId is "dev-token" — no DB row.
+ * For the { valid: false } case, tokenId may be null when the token is not found in the DB.
  */
 export type TokenValidationResult =
-  | { valid: true; phoneStubHash: string; emailDomain: string }
-  | { valid: false; reason: string };
+  | { valid: true; phoneStubHash: string; emailDomain: string; tokenId: string }
+  | { valid: false; reason: string; tokenId: string | null };
 
 /**
  * TokenValidator — validates a pre-authorization token and returns

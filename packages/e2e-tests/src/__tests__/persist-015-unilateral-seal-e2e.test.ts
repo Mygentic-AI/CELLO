@@ -209,7 +209,7 @@ describe("PERSIST-015-E2E AC-003: B reconnects and receives unilateral notificat
     await clientB2.registerHandler();
 
     // B2 re-registers — gets already_registered → RegistrationState reconstructed
-    const regB2 = await clientB2.register(`+${Buffer.from(new Uint8Array(5)).toString("hex")}`);
+    const regB2 = await clientB2.register(`+${Buffer.from(new Uint8Array(5)).toString("hex")}`, "DEV-test-token");
     // already_registered returns reconstructed state; error indicates a different failure
     if ("error" in regB2 && regB2.error !== "already_registered") {
       throw new Error(`B2 reg failed: ${regB2.error}`);

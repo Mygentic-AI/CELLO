@@ -259,6 +259,11 @@ observability:
       trigger: "Invalid or missing API key on /internal/pre-authorize"
       context_fields: [remoteAddr, correlationId]
 
+    - name: preauth.token.not_found
+      level: warn
+      trigger: "Token present in DKG Round 1 frame but not found in pre_authorization_tokens table"
+      context_fields: [tokenPrefix, correlationId]
+
     - name: preauth.token.issue.failed
       level: error
       trigger: "Token generation or database insert failed"

@@ -88,7 +88,7 @@ describe("AC-001: cello_register on unregistered instance returns success; cello
     const regResult = parseResult(
       await fix.agentA.mcp!.callTool({
         name: "cello_register",
-        arguments: { phone_stub: `+${Date.now()}` },
+        arguments: { phone_stub: `+${Date.now()}`, pre_auth_token: "DEV-test-token" },
       }),
     ) as Record<string, unknown>;
 
@@ -477,7 +477,7 @@ describe("SI-001: cello_register response contains no ML-DSA secret key material
     const result = parseResult(
       await fix.agentA.mcp!.callTool({
         name: "cello_register",
-        arguments: { phone_stub: `+${Date.now()}` },
+        arguments: { phone_stub: `+${Date.now()}`, pre_auth_token: "DEV-test-token" },
       }),
     ) as Record<string, unknown>;
 

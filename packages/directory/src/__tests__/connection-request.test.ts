@@ -167,6 +167,7 @@ async function doRegister(
     threshold,
     participants,
     directoryNodes: [dirNode],
+    preAuthToken: "DEV-test-token",
   });
   const primaryPubkeyHex = Buffer.from(dkgResult.primaryPubkey).toString("hex");
   sendFrame(stream, CBOR_ENC.encode({ type: "dkg_complete", primary_pubkey: primaryPubkeyHex }));

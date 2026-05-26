@@ -955,10 +955,11 @@ export function createMcpSessionServer(
       description: "Register this agent with the CELLO directory. Runs the REG-001 DKG ceremony. Idempotent — returns already_registered if already done.",
       inputSchema: {
         phone_stub: z.string().describe("Phone stub for identity binding (format: +E.164 or hex stub)"),
+        pre_auth_token: z.string().optional().describe("OPS-AGENT-001: Pre-authorization token issued by POST /internal/pre-authorize. Required in M6+. Use any 'DEV-' prefixed token in CELLO_ENV=local."),
       },
     },
-    async ({ phone_stub }) => {
-      const result = await client.register(phone_stub);
+    async ({ phone_stub, pre_auth_token }) => {
+      const result = await client.register(phone_stub, pre_auth_token);
       if ("error" in result) {
         return jsonText({ error: { reason: result.error } });
       }

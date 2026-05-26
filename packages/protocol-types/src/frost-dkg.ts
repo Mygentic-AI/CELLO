@@ -59,6 +59,10 @@ export interface DkgRound2Share {
  * Client → Directory: begin DKG round 1 for this agent/epoch.
  * The directory node generates its own secret polynomial and returns
  * its public broadcast.
+ *
+ * OPS-AGENT-001: preAuthToken is required. The directory consumes it
+ * atomically as the first operation before any crypto computation.
+ * Use 'DEV-test-token' (or any 'DEV-' prefix) in CELLO_ENV=local.
  */
 export interface FrostDkgRound1Request {
   type: "frost_dkg_round1_request";
@@ -68,6 +72,13 @@ export interface FrostDkgRound1Request {
   epochId: string;
   /** Threshold parameters for the DKG group */
   signers: { min: number; max: number };
+  /**
+   * OPS-AGENT-001: Pre-authorization token issued by POST /internal/pre-authorize.
+   * Must be present for all new registrations after M6. The directory consumes
+   * the token atomically before any crypto computation.
+   * Local/test: use any 'DEV-' prefixed token (accepted by DevTokenValidator).
+   */
+  preAuthToken?: string;
 }
 
 export interface FrostDkgRound1ResponseOk {

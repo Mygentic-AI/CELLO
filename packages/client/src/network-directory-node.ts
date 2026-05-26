@@ -244,20 +244,25 @@ async function dkgRound1WithNode(
   agentPubkeyHex: string,
   epochId: string,
   signers: { min: number; max: number },
+  preAuthToken?: string,
 ): Promise<DkgRound1Broadcast> {
   const frame = CBOR_ENC.encode({
     type: "frost_dkg_round1_request",
     agentPubkey: agentPubkeyHex,
     epochId,
     signers,
+    // OPS-AGENT-001: include preAuthToken when present (mandatory in M6+)
+    ...(preAuthToken !== undefined ? { preAuthToken } : {}),
   });
   const stream = await node.openStream();
   try {
     stream.send(lp.encode.single(frame));
     for await (const chunk of lp.decode(stream)) {
       const bytes = chunk instanceof Uint8Array ? chunk : (chunk as unknown as { slice(): Uint8Array }).slice();
-      const resp = parseDkgRound1Response(bytes);
-      if (!resp) throw new Error("dkgRound1: invalid response");
+      const parsed = parseDkgRound1Response(bytes);
+      if (parsed.kind === "invalid") throw new Error("dkgRound1: invalid response");
+      if (parsed.kind === "preauth_error") throw new Error(`dkgRound1 rejected: ${parsed.reason}`);
+      const resp = parsed.response;
       if (!resp.ok) throw new Error(`dkgRound1 failed: ${resp.reason}`);
       return resp.broadcast;
     }
@@ -347,25 +352,38 @@ async function dkgRound3WithNode(
 
 // ─── DKG response parsers (client-side decoders) ──────────────────────────────
 
-function parseDkgRound1Response(bytes: Uint8Array): FrostDkgRound1Response | null {
+/** Structured result for parseDkgRound1Response — distinguishes normal responses from preauth rejections */
+type DkgRound1ParseResult =
+  | { kind: "response"; response: FrostDkgRound1Response }
+  | { kind: "preauth_error"; reason: string }
+  | { kind: "invalid" };
+
+function parseDkgRound1Response(bytes: Uint8Array): DkgRound1ParseResult {
   let obj: unknown;
-  try { obj = cborDecode(bytes); } catch { return null; }
-  if (typeof obj !== "object" || obj === null) return null;
+  try { obj = cborDecode(bytes); } catch { return { kind: "invalid" }; }
+  if (typeof obj !== "object" || obj === null) return { kind: "invalid" };
   const o = obj as Record<string, unknown>;
-  if (o["type"] !== "frost_dkg_round1_response") return null;
+
+  // Handle preauth_error frames from the directory (CRIT-1: previously silently dropped)
+  if (o["type"] === "preauth_error") {
+    const reason = typeof o["reason"] === "string" ? o["reason"] : "PRE_AUTH_TOKEN_MISSING";
+    return { kind: "preauth_error", reason };
+  }
+
+  if (o["type"] !== "frost_dkg_round1_response") return { kind: "invalid" };
   if (o["ok"] === true) {
     const raw = o["broadcast"];
-    if (typeof raw !== "object" || raw === null) return null;
+    if (typeof raw !== "object" || raw === null) return { kind: "invalid" };
     const b = raw as Record<string, unknown>;
     const identifier = typeof b["identifier"] === "string" ? b["identifier"] : null;
     const proofOfKnowledge = toU8(b["proofOfKnowledge"]);
     const commitment = parseU8Array(b["commitment"]);
-    if (!identifier || !proofOfKnowledge || !commitment) return null;
-    return { type: "frost_dkg_round1_response", ok: true, broadcast: { identifier, commitment, proofOfKnowledge } };
+    if (!identifier || !proofOfKnowledge || !commitment) return { kind: "invalid" };
+    return { kind: "response", response: { type: "frost_dkg_round1_response", ok: true, broadcast: { identifier, commitment, proofOfKnowledge } } };
   }
   const reason = o["reason"];
-  if (reason !== "already_in_progress" && reason !== "internal_error") return null;
-  return { type: "frost_dkg_round1_response", ok: false, reason };
+  if (reason !== "already_in_progress" && reason !== "internal_error") return { kind: "invalid" };
+  return { kind: "response", response: { type: "frost_dkg_round1_response", ok: false, reason } };
 }
 
 function parseDkgRound2Response(bytes: Uint8Array): FrostDkgRound2Response | null {
@@ -520,6 +538,8 @@ export async function runNetworkDkg(
     threshold: number;
     participants: number;
     directoryNodes: NetworkDirectoryNode[];
+    /** OPS-AGENT-001: Pre-authorization token to present in Round 1 frame. */
+    preAuthToken?: string;
   },
 ): Promise<{ signer: FrostThresholdSigner; primaryPubkey: Uint8Array }> {
   const agentPubkeyHex = Buffer.from(agentPubkey).toString("hex");
@@ -546,7 +566,7 @@ export async function runNetworkDkg(
   // Directory nodes run round1 in parallel
   const nodeRound1Broadcasts = await Promise.all(
     opts.directoryNodes.map((node) =>
-      dkgRound1WithNode(node, agentPubkeyHex, epochId, signers)
+      dkgRound1WithNode(node, agentPubkeyHex, epochId, signers, opts.preAuthToken)
     )
   );
 

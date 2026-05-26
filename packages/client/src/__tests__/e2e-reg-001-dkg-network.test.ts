@@ -35,6 +35,7 @@ import { CONTEXT_SESSION_ESTABLISHMENT } from "@cello-protocol/crypto";
 import { createDirectoryNode } from "@cello-protocol/directory";
 import { createNode } from "@cello-protocol/transport";
 import { generateKeypair } from "@cello-protocol/crypto";
+import { DevTokenValidator } from "@cello-protocol/interfaces/stubs";
 import { NetworkDirectoryNode, runNetworkDkg } from "../network-directory-node.js";
 
 setupV3Tests();
@@ -64,6 +65,24 @@ async function makeDirectoryInstance(nodeId: string) {
     relay: STUB_RELAY,
     relayEndpoint: { peer_id: "stub-relay", multiaddrs: [] },
     nodeId,
+  });
+  scope.addCleanup(() => dir.stop());
+  return dir;
+}
+
+/**
+ * Creates a directory node with DevTokenValidator wired.
+ * Used by AC-002 transport-path tests to exercise the token gate on real libp2p streams.
+ */
+async function makeDirectoryInstanceWithValidator(nodeId: string) {
+  const kp = generateKeypair();
+  const dir = await createDirectoryNode({
+    keyProvider: kp,
+    listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+    relay: STUB_RELAY,
+    relayEndpoint: { peer_id: "stub-relay", multiaddrs: [] },
+    nodeId,
+    tokenValidator: new DevTokenValidator(),
   });
   scope.addCleanup(() => dir.stop());
   return dir;
@@ -126,6 +145,7 @@ describe("AC-006: 2-of-3 FROST DKG over real /cello/frost/1.0.0 libp2p streams",
       threshold: 2,
       participants: 3, // directory node count; client is the +1 coordinator
       directoryNodes: networkNodes,
+      preAuthToken: "DEV-test-token",
     });
 
     // (a) primaryPubkey is 32 bytes (Ed25519 group key)
@@ -171,5 +191,108 @@ describe("AC-006: 2-of-3 FROST DKG over real /cello/frost/1.0.0 libp2p streams",
     // (e) The signer verifies the same signature via verifySignature()
     const valid2 = signer.verifySignature(sigResult.signature, tbs, CONTEXT_SESSION_ESTABLISHMENT, primaryPubkey);
     expect(valid2).toBe(true);
+  });
+});
+
+// ─── AC-002: Transport-path token gate ────────────────────────────────────────
+
+describe("AC-002: Token gate exercised via real /cello/frost/1.0.0 libp2p stream", () => {
+  /**
+   * S — Specification:
+   * AC-002: A directory node with tokenValidator wired must:
+   *   (a) Accept a DKG Round 1 frame with a valid DEV- token and proceed with DKG
+   *   (b) Reject a DKG Round 1 frame WITHOUT a preAuthToken field with PRE_AUTH_TOKEN_MISSING
+   *
+   * This test exercises the token gate code path (lines 793–860 of directory-node.ts)
+   * through real libp2p streams — NOT just the repository layer.
+   * The gate is entered ONLY when tokenValidator is wired. This test verifies
+   * that the gate code is reachable and correct end-to-end.
+   *
+   * TRANSPORT-PATH PROOF: If the gate code were deleted, the "no token → rejected" assertion
+   * would fail because the DKG would proceed even without a token.
+   */
+
+  it("AC-002a: directory with DevTokenValidator wired accepts DEV- token and DKG succeeds", async () => {
+    // Three directory nodes — all have DevTokenValidator wired
+    const [dir0, dir1, dir2] = await Promise.all([
+      makeDirectoryInstanceWithValidator("ac002-gate-node-0"),
+      makeDirectoryInstanceWithValidator("ac002-gate-node-1"),
+      makeDirectoryInstanceWithValidator("ac002-gate-node-2"),
+    ]);
+
+    const agentKp = generateKeypair();
+    const agentPubkey = await agentKp.getPublicKey();
+    const agentNode = await createNode({
+      keyProvider: agentKp,
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+    });
+    await agentNode.start();
+    scope.addCleanup(() => agentNode.stop());
+
+    await Promise.all([
+      agentNode.dial(dir0.node.listenAddresses()[0]!),
+      agentNode.dial(dir1.node.listenAddresses()[0]!),
+      agentNode.dial(dir2.node.listenAddresses()[0]!),
+    ]);
+
+    const networkNodes = [
+      new NetworkDirectoryNode({ id: "ac002-gate-node-0", node: agentNode, directoryPeerId: dir0.node.getPeerId(), directoryMultiaddrs: [dir0.node.listenAddresses()[0]!] }),
+      new NetworkDirectoryNode({ id: "ac002-gate-node-1", node: agentNode, directoryPeerId: dir1.node.getPeerId(), directoryMultiaddrs: [dir1.node.listenAddresses()[0]!] }),
+      new NetworkDirectoryNode({ id: "ac002-gate-node-2", node: agentNode, directoryPeerId: dir2.node.getPeerId(), directoryMultiaddrs: [dir2.node.listenAddresses()[0]!] }),
+    ];
+
+    // DKG with valid DEV- token — tokenValidator (DevTokenValidator) must accept it
+    // and token must be consumed so DKG proceeds to completion
+    const { primaryPubkey } = await runNetworkDkg(agentPubkey, {
+      threshold: 2,
+      participants: 3,
+      directoryNodes: networkNodes,
+      preAuthToken: "DEV-ac002-valid-token",
+    });
+
+    // DKG succeeded — primaryPubkey is a 32-byte Ed25519 group key
+    expect(primaryPubkey).toBeInstanceOf(Uint8Array);
+    expect(primaryPubkey.length).toBe(32);
+  });
+
+  it("AC-002b: directory with DevTokenValidator wired rejects DKG Round 1 without preAuthToken (PRE_AUTH_TOKEN_MISSING)", async () => {
+    // Three directory nodes with DevTokenValidator wired
+    const [dir0, dir1, dir2] = await Promise.all([
+      makeDirectoryInstanceWithValidator("ac002b-gate-node-0"),
+      makeDirectoryInstanceWithValidator("ac002b-gate-node-1"),
+      makeDirectoryInstanceWithValidator("ac002b-gate-node-2"),
+    ]);
+
+    const agentKp = generateKeypair();
+    const agentPubkey = await agentKp.getPublicKey();
+    const agentNode = await createNode({
+      keyProvider: agentKp,
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+    });
+    await agentNode.start();
+    scope.addCleanup(() => agentNode.stop());
+
+    await Promise.all([
+      agentNode.dial(dir0.node.listenAddresses()[0]!),
+      agentNode.dial(dir1.node.listenAddresses()[0]!),
+      agentNode.dial(dir2.node.listenAddresses()[0]!),
+    ]);
+
+    const networkNodes = [
+      new NetworkDirectoryNode({ id: "ac002b-gate-node-0", node: agentNode, directoryPeerId: dir0.node.getPeerId(), directoryMultiaddrs: [dir0.node.listenAddresses()[0]!] }),
+      new NetworkDirectoryNode({ id: "ac002b-gate-node-1", node: agentNode, directoryPeerId: dir1.node.getPeerId(), directoryMultiaddrs: [dir1.node.listenAddresses()[0]!] }),
+      new NetworkDirectoryNode({ id: "ac002b-gate-node-2", node: agentNode, directoryPeerId: dir2.node.getPeerId(), directoryMultiaddrs: [dir2.node.listenAddresses()[0]!] }),
+    ];
+
+    // DKG WITHOUT a preAuthToken — tokenValidator must reject with PRE_AUTH_TOKEN_MISSING
+    // runNetworkDkg will throw because the directory rejects the DKG Round 1 frame
+    await expect(
+      runNetworkDkg(agentPubkey, {
+        threshold: 2,
+        participants: 3,
+        directoryNodes: networkNodes,
+        // preAuthToken intentionally omitted — directory must reject
+      }),
+    ).rejects.toThrow("PRE_AUTH_TOKEN_MISSING");
   });
 });

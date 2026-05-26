@@ -39,12 +39,14 @@ export class DevTokenValidator implements TokenValidator {
         valid: true,
         phoneStubHash: DEV_PHONE_STUB_HASH,
         emailDomain: DEV_EMAIL_DOMAIN,
+        tokenId: "dev-token",
       };
     }
     return {
       valid: false,
       reason: "DevTokenValidator only accepts tokens with the 'DEV-' prefix. " +
         "Use CELLO_ENV=local and a 'DEV-' prefixed token for local development.",
+      tokenId: null,
     };
   }
 }
