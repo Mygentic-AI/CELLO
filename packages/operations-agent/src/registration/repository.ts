@@ -404,10 +404,10 @@ export class RegistrationRepository {
   }
 
   /**
-   * Increment the OTP attempt count and optionally clear otp_hash (when max attempts reached).
+   * Increment the OTP attempt count. Does not clear OTP fields — lockout uses transitionOnOtpLockout().
    * Returns the updated record.
    */
-  async incrementOtpAttempt(id: string, clearOtp: boolean): Promise<RegistrationRecord> {
+  async incrementOtpAttempt(id: string): Promise<RegistrationRecord> {
     const prevResult = await this.#pool.query<RegistrationRow>(
       `SELECT chain_hash, state FROM registrations WHERE id = $1`,
       [id],
@@ -422,14 +422,11 @@ export class RegistrationRepository {
     const result = await this.#pool.query<RegistrationRow>(
       `UPDATE registrations SET
          otp_attempt_count = otp_attempt_count + 1,
-         otp_hash = CASE WHEN $1 THEN NULL ELSE otp_hash END,
-         otp_salt = CASE WHEN $1 THEN NULL ELSE otp_salt END,
-         otp_expires_at = CASE WHEN $1 THEN NULL ELSE otp_expires_at END,
-         updated_at = $2,
-         chain_hash = $3
-       WHERE id = $4
+         updated_at = $1,
+         chain_hash = $2
+       WHERE id = $3
        RETURNING *`,
-      [clearOtp, now, newChainHash, id],
+      [now, newChainHash, id],
     );
     return rowToRecord(result.rows[0]);
   }

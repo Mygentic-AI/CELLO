@@ -350,7 +350,7 @@ export class RegistrationStateMachine {
         );
         return awaitingEmail;
       } else {
-        await repository.incrementOtpAttempt(record.id, false);
+        await repository.incrementOtpAttempt(record.id);
         const remaining = MAX_OTP_ATTEMPTS - newAttemptCount;
         await channel.send(
           from,

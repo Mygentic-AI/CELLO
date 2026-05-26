@@ -261,9 +261,9 @@ describeIntegration("RegistrationRepository integration", () => {
     expect(expiredIds).toContain(r.id);
   });
 
-  // ─── OTP attempt increment / clearOtp ─────────────────────────────────────
+  // ─── OTP attempt increment ────────────────────────────────────────────────
 
-  it("incrementOtpAttempt increments count and optionally clears otp_hash", async () => {
+  it("incrementOtpAttempt increments count without clearing otp_hash", async () => {
     const ts = Date.now() + 5;
     const record = await repo.insert({
       phoneStubHash: `otp-attempt-hash-${ts}`,
@@ -280,20 +280,11 @@ describeIntegration("RegistrationRepository integration", () => {
       otpAttemptCount: 0,
     });
 
-    // Increment without clearing
-    await repo.incrementOtpAttempt(record.id, false);
-    const after1 = await repo.findById(record.id);
-    if (after1?.state !== "AWAITING_EMAIL_OTP") throw new Error("type guard");
-    expect(after1.attemptCount).toBe(1);
-    expect(after1.otpHash).toBe("someHash"); // Not cleared
-
-    // Increment with clearOtp = true
-    await repo.incrementOtpAttempt(record.id, true);
-    const after2 = await repo.findById(record.id);
-    if (after2?.state !== "AWAITING_EMAIL_OTP") throw new Error("type guard");
-    expect(after2.attemptCount).toBe(2);
-    // otpHash is cleared — represented as empty string sentinel (null from DB → "")
-    expect(after2.otpHash).toBeFalsy();
+    await repo.incrementOtpAttempt(record.id);
+    const after = await repo.findById(record.id);
+    if (after?.state !== "AWAITING_EMAIL_OTP") throw new Error("type guard");
+    expect(after.attemptCount).toBe(1);
+    expect(after.otpHash).toBe("someHash");
   });
 
   // ─── C-001: transition() clearOtp flag ────────────────────────────────────
