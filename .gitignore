@@ -20,5 +20,6 @@ packages/*/tsconfig.tsbuildinfo
 # Claude Code local artifacts
 .claude/worktrees/
 .claude/skills/
+.claude/projects/
 .claude-flow/
 packages/directory/test-sigterm-*.mjs
