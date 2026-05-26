@@ -1,17 +1,17 @@
 ---
-name: M6 — Operations Agent
+name: M6 — Beta Launch
 type: design
 date: 2026-05-26
-topics: [milestone, M6, operations-agent, registration, onboarding, telegram, SES, OTP, pre-authorization, database-roles]
+topics: [milestone, M6, beta-launch, operations-agent, registration, onboarding, telegram, SES, OTP, pre-authorization, database-roles, reposplit, npm-publish]
 status: in-progress
-description: M6 write-up — CELLO Operations Agent registration state machine. Interface contracts, migrations, and downstream story unblocking.
+description: M6 write-up — CELLO beta launch. Installable @cello-protocol/connect npm package, Telegram registration bot, and end-to-end stranger flow.
 ---
 
-# M6 — Operations Agent
+# M6 — Beta Launch
 
 **Started:** 2026-05-26
-**Stories closed:** OPS-AGENT-000
-**Stories open:** OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, OPS-AGENT-005A, OPS-AGENT-005B
+**Stories closed:** OPS-AGENT-000, OPS-AGENT-001
+**Stories open:** OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-001, REPOSPLIT-002, DEMO-001, M6-E2E-001
 
 ---
 
@@ -23,7 +23,7 @@ Design-and-contract story. No runtime behavior. Establishes the stable interface
 - 6 TypeScript interfaces in `packages/interfaces/src/`: `MessagingChannel`, `OtpDeliveryProvider`, `TokenValidator`, `PreAuthorizationClient`, `SecurityAlertProvider`, `RegistrationState` discriminated union (9 states) + `RegistrationRecord`
 - 5 local stubs in `packages/interfaces/src/stubs/` — zero external dependencies, zero constructor args, usable at `CELLO_ENV=local` with no secrets or AWS credentials
 - `PreAuthorizationToken` + `PreAuthorizationTokenRow` types; production token format: `CELLO-` + 33 base58 chars (≥193 bits entropy); dev stub format: `DEV-CELLO-` + 16 hex chars
-- `packages/operations-agent/` package scaffold (`@cello/operations-agent`) — downstream stories implement into this package
+- `packages/operations-agent/` package scaffold (`@cello-protocol/operations-agent`) — downstream stories implement into this package
 - V24 migration: `registrations` table, partial UNIQUE index (active registrations only), chain_hash column, RLS (INSERT/SELECT/UPDATE for both `cello_service` and `cello_ops_agent`; no DELETE on either)
 - V25 migration: `pre_authorization_tokens` table, UNIQUE(token) for atomic single-use, FK to registrations
 - V26 migration: `cello_ops_agent` PostgreSQL role — scoped to V24/V25 tables only; `GRANT USAGE ON SCHEMA public` required (and present); explicitly denied access to `agent_profiles`, `sessions`, and all key material tables
