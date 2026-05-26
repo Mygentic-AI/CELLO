@@ -331,6 +331,7 @@ export async function validatePreAuthTokenForDkg(
 
     // NOT_FOUND: MED-1 — use preauth.token.not_found (distinct from missing-field case)
     logger.warn("preauth.token.not_found", {
+      tokenPrefix: token.slice(0, 8),
       correlationId,
     });
     return { ok: false, reason: "PRE_AUTH_TOKEN_MISSING" };

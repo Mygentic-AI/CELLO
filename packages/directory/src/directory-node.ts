@@ -827,7 +827,7 @@ export class CelloDirectoryNode {
               } else if (reason === "PRE_AUTH_TOKEN_NOT_FOUND") {
                 // MED-1: NOT_FOUND is distinct from MISSING — different log event
                 errorCode = "PRE_AUTH_TOKEN_MISSING";
-                this.#logger?.warn("preauth.token.not_found", { correlationId });
+                this.#logger?.warn("preauth.token.not_found", { tokenPrefix: token.slice(0, 8), correlationId });
               } else {
                 errorCode = "PRE_AUTH_TOKEN_MISSING";
                 this.#logger?.warn("preauth.token.missing", { remoteAgentId: agentId, correlationId });
