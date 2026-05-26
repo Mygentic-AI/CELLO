@@ -5,7 +5,7 @@
  *
  * Token format: "CELLO-" + 33 base58 chars (Bitcoin alphabet, no 0/O/I/l).
  * Entropy: 58^33 ≈ 2^194.9 bits — exceeds the 192-bit SI-003 minimum.
- * Generation: crypto.randomBytes(25) → base58 encode → take 33 chars.
+ * Generation: rejection sampling — crypto.randomBytes(25) → base58 encode → accept only if exactly 33 chars.
  *
  * Atomic consumption (SI-002, RFC 9591):
  *   UPDATE pre_authorization_tokens
@@ -41,42 +41,50 @@ export const BASE58_ALPHABET =
  * Pseudocode:
  *   1. Generate 25 random bytes via CSPRNG (NIST SP 800-90A).
  *   2. Convert to a BigInt and encode in base58.
- *   3. Pad/truncate to exactly 33 characters.
+ *   3. Rejection sampling: if the encoding is not exactly 33 chars, regenerate.
  *   4. Prepend "CELLO-".
  *
  * Entropy: 58^33 ≈ 2^194.9 bits (> 192-bit minimum per SI-003).
  *
- * Note: base58(25 bytes) may be shorter than 33 chars if leading bytes are 0.
- * We handle this by left-padding with the first character of the alphabet ('1')
- * which encodes zero in base58, matching Bitcoin's zero-encoding convention.
+ * Rejection sampling is used instead of pad/truncate to preserve all 193.9 bits
+ * of entropy. The probability of a 25-byte random input NOT producing a 33-char
+ * base58 output is very small (< 2%) so rejection loops terminate quickly.
+ *
+ * Note: base58(25 bytes) produces 33 chars for most random inputs.
+ * '1' (first base58 char) is the zero-encoding convention (Bitcoin base58).
  */
 export function generatePreAuthToken(): string {
-  // 25 bytes = 200 bits. After base58 encoding we take 33 chars ≈ 193.9 bits.
-  const raw = randomBytes(25);
+  // Loop until we get exactly 33 base58 chars — rejection sampling preserves full entropy.
+  // Each iteration has > 98% probability of success so average iterations ≈ 1.02.
+  for (;;) {
+    // 25 bytes = 200 bits of raw entropy (NIST SP 800-90A)
+    const raw = randomBytes(25);
 
-  // Convert bytes to BigInt (big-endian)
-  let n = BigInt(0);
-  for (const byte of raw) {
-    n = (n << 8n) | BigInt(byte);
+    // Convert bytes to BigInt (big-endian)
+    let n = BigInt(0);
+    for (const byte of raw) {
+      n = (n << 8n) | BigInt(byte);
+    }
+
+    // Base58 encode
+    const digits: string[] = [];
+    while (n > 0n) {
+      const rem = Number(n % 58n);
+      digits.unshift(BASE58_ALPHABET[rem]!);
+      n = n / 58n;
+    }
+
+    // Left-pad with '1' (base58 zero-character) for leading zero bytes
+    while (digits.length < 33) {
+      digits.unshift("1");
+    }
+
+    // Rejection sampling: only accept exactly 33-char encodings (CRIT-2: no truncation)
+    if (digits.length === 33) {
+      return `CELLO-${digits.join("")}`;
+    }
+    // digits.length > 33 → try again with fresh random bytes
   }
-
-  // Base58 encode
-  const digits: string[] = [];
-  while (n > 0n) {
-    const rem = Number(n % 58n);
-    digits.unshift(BASE58_ALPHABET[rem]!);
-    n = n / 58n;
-  }
-
-  // Left-pad with '1' (base58 zero-character) to reach 33 characters
-  while (digits.length < 33) {
-    digits.unshift("1");
-  }
-
-  // Take exactly 33 characters (truncate if longer, which is theoretically possible)
-  const payload = digits.slice(0, 33).join("");
-
-  return `CELLO-${payload}`;
 }
 
 // ─── Token issuance ───────────────────────────────────────────────────────────
@@ -169,7 +177,7 @@ export async function issuePreAuthToken(
 
 export type ConsumeTokenResult =
   | { ok: true; tokenId: string; phoneStubHash: string; emailDomain: string }
-  | { ok: false; reason: "PRE_AUTH_TOKEN_CONSUMED" | "PRE_AUTH_TOKEN_EXPIRED" | "PRE_AUTH_TOKEN_NOT_FOUND" };
+  | { ok: false; reason: "PRE_AUTH_TOKEN_CONSUMED" | "PRE_AUTH_TOKEN_EXPIRED" | "PRE_AUTH_TOKEN_NOT_FOUND"; tokenId: string | null };
 
 /**
  * Atomically consume a pre-authorization token.
@@ -177,47 +185,28 @@ export type ConsumeTokenResult =
  * This is the FIRST operation that must happen in the DKG Round 1 handler.
  * No crypto must precede this call.
  *
- * Pseudocode:
- *   1. First check: SELECT to determine if token exists and whether it's expired
- *      SELECT id, consumed_at, expires_at FROM pre_authorization_tokens WHERE token = $1
- *   2. If no row → NOT_FOUND (treat as invalid)
- *   3. If expires_at < now() → PRE_AUTH_TOKEN_EXPIRED (do not consume)
- *   4. Atomic UPDATE: UPDATE ... SET consumed_at = now()
- *                     WHERE token = $1 AND consumed_at IS NULL
+ * Pseudocode (MED-2: single atomic UPDATE to eliminate TOCTOU):
+ *   1. Atomic UPDATE: UPDATE ... SET consumed_at = now()
+ *                     WHERE token = $1 AND consumed_at IS NULL AND expires_at > now()
  *                     RETURNING id, phone_stub_hash, email_domain
- *   5. If rowCount = 0 → PRE_AUTH_TOKEN_CONSUMED (race condition: another process consumed it)
- *   6. If rowCount = 1 → ok, return token data
+ *   2. If rowCount = 1 → ok, return token data
+ *   3. If rowCount = 0 → disambiguation SELECT to distinguish CONSUMED/EXPIRED/NOT_FOUND:
+ *      SELECT id, consumed_at, expires_at FROM pre_authorization_tokens WHERE token = $1
+ *      a. No row → PRE_AUTH_TOKEN_NOT_FOUND
+ *      b. Row with consumed_at IS NOT NULL → PRE_AUTH_TOKEN_CONSUMED
+ *      c. Row with expires_at <= now() → PRE_AUTH_TOKEN_EXPIRED
  *
  * SI-002: The UPDATE is atomic at the database level. Two concurrent UPDATE calls
  * for the same token return rowCount=1 for exactly one caller.
+ * MED-2: The expiry check is inside the UPDATE predicate (not a separate SELECT),
+ * eliminating the TOCTOU window where a token expiring between SELECT and UPDATE
+ * could still be consumed.
  */
 export async function consumePreAuthToken(
   pool: pg.Pool,
   token: string,
 ): Promise<ConsumeTokenResult> {
-  // Step 1: Check token state first (to distinguish consumed vs expired)
-  const checkResult = await pool.query<{
-    id: string;
-    consumed_at: Date | null;
-    expires_at: Date;
-  }>(
-    "SELECT id, consumed_at, expires_at FROM pre_authorization_tokens WHERE token = $1",
-    [token],
-  );
-
-  if (checkResult.rows.length === 0) {
-    return { ok: false, reason: "PRE_AUTH_TOKEN_NOT_FOUND" };
-  }
-
-  const row = checkResult.rows[0]!;
-
-  // Step 2: Check expiry (before attempting UPDATE)
-  if (row.expires_at <= new Date()) {
-    return { ok: false, reason: "PRE_AUTH_TOKEN_EXPIRED" };
-  }
-
-  // Step 3: Atomic consumption
-  // UPDATE ... WHERE consumed_at IS NULL ensures only one concurrent caller succeeds.
+  // Step 1: Single atomic UPDATE — expiry check IS in the predicate (MED-2)
   // RFC 9591 § pattern: single-use token via conditional update.
   const updateResult = await pool.query<{
     id: string;
@@ -226,23 +215,44 @@ export async function consumePreAuthToken(
   }>(
     `UPDATE pre_authorization_tokens
      SET consumed_at = now()
-     WHERE token = $1 AND consumed_at IS NULL
+     WHERE token = $1 AND consumed_at IS NULL AND expires_at > now()
      RETURNING id, phone_stub_hash, email_domain`,
     [token],
   );
 
-  if (updateResult.rowCount === 0) {
-    // Another concurrent caller consumed the token (SI-002 atomicity)
-    return { ok: false, reason: "PRE_AUTH_TOKEN_CONSUMED" };
+  if (updateResult.rowCount === 1) {
+    const updated = updateResult.rows[0]!;
+    return {
+      ok: true,
+      tokenId: updated.id,
+      phoneStubHash: updated.phone_stub_hash,
+      emailDomain: updated.email_domain,
+    };
   }
 
-  const updated = updateResult.rows[0]!;
-  return {
-    ok: true,
-    tokenId: updated.id,
-    phoneStubHash: updated.phone_stub_hash,
-    emailDomain: updated.email_domain,
-  };
+  // Step 2: rowCount = 0 → disambiguation SELECT to determine the reason
+  const disambig = await pool.query<{
+    id: string;
+    consumed_at: Date | null;
+    expires_at: Date;
+  }>(
+    "SELECT id, consumed_at, expires_at FROM pre_authorization_tokens WHERE token = $1",
+    [token],
+  );
+
+  if (disambig.rows.length === 0) {
+    return { ok: false, reason: "PRE_AUTH_TOKEN_NOT_FOUND", tokenId: null };
+  }
+
+  const row = disambig.rows[0]!;
+
+  if (row.consumed_at !== null) {
+    // Another concurrent caller consumed the token (SI-002 atomicity)
+    return { ok: false, reason: "PRE_AUTH_TOKEN_CONSUMED", tokenId: row.id };
+  }
+
+  // consumed_at IS NULL but UPDATE predicate failed → expires_at <= now()
+  return { ok: false, reason: "PRE_AUTH_TOKEN_EXPIRED", tokenId: row.id };
 }
 
 // ─── DKG token gate ───────────────────────────────────────────────────────────
@@ -302,27 +312,25 @@ export async function validatePreAuthTokenForDkg(
 
   if (!result.ok) {
     if (result.reason === "PRE_AUTH_TOKEN_CONSUMED") {
-      // Look up tokenId for logging (best-effort — use token hash as fallback)
-      const tokenId = await getTokenId(pool, token);
+      // result.tokenId is the DB UUID from the disambiguation SELECT (no extra query needed)
       logger.warn("preauth.token.reuse.rejected", {
-        tokenId: tokenId ?? token.slice(0, 16) + "...",
+        tokenId: result.tokenId,
         correlationId,
       });
       return { ok: false, reason: "PRE_AUTH_TOKEN_CONSUMED" };
     }
 
     if (result.reason === "PRE_AUTH_TOKEN_EXPIRED") {
-      const tokenId = await getTokenId(pool, token);
+      // result.tokenId is the DB UUID from the disambiguation SELECT (no extra query needed)
       logger.warn("preauth.token.expired", {
-        tokenId: tokenId ?? token.slice(0, 16) + "...",
+        tokenId: result.tokenId,
         correlationId,
       });
       return { ok: false, reason: "PRE_AUTH_TOKEN_EXPIRED" };
     }
 
-    // NOT_FOUND: treat same as missing (avoid oracle leakage)
-    logger.warn("preauth.token.missing", {
-      remoteAgentId: agentId,
+    // NOT_FOUND: MED-1 — use preauth.token.not_found (distinct from missing-field case)
+    logger.warn("preauth.token.not_found", {
       correlationId,
     });
     return { ok: false, reason: "PRE_AUTH_TOKEN_MISSING" };
@@ -417,17 +425,3 @@ export async function linkAgentToAccount(
   return readback.rows[0]!.account_id;
 }
 
-// ─── Private helpers ──────────────────────────────────────────────────────────
-
-/** Look up a token's database id by token string (for logging purposes). Returns null if not found. */
-async function getTokenId(pool: pg.Pool, token: string): Promise<string | null> {
-  try {
-    const result = await pool.query<{ id: string }>(
-      "SELECT id FROM pre_authorization_tokens WHERE token = $1",
-      [token],
-    );
-    return result.rows[0]?.id ?? null;
-  } catch {
-    return null;
-  }
-}

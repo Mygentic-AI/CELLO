@@ -98,7 +98,14 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
       try {
         result = await issuePreAuthToken(pool, { phoneStubHash, emailDomain, registrationId });
       } catch (err: unknown) {
-        const reason = err instanceof Error ? err.message : String(err);
+        // LOW-2: Sanitize Postgres errors to avoid leaking internal schema details.
+        // Postgres driver errors have a numeric `code` property (e.g. "23505" for unique violation).
+        // Log only the error code for DB errors; log the message for non-DB errors.
+        const pgErr = err as { code?: string; constructor?: { name?: string } };
+        const isDbError = typeof pgErr.code === "string" && /^\d{5}$/.test(pgErr.code);
+        const reason = isDbError
+          ? `database_error:${pgErr.code}`
+          : err instanceof Error ? err.message : String(err);
         logger.error("preauth.token.issue.failed", {
           reason,
           correlationId,

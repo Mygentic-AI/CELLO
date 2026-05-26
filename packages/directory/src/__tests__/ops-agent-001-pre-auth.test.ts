@@ -29,7 +29,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import pg from "pg";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 
 // ─── Integration guard ────────────────────────────────────────────────────────
@@ -90,7 +90,7 @@ async function insertTokenRow(
 
 /** Helper: insert a fake registration row for FK satisfaction */
 async function insertRegistrationRow(pool: pg.Pool, phoneStubHash: string): Promise<string> {
-  const id = "00000000-0000-0000-0000-" + Buffer.from(randomBytes(6)).toString("hex");
+  const id = randomUUID();
   const chainHash = createHash("sha256").update(id).digest("hex");
   await pool.query(
     `INSERT INTO registrations

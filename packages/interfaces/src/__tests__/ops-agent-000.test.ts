@@ -92,6 +92,8 @@ describe("AC-003: TokenValidator + DevTokenValidator", () => {
     if (result.valid) {
       expect(typeof result.phoneStubHash).toBe("string");
       expect(typeof result.emailDomain).toBe("string");
+      // LOW-1: assert tokenId is returned on success
+      expect(result.tokenId).toBe("dev-token");
     }
   });
 

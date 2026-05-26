@@ -818,10 +818,16 @@ export class CelloDirectoryNode {
               let errorCode: string;
               if (reason.includes("CONSUMED") || reason === "PRE_AUTH_TOKEN_CONSUMED") {
                 errorCode = "PRE_AUTH_TOKEN_CONSUMED";
-                this.#logger?.warn("preauth.token.reuse.rejected", { tokenId: token.slice(0, 16), correlationId });
+                // HIGH-2: use DB UUID from result.tokenId (not token string prefix)
+                this.#logger?.warn("preauth.token.reuse.rejected", { tokenId: validationResult.tokenId, correlationId });
               } else if (reason.includes("EXPIRED") || reason === "PRE_AUTH_TOKEN_EXPIRED") {
                 errorCode = "PRE_AUTH_TOKEN_EXPIRED";
-                this.#logger?.warn("preauth.token.expired", { tokenId: token.slice(0, 16), correlationId });
+                // HIGH-2: use DB UUID from result.tokenId (not token string prefix)
+                this.#logger?.warn("preauth.token.expired", { tokenId: validationResult.tokenId, correlationId });
+              } else if (reason === "PRE_AUTH_TOKEN_NOT_FOUND") {
+                // MED-1: NOT_FOUND is distinct from MISSING — different log event
+                errorCode = "PRE_AUTH_TOKEN_MISSING";
+                this.#logger?.warn("preauth.token.not_found", { correlationId });
               } else {
                 errorCode = "PRE_AUTH_TOKEN_MISSING";
                 this.#logger?.warn("preauth.token.missing", { remoteAgentId: agentId, correlationId });
@@ -1373,6 +1379,8 @@ export class CelloDirectoryNode {
 
     // Step 1: Validate phone_stub non-empty
     if (!frame.phone_stub || frame.phone_stub.length === 0) {
+      // HIGH-3: clean up pending pre-auth data on all early-return paths
+      this.#pendingPreAuthData.delete(frame.k_local_pubkey);
       this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "invalid_verification" }));
       return;
     }
@@ -1381,6 +1389,8 @@ export class CelloDirectoryNode {
     // Include profile data so the client can reconstruct RegistrationState without a new DKG.
     const existingProfile = this.#store.getProfile(frame.k_local_pubkey);
     if (existingProfile) {
+      // HIGH-3: clean up pending pre-auth data on all early-return paths
+      this.#pendingPreAuthData.delete(frame.k_local_pubkey);
       this.#sendFrame(stream, encodeRegisterError({
         type: "register_error",
         reason: "already_registered",
@@ -1395,6 +1405,8 @@ export class CelloDirectoryNode {
     // FIPS 180-4 SHA-256
     const phoneStubHash = createHash("sha256").update(frame.phone_stub, "utf8").digest("hex");
     if (this.#store.hasPhoneStubHash(phoneStubHash)) {
+      // HIGH-3: clean up pending pre-auth data on all early-return paths
+      this.#pendingPreAuthData.delete(frame.k_local_pubkey);
       this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "phone_already_claimed" }));
       return;
     }
@@ -1405,6 +1417,8 @@ export class CelloDirectoryNode {
     if (this.#forceDkgFailure) {
       // OBS-001: DKG failed log
       protocolLog("REG", `DKG failed — agent ${truncHex(frame.k_local_pubkey)}, reason: forced_failure`);
+      // HIGH-3: clean up pending pre-auth data on all early-return paths
+      this.#pendingPreAuthData.delete(frame.k_local_pubkey);
       this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "dkg_failed" }));
       return;
     }
@@ -1449,6 +1463,8 @@ export class CelloDirectoryNode {
         // Verify: client-reported primary_pubkey must match directory-computed shareCommitment
         const expectedHex = Buffer.from(storedCommitment).toString("hex");
         if (clientPrimaryPubkey !== expectedHex) {
+          // HIGH-3: clean up pending pre-auth data on all early-return paths
+          this.#pendingPreAuthData.delete(frame.k_local_pubkey);
           this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "dkg_verification_failed" }));
           return;
         }
@@ -1466,6 +1482,8 @@ export class CelloDirectoryNode {
       this.registerThresholdSigner(frame.k_local_pubkey, delegatedSigner);
       this.registerPrimaryPubkey(frame.k_local_pubkey, new Uint8Array(primaryPubkeyBytes));
     } catch {
+      // HIGH-3: clean up pending pre-auth data on DKG failure/timeout
+      this.#pendingPreAuthData.delete(frame.k_local_pubkey);
       this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "dkg_failed" }));
       return;
     }

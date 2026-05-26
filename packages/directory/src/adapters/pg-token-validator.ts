@@ -19,6 +19,19 @@ import type pg from "pg";
 import type { TokenValidator, TokenValidationResult } from "@cello-protocol/interfaces";
 import { consumePreAuthToken } from "../pre-auth-token-repository.js";
 
+/** Look up a token's DB UUID (for logging on failure paths). Returns null if not found. */
+async function lookupTokenId(pool: pg.Pool, token: string): Promise<string | null> {
+  try {
+    const result = await pool.query<{ id: string }>(
+      "SELECT id FROM pre_authorization_tokens WHERE token = $1",
+      [token],
+    );
+    return result.rows[0]?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * PgTokenValidator — implements TokenValidator for production environments.
  * Atomically consumes pre-authorization tokens from Postgres.
@@ -54,9 +67,15 @@ export class PgTokenValidator implements TokenValidator {
 
     // Map error codes to TokenValidationResult failure.
     // Caller is responsible for logging the appropriate event.
+    // Look up the DB UUID so the caller can include it in log events (HIGH-2).
+    // NOT_FOUND → tokenId will be null (no row to look up).
+    const tokenId = result.reason !== "PRE_AUTH_TOKEN_NOT_FOUND"
+      ? await lookupTokenId(this.#pool, token)
+      : null;
     return {
       valid: false,
       reason: result.reason,
+      tokenId,
     };
   }
 }

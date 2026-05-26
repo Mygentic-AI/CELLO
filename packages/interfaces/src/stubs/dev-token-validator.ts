@@ -46,6 +46,7 @@ export class DevTokenValidator implements TokenValidator {
       valid: false,
       reason: "DevTokenValidator only accepts tokens with the 'DEV-' prefix. " +
         "Use CELLO_ENV=local and a 'DEV-' prefixed token for local development.",
+      tokenId: null,
     };
   }
 }
