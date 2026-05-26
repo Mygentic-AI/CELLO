@@ -159,7 +159,7 @@ acceptance_criteria:
     given: "The packages/interfaces/src/ directory after merge"
     when: "MessagingChannel interface is imported by a consumer"
     then: "the interface exports send(to: string, message: string): Promise<void>,
-      onMessage(handler: (from: string, message: string) => void): void, and
+      onMessage(handler: (from: string, message: string) => void | Promise<void>): void, and
       resolveIdentity(from: string): Promise<ChannelIdentity>; ChannelIdentity
       is a discriminated union with channel field ('telegram' | 'whatsapp' | 'cli'),
       optional phoneNumber, and required channelUserId"

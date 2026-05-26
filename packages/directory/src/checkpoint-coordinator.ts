@@ -22,7 +22,7 @@ import { randomUUID } from "node:crypto";
 import type { Logger, DirectoryStore } from "@cello/interfaces";
 // buildCheckpointTbs: static import — both coordinator and verifier use the same function (AC-010-canonical-tbs)
 import { computeCheckpointHash, buildCheckpointTbs, verify, type KeyProvider } from "@cello/crypto";
-import type { ICheckpointTransport, CheckpointSignatureResponse, CheckpointProposal } from "@cello/interfaces";
+import type { ICheckpointTransport, CheckpointSignatureResponse } from "@cello/interfaces";
 import type { MmrStore } from "./mmr-store.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────

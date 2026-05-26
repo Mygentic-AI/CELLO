@@ -158,7 +158,7 @@ for REGION in "${REGIONS[@]}"; do
 done
 
 # Tables covered by the publication (all append-only tables, AC behavior)
-PUBLICATION_TABLES="agent_profiles,conversation_seals,conversation_seal_staging,directory_checkpoints,checkpoint_node_signatures,relay_registrations,sessions,pending_notifications,user_accounts"
+PUBLICATION_TABLES="agent_profiles,conversation_seals,conversation_seal_staging,directory_checkpoints,checkpoint_node_signatures,relay_registrations,sessions,pending_notifications,user_accounts,registrations,pre_authorization_tokens"
 TABLE_COUNT=$(echo "${PUBLICATION_TABLES}" | tr ',' '\n' | wc -l | tr -d ' ')
 
 # ── Step 1: Validate all ECS tasks are RUNNING before touching any DB ─────────

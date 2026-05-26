@@ -9,3 +9,8 @@ export { LocalAuditLogShipper } from "./local-audit-log-shipper.js";
 export { LocalCloudStorageProvider } from "./local-cloud-storage-provider.js";
 export { InMemoryNotificationQueue } from "./in-memory-notification-queue.js";
 export { InMemoryCheckpointTransport } from "./in-memory-checkpoint-transport.js";
+export { CliAdapter } from "./cli-adapter.js";
+export { ConsoleOtpDeliveryProvider } from "./console-otp-delivery-provider.js";
+export { DevTokenValidator } from "./dev-token-validator.js";
+export { LocalPreAuthorizationClient } from "./local-pre-authorization-client.js";
+export { ConsoleSecurityAlertProvider } from "./console-security-alert-provider.js";
