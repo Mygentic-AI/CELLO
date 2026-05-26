@@ -81,6 +81,35 @@ Story completed: OPS-AGENT-001 — directory pre-authorization API + FROST DKG R
 
 ---
 
+## 2026-05-26 — OPS-AGENT-002: story closed
+
+Story completed: OPS-AGENT-002 — PostgreSQL-backed registration state machine.
+
+**Delivered:**
+- `RegistrationStateMachine` — full 9-state machine; all state transitions persist to Postgres via `RegistrationRepository`
+- `RegistrationEngine` — wires state machine to `MessagingChannel.onMessage`; restart recovery (`loadAllActive` on `start()`); AWAITING_CONTACT re-prompt sweep (10 min); expiry sweep (1 hr)
+- `RegistrationRepository` — all DB operations including `transitionOnOtpLockout()` (atomic BEGIN/SELECT FOR UPDATE/UPDATE/COMMIT for lockout path)
+- OTP: SHA-256(otp + salt) stored, never plaintext; `timingSafeEqual` at verification (SI-001)
+- Phone: SHA-256(normalized_phone) stored, never raw number (SI-002)
+- SI-003: runtime enforcement tested with real integration tests (crafted messages to AWAITING_CONTACT assert state doesn't advance)
+- In-memory OTP rate limiter (5 sends/hr/domain, resets on restart) — `registration.otp.rate_limited` emitted at WARN with all 4 required context fields
+- All 9 observability events emitted: `registration.started`, `registration.phone.verified`, `registration.email.verified`, `registration.completed`, `registration.state.recovered`, `registration.otp.expired`, `registration.otp.rate_limited`, `registration.expired`, `registration.engine.error`
+- 51 tests; `CELLO_ENV=local` gates integration tests; `--pool-options.threads.maxThreads=1` enforced in vitest config
+
+**Notable design decisions downstream stories should know:**
+- OTP lockout transitions to `AWAITING_EMAIL` (not stays in `AWAITING_EMAIL_OTP`) — AC-005 YAML updated with rationale
+- `otpSalt` is NOT on `RegistrationRecord` — fetched from DB via `getOtpSalt(id)` only at verification time
+- `chainHash` is NOT on `RegistrationRecord` — persistence-layer concern only
+- Engine always queries DB on message receipt (never uses in-memory map as cache) — intentional for restart-recovery correctness
+- Timer sweep `.catch()` handlers log via `registration.engine.error` with `error.message` / `error.stack` — no `void` discards
+
+**Downstream stories now unblocked:**
+- OPS-AGENT-003: implement `TelegramAdapter` satisfying `MessagingChannel` — inject into `RegistrationEngine`
+- OPS-AGENT-004: implement `SesOtpDeliveryProvider` satisfying `OtpDeliveryProvider` — inject into `RegistrationEngine`
+- OPS-AGENT-005B: wire application code — `RegistrationEngine` is the composition root entry point; requires `pool`, `channel`, `otpDelivery`, `preAuth`, `logger`, `channelType`
+
+---
+
 ## Constraints
 
 **CONSTRAINT: registrations table single-writer assumption.** The Operations Agent writes only from us-east-1. The partial unique index `UNIQUE (phone_stub_hash) WHERE state NOT IN (terminal)` is enforced locally per-node in logical replication — it does NOT prevent cross-region duplicates. Multi-region Ops Agent deployment requires schema redesign. See OPS-AGENT-000 `replication_safety` note.
