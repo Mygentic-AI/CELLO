@@ -579,7 +579,7 @@ const tokenValidator: TokenValidator = (() => {
     });
     process.exit(1);
   }
-  const v = new PgTokenValidator(pgPool, logger);
+  const v = new PgTokenValidator(pgPool);
   logger.info("adapter.initialised", { adapterName: "TokenValidator", implementation: "PgTokenValidator", env });
   return v;
 })();
