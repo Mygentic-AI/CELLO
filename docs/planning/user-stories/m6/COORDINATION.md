@@ -50,6 +50,8 @@ Story completed: OPS-AGENT-000 — interfaces, types, stubs, migrations.
 
 Migration Version Registry updated above.
 
+**Security fix (post-review):** Dev role passwords (`cello_service`, `cello_analytics`, `cello_ops_agent`) were removed from migration SQL and moved to `docker/postgres/initdb/01-dev-role-passwords.sql` (runs on first container startup). Developers with existing containers must `docker compose down -v && docker compose up -d` then re-run migrations to pick up the new init script.
+
 ---
 
 ## Constraints
