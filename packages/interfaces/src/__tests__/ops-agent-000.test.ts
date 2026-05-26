@@ -231,7 +231,7 @@ describe("AC-005 + SI-001: PreAuthorizationToken format and entropy", () => {
     const raw = randomBytes(25);
     const encoded = encodeBase58(raw);
     // Pad or take exactly 33 chars — pad with leading '1' (zero in base58) if needed
-    const padded = encoded.padStart(RANDOM_CHAR_COUNT, "1").slice(-RANDOM_CHAR_COUNT);
+    const padded = encoded.padStart(RANDOM_CHAR_COUNT, "1").slice(0, RANDOM_CHAR_COUNT);
     return TOKEN_PREFIX + padded;
   }
 
@@ -337,6 +337,7 @@ describe("AC-006: RegistrationState discriminated union", () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       expiresAt: new Date(Date.now() + 7 * 86400_000),
+      emailDomain: "example.com",
       state: "AWAITING_EMAIL_OTP",
       otpHash: "hashed-otp",
       otpExpiresAt: new Date(Date.now() + 900_000),
@@ -357,6 +358,7 @@ describe("AC-006: RegistrationState discriminated union", () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       expiresAt: new Date(),
+      emailDomain: null,
       state: "INITIAL",
     };
     // TypeScript will error if "chainHash" is a valid key on RegistrationRecord.

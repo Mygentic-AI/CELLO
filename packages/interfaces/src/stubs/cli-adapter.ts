@@ -27,7 +27,7 @@ import type { MessagingChannel, ChannelIdentity } from "../messaging-channel.js"
  * resolveIdentity() returns a fixed cli ChannelIdentity.
  */
 export class CliAdapter implements MessagingChannel {
-  #messageHandler: ((from: string, message: string) => void) | undefined = undefined;
+  #messageHandler: ((from: string, message: string) => void | Promise<void>) | undefined = undefined;
   #readlineStarted = false;
 
   /** Write a message to stdout in a structured format. */
@@ -40,7 +40,7 @@ export class CliAdapter implements MessagingChannel {
    * Attaches a readline interface to stdin on first call.
    * Each line received from stdin is dispatched as a message from "cli-stdin".
    */
-  onMessage(handler: (from: string, message: string) => void): void {
+  onMessage(handler: (from: string, message: string) => void | Promise<void>): void {
     this.#messageHandler = handler;
     if (!this.#readlineStarted) {
       this.#readlineStarted = true;

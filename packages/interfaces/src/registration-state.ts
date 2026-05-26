@@ -84,4 +84,11 @@ export type RegistrationRecord = {
   updatedAt: Date;
   /** When this registration record expires (7-day idle timeout) */
   expiresAt: Date;
+  /**
+   * Email domain collected during registration (e.g. "example.com").
+   * null before the AWAITING_EMAIL transition — set once the operator provides
+   * their email address and the domain is extracted.
+   * Mirrors the nullable email_domain TEXT column in the registrations table.
+   */
+  emailDomain: string | null;
 } & RegistrationState;

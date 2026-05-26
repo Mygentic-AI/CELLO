@@ -21,7 +21,7 @@
 export type ChannelIdentity =
   | { channel: "telegram"; channelUserId: string; phoneNumber?: string }
   | { channel: "whatsapp"; channelUserId: string; phoneNumber?: string }
-  | { channel: "cli"; channelUserId: string; phoneNumber?: string };
+  | { channel: "cli"; channelUserId: string };
 
 /**
  * MessagingChannel — single interface, multiple channel implementations.
@@ -37,7 +37,7 @@ export interface MessagingChannel {
    * Register a handler for inbound messages.
    * Called once at startup. `from` is the channel-native sender identifier.
    */
-  onMessage(handler: (from: string, message: string) => void): void;
+  onMessage(handler: (from: string, message: string) => void | Promise<void>): void;
 
   /**
    * Resolve the full channel identity for a given channel-native sender address.
