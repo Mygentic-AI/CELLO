@@ -77,6 +77,140 @@ async function attemptQuery(
 }
 
 describeIntegration(
+  "OPS-AGENT-000 AC-007: schema structure assertions (registrations + pre_authorization_tokens)",
+  () => {
+    // Queries information_schema and pg_indexes to verify the schema is exactly as designed.
+    // Uses opsAgentPool — SELECT on information_schema is available to any role.
+
+    it("AC-007: registrations table exists", async () => {
+      const result = await opsAgentPool.query<{ table_name: string }>(
+        `SELECT table_name FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name = 'registrations'`,
+      );
+      expect(result.rows.length, "registrations table must exist").toBe(1);
+    });
+
+    it("AC-007: pre_authorization_tokens table exists", async () => {
+      const result = await opsAgentPool.query<{ table_name: string }>(
+        `SELECT table_name FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name = 'pre_authorization_tokens'`,
+      );
+      expect(result.rows.length, "pre_authorization_tokens table must exist").toBe(1);
+    });
+
+    it("AC-007: registrations columns have correct nullability", async () => {
+      const result = await opsAgentPool.query<{ column_name: string; is_nullable: string }>(
+        `SELECT column_name, is_nullable
+         FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'registrations'`,
+      );
+      const cols = Object.fromEntries(result.rows.map((r) => [r.column_name, r.is_nullable]));
+
+      // NOT NULL columns
+      const notNullCols = [
+        "id",
+        "phone_stub_hash",
+        "channel",
+        "channel_user_id",
+        "state",
+        "state_data",
+        "otp_attempt_count",
+        "created_at",
+        "updated_at",
+        "expires_at",
+        "chain_hash",
+      ];
+      for (const col of notNullCols) {
+        expect(cols[col], `registrations.${col} must exist`).toBeDefined();
+        expect(cols[col], `registrations.${col} must be NOT NULL`).toBe("NO");
+      }
+
+      // Nullable columns
+      const nullableCols = ["email_domain", "otp_hash", "otp_salt", "otp_expires_at"];
+      for (const col of nullableCols) {
+        expect(cols[col], `registrations.${col} must exist`).toBeDefined();
+        expect(cols[col], `registrations.${col} must be nullable`).toBe("YES");
+      }
+    });
+
+    it("AC-007: partial UNIQUE index idx_registrations_phone_stub_hash_active exists on registrations", async () => {
+      const result = await opsAgentPool.query<{ indexname: string }>(
+        `SELECT indexname FROM pg_indexes
+         WHERE tablename = 'registrations'
+           AND indexname = 'idx_registrations_phone_stub_hash_active'`,
+      );
+      expect(
+        result.rows.length,
+        "partial UNIQUE index idx_registrations_phone_stub_hash_active must exist on registrations",
+      ).toBe(1);
+    });
+
+    it("AC-007: pre_authorization_tokens.token has a UNIQUE index", async () => {
+      // information_schema.constraint_column_usage only shows rows the current role owns,
+      // so we use pg_indexes (globally visible) to verify the UNIQUE index on token.
+      const result = await opsAgentPool.query<{ indexname: string }>(
+        `SELECT indexname FROM pg_indexes
+         WHERE tablename = 'pre_authorization_tokens'
+           AND indexname = 'pre_authorization_tokens_token_key'`,
+      );
+      expect(
+        result.rows.length,
+        "pre_authorization_tokens.token must have a UNIQUE index (pre_authorization_tokens_token_key)",
+      ).toBe(1);
+    });
+
+    it("AC-007: FK from pre_authorization_tokens.registration_id to registrations(id) exists", async () => {
+      const result = await opsAgentPool.query<{ constraint_name: string }>(
+        `SELECT rc.constraint_name
+         FROM information_schema.referential_constraints rc
+         JOIN information_schema.key_column_usage kcu
+           ON rc.constraint_name = kcu.constraint_name
+          AND rc.constraint_schema = kcu.table_schema
+         JOIN information_schema.key_column_usage kcu2
+           ON rc.unique_constraint_name = kcu2.constraint_name
+          AND rc.unique_constraint_schema = kcu2.table_schema
+         WHERE kcu.table_schema = 'public'
+           AND kcu.table_name = 'pre_authorization_tokens'
+           AND kcu.column_name = 'registration_id'
+           AND kcu2.table_name = 'registrations'
+           AND kcu2.column_name = 'id'`,
+      );
+      expect(
+        result.rows.length,
+        "FK from pre_authorization_tokens.registration_id to registrations(id) must exist",
+      ).toBeGreaterThanOrEqual(1);
+    });
+
+    it("AC-007: pre_authorization_tokens.chain_hash is NOT NULL", async () => {
+      const result = await opsAgentPool.query<{ is_nullable: string }>(
+        `SELECT is_nullable FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pre_authorization_tokens'
+           AND column_name = 'chain_hash'`,
+      );
+      expect(result.rows.length, "pre_authorization_tokens.chain_hash column must exist").toBe(1);
+      expect(result.rows[0]!.is_nullable, "pre_authorization_tokens.chain_hash must be NOT NULL").toBe(
+        "NO",
+      );
+    });
+
+    it("AC-007: pre_authorization_tokens.consumed_at is nullable", async () => {
+      const result = await opsAgentPool.query<{ is_nullable: string }>(
+        `SELECT is_nullable FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pre_authorization_tokens'
+           AND column_name = 'consumed_at'`,
+      );
+      expect(result.rows.length, "pre_authorization_tokens.consumed_at column must exist").toBe(1);
+      expect(
+        result.rows[0]!.is_nullable,
+        "pre_authorization_tokens.consumed_at must be nullable",
+      ).toBe("YES");
+    });
+  },
+);
+
+describeIntegration(
   "OPS-AGENT-000 AC-007b: cello_ops_agent role scope boundary",
   () => {
     it("AC-007b: SELECT on registrations as cello_ops_agent succeeds", async () => {

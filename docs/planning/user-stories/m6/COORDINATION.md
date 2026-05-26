@@ -39,13 +39,14 @@ Story completed: OPS-AGENT-000 — interfaces, types, stubs, migrations.
 - `PreAuthorizationToken` + `PreAuthorizationTokenRow` types
 - V24 migration: `registrations` table with partial UNIQUE index, RLS (no DELETE)
 - V25 migration: `pre_authorization_tokens` table with UNIQUE(token), FK to registrations, RLS (no DELETE)
+- V26 migration: `cello_ops_agent` role — scoped INSERT/SELECT/UPDATE on registrations and pre_authorization_tokens; explicit no-DELETE; dev password set for local environments
 
 **All downstream stories may now proceed:**
 - OPS-AGENT-001: use `PreAuthorizationClient`, `PreAuthorizationToken`, `PreAuthorizationTokenRow`, V25 table
 - OPS-AGENT-002: use `RegistrationState`, `RegistrationRecord`, V24 table
 - OPS-AGENT-003: implement `TelegramAdapter` satisfying `MessagingChannel`
 - OPS-AGENT-004: implement `SesOtpDeliveryProvider` satisfying `OtpDeliveryProvider`
-- OPS-AGENT-005A: use V24/V25 migrations in IaC; no new migration versions required from this story
+- OPS-AGENT-005A: use V24/V25/V26 migrations in IaC; provision `cello/{env}/ops-agent/rds-credentials` secret for cello_ops_agent production password
 
 Migration Version Registry updated above.
 
