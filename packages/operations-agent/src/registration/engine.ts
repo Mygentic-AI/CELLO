@@ -117,14 +117,24 @@ export class RegistrationEngine {
     const contactInterval = this.#opts.contactPromptIntervalMs ?? CONTACT_PROMPT_INTERVAL_MS;
     const expiryInterval = this.#opts.expirySweepIntervalMs ?? EXPIRY_SWEEP_INTERVAL_MS;
 
-    this.#contactPromptTimer = setInterval(
-      () => { void this.#runContactPromptSweep(); },
-      contactInterval,
-    );
-    this.#expirySweepTimer = setInterval(
-      () => { void this.#runExpirySweep(); },
-      expiryInterval,
-    );
+    this.#contactPromptTimer = setInterval(() => {
+      this.#runContactPromptSweep().catch((err) => {
+        const error = err instanceof Error ? err : new Error(String(err));
+        this.#logger.error("registration.engine.error", error, {
+          "error.message": error.message,
+          "error.stack": error.stack ?? "",
+        });
+      });
+    }, contactInterval);
+    this.#expirySweepTimer = setInterval(() => {
+      this.#runExpirySweep().catch((err) => {
+        const error = err instanceof Error ? err : new Error(String(err));
+        this.#logger.error("registration.engine.error", error, {
+          "error.message": error.message,
+          "error.stack": error.stack ?? "",
+        });
+      });
+    }, expiryInterval);
   }
 
   /**

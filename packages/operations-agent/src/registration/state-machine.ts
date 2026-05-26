@@ -169,13 +169,14 @@ export class RegistrationStateMachine {
       expiresAt,
     });
 
-    const awaitingRecord = await repository.transition(record.id, "AWAITING_CONTACT");
-
+    // Log immediately after insert — record now exists with this id (LOW-002)
     logger.info("registration.started", {
       registrationId: record.id,
       channel,
       correlationId,
     });
+
+    const awaitingRecord = await repository.transition(record.id, "AWAITING_CONTACT");
 
     // Send request_contact prompt
     await this.#deps.channel.send(
@@ -268,8 +269,9 @@ export class RegistrationStateMachine {
     const emailDomain = extractEmailDomain(email);
 
     // Check OTP rate limit (AC-009)
-    const rateLimited = this.#checkAndIncrementRateLimit(emailDomain, from, record.id, correlationId);
+    const rateLimited = this.#isRateLimited(emailDomain, record.id, correlationId);
     if (rateLimited) {
+      await channel.send(from, "Too many verification code requests. Please wait before trying again.");
       return record;
     }
 
@@ -279,10 +281,7 @@ export class RegistrationStateMachine {
     const otpHash = hashOtp(otp, salt);
     const otpExpiresAt = new Date(Date.now() + OTP_TTL_MS);
 
-    // Deliver OTP via provider
-    await this.#deps.otpDelivery.sendOtp(email, otp);
-
-    // Transition to AWAITING_EMAIL_OTP with OTP data
+    // Write OTP hash to DB first — deliver only after DB write succeeds (MED-001)
     const updated = await repository.transition(record.id, "AWAITING_EMAIL_OTP", {
       emailDomain,
       otpHash,
@@ -290,6 +289,9 @@ export class RegistrationStateMachine {
       otpExpiresAt,
       otpAttemptCount: 0,
     });
+
+    // Deliver OTP only after DB write succeeds
+    await this.#deps.otpDelivery.sendOtp(email, otp);
 
     await channel.send(from, `A 6-digit verification code has been sent to ${email}. Please enter it here.`);
 
@@ -309,16 +311,16 @@ export class RegistrationStateMachine {
 
     const candidate = message.trim();
 
-    // Check OTP expiry (AC-006)
-    if (record.otpExpiresAt < new Date()) {
-      logger.info("registration.otp.expired", { registrationId: record.id, correlationId });
-      await channel.send(from, "Your verification code has expired. Please request a new one.");
+    // 1. If OTP hash is null/empty (cleared sentinel) — prompt to re-enter email
+    if (!record.otpHash) {
+      await channel.send(from, "Your verification code was invalidated. Please provide your email address again to receive a new code.");
       return record;
     }
 
-    // If OTP hash is null (cleared after 3 failures), user must request new OTP
-    if (!record.otpHash) {
-      await channel.send(from, "Your verification code was invalidated. Please request a new one by providing your email address again.");
+    // 2. Check OTP expiry (AC-006)
+    if (record.otpExpiresAt < new Date()) {
+      logger.info("registration.otp.expired", { registrationId: record.id, correlationId });
+      await channel.send(from, "Your verification code has expired. Please request a new one.");
       return record;
     }
 
@@ -399,10 +401,11 @@ export class RegistrationStateMachine {
 
   /**
    * Check and increment the rate limiter for a given email domain.
-   * Returns true if rate-limited (caller should abort), false if within limit.
+   * Returns true if rate-limited (caller should abort and send notification), false if within limit.
    * Emits registration.otp.rate_limited at WARN if limit exceeded.
+   * Does NOT send any channel message — the caller is responsible for awaiting the notification.
    */
-  #checkAndIncrementRateLimit(emailDomain: string, channelUserId: string, registrationId: string, correlationId: string): boolean {
+  #isRateLimited(emailDomain: string, registrationId: string, correlationId: string): boolean {
     const now = new Date();
     const entry = this.#rateLimitMap.get(emailDomain);
 
@@ -421,9 +424,6 @@ export class RegistrationStateMachine {
           sendCount: entry.count,
           correlationId,
         });
-        this.#deps.channel
-          .send(channelUserId, "Too many verification code requests. Please wait before trying again.")
-          .catch(() => {/* ignore send error */});
         return true;
       }
 

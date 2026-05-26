@@ -252,6 +252,36 @@ describeIntegration("SI-003: State machine rejects OTP/email input before phone 
     if (record) await repo.transition(record.id, "EXPIRED");
   });
 
+  it("SI-003: CONTACT event with mismatched user_id is rejected; state stays AWAITING_CONTACT", async () => {
+    const userId = `si003-mismatch-${Date.now()}`;
+    const { channel, otpDelivery, inject } = makeMinimalChannel();
+    const engine = new RegistrationEngine({
+      pool,
+      channel,
+      otpDelivery,
+      preAuth: new LocalPreAuthorizationClient(),
+      logger: makeMinimalLogger(),
+      channelType: "cli",
+      onError: (err) => { throw err; },
+    });
+    await engine.start();
+
+    // Start registration (now in AWAITING_CONTACT)
+    await inject(userId, "hello");
+
+    // Adversarial: send CONTACT event with a DIFFERENT user_id
+    await inject(userId, `CONTACT:different-user:+447911999888`);
+
+    // State must still be AWAITING_CONTACT — mismatched user_id rejected
+    const repo = new RegistrationRepository(pool);
+    const record = await repo.findActiveByChannelUser("cli", userId);
+    expect(record?.state).toBe("AWAITING_CONTACT");
+
+    engine.stop();
+    // Cleanup
+    if (record) await repo.transition(record.id, "EXPIRED");
+  });
+
   it("SI-003: sending an email address to a record in AWAITING_CONTACT does not advance state", async () => {
     const userId = `si003-email-${Date.now()}`;
     const { channel, otpDelivery, inject } = makeMinimalChannel();

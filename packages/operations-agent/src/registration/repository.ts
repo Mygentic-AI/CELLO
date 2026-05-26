@@ -132,10 +132,12 @@ function deserializeState(row: RegistrationRow): RegistrationState {
     case "AWAITING_EMAIL":
       return { state: "AWAITING_EMAIL" };
     case "AWAITING_EMAIL_OTP":
-      // otp_hash and otp_expires_at may be null when the OTP was cleared after 3 failed
-      // attempts (see incrementOtpAttempt with clearOtp=true). In that case, the state
-      // machine's #handleAwaitingEmailOtp checks `if (!record.otpHash)` to detect the
-      // cleared case and prompt the user to request a new OTP.
+      // otp_hash and otp_expires_at are null only via direct DB manipulation (e.g. test setup
+      // or admin intervention). In normal production flow, the state machine clears OTP fields
+      // via transition(id, "EMAIL_CONFIRMED", { clearOtp: true }) or transitionOnOtpLockout().
+      // The new Date(0) sentinel for otp_expires_at is intentionally always < now(), but
+      // #handleAwaitingEmailOtp checks !otpHash before the expiry check, so this sentinel
+      // is never reached from normal code paths.
       // We use empty string as a sentinel for null otp_hash; the falsy check handles both.
       return {
         state: "AWAITING_EMAIL_OTP",
