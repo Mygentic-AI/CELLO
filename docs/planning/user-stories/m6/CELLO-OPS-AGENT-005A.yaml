@@ -207,6 +207,42 @@ acceptance_criteria:
     test_type: integration
     component_under_test: infrastructure
 
+  - id: AC-009b
+    given: "The Ops Agent ECS task running (stub or real image) and the
+      directory ECS task running in the same VPC"
+    when: "ECS Exec is used to run curl http://<directory-task-ip>:8080/internal/pre-authorize
+      from the Ops Agent task"
+    then: "HTTP 401 Unauthorized is returned (no API key provided);
+      this confirms: (1) the directory security group allows inbound on
+      port 8080 from the Ops Agent security group, (2) the directory HTTP
+      server routes /internal/pre-authorize on port 8080, (3) VPC routing
+      between the Ops Agent subnet and directory subnet works; if the
+      response is connection timeout or connection refused, the SG inbound
+      rule or VPC routing is wrong — fix before 005B begins"
+    test_type: integration
+    component_under_test: infrastructure
+    notes: "Requires adding an inbound rule to the directory security group:
+      port 8080 from the Ops Agent security group. This is a cross-stack
+      reference: cello-ecs-operations-agent.yaml exports the Ops Agent SG,
+      cello-ecs-directory.yaml (or cello-vpc.yaml) imports it and adds the
+      inbound rule. Same pattern as directory → RDS inbound."
+
+  - id: AC-009c
+    given: "cello-rotation.yaml"
+    when: "the rotation Lambda configuration is inspected"
+    then: "a second RotationSchedule resource exists targeting
+      cello/{env}/ops-agent/rds-credentials for the cello_ops_agent role;
+      the handler.py reads ROLE_NAME from the secret JSON 'username' field
+      (not hardcoded); verified by: triggering a manual rotation via
+      aws secretsmanager rotate-secret and confirming the Ops Agent task
+      can still connect to PostgreSQL after the password change"
+    test_type: integration
+    component_under_test: infrastructure
+    notes: "The rotation Lambda must support multiple database roles.
+      OPS-AGENT-000 migration_note already specifies: 'The password is
+      set by the rotation Lambda using the same pattern as cello_service.'
+      This AC makes that requirement testable."
+
   - id: AC-010-integration-gate
     given: "The Operations Agent ECS service running with the stub container
       in us-east-1, all secrets resolving, health check passing"

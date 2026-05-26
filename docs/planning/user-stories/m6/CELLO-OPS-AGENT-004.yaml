@@ -41,7 +41,7 @@ behavior:
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "SES configured in eu-west-1 with a verified sender identity
+    given: "SES configured in us-east-1 with a verified sender identity
       and a verified sandbox recipient address"
     when: "sendOtp() is called with the verified recipient address"
     then: "SES returns a MessageId without error (delivery accepted);
@@ -207,8 +207,7 @@ references:
   blocks:
     - CELLO-OPS-AGENT-005B
     - CELLO-M6-E2E-001
-  notes: "Hard dependency on SES eu-west-1 production access approval.
-    Submit request day one of M6 — bootstrap checklist item.
-    Rate limit counter is in-memory per-process — no Postgres table needed.
-    This was a deliberate decision to avoid adding a reactive migration
-    mid-milestone (Mitigation C compliance)."
+  notes: "SES production access approved in us-east-1 (2026-05-25, bootstrap
+    checklist complete). Rate limit counter is in-memory per-process — no
+    Postgres table needed. This was a deliberate decision to avoid adding a
+    reactive migration mid-milestone (Mitigation C compliance)."

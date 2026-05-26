@@ -126,6 +126,26 @@ acceptance_criteria:
     test_type: integration
     component_under_test: infrastructure
 
+  - id: AC-007b
+    given: "M6 migrations deployed to all 3 regions (us-east-1, eu-central-1,
+      eu-west-2) and the replication publication cello_pub"
+    when: "pg_publication_tables is queried on each node"
+    then: "registrations and pre_authorization_tokens are present in
+      cello_pub on all 3 nodes; a pre-auth token INSERT on us-east-1 is
+      visible via SELECT on eu-central-1 within 5 seconds (replication lag);
+      the WAL sender role (cello_replication) has SELECT on both new tables;
+      setup-replication.sh's PUBLICATION_TABLES variable includes both tables;
+      ALTER PUBLICATION cello_pub ADD TABLE registrations,
+      pre_authorization_tokens has been run on all 3 nodes (idempotent —
+      ADD TABLE on an already-published table is a no-op in PG 16+)"
+    test_type: integration
+    component_under_test: infrastructure
+    notes: "Without this, a pre-auth token issued by the Ops Agent on
+      us-east-1 cannot be consumed by a directory in eu-central-1 — the
+      row doesn't exist there. Same pattern as M5 FEDERATION-001 publication
+      setup. GRANT SELECT ON registrations, pre_authorization_tokens TO
+      cello_replication must also be applied (WAL sender needs SELECT)."
+
   - id: AC-008-integration-gate
     given: "The Operations Agent ECS service running the real application
       image in staging, PostgreSQL connected, Telegram bot responding"
@@ -231,4 +251,9 @@ references:
     All application code was already written and tested in 001-004;
     this story is purely about wiring it into the proven deployment.
     The directory must be deployed with OPS-AGENT-001's preAuthToken
-    field handling active before AC-003 can be exercised."
+    enforcement active in all 3 regions before AC-003 can pass. Verify
+    by calling FROST DKG Round 1 WITHOUT a preAuthToken against each
+    region's directory endpoint and confirming PRE_AUTH_TOKEN_MISSING
+    rejection. If any region returns a successful DKG (old code),
+    trigger the directory pipeline and wait for completion before
+    proceeding with AC-003."

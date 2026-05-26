@@ -50,13 +50,16 @@ behavior:
       { method, errorCode, description } and propagates the error
       to the caller; the polling loop continues on the next cycle"
 
-  - trigger: "When the TelegramAdapter restarts after a process stop or
-      ECS task replacement"
-    action: "the adapter resumes getUpdates polling with offset =
-      last_processed_update_id + 1; updates that arrived during the
-      switchover window are processed exactly once; no update is
-      reprocessed because the offset is advanced immediately after
-      successful delivery to the onMessage callback"
+  - trigger: "When the TelegramAdapter confirms processing of an update"
+    action: "it calls getUpdates with offset = update_id + 1 on the
+      NEXT poll cycle, which tells Telegram's server to mark all updates
+      up to update_id as acknowledged; no separate persistence of offset
+      is needed — Telegram's server-side acknowledgement model means a
+      restarted adapter calling getUpdates with no offset receives only
+      updates not yet acknowledged; duplicate delivery after a crash
+      between processing and the next getUpdates call is handled by the
+      state machine's idempotent channel_user_id lookup (existing record
+      resumes, not duplicates)"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -144,22 +147,24 @@ acceptance_criteria:
       update_id presence confirm the real Telegram API was used."
 
   - id: AC-006b
-    given: "A TelegramAdapter that has processed update_id=100, then is
-      stopped and restarted (simulating an ECS task replacement)"
-    when: "the restarted adapter makes its first getUpdates call"
+    given: "A TelegramAdapter that has processed update_id=100"
+    when: "the adapter makes its next getUpdates call"
     then: "the call uses offset=101 (last_processed_update_id + 1);
-      Telegram does not re-deliver update 100; the adapter does not call
-      the onMessage callback with a duplicate message; this is verified
-      by: (1) recording the update_id from the first getUpdates response,
-      (2) stopping the adapter, (3) starting a new TelegramAdapter instance
-      with the persisted offset state, (4) confirming getUpdates is called
-      with the correct offset parameter"
+      Telegram's server acknowledges all updates ≤ 100 and does not
+      re-deliver them; a fresh TelegramAdapter instance calling getUpdates
+      with no stored offset receives only unacknowledged updates from
+      Telegram's server — no external offset persistence is required;
+      the at-most-once gap (crash between processing and the next
+      getUpdates) is handled by the state machine: a duplicate inbound
+      message for an existing channel_user_id resumes the existing
+      registration rather than creating a duplicate"
     test_type: unit
     component_under_test: operations-agent
-    notes: "The offset state must survive in-process restart. In production
-      the at-most-one ECS deploy constraint (OPS-AGENT-005A AC-004c) means
-      only one adapter instance is ever active; this AC covers the offset
-      mechanics independently."
+    notes: "Telegram's server-side offset acknowledgement is the persistence
+      mechanism — the adapter does not need to write offset state to disk
+      or a database. The unit test verifies: (1) offset advances correctly
+      during polling, (2) the state machine's idempotent lookup handles the
+      crash-window duplicate scenario."
 
   - id: AC-007-integration-gate
     given: "The Operations Agent running with TelegramAdapter against
@@ -203,19 +208,22 @@ security_invariants:
     component_under_test: operations-agent
 
   - id: SI-003
-    statement: "The TelegramAdapter must use an advancing getUpdates offset
-      to prevent duplicate processing of updates across restarts"
-    adversarial_condition: "even when the ECS task is replaced and a new
-      adapter instance starts with offset=0 (regression: offset not persisted),
-      in-flight updates that Telegram already delivered are not processed a
-      second time; verified by AC-006b — a restarted adapter with the correct
-      persisted offset never re-fires onMessage for an already-processed update_id"
+    statement: "The TelegramAdapter advances the getUpdates offset after
+      each successful processing, preventing re-delivery of acknowledged
+      updates"
+    adversarial_condition: "even when the ECS task is replaced mid-flow,
+      Telegram's server-side acknowledgement ensures the new adapter only
+      receives unacknowledged updates; the crash-window duplicate (processing
+      succeeded but offset not yet advanced) is handled by the state machine's
+      idempotent channel_user_id lookup — a re-delivered message resumes the
+      existing registration rather than creating a duplicate"
     test_type: unit
     component_under_test: operations-agent
-    notes: "This is an at-most-once delivery invariant for inbound Telegram
-      messages. Critically paired with OPS-AGENT-005A AC-004c
-      (at-most-one ECS task): together they prevent both duplicate delivery
-      and message loss during deploys."
+    notes: "At-most-once delivery relies on two mechanisms: (1) Telegram's
+      server-side offset acknowledgement (no external persistence needed),
+      (2) state machine idempotency for the crash-window edge case.
+      Paired with OPS-AGENT-005A AC-004c (at-most-one ECS task) to prevent
+      split-brain polling."
 
 # ─── Observability ──────────────────────────────────────────
 observability:
