@@ -60,7 +60,13 @@ acceptance_criteria:
       a private workspace package to a public npm dependency. The publish
       happens once from trustless-cello. After this, server-side stories
       can modify interfaces via normal PRs to trustless-cello without
-      cross-repo friction."
+      cross-repo friction.
+
+      TIMING: Do NOT publish until OPS-AGENT-000 is merged. OPS-AGENT-000
+      adds MessagingChannel, OtpDeliveryProvider, TokenValidator,
+      PreAuthorizationClient, and SecurityAlertProvider to packages/interfaces/.
+      An early publish misses these types and forces a second publish+lockfile
+      update cycle. The publish must include all M6 interface additions."
 
   - id: AC-001
     given: "The cello-client repository after package extraction"

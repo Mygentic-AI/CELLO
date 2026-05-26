@@ -129,12 +129,23 @@ acceptance_criteria:
       and a client machine outside the VPC (developer laptop or demo EC2)"
     when: "a libp2p WebSocket dial is attempted from outside the VPC to
       the directory ALB on port 443 (or 80)"
-    then: "the connection succeeds; the libp2p handshake (Noise XX) completes;
-      the client can open a stream on /cello/frost/1.0.0 or /cello/session/1.0.0;
-      the directory responds to protocol frames; this confirms the full
-      transport path: external client → ALB → directory container (WebSocket);
-      the deliverable is a working CELLO_DIRECTORY_URL (ALB hostname) that
-      REPOSPLIT-002 AC-003 can bake in as the production endpoint"
+    then: "THREE verification dimensions must pass:
+      (1) WebSocket handshake: the libp2p connection succeeds through the ALB;
+          the Noise XX handshake completes; the client can open a stream on
+          /cello/frost/1.0.0 or /cello/session/1.0.0; the directory responds.
+      (2) Circuit relay data path: the client requests a circuit relay
+          reservation through the directory (circuitRelayServer); data sent
+          by the client traverses the path external→ALB→directory→relay and
+          arrives at the relay process (relay.message.forwarded visible in
+          relay CloudWatch logs within 10 seconds); a second external client
+          can send a message to the first via this relayed path.
+      (3) Idle timeout survival: a WebSocket session survives 5 minutes of
+          idle time (no application data) without the ALB dropping the
+          connection; this requires either ALB IdleTimeout ≥ 300s in the
+          CloudFormation template OR libp2p-level WebSocket ping/pong
+          keep-alives at an interval below the ALB timeout.
+      The deliverable is a working CELLO_DIRECTORY_URL (ALB hostname) that
+      REPOSPLIT-002 AC-003 can bake in as the production endpoint."
     test_type: integration
     component_under_test: transport
     notes: "This resolves the transport_path_prerequisite documented in
@@ -155,8 +166,46 @@ acceptance_criteria:
       security group rules. The relay remains VPC-internal; the directory acts as
       circuit relay (already configured via circuitRelayServer() in transport/node.ts).
 
+      Circuit relay research notes:
+      - circuitRelayServer() is already configured on all CelloNode instances
+        (transport/node.ts line 298); circuitRelayTransport() is on all clients
+        (line 287). The machinery exists but has never been exercised through
+        a WebSocket+ALB path.
+      - libp2p circuit relay v2 requires the relay node to accept reservation
+        requests. Verify the directory's relay server accepts reservations from
+        WebSocket peers (not just direct TCP peers).
+      - The relay's connection from directory is TCP:4001 within the VPC. The
+        question is: does a circuit-relayed stream through the directory look
+        the same at the relay level as a direct TCP stream? Test explicitly.
+
+      ALB timeout note:
+      - AWS ALB default idle timeout is 60 seconds. Long-lived WebSocket
+        connections with no data will be silently dropped. Either set
+        IdleTimeout: 300 in cello-ecs-directory.yaml ALB properties, or
+        configure libp2p ping keep-alive at 30s intervals. The E2E test
+        sends messages immediately — it won't catch this. The 5-minute
+        idle AC forces the fix.
+
       This AC blocks REPOSPLIT-002 AC-003, DEMO-001 AC-004b, and M6-E2E-001.
       Must complete before any of those stories can pass."
+
+  - id: AC-008
+    given: "The cello-client GitHub Actions CI pipeline with NPM_TOKEN
+      configured in secrets"
+    when: "a test tag (e.g. v0.0.0-scaffold.1) is pushed to cello-client"
+    then: "the publish step executes and succeeds; @cello/connect@0.0.0-scaffold.1
+      is published to npm (confirms: NPM_TOKEN works from GitHub runners,
+      publishConfig.access is 'public' for the scoped package, no 2FA
+      requirement blocks automated publish, tag-based trigger fires correctly);
+      the published package is immediately unpublished or deprecated after
+      verification — this is a smoke test, not a real release"
+    test_type: integration
+    component_under_test: client
+    notes: "First-run npm auth failures are a real class of problem (M5
+      DEPLOY-004 had 8 first-run failures). This catches NPM_TOKEN type
+      issues (classic vs granular, IP restrictions), 2FA blocks, and
+      publishConfig problems before REPOSPLIT-002 needs the publish path
+      for real. Zero cost if it works; saves hours if it doesn't."
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants: []
