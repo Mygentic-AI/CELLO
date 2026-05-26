@@ -54,6 +54,33 @@ Migration Version Registry updated above.
 
 ---
 
+## 2026-05-26 — OPS-AGENT-001: story closed
+
+Story completed: OPS-AGENT-001 — directory pre-authorization API + FROST DKG Round 1 token gate.
+
+**Delivered:**
+- `POST /internal/pre-authorize` endpoint in `packages/directory/src/internal-api-server.ts` — API key auth, token issuance (CELLO- + 33 base58 chars, ≥193 bits entropy via CSPRNG + rejection sampling)
+- `pre-auth-token-repository.ts` — atomic `consumePreAuthToken` (single UPDATE with `expires_at > now()` predicate, eliminating TOCTOU), `issuePreAuthToken`, `linkAgentToAccount` (sets `agent_profiles.account_id`)
+- `PgTokenValidator` adapter wired for `CELLO_ENV != local`; `DevTokenValidator` wired for `CELLO_ENV=local`
+- Token gate in `directory-node.ts` FROST DKG Round 1 handler — consumption before any crypto (AC-006)
+- Account deduplication: same `phone_stub_hash` → same `user_accounts` row, multiple `agent_profiles` (AC-005b)
+- AC-009: `session-fixture.ts` and all DKG call sites updated with `preAuthToken: 'DEV-test-token'`; `mcp-003-e2e.test.ts` MCP tool calls updated
+- All 8 `preauth.*` events added to canonical event taxonomy in pipeline discussion log
+- 19 integration + unit tests in `ops-agent-001-pre-auth.test.ts`; 2 transport-path tests in `e2e-reg-001-dkg-network.test.ts` wiring `DevTokenValidator` over real libp2p streams
+
+**Review history:** code-review (10 findings, all fixed), sprint-review pass 1 (2 blocking + 4 medium/low, all fixed), sprint-review pass 2 (1 blocking — missing `tokenPrefix` context field, fixed), sprint-review pass 3 → APPROVED.
+
+**Notable fix from review:** `consumePreAuthToken` was originally SELECT+UPDATE (TOCTOU on expiry check). Rewritten as single atomic `UPDATE ... WHERE consumed_at IS NULL AND expires_at > now()` with disambiguation SELECT only on rowCount=0.
+
+**Downstream stories unblocked:**
+- OPS-AGENT-002: registration state machine — V24 table, pre-auth token consumption is done
+- OPS-AGENT-005B: wire application code — `DevTokenValidator` wired, AC-009 complete
+- M6-E2E-001: full stranger flow — token gate live
+
+**Known gap (not blocking):** `cello_service` role lacks explicit `UPDATE` grant on `agent_profiles`. Integration tests pass as superuser. A grant should be added in a future migration before production deployment.
+
+---
+
 ## Constraints
 
 **CONSTRAINT: registrations table single-writer assumption.** The Operations Agent writes only from us-east-1. The partial unique index `UNIQUE (phone_stub_hash) WHERE state NOT IN (terminal)` is enforced locally per-node in logical replication — it does NOT prevent cross-region duplicates. Multi-region Ops Agent deployment requires schema redesign. See OPS-AGENT-000 `replication_safety` note.
