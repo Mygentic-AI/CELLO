@@ -14,7 +14,7 @@
  *   migration.failed           — ERROR — { version, description, reason }
  */
 
-import type { Logger, LogContext } from "@cello/interfaces";
+import type { Logger, LogContext } from "@cello-protocol/interfaces";
 
 // ─── directory.service.started ─────────────────────────────────────────────
 

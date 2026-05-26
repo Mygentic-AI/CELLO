@@ -29,7 +29,7 @@ behavior:
 
   - trigger: "When the demo agent starts"
     action: "it loads its identity from a key file, connects to the
-      CELLO network via @cello/connect using HTTPS (443) to reach
+      CELLO network via @cello-protocol/connect using HTTPS (443) to reach
       the production directory ALB and relay circuit relay path,
       begins listening for inbound sessions, and logs demo.started
       at INFO once the connection is established"
@@ -62,7 +62,7 @@ acceptance_criteria:
       Back up the key file immediately after registration."
 
   - id: AC-001
-    given: "An EC2 instance with @cello/connect installed and a
+    given: "An EC2 instance with @cello-protocol/connect installed and a
       registered agent identity"
     when: "the demo agent process starts"
     then: "cello_status returns { registered: true, agentId: '<hex>' };
@@ -111,7 +111,7 @@ acceptance_criteria:
 
   - id: AC-004b
     given: "The demo agent EC2 instance with only HTTPS (443) outbound"
-    when: "npx @cello/connect is started and cello_status is called"
+    when: "npx @cello-protocol/connect is started and cello_status is called"
     then: "cello_status returns directory_reachable: true; the libp2p
       connection from the EC2 instance to the directory ALB succeeds
       via WebSocket over HTTPS (443); if this fails with connection
@@ -137,7 +137,7 @@ acceptance_criteria:
     when: "inspected for external dependencies"
     then: "no LLM backend (no Bedrock, no OpenAI, no Anthropic API);
       no HTTP server exposed; no database; the only dependencies are
-      @cello/connect and Node.js standard library; the response is a
+      @cello-protocol/connect and Node.js standard library; the response is a
       hardcoded string constant"
     test_type: manual
     component_under_test: demo-agent
@@ -159,7 +159,7 @@ acceptance_criteria:
 
   - id: AC-007
     given: "The demo agent's AgentID published in README or quick-start docs"
-    when: "a stranger who just installed @cello/connect sends a message"
+    when: "a stranger who just installed @cello-protocol/connect sends a message"
     then: "the stranger's agent receives the canned response, proving
       the full protocol works; this AC is verified as part of M6-E2E-001;
       DEMO-001 cannot be marked closed until M6-E2E-001 passes"

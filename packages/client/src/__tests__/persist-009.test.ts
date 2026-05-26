@@ -25,8 +25,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { rmSync, mkdirSync, writeFileSync } from "node:fs";
-import { LocalClientStore } from "@cello/interfaces/stubs";
-import type { ClientStore } from "@cello/interfaces";
+import { LocalClientStore } from "@cello-protocol/interfaces/stubs";
+import type { ClientStore } from "@cello-protocol/interfaces";
 
 // ─── HKDF derivation (pure unit tests — no native module needed) ──────────────
 

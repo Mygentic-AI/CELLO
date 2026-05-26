@@ -4,7 +4,7 @@
  * test_type: integration — requires docker compose up and a running Postgres container.
  * Skipped automatically when CELLO_ENV != 'local' or when DATABASE_URL is not reachable.
  *
- * Run with: CELLO_ENV=local DATABASE_URL=... DEV_ENVELOPE_KEY=... pnpm --filter @cello/directory run test
+ * Run with: CELLO_ENV=local DATABASE_URL=... DEV_ENVELOPE_KEY=... pnpm --filter @cello-protocol/directory run test
  *
  * Covers:
  *   AC-001: postgres container starts, cello_dev database is accessible

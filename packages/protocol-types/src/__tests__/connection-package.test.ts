@@ -20,7 +20,7 @@
  *   - FakeMlDsaVerifier: re-signs and compares to simulate real verify.
  *     (This is intentionally NOT cryptographically secure — tests only.)
  *
- * For production: @cello/crypto will provide InMemoryMlDsaKeyProvider wrapping
+ * For production: @cello-protocol/crypto will provide InMemoryMlDsaKeyProvider wrapping
  * node-oqs, which implements the MlDsaKeyProvider interface defined here.
  *
  * References:

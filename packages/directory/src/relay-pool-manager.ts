@@ -76,7 +76,7 @@
  */
 
 import { ed25519 } from "@noble/curves/ed25519.js";
-import type { CloudStorageProvider, Logger } from "@cello/interfaces";
+import type { CloudStorageProvider, Logger } from "@cello-protocol/interfaces";
 
 // ─── Manifest types ───────────────────────────────────────────────────────────
 

@@ -81,10 +81,10 @@ import {
   waitFor,
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
-import { generateKeypair, mlDsaKeygen } from "@cello/crypto";
-import { clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
-import { encodeConnectionPackage, buildPseudonymBinding } from "@cello/protocol-types";
-import type { ConnectionPackage } from "@cello/protocol-types";
+import { generateKeypair, mlDsaKeygen } from "@cello-protocol/crypto";
+import { clearTestShares } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import { encodeConnectionPackage, buildPseudonymBinding } from "@cello-protocol/protocol-types";
+import type { ConnectionPackage } from "@cello-protocol/protocol-types";
 import { createSessionFixture } from "../session-fixture.js";
 
 setupV3Tests();

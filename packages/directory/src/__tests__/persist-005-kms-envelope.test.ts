@@ -50,9 +50,9 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { randomBytes } from "node:crypto";
 import pg from "pg";
-import { LocalEnvelopeKeyProvider } from "@cello/interfaces/stubs";
+import { LocalEnvelopeKeyProvider } from "@cello-protocol/interfaces/stubs";
 import { EncryptedPgShareStore } from "../encrypted-share-store.js";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 // ─── Unit tests ───────────────────────────────────────────────────────────────
 // These run without a database connection.

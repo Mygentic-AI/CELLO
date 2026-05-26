@@ -8,5 +8,5 @@ phases:
       - pnpm install --frozen-lockfile
   build:
     commands:
-      - pnpm --filter @cello/e2e-tests run typecheck
-      - pnpm --filter @cello/e2e-tests run test
+      - pnpm --filter @cello-protocol/e2e-tests run typecheck
+      - pnpm --filter @cello-protocol/e2e-tests run test

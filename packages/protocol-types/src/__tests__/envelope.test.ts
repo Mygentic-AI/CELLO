@@ -22,7 +22,7 @@ import {
   afterEach,
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
-import { generateKeypair, msgLeafHash, verify } from "@cello/crypto";
+import { generateKeypair, msgLeafHash, verify } from "@cello-protocol/crypto";
 import { Encoder } from "cbor-x";
 import {
   buildEnvelope,

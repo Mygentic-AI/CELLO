@@ -8,5 +8,5 @@ phases:
       - pnpm install --frozen-lockfile
   build:
     commands:
-      - pnpm --filter @cello/protocol-types run typecheck
-      - pnpm --filter @cello/protocol-types run test
+      - pnpm --filter @cello-protocol/protocol-types run typecheck
+      - pnpm --filter @cello-protocol/protocol-types run test

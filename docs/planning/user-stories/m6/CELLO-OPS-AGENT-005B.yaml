@@ -110,9 +110,9 @@ acceptance_criteria:
     then: "multi-stage build: Node 24-slim build stage → production
       stage with only compiled dist/, node_modules (production only);
       runs as non-root user cello; EXPOSE 8080; no dev dependencies
-      in final image; no import of @cello/crypto key generation or
+      in final image; no import of @cello-protocol/crypto key generation or
       FROST modules present in the bundle (verifiable via
-      pnpm why @cello/crypto in the production dependencies)"
+      pnpm why @cello-protocol/crypto in the production dependencies)"
     test_type: manual
     component_under_test: operations-agent
 
@@ -179,7 +179,7 @@ security_invariants:
       in the Operations Agent process, they cannot generate a FROST share
       or sign as a directory node because those modules are not reachable
       from the Operations Agent's dependency graph; verified by enumerating
-      all reachable imports and asserting @cello/crypto key generation and
+      all reachable imports and asserting @cello-protocol/crypto key generation and
       FROST modules are absent"
     test_type: unit
     component_under_test: operations-agent

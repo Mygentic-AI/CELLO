@@ -73,9 +73,9 @@
 
 import { describe, it, expect } from "vitest";
 import { randomBytes } from "node:crypto";
-import type { ClientStore, Logger } from "@cello/interfaces";
-import { LocalClientStore } from "@cello/interfaces/stubs";
-import { generateKeypair } from "@cello/crypto";
+import type { ClientStore, Logger } from "@cello-protocol/interfaces";
+import { LocalClientStore } from "@cello-protocol/interfaces/stubs";
+import { generateKeypair } from "@cello-protocol/crypto";
 
 import {
   AgentHashQueue,

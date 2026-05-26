@@ -21,9 +21,9 @@
  */
 
 import * as lp from "it-length-prefixed";
-import type { ICheckpointTransport, CheckpointProposal, CheckpointSignatureResponse } from "@cello/interfaces";
-import type { Logger } from "@cello/interfaces";
-import type { CelloNode } from "@cello/transport";
+import type { ICheckpointTransport, CheckpointProposal, CheckpointSignatureResponse } from "@cello-protocol/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
+import type { CelloNode } from "@cello-protocol/transport";
 
 export interface Libp2pCheckpointTransportOptions {
   /** The local libp2p node — used to open streams to peer nodes. */

@@ -30,20 +30,20 @@ import {
 import type { TestScope } from "@claude-flow/testing";
 import { randomBytes, createHash } from "node:crypto";
 import { Encoder } from "cbor-x";
-import { generateKeypair, buildMerkleTree, merkleRoot, FrostThresholdSigner, CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto";
-import type { LeafInput } from "@cello/crypto";
-import { bootstrapKeyShares, clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
-import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
+import { generateKeypair, buildMerkleTree, merkleRoot, FrostThresholdSigner, CONTEXT_SESSION_ESTABLISHMENT } from "@cello-protocol/crypto";
+import type { LeafInput } from "@cello-protocol/crypto";
+import { bootstrapKeyShares, clearTestShares } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello-protocol/crypto/frost/stubs.js";
 import {
   buildStructure2,
   encodeStructure2,
   computeGenesisPrevRoot,
   buildSessionEstablishmentTbs,
-} from "@cello/protocol-types";
-import type { SessionAssignment } from "@cello/protocol-types";
-import { createNode } from "@cello/transport";
-import { createRelayNode } from "@cello/relay";
-import type { CelloRelayNode } from "@cello/relay";
+} from "@cello-protocol/protocol-types";
+import type { SessionAssignment } from "@cello-protocol/protocol-types";
+import { createNode } from "@cello-protocol/transport";
+import { createRelayNode } from "@cello-protocol/relay";
+import type { CelloRelayNode } from "@cello-protocol/relay";
 import { createClient } from "../client.js";
 import type { CelloClient } from "../types.js";
 
@@ -511,7 +511,7 @@ describe("AC-004: Structure 2 with replaced sender_signature → B desynchronize
 
     // Replace sender_signature inside structure2_cbor with random bytes.
     // Easiest: override the structure2_cbor with a re-encoded S2 containing a bad sig.
-    const { encodeStructure2: enc2, buildStructure2: build2 } = await import("@cello/protocol-types");
+    const { encodeStructure2: enc2, buildStructure2: build2 } = await import("@cello-protocol/protocol-types");
     const senderPubkey = await fix.clientA.kp.getPublicKey();
     const badSig = new Uint8Array(randomBytes(64));
     const s2bad = build2(1, senderPubkey, contentHash, badSig, prevRoot);
@@ -741,8 +741,8 @@ describe("AC-009: content_missing after grace window → B desynchronized", () =
 
     // Recreate clientB with a short contentGraceMs for this test.
     const { createClient: cc } = await import("../client.js");
-    const { createNode: cn } = await import("@cello/transport");
-    const { generateKeypair: gkp } = await import("@cello/crypto");
+    const { createNode: cn } = await import("@cello-protocol/transport");
+    const { generateKeypair: gkp } = await import("@cello-protocol/crypto");
     const kpB2 = gkp();
     const pubkeyB2 = await kpB2.getPublicKey();
     const nodeB2 = await cn({ keyProvider: kpB2, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });

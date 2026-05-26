@@ -34,7 +34,7 @@
  */
 
 import pg from "pg";
-import type { NotificationQueue, QueuedNotification, Logger } from "@cello/interfaces";
+import type { NotificationQueue, QueuedNotification, Logger } from "@cello-protocol/interfaces";
 
 /**
  * PgNotificationQueue — Postgres-backed implementation of NotificationQueue.

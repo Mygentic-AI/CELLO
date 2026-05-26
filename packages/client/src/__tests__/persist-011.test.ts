@@ -47,14 +47,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes, createHash } from "node:crypto";
 import { rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
-import type { Logger } from "@cello/interfaces";
-import type { CloudStorageProvider } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
+import type { CloudStorageProvider } from "@cello-protocol/interfaces";
 
 import { deriveBackupKey } from "../backup-key-derivation.js";
 import { deriveDbKey } from "../db-key-derivation.js";
 import { ClientBackup } from "../client-backup.js";
 import { BACKUP_WARNING } from "../client-backup.js";
-import { LocalCloudStorageProvider } from "@cello/interfaces/stubs";
+import { LocalCloudStorageProvider } from "@cello-protocol/interfaces/stubs";
 
 // ─── SQLCipher integration for AC-003 — skip if native module unavailable ─────
 

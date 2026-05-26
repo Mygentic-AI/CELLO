@@ -44,7 +44,7 @@
  *   integration test (CELLO_ENV=local, real Postgres).
  *   [Static analysis (no DB) + Integration (CELLO_ENV=local)]
  *
- * AC-010-canonical-tbs: buildCheckpointTbs lives in @cello/crypto — already tested in
+ * AC-010-canonical-tbs: buildCheckpointTbs lives in @cello-protocol/crypto — already tested in
  *   packages/crypto/src/__tests__/checkpoint.test.ts. Here we verify the import in
  *   the directory package uses the crypto version (no inline serialization).
  *   [Unit]
@@ -81,9 +81,9 @@ import {
   type ICheckpointTransport,
   type CheckpointSignatureWithKey,
 } from "../checkpoint-coordinator.js";
-import { computeCheckpointHash, buildCheckpointTbs, generateKeypair } from "@cello/crypto";
+import { computeCheckpointHash, buildCheckpointTbs, generateKeypair } from "@cello-protocol/crypto";
 import { configurePgTypes } from "../pg-type-config.js";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 // ─── Test environment setup ────────────────────────────────────────────────────
 
@@ -222,11 +222,11 @@ describe("FEDERATION-002 SI-003: deterministic sort enforced at hash level", () 
   });
 });
 
-// ─── AC-010-canonical-tbs: verify imports from @cello/crypto (unit) ──────────
+// ─── AC-010-canonical-tbs: verify imports from @cello-protocol/crypto (unit) ──────────
 
 describe("FEDERATION-002 AC-010-canonical-tbs: no inline serialization in directory", () => {
-  it("buildCheckpointTbs is imported from @cello/crypto — not implemented inline", () => {
-    // If this import works, it came from @cello/crypto
+  it("buildCheckpointTbs is imported from @cello-protocol/crypto — not implemented inline", () => {
+    // If this import works, it came from @cello-protocol/crypto
     expect(typeof buildCheckpointTbs).toBe("function");
   });
 
@@ -1119,7 +1119,7 @@ describeIntegration("FEDERATION-002 integration: DB-002 — 2-of-3 success when 
       async getPeerNodeIds() { return ["test-node-peer-b", "test-node-peer-c"]; },
       async sendCheckpointProposal(peerNodeId, proposal) {
         if (peerNodeId === "test-node-peer-b") {
-          const { buildCheckpointTbs: btbs } = await import("@cello/crypto");
+          const { buildCheckpointTbs: btbs } = await import("@cello-protocol/crypto");
           const hashBytes = btbs(proposal.mmrPeaks, proposal.identityMerkleRoot, proposal.checkpointId);
           const sigBytes = await keyProviderB.sign(hashBytes);
           return {

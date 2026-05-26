@@ -15,8 +15,8 @@
 
 import { describe, it, expect, test } from "vitest";
 import { randomBytes } from "node:crypto";
-import { generateKeypair, verify } from "@cello/crypto";
-import type { Leaf } from "@cello/interfaces";
+import { generateKeypair, verify } from "@cello-protocol/crypto";
+import type { Leaf } from "@cello-protocol/interfaces";
 
 // ─── E2E tests (test.todo — require multi-process infrastructure) ────────────
 

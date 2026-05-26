@@ -12,22 +12,22 @@
 
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { ed25519_FROST, FrostThresholdSigner } from "@cello/crypto";
-import { bootstrapKeyShares, storeDkgResult } from "@cello/crypto/frost/frost-threshold-signer.js";
-import type { CelloNode } from "@cello/transport";
+import { ed25519_FROST, FrostThresholdSigner } from "@cello-protocol/crypto";
+import { bootstrapKeyShares, storeDkgResult } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import type { CelloNode } from "@cello-protocol/transport";
 import type {
   DirectoryNodeStub,
   StubCommitment,
   StubSignParams,
   BootstrapResult,
-} from "@cello/crypto/frost/types.js";
+} from "@cello-protocol/crypto/frost/types.js";
 import type {
   DkgRound1Broadcast,
   DkgRound2Share,
   FrostDkgRound1Response,
   FrostDkgRound2Response,
   FrostDkgRound3Response,
-} from "@cello/protocol-types";
+} from "@cello-protocol/protocol-types";
 
 const FROST_PROTOCOL_ID = "/cello/frost/1.0.0";
 const CBOR_ENC = new Encoder({ tagUint8Array: false });

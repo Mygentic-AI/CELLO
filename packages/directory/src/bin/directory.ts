@@ -38,11 +38,11 @@ import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import pg from "pg";
-import { FileKeyProvider, InMemoryKeyProvider } from "@cello/crypto";
+import { FileKeyProvider, InMemoryKeyProvider } from "@cello-protocol/crypto";
 import { createDirectoryNode } from "../directory-node.js";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
-import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper, InMemoryNotificationQueue } from "@cello/interfaces/stubs";
-import type { AuditLogShipper, NotificationQueue } from "@cello/interfaces";
+import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper, InMemoryNotificationQueue } from "@cello-protocol/interfaces/stubs";
+import type { AuditLogShipper, NotificationQueue } from "@cello-protocol/interfaces";
 // S3AuditLogShipper is imported dynamically below to avoid loading @aws-sdk/client-s3
 // in CELLO_ENV=local subprocesses where it causes tsx/esm resolution noise.
 import { InMemoryShareStore } from "../share-store.js";
@@ -59,9 +59,9 @@ import { PgNotificationQueue } from "../adapters/pg-notification-queue.js";
 import { RelayPoolManager } from "../relay-pool-manager.js";
 import { CheckpointCoordinator } from "../checkpoint-coordinator.js";
 import { Libp2pCheckpointTransport } from "../adapters/libp2p-checkpoint-transport.js";
-import { InMemoryCheckpointTransport } from "@cello/interfaces/stubs";
-import type { ICheckpointTransport, CloudStorageProvider } from "@cello/interfaces";
-import { LocalCloudStorageProvider } from "@cello/interfaces/stubs";
+import { InMemoryCheckpointTransport } from "@cello-protocol/interfaces/stubs";
+import type { ICheckpointTransport, CloudStorageProvider } from "@cello-protocol/interfaces";
+import { LocalCloudStorageProvider } from "@cello-protocol/interfaces/stubs";
 
 const env = process.env["CELLO_ENV"];
 const logger = new StdoutLogger();

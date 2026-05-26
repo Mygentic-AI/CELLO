@@ -92,7 +92,7 @@ import {
   CHAIN_GENESIS,
 } from "../hash-chain.js";
 import { verifyInclusionProof } from "../mmr.js";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 // ─── Environment setup ────────────────────────────────────────────────────────
 

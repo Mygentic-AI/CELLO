@@ -261,15 +261,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { buildMerkleTree, merkleRoot, inclusionProof } from "@cello/crypto";
-import type { LeafInput, MlDsaKeyProvider } from "@cello/crypto";
+import { buildMerkleTree, merkleRoot, inclusionProof } from "@cello-protocol/crypto";
+import type { LeafInput, MlDsaKeyProvider } from "@cello-protocol/crypto";
 import type { CelloClient, SessionAssignmentEvent } from "./types.js";
-import type { CelloNode } from "@cello/transport";
-import type { KeyProvider } from "@cello/crypto";
+import type { CelloNode } from "@cello-protocol/transport";
+import type { KeyProvider } from "@cello-protocol/crypto";
 import type { SignalRequirement } from "./connection-policy.js";
-import { buildPseudonymBinding, encodeConnectionPackage } from "@cello/protocol-types";
-import type { ConnectionPackage } from "@cello/protocol-types";
-import type { CheckpointStatusProvider } from "@cello/interfaces";
+import { buildPseudonymBinding, encodeConnectionPackage } from "@cello-protocol/protocol-types";
+import type { ConnectionPackage } from "@cello-protocol/protocol-types";
+import type { CheckpointStatusProvider } from "@cello-protocol/interfaces";
 import type { ClientBackup } from "./client-backup.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -997,7 +997,7 @@ export function createMcpSessionServer(
           | { result: "timeout" }
           | { result: "error"; reason: string }
         >;
-        getRegistrationState?: () => import("@cello/protocol-types").RegistrationState | null;
+        getRegistrationState?: () => import("@cello-protocol/protocol-types").RegistrationState | null;
         getMlDsaProvider?: () => MlDsaKeyProvider | null;
       };
 
@@ -1089,7 +1089,7 @@ export function createMcpSessionServer(
           | { result: "timeout" }
           | { result: "error"; reason: string }
         >;
-        getRegistrationState?: () => import("@cello/protocol-types").RegistrationState | null;
+        getRegistrationState?: () => import("@cello-protocol/protocol-types").RegistrationState | null;
         getMlDsaProvider?: () => MlDsaKeyProvider | null;
       };
 

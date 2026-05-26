@@ -61,16 +61,16 @@
  * Run with:
  *   docker compose up -d && docker compose run --rm flyway
  *   CELLO_ENV=local DATABASE_URL=postgresql://postgres:dev@localhost:5433/cello_dev \
- *     pnpm --filter @cello/directory run test -- \
+ *     pnpm --filter @cello-protocol/directory run test -- \
  *       --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import pg from "pg";
 import { randomUUID, randomBytes } from "node:crypto";
-import type { Logger } from "@cello/interfaces";
-import type { DirectoryNotification } from "@cello/interfaces";
-import type { PendingConnectionRequest } from "@cello/protocol-types";
+import type { Logger } from "@cello-protocol/interfaces";
+import type { DirectoryNotification } from "@cello-protocol/interfaces";
+import type { PendingConnectionRequest } from "@cello-protocol/protocol-types";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { PendingConnectionRequestTtlSweep } from "../pending-connection-request-ttl-sweep.js";
 

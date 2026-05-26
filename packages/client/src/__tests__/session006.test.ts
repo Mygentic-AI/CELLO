@@ -42,19 +42,19 @@ import {
 import type { TestScope } from "@claude-flow/testing";
 import { randomBytes, createHash } from "node:crypto";
 import { Encoder } from "cbor-x";
-import { generateKeypair, FrostThresholdSigner, CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto";
-import { bootstrapKeyShares, clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
-import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
+import { generateKeypair, FrostThresholdSigner, CONTEXT_SESSION_ESTABLISHMENT } from "@cello-protocol/crypto";
+import { bootstrapKeyShares, clearTestShares } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello-protocol/crypto/frost/stubs.js";
 import {
   buildStructure2,
   encodeStructure2,
   computeGenesisPrevRoot,
   buildSessionEstablishmentTbs,
-} from "@cello/protocol-types";
-import type { SessionAssignment } from "@cello/protocol-types";
-import { createNode } from "@cello/transport";
-import { createRelayNode } from "@cello/relay";
-import type { CelloRelayNode } from "@cello/relay";
+} from "@cello-protocol/protocol-types";
+import type { SessionAssignment } from "@cello-protocol/protocol-types";
+import { createNode } from "@cello-protocol/transport";
+import { createRelayNode } from "@cello-protocol/relay";
+import type { CelloRelayNode } from "@cello-protocol/relay";
 import { createClient } from "../client.js";
 import type { CelloClient, SessionRecord } from "../types.js";
 

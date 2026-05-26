@@ -74,7 +74,7 @@ The domain context string is the cross-ceremony confusion guard — an establish
 
 ## Package Structure (monorepo, pnpm workspaces)
 
-**npm scope: `@cello/`** — all packages publish as `@cello/package-name` (e.g. `@cello/client`, `@cello/crypto`, `@cello/adapter-claude-code`).
+**npm scope: `@cello-protocol/`** — all packages publish as `@cello-protocol/package-name` (e.g. `@cello-protocol/client`, `@cello-protocol/crypto`, `@cello-protocol/adapter-claude-code`).
 
 **Runtime: Node.js 24 LTS (Krypton).** TypeScript `target: ES2022`. All `package.json` files declare `"engines": { "node": ">=24" }`.
 
@@ -82,22 +82,22 @@ The domain context string is the cross-ceremony confusion guard — an establish
 
 ```
 packages/
-  protocol-types/   @cello/protocol-types  — wire types, TBS schemas, envelope definitions
-  crypto/           @cello/crypto          — Ed25519 (KeyProvider), SHA-256, ML-DSA (M3+), FROST (M2+)
-  transport/        @cello/transport       — libp2p node bootstrap, dial, stream handling
-  client/           @cello/client          — protocol core (CelloClient); no MCP, no agent runtime
-  adapter-claude-code/  @cello/adapter-claude-code  — MCP server, claude/channel notifications, stdio entrypoint; ships SKILL.md
-  adapter-hermes/   @cello/adapter-hermes  — Hermes message channel integration; ships SKILL.md  (later milestone)
-  adapter-ironclaw/ @cello/adapter-ironclaw — (later milestone)
-  adapter-openclaw/ @cello/adapter-openclaw — (later milestone)
-  directory/        @cello/directory       — directory node logic
-  relay/            @cello/relay           — relay node logic
+  protocol-types/   @cello-protocol/protocol-types  — wire types, TBS schemas, envelope definitions
+  crypto/           @cello-protocol/crypto          — Ed25519 (KeyProvider), SHA-256, ML-DSA (M3+), FROST (M2+)
+  transport/        @cello-protocol/transport       — libp2p node bootstrap, dial, stream handling
+  client/           @cello-protocol/client          — protocol core (CelloClient); no MCP, no agent runtime
+  adapter-claude-code/  @cello-protocol/adapter-claude-code  — MCP server, claude/channel notifications, stdio entrypoint; ships SKILL.md
+  adapter-hermes/   @cello-protocol/adapter-hermes  — Hermes message channel integration; ships SKILL.md  (later milestone)
+  adapter-ironclaw/ @cello-protocol/adapter-ironclaw — (later milestone)
+  adapter-openclaw/ @cello-protocol/adapter-openclaw — (later milestone)
+  directory/        @cello-protocol/directory       — directory node logic
+  relay/            @cello-protocol/relay           — relay node logic
   e2e-tests/                               — in-process Vitest harness, real libp2p nodes
 ```
 
 **Dependency rule:** `adapter-* → client → transport, crypto, protocol-types`. No adapter imports from `directory` or `relay`.
 
-**Distribution:** each adapter is an npm package. Its `SKILL.md` is the installation skill for that agent runtime — the one-liner is `npm install @cello/adapter-<name>`, then follow the skill. The skill knows how to wire up that specific agent. Operators building their own integration import `@cello/client` directly.
+**Distribution:** each adapter is an npm package. Its `SKILL.md` is the installation skill for that agent runtime — the one-liner is `npm install @cello-protocol/adapter-<name>`, then follow the skill. The skill knows how to wire up that specific agent. Operators building their own integration import `@cello-protocol/client` directly.
 
 ---
 

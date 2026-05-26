@@ -26,12 +26,12 @@
  *   }
  *
  * These tests verify the relay's ACK signing independently of the client's
- * AgentHashQueue verification, using only @cello/crypto primitives directly.
+ * AgentHashQueue verification, using only @cello-protocol/crypto primitives directly.
  */
 
 import { describe, it, expect } from "vitest";
 import { randomBytes } from "node:crypto";
-import { generateKeypair, verify, buildRelayAckTbs } from "@cello/crypto";
+import { generateKeypair, verify, buildRelayAckTbs } from "@cello-protocol/crypto";
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 

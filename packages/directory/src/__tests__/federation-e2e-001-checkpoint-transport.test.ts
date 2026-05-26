@@ -14,9 +14,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as lp from "it-length-prefixed";
 import { Libp2pCheckpointTransport } from "../adapters/libp2p-checkpoint-transport.js";
-import type { CheckpointProposal } from "@cello/interfaces";
-import { InMemoryKeyProvider } from "@cello/crypto";
-import { createNode } from "@cello/transport";
+import type { CheckpointProposal } from "@cello-protocol/interfaces";
+import { InMemoryKeyProvider } from "@cello-protocol/crypto";
+import { createNode } from "@cello-protocol/transport";
 import { randomBytes } from "node:crypto";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

@@ -33,16 +33,16 @@ import type { TestScope } from "@claude-flow/testing";
 import {
   generateKeypair,
   mlDsaKeygen,
-} from "@cello/crypto";
-import { clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
+} from "@cello-protocol/crypto";
+import { clearTestShares } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
 import {
   encodeConnectionPackage,
   buildPseudonymBinding,
-} from "@cello/protocol-types";
-import type { ConnectionPackage } from "@cello/protocol-types";
-import { createNode } from "@cello/transport";
-import { createDirectoryNode } from "@cello/directory";
-import type { RelayAdapter, RelaySessionAssignment } from "@cello/directory";
+} from "@cello-protocol/protocol-types";
+import type { ConnectionPackage } from "@cello-protocol/protocol-types";
+import { createNode } from "@cello-protocol/transport";
+import { createDirectoryNode } from "@cello-protocol/directory";
+import type { RelayAdapter, RelaySessionAssignment } from "@cello-protocol/directory";
 import { createClient } from "../client.js";
 import type { SignalRequirementPolicy } from "../connection-policy.js";
 

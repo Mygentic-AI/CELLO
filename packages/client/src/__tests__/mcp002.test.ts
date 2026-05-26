@@ -36,13 +36,13 @@ import type { TestScope } from "@claude-flow/testing";
 import { readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { generateKeypair, buildMerkleTree, merkleRoot, verifyInclusion } from "@cello/crypto";
+import { generateKeypair, buildMerkleTree, merkleRoot, verifyInclusion } from "@cello-protocol/crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpSessionServer } from "../mcp-server.js";
 import type { CelloClient, SessionRecord, SendResult, SendMessageResult, ReceiveAssignmentResult, SessionAssignmentEvent } from "../types.js";
-import type { CelloNode } from "@cello/transport";
+import type { CelloNode } from "@cello-protocol/transport";
 
 setupV3Tests();
 

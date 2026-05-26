@@ -151,7 +151,7 @@ export function encodeNotAuthenticated(frame: NotAuthenticated): Uint8Array {
 
 // ─── REG-001: Registration frame encoders ────────────────────────────────────
 
-import type { RegisterSuccess, RegisterError, DkgReady } from "@cello/protocol-types";
+import type { RegisterSuccess, RegisterError, DkgReady } from "@cello-protocol/protocol-types";
 
 export function encodeRegisterSuccess(frame: RegisterSuccess): Uint8Array {
   return ENC.encode({ type: frame.type, agent_id: frame.agent_id, primary_pubkey: frame.primary_pubkey });
@@ -179,7 +179,7 @@ import type {
   ConnectionRequestInbound,
   DisclosureRequestInbound,
   DisclosureResponseInbound,
-} from "@cello/protocol-types";
+} from "@cello-protocol/protocol-types";
 
 export function encodeConnectionRequestError(frame: ConnectionRequestError): Uint8Array {
   const obj: Record<string, unknown> = { type: frame.type, reason: frame.reason };
@@ -229,7 +229,7 @@ export function encodeDisclosureResponseInbound(frame: DisclosureResponseInbound
 
 // ─── Decode (client → directory) ─────────────────────────────────────────────
 
-import type { RegisterRequest, DkgComplete, ConnectionRequest, ConnectionResponse, DisclosureRequest, DisclosureResponse } from "@cello/protocol-types";
+import type { RegisterRequest, DkgComplete, ConnectionRequest, ConnectionResponse, DisclosureRequest, DisclosureResponse } from "@cello-protocol/protocol-types";
 
 import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilateral, SealUnilateralTooEarly, SealUnilateralConfirmed, SealUnilateralNotification } from "./directory-types.js";
 

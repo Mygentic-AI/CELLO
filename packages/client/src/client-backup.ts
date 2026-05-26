@@ -31,7 +31,7 @@
 
 import { randomBytes, createCipheriv, createDecipheriv, createHash } from "node:crypto";
 import { readFile, writeFile, rename, unlink } from "node:fs/promises";
-import type { CloudStorageProvider, Logger } from "@cello/interfaces";
+import type { CloudStorageProvider, Logger } from "@cello-protocol/interfaces";
 import { deriveBackupKey } from "./backup-key-derivation.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────

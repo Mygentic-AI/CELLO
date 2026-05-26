@@ -35,9 +35,9 @@ import {
   msgLeafHash,
   ctrlLeafHash,
   MockThresholdSigner,
-} from "@cello/crypto";
-import { buildStructure2, encodeStructure2 } from "@cello/protocol-types";
-import { createNode } from "@cello/transport";
+} from "@cello-protocol/crypto";
+import { buildStructure2, encodeStructure2 } from "@cello-protocol/protocol-types";
+import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import {
   createDirectoryNode,

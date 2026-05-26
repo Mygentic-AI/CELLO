@@ -42,8 +42,8 @@ import * as lp from "it-length-prefixed";
 import {
   generateKeypair,
   mlDsaKeygen,
-} from "@cello/crypto";
-import { createNode } from "@cello/transport";
+} from "@cello-protocol/crypto";
+import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import {
   createDirectoryNode,
@@ -51,8 +51,8 @@ import {
 } from "../directory-node.js";
 import type { RelayAdapter } from "../directory-node.js";
 import type { RelaySessionAssignment } from "../directory-types.js";
-import { InMemoryDirectoryStore } from "@cello/interfaces/stubs";
-import { NetworkDirectoryNode, runNetworkDkg } from "@cello/client";
+import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
+import { NetworkDirectoryNode, runNetworkDkg } from "@cello-protocol/client";
 
 setupV3Tests();
 

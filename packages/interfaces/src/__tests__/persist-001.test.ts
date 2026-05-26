@@ -23,7 +23,7 @@ import type {
 // ─── AC-001: Interface exports ───────────────────────────────────────────────
 
 describe("AC-001: interface exports", () => {
-  it("DirectoryStore is exported from @cello/interfaces", async () => {
+  it("DirectoryStore is exported from @cello-protocol/interfaces", async () => {
     const mod = await import("../index.js");
     // Type-only — verifiable at typecheck time; this test confirms the module resolves
     expect(mod).toBeDefined();

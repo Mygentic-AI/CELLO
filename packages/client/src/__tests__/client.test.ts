@@ -17,10 +17,10 @@ import {
   waitFor,
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
-import { generateKeypair } from "@cello/crypto";
-import { createNode } from "@cello/transport";
+import { generateKeypair } from "@cello-protocol/crypto";
+import { createNode } from "@cello-protocol/transport";
 import * as lp from "it-length-prefixed";
-import { serializeEnvelope, buildEnvelope } from "@cello/protocol-types";
+import { serializeEnvelope, buildEnvelope } from "@cello-protocol/protocol-types";
 import { createClient } from "../client.js";
 import type { CelloClient } from "../types.js";
 
@@ -466,7 +466,7 @@ describe("SI-002: send path always invokes buildEnvelope (never bypasses constru
     const { clientA, clientB, pubkeyAHex, pubkeyBHex, cleanup } = await makeClientPair();
     scope.addCleanup(cleanup);
 
-    const { msgLeafHash } = await import("@cello/crypto");
+    const { msgLeafHash } = await import("@cello-protocol/crypto");
     const content = new TextEncoder().encode("si-002 test");
     const result = await clientA.send(pubkeyBHex, content);
     expect(result.delivered).toBe(true);

@@ -1,5 +1,5 @@
 /**
- * @cello/client — CELLO-CONNPOL-001
+ * @cello-protocol/client — CELLO-CONNPOL-001
  * Connection policy engine.
  *
  * Evaluates an incoming connection package against a SignalRequirementPolicy
@@ -67,21 +67,21 @@ import type {
   ValidatedEndorsement,
   ValidatedAttestation,
   SignalCondition,
-} from "@cello/protocol-types";
+} from "@cello-protocol/protocol-types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 /**
  * Directory-appended context for the connection requester.
- * Identical in shape to DirectoryContext in @cello/protocol-types.
+ * Identical in shape to DirectoryContext in @cello-protocol/protocol-types.
  * Re-exported here so callers import from a single location.
  */
-export type { DirectoryContext } from "@cello/protocol-types";
-import type { DirectoryContext } from "@cello/protocol-types";
+export type { DirectoryContext } from "@cello-protocol/protocol-types";
+import type { DirectoryContext } from "@cello-protocol/protocol-types";
 
 /**
  * Signal requirement with a condition.
- * Uses the same wire types from @cello/protocol-types.
+ * Uses the same wire types from @cello-protocol/protocol-types.
  */
 export interface SignalRequirement {
   signal_type: "endorsement" | "attestation" | "pseudonym_age" | "registration_age";

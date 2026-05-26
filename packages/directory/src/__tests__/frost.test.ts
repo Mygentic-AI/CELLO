@@ -7,13 +7,13 @@
  * Covers: AC-001–AC-008, SI-001–SI-003
  *
  * Crypto reference: FROST/Ed25519 per RFC 9591
- * Implementation: @noble/curves/ed25519_FROST (via @cello/crypto)
+ * Implementation: @noble/curves/ed25519_FROST (via @cello-protocol/crypto)
  *
  * Epoch identifier format: "{agent_id}:epoch:{N}" (monotonic, starts at 1)
  * In-flight conflict key: "${agentPubkeyHex}:${epochId}" → peerIdString
  *
- * Note: @noble/curves is only a direct dep of @cello/crypto, not this package.
- * All FROST crypto operations are accessed via @cello/crypto subpath exports.
+ * Note: @noble/curves is only a direct dep of @cello-protocol/crypto, not this package.
+ * All FROST crypto operations are accessed via @cello-protocol/crypto subpath exports.
  */
 
 import {
@@ -30,11 +30,11 @@ import {
   bootstrapKeyShares,
   clearTestShares,
   FrostThresholdSigner,
-} from "@cello/crypto/frost/frost-threshold-signer.js";
-import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
+} from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello-protocol/crypto/frost/stubs.js";
 import {
   CONTEXT_SESSION_ESTABLISHMENT,
-} from "@cello/crypto/frost/types.js";
+} from "@cello-protocol/crypto/frost/types.js";
 import {
   FrostDirectoryHandler,
   BootstrapNotAllowedInProduction,

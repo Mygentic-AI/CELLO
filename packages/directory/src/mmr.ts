@@ -31,7 +31,7 @@
  */
 
 import { createHash } from "node:crypto";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

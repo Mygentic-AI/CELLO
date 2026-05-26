@@ -8,7 +8,7 @@
  * Run with:
  *   docker compose up -d && docker compose run --rm flyway
  *   CELLO_ENV=local DATABASE_URL=postgresql://postgres:dev@localhost:5433/cello_dev \
- *     pnpm --filter @cello/directory run test
+ *     pnpm --filter @cello-protocol/directory run test
  *
  * Covers:
  *   AC-001: every append-only table has relrowsecurity=true, exactly 2 policies for

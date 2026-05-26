@@ -28,13 +28,13 @@ import { createHash } from "node:crypto";
 import {
   FrostThresholdSigner,
   generateKeypair,
-} from "@cello/crypto";
+} from "@cello-protocol/crypto";
 import {
   bootstrapKeyShares,
   clearTestShares,
-} from "@cello/crypto/frost/frost-threshold-signer.js";
-import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
-import { createNode } from "@cello/transport";
+} from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello-protocol/crypto/frost/stubs.js";
+import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import {
   createDirectoryNode,

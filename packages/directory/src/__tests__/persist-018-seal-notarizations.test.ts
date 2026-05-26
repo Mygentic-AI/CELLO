@@ -54,7 +54,7 @@
  * Run with:
  *   docker compose up -d && docker compose run --rm flyway
  *   CELLO_ENV=local DATABASE_URL=postgresql://postgres:dev@localhost:5433/cello_dev \
- *     pnpm --filter @cello/directory run test -- \
+ *     pnpm --filter @cello-protocol/directory run test -- \
  *     --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
  */
 
@@ -67,8 +67,8 @@ import {
   serializeRecord,
   CHAIN_GENESIS,
 } from "../hash-chain.js";
-import type { Logger } from "@cello/interfaces";
-import type { SealNotarization } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
+import type { SealNotarization } from "@cello-protocol/interfaces";
 
 const isLocal = process.env["CELLO_ENV"] === "local";
 const DATABASE_URL =

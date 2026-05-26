@@ -8,12 +8,12 @@ phases:
       - pnpm install --frozen-lockfile
   build:
     commands:
-      - pnpm --filter @cello/crypto run typecheck
-      - pnpm --filter @cello/interfaces run typecheck
-      - pnpm --filter @cello/protocol-types run typecheck
-      - pnpm --filter @cello/transport run typecheck
-      - pnpm --filter @cello/relay run typecheck
-      - pnpm --filter @cello/relay run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
+      - pnpm --filter @cello-protocol/crypto run typecheck
+      - pnpm --filter @cello-protocol/interfaces run typecheck
+      - pnpm --filter @cello-protocol/protocol-types run typecheck
+      - pnpm --filter @cello-protocol/transport run typecheck
+      - pnpm --filter @cello-protocol/relay run typecheck
+      - pnpm --filter @cello-protocol/relay run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
       # ── Docker build → ECR push (DEPLOY-003) ────────────────────────────────
       - export IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
       - export ECR_REPO=257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay

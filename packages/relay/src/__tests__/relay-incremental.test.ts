@@ -28,17 +28,17 @@ import {
   merkleRoot,
   msgLeafHash,
   nodeHash,
-} from "@cello/crypto";
-import type { LeafInput } from "@cello/crypto";
+} from "@cello-protocol/crypto";
+import type { LeafInput } from "@cello-protocol/crypto";
 import { createRelayNode } from "../relay-node.js";
 import type { SessionAssignment } from "../relay-types.js";
 import { randomBytes } from "node:crypto";
 import { Encoder } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { generateKeypair } from "@cello/crypto";
+import { generateKeypair } from "@cello-protocol/crypto";
 import { createHash } from "node:crypto";
 import { decode } from "cbor-x";
-import { createNode } from "@cello/transport";
+import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 
 setupV3Tests();

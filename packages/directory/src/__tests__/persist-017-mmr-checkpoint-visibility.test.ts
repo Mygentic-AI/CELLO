@@ -73,7 +73,7 @@
  * Run with:
  *   docker compose up -d && docker compose run --rm flyway
  *   CELLO_ENV=local DATABASE_URL=postgresql://cello_service:cello_service_dev@localhost:5433/cello_dev \
- *     pnpm --filter @cello/directory run test -- \
+ *     pnpm --filter @cello-protocol/directory run test -- \
  *       --pool-options.forks.maxForks=1 --pool-options.forks.minForks=1
  */
 
@@ -81,15 +81,15 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi, test } from 
 import { randomUUID, createHash, randomBytes } from "node:crypto";
 import { Encoder } from "cbor-x";
 import pg from "pg";
-import { generateKeypair, buildMerkleTree, merkleRoot } from "@cello/crypto";
-import { buildStructure2, encodeStructure2 } from "@cello/protocol-types";
+import { generateKeypair, buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
+import { buildStructure2, encodeStructure2 } from "@cello-protocol/protocol-types";
 import { MmrStore } from "../mmr-store.js";
 import { MmrCheckpointService } from "../mmr-checkpoint-service.js";
 import { verifyInclusionProof, PROOF_NOT_YET_AVAILABLE } from "../mmr.js";
 import { createDirectoryNode } from "../directory-node.js";
 import type { RelayAdapter } from "../directory-node.js";
-import type { Logger } from "@cello/interfaces";
-import { LocalJobScheduler } from "@cello/interfaces/stubs";
+import type { Logger } from "@cello-protocol/interfaces";
+import { LocalJobScheduler } from "@cello-protocol/interfaces/stubs";
 
 const CBOR_ENC_TEST = new Encoder({ tagUint8Array: false });
 

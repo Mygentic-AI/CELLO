@@ -12,7 +12,7 @@
  *   timestamp_BE8:         Unix millisecond timestamp as 8-byte big-endian uint64
  *
  * SI-003: This TBS must be used by both the relay (which signs) and the directory
- * (which verifies). Keeping it in @cello/crypto ensures neither side can diverge.
+ * (which verifies). Keeping it in @cello-protocol/crypto ensures neither side can diverge.
  *
  * verifyRelayRegistrationSignature verifies that the signature was produced by the
  * private key corresponding to publicKeyHex, preventing an attacker from registering

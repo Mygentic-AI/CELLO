@@ -44,7 +44,7 @@
  * Run with:
  *   docker compose up -d && docker compose run --rm flyway
  *   CELLO_ENV=local DATABASE_URL=postgresql://cello_service:cello_service_dev@localhost:5433/cello_dev \
- *     pnpm --filter @cello/directory run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
+ *     pnpm --filter @cello-protocol/directory run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
@@ -62,7 +62,7 @@ import {
   PROOF_NOT_YET_AVAILABLE,
 } from "../mmr.js";
 import { MmrStore } from "../mmr-store.js";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 // ─── Unit tests: pure MMR algorithm (no DB) ──────────────────────────────────
 

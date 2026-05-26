@@ -25,23 +25,23 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { generateKeypair, FrostThresholdSigner } from "@cello/crypto";
-import type { Logger } from "@cello/interfaces";
+import { generateKeypair, FrostThresholdSigner } from "@cello-protocol/crypto";
+import type { Logger } from "@cello-protocol/interfaces";
 import {
   bootstrapKeyShares,
   clearTestShares,
-} from "@cello/crypto/frost/frost-threshold-signer.js";
-import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
-import { createNode } from "@cello/transport";
-import { createDirectoryNode } from "@cello/directory";
-import { InMemoryDirectoryStore, InMemorySessionWal } from "@cello/interfaces/stubs";
-import type { SessionWal } from "@cello/interfaces";
-import { NetworkRelayAdapter } from "@cello/directory/network-relay-adapter.js";
-import type { CelloDirectoryNode } from "@cello/directory";
-import { createRelayNode } from "@cello/relay";
-import type { CelloRelayNode, DirectoryAdapter } from "@cello/relay";
-import { createClient, createMcpSessionServer } from "@cello/client";
-import type { SignalRequirementPolicy } from "@cello/client";
+} from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello-protocol/crypto/frost/stubs.js";
+import { createNode } from "@cello-protocol/transport";
+import { createDirectoryNode } from "@cello-protocol/directory";
+import { InMemoryDirectoryStore, InMemorySessionWal } from "@cello-protocol/interfaces/stubs";
+import type { SessionWal } from "@cello-protocol/interfaces";
+import { NetworkRelayAdapter } from "@cello-protocol/directory/network-relay-adapter.js";
+import type { CelloDirectoryNode } from "@cello-protocol/directory";
+import { createRelayNode } from "@cello-protocol/relay";
+import type { CelloRelayNode, DirectoryAdapter } from "@cello-protocol/relay";
+import { createClient, createMcpSessionServer } from "@cello-protocol/client";
+import type { SignalRequirementPolicy } from "@cello-protocol/client";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Notification } from "@modelcontextprotocol/sdk/types.js";
@@ -53,7 +53,7 @@ export interface AgentFixture {
   pubkey: Uint8Array;
   pubkeyHex: string;
   /** Raw libp2p node — for tests that need to stop/restart the agent's transport */
-  node: Awaited<ReturnType<typeof import("@cello/transport").createNode>>;
+  node: Awaited<ReturnType<typeof import("@cello-protocol/transport").createNode>>;
   client: ReturnType<typeof createClient>;
   /** Set after register() is called (opts.register: true) */
   primaryPubkey?: string;
@@ -200,7 +200,7 @@ export async function createSessionFixture(
   const relayAddr = relayMultiaddrs[0]!;
 
   // ── Directory ──────────────────────────────────────────────────────────────
-  let relayForDirectory: import("@cello/relay").CelloRelayNode | NetworkRelayAdapter;
+  let relayForDirectory: import("@cello-protocol/relay").CelloRelayNode | NetworkRelayAdapter;
   let stopNetworkAdapter: (() => Promise<void>) | undefined;
 
   if (opts.networkRelay) {

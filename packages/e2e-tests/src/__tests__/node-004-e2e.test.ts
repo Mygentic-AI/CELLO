@@ -22,7 +22,7 @@ import {
   waitFor,
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
-import { clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
+import { clearTestShares } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { createSessionFixture } from "../session-fixture.js";
 

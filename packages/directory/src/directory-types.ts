@@ -68,9 +68,9 @@ export interface SessionRequest {
   relay_rtt?: Record<string, number>;
 }
 
-// SessionAssignment and participant/relay types live in @cello/protocol-types (MSG-004 boundary fix).
+// SessionAssignment and participant/relay types live in @cello-protocol/protocol-types (MSG-004 boundary fix).
 // Re-exported here for backwards compatibility.
-import type { SessionAssignment, ParticipantInfo, RelayEndpointInfo } from "@cello/protocol-types";
+import type { SessionAssignment, ParticipantInfo, RelayEndpointInfo } from "@cello-protocol/protocol-types";
 export type { SessionAssignment, ParticipantInfo, RelayEndpointInfo };
 /** @deprecated Use RelayEndpointInfo instead */
 export type RelayEndpoint = RelayEndpointInfo;
@@ -80,7 +80,7 @@ export interface SessionAssignmentFrame {
   assignment: SessionAssignment;
 }
 
-// ─── Session outcome frame types (re-exported from @cello/protocol-types) ────
+// ─── Session outcome frame types (re-exported from @cello-protocol/protocol-types) ────
 // These are wire-format events that cross process boundaries.
 export type {
   SessionAbandoned,
@@ -90,7 +90,7 @@ export type {
   SealRejectionReason,
   SessionSealRejected,
   SealVerified,
-} from "@cello/protocol-types";
+} from "@cello-protocol/protocol-types";
 
 // ─── SESSION-005: New signaling frames ────────────────────────────────────────
 
@@ -142,7 +142,7 @@ export interface NotAuthenticated {
 
 // ─── REG-001: Registration frame types ────────────────────────────────────────
 
-export type { RegisterRequest, DkgComplete, RegisterSuccess, RegisterError, RegisterErrorReason } from "@cello/protocol-types";
+export type { RegisterRequest, DkgComplete, RegisterSuccess, RegisterError, RegisterErrorReason } from "@cello-protocol/protocol-types";
 
 // ─── CONNREQ-002: Connection request frame types (re-exported from protocol-types) ───
 
@@ -160,7 +160,7 @@ export type {
   DisclosureRequestInbound,
   DisclosureResponse,
   DisclosureResponseInbound,
-} from "@cello/protocol-types";
+} from "@cello-protocol/protocol-types";
 
 // ─── PERSIST-014: Seal attempt frames ────────────────────────────────────────
 
@@ -237,12 +237,12 @@ export interface SealUnilateralNotification {
 }
 
 // ─── Internal directory session state ─────────────────────────────────────────
-// SealNotarization is a storage-only type — defined in @cello/interfaces, imported where needed.
-export type { SealNotarization } from "@cello/interfaces";
+// SealNotarization is a storage-only type — defined in @cello-protocol/interfaces, imported where needed.
+export type { SealNotarization } from "@cello-protocol/interfaces";
 
 // ─── Relay seal data (mirror of relay-types SealData, kept local to avoid cross-package import) ──
 
-import type { Structure2 } from "@cello/protocol-types";
+import type { Structure2 } from "@cello-protocol/protocol-types";
 
 export interface RelaySealLeaf {
   kind: "msg" | "ctrl";

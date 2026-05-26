@@ -41,7 +41,7 @@
 
 import type { LocalShare, ShareStore } from "./share-store.js";
 import type { EncryptedPgShareStore } from "./encrypted-share-store.js";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 import { InMemoryShareStore } from "./share-store.js";
 
 /**

@@ -1,5 +1,5 @@
 /**
- * @cello/protocol-types — CELLO-MSG-001 (v0) + CELLO-MSG-003 (v1)
+ * @cello-protocol/protocol-types — CELLO-MSG-001 (v0) + CELLO-MSG-003 (v1)
  * Envelope construction, validation, serialization, and deserialization.
  *
  * ──── v0 Pseudocode (CELLO-MSG-001) ────
@@ -81,8 +81,8 @@
 
 import { Encoder } from "cbor-x";
 import { decode as cborDecode } from "cbor-x";
-import { msgLeafHash, verify } from "@cello/crypto";
-import type { KeyProvider } from "@cello/crypto";
+import { msgLeafHash, verify } from "@cello-protocol/crypto";
+import type { KeyProvider } from "@cello-protocol/crypto";
 import type {
   MessageEnvelope,
   MessageEnvelopeV1,

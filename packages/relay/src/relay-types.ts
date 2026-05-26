@@ -10,7 +10,7 @@
  *   per RFC 8032 (Ed25519) and FIPS 180-4 (SHA-256)
  */
 
-import type { Structure2 } from "@cello/protocol-types";
+import type { Structure2 } from "@cello-protocol/protocol-types";
 
 // ─── Auth frame types ─────────────────────────────────────────────────────────
 

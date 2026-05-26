@@ -2,12 +2,12 @@
  * CheckpointStatusProvider — interface for querying MMR checkpoint visibility
  * for a sealed session (PERSIST-017).
  *
- * Implemented by MmrStore in @cello/directory.
+ * Implemented by MmrStore in @cello-protocol/directory.
  * Consumed by adapter-claude-code/src/server.ts (createMcpServer) to surface
  * checkpoint_status in cello_close_session, cello_get_sealed_receipt, and
- * cello_get_inclusion_proof without importing @cello/directory directly.
+ * cello_get_inclusion_proof without importing @cello-protocol/directory directly.
  *
- * The adapter-claude-code package may not import @cello/directory per the
+ * The adapter-claude-code package may not import @cello-protocol/directory per the
  * CONTEXT.md dependency rule: "adapter-* → client → transport, crypto, protocol-types.
  * No adapter imports from directory or relay."
  */

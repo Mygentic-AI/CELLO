@@ -1,5 +1,5 @@
 /**
- * CELLO-TESTFIX-001 — @cello/test-fixtures tests
+ * CELLO-TESTFIX-001 — @cello-protocol/test-fixtures tests
  *
  * Every AC from the story maps to a named test below.
  * Tests are written RED-first per SPARC Phase R.
@@ -34,7 +34,7 @@ import {
   REQUIRES_PSEUDONYM_7_DAYS,
   INFERENCE_OPEN_POLICY,
 } from "../index.js";
-import type { ConnectionPolicy } from "@cello/protocol-types";
+import type { ConnectionPolicy } from "@cello-protocol/protocol-types";
 
 setupV3Tests();
 

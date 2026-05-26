@@ -30,11 +30,11 @@ import {
   createTestScope,
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
-import { clearTestShares, verifyFrostSignature } from "@cello/crypto/frost/frost-threshold-signer.js";
-import { CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto";
-import { createDirectoryNode } from "@cello/directory";
-import { createNode } from "@cello/transport";
-import { generateKeypair } from "@cello/crypto";
+import { clearTestShares, verifyFrostSignature } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import { CONTEXT_SESSION_ESTABLISHMENT } from "@cello-protocol/crypto";
+import { createDirectoryNode } from "@cello-protocol/directory";
+import { createNode } from "@cello-protocol/transport";
+import { generateKeypair } from "@cello-protocol/crypto";
 import { NetworkDirectoryNode, runNetworkDkg } from "../network-directory-node.js";
 
 setupV3Tests();

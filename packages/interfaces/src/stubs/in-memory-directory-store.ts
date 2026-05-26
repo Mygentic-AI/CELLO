@@ -8,7 +8,7 @@
  * Migrated from packages/directory/src/directory-store.ts.
  */
 
-import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello/protocol-types";
+import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
 import type { DirectoryStore, DirectoryNotification, SealNotarization, AccountRow, CreateAccountParams } from "../directory-store.js";
 
 const NOTIFICATION_QUEUE_BOUND = 256;

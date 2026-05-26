@@ -1,5 +1,5 @@
 /**
- * @cello/test-fixtures — CELLO-TESTFIX-001
+ * @cello-protocol/test-fixtures — CELLO-TESTFIX-001
  *
  * Shared test-only infrastructure for @cello packages.
  * This package MUST NOT appear in `dependencies` or `peerDependencies` of any
@@ -19,11 +19,11 @@ import type {
   PackageValidationResult,
   ConnectionPolicy,
   DirectoryContext,
-} from "@cello/protocol-types";
+} from "@cello-protocol/protocol-types";
 import {
   ML_DSA_PUBKEY_BYTES,
   ML_DSA_SIGNATURE_BYTES,
-} from "@cello/protocol-types";
+} from "@cello-protocol/protocol-types";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -197,9 +197,9 @@ export function buildInvalidPackage(): Extract<PackageValidationResult, { valid:
 
 // ─── DirectoryContext ─────────────────────────────────────────────────────────
 
-// Re-export DirectoryContext from @cello/protocol-types — it is defined there
+// Re-export DirectoryContext from @cello-protocol/protocol-types — it is defined there
 // and test-fixtures simply provides a factory function.
-export type { DirectoryContext } from "@cello/protocol-types";
+export type { DirectoryContext } from "@cello-protocol/protocol-types";
 
 export function makeDirectoryContext(opts: {
   registered_days_ago?: number;

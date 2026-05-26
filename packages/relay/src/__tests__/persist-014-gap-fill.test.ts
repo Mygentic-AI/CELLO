@@ -8,10 +8,10 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { InMemorySessionWal } from "@cello/interfaces/stubs";
-import { StdoutLogger } from "@cello/interfaces/stubs";
-import { RELAY_SESSION_UNRECOVERABLE } from "@cello/interfaces";
-import type { Leaf, SessionWal } from "@cello/interfaces";
+import { InMemorySessionWal } from "@cello-protocol/interfaces/stubs";
+import { StdoutLogger } from "@cello-protocol/interfaces/stubs";
+import { RELAY_SESSION_UNRECOVERABLE } from "@cello-protocol/interfaces";
+import type { Leaf, SessionWal } from "@cello-protocol/interfaces";
 import { randomBytes } from "node:crypto";
 
 // ─── Test helpers ────────────────────────────────────────────────────────────

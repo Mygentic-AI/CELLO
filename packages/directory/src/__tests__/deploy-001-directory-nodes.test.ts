@@ -19,7 +19,7 @@ import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { PgDirectoryStore, BIGINT_COLUMNS, STORE_TABLES } from "../adapters/pg-directory-store.js";
 import { configurePgTypes } from "../pg-type-config.js";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 // ─── Environment setup ────────────────────────────────────────────────────────
 

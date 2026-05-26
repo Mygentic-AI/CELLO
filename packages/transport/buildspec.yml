@@ -8,5 +8,5 @@ phases:
       - pnpm install --frozen-lockfile
   build:
     commands:
-      - pnpm --filter @cello/transport run typecheck
-      - pnpm --filter @cello/transport run test
+      - pnpm --filter @cello-protocol/transport run typecheck
+      - pnpm --filter @cello-protocol/transport run test

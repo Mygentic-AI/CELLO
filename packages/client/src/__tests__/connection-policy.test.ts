@@ -1,5 +1,5 @@
 /**
- * @cello/client — CELLO-CONNPOL-001
+ * @cello-protocol/client — CELLO-CONNPOL-001
  * Connection policy engine tests.
  *
  * All tests are derived 1:1 from story ACs and SIs.
@@ -14,7 +14,7 @@ import {
   buildPackageWithExpiredEndorsement,
   buildPackageWithTargetMismatch,
   makeDirectoryContext,
-} from "@cello/test-fixtures";
+} from "@cello-protocol/test-fixtures";
 import {
   evaluateConnectionPackage,
   CLOSED_POLICY,

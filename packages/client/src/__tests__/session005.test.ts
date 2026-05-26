@@ -40,28 +40,28 @@ import { Encoder } from "cbor-x";
 import {
   generateKeypair,
   FrostThresholdSigner,
-} from "@cello/crypto";
+} from "@cello-protocol/crypto";
 // bootstrapKeyShares and clearTestShares are test-only — not exported from production barrel
 import {
   bootstrapKeyShares,
   clearTestShares,
-} from "@cello/crypto/frost/frost-threshold-signer.js";
-import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
-import { CONTEXT_SEAL, CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto/frost/types.js";
+} from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello-protocol/crypto/frost/stubs.js";
+import { CONTEXT_SEAL, CONTEXT_SESSION_ESTABLISHMENT } from "@cello-protocol/crypto/frost/types.js";
 import {
   buildSealTbs,
   computeGenesisPrevRoot,
   buildSessionEstablishmentTbs,
-} from "@cello/protocol-types";
-import { createNode } from "@cello/transport";
-import { createRelayNode } from "@cello/relay";
-import type { DirectoryAdapter } from "@cello/relay";
+} from "@cello-protocol/protocol-types";
+import { createNode } from "@cello-protocol/transport";
+import { createRelayNode } from "@cello-protocol/relay";
+import type { DirectoryAdapter } from "@cello-protocol/relay";
 import {
   createDirectoryNode,
   encodeSessionSealed,
   decodeOutboundSignalingFrame,
-} from "@cello/directory";
-import type { RelayAdapter, RelaySessionAssignment } from "@cello/directory";
+} from "@cello-protocol/directory";
+import type { RelayAdapter, RelaySessionAssignment } from "@cello-protocol/directory";
 import { createClient } from "../client.js";
 
 setupV3Tests();

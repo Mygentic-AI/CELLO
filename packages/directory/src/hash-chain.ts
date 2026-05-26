@@ -15,7 +15,7 @@
  */
 
 import { createHash } from "node:crypto";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 /** The well-known genesis constant, same for all tables and all environments. */
 export const CHAIN_GENESIS = createHash("sha256")

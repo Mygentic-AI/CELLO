@@ -8,5 +8,5 @@ phases:
       - pnpm install --frozen-lockfile
   build:
     commands:
-      - pnpm --filter @cello/adapter-claude-code run typecheck
-      - pnpm --filter @cello/adapter-claude-code run test
+      - pnpm --filter @cello-protocol/adapter-claude-code run typecheck
+      - pnpm --filter @cello-protocol/adapter-claude-code run test

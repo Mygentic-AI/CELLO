@@ -85,10 +85,10 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { CelloClient, SessionAssignmentEvent, ClientBackup } from "@cello/client";
-import type { CelloNode } from "@cello/transport";
-import type { KeyProvider } from "@cello/crypto";
-import type { CheckpointStatusProvider } from "@cello/interfaces";
+import type { CelloClient, SessionAssignmentEvent, ClientBackup } from "@cello-protocol/client";
+import type { CelloNode } from "@cello-protocol/transport";
+import type { KeyProvider } from "@cello-protocol/crypto";
+import type { CheckpointStatusProvider } from "@cello-protocol/interfaces";
 import { pushSessionRequestNotification } from "./notifications.js";
 
 // ─── InboundSessionEvent ─────────────────────────────────────────────────────

@@ -52,10 +52,10 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { fsync } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
-import type { Logger } from "@cello/interfaces";
-import type { SessionWal, Leaf } from "@cello/interfaces";
-import { RELAY_SESSION_UNRECOVERABLE } from "@cello/interfaces";
-import { InMemorySessionWal } from "@cello/interfaces/stubs";
+import type { Logger } from "@cello-protocol/interfaces";
+import type { SessionWal, Leaf } from "@cello-protocol/interfaces";
+import { RELAY_SESSION_UNRECOVERABLE } from "@cello-protocol/interfaces";
+import { InMemorySessionWal } from "@cello-protocol/interfaces/stubs";
 
 // Re-export for test imports and relay barrel
 export { RELAY_SESSION_UNRECOVERABLE };

@@ -153,8 +153,8 @@ describeIntegration("AC-002: CELLO_ENV=local startup — all adapters initialise
 });
 
 describe("SI-002: PgDirectoryStore not exported from packages/directory index.ts", () => {
-  it("@cello/directory index does not export PgDirectoryStore", async () => {
-    const mod = await import("@cello/directory");
+  it("@cello-protocol/directory index does not export PgDirectoryStore", async () => {
+    const mod = await import("@cello-protocol/directory");
     expect((mod as Record<string, unknown>)["PgDirectoryStore"]).toBeUndefined();
   });
 });

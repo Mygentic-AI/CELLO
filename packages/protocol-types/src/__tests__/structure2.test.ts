@@ -3,8 +3,8 @@
  *
  * ACs covered here: AC-001, AC-002 (CBOR encoding), AC-003, AC-004, AC-007, AC-008
  * SIs covered here: SI-001
- * AC-005 / SI-002 are client-layer integration tests — deferred to @cello/client
- * AC-002 leaf-hash vectors and AC-006 / SI-003 domain-separation are in @cello/crypto
+ * AC-005 / SI-002 are client-layer integration tests — deferred to @cello-protocol/client
+ * AC-002 leaf-hash vectors and AC-006 / SI-003 domain-separation are in @cello-protocol/crypto
  *
  * Structure 1 TBS: [1, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]
  * Structure 2 wire: [sequence_number, sender_pubkey, content_hash, sender_signature, scan_result, prev_root]
@@ -24,7 +24,7 @@ import {
   it,
   expect,
 } from "@claude-flow/testing";
-import { generateKeypair } from "@cello/crypto";
+import { generateKeypair } from "@cello-protocol/crypto";
 import { extractStructure1, buildEnvelopeV1 } from "../envelope.js";
 import {
   buildStructure2,

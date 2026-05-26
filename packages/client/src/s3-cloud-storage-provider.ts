@@ -29,7 +29,7 @@
  */
 
 import { S3Client, PutObjectCommand, GetObjectCommand, NoSuchKey } from "@aws-sdk/client-s3";
-import type { CloudStorageProvider } from "@cello/interfaces";
+import type { CloudStorageProvider } from "@cello-protocol/interfaces";
 
 /** Configuration for S3CloudStorageProvider. Provided by the composition root. */
 export interface S3CloudStorageConfig {

@@ -29,7 +29,7 @@ import { decode } from "cbor-x";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { encodeConnectionRequestError } from "../directory-frames.js";
 import { configurePgTypes } from "../pg-type-config.js";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 // ─── Environment ──────────────────────────────────────────────────────────────
 

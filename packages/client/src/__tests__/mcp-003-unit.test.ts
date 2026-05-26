@@ -37,7 +37,7 @@ import {
   afterEach,
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
-import { generateKeypair } from "@cello/crypto";
+import { generateKeypair } from "@cello-protocol/crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
@@ -48,9 +48,9 @@ import type {
   SendMessageResult,
   ReceiveAssignmentResult,
 } from "../types.js";
-import type { CelloNode } from "@cello/transport";
+import type { CelloNode } from "@cello-protocol/transport";
 import type { SignalRequirementPolicy, ConnectionReport } from "../connection-policy.js";
-import type { ClientConnectionRecord } from "@cello/protocol-types";
+import type { ClientConnectionRecord } from "@cello-protocol/protocol-types";
 
 setupV3Tests();
 

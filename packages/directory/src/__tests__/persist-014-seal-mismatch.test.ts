@@ -12,8 +12,8 @@
 import { describe, it, expect, test } from "vitest";
 import { randomBytes } from "node:crypto";
 import { Encoder } from "cbor-x";
-import { generateKeypair } from "@cello/crypto";
-import { createNode } from "@cello/transport";
+import { generateKeypair } from "@cello-protocol/crypto";
+import { createNode } from "@cello-protocol/transport";
 import { createDirectoryNode } from "../directory-node.js";
 import { decodeInboundSignalingFrame } from "../directory-frames.js";
 

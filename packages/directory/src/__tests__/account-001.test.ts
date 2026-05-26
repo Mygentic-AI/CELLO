@@ -37,8 +37,8 @@ import pg from "pg";
 import { randomUUID, randomBytes } from "node:crypto";
 import { PgDirectoryStore, BIGINT_COLUMNS, deserializeRow } from "../adapters/pg-directory-store.js";
 import { CHAIN_GENESIS } from "../hash-chain.js";
-import type { Logger } from "@cello/interfaces";
-import type { AgentProfile } from "@cello/protocol-types";
+import type { Logger } from "@cello-protocol/interfaces";
+import type { AgentProfile } from "@cello-protocol/protocol-types";
 
 // ─── Environment setup ────────────────────────────────────────────────────────
 
@@ -660,7 +660,7 @@ describe("ACCOUNT-001 unit: SI-001 getAgentsByAccount returns only public metada
      * of returned profiles against the AgentProfile type definition.
      */
     // Use InMemoryDirectoryStore to verify the contract without needing Postgres
-    const { InMemoryDirectoryStore } = await import("@cello/interfaces/stubs");
+    const { InMemoryDirectoryStore } = await import("@cello-protocol/interfaces/stubs");
     const store = new InMemoryDirectoryStore();
 
     const accountId = randomUUID();

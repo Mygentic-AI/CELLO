@@ -69,8 +69,8 @@
  *   All-sessions index: "hq:sessions"         → JSON string[] of sessionIds with queues
  */
 
-import { verify, buildRelayAckTbs } from "@cello/crypto";
-import type { ClientStore, Logger } from "@cello/interfaces";
+import { verify, buildRelayAckTbs } from "@cello-protocol/crypto";
+import type { ClientStore, Logger } from "@cello-protocol/interfaces";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -144,7 +144,7 @@ const SESSIONS_INDEX_KEY = "hq:sessions";
  * Build the to-be-signed bytes for a relay ACK.
  *
  * Hex-decodes hashHex and delegates to buildRelayAckTbs (the canonical
- * implementation in @cello/crypto shared with the relay signer).
+ * implementation in @cello-protocol/crypto shared with the relay signer).
  *
  * TBS = SHA-256(hash_bytes || seq_BE4 || ts_BE8). RFC 8032, FIPS 180-4.
  */

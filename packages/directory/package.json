@@ -1,5 +1,5 @@
 {
-  "name": "@cello/directory",
+  "name": "@cello-protocol/directory",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -30,8 +30,8 @@
     "cello-directory": "./dist/bin/directory.js"
   },
   "devDependencies": {
-    "@cello/client": "workspace:*",
-    "@cello/relay": "workspace:*",
+    "@cello-protocol/client": "workspace:*",
+    "@cello-protocol/relay": "workspace:*",
     "@claude-flow/testing": "3.0.0-alpha.6",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/pg": "8.20.0",
@@ -41,10 +41,10 @@
   "dependencies": {
     "@aws-sdk/client-s3": "3.1051.0",
     "@aws-sdk/client-secrets-manager": "3.1051.0",
-    "@cello/crypto": "workspace:*",
-    "@cello/interfaces": "workspace:*",
-    "@cello/protocol-types": "workspace:*",
-    "@cello/transport": "workspace:*",
+    "@cello-protocol/crypto": "workspace:*",
+    "@cello-protocol/interfaces": "workspace:*",
+    "@cello-protocol/protocol-types": "workspace:*",
+    "@cello-protocol/transport": "workspace:*",
     "@libp2p/interface": "^3.0.0",
     "@noble/curves": "2.2.0",
     "cbor-x": "^1.6.4",

@@ -13,8 +13,8 @@ import type {
   SessionSealed,
   SessionSealRejected,
   SealVerified,
-} from "@cello/protocol-types";
-import type { AgentProfile, ConnectionEstablished, ConnectionRecord, PendingConnectionRequest } from "@cello/protocol-types";
+} from "@cello-protocol/protocol-types";
+import type { AgentProfile, ConnectionEstablished, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
 
 // ─── ACCOUNT-001: Account identity types ─────────────────────────────────────
 

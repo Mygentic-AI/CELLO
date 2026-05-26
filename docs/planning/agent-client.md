@@ -128,7 +128,7 @@ CELLO uses two cryptographic signing schemes that serve different roles:
 | Pseudonym binding | Ed25519 | ML-DSA | Directory co-signs at registration; single key |
 | Connection package items | Ed25519 | ML-DSA | Same |
 
-**M0–M2: Ed25519 only.** All signatures (threshold and non-threshold) use Ed25519. This matches `@cello/crypto` which lists ML-DSA as M3+.
+**M0–M2: Ed25519 only.** All signatures (threshold and non-threshold) use Ed25519. This matches `@cello-protocol/crypto` which lists ML-DSA as M3+.
 
 **M3+: ML-DSA for non-threshold signatures.** ML-DSA is CRYSTALS-Dilithium, NIST FIPS 204. Security level (ML-DSA-44 vs ML-DSA-65) is an open decision. The library to build against is `liboqs` / `node-oqs` (Open Quantum Safe project, implements FIPS 204).
 
@@ -1485,7 +1485,7 @@ A desktop tray app is far-future scope. "Not Me" emergency revocation is handled
 | AC-42 | Crypto | Device attestation scope misframed in Deployment Contexts table. Attestation is about the owner's personal devices (iPhone, MacBook, TPM hardware), not the deployment infrastructure. A cloud VM agent whose owner has linked their iPhone carries full attestation. The table implies VPS agents cannot have device attestation, which is wrong per device-attestation-reexamination.md |
 | AC-43 | Crypto | WebAuthn not distinguished from device attestation in registration flow step 5. WebAuthn is a tethering/account-security signal; it is not a device sacrifice mechanism and does not produce stable device identifiers for Sybil deduplication. The distinction must be explicit (see device-attestation-reexamination.md) |
 | AC-44 | Crypto | Mid-session compromise canary gap not stated: the canary fires at session establishment boundaries only, not per message. A K_local extraction during an active session is not detected until the next session start. This is an operational security gap the document implies is covered but is not |
-| AC-45 | Crypto | npm pinned-version installation requirement missing. open-decisions.md Decision 11 specifies the install command must use a pinned version (`npx @cello/mcp-server@1.2.3`) not latest, to prevent compromised npm publish from affecting all agents on restart |
+| AC-45 | Crypto | npm pinned-version installation requirement missing. open-decisions.md Decision 11 specifies the install command must use a pinned version (`npx @cello-protocol/mcp-server@1.2.3`) not latest, to prevent compromised npm publish from affecting all agents on restart |
 | AC-46 | Transport | AutoNAT step absent from session establishment flow. libp2p-dht-and-peer-connectivity.md specifies each client runs AutoNAT ("can you reach me at this address?") before signaling candidate addresses to the directory. Without AutoNAT, reported external addresses are wrong and hole-punch success rate degrades |
 | AC-47 | Transport | ~~Resolved~~ — always-on at every session establishment. Client selects 2–3 lowest-latency backup nodes and sends fire-and-forget redundant hash copies unconditionally, not only under high load. |
 | AC-48 | Transport | Node load indicator in ping response not described. node-architecture-and-replication.md specifies ping packets return a single-byte load indicator used for load-aware node routing. agent-client.md describes RTT-only routing |

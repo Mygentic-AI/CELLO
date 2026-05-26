@@ -47,7 +47,7 @@
  */
 
 import pg from "pg";
-import type { EnvelopeKeyProvider, Logger } from "@cello/interfaces";
+import type { EnvelopeKeyProvider, Logger } from "@cello-protocol/interfaces";
 
 /**
  * AES-256-GCM overhead: 12-byte nonce + 16-byte authentication tag.

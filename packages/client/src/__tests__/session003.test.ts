@@ -25,11 +25,11 @@ import {
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
 import { randomBytes } from "node:crypto";
-import { generateKeypair, FrostThresholdSigner } from "@cello/crypto";
-import { bootstrapKeyShares, clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
-import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
-import { buildSealTbs } from "@cello/protocol-types";
-import { createNode } from "@cello/transport";
+import { generateKeypair, FrostThresholdSigner } from "@cello-protocol/crypto";
+import { bootstrapKeyShares, clearTestShares } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello-protocol/crypto/frost/stubs.js";
+import { buildSealTbs } from "@cello-protocol/protocol-types";
+import { createNode } from "@cello-protocol/transport";
 import { createClient } from "../client.js";
 
 setupV3Tests();

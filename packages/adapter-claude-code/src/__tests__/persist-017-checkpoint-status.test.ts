@@ -50,13 +50,13 @@ import {
   afterEach,
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
-import { generateKeypair } from "@cello/crypto";
-import { createNode } from "@cello/transport";
+import { generateKeypair } from "@cello-protocol/crypto";
+import { createNode } from "@cello-protocol/transport";
 import { createMcpServer } from "../index.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { CelloClient, SessionAssignmentEvent } from "@cello/client";
-import type { CheckpointStatusProvider, SealStagingStatus } from "@cello/interfaces";
+import type { CelloClient, SessionAssignmentEvent } from "@cello-protocol/client";
+import type { CheckpointStatusProvider, SealStagingStatus } from "@cello-protocol/interfaces";
 
 setupV3Tests();
 

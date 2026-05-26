@@ -1,5 +1,5 @@
 /**
- * @cello/crypto — ML-DSA-44 signing primitives (CELLO-CRYPTO-004)
+ * @cello-protocol/crypto — ML-DSA-44 signing primitives (CELLO-CRYPTO-004)
  *
  * Phase P — Pseudocode (FIPS 204 / CRYSTALS-Dilithium)
  * ────────────────────────────────────────────────────

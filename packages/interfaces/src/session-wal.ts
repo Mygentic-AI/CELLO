@@ -24,7 +24,7 @@
 /** Sentinel value returned by reconstruct() when the WAL is corrupt or unrecoverable. */
 export const RELAY_SESSION_UNRECOVERABLE = Symbol("RELAY_SESSION_UNRECOVERABLE");
 
-/** A Structure 2 leaf as stored in the WAL. Fields mirror Structure2 in @cello/protocol-types. */
+/** A Structure 2 leaf as stored in the WAL. Fields mirror Structure2 in @cello-protocol/protocol-types. */
 export interface Leaf {
   sequence_number: number;
   sender_pubkey: Uint8Array;

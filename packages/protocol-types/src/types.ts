@@ -1,5 +1,5 @@
 /**
- * @cello/protocol-types — CELLO-MSG-001 (v0) + CELLO-MSG-003 (v1)
+ * @cello-protocol/protocol-types — CELLO-MSG-001 (v0) + CELLO-MSG-003 (v1)
  *
  * Wire types for the MessageEnvelope.
  *
@@ -35,7 +35,7 @@ export interface MessageEnvelope {
   content: Uint8Array;
 
   /**
-   * SHA-256(0x00 || content) — computed by msgLeafHash from @cello/crypto.
+   * SHA-256(0x00 || content) — computed by msgLeafHash from @cello-protocol/crypto.
    * ALWAYS recomputed by buildEnvelope; any caller-supplied value is ignored.
    */
   content_hash: Uint8Array;
@@ -72,7 +72,7 @@ export interface MessageEnvelopeV1 {
   content: Uint8Array;
 
   /**
-   * SHA-256(0x00 || content) — computed by msgLeafHash from @cello/crypto.
+   * SHA-256(0x00 || content) — computed by msgLeafHash from @cello-protocol/crypto.
    * ALWAYS recomputed by buildEnvelopeV1; any caller-supplied value is ignored.
    */
   content_hash: Uint8Array;

@@ -30,8 +30,8 @@ import { createRequire } from "node:module";
 import { randomBytes, randomUUID } from "node:crypto";
 import pg from "pg";
 
-import { LocalAuditLogShipper, StdoutLogger } from "@cello/interfaces/stubs";
-import type { AuditLogShipper, AuditLogEntry } from "@cello/interfaces";
+import { LocalAuditLogShipper, StdoutLogger } from "@cello-protocol/interfaces/stubs";
+import type { AuditLogShipper, AuditLogEntry } from "@cello-protocol/interfaces";
 
 const isLocal = process.env["CELLO_ENV"] === "local";
 const DATABASE_URL =
@@ -291,7 +291,7 @@ describeIntegration("PERSIST-006 AC-004 (integration): shipped entries appear in
 
     // Create a small helper script: ships 3 entries, then awaits SIGTERM
     const testScript = `
-import { LocalAuditLogShipper, StdoutLogger } from "@cello/interfaces/stubs";
+import { LocalAuditLogShipper, StdoutLogger } from "@cello-protocol/interfaces/stubs";
 
 const logger = new StdoutLogger();
 const shipper = new LocalAuditLogShipper(${JSON.stringify(auditPath)}, logger);
@@ -320,7 +320,7 @@ process.on("SIGTERM", () => { clearInterval(keepAlive); });
 `;
 
     // Write script inside PKG so Node can resolve workspace packages via pnpm node_modules.
-    // A /tmp path has no access to the workspace and @cello/interfaces cannot be resolved.
+    // A /tmp path has no access to the workspace and @cello-protocol/interfaces cannot be resolved.
     const scriptPath = join(PKG, `test-sigterm-${randomUUID()}.mjs`);
     await writeFile(scriptPath, testScript, "utf8");
 

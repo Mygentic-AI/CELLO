@@ -8,7 +8,7 @@
  * The private key NEVER crosses the provider boundary (SI-001). The only exported
  * values are the public key (via getPublicKey()) and signatures (via sign()).
  *
- * Key file format (same as FileKeyProvider in @cello/crypto):
+ * Key file format (same as FileKeyProvider in @cello-protocol/crypto):
  *   Bytes 0–3:   Magic [0xCE, 0x11, 0x0E, 0x01]
  *   Byte 4:      Version (0x01)
  *   Bytes 5–36:  32-byte Ed25519 seed
@@ -21,9 +21,9 @@
 
 import { readFile } from "node:fs/promises";
 import { ed25519 } from "@noble/curves/ed25519.js";
-import type { SigningKeyProvider, SigningPublicKey, SigningSignature, SignOptions } from "@cello/interfaces";
-import { SigningKeyProviderError } from "@cello/interfaces";
-import type { Logger } from "@cello/interfaces";
+import type { SigningKeyProvider, SigningPublicKey, SigningSignature, SignOptions } from "@cello-protocol/interfaces";
+import { SigningKeyProviderError } from "@cello-protocol/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 // ─── Key file format constants ───────────────────────────────────────────────
 

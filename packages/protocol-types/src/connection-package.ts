@@ -1,5 +1,5 @@
 /**
- * @cello/protocol-types — CELLO-CONNREQ-001
+ * @cello-protocol/protocol-types — CELLO-CONNREQ-001
  * Connection package wire types, CBOR encoding/decoding, and validation.
  *
  * ──── Phase P: Pseudocode ────
@@ -67,8 +67,8 @@ import { decode as cborDecode } from "cbor-x";
 /**
  * ML-DSA-44 key provider interface.
  *
- * Defined here (not imported from @cello/crypto) because protocol-types is a leaf
- * package that @cello/crypto will import from, not the reverse.
+ * Defined here (not imported from @cello-protocol/crypto) because protocol-types is a leaf
+ * package that @cello-protocol/crypto will import from, not the reverse.
  *
  * The crypto package's InMemoryMlDsaKeyProvider and FileMlDsaKeyProvider will
  * implement this interface.
@@ -379,7 +379,7 @@ function buildAttestationTbs(a: Omit<Attestation, "attester_ml_dsa_signature">):
  * This function is a thin wrapper that enables real ML-DSA verification once
  * a native binding is available. Currently delegates to the provided verifier
  * function — this indirection is necessary because protocol-types cannot import
- * @cello/crypto (direction of the dependency would be inverted).
+ * @cello-protocol/crypto (direction of the dependency would be inverted).
  *
  * Callers that need verification MUST supply a verifier. The default throws to
  * prevent silent acceptance if the caller forgets to wire one in.

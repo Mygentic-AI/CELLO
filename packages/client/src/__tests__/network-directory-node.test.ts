@@ -24,11 +24,11 @@ import {
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
 import { randomBytes } from "node:crypto";
-import { bootstrapKeyShares, clearTestShares, verifyFrostSignature } from "@cello/crypto/frost/frost-threshold-signer.js";
-import { CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner } from "@cello/crypto";
-import { createDirectoryNode } from "@cello/directory";
-import { createNode } from "@cello/transport";
-import { generateKeypair } from "@cello/crypto";
+import { bootstrapKeyShares, clearTestShares, verifyFrostSignature } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import { CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner } from "@cello-protocol/crypto";
+import { createDirectoryNode } from "@cello-protocol/directory";
+import { createNode } from "@cello-protocol/transport";
+import { generateKeypair } from "@cello-protocol/crypto";
 import { NetworkDirectoryNode, bootstrapNetworkKeyShares } from "../network-directory-node.js";
 
 setupV3Tests();

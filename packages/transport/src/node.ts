@@ -75,7 +75,7 @@ import { generateKeyPair, generateKeyPairFromSeed } from "@libp2p/crypto/keys";
 import { multiaddr } from "@multiformats/multiaddr";
 import { peerIdFromString } from "@libp2p/peer-id";
 import type { Libp2p, Stream, Connection, StreamHandler } from "@libp2p/interface";
-import type { KeyProvider } from "@cello/crypto";
+import type { KeyProvider } from "@cello-protocol/crypto";
 import type {
   CelloNode,
   CelloStreamHandler,

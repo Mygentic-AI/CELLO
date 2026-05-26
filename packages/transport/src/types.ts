@@ -2,7 +2,7 @@
  * CELLO Transport — types.ts
  *
  * Defines the CelloNode interface, CreateNodeOptions, StreamHandler, and structured
- * error types for the @cello/transport package.
+ * error types for the @cello-protocol/transport package.
  *
  * ARCHITECTURE NOTE (ADR-0001):
  * The KeyProvider is stored on CelloNode for use by higher layers (MSG-001 signing)
@@ -13,7 +13,7 @@
  *   - These are always different keys serving different trust claims.
  */
 
-import type { KeyProvider } from "@cello/crypto";
+import type { KeyProvider } from "@cello-protocol/crypto";
 import type { Stream } from "@libp2p/interface";
 
 // ─── Options ────────────────────────────────────────────────────────────────

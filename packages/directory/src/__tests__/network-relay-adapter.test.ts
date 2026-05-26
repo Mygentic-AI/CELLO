@@ -25,11 +25,11 @@ import {
 } from "@claude-flow/testing";
 import { randomBytes } from "node:crypto";
 import { Encoder } from "cbor-x";
-import { generateKeypair } from "@cello/crypto";
-import { createRelayNode } from "@cello/relay";
-import type { DirectoryAdapter } from "@cello/relay";
-import { createDirectoryNode } from "@cello/directory";
-import type { RelaySessionAssignment } from "@cello/directory";
+import { generateKeypair } from "@cello-protocol/crypto";
+import { createRelayNode } from "@cello-protocol/relay";
+import type { DirectoryAdapter } from "@cello-protocol/relay";
+import { createDirectoryNode } from "@cello-protocol/directory";
+import type { RelaySessionAssignment } from "@cello-protocol/directory";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
 
 setupV3Tests();

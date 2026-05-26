@@ -1,5 +1,5 @@
 {
-  "name": "@cello/adapter-claude-code",
+  "name": "@cello-protocol/adapter-claude-code",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -22,17 +22,17 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cello/client": "workspace:*",
-    "@cello/crypto": "workspace:*",
-    "@cello/interfaces": "workspace:*",
-    "@cello/transport": "workspace:*",
+    "@cello-protocol/client": "workspace:*",
+    "@cello-protocol/crypto": "workspace:*",
+    "@cello-protocol/interfaces": "workspace:*",
+    "@cello-protocol/transport": "workspace:*",
     "@libp2p/peer-id": "^6.0.8",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.2"
   },
   "devDependencies": {
-    "@cello/directory": "workspace:*",
-    "@cello/relay": "workspace:*",
+    "@cello-protocol/directory": "workspace:*",
+    "@cello-protocol/relay": "workspace:*",
     "@claude-flow/testing": "3.0.0-alpha.6",
     "cbor-x": "^1.6.0",
     "it-length-prefixed": "^10.0.1"

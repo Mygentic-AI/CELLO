@@ -19,7 +19,7 @@
  */
 
 import pg from "pg";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 export class PendingConnectionRequestTtlSweep {
   readonly #pool: pg.Pool;

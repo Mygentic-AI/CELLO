@@ -642,7 +642,7 @@ Resources:
       # P — Pseudocode:
       # 1. Read STAGING_DIRECTORY_URL from env (injected by CodePipeline, not hardcoded)
       # 2. Install Node 24 + pnpm
-      # 3. Run: pnpm --filter @cello/e2e-tests run typecheck (compile smoke/run-smoke-tests.ts)
+      # 3. Run: pnpm --filter @cello-protocol/e2e-tests run typecheck (compile smoke/run-smoke-tests.ts)
       # 4. Run: node packages/e2e-tests/dist/smoke/run-smoke-tests.js
       # 5. Smoke runner emits pipeline.staging.smoke_test.passed or pipeline.staging.smoke_test.failed
       # 6. Exit code from runner propagates to CodeBuild (non-zero = pipeline fails)
@@ -660,12 +660,12 @@ Resources:
             build:
               commands:
                 - export START_MS=$(date +%s%3N)
-                - pnpm --filter @cello/crypto run typecheck
-                - pnpm --filter @cello/interfaces run typecheck
-                - pnpm --filter @cello/protocol-types run typecheck
-                - pnpm --filter @cello/transport run typecheck
-                - pnpm --filter @cello/client run typecheck
-                - pnpm --filter @cello/e2e-tests run typecheck
+                - pnpm --filter @cello-protocol/crypto run typecheck
+                - pnpm --filter @cello-protocol/interfaces run typecheck
+                - pnpm --filter @cello-protocol/protocol-types run typecheck
+                - pnpm --filter @cello-protocol/transport run typecheck
+                - pnpm --filter @cello-protocol/client run typecheck
+                - pnpm --filter @cello-protocol/e2e-tests run typecheck
                 # Run smoke tests against the staging ALB URL
                 # STAGING_DIRECTORY_URL is set by CodePipeline EnvironmentVariableOverride
                 - node packages/e2e-tests/dist/smoke/run-smoke-tests.js

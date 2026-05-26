@@ -39,11 +39,11 @@ COPY packages/transport/ packages/transport/
 COPY packages/relay/ packages/relay/
 
 # Build all packages in dependency order
-RUN pnpm --filter @cello/interfaces run typecheck && \
-    pnpm --filter @cello/protocol-types run typecheck && \
-    pnpm --filter @cello/crypto run typecheck && \
-    pnpm --filter @cello/transport run typecheck && \
-    pnpm --filter @cello/relay run typecheck
+RUN pnpm --filter @cello-protocol/interfaces run typecheck && \
+    pnpm --filter @cello-protocol/protocol-types run typecheck && \
+    pnpm --filter @cello-protocol/crypto run typecheck && \
+    pnpm --filter @cello-protocol/transport run typecheck && \
+    pnpm --filter @cello-protocol/relay run typecheck
 
 # ─── Stage 2: Production ───────────────────────────────────────────────────
 FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-slim AS production

@@ -30,13 +30,13 @@ import {
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
 import { randomBytes } from "node:crypto";
-import { generateKeypair, FrostThresholdSigner, CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto";
-import { computeGenesisPrevRoot, buildSessionEstablishmentTbs } from "@cello/protocol-types";
-import { bootstrapKeyShares, clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
-import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
-import { createNode } from "@cello/transport";
-import type { SessionAssignment } from "@cello/directory";
-import { createRelayNode, RELAY_PROTOCOL_ID } from "@cello/relay";
+import { generateKeypair, FrostThresholdSigner, CONTEXT_SESSION_ESTABLISHMENT } from "@cello-protocol/crypto";
+import { computeGenesisPrevRoot, buildSessionEstablishmentTbs } from "@cello-protocol/protocol-types";
+import { bootstrapKeyShares, clearTestShares } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello-protocol/crypto/frost/stubs.js";
+import { createNode } from "@cello-protocol/transport";
+import type { SessionAssignment } from "@cello-protocol/directory";
+import { createRelayNode, RELAY_PROTOCOL_ID } from "@cello-protocol/relay";
 import { createClient } from "../client.js";
 import type { CelloClient } from "../types.js";
 
@@ -643,7 +643,7 @@ describe("AC-008 / DB-001 / DB-002 (transport-loss recovery — SESSION-006)", (
   }, 15_000);
 });
 
-// Verify that RELAY_PROTOCOL_ID from @cello/relay is "/cello/relay/1.0.0"
+// Verify that RELAY_PROTOCOL_ID from @cello-protocol/relay is "/cello/relay/1.0.0"
 describe("RELAY_PROTOCOL_ID constant", () => {
   it("RELAY_PROTOCOL_ID is /cello/relay/1.0.0", () => {
     expect(RELAY_PROTOCOL_ID).toBe("/cello/relay/1.0.0");

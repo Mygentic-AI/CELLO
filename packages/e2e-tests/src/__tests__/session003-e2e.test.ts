@@ -26,9 +26,9 @@ import {
   afterEach,
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
-import { clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
+import { clearTestShares } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
 import { createSessionFixture } from "../session-fixture.js";
-import type { CelloClient } from "@cello/client";
+import type { CelloClient } from "@cello-protocol/client";
 
 setupV3Tests();
 

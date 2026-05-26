@@ -12,7 +12,7 @@
  */
 
 import { createServer, type Server } from "node:http";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 export interface HealthServerOptions {
   nodeId: string;

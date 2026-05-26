@@ -1,5 +1,5 @@
 {
-  "name": "@cello/transport",
+  "name": "@cello-protocol/transport",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -19,7 +19,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cello/crypto": "workspace:*",
+    "@cello-protocol/crypto": "workspace:*",
     "@libp2p/crypto": "^5.0.0",
     "@libp2p/interface": "^3.0.0",
     "@libp2p/peer-id": "^6.0.0",

@@ -31,16 +31,16 @@ import { join } from "node:path";
 import { stat } from "node:fs/promises";
 import {
   generateKeypair,
-} from "@cello/crypto";
+} from "@cello-protocol/crypto";
 import {
   clearTestShares,
-} from "@cello/crypto/frost/frost-threshold-signer.js";
-import { createNode } from "@cello/transport";
+} from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import { createNode } from "@cello-protocol/transport";
 import {
   createDirectoryNode,
-} from "@cello/directory";
-import type { RelayAdapter } from "@cello/directory";
-import type { RelaySessionAssignment } from "@cello/directory";
+} from "@cello-protocol/directory";
+import type { RelayAdapter } from "@cello-protocol/directory";
+import type { RelaySessionAssignment } from "@cello-protocol/directory";
 import { createClient } from "../client.js";
 
 setupV3Tests();

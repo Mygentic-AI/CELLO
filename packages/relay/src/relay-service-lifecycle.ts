@@ -35,7 +35,7 @@
  */
 
 import { createServer, type Server } from "node:http";
-import type { Logger, LogContext } from "@cello/interfaces";
+import type { Logger, LogContext } from "@cello-protocol/interfaces";
 
 // ─── relay.service.started ─────────────────────────────────────────────────────
 

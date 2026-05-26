@@ -86,29 +86,29 @@ import type { TestScope } from "@claude-flow/testing";
 import {
   generateKeypair,
   mlDsaKeygen,
-} from "@cello/crypto";
+} from "@cello-protocol/crypto";
 import {
   clearTestShares,
-} from "@cello/crypto/frost/frost-threshold-signer.js";
+} from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
 import {
   encodeConnectionPackage,
   buildPseudonymBinding,
-} from "@cello/protocol-types";
-import type { ConnectionPackage } from "@cello/protocol-types";
-import { createNode } from "@cello/transport";
+} from "@cello-protocol/protocol-types";
+import type { ConnectionPackage } from "@cello-protocol/protocol-types";
+import { createNode } from "@cello-protocol/transport";
 import {
   createDirectoryNode,
-} from "@cello/directory";
-import type { RelayAdapter, RelaySessionAssignment } from "@cello/directory";
+} from "@cello-protocol/directory";
+import type { RelayAdapter, RelaySessionAssignment } from "@cello-protocol/directory";
 import { createClient } from "../client.js";
 import type { SignalRequirementPolicy } from "../connection-policy.js";
 // CONNREQ-003: fixture import — canonical shared infrastructure from e2e-tests.
-// Note: @cello/e2e-tests is a dev dependency to avoid the circular project reference
+// Note: @cello-protocol/e2e-tests is a dev dependency to avoid the circular project reference
 // issue (e2e-tests → client → e2e-tests). TypeScript resolves the types through the
-// package exports map pointing to dist/. Run pnpm --filter @cello/e2e-tests typecheck
+// package exports map pointing to dist/. Run pnpm --filter @cello-protocol/e2e-tests typecheck
 // before this package's typecheck to ensure dist/ is up-to-date.
-import { createSessionFixture } from "@cello/e2e-tests/session-fixture";
-import type { Logger, LogContext } from "@cello/interfaces";
+import { createSessionFixture } from "@cello-protocol/e2e-tests/session-fixture";
+import type { Logger, LogContext } from "@cello-protocol/interfaces";
 
 setupV3Tests();
 

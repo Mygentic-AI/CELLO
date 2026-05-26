@@ -9,7 +9,7 @@
     "test": "vitest run",
     "test:all": "pnpm -r --workspace-concurrency=1 run test",
     "lint": "eslint packages/*/src",
-    "dev": "pnpm --filter @cello/directory run start & pnpm --filter @cello/relay run start"
+    "dev": "pnpm --filter @cello-protocol/directory run start & pnpm --filter @cello-protocol/relay run start"
   },
   "pnpm": {
     "onlyBuiltDependencies": ["@journeyapps/sqlcipher", "esbuild", "better-sqlite3", "argon2", "@oqs/liboqs-js", "agentdb", "hnswlib-node", "cbor-extract", "protobufjs", "sharp"]

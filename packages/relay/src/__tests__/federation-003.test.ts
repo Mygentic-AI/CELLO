@@ -39,8 +39,8 @@ import {
   buildRelayAckTbs,
   buildRelayRegistrationTbs,
   verifyRelayRegistrationSignature,
-} from "@cello/crypto";
-import { createNode } from "@cello/transport";
+} from "@cello-protocol/crypto";
+import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID, DIRECTORY_RELAY_PROTOCOL_ID } from "../relay-node.js";
 import type { DirectoryAdapter } from "../relay-node.js";

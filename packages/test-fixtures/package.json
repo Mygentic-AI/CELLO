@@ -1,5 +1,5 @@
 {
-  "name": "@cello/test-fixtures",
+  "name": "@cello-protocol/test-fixtures",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -19,7 +19,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cello/protocol-types": "workspace:*"
+    "@cello-protocol/protocol-types": "workspace:*"
   },
   "devDependencies": {
     "@claude-flow/testing": "3.0.0-alpha.6",

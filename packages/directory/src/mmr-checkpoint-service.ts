@@ -40,7 +40,7 @@
  */
 
 import type pg from "pg";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 import type { MmrStore } from "./mmr-store.js";
 
 export class MmrCheckpointService {

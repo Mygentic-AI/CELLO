@@ -73,14 +73,14 @@
 import { randomBytes, createHash } from "node:crypto";
 import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { verify, buildMerkleTree, merkleRoot, generateKeypair, msgLeafHash, ctrlLeafHash, nodeHash, buildRelayAckTbs } from "@cello/crypto";
-import type { KeyProvider, LeafInput } from "@cello/crypto";
-import { buildStructure2, encodeStructure2, computeGenesisPrevRoot } from "@cello/protocol-types";
-import { createNode } from "@cello/transport";
-import type { CelloNode } from "@cello/transport";
+import { verify, buildMerkleTree, merkleRoot, generateKeypair, msgLeafHash, ctrlLeafHash, nodeHash, buildRelayAckTbs } from "@cello-protocol/crypto";
+import type { KeyProvider, LeafInput } from "@cello-protocol/crypto";
+import { buildStructure2, encodeStructure2, computeGenesisPrevRoot } from "@cello-protocol/protocol-types";
+import { createNode } from "@cello-protocol/transport";
+import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
-import type { Logger, SessionWal } from "@cello/interfaces";
-import { RELAY_SESSION_UNRECOVERABLE } from "@cello/interfaces";
+import type { Logger, SessionWal } from "@cello-protocol/interfaces";
+import { RELAY_SESSION_UNRECOVERABLE } from "@cello-protocol/interfaces";
 import type {
   SessionAssignment,
   RelaySessionState,
@@ -165,7 +165,7 @@ function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
 /**
  * DirectoryAdapter: in-process interface the relay calls to trigger seal processing
  * and to look up predecessor relay public keys for ACK verification (FEDERATION-003).
- * Uses structural typing so relay package does not import @cello/directory.
+ * Uses structural typing so relay package does not import @cello-protocol/directory.
  */
 export interface DirectoryAdapter {
   processSeal(sessionId: Uint8Array, sealData: import("./relay-types.js").SealData): Promise<{ ok: true } | { ok: false; reason: string }>;

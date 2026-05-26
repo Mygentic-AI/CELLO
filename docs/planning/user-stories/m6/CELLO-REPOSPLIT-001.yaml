@@ -50,7 +50,7 @@ acceptance_criteria:
     component_under_test: adapter-claude-code
     notes: "This commit lands in trustless-cello, not cello-client.
       It is the first commit of this story. Must precede all extraction
-      work so the monorepo CI stays green throughout. The @cello/interfaces
+      work so the monorepo CI stays green throughout. The @cello-protocol/interfaces
       prep (removing private, adding files allowlist) is a prerequisite
       for REPOSPLIT-002 — cello-client will consume it as a pinned npm
       dependency."
@@ -104,7 +104,7 @@ acceptance_criteria:
       REPOSPLIT-002)"
     when: "an agent reads it"
     then: "the install command is correct (claude mcp add cello npx
-      @cello/connect); the package name is @cello/connect; tool usage
+      @cello-protocol/connect); the package name is @cello-protocol/connect; tool usage
       examples are present and accurate for M6 (cello_register,
       cello_send, cello_receive, cello_status); content is sufficient
       for an agent to get connected — final polish deferred to later
@@ -193,7 +193,7 @@ acceptance_criteria:
     given: "The cello-client GitHub Actions CI pipeline with NPM_TOKEN
       configured in secrets"
     when: "a test tag (e.g. v0.0.0-scaffold.1) is pushed to cello-client"
-    then: "the publish step executes and succeeds; @cello/connect@0.0.0-scaffold.1
+    then: "the publish step executes and succeeds; @cello-protocol/connect@0.0.0-scaffold.1
       is published to npm (confirms: NPM_TOKEN works from GitHub runners,
       publishConfig.access is 'public' for the scoped package, no 2FA
       requirement blocks automated publish, tag-based trigger fires correctly);

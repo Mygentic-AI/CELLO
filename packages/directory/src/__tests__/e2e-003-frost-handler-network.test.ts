@@ -16,9 +16,9 @@ import {
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
 import { randomBytes } from "node:crypto";
-import { bootstrapKeyShares, clearTestShares } from "@cello/crypto/frost/frost-threshold-signer.js";
-import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
-import { CONTEXT_SESSION_ESTABLISHMENT } from "@cello/crypto";
+import { bootstrapKeyShares, clearTestShares } from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello-protocol/crypto/frost/stubs.js";
+import { CONTEXT_SESSION_ESTABLISHMENT } from "@cello-protocol/crypto";
 import { FrostDirectoryHandler, BootstrapNotAllowedInProduction } from "../frost-handler.js";
 import { InMemoryShareStore } from "../share-store.js";
 
@@ -265,7 +265,7 @@ describe("AC-008: FrostThresholdSigner as coordinator + FrostDirectoryHandler as
     // The FrostThresholdSigner handles the commitment list construction correctly via participateInCeremony.
     // We verify that by running a full ceremony with the original in-process stubs (which use the same share
     // as the handler) — full end-to-end network verification is in AC-014.
-    const { FrostThresholdSigner: FTS } = await import("@cello/crypto");
+    const { FrostThresholdSigner: FTS } = await import("@cello-protocol/crypto");
     const signer = new FTS({ threshold: 2, participants: 1, directoryNodeStubs: stubs }, agentPubkey);
     const tbs = new Uint8Array(randomBytes(32));
     const ceremonyResult = await signer.participateInCeremony("ceremony-ac008", tbs, CONTEXT_SESSION_ESTABLISHMENT);
@@ -273,7 +273,7 @@ describe("AC-008: FrostThresholdSigner as coordinator + FrostDirectoryHandler as
     if (!ceremonyResult.ok) return;
 
     // Verify the combined signature against primaryPubkey
-    const { verifyFrostSignature } = await import("@cello/crypto/frost/frost-threshold-signer.js");
+    const { verifyFrostSignature } = await import("@cello-protocol/crypto/frost/frost-threshold-signer.js");
     const valid = verifyFrostSignature(ceremonyResult.signature, tbs, CONTEXT_SESSION_ESTABLISHMENT, primaryPubkey);
     expect(valid).toBe(true);
   });

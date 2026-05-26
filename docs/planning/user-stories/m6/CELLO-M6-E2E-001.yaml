@@ -20,7 +20,7 @@ story: >
 
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
-  - trigger: "When a stranger runs 'claude mcp add cello npx @cello/connect'"
+  - trigger: "When a stranger runs 'claude mcp add cello npx @cello-protocol/connect'"
     action: "the MCP server is installed and available; no errors;
       no configuration required beyond the install command"
 
@@ -39,7 +39,7 @@ behavior:
       cello_get_sealed_receipt"
 
   - trigger: "When all of the above succeeds"
-    action: "@cello/connect is promoted from the 'beta' dist-tag
+    action: "@cello-protocol/connect is promoted from the 'beta' dist-tag
       to 'latest' on npm"
 
 # ─── Acceptance Criteria ────────────────────────────────────
@@ -52,8 +52,8 @@ acceptance_criteria:
   - id: AC-001
     given: "A clean machine with Node.js installed and no prior
       CELLO configuration"
-    when: "'claude mcp add cello npx @cello/connect' is run"
-    then: "the MCP server is installed without error; 'npx @cello/connect'
+    when: "'claude mcp add cello npx @cello-protocol/connect' is run"
+    then: "the MCP server is installed without error; 'npx @cello-protocol/connect'
       starts the MCP server and reports available tools including
       cello_register, cello_send, cello_receive"
     test_type: manual
@@ -61,15 +61,15 @@ acceptance_criteria:
 
   - id: AC-001b
     given: "The same clean machine from AC-001"
-    when: "'npm install @cello/connect@beta' is run as an alternative
+    when: "'npm install @cello-protocol/connect@beta' is run as an alternative
       install path"
-    then: "the package installs without error; npx @cello/connect starts
+    then: "the package installs without error; npx @cello-protocol/connect starts
       the MCP server; both install paths work"
     test_type: manual
     component_under_test: client
 
   - id: AC-002
-    given: "The @cello/connect MCP server running on the clean machine"
+    given: "The @cello-protocol/connect MCP server running on the clean machine"
     when: "the user messages the production Telegram bot, completes
       phone verification (contact sharing), provides email, enters
       the OTP received via email"
@@ -131,8 +131,8 @@ acceptance_criteria:
   - id: AC-008
     given: "AC-001 through AC-007 all pass"
     when: "the E2E gate is satisfied"
-    then: "@cello/connect is promoted from 'beta' to 'latest' on npm;
-      'npm install @cello/connect' (without @beta) resolves to the
+    then: "@cello-protocol/connect is promoted from 'beta' to 'latest' on npm;
+      'npm install @cello-protocol/connect' (without @beta) resolves to the
       verified version; this is the Mitigation D final gate — the beta
       tag is held until this entire flow is verified against production"
     test_type: manual

@@ -77,8 +77,8 @@
 
 import { ed25519_FROST } from "@noble/curves/ed25519.js";
 import type { NonceCommitments } from "@noble/curves/abstract/frost.js";
-import type { FrostContext } from "@cello/crypto/frost/types.js";
-import type { Logger } from "@cello/interfaces";
+import type { FrostContext } from "@cello-protocol/crypto/frost/types.js";
+import type { Logger } from "@cello-protocol/interfaces";
 import type { ShareStore, LocalShare } from "./share-store.js";
 import { InMemoryShareStore } from "./share-store.js";
 
@@ -877,7 +877,7 @@ function parseEpochN(epochId: string): number | null {
  * Frame a TBS with a context string for domain separation.
  * Encoding: `<context>\0<tbs>`
  *
- * This matches the framing in @cello/crypto frost-threshold-signer.ts so that
+ * This matches the framing in @cello-protocol/crypto frost-threshold-signer.ts so that
  * the directory's partial signatures are compatible with the client-side aggregation.
  */
 function frameMessage(context: string, tbs: Uint8Array): Uint8Array {

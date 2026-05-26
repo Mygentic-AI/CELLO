@@ -17,8 +17,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { generateKeypair } from "@cello/crypto";
-import { createNode } from "@cello/transport";
+import { generateKeypair } from "@cello-protocol/crypto";
+import { createNode } from "@cello-protocol/transport";
 
 const relayMultiaddr = process.env["CELLO_RELAY_MULTIADDR"];
 

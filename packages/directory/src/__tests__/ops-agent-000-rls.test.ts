@@ -9,7 +9,7 @@
  *   CELLO_ENV=local DATABASE_URL=postgresql://postgres:dev@localhost:5433/cello_dev \
  *     DEV_ENVELOPE_KEY=86e903357804be102cf6f55e1b86ed342e01a6f50835272200ac970d0d094ac7 \
  *     AUDIT_LOG_PATH=/tmp/cello-audit.jsonl \
- *     pnpm --filter @cello/directory run test -- --pool-options.threads.maxThreads=1
+ *     pnpm --filter @cello-protocol/directory run test -- --pool-options.threads.maxThreads=1
  *
  * AC-007b: Verifies cello_ops_agent scope boundary:
  *   - SELECT on registrations succeeds

@@ -1,5 +1,5 @@
 /**
- * @cello/client — types.ts
+ * @cello-protocol/client — types.ts
  *
  * Public types for the CelloClient (MSG-002, SESSION-002, MSG-004, ADAPTER-003).
  */
@@ -211,13 +211,13 @@ export interface CelloClient {
    *
    * REG-001 AC-001, AC-002, AC-008, AC-010.
    */
-  register(phoneStub: string): Promise<import("@cello/protocol-types").RegistrationState | { error: string }>;
+  register(phoneStub: string): Promise<import("@cello-protocol/protocol-types").RegistrationState | { error: string }>;
 
   /**
    * Return the cached registration state, or null if not yet registered.
    * CELLO-MCP-003.
    */
-  getRegistrationState(): import("@cello/protocol-types").RegistrationState | null;
+  getRegistrationState(): import("@cello-protocol/protocol-types").RegistrationState | null;
 
   /**
    * Return the configured directory peer ID (from CELLO_DIRECTORY_MULTIADDR), or null.
@@ -297,7 +297,7 @@ export interface CelloClient {
    * List all active connection records.
    * CELLO-MCP-003.
    */
-  listConnections(): import("@cello/protocol-types").ClientConnectionRecord[];
+  listConnections(): import("@cello-protocol/protocol-types").ClientConnectionRecord[];
 
   /**
    * Register a peer in the local registry.
@@ -338,7 +338,7 @@ export interface CelloClient {
    * SESSION-002 AC-002, AC-003, AC-004, AC-005, SI-003.
    */
   receiveSessionAssignment(
-    assignment: import("@cello/protocol-types").SessionAssignment,
+    assignment: import("@cello-protocol/protocol-types").SessionAssignment,
     myPubkey: Uint8Array,
   ): Promise<ReceiveAssignmentResult>;
 

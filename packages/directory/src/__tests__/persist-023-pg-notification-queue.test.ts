@@ -62,11 +62,11 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import pg from "pg";
 import { randomUUID, randomBytes } from "node:crypto";
-import type { Logger } from "@cello/interfaces";
-import type { NotificationQueue, QueuedNotification } from "@cello/interfaces";
-import { InMemoryNotificationQueue } from "@cello/interfaces/stubs";
+import type { Logger } from "@cello-protocol/interfaces";
+import type { NotificationQueue, QueuedNotification } from "@cello-protocol/interfaces";
+import { InMemoryNotificationQueue } from "@cello-protocol/interfaces/stubs";
 import { PgNotificationQueue } from "../adapters/pg-notification-queue.js";
-import { generateKeypair } from "@cello/crypto";
+import { generateKeypair } from "@cello-protocol/crypto";
 import { createDirectoryNode } from "../directory-node.js";
 
 // ─── Environment guards ───────────────────────────────────────────────────────

@@ -27,13 +27,13 @@ import type { TestScope } from "@claude-flow/testing";
 import { readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { generateKeypair } from "@cello/crypto";
-import { createNode } from "@cello/transport";
+import { generateKeypair } from "@cello-protocol/crypto";
+import { createNode } from "@cello-protocol/transport";
 import { createMcpServer } from "../index.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Tool, Notification } from "@modelcontextprotocol/sdk/types.js";
-import type { CelloClient, SessionAssignmentEvent } from "@cello/client";
+import type { CelloClient, SessionAssignmentEvent } from "@cello-protocol/client";
 
 setupV3Tests();
 

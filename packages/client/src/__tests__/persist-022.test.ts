@@ -66,9 +66,9 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
-import type { Logger } from "@cello/interfaces";
-import type { CloudStorageProvider } from "@cello/interfaces";
-import { LocalCloudStorageProvider } from "@cello/interfaces/stubs";
+import type { Logger } from "@cello-protocol/interfaces";
+import type { CloudStorageProvider } from "@cello-protocol/interfaces";
+import { LocalCloudStorageProvider } from "@cello-protocol/interfaces/stubs";
 
 import { deriveBackupKey } from "../backup-key-derivation.js";
 import { ClientBackup } from "../client-backup.js";

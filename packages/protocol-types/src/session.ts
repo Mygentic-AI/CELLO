@@ -2,7 +2,7 @@
  * CELLO-SESSION-002/MSG-004/SESSION-003/SESSION-004/SESSION-005 — session.ts
  *
  * SessionAssignment: shared wire type used by directory (sender), client (receiver),
- * and relay (verifier). Lives here so client can import it without touching @cello/directory.
+ * and relay (verifier). Lives here so client can import it without touching @cello-protocol/directory.
  *
  * SESSION-004 additions to SessionAssignment:
  *   signature_type: 'frost' | 'single'

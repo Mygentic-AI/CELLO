@@ -1,5 +1,5 @@
 /**
- * @cello/transport — public API
+ * @cello-protocol/transport — public API
  *
  * Exports the CelloNode factory, interface, protocol constants, and error types.
  */

@@ -38,7 +38,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
-import type { Logger, LogContext } from "@cello/interfaces";
+import type { Logger, LogContext } from "@cello-protocol/interfaces";
 
 // ─── Test helpers ──────────────────────────────────────────────────────────
 

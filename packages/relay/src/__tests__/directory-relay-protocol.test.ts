@@ -33,8 +33,8 @@ import {
 import { createHash, randomBytes } from "node:crypto";
 import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { generateKeypair } from "@cello/crypto";
-import { createNode } from "@cello/transport";
+import { generateKeypair } from "@cello-protocol/crypto";
+import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID, DIRECTORY_RELAY_PROTOCOL_ID } from "../relay-node.js";
 import type { SessionAssignment } from "../relay-types.js";

@@ -11,7 +11,7 @@
  * SI-002: only runnable against CELLO_ENV=local. Exits with code 1 otherwise.
  * AC-005: baseline scenarios inserted after tables are truncated.
  *
- * Run via: pnpm --filter @cello/directory run db:seed
+ * Run via: pnpm --filter @cello-protocol/directory run db:seed
  */
 
 import pg from "pg";

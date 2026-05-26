@@ -8,7 +8,7 @@
  * ordered by MMR position ascending — e.g. '["aabb...","ccdd..."]' with no
  * whitespace and no object keys, UTF-8 encoded.
  *
- * This function MUST live in @cello/crypto so both:
+ * This function MUST live in @cello-protocol/crypto so both:
  *   - the coordinator (which computes the hash to broadcast)
  *   - the non-coordinator (which independently recomputes to verify)
  * import the same serialization. AC-010-canonical-tbs: no inline serialization

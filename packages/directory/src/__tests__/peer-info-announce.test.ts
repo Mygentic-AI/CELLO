@@ -31,8 +31,8 @@ import * as lp from "it-length-prefixed";
 import {
   generateKeypair,
   MockThresholdSigner,
-} from "@cello/crypto";
-import { createNode } from "@cello/transport";
+} from "@cello-protocol/crypto";
+import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import {
   createDirectoryNode,

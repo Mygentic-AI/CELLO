@@ -15,7 +15,7 @@
 
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { StdoutLogger } from "@cello/interfaces/stubs";
+import { StdoutLogger } from "@cello-protocol/interfaces/stubs";
 import { AnalyticsJob } from "../analytics-job.js";
 
 const logger = new StdoutLogger();

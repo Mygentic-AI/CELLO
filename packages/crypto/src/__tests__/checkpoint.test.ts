@@ -3,10 +3,10 @@
  *
  * Specification (stated before each test per SPARC S phase):
  *
- * AC-010-canonical-tbs: buildCheckpointTbs lives in @cello/crypto — both the
+ * AC-010-canonical-tbs: buildCheckpointTbs lives in @cello-protocol/crypto — both the
  *   coordinator (which computes the hash to broadcast the proposal) and each
  *   non-coordinator verifier (which independently recomputes the hash to validate
- *   the proposal) import this function from @cello/crypto. No inline serialization
+ *   the proposal) import this function from @cello-protocol/crypto. No inline serialization
  *   of mmr_peaks exists in packages/directory.
  *
  * Cross-path contract test: coordinator serializes → non-coordinator serializes
@@ -31,9 +31,9 @@ import { buildCheckpointTbs, computeCheckpointHash } from "../checkpoint.js";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 
-// ─── AC-010-canonical-tbs: buildCheckpointTbs lives in @cello/crypto ─────────
+// ─── AC-010-canonical-tbs: buildCheckpointTbs lives in @cello-protocol/crypto ─────────
 
-describe("AC-010-canonical-tbs: buildCheckpointTbs is importable from @cello/crypto", () => {
+describe("AC-010-canonical-tbs: buildCheckpointTbs is importable from @cello-protocol/crypto", () => {
   it("buildCheckpointTbs exists and is a function", () => {
     expect(typeof buildCheckpointTbs).toBe("function");
   });

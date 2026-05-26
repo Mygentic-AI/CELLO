@@ -10,7 +10,7 @@
  * Run with:
  *   docker compose up -d && docker compose run --rm flyway
  *   CELLO_ENV=local DATABASE_URL=postgresql://cello_service:cello_service_dev@localhost:5433/cello_dev \
- *     pnpm --filter @cello/directory run test
+ *     pnpm --filter @cello-protocol/directory run test
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
@@ -23,7 +23,7 @@ import {
   CHAIN_GENESIS,
 } from "../hash-chain.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 // ─── Unit tests: pure hash chain logic ───────────────────────────────────────
 

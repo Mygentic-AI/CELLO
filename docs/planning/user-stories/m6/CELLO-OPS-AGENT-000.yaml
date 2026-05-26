@@ -290,11 +290,11 @@ acceptance_criteria:
     given: "The trustless-cello monorepo"
     when: "OPS-AGENT-000 is merged"
     then: "packages/operations-agent/ exists with: package.json (name:
-      @cello/operations-agent, dependencies on @cello/interfaces),
+      @cello-protocol/operations-agent, dependencies on @cello-protocol/interfaces),
       tsconfig.json (project references to ../interfaces), vitest.config.ts,
       and a src/index.ts stub that exports nothing; the package is registered
       in pnpm-workspace.yaml; pnpm install at the repo root resolves it;
-      pnpm --filter @cello/operations-agent run typecheck exits 0;
+      pnpm --filter @cello-protocol/operations-agent run typecheck exits 0;
       OPS-AGENT-002/003/004 implementors have a ready package to write into"
     test_type: integration
     component_under_test: operations-agent

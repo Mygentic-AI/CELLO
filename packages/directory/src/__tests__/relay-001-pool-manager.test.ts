@@ -44,7 +44,7 @@ import { describe, it, expect, vi } from "vitest";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { RelayPoolManager } from "../relay-pool-manager.js";
 import type { RelayPoolManifest, RelayManifestEntry } from "../relay-pool-manager.js";
-import type { CloudStorageProvider, Logger } from "@cello/interfaces";
+import type { CloudStorageProvider, Logger } from "@cello-protocol/interfaces";
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 

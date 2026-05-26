@@ -20,7 +20,7 @@ import type {
   FrostDkgRound3Response,
   DkgRound1Broadcast,
   DkgRound2Share,
-} from "@cello/protocol-types";
+} from "@cello-protocol/protocol-types";
 
 const ENC = new Encoder({ tagUint8Array: false });
 

@@ -22,10 +22,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { rmSync, mkdirSync, writeFileSync, readdirSync, statSync, readFileSync } from "node:fs";
-import { verify } from "@cello/crypto";
-import type { SigningKeyProvider } from "@cello/interfaces";
-import { SigningKeyProviderError } from "@cello/interfaces";
-import type { Logger } from "@cello/interfaces";
+import { verify } from "@cello-protocol/crypto";
+import type { SigningKeyProvider } from "@cello-protocol/interfaces";
+import { SigningKeyProviderError } from "@cello-protocol/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 import { EncryptedFileSigningKeyProvider } from "../encrypted-file-signing-key-provider.js";
 
@@ -584,7 +584,7 @@ describe("PERSIST-010 AC-007 — no direct private key access outside provider f
    * that @noble/curves/ed25519 (the raw Ed25519 signing primitive) is only imported in
    * files whose name matches *-signing-key-provider*.ts.
    *
-   * Scope: packages/client only. The @cello/crypto package is the legitimate home of
+   * Scope: packages/client only. The @cello-protocol/crypto package is the legitimate home of
    * low-level crypto primitives and may use ed25519 directly. This test enforces that
    * CLIENT application code always goes through the SigningKeyProvider abstraction,
    * never calling ed25519 directly with seed bytes.
@@ -592,7 +592,7 @@ describe("PERSIST-010 AC-007 — no direct private key access outside provider f
    * Test files (__tests__/**) are excluded — the test fixture in this file imports
    * EncryptedFileSigningKeyProvider which itself is the allowed entry point.
    */
-  it("AC-007 — within @cello/client, @noble/curves/ed25519 only imported in *-signing-key-provider* files", () => {
+  it("AC-007 — within @cello-protocol/client, @noble/curves/ed25519 only imported in *-signing-key-provider* files", () => {
     // packages/client/src/ — the application code boundary
     const clientSrcRoot = join(__dirname, "../");
 

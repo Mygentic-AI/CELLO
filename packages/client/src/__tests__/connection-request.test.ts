@@ -47,22 +47,22 @@ import { randomBytes } from "node:crypto";
 import {
   generateKeypair,
   mlDsaKeygen,
-} from "@cello/crypto";
+} from "@cello-protocol/crypto";
 import {
   clearTestShares,
-} from "@cello/crypto/frost/frost-threshold-signer.js";
+} from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
 import {
   encodeConnectionPackage,
   buildPseudonymBinding,
-} from "@cello/protocol-types";
-import type { ConnectionPackage, ConnectionEstablished } from "@cello/protocol-types";
-import { createNode } from "@cello/transport";
+} from "@cello-protocol/protocol-types";
+import type { ConnectionPackage, ConnectionEstablished } from "@cello-protocol/protocol-types";
+import { createNode } from "@cello-protocol/transport";
 import {
   createDirectoryNode,
-} from "@cello/directory";
-import { InMemoryDirectoryStore } from "@cello/interfaces/stubs";
-import type { RelayAdapter, RelaySessionAssignment } from "@cello/directory";
-import { createRelayNode } from "@cello/relay";
+} from "@cello-protocol/directory";
+import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
+import type { RelayAdapter, RelaySessionAssignment } from "@cello-protocol/directory";
+import { createRelayNode } from "@cello-protocol/relay";
 import { createClient } from "../client.js";
 import type { SignalRequirementPolicy } from "../connection-policy.js";
 
@@ -732,7 +732,7 @@ describe("CONNREQ-002-SI-003: forged package_cbor is rejected; no connection rec
     }
 
     // decodeConnectionPackage should fail (throw or return null) or validateConnectionPackage should fail
-    const { decodeConnectionPackage } = await import("@cello/protocol-types");
+    const { decodeConnectionPackage } = await import("@cello-protocol/protocol-types");
     let decoded: ReturnType<typeof decodeConnectionPackage> | null = null;
     try {
       decoded = decodeConnectionPackage(forgedCbor);
@@ -748,8 +748,8 @@ describe("CONNREQ-002-SI-003: forged package_cbor is rejected; no connection rec
     }
 
     // If decode succeeds, signature validation must fail
-    const { verifyPseudonymBinding } = await import("@cello/protocol-types");
-    const { mlDsaVerify } = await import("@cello/crypto");
+    const { verifyPseudonymBinding } = await import("@cello-protocol/protocol-types");
+    const { mlDsaVerify } = await import("@cello-protocol/crypto");
     const sigValid = verifyPseudonymBinding(decoded.pseudonym_binding, mlDsaVerify);
     expect(sigValid).toBe(false);
   });

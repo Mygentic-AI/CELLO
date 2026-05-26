@@ -47,10 +47,10 @@ All nine packages live in one pnpm workspace. Developers can run the full system
 
 ## What the Split Is
 
-The plan is to extract the five client packages into a separate public repository called `cello-client` (`github.com/Mygentic-AI/cello-client`). The client packages publish to npm as `@cello/connect`. An agent operator installs the client with:
+The plan is to extract the five client packages into a separate public repository called `cello-client` (`github.com/Mygentic-AI/cello-client`). The client packages publish to npm as `@cello-protocol/connect`. An agent operator installs the client with:
 
 ```
-claude mcp add cello npx @cello/connect
+claude mcp add cello npx @cello-protocol/connect
 ```
 
 The server packages (`directory`, `relay`, `e2e-tests`) remain in `trustless-cello`, which stays private.
@@ -63,7 +63,7 @@ After the split, `trustless-cello`'s server packages resolve the client packages
 
 The goal for M6 is that a stranger — someone who read about CELLO online — can install the client, register their agent, and start communicating. That requires publishing to npm. The entire client package chain must be publishable.
 
-The client packages cannot remain in `trustless-cello` and be published from there, because `trustless-cello` contains the server code, IaC templates, and deployment infrastructure. Publishing from the monorepo would mean anyone who installed `@cello/connect` could inspect the server implementation, the CloudFormation templates, and the deployment scripts. This would hand attackers a detailed map of the infrastructure and a sandbox to test attacks against.
+The client packages cannot remain in `trustless-cello` and be published from there, because `trustless-cello` contains the server code, IaC templates, and deployment infrastructure. Publishing from the monorepo would mean anyone who installed `@cello-protocol/connect` could inspect the server implementation, the CloudFormation templates, and the deployment scripts. This would hand attackers a detailed map of the infrastructure and a sandbox to test attacks against.
 
 The security rationale for the split is simple: open-source the client (the agent operator's code, which they should be able to audit), keep the server private (the network infrastructure, which attackers should not be able to clone and study).
 
@@ -79,7 +79,7 @@ There are two approaches.
 
 ### Approach A: Split Early
 
-Do the extraction now, at the start of M6, before any new M6 client features are written. All M6 client development happens in `cello-client`. The monorepo's server packages update to consume `@cello/connect` from npm.
+Do the extraction now, at the start of M6, before any new M6 client features are written. All M6 client development happens in `cello-client`. The monorepo's server packages update to consume `@cello-protocol/connect` from npm.
 
 **Arguments for:**
 
@@ -127,7 +127,7 @@ This work is genuinely independent. It proves the CI pipeline works, clears the 
 - Move the 14 clean tests; leave the 12 integration tests in `trustless-cello`
 - Apply the structural changes (package rename, files allowlist, SKILL.md)
 - Verify `tsc --build`, `pnpm test`, and tarball checks all pass
-- Publish `@cello/connect@beta`
+- Publish `@cello-protocol/connect@beta`
 - Update `trustless-cello` to resolve client packages from npm
 
 The dependency graph position of REPOSPLIT-001 in the M6 story sequence does not change. DEMO-001 and M6-E2E-001 still wait on the publish. What changes is the internal execution order within REPOSPLIT-001: scaffolding runs in parallel with OPS-AGENT-000 from day one; extraction runs after the M6 client changes (`cello_register` and the registration flow) are merged.
@@ -145,7 +145,7 @@ The dependency graph position of REPOSPLIT-001 in the M6 story sequence does not
 
 **Do after M6 client development is complete:**
 - Extract the five client packages from `trustless-cello` into `cello-client`
-- Publish `@cello/connect@beta`
+- Publish `@cello-protocol/connect@beta`
 - Update `trustless-cello` to resolve client packages from npm
 
 **Rationale:**

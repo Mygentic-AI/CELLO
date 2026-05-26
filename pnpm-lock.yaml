@@ -38,16 +38,16 @@ importers:
 
   packages/adapter-claude-code:
     dependencies:
-      '@cello/client':
+      '@cello-protocol/client':
         specifier: workspace:*
         version: link:../client
-      '@cello/crypto':
+      '@cello-protocol/crypto':
         specifier: workspace:*
         version: link:../crypto
-      '@cello/interfaces':
+      '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
-      '@cello/transport':
+      '@cello-protocol/transport':
         specifier: workspace:*
         version: link:../transport
       '@libp2p/peer-id':
@@ -60,10 +60,10 @@ importers:
         specifier: ^4.4.2
         version: 4.4.2
     devDependencies:
-      '@cello/directory':
+      '@cello-protocol/directory':
         specifier: workspace:*
         version: link:../directory
-      '@cello/relay':
+      '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
       '@claude-flow/testing':
@@ -81,16 +81,16 @@ importers:
       '@aws-sdk/client-s3':
         specifier: 3.1051.0
         version: 3.1051.0
-      '@cello/crypto':
+      '@cello-protocol/crypto':
         specifier: workspace:*
         version: link:../crypto
-      '@cello/interfaces':
+      '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
-      '@cello/protocol-types':
+      '@cello-protocol/protocol-types':
         specifier: workspace:*
         version: link:../protocol-types
-      '@cello/transport':
+      '@cello-protocol/transport':
         specifier: workspace:*
         version: link:../transport
       '@journeyapps/sqlcipher':
@@ -118,16 +118,16 @@ importers:
         specifier: ^4.4.2
         version: 4.4.2
     devDependencies:
-      '@cello/directory':
+      '@cello-protocol/directory':
         specifier: workspace:*
         version: link:../directory
-      '@cello/e2e-tests':
+      '@cello-protocol/e2e-tests':
         specifier: workspace:*
         version: link:../e2e-tests
-      '@cello/relay':
+      '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
-      '@cello/test-fixtures':
+      '@cello-protocol/test-fixtures':
         specifier: workspace:*
         version: link:../test-fixtures
       '@claude-flow/testing':
@@ -157,16 +157,16 @@ importers:
       '@aws-sdk/client-secrets-manager':
         specifier: 3.1051.0
         version: 3.1051.0
-      '@cello/crypto':
+      '@cello-protocol/crypto':
         specifier: workspace:*
         version: link:../crypto
-      '@cello/interfaces':
+      '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
-      '@cello/protocol-types':
+      '@cello-protocol/protocol-types':
         specifier: workspace:*
         version: link:../protocol-types
-      '@cello/transport':
+      '@cello-protocol/transport':
         specifier: workspace:*
         version: link:../transport
       '@libp2p/interface':
@@ -185,10 +185,10 @@ importers:
         specifier: 8.18.0
         version: 8.18.0
     devDependencies:
-      '@cello/client':
+      '@cello-protocol/client':
         specifier: workspace:*
         version: link:../client
-      '@cello/relay':
+      '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
       '@claude-flow/testing':
@@ -209,28 +209,28 @@ importers:
 
   packages/e2e-tests:
     dependencies:
-      '@cello/adapter-claude-code':
+      '@cello-protocol/adapter-claude-code':
         specifier: workspace:*
         version: link:../adapter-claude-code
-      '@cello/client':
+      '@cello-protocol/client':
         specifier: workspace:*
         version: link:../client
-      '@cello/crypto':
+      '@cello-protocol/crypto':
         specifier: workspace:*
         version: link:../crypto
-      '@cello/directory':
+      '@cello-protocol/directory':
         specifier: workspace:*
         version: link:../directory
-      '@cello/interfaces':
+      '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
-      '@cello/protocol-types':
+      '@cello-protocol/protocol-types':
         specifier: workspace:*
         version: link:../protocol-types
-      '@cello/relay':
+      '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
-      '@cello/transport':
+      '@cello-protocol/transport':
         specifier: workspace:*
         version: link:../transport
       '@claude-flow/testing':
@@ -248,7 +248,7 @@ importers:
 
   packages/interfaces:
     dependencies:
-      '@cello/protocol-types':
+      '@cello-protocol/protocol-types':
         specifier: workspace:*
         version: link:../protocol-types
     devDependencies:
@@ -258,7 +258,7 @@ importers:
 
   packages/operations-agent:
     dependencies:
-      '@cello/interfaces':
+      '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
     devDependencies:
@@ -268,14 +268,14 @@ importers:
 
   packages/protocol-types:
     dependencies:
-      '@cello/crypto':
+      '@cello-protocol/crypto':
         specifier: workspace:*
         version: link:../crypto
       cbor-x:
         specifier: ^1.6.4
         version: 1.6.4
     devDependencies:
-      '@cello/test-fixtures':
+      '@cello-protocol/test-fixtures':
         specifier: workspace:*
         version: link:../test-fixtures
       '@claude-flow/testing':
@@ -287,16 +287,16 @@ importers:
 
   packages/relay:
     dependencies:
-      '@cello/crypto':
+      '@cello-protocol/crypto':
         specifier: workspace:*
         version: link:../crypto
-      '@cello/interfaces':
+      '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
-      '@cello/protocol-types':
+      '@cello-protocol/protocol-types':
         specifier: workspace:*
         version: link:../protocol-types
-      '@cello/transport':
+      '@cello-protocol/transport':
         specifier: workspace:*
         version: link:../transport
       '@chainsafe/libp2p-noise':
@@ -342,7 +342,7 @@ importers:
 
   packages/test-fixtures:
     dependencies:
-      '@cello/protocol-types':
+      '@cello-protocol/protocol-types':
         specifier: workspace:*
         version: link:../protocol-types
     devDependencies:
@@ -355,7 +355,7 @@ importers:
 
   packages/transport:
     dependencies:
-      '@cello/crypto':
+      '@cello-protocol/crypto':
         specifier: workspace:*
         version: link:../crypto
       '@chainsafe/libp2p-noise':

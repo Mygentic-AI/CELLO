@@ -9,7 +9,7 @@
  *   - conversation_seal_staging    — staging (mutable; cleared per checkpoint)
  *
  * Used only from the composition root (bin/directory.ts) and tests. Not exported
- * from @cello/directory's public index.
+ * from @cello-protocol/directory's public index.
  *
  * Observability events emitted:
  *   mmr.leaf.appended        — INFO   { sessionId, leafIndex, leafHash, correlationId }
@@ -22,7 +22,7 @@
 
 import pg from "pg";
 import { randomUUID, createHash } from "node:crypto";
-import type { Logger, CheckpointStatusProvider, SealStagingStatus } from "@cello/interfaces";
+import type { Logger, CheckpointStatusProvider, SealStagingStatus } from "@cello-protocol/interfaces";
 import {
   appendLeafToMmr,
   computeInclusionProof,
@@ -38,8 +38,8 @@ import {
   type ChainVerificationResult,
 } from "./hash-chain.js";
 
-// Re-export SealStagingStatus so that callers within @cello/directory (e.g. tests)
-// can import it from the canonical location without a second import of @cello/interfaces.
+// Re-export SealStagingStatus so that callers within @cello-protocol/directory (e.g. tests)
+// can import it from the canonical location without a second import of @cello-protocol/interfaces.
 export type { SealStagingStatus };
 
 /**

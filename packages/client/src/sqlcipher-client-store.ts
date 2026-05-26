@@ -19,7 +19,7 @@ import { createRequire } from "node:module";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ClientStore, Logger } from "@cello/interfaces";
+import type { ClientStore, Logger } from "@cello-protocol/interfaces";
 
 // ─── Type shim for @journeyapps/sqlcipher ───────────────────────────────────
 

@@ -19,10 +19,10 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { Logger, DirectoryStore } from "@cello/interfaces";
+import type { Logger, DirectoryStore } from "@cello-protocol/interfaces";
 // buildCheckpointTbs: static import — both coordinator and verifier use the same function (AC-010-canonical-tbs)
-import { computeCheckpointHash, buildCheckpointTbs, verify, type KeyProvider } from "@cello/crypto";
-import type { ICheckpointTransport, CheckpointSignatureResponse } from "@cello/interfaces";
+import { computeCheckpointHash, buildCheckpointTbs, verify, type KeyProvider } from "@cello-protocol/crypto";
+import type { ICheckpointTransport, CheckpointSignatureResponse } from "@cello-protocol/interfaces";
 import type { MmrStore } from "./mmr-store.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -41,7 +41,7 @@ export interface SealBatchRow {
 }
 
 // Re-export from interfaces so callers can import from either location.
-export type { ICheckpointTransport, CheckpointSignatureResponse, CheckpointProposal } from "@cello/interfaces";
+export type { ICheckpointTransport, CheckpointSignatureResponse, CheckpointProposal } from "@cello-protocol/interfaces";
 
 /**
  * Configuration for CheckpointCoordinator.
@@ -108,7 +108,7 @@ export function sortSealBatch(batch: readonly SealBatchRow[]): SealBatchRow[] {
  *   4. Sort the batch deterministically: sortSealBatch(batch) — recorded_at ASC, conversation_id ASC (SI-003).
  *   5. Compute MMR peaks from the sorted batch using the existing MmrStore state.
  *   6. Compute checkpoint_hash: computeCheckpointHash(mmrPeaks, identityMerkleRoot, checkpointId)
- *      where computeCheckpointHash is imported from @cello/crypto (AC-010-canonical-tbs).
+ *      where computeCheckpointHash is imported from @cello-protocol/crypto (AC-010-canonical-tbs).
  *   7. Broadcast the proposal to all peer nodes via ICheckpointTransport.
  *   8. Collect signatures within roundTimeoutMs (30 seconds).
  *   9. If < requiredThreshold (2) valid signatures: log federation.checkpoint.skipped at WARN.
@@ -314,7 +314,7 @@ export class CheckpointCoordinator {
 
     // Step 4: Sign the checkpoint hash bytes (raw 32-byte Uint8Array, not hex string).
     // RFC 8032: Ed25519 signs the raw message bytes.
-    // buildCheckpointTbs: static import from @cello/crypto (AC-010-canonical-tbs).
+    // buildCheckpointTbs: static import from @cello-protocol/crypto (AC-010-canonical-tbs).
     const hashBytes = buildCheckpointTbs(
       localState.mmrPeaks,
       localState.identityMerkleRoot,
@@ -403,7 +403,7 @@ export class CheckpointCoordinator {
     const seenNodeIds = new Set<string>();
 
     // Coordinator signs its own proposal first (RFC 8032)
-    // buildCheckpointTbs is the static import from @cello/crypto (AC-010-canonical-tbs)
+    // buildCheckpointTbs is the static import from @cello-protocol/crypto (AC-010-canonical-tbs)
     const hashBytes = buildCheckpointTbs(mmrPeaks, identityMerkleRoot, checkpointId);
     const coordinatorSig = await this.#keyProvider.sign(hashBytes);
     const coordinatorSigHex = Buffer.from(coordinatorSig).toString("hex");

@@ -102,16 +102,16 @@
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash } from "@cello/crypto";
+import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash } from "@cello-protocol/crypto";
 
-import type { KeyProvider, LeafInput, IThresholdSigner } from "@cello/crypto";
-import { encodeStructure2, computeGenesisPrevRoot, buildSessionEstablishmentTbs, buildSealTbs } from "@cello/protocol-types";
-import type { AgentProfile } from "@cello/protocol-types";
-import { createNode } from "@cello/transport";
-import type { CelloNode } from "@cello/transport";
+import type { KeyProvider, LeafInput, IThresholdSigner } from "@cello-protocol/crypto";
+import { encodeStructure2, computeGenesisPrevRoot, buildSessionEstablishmentTbs, buildSealTbs } from "@cello-protocol/protocol-types";
+import type { AgentProfile } from "@cello-protocol/protocol-types";
+import { createNode } from "@cello-protocol/transport";
+import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
-import type { SessionAbandoned, SessionSealed, SessionSealRejected, SealVerified } from "@cello/protocol-types";
-import type { SealNotarization, Logger, NotificationQueue, ICheckpointTransport, CheckpointProposal } from "@cello/interfaces";
+import type { SessionAbandoned, SessionSealed, SessionSealRejected, SealVerified } from "@cello-protocol/protocol-types";
+import type { SealNotarization, Logger, NotificationQueue, ICheckpointTransport, CheckpointProposal } from "@cello-protocol/interfaces";
 import type {
   SessionAssignment,
   SessionAssignmentFrame,
@@ -122,8 +122,8 @@ import type {
   SessionFrostSealed,
 } from "./directory-types.js";
 import { WALL_CLOCK } from "./directory-types.js";
-import type { DirectoryStore } from "@cello/interfaces";
-import { InMemoryDirectoryStore } from "@cello/interfaces/stubs";
+import type { DirectoryStore } from "@cello-protocol/interfaces";
+import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
 import {
   encodeSignalingAuthChallenge,
   encodeSignalingAuthFailed,
@@ -187,7 +187,7 @@ interface NonceEntry {
 
 /**
  * The directory calls these relay methods — either in-process or over the network.
- * Uses structural typing so the directory package need not import @cello/relay directly.
+ * Uses structural typing so the directory package need not import @cello-protocol/relay directly.
  *
  * CELLO-NODE-004: Methods are now async to support both in-process and network implementations.
  * In-process implementations may return sync values; callers use await to handle both cases.
@@ -786,7 +786,7 @@ export class CelloDirectoryNode {
           if (result.ok) {
             // Map frost-handler DkgRound2Share (identifier/targetIdentifier)
             // → protocol-types DkgRound2Share (signerIdentifier/targetIdentifier)
-            const sharesForOthers: import("@cello/protocol-types").DkgRound2Share[] = result.sharesForOthers.map((s) => ({
+            const sharesForOthers: import("@cello-protocol/protocol-types").DkgRound2Share[] = result.sharesForOthers.map((s) => ({
               signerIdentifier: s.identifier,
               targetIdentifier: s.targetIdentifier,
               signingShare: s.signingShare,
@@ -1245,7 +1245,7 @@ export class CelloDirectoryNode {
     return this.#store.hasProfile(kLocalPubkeyHex);
   }
 
-  getProfile(kLocalPubkeyHex: string): import("@cello/protocol-types").AgentProfile | undefined {
+  getProfile(kLocalPubkeyHex: string): import("@cello-protocol/protocol-types").AgentProfile | undefined {
     return this.#store.getProfile(kLocalPubkeyHex);
   }
 
@@ -1276,7 +1276,7 @@ export class CelloDirectoryNode {
   async #processRegisterRequest(
     stream: Stream,
     authedPubkeyHex: string,
-    frame: import("@cello/protocol-types").RegisterRequest,
+    frame: import("@cello-protocol/protocol-types").RegisterRequest,
   ): Promise<void> {
     // SI-004: auth gate — authedPubkeyHex is already verified above (only reached after auth)
 
@@ -1419,7 +1419,7 @@ export class CelloDirectoryNode {
   async #processConnectionRequest(
     stream: Stream,
     senderHex: string,
-    frame: import("@cello/protocol-types").ConnectionRequest,
+    frame: import("@cello-protocol/protocol-types").ConnectionRequest,
   ): Promise<void> {
     const targetHex = frame.target_pubkey;
 
@@ -1467,7 +1467,7 @@ export class CelloDirectoryNode {
       ? this.#packageCborInterceptor(frame.package_cbor)
       : frame.package_cbor;
 
-    const inboundFrame: import("@cello/protocol-types").ConnectionRequestInbound = {
+    const inboundFrame: import("@cello-protocol/protocol-types").ConnectionRequestInbound = {
       type: "connection_request_inbound",
       from_pubkey: senderHex,
       connection_request_id: connectionRequestId,
@@ -1529,7 +1529,7 @@ export class CelloDirectoryNode {
   async #processConnectionResponse(
     _stream: Stream,
     responderHex: string,
-    frame: import("@cello/protocol-types").ConnectionResponse,
+    frame: import("@cello-protocol/protocol-types").ConnectionResponse,
   ): Promise<void> {
     const pending = this.#pendingConnectionRequests.get(frame.connection_request_id);
     if (!pending) return;
@@ -1558,12 +1558,12 @@ export class CelloDirectoryNode {
       protocolLog("CONN", `Connection ${truncHex(connectionId)} established: ${truncHex(pending.senderHex)} ↔ ${truncHex(pending.targetHex)}`);
 
       // Notify both clients
-      const toSender: import("@cello/protocol-types").ConnectionEstablished = {
+      const toSender: import("@cello-protocol/protocol-types").ConnectionEstablished = {
         type: "connection_established",
         counterparty_pubkey: pending.targetHex,
         connection_id: connectionId,
       };
-      const toTarget: import("@cello/protocol-types").ConnectionEstablished = {
+      const toTarget: import("@cello-protocol/protocol-types").ConnectionEstablished = {
         type: "connection_established",
         counterparty_pubkey: pending.senderHex,
         connection_id: connectionId,
@@ -1612,7 +1612,7 @@ export class CelloDirectoryNode {
   async #processDisclosureRequest(
     _stream: Stream,
     requesterHex: string,
-    frame: import("@cello/protocol-types").DisclosureRequest,
+    frame: import("@cello-protocol/protocol-types").DisclosureRequest,
   ): Promise<void> {
     const pending = this.#pendingConnectionRequests.get(frame.connection_request_id);
     if (!pending) return;
@@ -1644,7 +1644,7 @@ export class CelloDirectoryNode {
   async #processDisclosureResponse(
     _stream: Stream,
     senderHex: string,
-    frame: import("@cello/protocol-types").DisclosureResponse,
+    frame: import("@cello-protocol/protocol-types").DisclosureResponse,
   ): Promise<void> {
     const pending = this.#pendingConnectionRequests.get(frame.connection_request_id);
     if (!pending) return;
@@ -2539,7 +2539,7 @@ function decodeStructure1Fields(cbor: Uint8Array): Structure1Fields | null {
 }
 
 function verifySealLeaves(
-  leaves: Array<{ kind: "msg" | "ctrl"; s2: import("@cello/protocol-types").Structure2; structure1_cbor: Uint8Array }>  // RelaySealLeaf
+  leaves: Array<{ kind: "msg" | "ctrl"; s2: import("@cello-protocol/protocol-types").Structure2; structure1_cbor: Uint8Array }>  // RelaySealLeaf
 ): { ok: true } | { ok: false } {
   // Final two leaves must be ctrl-kind (0x02) from distinct participants.
   if (leaves.length < 2) return { ok: false };
@@ -2564,7 +2564,7 @@ function verifySealLeaves(
 // The client runs participateInCeremony locally (it holds the coordinator share)
 // and returns the combined FROST signature.
 
-import type { ThresholdSignature, FrostContext } from "@cello/crypto/frost/types.js";
+import type { ThresholdSignature, FrostContext } from "@cello-protocol/crypto/frost/types.js";
 
 class ClientDelegatedSigner implements IThresholdSigner {
   readonly #agentPubkeyHex: string;

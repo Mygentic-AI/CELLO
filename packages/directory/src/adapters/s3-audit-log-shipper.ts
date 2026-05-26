@@ -108,7 +108,7 @@
 
 import { randomUUID } from "node:crypto";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import type { AuditLogShipper, AuditLogEntry, Logger } from "@cello/interfaces";
+import type { AuditLogShipper, AuditLogEntry, Logger } from "@cello-protocol/interfaces";
 
 /** Maximum number of entries to hold in the in-memory buffer (AC-005) */
 const MAX_BUFFER = 10_000;

@@ -34,23 +34,23 @@ import { Encoder } from "cbor-x";
 import {
   generateKeypair,
   FrostThresholdSigner,
-} from "@cello/crypto";
+} from "@cello-protocol/crypto";
 import {
   bootstrapKeyShares,
   clearTestShares,
-} from "@cello/crypto/frost/frost-threshold-signer.js";
-import { createInProcessStubs } from "@cello/crypto/frost/stubs.js";
+} from "@cello-protocol/crypto/frost/frost-threshold-signer.js";
+import { createInProcessStubs } from "@cello-protocol/crypto/frost/stubs.js";
 import {
   CONTEXT_SESSION_ESTABLISHMENT,
   CONTEXT_SEAL,
-} from "@cello/crypto/frost/types.js";
+} from "@cello-protocol/crypto/frost/types.js";
 import {
   computeGenesisPrevRoot,
   buildSessionEstablishmentTbs,
-} from "@cello/protocol-types";
-import type { SessionAssignmentFrost, SessionAssignmentSingle } from "@cello/protocol-types";
-import { createNode } from "@cello/transport";
-import { createRelayNode } from "@cello/relay";
+} from "@cello-protocol/protocol-types";
+import type { SessionAssignmentFrost, SessionAssignmentSingle } from "@cello-protocol/protocol-types";
+import { createNode } from "@cello-protocol/transport";
+import { createRelayNode } from "@cello-protocol/relay";
 import { createClient } from "../client.js";
 import type { CelloClient } from "../types.js";
 

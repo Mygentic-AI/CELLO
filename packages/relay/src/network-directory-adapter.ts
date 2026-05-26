@@ -13,9 +13,9 @@
 
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import type { KeyProvider } from "@cello/crypto";
-import { buildRelayRegistrationTbs } from "@cello/crypto";
-import type { CelloNode } from "@cello/transport";
+import type { KeyProvider } from "@cello-protocol/crypto";
+import { buildRelayRegistrationTbs } from "@cello-protocol/crypto";
+import type { CelloNode } from "@cello-protocol/transport";
 import type { DirectoryAdapter } from "./relay-node.js";
 import type { SealData } from "./relay-types.js";
 

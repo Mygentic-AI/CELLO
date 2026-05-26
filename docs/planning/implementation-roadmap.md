@@ -147,7 +147,7 @@ Fully specified stories live in `docs/planning/user-stories/m0/`. The table belo
 | CELLO-MSG-001 | Signed envelope v0 schema (no session, no sequence) | Message Exchange | CLIENT | P0 | protocol-types | CRYPTO-001, CRYPTO-002 |
 | CELLO-TRANSPORT-001 | libp2p node bootstrap, Peer IDs, dial, custom stream protocol; cross-machine AC | Transport | CLIENT | P0 | transport | SCAFFOLD-001 |
 | CELLO-MSG-002 | Peer-to-peer signed message exchange over libp2p streams | Message Exchange | CLIENT | P0 | client | MSG-001, TRANSPORT-001 |
-| CELLO-MCP-001 | M0 MCP tool logic in @cello/client (connect peer, send, receive, status) | MCP Tool Surface | AGENT | P0 | client | MSG-002 |
+| CELLO-MCP-001 | M0 MCP tool logic in @cello-protocol/client (connect peer, send, receive, status) | MCP Tool Surface | AGENT | P0 | client | MSG-002 |
 | CELLO-ADAPTER-001 | Claude Code adapter: stdio MCP server, claude/channel notifications, FileKeyProvider startup, SKILL.md | MCP Tool Surface | AGENT | P0 | adapter-claude-code | MCP-001, CRYPTO-001 |
 | CELLO-E2E-001 | M0 milestone sign-off: two real Claude Code agents on two machines exchange a signed message end-to-end | End-to-End | AGENT | P0 | adapter-claude-code, client, transport, crypto | ADAPTER-001, TRANSPORT-001 AC-011 |
 
@@ -237,7 +237,7 @@ Items that are part of the canonical protocol design but are deliberately not bu
 
 ## Monorepo Structure
 
-The repo is a pnpm-workspace monorepo designed for eventual extraction: the client-side packages (`client`, `crypto`, `transport`, `protocol-types`, `adapter-*`) will move to a separate `cello-agent` repo at production readiness. The monorepo exists because cross-package integration testing (real libp2p nodes, real crypto, in-process directory/relay) is dramatically simpler when all packages share a single Vitest workspace and a single `pnpm install`. When the client extracts, shared packages publish as `@cello/*` on npm — import paths don't change for any consumer.
+The repo is a pnpm-workspace monorepo designed for eventual extraction: the client-side packages (`client`, `crypto`, `transport`, `protocol-types`, `adapter-*`) will move to a separate `cello-agent` repo at production readiness. The monorepo exists because cross-package integration testing (real libp2p nodes, real crypto, in-process directory/relay) is dramatically simpler when all packages share a single Vitest workspace and a single `pnpm install`. When the client extracts, shared packages publish as `@cello-protocol/*` on npm — import paths don't change for any consumer.
 
 ### Root
 
@@ -262,7 +262,7 @@ trustless-cello/
 
 ```
 packages/
-├── crypto/                         # @cello/crypto — Ed25519, SHA-256, FROST (M2+)
+├── crypto/                         # @cello-protocol/crypto — Ed25519, SHA-256, FROST (M2+)
 │   ├── package.json
 │   ├── tsconfig.json               # refs: (none — true leaf, pure primitives)
 │   ├── buildspec.yml
@@ -272,7 +272,7 @@ packages/
 │       │   └── fixtures/           # RFC 8032 test vectors, domain-sep hash vectors
 │       └── frost/                  # M2+ — IThresholdSigner, FrostThresholdSigner
 │
-├── protocol-types/                 # @cello/protocol-types — wire types, TBS schemas, envelope defs
+├── protocol-types/                 # @cello-protocol/protocol-types — wire types, TBS schemas, envelope defs
 │   ├── package.json
 │   ├── tsconfig.json               # refs: crypto (envelope construction needs hash + sign)
 │   ├── buildspec.yml
@@ -281,7 +281,7 @@ packages/
 │       └── __tests__/
 │           └── fixtures/           # TBS byte vectors, canonical CBOR test cases
 │
-├── transport/                      # @cello/transport — libp2p bootstrap, dial, stream handling
+├── transport/                      # @cello-protocol/transport — libp2p bootstrap, dial, stream handling
 │   ├── package.json
 │   ├── tsconfig.json               # refs: crypto (for KeyProvider type)
 │   ├── buildspec.yml
@@ -290,7 +290,7 @@ packages/
 │       ├── protocols.ts            # protocol ID constants (/cello/m0/1.0.0, etc.)
 │       └── __tests__/
 │
-├── client/                         # @cello/client — CelloClient, MCP tool logic (no server)
+├── client/                         # @cello-protocol/client — CelloClient, MCP tool logic (no server)
 │   ├── package.json
 │   ├── tsconfig.json               # refs: transport, protocol-types, crypto
 │   ├── buildspec.yml
@@ -299,7 +299,7 @@ packages/
 │       ├── mcp/                    # tool handlers (connect, send, receive, session, seal)
 │       └── __tests__/
 │
-├── adapter-claude-code/            # @cello/adapter-claude-code — MCP server + notifications
+├── adapter-claude-code/            # @cello-protocol/adapter-claude-code — MCP server + notifications
 │   ├── package.json
 │   ├── tsconfig.json               # refs: client
 │   ├── buildspec.yml
@@ -308,7 +308,7 @@ packages/
 │       ├── index.ts                # stdio entrypoint
 │       └── __tests__/
 │
-├── directory/                      # @cello/directory — directory node logic (M1+)
+├── directory/                      # @cello-protocol/directory — directory node logic (M1+)
 │   ├── package.json
 │   ├── tsconfig.json               # refs: transport, crypto, protocol-types
 │   ├── buildspec.yml
@@ -317,7 +317,7 @@ packages/
 │       ├── store.ts                # DirectoryStore interface + InMemoryDirectoryStore
 │       └── __tests__/
 │
-├── relay/                          # @cello/relay — relay node logic (M1+)
+├── relay/                          # @cello-protocol/relay — relay node logic (M1+)
 │   ├── package.json
 │   ├── tsconfig.json               # refs: transport, crypto, protocol-types
 │   ├── buildspec.yml
@@ -361,9 +361,9 @@ Violations are compile errors — not lint warnings, not convention. An import f
 
 ### Per-Package Conventions
 
-- **`package.json`:** `name: @cello/<name>`, `engines: { "node": ">=24" }`, scripts: `typecheck`, `test`
+- **`package.json`:** `name: @cello-protocol/<name>`, `engines: { "node": ">=24" }`, scripts: `typecheck`, `test`
 - **`tsconfig.json`:** extends `../../tsconfig.base.json`, `composite: true`, declares only direct deps in `references`
-- **`buildspec.yml`:** CodeBuild spec — `nodejs: 24`, `pnpm install --frozen-lockfile`, `pnpm --filter @cello/<name> run typecheck && test`
+- **`buildspec.yml`:** CodeBuild spec — `nodejs: 24`, `pnpm install --frozen-lockfile`, `pnpm --filter @cello-protocol/<name> run typecheck && test`
 - **Tests:** co-located at `src/__tests__/*.test.ts`. Fixtures in `src/__tests__/fixtures/`
 - **No barrel re-exports beyond `index.ts`** — each package has one public entry point
 
@@ -373,7 +373,7 @@ Root devDependencies:
 - `vitest` — test runner
 - `@claude-flow/testing` — `setupV3Tests()`, `createTestScope()`, `waitFor()`, `retry()`, `withTimeout()`, `measureTime()`, performance assertions, custom matchers
 
-The Vitest workspace config at root enumerates all packages. Each package's tests run in `environment: 'node'`. The `e2e-tests` package has a longer `testTimeout` (30s). Cross-machine tests are excluded from the workspace and run via `pnpm --filter @cello/e2e-tests run test:cross-machine`.
+The Vitest workspace config at root enumerates all packages. Each package's tests run in `environment: 'node'`. The `e2e-tests` package has a longer `testTimeout` (30s). Cross-machine tests are excluded from the workspace and run via `pnpm --filter @cello-protocol/e2e-tests run test:cross-machine`.
 
 ### What Changes Per Milestone
 
@@ -402,7 +402,7 @@ At production readiness, the client-side packages move to the existing `cello-ag
 - `packages/e2e-tests`
 - `docs/planning/` (protocol design vault)
 
-After extraction, the shared packages publish as `@cello/*` on npm. The infrastructure repo depends on the published packages for its e2e test harness. Import paths are unchanged — the monorepo boundary was always the npm scope boundary.
+After extraction, the shared packages publish as `@cello-protocol/*` on npm. The infrastructure repo depends on the published packages for its e2e test harness. Import paths are unchanged — the monorepo boundary was always the npm scope boundary.
 
 ---
 

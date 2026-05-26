@@ -33,7 +33,7 @@ import {
   waitFor,
 } from "@claude-flow/testing";
 import type { TestScope } from "@claude-flow/testing";
-import { generateKeypair } from "@cello/crypto";
+import { generateKeypair } from "@cello-protocol/crypto";
 import { createSessionFixture } from "../session-fixture.js";
 import type { SessionFixtureResult } from "../session-fixture.js";
 
@@ -192,7 +192,7 @@ describe("M-002 (AC-003): error path leaves clean state; second call can succeed
 describe("M-003 (SI-001): session_request wire-frame field isolation — documented limitation", () => {
   it("M-003: SI-001 wire interception not available in integration; verified at unit layer", () => {
     // SI-001 states: the session_request frame shall contain only { target_pubkey }.
-    // Wire-frame interception is not supported in the @cello/testing harness.
+    // Wire-frame interception is not supported in the @cello-protocol/testing harness.
     // Coverage: unit tests in packages/adapter-claude-code/src/__tests__/adapter-003.test.ts
     // verify the CBOR-encoded frame has exactly { type, target_pubkey } and no extra fields.
     expect(true).toBe(true);

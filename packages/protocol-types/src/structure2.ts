@@ -17,7 +17,7 @@
  */
 
 import { Encoder } from "cbor-x";
-import { verify } from "@cello/crypto";
+import { verify } from "@cello-protocol/crypto";
 import type { EnvelopeError } from "./types.js";
 
 const CBOR_ENC = new Encoder({ tagUint8Array: false });

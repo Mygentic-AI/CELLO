@@ -12,8 +12,8 @@
 
 import { describe, it, expect } from "vitest";
 import { randomBytes } from "node:crypto";
-import { buildMerkleTree, merkleRoot } from "@cello/crypto";
-import type { LeafInput } from "@cello/crypto";
+import { buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
+import type { LeafInput } from "@cello-protocol/crypto";
 
 // ─── E2E tests (test.todo — require multi-process infrastructure) ────────────
 

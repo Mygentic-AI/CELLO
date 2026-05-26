@@ -32,10 +32,10 @@ import {
   generateKeypair,
   buildMerkleTree,
   merkleRoot,
-} from "@cello/crypto";
-import type { LeafInput } from "@cello/crypto";
-import { encodeStructure2 } from "@cello/protocol-types";
-import { createNode } from "@cello/transport";
+} from "@cello-protocol/crypto";
+import type { LeafInput } from "@cello-protocol/crypto";
+import { encodeStructure2 } from "@cello-protocol/protocol-types";
+import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
 import type { SessionAssignment } from "../relay-types.js";
@@ -959,7 +959,7 @@ describe("relay-SI-NEW: recordAssignment rejects invalid directory signature", (
 });
 
 // ─── SESSION-002 AC-002 (relay side) ─────────────────────────────────────────
-// relay computes genesis prev_root byte-identical to computeGenesisPrevRoot from @cello/protocol-types
+// relay computes genesis prev_root byte-identical to computeGenesisPrevRoot from @cello-protocol/protocol-types
 
 describe("SESSION-002 AC-002: relay genesis prev_root matches computeGenesisPrevRoot from protocol-types", () => {
   it("Structure 2 prev_root for seq=1 equals computeGenesisPrevRoot(A, B, session_id, ts)", async () => {

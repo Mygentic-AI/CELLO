@@ -8,12 +8,12 @@ phases:
       - pnpm install --frozen-lockfile
   build:
     commands:
-      - pnpm --filter @cello/crypto run typecheck
-      - pnpm --filter @cello/interfaces run typecheck
-      - pnpm --filter @cello/protocol-types run typecheck
-      - pnpm --filter @cello/transport run typecheck
-      - pnpm --filter @cello/relay run typecheck
-      - pnpm --filter @cello/client run typecheck
-      - pnpm --filter @cello/directory run typecheck
-      - pnpm --filter @cello/e2e-tests run typecheck
-      - pnpm --filter @cello/client run test
+      - pnpm --filter @cello-protocol/crypto run typecheck
+      - pnpm --filter @cello-protocol/interfaces run typecheck
+      - pnpm --filter @cello-protocol/protocol-types run typecheck
+      - pnpm --filter @cello-protocol/transport run typecheck
+      - pnpm --filter @cello-protocol/relay run typecheck
+      - pnpm --filter @cello-protocol/client run typecheck
+      - pnpm --filter @cello-protocol/directory run typecheck
+      - pnpm --filter @cello-protocol/e2e-tests run typecheck
+      - pnpm --filter @cello-protocol/client run test

@@ -2,7 +2,7 @@
  * CELLO-TRANSPORT-001: node.test.ts
  *
  * Tests derived 1:1 from story ACs and SIs.
- * Run: pnpm --filter @cello/transport run test
+ * Run: pnpm --filter @cello-protocol/transport run test
  *
  * Phase R TDD rule: ALL these tests must be written before implementation exists
  * (or confirmed to fail). Implementation is in src/node.ts.
@@ -28,7 +28,7 @@ import {
 } from "@claude-flow/testing";
 import { randomBytes } from "node:crypto";
 import * as lp from "it-length-prefixed";
-import { generateKeypair } from "@cello/crypto";
+import { generateKeypair } from "@cello-protocol/crypto";
 import { peerIdFromPublicKey } from "@libp2p/peer-id";
 import { publicKeyFromRaw } from "@libp2p/crypto/keys";
 import { createNode } from "../node.js";
@@ -36,7 +36,7 @@ import {
   CELLO_PROTOCOL_ID,
   CIRCUIT_RELAY_V2_HOP_PROTOCOL_ID,
 } from "../protocols.js";
-import type { KeyProvider } from "@cello/crypto";
+import type { KeyProvider } from "@cello-protocol/crypto";
 import type { Stream } from "@libp2p/interface";
 
 setupV3Tests();

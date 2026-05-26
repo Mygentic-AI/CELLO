@@ -60,7 +60,7 @@
  */
 
 import pg from "pg";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 import { configurePgTypes } from "./pg-type-config.js";
 
 // ─── Graph data structures for in-memory analysis ────────────────────────────

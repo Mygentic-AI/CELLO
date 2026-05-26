@@ -77,7 +77,7 @@ import pg from "pg";
 import { randomBytes } from "node:crypto";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { computeChainHash, serializeRecord, CHAIN_GENESIS } from "../hash-chain.js";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 // ─── Test environment setup ───────────────────────────────────────────────────
 

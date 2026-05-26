@@ -24,8 +24,8 @@ import type {
   Logger,
   AccountRow,
   CreateAccountParams,
-} from "@cello/interfaces";
-import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello/protocol-types";
+} from "@cello-protocol/interfaces";
+import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
 import {
   computeChainHash,
   serializeRecord,

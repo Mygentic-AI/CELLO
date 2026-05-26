@@ -55,10 +55,10 @@ import {
 } from "../adapters/pg-directory-store.js";
 import { configurePgTypes } from "../pg-type-config.js";
 import { verifyChain, HASH_CHAINED_TABLES } from "../hash-chain.js";
-import type { Logger } from "@cello/interfaces";
-import { InMemoryDirectoryStore } from "@cello/interfaces/stubs";
-import { generateKeypair, buildRelayRegistrationTbs } from "@cello/crypto";
-import { createNode } from "@cello/transport";
+import type { Logger } from "@cello-protocol/interfaces";
+import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
+import { generateKeypair, buildRelayRegistrationTbs } from "@cello-protocol/crypto";
+import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import {
   createDirectoryNode,
@@ -583,8 +583,8 @@ describeIntegration("FEDERATION-003 integration: SI-003 registration signature v
    * the relay-registration module, which is used by the endpoint handler.
    */
   it("SI-003: verifyRelayRegistrationSignature accepts valid self-signature", async () => {
-    const { generateKeypair } = await import("@cello/crypto");
-    const { verifyRelayRegistrationSignature, buildRelayRegistrationTbs } = await import("@cello/crypto");
+    const { generateKeypair } = await import("@cello-protocol/crypto");
+    const { verifyRelayRegistrationSignature, buildRelayRegistrationTbs } = await import("@cello-protocol/crypto");
 
     const kp = generateKeypair();
     const pubKey = await kp.getPublicKey();
@@ -600,8 +600,8 @@ describeIntegration("FEDERATION-003 integration: SI-003 registration signature v
   });
 
   it("SI-003: verifyRelayRegistrationSignature rejects signature from different key", async () => {
-    const { generateKeypair } = await import("@cello/crypto");
-    const { verifyRelayRegistrationSignature, buildRelayRegistrationTbs } = await import("@cello/crypto");
+    const { generateKeypair } = await import("@cello-protocol/crypto");
+    const { verifyRelayRegistrationSignature, buildRelayRegistrationTbs } = await import("@cello-protocol/crypto");
 
     const kp = generateKeypair();
     const attackerKp = generateKeypair();

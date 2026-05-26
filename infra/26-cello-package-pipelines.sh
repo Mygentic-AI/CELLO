@@ -2,7 +2,7 @@
 # =============================================================================
 # INFRA-001: CELLO package CI pipelines (ACs 001–005)
 #
-# Creates 8 CodeBuild + CodePipeline pairs — one per @cello/* package.
+# Creates 8 CodeBuild + CodePipeline pairs — one per @cello-protocol/* package.
 # Each pipeline triggers on main branch pushes that touch packages/<name>/**
 # or root config files (tsconfig.base.json, pnpm-workspace.yaml, package.json).
 # Triggering is handled by the cello-pipeline-filter Lambda (see 27-update-filter.sh).

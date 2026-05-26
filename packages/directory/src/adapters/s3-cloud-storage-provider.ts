@@ -23,7 +23,7 @@
  */
 
 import { S3Client, PutObjectCommand, GetObjectCommand, NoSuchKey } from "@aws-sdk/client-s3";
-import type { CloudStorageProvider } from "@cello/interfaces";
+import type { CloudStorageProvider } from "@cello-protocol/interfaces";
 
 export class S3CloudStorageProvider implements CloudStorageProvider {
   readonly #client: S3Client;

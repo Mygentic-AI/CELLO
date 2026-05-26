@@ -69,7 +69,7 @@
  *      //  Use FrostThresholdSigner.verifySignature() which handles framing internally:
  *      //    framedMsg = <context>\0<tbs>  (domain separation per CONTEXT.md)
  *      //  OR use ed25519_FROST.verify(sig, frameMessage(context, tbs), verifyKey) directly
- *      //  The client imports ed25519_FROST from @noble/curves/ed25519 (not from @cello/crypto)
+ *      //  The client imports ed25519_FROST from @noble/curves/ed25519 (not from @cello-protocol/crypto)
  *      //  to keep the verify path independent from any signer state.
  *      framedMsg = frameMessage(CONTEXT_SESSION_ESTABLISHMENT, tbs)  // context\0tbs
  *      isValid = ed25519_FROST.verify(assignment.directory_signature, framedMsg, verifyKey)
@@ -82,7 +82,7 @@
  * IMPORTANT NOTE on CelloClientImpl constructor and createClient factory changes:
  *   - Add optional #thresholdSigner: IThresholdSigner | null field
  *   - createClient accepts optional thresholdSigner in opts
- *   - No @cello/directory import — IThresholdSigner comes from @cello/crypto
+ *   - No @cello-protocol/directory import — IThresholdSigner comes from @cello-protocol/crypto
  *
  * IMPORTANT NOTE on ReceiveAssignmentResult (IMPORTANT-9):
  *   Add 'frost_signature_invalid' | 'unsupported_signature_type' | 'frost_signer_not_configured'
@@ -114,22 +114,22 @@ import {
   buildEnvelope, serializeEnvelope, deserializeEnvelope, validateEnvelope,
   computeGenesisPrevRoot, encodeSealPayload, buildSessionEstablishmentTbs, buildSealTbs,
   decodeConnectionPackage, validateConnectionPackage,
-} from "@cello/protocol-types";
-import type { Structure2 } from "@cello/protocol-types";
-import { verify, buildMerkleTree, merkleRoot, verifyFrostSignature, CONTEXT_SESSION_ESTABLISHMENT, mlDsaKeygen, mlDsaVerify, FileMlDsaKeyProvider } from "@cello/crypto";
-import type { LeafInput, IThresholdSigner } from "@cello/crypto";
-import { CELLO_PROTOCOL_ID, CELLO_CONTENT_PROTOCOL_ID } from "@cello/transport";
+} from "@cello-protocol/protocol-types";
+import type { Structure2 } from "@cello-protocol/protocol-types";
+import { verify, buildMerkleTree, merkleRoot, verifyFrostSignature, CONTEXT_SESSION_ESTABLISHMENT, mlDsaKeygen, mlDsaVerify, FileMlDsaKeyProvider } from "@cello-protocol/crypto";
+import type { LeafInput, IThresholdSigner } from "@cello-protocol/crypto";
+import { CELLO_PROTOCOL_ID, CELLO_CONTENT_PROTOCOL_ID } from "@cello-protocol/transport";
 import { NetworkDirectoryNode, runNetworkDkg } from "./network-directory-node.js";
-import type { KeyProvider } from "@cello/crypto";
-import type { CelloNode } from "@cello/transport";
+import type { KeyProvider } from "@cello-protocol/crypto";
+import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
-import type { SessionAssignment, RegistrationState } from "@cello/protocol-types";
+import type { SessionAssignment, RegistrationState } from "@cello-protocol/protocol-types";
 import type {
   CelloClient, PeerEntry, ReceivedEnvelope, SendResult, SessionRecord,
   ReceiveAssignmentResult, ReceivedMessage, SendMessageResult, SessionAssignmentEvent,
   InitiateSessionResult,
 } from "./types.js";
-import type { Logger } from "@cello/interfaces";
+import type { Logger } from "@cello-protocol/interfaces";
 
 const RELAY_PROTOCOL_ID = "/cello/relay/1.0.0";
 const AUTH_DOMAIN = "CELLO-RELAY-AUTH-v1";
@@ -370,12 +370,12 @@ class CelloClientImpl implements CelloClient {
   readonly #mlDsaKeyFile: string | undefined;
 
   /** ML-DSA key provider stored after successful register() call. Used to sign ConnectionPackages. CELLO-MCP-003. */
-  #mlDsaProvider: import("@cello/crypto").MlDsaKeyProvider | null = null;
+  #mlDsaProvider: import("@cello-protocol/crypto").MlDsaKeyProvider | null = null;
 
   // ─── CONNREQ-002: Connection state ────────────────────────────────────────────
 
   /** connection_id → ClientConnectionRecord */
-  readonly #connections = new Map<string, import("@cello/protocol-types").ClientConnectionRecord>();
+  readonly #connections = new Map<string, import("@cello-protocol/protocol-types").ClientConnectionRecord>();
   /** counterparty_pubkey_hex → connection_id (for fast lookup by peer) */
   readonly #connectionsByPeer = new Map<string, string>();
 
@@ -390,7 +390,7 @@ class CelloClientImpl implements CelloClient {
   /** Whitelist: sender pubkeys that bypass evaluateConnectionPackage. */
   readonly #whitelist: string[];
   /** Callback fired when an inbound connection_request_inbound is queued for agent review. */
-  readonly #onConnectionPendingReview: ((event: import("@cello/protocol-types").ConnectionRequestInbound) => void) | undefined;
+  readonly #onConnectionPendingReview: ((event: import("@cello-protocol/protocol-types").ConnectionRequestInbound) => void) | undefined;
   /** DB-003: if true, attempt cross-check of sender's ml_dsa_pubkey on inbound requests. */
   readonly #crossCheckDirectoryOnInbound: boolean;
   /** DB-003: peers whose connection was accepted without successful cross-check. */
@@ -400,9 +400,9 @@ class CelloClientImpl implements CelloClient {
   _evaluateCallCount = 0;
 
   /** Callback fired when a connection_established event arrives. */
-  #onConnectionEstablishedHandler: ((event: import("@cello/protocol-types").ConnectionEstablished) => void) | undefined;
+  #onConnectionEstablishedHandler: ((event: import("@cello-protocol/protocol-types").ConnectionEstablished) => void) | undefined;
   /** Callback fired when a disclosure_request_inbound arrives. */
-  #onDisclosureRequestedHandler: ((event: import("@cello/protocol-types").DisclosureRequestInbound) => void) | undefined;
+  #onDisclosureRequestedHandler: ((event: import("@cello-protocol/protocol-types").DisclosureRequestInbound) => void) | undefined;
 
   /**
    * CONNREQ-003: Multi-slot resolver map for concurrent outbound connection requests.
@@ -512,7 +512,7 @@ class CelloClientImpl implements CelloClient {
     round2TimeoutMs = 120_000,
     trackEvaluateCount = false,
     whitelist: string[] = [],
-    onConnectionPendingReview?: (event: import("@cello/protocol-types").ConnectionRequestInbound) => void,
+    onConnectionPendingReview?: (event: import("@cello-protocol/protocol-types").ConnectionRequestInbound) => void,
     crossCheckDirectoryOnInbound = false,
     logger?: Logger,
   ) {
@@ -2166,7 +2166,7 @@ class CelloClientImpl implements CelloClient {
       const result = await this.#thresholdSigner.participateInCeremony(
         ceremonyId,
         tbs,
-        context as import("@cello/crypto/frost/types.js").FrostContext,
+        context as import("@cello-protocol/crypto/frost/types.js").FrostContext,
       );
 
       const sig = result.ok ? result.signature : null;
@@ -3325,7 +3325,7 @@ class CelloClientImpl implements CelloClient {
    * Register a handler for connection_established events.
    * CONNREQ-002: fires on both the sender and the target when a connection is created.
    */
-  onConnectionEstablished(handler: (event: import("@cello/protocol-types").ConnectionEstablished) => void): void {
+  onConnectionEstablished(handler: (event: import("@cello-protocol/protocol-types").ConnectionEstablished) => void): void {
     this.#onConnectionEstablishedHandler = handler;
   }
 
@@ -3333,7 +3333,7 @@ class CelloClientImpl implements CelloClient {
    * Register a handler for disclosure_request_inbound events (Round 2 notification for sender).
    * CONNREQ-002: fires on the sender when the target requests more disclosure.
    */
-  onDisclosureRequested(handler: (event: import("@cello/protocol-types").DisclosureRequestInbound) => void): void {
+  onDisclosureRequested(handler: (event: import("@cello-protocol/protocol-types").DisclosureRequestInbound) => void): void {
     this.#onDisclosureRequestedHandler = handler;
   }
 
@@ -3341,7 +3341,7 @@ class CelloClientImpl implements CelloClient {
    * Return all active connection records for this client.
    * CONNREQ-002: used by the MCP tool layer and tests.
    */
-  listConnections(): import("@cello/protocol-types").ClientConnectionRecord[] {
+  listConnections(): import("@cello-protocol/protocol-types").ClientConnectionRecord[] {
     return [...this.#connections.values()];
   }
 
@@ -3349,7 +3349,7 @@ class CelloClientImpl implements CelloClient {
    * Return the cached registration state, or null if not yet registered.
    * CELLO-MCP-003.
    */
-  getRegistrationState(): import("@cello/protocol-types").RegistrationState | null {
+  getRegistrationState(): import("@cello-protocol/protocol-types").RegistrationState | null {
     return this.#registrationState;
   }
 
@@ -3358,7 +3358,7 @@ class CelloClientImpl implements CelloClient {
    * Used by the MCP server to build ConnectionPackages. CELLO-MCP-003.
    * SI-001: This returns the key PROVIDER (sign/getPublicKey), not raw secret bytes.
    */
-  getMlDsaProvider(): import("@cello/crypto").MlDsaKeyProvider | null {
+  getMlDsaProvider(): import("@cello-protocol/crypto").MlDsaKeyProvider | null {
     return this.#mlDsaProvider;
   }
 
@@ -3714,7 +3714,7 @@ class CelloClientImpl implements CelloClient {
       const connectionId = frame["connection_id"] as string;
       const counterpartyPubkey = frame["counterparty_pubkey"] as string;
       // Store connection record locally
-      const record: import("@cello/protocol-types").ClientConnectionRecord = {
+      const record: import("@cello-protocol/protocol-types").ClientConnectionRecord = {
         connection_id: connectionId,
         counterparty_pubkey: counterpartyPubkey,
         counterparty_primary_pubkey: "",
@@ -3746,7 +3746,7 @@ class CelloClientImpl implements CelloClient {
       if (reason === "already_connected" && frame["connection_id"]) {
         const connectionId = frame["connection_id"] as string;
         if (!this.#connections.has(connectionId)) {
-          const record: import("@cello/protocol-types").ClientConnectionRecord = {
+          const record: import("@cello-protocol/protocol-types").ClientConnectionRecord = {
             connection_id: connectionId,
             counterparty_pubkey: targetPubkeyHex,
             counterparty_primary_pubkey: "",
@@ -3835,7 +3835,7 @@ class CelloClientImpl implements CelloClient {
     if (type === "connection_established") {
       const connectionId = frame["connection_id"] as string;
       const counterpartyPubkey = frame["counterparty_pubkey"] as string;
-      const record: import("@cello/protocol-types").ClientConnectionRecord = {
+      const record: import("@cello-protocol/protocol-types").ClientConnectionRecord = {
         connection_id: connectionId,
         counterparty_pubkey: counterpartyPubkey,
         counterparty_primary_pubkey: "",
@@ -4169,7 +4169,7 @@ class CelloClientImpl implements CelloClient {
           verdict = "reject";
           rejectReason = validatedPackage.reason;
         } else {
-        const context: import("@cello/protocol-types").DirectoryContext = {
+        const context: import("@cello-protocol/protocol-types").DirectoryContext = {
           registered_at: senderRegisteredAt,
           is_provisional: senderIsProvisional,
           conversation_count: 0,
@@ -4376,7 +4376,7 @@ class CelloClientImpl implements CelloClient {
           verdict = "reject";
           rejectReason = validatedPackage.reason;
         } else {
-          const context: import("@cello/protocol-types").DirectoryContext = {
+          const context: import("@cello-protocol/protocol-types").DirectoryContext = {
             registered_at: 0,
             is_provisional: false,
             conversation_count: 0,
@@ -4467,7 +4467,7 @@ class CelloClientImpl implements CelloClient {
    *   2. Ensure #myPubkeyHex is set (read from keyProvider if not yet set)
    *   3. Open persistent signaling stream if not already open (DB-001: single retry on failure)
    *      If stream still cannot be opened → return { ok: false, reason: 'directory_unreachable' }
-   *   4. Encode session_request frame inline using CBOR (no @cello/directory import):
+   *   4. Encode session_request frame inline using CBOR (no @cello-protocol/directory import):
    *        CBOR({ type: "session_request", target_pubkey: Buffer.from(targetPubkeyHex, 'hex') })
    *      SI-001: only target_pubkey, no extra fields, no key material
    *   5. Create response Promise:
@@ -4533,7 +4533,7 @@ class CelloClientImpl implements CelloClient {
     }
 
     // SESSION-006: session_request frame includes connection_id if we have one
-    // Encoded inline with raw CBOR — no import from @cello/directory
+    // Encoded inline with raw CBOR — no import from @cello-protocol/directory
     const targetPubkeyBytes = Buffer.from(targetPubkeyHex, "hex");
     const sessionRequestPayload: Record<string, unknown> = {
       type: "session_request",
@@ -4895,7 +4895,7 @@ class CelloClientImpl implements CelloClient {
             const counterpartyPubkey = frame["counterparty_pubkey"] as string;
             if (connectionId && counterpartyPubkey) {
               if (!this.#connections.has(connectionId)) {
-                const record: import("@cello/protocol-types").ClientConnectionRecord = {
+                const record: import("@cello-protocol/protocol-types").ClientConnectionRecord = {
                   connection_id: connectionId,
                   counterparty_pubkey: counterpartyPubkey,
                   counterparty_primary_pubkey: "",
@@ -4938,7 +4938,7 @@ class CelloClientImpl implements CelloClient {
                 type: "disclosure_request_inbound",
                 from_pubkey: frame["from_pubkey"] as string,
                 connection_request_id: frame["connection_request_id"] as string,
-                requested_items: (frame["requested_items"] as import("@cello/protocol-types").DisclosureRequestItem[]) ?? [],
+                requested_items: (frame["requested_items"] as import("@cello-protocol/protocol-types").DisclosureRequestItem[]) ?? [],
               });
             }
             // CONNREQ-003: disclosure_request_inbound carries from_pubkey (= target).
@@ -5029,7 +5029,7 @@ class CelloClientImpl implements CelloClient {
  * Returns null if any required field is missing or malformed.
  *
  * The object is already decoded by cbor-x from the outer frame — this function just
- * validates and casts the fields. No @cello/directory import needed.
+ * validates and casts the fields. No @cello-protocol/directory import needed.
  *
  * Wire shape (from encodeSessionAssignment in directory-frames.ts):
  *   {
@@ -5102,7 +5102,7 @@ function parseSessionAssignment(raw: Record<string, unknown>): SessionAssignment
   };
 }
 
-function parseParticipantInfo(raw: unknown): import("@cello/protocol-types").ParticipantInfo | null {
+function parseParticipantInfo(raw: unknown): import("@cello-protocol/protocol-types").ParticipantInfo | null {
   if (typeof raw !== "object" || raw === null) return null;
   const r = raw as Record<string, unknown>;
   const pubkey = toU8Safe(r["pubkey"]);
@@ -5114,7 +5114,7 @@ function parseParticipantInfo(raw: unknown): import("@cello/protocol-types").Par
   return { pubkey, peer_id: peerId, multiaddrs };
 }
 
-function parseEndpointInfo(raw: unknown): import("@cello/protocol-types").RelayEndpointInfo | null {
+function parseEndpointInfo(raw: unknown): import("@cello-protocol/protocol-types").RelayEndpointInfo | null {
   if (typeof raw !== "object" || raw === null) return null;
   const r = raw as Record<string, unknown>;
   const peerId = typeof r["peer_id"] === "string" ? r["peer_id"] : null;
@@ -5159,7 +5159,7 @@ export function createClient(
     /** CONNREQ-002: sender pubkeys that bypass evaluateConnectionPackage. */
     whitelist?: string[];
     /** CONNREQ-002: callback fired when an inbound connection_request_inbound is queued for agent review. */
-    onConnectionPendingReview?: (event: import("@cello/protocol-types").ConnectionRequestInbound) => void;
+    onConnectionPendingReview?: (event: import("@cello-protocol/protocol-types").ConnectionRequestInbound) => void;
     /** DB-003: attempt cross-check of sender's ml_dsa_pubkey on inbound requests. */
     crossCheckDirectoryOnInbound?: boolean;
     /** PERSIST-014: injected logger for observability events. */
@@ -5177,7 +5177,7 @@ export function createClient(
   /** TEST-ONLY: register a minimal session record without a real relay connection. */
   injectTestSession(sessionIdHex: string, sessionId: Uint8Array, myPubkeyHex: string, directoryPubkey: Uint8Array, status?: SessionRecord["status"], opts?: { isInitiator?: boolean }): void;
   /** CONNREQ-002: list active connection records. */
-  listConnections(): import("@cello/protocol-types").ClientConnectionRecord[];
+  listConnections(): import("@cello-protocol/protocol-types").ClientConnectionRecord[];
   /** CONNREQ-002: send connection_request to target B and await final outcome. */
   cello_request_connection(opts: { target_pubkey: string; package_cbor: Uint8Array }): Promise<
     | { result: "established"; connection_id: string }
@@ -5198,9 +5198,9 @@ export function createClient(
   /** CONNREQ-002: request more disclosure from sender (Round 2, target side). */
   cello_request_more_disclosure(opts: { connection_request_id: string; requested_items: unknown[] }): Promise<{ error: "max_rounds_reached" } | { ok: true }>;
   /** CONNREQ-002: register connection_established event handler. */
-  onConnectionEstablished(handler: (event: import("@cello/protocol-types").ConnectionEstablished) => void): void;
+  onConnectionEstablished(handler: (event: import("@cello-protocol/protocol-types").ConnectionEstablished) => void): void;
   /** CONNREQ-002: register disclosure_request_inbound event handler (sender side). */
-  onDisclosureRequested(handler: (event: import("@cello/protocol-types").DisclosureRequestInbound) => void): void;
+  onDisclosureRequested(handler: (event: import("@cello-protocol/protocol-types").DisclosureRequestInbound) => void): void;
   /** CONNREQ-002: reconnect the persistent directory signaling stream. */
   reconnectDirectory(): Promise<boolean>;
   /** PERSIST-015: send seal_unilateral to directory after delivery_grace_seconds. */
@@ -5248,7 +5248,7 @@ export function createClient(
     injectLeafDeliver(sessionIdHex: string, frame: Record<string, unknown>): void;
     injectRelayDisconnect(sessionIdHex: string): void;
     injectTestSession(sessionIdHex: string, sessionId: Uint8Array, myPubkeyHex: string, directoryPubkey: Uint8Array, status?: SessionRecord["status"], opts?: { isInitiator?: boolean }): void;
-    listConnections(): import("@cello/protocol-types").ClientConnectionRecord[];
+    listConnections(): import("@cello-protocol/protocol-types").ClientConnectionRecord[];
     cello_request_connection(opts: { target_pubkey: string; package_cbor: Uint8Array }): Promise<
       | { result: "established"; connection_id: string }
       | { result: "rejected"; reason: string }
@@ -5265,8 +5265,8 @@ export function createClient(
       | { result: "error"; reason: string }
     >;
     cello_request_more_disclosure(opts: { connection_request_id: string; requested_items: unknown[] }): Promise<{ error: "max_rounds_reached" } | { ok: true }>;
-    onConnectionEstablished(handler: (event: import("@cello/protocol-types").ConnectionEstablished) => void): void;
-    onDisclosureRequested(handler: (event: import("@cello/protocol-types").DisclosureRequestInbound) => void): void;
+    onConnectionEstablished(handler: (event: import("@cello-protocol/protocol-types").ConnectionEstablished) => void): void;
+    onDisclosureRequested(handler: (event: import("@cello-protocol/protocol-types").DisclosureRequestInbound) => void): void;
     reconnectDirectory(): Promise<boolean>;
     /** PERSIST-015: send seal_unilateral to directory after delivery_grace_seconds. */
     initiateUnilateralSeal(sessionIdHex: string): Promise<

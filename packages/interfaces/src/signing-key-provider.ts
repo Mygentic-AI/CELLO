@@ -2,7 +2,7 @@
  * SigningKeyProvider — pluggable Ed25519 signing interface (PERSIST-010).
  *
  * IMPORTANT: This is the client-side Ed25519 signing abstraction. It is NOT:
- *   - KeyProvider (the @cello/crypto interface — same shape but lives in a different package)
+ *   - KeyProvider (the @cello-protocol/crypto interface — same shape but lives in a different package)
  *   - EnvelopeKeyProvider (the KMS interface for wrapping K_server_X shares at rest)
  *
  * The private key NEVER crosses the provider boundary. The provider performs signing

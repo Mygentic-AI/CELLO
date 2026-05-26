@@ -43,8 +43,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { resolve } from "node:path";
 import { readFile } from "node:fs/promises";
-import type { AuditLogShipper, AuditLogEntry, Logger } from "@cello/interfaces";
-import { LocalAuditLogShipper } from "@cello/interfaces/stubs";
+import type { AuditLogShipper, AuditLogEntry, Logger } from "@cello-protocol/interfaces";
+import { LocalAuditLogShipper } from "@cello-protocol/interfaces/stubs";
 import { S3AuditLogShipper } from "../adapters/s3-audit-log-shipper.js";
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
