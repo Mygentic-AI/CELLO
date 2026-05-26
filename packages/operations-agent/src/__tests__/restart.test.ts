@@ -154,8 +154,9 @@ describeIntegration("restart recovery (AC-007, AC-010)", () => {
     );
     expect(ourRecoveredEvent).toBeDefined();
     expect(ourRecoveredEvent?.context?.state).toBe("AWAITING_EMAIL_OTP");
-    // correlationId must NOT be present (AC-007 spec)
-    expect(ourRecoveredEvent?.context?.correlationId).toBeUndefined();
+    // correlationId must NOT be present (AC-007 spec — startup recovery has no active flow)
+    expect(ourRecoveredEvent?.context).toBeDefined();
+    expect(ourRecoveredEvent!.context!["correlationId"]).toBeUndefined();
 
     // ── Phase 4: Verify exactly one record with original id ──────────────────
     const rawResult = await pool.query(

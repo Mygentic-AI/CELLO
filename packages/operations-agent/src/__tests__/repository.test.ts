@@ -296,6 +296,102 @@ describeIntegration("RegistrationRepository integration", () => {
     expect(after2.otpHash).toBeFalsy();
   });
 
+  // ─── C-001: transition() clearOtp flag ────────────────────────────────────
+
+  it("C-001: transition() with clearOtp:true sets OTP columns to NULL regardless of COALESCE", async () => {
+    const ts = Date.now() + 9;
+    const record = await repo.insert({
+      phoneStubHash: `coalesce-test-hash-${ts}`,
+      channel: "cli",
+      channelUserId: `coalesce-user-${ts}`,
+      state: "INITIAL",
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+
+    // Set OTP fields
+    await repo.transition(record.id, "AWAITING_EMAIL_OTP", {
+      otpHash: "hash-value",
+      otpSalt: "salt-value",
+      otpExpiresAt: new Date(Date.now() + 15 * 60 * 1000),
+      otpAttemptCount: 0,
+    });
+
+    // Transition with clearOtp: true — OTP fields must be NULL in DB
+    await repo.transition(record.id, "EMAIL_CONFIRMED", { clearOtp: true });
+
+    const rawResult = await pool.query(
+      `SELECT otp_hash, otp_salt, otp_expires_at FROM registrations WHERE id = $1`,
+      [record.id],
+    );
+    expect(rawResult.rows[0].otp_hash).toBeNull();
+    expect(rawResult.rows[0].otp_salt).toBeNull();
+    expect(rawResult.rows[0].otp_expires_at).toBeNull();
+  });
+
+  it("C-001: transition() without clearOtp preserves existing OTP values via COALESCE", async () => {
+    const ts = Date.now() + 10;
+    const record = await repo.insert({
+      phoneStubHash: `coalesce-preserve-${ts}`,
+      channel: "cli",
+      channelUserId: `coalesce-user2-${ts}`,
+      state: "INITIAL",
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+
+    // Set OTP fields
+    await repo.transition(record.id, "AWAITING_EMAIL_OTP", {
+      otpHash: "preserved-hash",
+      otpSalt: "preserved-salt",
+      otpExpiresAt: new Date(Date.now() + 15 * 60 * 1000),
+      otpAttemptCount: 0,
+    });
+
+    // Transition without OTP updates (no clearOtp, no otpHash/otpSalt) — values preserved
+    await repo.transition(record.id, "AWAITING_EMAIL_OTP");
+
+    const rawResult = await pool.query(
+      `SELECT otp_hash, otp_salt FROM registrations WHERE id = $1`,
+      [record.id],
+    );
+    expect(rawResult.rows[0].otp_hash).toBe("preserved-hash");
+    expect(rawResult.rows[0].otp_salt).toBe("preserved-salt");
+  });
+
+  // ─── C-002: transitionOnOtpLockout is atomic ──────────────────────────────
+
+  it("C-002: transitionOnOtpLockout atomically transitions to AWAITING_EMAIL with cleared OTP and reset count", async () => {
+    const ts = Date.now() + 11;
+    const record = await repo.insert({
+      phoneStubHash: `lockout-test-hash-${ts}`,
+      channel: "cli",
+      channelUserId: `lockout-user-${ts}`,
+      state: "INITIAL",
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+
+    // Set OTP fields and increment attempt count to 2
+    await repo.transition(record.id, "AWAITING_EMAIL_OTP", {
+      otpHash: "lockout-hash",
+      otpSalt: "lockout-salt",
+      otpExpiresAt: new Date(Date.now() + 15 * 60 * 1000),
+      otpAttemptCount: 2,
+    });
+
+    // Simulate lockout via atomic method
+    const result = await repo.transitionOnOtpLockout(record.id);
+
+    expect(result.state).toBe("AWAITING_EMAIL");
+
+    const rawResult = await pool.query(
+      `SELECT otp_hash, otp_salt, otp_expires_at, otp_attempt_count FROM registrations WHERE id = $1`,
+      [record.id],
+    );
+    expect(rawResult.rows[0].otp_hash).toBeNull();
+    expect(rawResult.rows[0].otp_salt).toBeNull();
+    expect(rawResult.rows[0].otp_expires_at).toBeNull();
+    expect(rawResult.rows[0].otp_attempt_count).toBe(0);
+  });
+
   // ─── SI-002: cello_ops_agent cannot DELETE ─────────────────────────────────
 
   it("SI-002: cello_ops_agent role cannot DELETE from registrations", async () => {

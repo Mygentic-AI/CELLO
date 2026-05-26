@@ -54,8 +54,9 @@ behavior:
   - trigger: "When the state machine is in AWAITING_EMAIL_OTP and
       an incorrect OTP is provided"
     action: "the attempt counter increments; after 3 failed attempts
-      the current OTP is invalidated and the user must request a
-      new send; the state remains AWAITING_EMAIL_OTP"
+      the current OTP is invalidated, the state transitions to
+      AWAITING_EMAIL, and the user must provide their email address
+      again to receive a new OTP"
 
   - trigger: "When any state has been idle for 7 days"
     action: "the state machine transitions to EXPIRED; the
@@ -136,9 +137,14 @@ acceptance_criteria:
   - id: AC-005
     given: "A RegistrationRecord in AWAITING_EMAIL_OTP state"
     when: "3 incorrect OTP attempts are made"
-    then: "the current OTP is invalidated (otpHash cleared); the user
-      is informed they must request a new OTP; attemptCount is reset;
-      the state remains AWAITING_EMAIL_OTP (same state, new OTP cycle)"
+    then: "the current OTP is invalidated; the state transitions to
+      AWAITING_EMAIL so the user can provide their email address again
+      to receive a new OTP; attemptCount is reset to 0; the user is
+      informed they must request a new OTP by providing their email address"
+    notes: "Implementation transitions to AWAITING_EMAIL rather than remaining
+      in AWAITING_EMAIL_OTP. Staying in AWAITING_EMAIL_OTP with a cleared
+      otpHash created a dead end — the handler had no branch to accept email
+      input. AWAITING_EMAIL is the correct recovery state."
     test_type: integration
     component_under_test: operations-agent
 

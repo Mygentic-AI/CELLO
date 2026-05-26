@@ -145,6 +145,10 @@ export class RegistrationEngine {
 
   #handleInboundMessage = async (from: string, message: string): Promise<void> => {
     try {
+      // Always query the DB for the current state — the in-memory map (#activeRecords)
+      // is used only by the contact-prompt sweep timer, not as a lookup cache.
+      // This ensures the state machine always operates on the authoritative persisted state,
+      // which is essential for correct restart recovery behavior.
       const existing = await this.#repository.findActiveByChannelUser(
         this.#opts.channelType,
         from,
@@ -185,7 +189,10 @@ export class RegistrationEngine {
       }
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      this.#logger.error("registration.engine.error", error);
+      this.#logger.error("registration.engine.error", error, {
+        "error.message": error.message,
+        "error.stack": error.stack ?? "",
+      });
       if (this.#opts.onError) {
         this.#opts.onError(error);
       }

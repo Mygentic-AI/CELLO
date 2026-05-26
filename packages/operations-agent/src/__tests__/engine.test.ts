@@ -8,7 +8,7 @@
  * AC-002b: 10-min timeout → contact prompt re-sent; state stays AWAITING_CONTACT.
  * AC-003: Valid email → OTP sent, AWAITING_EMAIL_OTP; otpHash stored (not plaintext).
  * AC-004: Correct OTP → EMAIL_CONFIRMED → PRE_AUTH_TOKEN_ISSUED, token delivered.
- * AC-005: 3 wrong OTPs → OTP invalidated; state stays AWAITING_EMAIL_OTP.
+ * AC-005: 3 wrong OTPs → OTP invalidated; state transitions to AWAITING_EMAIL; new OTP cycle possible.
  * AC-006: Expired OTP → rejected; registration.otp.expired logged.
  * AC-008: 7-day expiry → record transitions to EXPIRED; fresh start allowed.
  * AC-009: 6th OTP send within 1 hour → rate limited; registration.otp.rate_limited logged.
@@ -412,6 +412,42 @@ describeIntegration("RegistrationEngine integration", () => {
     expect(startedEvents.length).toBeGreaterThan(0);
   });
 
+  // ─── H-001: registration.engine.error context fields ─────────────────────────
+
+  it("H-001: registration.engine.error emits error.message and error.stack as context fields", async () => {
+    // Inject a channel whose resolveIdentity always throws — this causes the engine's
+    // inbound message handler to catch the error and emit registration.engine.error
+    // with { "error.message", "error.stack" } as explicit context fields.
+    const faultyChannelState = makeTestChannel();
+    const { logger: faultyLogger, events: faultyEvents } = makeTestLogger();
+    const faultyChannelWithThrow: MessagingChannel = {
+      async send() {},
+      onMessage(h) { faultyChannelState.channel.onMessage(h); },
+      async resolveIdentity() { throw new Error("test-identity-failure"); },
+    };
+
+    const faultyEngine = new RegistrationEngine({
+      pool,
+      channel: faultyChannelWithThrow,
+      otpDelivery: otpState.provider,
+      preAuth: new LocalPreAuthorizationClient(),
+      logger: faultyLogger,
+      channelType: "cli",
+      // No onError rethrow — let the engine log and continue
+    });
+    await faultyEngine.start();
+
+    const faultyUserId = `fault-h001-${Date.now()}`;
+    await faultyChannelState.injectMessage(faultyUserId, "hello");
+
+    const engineErrorEvent = faultyEvents.find((e) => e.event === "registration.engine.error");
+    expect(engineErrorEvent).toBeDefined();
+    expect(engineErrorEvent?.context?.["error.message"]).toBe("test-identity-failure");
+    expect(typeof engineErrorEvent?.context?.["error.stack"]).toBe("string");
+
+    faultyEngine.stop();
+  });
+
   // ─── AC-009 ─────────────────────────────────────────────────────────────────
 
   it("AC-009: 6th OTP send within 1 hour is rate-limited; registration.otp.rate_limited logged", async () => {
@@ -421,12 +457,10 @@ describeIntegration("RegistrationEngine integration", () => {
     // Send 5 emails (each triggers an OTP send)
     for (let i = 1; i <= 5; i++) {
       await channelState.injectMessage(userId, `user${i}@example.com`);
-      // After each failed OTP, need to go back to AWAITING_EMAIL
-      // Actually the state machine stays in AWAITING_EMAIL_OTP after first send
-      // So we need to request from the same email domain — but the state machine
-      // transitions to AWAITING_EMAIL_OTP after first email.
-      // The rate limit is per email domain, tested on successive requests within same state.
-      // For this test, let's reset state to AWAITING_EMAIL after each OTP to trigger 6 sends.
+      // After each OTP send the record moves to AWAITING_EMAIL_OTP.
+      // This test directly resets state via repo.transition() between each OTP send.
+      // It relies on the engine querying the DB on every inbound message (not the in-memory map).
+      // See M-001 in the code review — this is intentional design.
       const repo = new RegistrationRepository(pool);
       const active = await repo.findActiveByChannelUser("cli", userId);
       if (active && active.state !== "AWAITING_EMAIL") {

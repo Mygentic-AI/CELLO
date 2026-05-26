@@ -74,10 +74,13 @@ type RateLimitEntry = { count: number; windowStart: Date };
 
 // ─── Email validation ─────────────────────────────────────────────────────────
 
-/** Basic email validation — must contain exactly one @ */
+/** Basic email validation — must contain exactly one @, domain must contain a dot */
 export function isValidEmail(s: string): boolean {
   const at = s.indexOf("@");
-  return at > 0 && at === s.lastIndexOf("@") && s.length - at > 1;
+  if (at <= 0 || at !== s.lastIndexOf("@")) return false;
+  const domain = s.slice(at + 1);
+  const dotPos = domain.indexOf(".");
+  return dotPos > 0 && dotPos < domain.length - 1;
 }
 
 /** Extract domain from a valid email address */
@@ -299,7 +302,9 @@ export class RegistrationStateMachine {
     from: string,
     correlationId: string,
   ): Promise<RegistrationRecord> {
-    if (record.state !== "AWAITING_EMAIL_OTP") return record;
+    if (record.state !== "AWAITING_EMAIL_OTP") {
+      throw new Error(`invariant: #handleAwaitingEmailOtp called with state=${record.state}`);
+    }
     const { repository, channel, logger, preAuth } = this.#deps;
 
     const candidate = message.trim();
@@ -331,21 +336,19 @@ export class RegistrationStateMachine {
       const newAttemptCount = record.attemptCount + 1;
       const lockout = newAttemptCount >= MAX_OTP_ATTEMPTS;
 
-      await repository.incrementOtpAttempt(record.id, lockout);
-
       if (lockout) {
-        // Transition back to AWAITING_EMAIL so the user can provide their email address
-        // again and receive a new OTP. Without this transition, the user is stuck in
-        // AWAITING_EMAIL_OTP with a cleared otpHash and no way to request a new code.
-        const awaitingEmail = await repository.transition(record.id, "AWAITING_EMAIL", {
-          otpAttemptCount: 0,
-        });
+        // Atomically: clear OTP fields, reset attempt count, transition to AWAITING_EMAIL.
+        // Using a single transactional operation avoids the stuck-state bug where a crash
+        // between incrementOtpAttempt and transition would leave the record in
+        // AWAITING_EMAIL_OTP with a cleared otpHash — a dead-end state.
+        const awaitingEmail = await repository.transitionOnOtpLockout(record.id);
         await channel.send(
           from,
           "Too many incorrect attempts. Your code has been invalidated. Please provide your email address again to get a new code.",
         );
         return awaitingEmail;
       } else {
+        await repository.incrementOtpAttempt(record.id, false);
         const remaining = MAX_OTP_ATTEMPTS - newAttemptCount;
         await channel.send(
           from,
@@ -356,11 +359,10 @@ export class RegistrationStateMachine {
       }
     }
 
-    // OTP correct — transition to EMAIL_CONFIRMED
+    // OTP correct — transition to EMAIL_CONFIRMED, explicitly clearing OTP fields.
+    // clearOtp: true bypasses COALESCE to write NULL directly.
     const emailConfirmed = await repository.transition(record.id, "EMAIL_CONFIRMED", {
-      otpHash: null,
-      otpSalt: null,
-      otpExpiresAt: null,
+      clearOtp: true,
     });
 
     logger.info("registration.email.verified", {

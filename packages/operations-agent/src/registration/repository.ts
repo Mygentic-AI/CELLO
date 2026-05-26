@@ -268,6 +268,15 @@ export class RegistrationRepository {
    * Transition the registration to a new state, updating columns as specified.
    * Computes the new chain hash from the previous one.
    * Returns the updated RegistrationRecord.
+   *
+   * @param updates.otpAttemptCount - When provided, sets otp_attempt_count to this value.
+   *   When omitted (undefined), the existing count is preserved via COALESCE.
+   *   Always pass `otpAttemptCount: 0` explicitly when transitioning to AWAITING_EMAIL_OTP
+   *   to ensure the attempt counter starts fresh.
+   * @param updates.clearOtp - When true, sets otp_hash, otp_salt, otp_expires_at to NULL
+   *   unconditionally (ignoring otpHash/otpSalt/otpExpiresAt values if also provided).
+   *   When falsy (default), uses COALESCE so omitted OTP fields preserve existing values.
+   *   Use clearOtp: true when the OTP must be explicitly invalidated (e.g. EMAIL_CONFIRMED).
    */
   async transition(
     id: string,
@@ -281,6 +290,7 @@ export class RegistrationRepository {
       otpAttemptCount?: number;
       stateData?: Record<string, unknown>;
       expiresAt?: Date;
+      clearOtp?: boolean;
     } = {},
   ): Promise<RegistrationRecord> {
     // Fetch the current row to get prev chain_hash
@@ -295,6 +305,11 @@ export class RegistrationRepository {
     const now = new Date();
     const newChainHash = computeTransitionChainHash(prevChainHash, id, newState, now);
 
+    // OTP columns use COALESCE by default so omitted values preserve existing DB values.
+    // When clearOtp=true, write NULL directly — bypassing COALESCE — to explicitly
+    // invalidate the OTP (e.g. after successful email verification).
+    const clearOtp = updates.clearOtp === true;
+
     const result = await this.#pool.query<RegistrationRow>(
       `UPDATE registrations SET
          state = $1,
@@ -302,13 +317,13 @@ export class RegistrationRepository {
          chain_hash = $3,
          phone_stub_hash = COALESCE($4, phone_stub_hash),
          email_domain = COALESCE($5, email_domain),
-         otp_hash = $6,
-         otp_salt = $7,
-         otp_expires_at = $8,
-         otp_attempt_count = COALESCE($9, otp_attempt_count),
-         state_data = COALESCE($10, state_data),
-         expires_at = COALESCE($11, expires_at)
-       WHERE id = $12
+         otp_hash = CASE WHEN $6 THEN NULL ELSE COALESCE($7, otp_hash) END,
+         otp_salt = CASE WHEN $6 THEN NULL ELSE COALESCE($8, otp_salt) END,
+         otp_expires_at = CASE WHEN $6 THEN NULL ELSE COALESCE($9, otp_expires_at) END,
+         otp_attempt_count = COALESCE($10, otp_attempt_count),
+         state_data = COALESCE($11, state_data),
+         expires_at = COALESCE($12, expires_at)
+       WHERE id = $13
        RETURNING *`,
       [
         newState,
@@ -316,9 +331,10 @@ export class RegistrationRepository {
         newChainHash,
         updates.phoneStubHash !== undefined ? updates.phoneStubHash : null,
         updates.emailDomain !== undefined ? updates.emailDomain : null,
-        updates.otpHash !== undefined ? updates.otpHash : null,
-        updates.otpSalt !== undefined ? updates.otpSalt : null,
-        updates.otpExpiresAt !== undefined ? updates.otpExpiresAt : null,
+        clearOtp,
+        !clearOtp && updates.otpHash !== undefined ? updates.otpHash : null,
+        !clearOtp && updates.otpSalt !== undefined ? updates.otpSalt : null,
+        !clearOtp && updates.otpExpiresAt !== undefined ? updates.otpExpiresAt : null,
         updates.otpAttemptCount !== undefined ? updates.otpAttemptCount : null,
         updates.stateData !== undefined ? JSON.stringify(updates.stateData) : null,
         updates.expiresAt !== undefined ? updates.expiresAt : null,
@@ -329,6 +345,60 @@ export class RegistrationRepository {
       throw new Error(`Registration transition failed — row not found: ${id}`);
     }
     return rowToRecord(result.rows[0]);
+  }
+
+  /**
+   * Atomically transition to AWAITING_EMAIL on OTP lockout.
+   * Performs in a single transaction:
+   *   - Sets state = 'AWAITING_EMAIL'
+   *   - Clears otp_hash, otp_salt, otp_expires_at to NULL
+   *   - Resets otp_attempt_count to 0
+   *   - Computes and writes new chain_hash
+   *   - Sets updated_at = now()
+   *
+   * A crash between incrementOtpAttempt and transition would leave the record
+   * in AWAITING_EMAIL_OTP with a cleared hash — a dead-end state. This method
+   * ensures both operations succeed or both fail.
+   */
+  async transitionOnOtpLockout(id: string): Promise<RegistrationRecord> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      const prevResult = await client.query<{ chain_hash: string }>(
+        "SELECT chain_hash FROM registrations WHERE id = $1 FOR UPDATE",
+        [id],
+      );
+      if (prevResult.rows.length === 0) {
+        throw new Error(`Registration not found: ${id}`);
+      }
+      const now = new Date();
+      const newChainHash = computeTransitionChainHash(
+        prevResult.rows[0].chain_hash,
+        id,
+        "AWAITING_EMAIL",
+        now,
+      );
+      const result = await client.query<RegistrationRow>(
+        `UPDATE registrations SET
+           state = 'AWAITING_EMAIL',
+           updated_at = $1,
+           chain_hash = $2,
+           otp_hash = NULL,
+           otp_salt = NULL,
+           otp_expires_at = NULL,
+           otp_attempt_count = 0
+         WHERE id = $3
+         RETURNING *`,
+        [now, newChainHash, id],
+      );
+      await client.query("COMMIT");
+      return rowToRecord(result.rows[0]);
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   /**

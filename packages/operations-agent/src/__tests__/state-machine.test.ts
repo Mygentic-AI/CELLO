@@ -40,6 +40,20 @@ describe("isValidEmail — AC-003b", () => {
     expect(isValidEmail("@example.com")).toBe(false);
     expect(isValidEmail("user@")).toBe(false);
   });
+
+  it("H-004: returns false when domain has no dot (e.g. user@localhost, user@x)", () => {
+    expect(isValidEmail("user@x")).toBe(false);
+    expect(isValidEmail("user@localhost")).toBe(false);
+  });
+
+  it("H-004: returns true when domain has dot with chars on both sides (e.g. user@x.y)", () => {
+    expect(isValidEmail("user@x.y")).toBe(true);
+  });
+
+  it("H-004: returns false when dot is at start or end of domain", () => {
+    expect(isValidEmail("user@.com")).toBe(false);
+    expect(isValidEmail("user@com.")).toBe(false);
+  });
 });
 
 describe("extractEmailDomain", () => {

@@ -26,13 +26,22 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 /**
  * Generate a cryptographically random 6-digit OTP string.
- * Uses modular reduction over a 32-bit random value.
+ * Uses rejection sampling to eliminate modulo bias:
+ *   MAX_SAFE = floor(2^32 / 1_000_000) * 1_000_000 = 4_294_000_000
+ *   Values in [0, MAX_SAFE) are uniformly mapped; values >= MAX_SAFE are discarded.
+ *   Retry probability ≈ 0.023% — negligible performance impact.
  * Zero-padded to always be exactly 6 characters.
  */
 export function generateOtp(): string {
-  const bytes = randomBytes(4);
-  const num = bytes.readUInt32BE(0) % 1_000_000;
-  return num.toString().padStart(6, "0");
+  const MAX_SAFE = 4_294_000_000; // floor(2^32 / 1_000_000) * 1_000_000
+  while (true) {
+    const bytes = randomBytes(4);
+    const num = bytes.readUInt32BE(0);
+    if (num < MAX_SAFE) {
+      return (num % 1_000_000).toString().padStart(6, "0");
+    }
+    // ~0.023% chance of retry — negligible
+  }
 }
 
 /**
