@@ -12,7 +12,7 @@
  * All tests use real SHA-256 via node:crypto — no mocks of crypto operations.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { isValidEmail, extractEmailDomain } from "../registration/state-machine.js";
 import { generateOtp, generateOtpSalt, hashOtp, verifyOtp } from "../registration/otp.js";
 import { hashPhone, normalizePhone } from "../registration/phone.js";
@@ -141,33 +141,130 @@ describe("Phone hashing — SI-002", () => {
 });
 
 // ─── SI-003: Cannot skip phone verification ───────────────────────────────────
+//
+// These tests verify the runtime enforcement of SI-003 using real engine/DB.
+// Type-level checks were previously used here but do not satisfy the adversarial
+// condition: "even when a crafted message attempts to provide an email OTP without
+// having completed phone verification, the state machine rejects it."
+//
+// The engine.test.ts describeIntegration block covers SI-003 runtime enforcement:
+// - A record in AWAITING_CONTACT state receiving a 6-digit OTP must not advance.
+// - A record in AWAITING_CONTACT state receiving an email address must not advance.
+//
+// These integration tests require a DB connection and are gated on CELLO_ENV=local.
 
-describe("SI-003: State machine cannot skip phone verification", () => {
-  it("INITIAL state does not have email OTP fields", () => {
-    // The discriminated union guarantees this at the type level.
-    // This runtime test verifies a state object with 'state: INITIAL'
-    // has no otpHash, confirming SI-003 at the data level.
-    const initialState = { state: "INITIAL" as const };
-    expect("otpHash" in initialState).toBe(false);
-    expect("emailDomain" in initialState).toBe(false);
+import pg from "pg";
+import { RegistrationEngine } from "../registration/engine.js";
+import { LocalPreAuthorizationClient } from "@cello-protocol/interfaces/stubs";
+import type { Logger, MessagingChannel, OtpDeliveryProvider, ChannelIdentity } from "@cello-protocol/interfaces";
+import { RegistrationRepository } from "../registration/repository.js";
+
+const isLocal = process.env["CELLO_ENV"] === "local";
+const describeIntegration = isLocal ? describe : describe.skip;
+
+const OPS_AGENT_URL = (
+  process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5433/cello_dev"
+).replace(
+  /^(postgres(?:ql)?):\/\/[^:]+:[^@]+@/,
+  "$1://cello_ops_agent:cello_ops_agent_dev@",
+);
+
+function makeMinimalLogger(): Logger {
+  return {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+  };
+}
+
+function makeMinimalChannel(): { channel: MessagingChannel; inject: (from: string, msg: string) => Promise<void>; otpDelivery: OtpDeliveryProvider } {
+  let handler: ((from: string, message: string) => void | Promise<void>) | undefined;
+  const channel: MessagingChannel = {
+    async send() {},
+    onMessage(h) { handler = h; },
+    async resolveIdentity(from): Promise<ChannelIdentity> {
+      return { channel: "cli", channelUserId: from };
+    },
+  };
+  const otpDelivery: OtpDeliveryProvider = {
+    async sendOtp() {},
+  };
+  return {
+    channel,
+    otpDelivery,
+    inject: async (from, msg) => { if (handler) await handler(from, msg); },
+  };
+}
+
+describeIntegration("SI-003: State machine rejects OTP/email input before phone verification (runtime)", () => {
+  let pool: pg.Pool;
+
+  beforeEach(() => {
+    pool = new pg.Pool({ connectionString: OPS_AGENT_URL });
   });
 
-  it("State union requires going through PHONE_CONFIRMED before AWAITING_EMAIL_OTP", () => {
-    // The state machine only transitions to AWAITING_EMAIL_OTP via:
-    //   AWAITING_EMAIL → AWAITING_EMAIL_OTP
-    // Which can only be reached via:
-    //   AWAITING_CONTACT → PHONE_CONFIRMED → AWAITING_EMAIL
-    // This is enforced by the switch statement in handleMessage.
-    // Verify that AWAITING_EMAIL_OTP state always has the required fields:
-    const awaitingOtpState = {
-      state: "AWAITING_EMAIL_OTP" as const,
-      otpHash: "deadbeef",
-      otpExpiresAt: new Date(),
-      attemptCount: 0,
-    };
-    // Should carry all required fields
-    expect(awaitingOtpState.otpHash).toBeDefined();
-    expect(awaitingOtpState.otpExpiresAt).toBeDefined();
-    expect(awaitingOtpState.attemptCount).toBe(0);
+  afterEach(async () => {
+    await pool.end();
+  });
+
+  it("SI-003: sending a 6-digit OTP to a record in AWAITING_CONTACT does not advance state", async () => {
+    const userId = `si003-otp-${Date.now()}`;
+    const { channel, otpDelivery, inject } = makeMinimalChannel();
+    const engine = new RegistrationEngine({
+      pool,
+      channel,
+      otpDelivery,
+      preAuth: new LocalPreAuthorizationClient(),
+      logger: makeMinimalLogger(),
+      channelType: "cli",
+      onError: (err) => { throw err; },
+    });
+    await engine.start();
+
+    // Start registration (now in AWAITING_CONTACT)
+    await inject(userId, "hello");
+
+    // Adversarial: send a crafted 6-digit OTP without sharing phone
+    await inject(userId, "123456");
+
+    // State must still be AWAITING_CONTACT — no transition
+    const repo = new RegistrationRepository(pool);
+    const record = await repo.findActiveByChannelUser("cli", userId);
+    expect(record?.state).toBe("AWAITING_CONTACT");
+
+    engine.stop();
+    // Cleanup
+    if (record) await repo.transition(record.id, "EXPIRED");
+  });
+
+  it("SI-003: sending an email address to a record in AWAITING_CONTACT does not advance state", async () => {
+    const userId = `si003-email-${Date.now()}`;
+    const { channel, otpDelivery, inject } = makeMinimalChannel();
+    const engine = new RegistrationEngine({
+      pool,
+      channel,
+      otpDelivery,
+      preAuth: new LocalPreAuthorizationClient(),
+      logger: makeMinimalLogger(),
+      channelType: "cli",
+      onError: (err) => { throw err; },
+    });
+    await engine.start();
+
+    // Start registration (now in AWAITING_CONTACT)
+    await inject(userId, "hello");
+
+    // Adversarial: send an email address without sharing phone first
+    await inject(userId, "adversary@example.com");
+
+    // State must still be AWAITING_CONTACT — no transition to AWAITING_EMAIL
+    const repo = new RegistrationRepository(pool);
+    const record = await repo.findActiveByChannelUser("cli", userId);
+    expect(record?.state).toBe("AWAITING_CONTACT");
+
+    engine.stop();
+    // Cleanup
+    if (record) await repo.transition(record.id, "EXPIRED");
   });
 });

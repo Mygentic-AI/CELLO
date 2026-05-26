@@ -286,6 +286,15 @@ observability:
       trigger: "7-day idle timeout"
       context_fields: [registrationId]
 
+    - name: registration.engine.error
+      level: error
+      trigger: "Unhandled exception caught by RegistrationEngine message handler"
+      context_fields: [error.message, error.stack]
+      correlationId: false
+      notes: "Infrastructure catch-all — not triggered by normal registration flows.
+        Prevents unhandled rejections from killing the process. onError callback
+        is also invoked (used in tests to surface failures)."
+
   alarms:
     - condition: "registration.otp.rate_limited count > 20 per hour"
       fires_to: ops-warning

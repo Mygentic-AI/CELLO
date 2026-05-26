@@ -311,23 +311,28 @@ describeIntegration("RegistrationEngine integration", () => {
 
   // ─── AC-005 ─────────────────────────────────────────────────────────────────
 
-  it("AC-005: 3 wrong OTPs → OTP invalidated; state stays AWAITING_EMAIL_OTP", async () => {
+  it("AC-005: 3 wrong OTPs → transitions to AWAITING_EMAIL; user can request new OTP and complete", async () => {
     await channelState.injectMessage(userId, "hello");
     await channelState.injectMessage(userId, `CONTACT:${userId}:+447911111111`);
     await channelState.injectMessage(userId, "user@example.com");
+    const firstOtp = otpState.captured[0].otp;
 
     // 3 wrong OTP attempts
     await channelState.injectMessage(userId, "000000");
     await channelState.injectMessage(userId, "111111");
     await channelState.injectMessage(userId, "222222");
 
+    // After lockout, state transitions to AWAITING_EMAIL (not AWAITING_EMAIL_OTP)
     const repo = new RegistrationRepository(pool);
-    const record = await repo.findActiveByChannelUser("cli", userId);
-    expect(record?.state).toBe("AWAITING_EMAIL_OTP");
-    if (record?.state !== "AWAITING_EMAIL_OTP") throw new Error("type guard");
-
-    // OTP should be invalidated (otpHash is cleared — empty string sentinel)
-    expect(record.otpHash).toBeFalsy();
+    const afterLockout = await repo.findActiveByChannelUser("cli", userId);
+    expect(afterLockout?.state).toBe("AWAITING_EMAIL");
+    // attemptCount reset to 0 on the AWAITING_EMAIL transition
+    // (can be verified via direct DB query since RegistrationRecord doesn't surface it for AWAITING_EMAIL)
+    const rawRow = await pool.query(
+      `SELECT otp_attempt_count FROM registrations WHERE id = $1`,
+      [afterLockout!.id],
+    );
+    expect(rawRow.rows[0].otp_attempt_count).toBe(0);
 
     // User was informed
     const invalidMsg = channelState.sent.find((m) =>
@@ -335,6 +340,20 @@ describeIntegration("RegistrationEngine integration", () => {
       m.message.toLowerCase().includes("new")
     );
     expect(invalidMsg).toBeDefined();
+
+    // User provides email again — new OTP cycle
+    await channelState.injectMessage(userId, "user@example.com");
+    const secondOtp = otpState.captured[1]?.otp;
+    expect(secondOtp).toBeDefined();
+    expect(secondOtp).not.toBe(firstOtp); // New OTP generated
+
+    // User provides correct new OTP — should complete
+    await channelState.injectMessage(userId, secondOtp!);
+    const finalRow = await pool.query(
+      `SELECT state FROM registrations WHERE id = $1`,
+      [afterLockout!.id],
+    );
+    expect(finalRow.rows[0].state).toBe("PRE_AUTH_TOKEN_ISSUED");
   });
 
   // ─── AC-006 ─────────────────────────────────────────────────────────────────

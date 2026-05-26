@@ -334,13 +334,17 @@ export class RegistrationStateMachine {
       await repository.incrementOtpAttempt(record.id, lockout);
 
       if (lockout) {
+        // Transition back to AWAITING_EMAIL so the user can provide their email address
+        // again and receive a new OTP. Without this transition, the user is stuck in
+        // AWAITING_EMAIL_OTP with a cleared otpHash and no way to request a new code.
+        const awaitingEmail = await repository.transition(record.id, "AWAITING_EMAIL", {
+          otpAttemptCount: 0,
+        });
         await channel.send(
           from,
           "Too many incorrect attempts. Your code has been invalidated. Please provide your email address again to get a new code.",
         );
-        // Return record with cleared otp (repository cleared it)
-        const updated = await repository.findById(record.id);
-        return updated ?? record;
+        return awaitingEmail;
       } else {
         const remaining = MAX_OTP_ATTEMPTS - newAttemptCount;
         await channel.send(
