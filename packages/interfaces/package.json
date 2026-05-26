@@ -1,8 +1,8 @@
 {
   "name": "@cello-protocol/interfaces",
   "version": "0.0.1",
-  "private": true,
   "type": "module",
+  "files": ["dist/", "package.json"],
   "engines": {
     "node": ">=24"
   },
