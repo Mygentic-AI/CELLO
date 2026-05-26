@@ -110,12 +110,42 @@ Story completed: OPS-AGENT-002 — PostgreSQL-backed registration state machine.
 
 ---
 
+## 2026-05-26 — REPOSPLIT-001: story closed
+
+Story completed: REPOSPLIT-001 — scaffold cello-client repo, CI pipeline, ALB WebSocket transport path.
+
+**Delivered:**
+- `github.com/Mygentic-AI/cello-client` scaffolded: pnpm workspace, five `core/` stub packages (`@cello-protocol/protocol-types`, `@cello-protocol/crypto`, `@cello-protocol/transport`, `@cello-protocol/client`, `@cello-protocol/connect`). All have `files` allowlist, `publishConfig.access: public`, `engines: node>=24`. No source code yet — stubs only.
+- GitHub Actions CI pipeline: Node 24, pnpm 10.33.2, tarball leak check over all five packages, tag-only publish wired to `NPM_TOKEN`. CI passes on an empty workspace.
+- AUDIT-ME.md with three falsifiable privacy claims and exact file pointers at cello-client layout paths.
+- SKILL.md updated in `packages/adapter-claude-code/` for `@cello-protocol/connect`.
+- README.md in cello-client: install, CELLO description, quick start, AUDIT-ME link.
+- AC-001 tsconfig fix: `adapter-claude-code/tsconfig.json` decoupled from relay/directory; server packages removed from devDependencies.
+- AC-007 ALB WebSocket transport path: directory WS listener on port 8080; health server on port 9090; ALB IdleTimeout 300; SG port 9090 rule in `cello-vpc.yaml`; all three items explicit in CloudFormation. IaC committed, not yet deployed.
+- Transport-path E2E test (`packages/e2e-tests/src/transport-path.test.ts`) with all three dimensions; gated on `CELLO_DIR_ALB` env var.
+- Publish smoke test procedure and transport path runbook in `cello-client/scripts/`.
+
+**Key constraints resolved:**
+- `@cello-protocol` npm scope confirmed; `NPM_TOKEN` in cello-client GitHub Secrets (expires 2026-08-24 — rotate before that date)
+- External client → directory/relay transport path unblocked — directory now accepts WebSocket on port 8080 through the existing ALB
+
+**Downstream stories now unblocked:**
+- REPOSPLIT-002: extract the five client packages, move tests, publish `@cello-protocol/connect@beta`
+
+**Post-merge actions required before REPOSPLIT-002 can begin:**
+1. Push trustless-cello main to origin — triggers CI/CD pipeline and ECS directory deployment
+2. Monitor directory ECS deployment (use loop skill at 3-minute intervals)
+3. After deployment stabilises, run `transport-path.test.ts` against the live ALB to verify AC-007 all three dimensions
+4. Push tag `v0.0.0-scaffold.1` to cello-client, verify `@cello-protocol/connect@0.0.0-scaffold.1` publishes successfully, then immediately unpublish/deprecate
+
+---
+
 ## Constraints
 
 **CONSTRAINT: registrations table single-writer assumption.** The Operations Agent writes only from us-east-1. The partial unique index `UNIQUE (phone_stub_hash) WHERE state NOT IN (terminal)` is enforced locally per-node in logical replication — it does NOT prevent cross-region duplicates. Multi-region Ops Agent deployment requires schema redesign. See OPS-AGENT-000 `replication_safety` note.
 
 **CONSTRAINT: npm @cello scope.** Must be claimed on Day 0 before any publish work begins. If contested, fallback to `@cello-protocol/interfaces` and `@cello-protocol/connect`. REPOSPLIT-002 AC-000 is blocked until this is resolved.
 
-**CONSTRAINT: External client → directory/relay transport path.** The directory's libp2p port (4000) is NOT exposed through the ALB. The relay is on a private IP with no external path. All M0-M4 tests ran in-process. Before REPOSPLIT-002 AC-003 or DEMO-001 AC-004b can pass, the transport layer must support external clients connecting via WebSocket through the ALB. See REPOSPLIT-002 `transport_path_prerequisite` implementation note for resolution options.
+**CONSTRAINT: External client → directory/relay transport path.** ~~The directory's libp2p port (4000) is NOT exposed through the ALB.~~ **RESOLVED by REPOSPLIT-001 (AC-007).** Directory now accepts WebSocket connections on port 8080 through the existing ALB. CloudFormation committed; deployment required before REPOSPLIT-002 AC-003 or DEMO-001 AC-004b can be verified against live infra.
 
 ---
