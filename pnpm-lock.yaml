@@ -256,6 +256,16 @@ importers:
         specifier: ^25.6.2
         version: 25.6.2
 
+  packages/operations-agent:
+    dependencies:
+      '@cello/interfaces':
+        specifier: workspace:*
+        version: link:../interfaces
+    devDependencies:
+      '@types/node':
+        specifier: ^25.6.2
+        version: 25.6.2
+
   packages/protocol-types:
     dependencies:
       '@cello/crypto':
