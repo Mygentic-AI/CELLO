@@ -800,6 +800,98 @@ All 6 subscription workers confirmed `streaming` state. All 6 replication slots 
 
 ---
 
+## Post-M5 CI/CD Hardening (2026-05-26)
+
+After M5 closed, three systemic CI/CD fragility issues were identified and fixed. None of these were visible during normal development — they surfaced only once production deployments were running regularly.
+
+### Issue 1 — `aws ecs wait services-stable` Hard 10-Minute Timeout
+
+**Symptom:** StagingDeploy and ProductionDeploy stages failed intermittently with no ECS error — the deployed service was actually healthy.
+
+**Root cause:** `aws ecs wait services-stable` has a hard ceiling of 10 minutes that cannot be extended via flags or configuration. ALB target deregistration delay is 300 seconds per target. For two targets (old + new task), deregistration alone consumes up to 10 minutes — before the new task's health check grace period even begins. Healthy deploys regularly exceeded this limit.
+
+**Fix:** Replaced `aws ecs wait services-stable` in both `StagingDeployDirectoryBuild` and `StagingDeployRelayBuild` with a custom poll loop on the ECS `rolloutState` field:
+```bash
+while [ $WAIT_ATTEMPTS -lt $MAX_WAIT_ATTEMPTS ]; do
+  DEPLOY_STATUS=$(aws ecs describe-services --cluster ... --query \
+    'services[0].deployments[?status==`PRIMARY`].rolloutState' --output text)
+  if [ "$DEPLOY_STATUS" = "COMPLETED" ]; then break
+  elif [ "$DEPLOY_STATUS" = "FAILED" ]; then exit 1
+  fi
+  WAIT_ATTEMPTS=$((WAIT_ATTEMPTS + 1))
+  sleep 15
+done
+```
+Ceiling: 60 × 15s = 15 minutes. `ProductionDeployBuild` already had a rolloutState loop — no change needed there.
+
+**Rule reinforced (from CLAUDE.md M5 rules):** ECS ALB deployments exceed `aws ecs wait` 10-minute timeout. The built-in wait command has a hard 10-minute limit that cannot be extended. Use custom poll loops checking `rolloutState` every 15–30 seconds for up to 15 minutes.
+
+### Issue 2 — Inline Buildspecs Only Update on `deploy.sh` Run
+
+**Symptom:** Changes to deploy logic (image swap commands, wait strategy) required running `./infra/deploy.sh` to take effect, even though the changes were committed and pushed. A `git push` that fixed a deploy bug would not actually fix the running pipeline until someone manually ran `deploy.sh` to update the CloudFormation stack.
+
+**Root cause:** All four deploy-stage buildspecs were embedded inline in `cello-cicd.yaml` as YAML block scalars. CodeBuild `Source.Type: NO_SOURCE` means the CodeBuild project has no source artifact — it runs whatever is embedded in the CloudFormation resource at the time the stack was last updated. Pushing to git does not update the stack.
+
+**Fix:** Extracted all four buildspecs to `infra/buildspecs/` repo files:
+- `infra/buildspecs/staging-deploy-directory.yml`
+- `infra/buildspecs/staging-deploy-relay.yml`
+- `infra/buildspecs/smoke-test.yml`
+- `infra/buildspecs/production-deploy.yml`
+
+Updated the corresponding CodeBuild projects in `cello-cicd.yaml`:
+- `Source.Type: NO_SOURCE` → `Type: CODEPIPELINE`
+- Inline `BuildSpec:` block → `BuildSpec: infra/buildspecs/<filename>.yml`
+- `Artifacts.Type: NO_ARTIFACTS` → `CODEPIPELINE`
+
+Updated all StagingDeploy and ProductionDeploy pipeline actions to pass `SourceOutput` (full repo) as the input artifact instead of `BuildOutput` (only contains package buildspecs).
+
+After this change, buildspec edits take effect on the next pipeline run with no `deploy.sh` required.
+
+**Structural tests updated:** `deploy-005-structural.test.ts` was checking the CF template for `services-stable`, smoke event strings, and SSM patterns — all of which had moved to separate files. Tests updated to read `infra/buildspecs/` files and `scenarios.ts` directly. 29/29 passing.
+
+### Issue 3 — Flyway Checksum Mismatch from Modified Applied Migrations
+
+**Symptom:** After commit `b50ab7b`, all three directory ECS services (us-east-1, eu-central-1, ap-northeast-1) failed to start with Flyway checksum mismatch errors:
+```
+Migration checksum mismatch for migration version 2
+→ Applied: 1552230209, Resolved: -51717480
+Migration checksum mismatch for migration version 7
+→ Applied: -200724931, Resolved: 66110819
+```
+
+**Root cause:** Commit `b50ab7b` modified `V2__directory_schema.sql` and `V7__analytics_tables.sql` — removing `PASSWORD 'cello_service_dev'` clauses — after these migrations had already been applied to all three RDS instances. Flyway CRC32-checksums each migration file at apply time and re-verifies the checksum on every subsequent startup. Any content change to an applied migration causes a permanent `Validate failed` error at startup.
+
+**This is a rule violation.** The CLAUDE.md Migration Integrity rule states: "Never modify a migration file after it has been applied to any environment." The b50ab7b change was well-intentioned (removing hardcoded passwords), but the correct fix was to emit a new migration (e.g., `ALTER ROLE cello_service NOCREATEDB NOLOGIN`) rather than editing the historical record.
+
+**Fix (emergency — could not create a corrective migration):** The Flyway `flyway_schema_history` table stores the expected checksum. Since the content change was correct (removing hardcoded passwords) and could not be reverted, the stored checksums were updated directly to match the post-edit file hashes via `psql` in running ECS containers using `aws ecs execute-command`:
+
+```sql
+UPDATE flyway_schema_history SET checksum=-51717480 WHERE version=2::text;
+UPDATE flyway_schema_history SET checksum=66110819 WHERE version=7::text;
+```
+
+Applied to all three regions:
+- us-east-1: task `a1c1f34ed2724a768f08dd212bf8c316`
+- eu-central-1: task `eac4ec4aa4f44863a746380fbf4ca2fa`
+- ap-northeast-1: task `d9d522f5ed6c43019580cb664b08427e`
+
+Note: eu-central-1 RDS admin credentials (`cello/dev/directory/rds-admin-credentials`) had never been bootstrapped — placeholder password from `cello-secrets.yaml` was still in place. Connected as `cello_service` (app user) instead, which has UPDATE permission on `flyway_schema_history`. A known gap: eu-central-1 admin credentials remain at placeholder value.
+
+**Note on `aws ecs execute-command` terminal output:** After every `exec-command` session completes, the terminal prints `Cannot perform start session: EOF`. This is an SSM Session Manager plugin cleanup artifact — not an error. Commands run successfully regardless of this message.
+
+**Rule reinforced:** Never modify a migration file after it has been applied to any environment. The cost is not local — it requires emergency database surgery in every region where the migration has been applied. If a migration needs correction, emit a new migration or accept the historical artifact.
+
+### First Clean End-to-End Pipeline Run
+
+Following all three fixes and the Flyway recovery, the first complete end-to-end directory pipeline run succeeded:
+
+**Execution `b689c78b` (cello-directory-pipeline):**
+- Source → Build → StagingDeploy (us-east-1) → SmokeTest → ProductionDeploy us-east-1 → ProductionDeploy eu-central-1 → ProductionDeploy ap-northeast-1: **Succeeded**
+
+All four stages ran without manual intervention. The rolloutState poll loops completed within the 15-minute ceiling on all regions. No `aws ecs wait` timeouts.
+
+---
+
 ## Related Documents
 - [[server-infrastructure]] — CELLO Server Infrastructure Requirements
 - [[2026-05-16_0900_m4-infrastructure-decisions]] — VPC topology, RDS, KMS, S3, IaC templates
