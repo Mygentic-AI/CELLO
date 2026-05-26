@@ -22,6 +22,23 @@
  *   pnpm --filter @cello-protocol/e2e-tests run test -- transport-path \
  *     --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
  *
+ * Environment variables:
+ *
+ *   CELLO_DIR_ALB        (required) — ALB hostname without scheme or path.
+ *                        Example: cello-dir-dev-1136016900.us-east-1.elb.amazonaws.com
+ *                        If absent, the entire suite is skipped.
+ *
+ *   CELLO_DIR_PUBKEY     (optional) — Ed25519 public key hex of the directory node.
+ *                        Defaults to the dev directory peer ID.
+ *
+ *   IDLE_TIMEOUT_TEST    (optional) — Set to any truthy value to enable dimension 3
+ *                        (idle timeout survival). This test takes ~5.5 minutes and
+ *                        is skipped by default even when CELLO_DIR_ALB is set.
+ *                        Run: CELLO_DIR_ALB=<host> IDLE_TIMEOUT_TEST=true pnpm ...
+ *                        When to run: before every ALB config change (IdleTimeout),
+ *                        and before any REPOSPLIT-002 merge that depends on long-lived
+ *                        WebSocket connections. See scripts/transport-path-runbook.md.
+ *
  * Infrastructure preconditions (must be in place before running):
  *   - directory ECS service updated with CELLO_DIRECTORY_WS_LISTEN_ADDR=/ip4/0.0.0.0/tcp/8080/ws
  *   - HEALTH_PORT=9090 in ECS task definition
@@ -102,6 +119,24 @@ describe.skipIf(!ALB_HOST)("REPOSPLIT-001 AC-007 — WebSocket transport path th
    * The directory is the circuit relay (circuitRelayServer() is configured).
    * Client A dials the directory → requests a relay reservation.
    * Client B dials Client A via the relay-provided circuit relay address.
+   *
+   * NOTE — CloudWatch log verification (manual, post-deploy):
+   *   AC-007 dim 2 also requires that `relay.message.forwarded` is visible in
+   *   relay CloudWatch logs within 10 seconds of a message being forwarded.
+   *   This test proves the transport-level circuit relay path works (reservation
+   *   + dial succeed), but the `relay.message.forwarded` log event can only be
+   *   verified against live infrastructure after deploying.
+   *
+   *   How to verify after deploy:
+   *     aws logs filter-log-events \
+   *       --log-group-name /cello/directory \
+   *       --start-time $(date -d '-30 seconds' +%s000) \
+   *       --filter-pattern '"relay.message.forwarded"'
+   *
+   *   Or check the relay CloudWatch log group in the AWS console
+   *   (us-east-1 → CloudWatch → Log groups → /cello/directory) within
+   *   10 seconds of running this test against the live ALB. See
+   *   scripts/transport-path-runbook.md for the full post-deploy checklist.
    */
   it("[AC-007-DIM2] Circuit relay reservation through directory succeeds within 10s", async () => {
     expect(ALB_HOST, "CELLO_DIR_ALB must be set").toBeTruthy();
