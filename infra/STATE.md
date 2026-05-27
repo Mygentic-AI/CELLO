@@ -12,30 +12,38 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 ## Environments
 
 ### dev — us-east-1
-*Last deployed: 2026-05-26
+*Last deployed: 2026-05-27 (deploy.sh pending — OPS-AGENT-005A IaC merged but not yet deployed)
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
-| cello-ecr-dev | UPDATE_COMPLETE | 2026-05-22 | |
-| cello-iam-dev | UPDATE_COMPLETE | 2026-05-23 | envelope-key secret added |
-| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-22 | |
+| cello-ecr-dev | UPDATE_COMPLETE | 2026-05-22 | PENDING UPDATE: OPS-AGENT-005A adds cello-operations-agent ECR repo |
+| cello-iam-dev | PENDING UPDATE | 2026-05-23 | OPS-AGENT-005A adds ops-agent task/execution roles; fix(ops-agent-001) adds ops-agent/directory-api-key to directory execution+task role |
+| cello-secrets-dev | PENDING UPDATE | 2026-05-22 | OPS-AGENT-005A adds ops-agent/telegram-bot-token, ses-credentials, directory-api-key, rds-credentials secrets |
 | cello-vpc-dev | UPDATE_COMPLETE | 2026-05-25 | Port 8080 for directory SG, port 80+443 for ALB SG; SSM+SSMMessages VPC endpoints added |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-22 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | s3:ListBucket added for relay+directory task roles |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
-| cello-rotation-dev | UPDATE_COMPLETE | 2026-05-25 | Now uses RDS-managed master secret (no manual admin creds) |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-25 | Real image deployed via pipeline to all 3 regions; manifest fallback enabled |
-| cello-ecs-operations-agent-dev | NOT DEPLOYED | — | OPS-AGENT-005A IaC complete; deploy on next deploy.sh run (AC-008: update this row after AC-001 passes) |
+| cello-rotation-dev | PENDING UPDATE | 2026-05-25 | OPS-AGENT-005A adds rotation Lambda config for ops-agent RDS creds |
+| cello-ecs-directory-dev | PENDING UPDATE | 2026-05-25 | fix(ops-agent-001) adds INTERNAL_API_KEY secret injection; directory pipeline currently failing (bbf94c2 image crashes — missing INTERNAL_API_KEY env) |
+| cello-ecs-operations-agent-dev | NOT DEPLOYED | — | OPS-AGENT-005A IaC committed (commit a569144); deploy via deploy.sh dev us-east-1 |
 | cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL: rate-limit 1000/5min, IP reputation (BLOCK), CommonRuleSet (COUNT); logs to aws-waf-logs-cello-dev (SECOPS-003) |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-25 | Real image deployed via pipeline (commit 1af5c16) to all 3 regions |
-| cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-05-23 | 10 alarms with -dev suffix, 2 SNS topics, 1 multi-region dashboard (SECOPS-002) |
+| cello-cloudwatch-dev | PENDING UPDATE | 2026-05-23 | OPS-AGENT-005A adds ops-agent ECS alarms |
 | cello-route53-dev | CREATE_COMPLETE | 2026-05-22 | |
-| cello-cicd-dev | UPDATE_COMPLETE | 2026-05-25 | 15-min rolloutState poll in ProductionDeploy; CELLO_ENV; ECR URI rewrite |
+| cello-cicd-dev | PENDING UPDATE | 2026-05-25 | OPS-AGENT-005A adds cello-operations-agent-pipeline |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
-| Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-22 | |
+| Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-22 | pipeline-mappings.json updated to add operations-agent path filter |
 | ECR Replication (account-level) | CONFIGURED | 2026-05-24 | us-east-1 → eu-central-1 + ap-northeast-1; filter: prefix "cello-" |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-24 | 167ca6...27b5 (directory node pubkey) |
 | Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | Replication user password (alphanumeric, 32-char) |
+
+**Pre-existing ops-agent secrets (created 2026-05-25, NOT yet at env-namespaced path):**
+| Secret | Path | Notes |
+|---|---|---|
+| Telegram bot token (prod) | `cello/ops-agent/telegram-bot-token` | Real value; CF expects `cello/dev/ops-agent/telegram-bot-token` — copy after deploy.sh |
+| Telegram bot token (staging) | `cello/ops-agent/telegram-bot-token-staging` | Real value; CF expects `cello/dev/ops-agent/telegram-bot-token-staging` — copy after deploy.sh |
+| directory-api-key | not yet created | CF creates `cello/dev/ops-agent/directory-api-key` as placeholder; populate with random key; same value goes into directory as INTERNAL_API_KEY |
+| ses-credentials | not yet created | CF creates `cello/dev/ops-agent/ses-credentials` as placeholder; populate manually |
 
 #### Key Resources — dev us-east-1
 
