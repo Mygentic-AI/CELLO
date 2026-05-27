@@ -211,10 +211,10 @@ describe("SesOtpDeliveryProvider — AC-002: rate limiting", () => {
 // ─── AC-003: Rate limit window reset ─────────────────────────────────────────
 
 describe("SesOtpDeliveryProvider — AC-003: rate limit window reset", () => {
-  it("resets the counter after 1 hour and allows sends again", async () => {
-    // Use fake timers so we can advance time without waiting
-    vi.useFakeTimers();
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
 
+  it("resets the counter after 1 hour and allows sends again", async () => {
     const sendMock = makeSendMock({ MessageId: "msg-id" });
     const sesClient = buildFakeClient(sendMock);
     const logger = makeLogger();
@@ -239,8 +239,6 @@ describe("SesOtpDeliveryProvider — AC-003: rate limit window reset", () => {
     // First send after window reset should succeed
     await expect(provider.sendOtp("window@example.com", "111111")).resolves.toBeUndefined();
     expect(sendMock).toHaveBeenCalledTimes(6);
-
-    vi.useRealTimers();
   });
 });
 
