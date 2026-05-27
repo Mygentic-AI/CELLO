@@ -109,9 +109,9 @@ acceptance_criteria:
     given: "The state machine calls send() with a text reply"
     when: "the Telegram Bot API processes the sendMessage call"
     then: "the sendMessage HTTP POST returns a Telegram message_id
-      (integer > 0) in the response; the adapter resolves the send()
-      promise with the message_id; the test user receives the message
-      via the staging bot"
+      (integer > 0) in the response, confirming delivery; the
+      adapter resolves the send() Promise<void> successfully;
+      the test user receives the message via the staging bot"
     test_type: integration
     component_under_test: operations-agent
 

@@ -10,8 +10,8 @@ description: M6 write-up — CELLO beta launch. Installable @cello-protocol/conn
 # M6 — Beta Launch
 
 **Started:** 2026-05-26
-**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, REPOSPLIT-001
-**Stories open:** OPS-AGENT-003, OPS-AGENT-004, OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002, DEMO-001, M6-E2E-001
+**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, REPOSPLIT-001
+**Stories open:** OPS-AGENT-004, OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002, DEMO-001, M6-E2E-001
 
 **Unblocked by OPS-AGENT-002:** OPS-AGENT-003 (Telegram adapter), OPS-AGENT-004 (SES OTP delivery), OPS-AGENT-005B (wire app code)
 
@@ -210,6 +210,51 @@ Scaffolding story. No package source code moves. Establishes the cello-client re
 - CloudFormation changes are committed and merged to main but not yet deployed. The directory ECS deployment will be triggered by the CI/CD pipeline after the next push to origin.
 - After the deployment stabilises, run `transport-path.test.ts` against the live ALB to verify all three dimensions of AC-007.
 - Push tag `v0.0.0-scaffold.1` to cello-client to execute the AC-008 publish smoke test; unpublish/deprecate immediately after confirming NPM_TOKEN works.
+
+---
+
+## OPS-AGENT-003 — TelegramAdapter: MessagingChannel over Telegram Bot API
+
+Implementation story. Delivers the Telegram transport layer for the Operations Agent registration bot. The `TelegramAdapter` implements the `MessagingChannel` interface and drives the existing `RegistrationEngine` (OPS-AGENT-002) over the real Telegram Bot API. After this story, the registration bot can receive `/start` commands and phone contact events from real Telegram users.
+
+**Delivered:**
+- `TelegramAdapter` (`packages/operations-agent/src/telegram-adapter.ts`) — `MessagingChannel` implementation over the Telegram Bot API via long-polling (`getUpdates`, timeout=25s)
+- `start()`: calls `getMe` to obtain `botUsername`; logs `telegram.polling.started` at INFO; optionally starts background polling loop
+- `pollOnce()`: one `getUpdates` cycle; exposed as public for testing; advances `this.#offset = update_id + 1` after each update
+- Contact event handling: `contact.user_id === message.from.id` check (SI-001 enforcement); stores contact in `#lastContactByFrom` for `resolveIdentity()`
+- `resolveIdentity(from)`: returns `phoneNumber` only on verified contact; returns `phoneNumber=undefined` on mismatch (SI-001)
+- `isContactPromptMessage()`: attaches `ReplyKeyboardMarkup` with `request_contact` button to contact-prompt messages
+- HTTP 409 Conflict safety net: logs `telegram.poller.conflict` at ERROR and calls `process.exit(1)` — ECS `MinimumHealthyPercent=0` ensures only one task polls after restart
+- All 6 `telegram.*` events added to canonical event taxonomy in pipeline discussion log
+- Token logging invariant: `#baseUrl` contains the token but is never logged; only `botUsername` appears in log events (SI-002)
+
+**Test structure:**
+- AC-001 (integration, `TELEGRAM_BOT_TOKEN` required): real `getMe` + `getUpdates` HTTP calls; `telegram.polling.started` proves real Telegram API responded; any received `update_id`s verified as integers > 0
+- AC-002 (manual `it.skip`): requires human to tap "Share Contact" in staging bot; documented procedure inline
+- AC-003 (integration, `TELEGRAM_BOT_TOKEN` required): real `sendMessage` call; returns early if queue empty
+- AC-006 (manual `it.skip`): requires human to drive full `/start` → `AWAITING_EMAIL` flow; documented procedure inline
+- AC-007-integration-gate: Flyway V1–V26 checksum integrity + >= 2 real HTTP calls (requires `TELEGRAM_BOT_TOKEN` + `CELLO_ENV=local`)
+- Unit tests (AC-004, AC-005, AC-006b, AC-006c, SI-001, SI-002): run without `TELEGRAM_BOT_TOKEN`; all use mock fetch
+
+**Bugs found during review cycle:**
+
+### 1. AC-001 test used synthetic update_id instead of real Telegram-assigned integer
+**Symptom:** The initial AC-001 test injected a synthetic update via `processUpdate()` with a hard-coded `update_id: 1001`. The story AC explicitly states: "the update_id in the getUpdates response is a Telegram-assigned integer that cannot be synthesized by a local stub." The test would pass whether or not any real HTTP call was made.
+**Fix:** Restructured AC-001 to call `adapter.start()` (real `getMe`) then `adapter.pollOnce()` (real `getUpdates`). The `telegram.polling.started` event proves `getMe` returned a real response. A spy on `processUpdate` captures any `update_id`s for integer validation.
+**Rule:** An integration test must exercise the actual transport boundary. A test that calls only `processUpdate()` with synthetic data is a unit test, not an integration test.
+
+### 2. AC-002 and AC-006 presented as automated when they require human interaction
+**Symptom:** The initial tests for AC-002 and AC-006 injected synthetic `processUpdate()` calls with fabricated `user_id` values. The story ACs explicitly state these are transport-level observables that "cannot be synthesized by a local stub." Tests that pass synthetic data cannot verify the Telegram server-side guarantee.
+**Fix:** Converted to `it.skip` with documented manual test procedures. The correct handling for a test requiring human interaction is explicit documentation, not simulated automation.
+**Rule:** When a story AC states "cannot be synthesized," the test must either reach the real boundary or be explicitly marked as a manual test with a clear procedure. A fake automation that passes synthetic data is worse than no test — it creates false confidence.
+
+### 3. AC-007-integration-gate had no test
+**Symptom:** The story's blocking gate AC (Flyway checksum integrity + >= 2 real HTTP calls) had no corresponding test. This left the gate unverifiable in CI.
+**Fix:** Added two `it.skipIf(skipIntegrationGate)` tests: one verifies Flyway `flyway_schema_history` rows all have `success=true` and non-placeholder checksums; the other wraps `globalThis.fetch` to count real calls to `api.telegram.org` and asserts >= 2.
+**Rule:** Every blocking gate AC must have a test. A gate without a test is not a gate.
+
+**Downstream stories unblocked:**
+- OPS-AGENT-005B: wire application code — `TelegramAdapter` is ready to inject into `RegistrationEngine` as the `MessagingChannel`; composition root in `server.ts` wires `TelegramAdapter` for `CELLO_ENV != local`; `TELEGRAM_BOT_TOKEN` env var needed in ECS task definition
 
 ---
 
