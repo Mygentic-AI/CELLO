@@ -126,6 +126,11 @@ Resources:
             # for dev/staging (placeholder until KmsEnvelopeKeyProvider is wired in M5+).
             - Name: DEV_ENVELOPE_KEY
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/envelope-key"
+            # INTERNAL_API_KEY: shared bearer key used by /internal/pre-authorize endpoint.
+            # Same secret as ops-agent/directory-api-key — populated once by operator;
+            # the same value is injected into the Ops Agent as DIRECTORY_API_KEY.
+            - Name: INTERNAL_API_KEY
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/directory-api-key"
           LogConfiguration:
             LogDriver: awslogs
             Options:
