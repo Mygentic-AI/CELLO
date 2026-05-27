@@ -61,6 +61,14 @@ const MAX_OTP_ATTEMPTS = 3;
 /** Registration expiry — 7 days */
 const REGISTRATION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 
+/**
+ * Sentinel prefix for messages that require a contact-sharing keyboard in Telegram.
+ * MessagingChannel adapters that support request_contact (e.g. TelegramAdapter) strip
+ * this prefix before sending and attach the appropriate keyboard UI. Adapters that do
+ * not support it (e.g. CliAdapter) strip the prefix and send the plain text.
+ */
+export const CONTACT_PROMPT_PREFIX = "__REQUEST_CONTACT__:";
+
 /** Rate limit: max OTP sends per email domain per hour */
 const OTP_RATE_LIMIT_PER_HOUR = 5;
 
@@ -140,7 +148,7 @@ export class RegistrationStateMachine {
         // Transient states that should not linger — re-prompt for contact
         await this.#deps.channel.send(
           from,
-          "Please share your phone number using the button below to continue registration.",
+          `${CONTACT_PROMPT_PREFIX}Please share your phone number using the button below to continue registration.`,
         );
         return record;
     }
@@ -181,7 +189,7 @@ export class RegistrationStateMachine {
     // Send request_contact prompt
     await this.#deps.channel.send(
       channelUserId,
-      "Welcome! Please share your phone number to begin registration.",
+      `${CONTACT_PROMPT_PREFIX}Welcome! Please share your phone number to begin registration.`,
     );
 
     return awaitingRecord;
@@ -197,7 +205,7 @@ export class RegistrationStateMachine {
     await repository.touchTimestamps(record.id, newExpiresAt);
     await channel.send(
       record.channelUserId,
-      "Please share your phone number using the button below to continue registration.",
+      `${CONTACT_PROMPT_PREFIX}Please share your phone number using the button below to continue registration.`,
     );
   }
 
@@ -248,7 +256,7 @@ export class RegistrationStateMachine {
     }
 
     // Not a contact event — re-prompt
-    await channel.send(from, "Please share your phone number using the button below.");
+    await channel.send(from, `${CONTACT_PROMPT_PREFIX}Please share your phone number using the button below.`);
     return record;
   }
 

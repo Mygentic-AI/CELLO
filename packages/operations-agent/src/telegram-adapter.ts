@@ -49,8 +49,7 @@
  *     // Build body; attach ReplyKeyboardMarkup for contact-prompt messages
  *     correlationId = randomUUID()
  *     body = { chat_id: to, text: message }
- *     if isContactPromptMessage(message):
- *       body.reply_markup = ReplyKeyboardMarkup with request_contact button
+ *     if message.startsWith(CONTACT_PROMPT_PREFIX): strip prefix; attach ReplyKeyboardMarkup
  *     response = await fetch(baseUrl + 'sendMessage', { method: POST, body: JSON.stringify(body) })
  *     if !response.ok:
  *       const { error_code, description } = await response.json()
@@ -80,10 +79,8 @@
  *     return response.result
  *
  * Contact prompt detection:
- *   The state machine sends two messages that require a keyboard:
- *   - "Welcome! Please share your phone number to begin registration."
- *   - "Please share your phone number using the button below..."
- *   Both contain "share your phone number" — we match on this substring.
+ *   The state machine prefixes contact-prompt messages with CONTACT_PROMPT_PREFIX ("__REQUEST_CONTACT__:").
+ *   send() strips the prefix before sending and attaches a ReplyKeyboardMarkup with request_contact.
  *   RFC references: N/A (no cryptographic operations in this adapter).
  *
  * SI-002: Token never logged. The baseUrl contains the token (as is standard for Telegram
@@ -173,24 +170,12 @@ export type StartOptions = {
 // ─── Contact prompt detection ─────────────────────────────────────────────────
 
 /**
- * Returns true if the message text is a contact-prompt that requires attaching
- * a ReplyKeyboardMarkup with a request_contact button.
- *
- * The state machine emits these messages (state-machine.ts):
- *   - "Welcome! Please share your phone number to begin registration."
- *   - "Please share your phone number using the button below to continue registration."
- *   - "Please share your phone number using the button below."
- * All contain "share your phone number".
- *
- * TODO: replace substring match with an explicit sentinel (e.g. `__REQUEST_CONTACT__:`
- * prefix that the adapter strips before sending). The current substring match creates
- * silent breakage if the state machine changes its contact-prompt wording without
- * updating this function. A sentinel would make the contract explicit and avoid coupling
- * this adapter to the exact wording of state machine messages.
+ * Sentinel prefix emitted by RegistrationStateMachine for messages that require a
+ * contact-sharing keyboard in Telegram. The adapter strips the prefix before sending
+ * and attaches a ReplyKeyboardMarkup with request_contact button.
+ * Must stay in sync with CONTACT_PROMPT_PREFIX in state-machine.ts.
  */
-function isContactPromptMessage(message: string): boolean {
-  return message.toLowerCase().includes("share your phone number");
-}
+const CONTACT_PROMPT_PREFIX = "__REQUEST_CONTACT__:";
 
 // ─── TelegramAdapter ──────────────────────────────────────────────────────────
 
@@ -246,12 +231,15 @@ export class TelegramAdapter implements MessagingChannel {
     const correlationId = randomUUID();
     const url = `${this.#baseUrl}sendMessage`;
 
+    const isContactPrompt = message.startsWith(CONTACT_PROMPT_PREFIX);
+    const text = isContactPrompt ? message.slice(CONTACT_PROMPT_PREFIX.length) : message;
+
     const body: Record<string, unknown> = {
       chat_id: to,
-      text: message,
+      text,
     };
 
-    if (isContactPromptMessage(message)) {
+    if (isContactPrompt) {
       body.reply_markup = {
         keyboard: [[{ text: "Share Phone Number", request_contact: true }]],
         one_time_keyboard: true,

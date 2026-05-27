@@ -21,6 +21,9 @@
 
 import type { MessagingChannel, ChannelIdentity } from "../messaging-channel.js";
 
+/** Sentinel prefix for contact-prompt messages — strip before sending to any channel. */
+const CONTACT_PROMPT_PREFIX = "__REQUEST_CONTACT__:";
+
 /**
  * CliAdapter — implements MessagingChannel for local development.
  * send() writes to stdout; onMessage() registers a stdin line reader.
@@ -30,9 +33,12 @@ export class CliAdapter implements MessagingChannel {
   #messageHandler: ((from: string, message: string) => void | Promise<void>) | undefined = undefined;
   #readlineStarted = false;
 
-  /** Write a message to stdout in a structured format. */
+  /** Write a message to stdout in a structured format. Strips contact-prompt sentinel prefix. */
   async send(to: string, message: string): Promise<void> {
-    process.stdout.write(`[CELLO CLI] to=${to} message=${message}\n`);
+    const text = message.startsWith(CONTACT_PROMPT_PREFIX)
+      ? message.slice(CONTACT_PROMPT_PREFIX.length)
+      : message;
+    process.stdout.write(`[CELLO CLI] to=${to} message=${text}\n`);
   }
 
   /**
