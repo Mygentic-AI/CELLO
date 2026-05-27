@@ -252,7 +252,7 @@ Resources:
       # RotateImmediatelyOnUpdate: false — prevents automatic rotation at stack
       # create/update time. At stack create, the Lambda has placeholder code and
       # the cello_ops_agent PostgreSQL role may not exist yet (Flyway not applied).
-      # deploy.sh Step 8b handles the first rotation explicitly at the correct
+      # deploy.sh Step 8a handles the first rotation explicitly at the correct
       # time (after Flyway has created the role).
       RotateImmediatelyOnUpdate: false
       RotationRules:

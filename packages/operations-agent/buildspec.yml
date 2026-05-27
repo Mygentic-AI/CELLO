@@ -24,12 +24,13 @@ phases:
       # OPS-AGENT-005A: build stub image from infra/stub/Dockerfile (no application source yet).
       # OPS-AGENT-005B: replace with: docker build --platform linux/amd64 -t ${IMAGE_URI} -f packages/operations-agent/Dockerfile .
       - export IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
-      - export ECR_REPO=257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-operations-agent
+      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - export ECR_REPO=${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/cello-operations-agent
       - export IMAGE_URI=${ECR_REPO}:${IMAGE_TAG}
-      - aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 257394457473.dkr.ecr.us-east-1.amazonaws.com
+      - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
       - docker build --platform linux/amd64 -t ${IMAGE_URI} -f infra/stub/Dockerfile .
       - docker push ${IMAGE_URI}
-      - aws ssm put-parameter --name /cello/${CELLO_ENV}/pipeline/operations-agent-image-uri --value "${IMAGE_URI}" --type String --overwrite --region us-east-1
+      - aws ssm put-parameter --name /cello/${CELLO_ENV}/pipeline/operations-agent-image-uri --value "${IMAGE_URI}" --type String --overwrite --region ${AWS_DEFAULT_REGION}
 artifacts:
   files:
     - packages/operations-agent/buildspec.yml
