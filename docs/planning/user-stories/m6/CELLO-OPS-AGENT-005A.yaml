@@ -164,17 +164,23 @@ acceptance_criteria:
     given: "The Operations Agent security group"
     when: "egress rules are inspected"
     then: "outbound is restricted to: HTTPS (443) to 0.0.0.0/0
-      (Telegram API and SES endpoints are distributed); port 8080 to
+      (Telegram API and SES endpoints are distributed); HTTP (80) to
+      the ALB security group (directory ALB on port 80 for
+      DIRECTORY_INTERNAL_URL per AC-009d); port 8080 to
       the directory service security group (internal pre-authorize
-      endpoint); port 5432 to the RDS security group (cello_ops_agent
-      database credential for registrations and pre_authorization_tokens);
-      no other egress is permitted; no inbound rules exist"
+      endpoint, direct-path smoke test per AC-009b); port 5432 to
+      the RDS security group (cello_ops_agent database credential for
+      registrations and pre_authorization_tokens); no other egress is
+      permitted; no inbound rules exist"
     test_type: integration
     component_under_test: infrastructure
     notes: "Telegram and SES IPs are not enumerable; HTTPS egress
       to 0.0.0.0/0 is acceptable. Application code constrains usage.
-      Port 5432 egress uses the same RDS security group reference pattern
-      as cello-ecs-directory.yaml."
+      Port 80 to ALB SG is required for AC-009d (DIRECTORY_INTERNAL_URL
+      uses the ALB DNS name on port 80). Port 8080 to directory SG is
+      the direct-path layer-4 smoke test (AC-009b). Port 5432 egress
+      uses the same RDS security group reference pattern as
+      cello-ecs-directory.yaml."
 
   - id: AC-005b
     given: "The cello-rds security group (or cello-vpc.yaml)"
@@ -200,8 +206,12 @@ acceptance_criteria:
       secretsmanager:GetSecretValue on the four enumerated secret ARNs
       (telegram-bot-token, ses-credentials, directory-api-key, rds-credentials),
       logs:CreateLogStream + logs:PutLogEvents on the log group, and
-      ecs:ExecuteCommand for debugging; no S3, no KMS, no IAM,
-      no access to directory/relay secret ARNs"
+      ssmmessages:CreateControlChannel + ssmmessages:CreateDataChannel +
+      ssmmessages:OpenControlChannel + ssmmessages:OpenDataChannel for
+      ECS Exec debugging (note: ecs:ExecuteCommand is a caller-side IAM
+      action, not a task role permission — the task role requires
+      ssmmessages:* for the SSM agent inside the container); no S3,
+      no KMS, no IAM, no access to directory/relay secret ARNs"
     test_type: manual
     component_under_test: infrastructure
     notes: "Task role lives in cello-iam.yaml (centralized pattern).
