@@ -20,9 +20,9 @@
  *       messageId = await sendViaSes(emailAddress, otp)
  *     catch ThrottlingException:
  *       wait 1000ms
- *       log otp.delivery.retried { emailDomain, retryDelayMs: 1000, correlationId }
  *       try:
  *         messageId = await sendViaSes(emailAddress, otp)   // retry
+ *         log otp.delivery.retried { emailDomain, retryDelayMs: 1000, correlationId }  // fires after retry succeeds
  *       catch:
  *         log otp.delivery.failed { emailDomain, sesErrorType, correlationId }
  *         throw DeliveryError(sesErrorType)
@@ -264,15 +264,26 @@ export class SesOtpDeliveryProvider implements OtpDeliveryProvider {
   }
 
   /**
+   * Prune expired send timestamps from the log for the given address.
+   * Removes entries older than the rolling rate-limit window.
+   * Called explicitly by both #isRateLimited and #recordSend to make the
+   * coupling visible rather than implicit.
+   */
+  #pruneSendLog(address: string): void {
+    const now = Date.now();
+    const existing = this.#sendLog.get(address) ?? [];
+    const inWindow = existing.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+    this.#sendLog.set(address, inWindow);
+  }
+
+  /**
    * Rolling rate limit check for the given email address.
-   * Prunes expired timestamps (older than 1 hour) in place.
+   * Prunes expired timestamps before checking the count.
    */
   #isRateLimited(emailAddress: string): boolean {
-    const now = Date.now();
-    const existing = this.#sendLog.get(emailAddress) ?? [];
-    const recent = existing.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
-    this.#sendLog.set(emailAddress, recent);
-    return recent.length >= RATE_LIMIT_MAX;
+    this.#pruneSendLog(emailAddress);
+    const count = (this.#sendLog.get(emailAddress) ?? []).length;
+    return count >= RATE_LIMIT_MAX;
   }
 
   /**
@@ -280,17 +291,20 @@ export class SesOtpDeliveryProvider implements OtpDeliveryProvider {
    * Called after delivery succeeds — not before, to avoid counting failed attempts.
    */
   #recordSend(emailAddress: string): void {
-    const now = Date.now();
+    this.#pruneSendLog(emailAddress);
     const existing = this.#sendLog.get(emailAddress) ?? [];
-    this.#sendLog.set(emailAddress, [...existing, now]);
+    this.#sendLog.set(emailAddress, [...existing, Date.now()]);
   }
 
   /**
    * Extract the domain portion of an email address (lowercased).
    * e.g. "User@Example.COM" → "example.com"
+   * Returns "[invalid-email-domain]" if the input contains no "@" sign (SI-002 defense).
    */
   #extractDomain(email: string): string {
-    return email.slice(email.indexOf("@") + 1).toLowerCase();
+    const atIndex = email.indexOf("@");
+    if (atIndex === -1) return "[invalid-email-domain]";
+    return email.slice(atIndex + 1).toLowerCase();
   }
 
   /** Extract the error name from an unknown thrown value. */

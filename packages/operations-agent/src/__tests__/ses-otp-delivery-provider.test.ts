@@ -204,6 +204,7 @@ describe("SesOtpDeliveryProvider — AC-002: rate limiting", () => {
 
     const error = await provider.sendOtp("user@domain.org", "999999").catch((e: unknown) => e);
     expect(error).toBeInstanceOf(RateLimitError);
+    expect((error as RateLimitError).name).toBe("RateLimitError");
     expect((error as RateLimitError).message).toContain("domain.org");
   });
 });
@@ -238,6 +239,7 @@ describe("SesOtpDeliveryProvider — AC-003: rate limit window reset", () => {
 
     // First send after window reset should succeed
     await expect(provider.sendOtp("window@example.com", "111111")).resolves.toBeUndefined();
+    await vi.runAllTimersAsync();
     expect(sendMock).toHaveBeenCalledTimes(6);
   });
 });
@@ -263,6 +265,7 @@ describe("SesOtpDeliveryProvider — AC-004: hard bounce", () => {
     const error = await provider.sendOtp("bounce@example.com", "444444").catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(DeliveryError);
+    expect((error as DeliveryError).name).toBe("DeliveryError");
     expect((error as DeliveryError).sesErrorType).toBe("Bounce");
 
     // otp.delivery.failed logged at ERROR with correct fields
@@ -456,7 +459,7 @@ describe("generateOtp — AC-007: 6-digit format invariant", () => {
 
 describe("generateOtp — SI-001: CSPRNG (not Math.random())", () => {
   it("produces a uniform-ish distribution over 1000 samples (Math.random() would cluster)", () => {
-    // This test cannot distinguish crypto.randomBytes from Math.random() via statistics alone
+    // This test cannot distinguish crypto.randomInt from Math.random() via statistics alone
     // with only 1000 samples. However it documents the intent and catches a completely broken
     // implementation (e.g. always returning the same value).
     const seen = new Set<string>();
@@ -466,6 +469,13 @@ describe("generateOtp — SI-001: CSPRNG (not Math.random())", () => {
     // With a CSPRNG over 1,000,000 values, 1000 samples should yield close to 1000 unique values.
     // Even a very bad RNG would produce > 900 unique values in 1000 draws from 1M possibilities.
     expect(seen.size).toBeGreaterThan(900);
+  });
+
+  it("never calls Math.random() — confirms CSPRNG source (not pseudo-random)", () => {
+    const spy = vi.spyOn(Math, "random");
+    Array.from({ length: 100 }, () => generateOtp());
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });
 
@@ -495,6 +505,32 @@ describe("SesOtpDeliveryProvider — SI-002: domain-only logging", () => {
     expect(allLoggedStrings).not.toContain(fullEmail);
     expect(allLoggedStrings).not.toContain("secret.user");
     expect(allLoggedStrings).toContain("private-domain.com");
+  });
+
+  it("logs [invalid-email-domain] when email has no @ sign (SI-002 defense-in-depth)", async () => {
+    const noAtEmail = "notanemailaddress";
+    const sendMock = makeSendMock({ MessageId: "msg-id" });
+    const sesClient = buildFakeClient(sendMock);
+    const logger = makeLogger();
+
+    const provider = new SesOtpDeliveryProvider({
+      sesClient,
+      fromAddress: "noreply@cello.example.com",
+      logger,
+    });
+
+    // sendOtp may succeed or fail — we only care that the raw string is never logged
+    await provider.sendOtp(noAtEmail, "123456").catch(() => undefined);
+
+    const allLoggedStrings = [
+      ...logger.infoCalls.map((c) => JSON.stringify(c)),
+      ...logger.errorCalls.map((c) => JSON.stringify(c)),
+    ].join(" ");
+
+    // Full no-@ address must not appear in logs
+    expect(allLoggedStrings).not.toContain(noAtEmail);
+    // The guard value must appear instead
+    expect(allLoggedStrings).toContain("[invalid-email-domain]");
   });
 
   it("does not log full email on bounce either", async () => {
