@@ -174,6 +174,29 @@ Story completed: REPOSPLIT-001 — scaffold cello-client repo, CI pipeline, ALB 
 
 ---
 
+## 2026-05-27 — OPS-AGENT-004: story closed
+
+Story completed: OPS-AGENT-004 — SES OTP delivery provider.
+
+**Delivered:**
+- `SesOtpDeliveryProvider` in `packages/operations-agent/src/ses/ses-otp-delivery-provider.ts` — implements `OtpDeliveryProvider` via AWS SES SDK v3
+- `crypto.randomInt(0, 1_000_000)` OTP generation (SI-001 spec alignment); `generateOtp()` in `otp.ts` updated
+- In-memory rolling rate limiter: 5 sends/hr per address; `RateLimitError` thrown on 6th attempt before any SES call
+- Per-instance bounced-address Set: `DeliveryError` thrown immediately on re-attempt without calling SES
+- Throttle retry: 1s wait, retry once; `otp.delivery.retried` logged on success
+- `#extractDomain` SI-002 guard: `[invalid-email-domain]` returned for no-`@` input
+- SI-003: `SESClient` injected via constructor; no internal `new SESClient()` or `process.env` reads
+- All 3 observability events (`otp.delivery.sent`, `otp.delivery.retried`, `otp.delivery.failed`) added to canonical event taxonomy
+- AC-008-integration-gate test written, gated on `CELLO_ENV=local && SES_INTEGRATION_TEST=true`
+- `DeliveryError` and `RateLimitError` exported from package index
+
+**Review history:** code-review (8 findings, all fixed), sprint-review pass 1 (1 blocking + 1 medium, both fixed), sprint-review pass 2 → APPROVED.
+
+**Downstream stories now unblocked:**
+- OPS-AGENT-005B: wire application code — inject `SesOtpDeliveryProvider` as `OtpDeliveryProvider` in composition root; SES credentials and `fromAddress` from Secrets Manager; `CELLO_ENV != local` gates production adapter selection
+
+---
+
 ## Constraints
 
 **CONSTRAINT: registrations table single-writer assumption.** The Operations Agent writes only from us-east-1. The partial unique index `UNIQUE (phone_stub_hash) WHERE state NOT IN (terminal)` is enforced locally per-node in logical replication — it does NOT prevent cross-region duplicates. Multi-region Ops Agent deployment requires schema redesign. See OPS-AGENT-000 `replication_safety` note.

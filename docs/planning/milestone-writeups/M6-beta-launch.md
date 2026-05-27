@@ -10,8 +10,8 @@ description: M6 write-up — CELLO beta launch. Installable @cello-protocol/conn
 # M6 — Beta Launch
 
 **Started:** 2026-05-26
-**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, REPOSPLIT-001
-**Stories open:** OPS-AGENT-004, OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002, DEMO-001, M6-E2E-001
+**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001
+**Stories open:** OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002, DEMO-001, M6-E2E-001
 
 **Unblocked by OPS-AGENT-002:** OPS-AGENT-003 (Telegram adapter), OPS-AGENT-004 (SES OTP delivery), OPS-AGENT-005B (wire app code)
 
@@ -255,6 +255,49 @@ Implementation story. Delivers the Telegram transport layer for the Operations A
 
 **Downstream stories unblocked:**
 - OPS-AGENT-005B: wire application code — `TelegramAdapter` is ready to inject into `RegistrationEngine` as the `MessagingChannel`; composition root in `server.ts` wires `TelegramAdapter` for `CELLO_ENV != local`; `TELEGRAM_BOT_TOKEN` env var needed in ECS task definition
+
+---
+
+## OPS-AGENT-004 — SES OTP Delivery Provider
+
+Implementation story. Delivers the email OTP transport layer for the registration state machine. `SesOtpDeliveryProvider` implements the `OtpDeliveryProvider` interface and delivers 6-digit OTPs via AWS SES with in-memory rate limiting, per-instance bounce tracking, and throttle retry. After this story, the registration engine can send real verification codes to operator email addresses.
+
+**Delivered:**
+- `SesOtpDeliveryProvider` (`packages/operations-agent/src/ses/ses-otp-delivery-provider.ts`) — `OtpDeliveryProvider` implementation over AWS SES SDK v3
+- 6-digit OTP via `crypto.randomInt(0, 1_000_000).toString().padStart(6, '0')` (SI-001: CSPRNG, not `Math.random`)
+- In-memory rolling rate limiter: 5 sends/hr per email address; throws `RateLimitError` on 6th attempt without calling SES; `#pruneSendLog` / `#isRateLimited` / `#recordSend` explicitly decoupled (no implicit side-effect coupling)
+- Per-instance hard bounce tracking: `Set<string>` of bounced addresses; second call with a bounced address throws `DeliveryError` immediately, no SES call; new instance starts with empty set
+- Throttle retry: 1-second wait, retry once; logs `otp.delivery.retried` on success; throws `DeliveryError` on retry failure
+- `#extractDomain` guards the no-`@` case: returns `[invalid-email-domain]` instead of the full string (SI-002 defense-in-depth)
+- SI-002: every log call uses `emailDomain` (domain only); full `emailAddress` never appears in any log event; verified by SI-002 test that serializes all log arguments and checks for absence of the full address
+- SI-003: `SESClient` injected via constructor config; provider contains no internal `new SESClient()` call; no `process.env` reads
+- `generateOtp()` in `otp.ts` rewritten from `randomBytes` rejection-sampling to `crypto.randomInt` to match SI-001 spec exactly
+- Three observability events added to canonical taxonomy: `otp.delivery.sent`, `otp.delivery.retried`, `otp.delivery.failed`
+- `DeliveryError` and `RateLimitError` exported from package index
+
+**Test structure:**
+- 20 unit tests covering AC-001 (mock SES, command shape, subject, from, body, log fields), AC-002 (6th send throws before SES), AC-003 (rolling window reset with fake timers), AC-004 (hard bounce + immediate re-attempt DeliveryError), AC-005 (throttle retry success and failure), AC-006 (ConsoleOtpDeliveryProvider), AC-007 (100-sample format check + leading zero), SI-001 (Math.random spy), SI-002 (full address absent in all log calls), SI-003 (injected client used)
+- AC-008-integration-gate test gated on `CELLO_ENV=local && SES_INTEGRATION_TEST=true`: real SES sandbox call (MessageId verified), state machine flow to `PRE_AUTH_TOKEN_ISSUED`, expired OTP rejection, rate-limit check
+
+**Bugs found during review cycle:**
+
+### 1. `generateOtp` used `randomBytes` with rejection sampling instead of `crypto.randomInt`
+**Symptom:** OPS-AGENT-002 had implemented `generateOtp()` using `randomBytes(4)` with a rejection sampling loop to avoid modulo bias. While cryptographically correct, this diverged from SI-001's explicit spec ("uses `crypto.randomInt(0, 1000000)` with `padStart(6, '0')`"), creating a traceability gap during audits.
+**Fix:** Replaced with `crypto.randomInt(0, 1_000_000).toString().padStart(6, '0')` — simpler and self-documenting.
+**Rule:** When a security invariant specifies the exact function name, the implementation must use that function. Equivalent-but-different implementations create audit surface.
+
+### 2. `#extractDomain` would log the full email on a no-`@` input
+**Symptom:** `email.slice(email.indexOf('@') + 1)` returns the full string when `indexOf` returns -1, since `slice(0)` is the whole string. A malformed input with no `@` would log the raw value — a SI-002 violation.
+**Fix:** Added `if (atIndex === -1) return '[invalid-email-domain]'` guard. Malformed inputs are caught upstream by the state machine's email validation, but defense-in-depth is warranted given SI-002 is a hard security invariant.
+**Rule:** SI guards must be in the implementation layer, not just in callers. An upstream validation does not eliminate the need for a boundary-level guard on a hard security invariant.
+
+### 3. AC-008-integration-gate had no test body
+**Symptom:** The test file contained a comment acknowledging AC-008 but no `describe` or `it` block implementing it. The story's blocking gate had no test.
+**Fix:** Added a `describe.skipIf(!isIntegrationEnabled)` block with four parts covering all AC-008 sub-requirements. Guarded on `CELLO_ENV=local && SES_INTEGRATION_TEST=true`.
+**Rule:** Every blocking gate AC must have a test. A comment is not a test.
+
+**Downstream stories unblocked:**
+- OPS-AGENT-005B: wire application code — `SesOtpDeliveryProvider` is ready to inject into `RegistrationEngine` as the `OtpDeliveryProvider`; composition root wires it for `CELLO_ENV != local`; SES credentials and `fromAddress` come from Secrets Manager
 
 ---
 
