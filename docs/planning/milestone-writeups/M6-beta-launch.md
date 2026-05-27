@@ -220,13 +220,12 @@ Implementation story. Delivers the Telegram transport layer for the Operations A
 **Delivered:**
 - `TelegramAdapter` (`packages/operations-agent/src/telegram-adapter.ts`) — `MessagingChannel` implementation over the Telegram Bot API via long-polling (`getUpdates`, timeout=25s)
 - `start()`: calls `getMe` to obtain `botUsername`; logs `telegram.polling.started` at INFO; optionally starts background polling loop
-- `pollOnce()`: one `getUpdates` cycle; exposed as public for testing; advances `this.#offset = update_id + 1` after each update
-- Contact event handling: `contact.user_id === message.from.id` check (SI-001 enforcement); stores contact in `#lastContactByFrom` for `resolveIdentity()`
-- `resolveIdentity(from)`: returns `phoneNumber` only on verified contact; returns `phoneNumber=undefined` on mismatch (SI-001)
-- `isContactPromptMessage()`: attaches `ReplyKeyboardMarkup` with `request_contact` button to contact-prompt messages
-- HTTP 409 Conflict safety net: logs `telegram.poller.conflict` at ERROR and calls `process.exit(1)` — ECS `MinimumHealthyPercent=0` ensures only one task polls after restart
-- All 6 `telegram.*` events added to canonical event taxonomy in pipeline discussion log
-- Token logging invariant: `#baseUrl` contains the token but is never logged; only `botUsername` appears in log events (SI-002)
+- `pollOnce()`: one `getUpdates` cycle; exposed as public for testing; advances `this.#offset = update_id + 1` after each update; 1s backoff on non-409 errors
+- Contact event handling: `contact.user_id === message.from.id` check (SI-001); absent `user_id` treated as mismatch; stores contact in `#lastContactByFrom` for `resolveIdentity()`
+- `resolveIdentity(from)`: returns `phoneNumber` only on verified contact; returns `phoneNumber=undefined` on any mismatch or absent `user_id` (SI-001)
+- `CONTACT_PROMPT_PREFIX` sentinel (`"__REQUEST_CONTACT__:"`): `send()` detects this prefix, strips it before sending, and attaches `ReplyKeyboardMarkup` with `request_contact` button; canonical definition in `packages/interfaces/src/messaging-channel.ts` — imported by `telegram-adapter.ts`, `state-machine.ts`, and `cli-adapter.ts`; drift is a compile error
+- HTTP 409 Conflict: logs `telegram.poller.conflict` at ERROR, calls `process.exit(1)`, then `return []` to prevent fall-through when exit is mocked in tests
+- All 6 `telegram.*` events added to canonical event taxonomy; token never appears in any log event (SI-002)
 
 **Test structure:**
 - AC-001 (integration, `TELEGRAM_BOT_TOKEN` required): real `getMe` + `getUpdates` HTTP calls; `telegram.polling.started` proves real Telegram API responded; any received `update_id`s verified as integers > 0
@@ -234,7 +233,7 @@ Implementation story. Delivers the Telegram transport layer for the Operations A
 - AC-003 (integration, `TELEGRAM_BOT_TOKEN` required): real `sendMessage` call; returns early if queue empty
 - AC-006 (manual `it.skip`): requires human to drive full `/start` → `AWAITING_EMAIL` flow; documented procedure inline
 - AC-007-integration-gate: Flyway V1–V26 checksum integrity + >= 2 real HTTP calls (requires `TELEGRAM_BOT_TOKEN` + `CELLO_ENV=local`)
-- Unit tests (AC-004, AC-005, AC-006b, AC-006c, SI-001, SI-002): run without `TELEGRAM_BOT_TOKEN`; all use mock fetch
+- Unit tests (AC-004, AC-005, AC-006b, AC-006c, SI-001, SI-002, send() sentinel path, `__contact_mismatch__` handler dispatch): run without `TELEGRAM_BOT_TOKEN`; all use mock fetch
 
 **Bugs found during review cycle:**
 
@@ -244,17 +243,42 @@ Implementation story. Delivers the Telegram transport layer for the Operations A
 **Rule:** An integration test must exercise the actual transport boundary. A test that calls only `processUpdate()` with synthetic data is a unit test, not an integration test.
 
 ### 2. AC-002 and AC-006 presented as automated when they require human interaction
-**Symptom:** The initial tests for AC-002 and AC-006 injected synthetic `processUpdate()` calls with fabricated `user_id` values. The story ACs explicitly state these are transport-level observables that "cannot be synthesized by a local stub." Tests that pass synthetic data cannot verify the Telegram server-side guarantee.
-**Fix:** Converted to `it.skip` with documented manual test procedures. The correct handling for a test requiring human interaction is explicit documentation, not simulated automation.
-**Rule:** When a story AC states "cannot be synthesized," the test must either reach the real boundary or be explicitly marked as a manual test with a clear procedure. A fake automation that passes synthetic data is worse than no test — it creates false confidence.
+**Symptom:** The initial tests for AC-002 and AC-006 injected synthetic `processUpdate()` calls with fabricated `user_id` values. The story ACs explicitly state these are transport-level observables that "cannot be synthesized by a local stub."
+**Fix:** Converted to `it.skip` with documented manual test procedures.
+**Rule:** When a story AC states "cannot be synthesized," the test must either reach the real boundary or be explicitly marked as a manual test with a clear procedure.
 
 ### 3. AC-007-integration-gate had no test
-**Symptom:** The story's blocking gate AC (Flyway checksum integrity + >= 2 real HTTP calls) had no corresponding test. This left the gate unverifiable in CI.
-**Fix:** Added two `it.skipIf(skipIntegrationGate)` tests: one verifies Flyway `flyway_schema_history` rows all have `success=true` and non-placeholder checksums; the other wraps `globalThis.fetch` to count real calls to `api.telegram.org` and asserts >= 2.
+**Symptom:** The story's blocking gate AC (Flyway checksum integrity + >= 2 real HTTP calls) had no corresponding test.
+**Fix:** Added two `it.skipIf(skipIntegrationGate)` tests: Flyway per-row integrity check and a fetch-wrapper call counter asserting >= 2 real calls to `api.telegram.org`.
 **Rule:** Every blocking gate AC must have a test. A gate without a test is not a gate.
 
+### 4. `isContactPromptMessage()` substring coupling — silent breakage on prompt wording change
+**Symptom:** Contact-prompt detection used `message.toLowerCase().includes("share your phone number")`. Any change to prompt wording in `state-machine.ts` would silently disable the keyboard — no compile error, no test failure.
+**Fix:** Replaced with an explicit `CONTACT_PROMPT_PREFIX = "__REQUEST_CONTACT__:"` sentinel prefixed by the state machine on all contact-prompt `send()` calls. Canonical definition in `@cello-protocol/interfaces`; all consumers import it.
+**Rule:** Never couple adapter behavior to the exact wording of messages from application logic. Use an explicit signal the type system can enforce.
+
+### 5. `CONTACT_PROMPT_PREFIX` redeclared as private const in three files
+**Symptom:** After the sentinel fix, each file declared its own private copy of `"__REQUEST_CONTACT__:"`. A rename in one place would silently diverge from the others.
+**Fix:** Moved canonical declaration to `packages/interfaces/src/messaging-channel.ts` (exported) and re-exported from `index.ts`. All three consumers import from `@cello-protocol/interfaces`. One string literal in the codebase.
+**Rule:** A constant shared across packages belongs in the shared package. Private copies are future inconsistencies.
+
+### 6. No unit test for `send()` sentinel behavior
+**Symptom:** The sentinel-prefix behavior had no test — a regression would pass the suite silently.
+**Fix:** Added `describe("send() — contact prompt sentinel prefix")` with two unit tests: sentinel path (prefix stripped, `reply_markup` attached) and plain path (text unchanged, no `reply_markup`).
+**Rule:** Every code path introduced by a fix commit needs a regression test.
+
+### 7. AC-004 and H-002 tests did not assert handler dispatch
+**Symptom:** Mismatch tests verified `resolveIdentity()` return value and log output but not that `"__contact_mismatch__"` was delivered to the `onMessage` handler — load-bearing behavior for the state machine's re-prompt logic.
+**Fix:** Extended both tests to register an `onMessage` handler, capture arguments, and assert `message === "__contact_mismatch__"`.
+**Rule:** Test the side effect, not just the return value.
+
+### 8. HTTP 409 handler fell through into non-ok branch when exit was mocked
+**Symptom:** After `process.exit(1)`, the 409 response continued into `if (!response.ok)` in tests — causing double `response.json()`, spurious `telegram.api.error` WARN, and unnecessary 1s backoff sleep.
+**Fix:** Added `return []` immediately after `process.exit(1)`. Unreachable in production; prevents fall-through in tests.
+**Rule:** Any branch calling `process.exit()` needs an explicit `return` after it for test environments where exit is mocked.
+
 **Downstream stories unblocked:**
-- OPS-AGENT-005B: wire application code — `TelegramAdapter` is ready to inject into `RegistrationEngine` as the `MessagingChannel`; composition root in `server.ts` wires `TelegramAdapter` for `CELLO_ENV != local`; `TELEGRAM_BOT_TOKEN` env var needed in ECS task definition
+- OPS-AGENT-005B: wire application code — `TelegramAdapter` ready to inject into `RegistrationEngine`; `TELEGRAM_BOT_TOKEN` env var needed in ECS task definition; composition root wires `TelegramAdapter` for `CELLO_ENV != local`
 
 ---
 
