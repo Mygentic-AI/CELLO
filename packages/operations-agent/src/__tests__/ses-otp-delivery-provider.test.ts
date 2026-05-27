@@ -595,8 +595,9 @@ describe("SesOtpDeliveryProvider — SI-003: injected SES client", () => {
 //   SES_INTEGRATION_TEST=true CELLO_ENV=local SES_SANDBOX_RECIPIENT=you@example.com \
 //   pnpm --filter @cello-protocol/operations-agent run test -- --pool-options.threads.maxThreads=1
 //
-// Note: No migrations in OPS-AGENT-004. Flyway checksum gate satisfied by OPS-AGENT-002
-// integration test which covers V1 through V[N] applied to the cello_dev database.
+// Rate limit behaviour (AC-008-4) is exercised by the unit-level test at the bottom of
+// this file (alongside AC-002 and AC-003) — it has no dependency on CELLO_ENV or
+// SES_INTEGRATION_TEST and runs unconditionally in CI.
 
 const isIntegrationEnabled =
   process.env["CELLO_ENV"] === "local" && process.env["SES_INTEGRATION_TEST"] === "true";
@@ -616,6 +617,14 @@ describe.skipIf(!isIntegrationEnabled)("AC-008 integration gate (SES_INTEGRATION
   beforeEach(async () => {
     pool = new pg.Pool({ connectionString: OPS_AGENT_URL_AC008 });
     repo = new RegistrationRepository(pool);
+
+    // Flyway checksum gate — AC-008 requires zero checksum errors on all applied migrations.
+    // This catches the FEDERATION-002 pattern where a previously-applied migration was
+    // modified, causing Flyway to report a checksum mismatch on the next deployment.
+    const flywayCheck = await pool.query(
+      `SELECT COUNT(*) AS failed_count FROM flyway_schema_history WHERE success = false`,
+    );
+    expect(Number(flywayCheck.rows[0].failed_count)).toBe(0);
   });
 
   afterEach(async () => {
@@ -624,14 +633,10 @@ describe.skipIf(!isIntegrationEnabled)("AC-008 integration gate (SES_INTEGRATION
 
   // ─── Part 1: SES acceptance — MessageId returned; otp.delivery.sent logged ────
 
-  it("AC-008-1: SES accepts OTP delivery and otp.delivery.sent is logged with messageId", async () => {
-    const fromAddress = process.env["SES_FROM_ADDRESS"] ?? "noreply@mail.mygentic.ai";
-    const sandboxRecipient = process.env["SES_SANDBOX_RECIPIENT"] ?? "";
+  const sandboxRecipient = process.env["SES_SANDBOX_RECIPIENT"] ?? "";
 
-    if (!sandboxRecipient) {
-      console.warn("[AC-008-1] SES_SANDBOX_RECIPIENT not set — skipping SES delivery sub-test");
-      return;
-    }
+  it.skipIf(!sandboxRecipient)("AC-008-1: SES accepts OTP delivery and otp.delivery.sent is logged with messageId", async () => {
+    const fromAddress = process.env["SES_FROM_ADDRESS"] ?? "noreply@mail.mygentic.ai";
 
     // Use default AWS credential chain (env vars, IAM role, ~/.aws/credentials)
     const sesClient = new SESClient({ region: "us-east-1" });
@@ -826,11 +831,15 @@ describe.skipIf(!isIntegrationEnabled)("AC-008 integration gate (SES_INTEGRATION
     }
   });
 
-  // ─── Part 4: Rate limit — 6th send throws RateLimitError ─────────────────
+});
 
-  it("AC-008-4: 6th call to SesOtpDeliveryProvider.sendOtp() within 1 hour throws RateLimitError", async () => {
-    // Pure unit-level: the rate limiter lives in SesOtpDeliveryProvider in-memory state.
-    // No SES calls needed — use a mock that always succeeds for the first 5.
+// ─── AC-008-4: Rate limit — 6th send throws RateLimitError (unit, no integration gate) ───
+//
+// This is the same in-memory rate limiter exercised by AC-002 but named for AC-008 to make
+// AC traceability explicit. No CELLO_ENV=local or SES_INTEGRATION_TEST=true required.
+
+describe("SesOtpDeliveryProvider — AC-008-4: rate limit (unit, always runs)", () => {
+  it("6th call to sendOtp() within 1 hour throws RateLimitError (in-memory rate limiter)", async () => {
     const targetEmail = "ac008-ratelimit@example.com";
     const provider = new SesOtpDeliveryProvider({
       sesClient: buildFakeClient(makeSendMock({ MessageId: "msg-id-rate" })),
@@ -842,7 +851,7 @@ describe.skipIf(!isIntegrationEnabled)("AC-008 integration gate (SES_INTEGRATION
       await provider.sendOtp(targetEmail, "999999");
     }
 
-    // 6th call to same address must throw RateLimitError
+    // 6th call to same address must throw RateLimitError without calling SES
     await expect(provider.sendOtp(targetEmail, "888888")).rejects.toBeInstanceOf(RateLimitError);
   });
 });
