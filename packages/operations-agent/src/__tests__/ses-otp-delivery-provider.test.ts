@@ -40,11 +40,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import pg from "pg";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 import { SesOtpDeliveryProvider, DeliveryError, RateLimitError } from "../ses/ses-otp-delivery-provider.js";
 import { generateOtp } from "../registration/otp.js";
-import { ConsoleOtpDeliveryProvider } from "@cello-protocol/interfaces/stubs";
-import type { Logger, LogContext } from "@cello-protocol/interfaces";
+import { ConsoleOtpDeliveryProvider, LocalPreAuthorizationClient } from "@cello-protocol/interfaces/stubs";
+import type { Logger, LogContext, MessagingChannel, ChannelIdentity } from "@cello-protocol/interfaces";
+import { RegistrationEngine } from "../registration/engine.js";
+import { RegistrationRepository } from "../registration/repository.js";
 
 // ─── Logger stub ─────────────────────────────────────────────────────────────
 
@@ -577,5 +580,269 @@ describe("SesOtpDeliveryProvider — SI-003: injected SES client", () => {
     // The spy we placed on the injected client was invoked — proving the provider
     // used it rather than constructing a new one.
     expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── AC-008: Integration gate ─────────────────────────────────────────────────
+//
+// Gated on BOTH:
+//   process.env.CELLO_ENV === 'local'     — consistent with all other integration tests
+//   process.env.SES_INTEGRATION_TEST === 'true'  — opt-in for SES-specific live tests
+//
+// In CI, neither env var is set, so this block is always skipped. That is expected.
+//
+// To run locally:
+//   SES_INTEGRATION_TEST=true CELLO_ENV=local SES_SANDBOX_RECIPIENT=you@example.com \
+//   pnpm --filter @cello-protocol/operations-agent run test -- --pool-options.threads.maxThreads=1
+//
+// Note: No migrations in OPS-AGENT-004. Flyway checksum gate satisfied by OPS-AGENT-002
+// integration test which covers V1 through V[N] applied to the cello_dev database.
+
+const isIntegrationEnabled =
+  process.env["CELLO_ENV"] === "local" && process.env["SES_INTEGRATION_TEST"] === "true";
+
+const DATABASE_URL_AC008 =
+  process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
+
+const OPS_AGENT_URL_AC008 = DATABASE_URL_AC008.replace(
+  /^(postgres(?:ql)?):\/\/[^:]+:[^@]+@/,
+  "$1://cello_ops_agent:cello_ops_agent_dev@",
+);
+
+describe.skipIf(!isIntegrationEnabled)("AC-008 integration gate (SES_INTEGRATION_TEST=true required)", () => {
+  let pool: pg.Pool;
+  let repo: RegistrationRepository;
+
+  beforeEach(async () => {
+    pool = new pg.Pool({ connectionString: OPS_AGENT_URL_AC008 });
+    repo = new RegistrationRepository(pool);
+  });
+
+  afterEach(async () => {
+    await pool.end();
+  });
+
+  // ─── Part 1: SES acceptance — MessageId returned; otp.delivery.sent logged ────
+
+  it("AC-008-1: SES accepts OTP delivery and otp.delivery.sent is logged with messageId", async () => {
+    const fromAddress = process.env["SES_FROM_ADDRESS"] ?? "noreply@mail.mygentic.ai";
+    const sandboxRecipient = process.env["SES_SANDBOX_RECIPIENT"] ?? "";
+
+    if (!sandboxRecipient) {
+      console.warn("[AC-008-1] SES_SANDBOX_RECIPIENT not set — skipping SES delivery sub-test");
+      return;
+    }
+
+    // Use default AWS credential chain (env vars, IAM role, ~/.aws/credentials)
+    const sesClient = new SESClient({ region: "us-east-1" });
+    const logger = makeLogger();
+
+    const provider = new SesOtpDeliveryProvider({
+      sesClient,
+      fromAddress,
+      logger,
+    });
+
+    await provider.sendOtp(sandboxRecipient, "123456");
+
+    // otp.delivery.sent must be logged with a non-empty messageId
+    expect(logger.infoCalls).toHaveLength(1);
+    const sentEvent = logger.infoCalls[0];
+    expect(sentEvent.event).toBe("otp.delivery.sent");
+    expect(typeof sentEvent.context?.messageId).toBe("string");
+    expect((sentEvent.context?.messageId as string).length).toBeGreaterThan(0);
+    expect(typeof sentEvent.context?.correlationId).toBe("string");
+  });
+
+  // ─── Part 2: State machine — correct OTP advances to PRE_AUTH_TOKEN_ISSUED ──
+
+  it("AC-008-2: correct OTP drives state machine to PRE_AUTH_TOKEN_ISSUED", async () => {
+    const userId = `ac008-correct-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const sent: Array<{ to: string; message: string }> = [];
+    const captured: Array<{ emailAddress: string; otp: string }> = [];
+    let messageHandler: ((from: string, message: string) => void | Promise<void>) | undefined;
+
+    const channel: MessagingChannel = {
+      async send(to: string, message: string): Promise<void> {
+        sent.push({ to, message });
+      },
+      onMessage(h) {
+        messageHandler = h;
+      },
+      async resolveIdentity(from: string): Promise<ChannelIdentity> {
+        return { channel: "cli", channelUserId: from };
+      },
+    };
+
+    const otpDelivery = {
+      async sendOtp(emailAddress: string, otp: string): Promise<void> {
+        captured.push({ emailAddress, otp });
+      },
+    };
+
+    const logEvents: Array<{ method: string; event: string }> = [];
+    const logger: Logger = {
+      debug: (_e: string) => {},
+      info: (event: string) => { logEvents.push({ method: "info", event }); },
+      warn: (event: string) => { logEvents.push({ method: "warn", event }); },
+      error: (event: string) => { logEvents.push({ method: "error", event }); },
+    };
+
+    async function inject(from: string, message: string): Promise<void> {
+      if (messageHandler) await messageHandler(from, message);
+    }
+
+    const engine = new RegistrationEngine({
+      pool,
+      channel,
+      otpDelivery,
+      preAuth: new LocalPreAuthorizationClient(),
+      logger,
+      channelType: "cli",
+      onError: (err) => { throw err; },
+    });
+    await engine.start();
+
+    try {
+      // Drive through: new user → phone contact → email address → correct OTP
+      await inject(userId, "hello");
+      await inject(userId, `CONTACT:${userId}:+447911555666`);
+      await inject(userId, "ac008test@example.com");
+
+      expect(captured.length).toBe(1);
+      const otp = captured[0].otp;
+
+      await inject(userId, otp);
+
+      // Verify terminal state
+      const rawResult = await pool.query(
+        `SELECT state FROM registrations WHERE channel_user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [userId],
+      );
+      expect(rawResult.rows[0].state).toBe("PRE_AUTH_TOKEN_ISSUED");
+    } finally {
+      engine.stop();
+      // Clean up: expire the record so it doesn't block future test runs
+      try {
+        const active = await repo.findActiveByChannelUser("cli", userId);
+        if (active) {
+          await repo.transition(active.id, "EXPIRED");
+        }
+      } catch { /* ignore cleanup errors */ }
+    }
+  });
+
+  // ─── Part 3: State machine — expired OTP is rejected ─────────────────────
+
+  it("AC-008-3: expired OTP is rejected; state does not advance beyond AWAITING_EMAIL_OTP", async () => {
+    const userId = `ac008-expired-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const captured: Array<{ emailAddress: string; otp: string }> = [];
+    const sent: Array<{ to: string; message: string }> = [];
+    let messageHandler: ((from: string, message: string) => void | Promise<void>) | undefined;
+
+    const channel: MessagingChannel = {
+      async send(to: string, message: string): Promise<void> {
+        sent.push({ to, message });
+      },
+      onMessage(h) { messageHandler = h; },
+      async resolveIdentity(from: string): Promise<ChannelIdentity> {
+        return { channel: "cli", channelUserId: from };
+      },
+    };
+
+    const otpDelivery = {
+      async sendOtp(emailAddress: string, otp: string): Promise<void> {
+        captured.push({ emailAddress, otp });
+      },
+    };
+
+    const logEvents: Array<{ method: string; event: string }> = [];
+    const logger: Logger = {
+      debug: (_e: string) => {},
+      info: (event: string) => { logEvents.push({ method: "info", event }); },
+      warn: (event: string) => { logEvents.push({ method: "warn", event }); },
+      error: (event: string) => { logEvents.push({ method: "error", event }); },
+    };
+
+    async function inject(from: string, message: string): Promise<void> {
+      if (messageHandler) await messageHandler(from, message);
+    }
+
+    const engine = new RegistrationEngine({
+      pool,
+      channel,
+      otpDelivery,
+      preAuth: new LocalPreAuthorizationClient(),
+      logger,
+      channelType: "cli",
+      onError: (err) => { throw err; },
+    });
+    await engine.start();
+
+    try {
+      // Drive to AWAITING_EMAIL_OTP
+      await inject(userId, "hello");
+      await inject(userId, `CONTACT:${userId}:+447911777888`);
+      await inject(userId, "expiredtest@example.com");
+
+      expect(captured.length).toBe(1);
+      const otp = captured[0].otp;
+
+      // Manually expire the OTP via direct DB update
+      await pool.query(
+        `UPDATE registrations SET otp_expires_at = $1 WHERE channel_user_id = $2`,
+        [new Date(Date.now() - 1000), userId],
+      );
+
+      // Submit the (now-expired) OTP
+      await inject(userId, otp);
+
+      // State must NOT have advanced to EMAIL_CONFIRMED or PRE_AUTH_TOKEN_ISSUED
+      const rawResult = await pool.query(
+        `SELECT state FROM registrations WHERE channel_user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [userId],
+      );
+      const stateAfter = rawResult.rows[0].state as string;
+      // State may remain AWAITING_EMAIL_OTP (otp expired, user needs to re-submit)
+      // or AWAITING_EMAIL (engine may reset on expiry) — but never PRE_AUTH_TOKEN_ISSUED
+      expect(stateAfter).not.toBe("PRE_AUTH_TOKEN_ISSUED");
+      expect(stateAfter).not.toBe("EMAIL_CONFIRMED");
+
+      // otp.expired event was logged
+      const expiredEvent = logEvents.find((e) => e.event === "registration.otp.expired");
+      expect(expiredEvent).toBeDefined();
+
+      // User was told the OTP expired
+      const expiredMsg = sent.find((m) => m.message.toLowerCase().includes("expired"));
+      expect(expiredMsg).toBeDefined();
+    } finally {
+      engine.stop();
+      try {
+        const active = await repo.findActiveByChannelUser("cli", userId);
+        if (active) {
+          await repo.transition(active.id, "EXPIRED");
+        }
+      } catch { /* ignore cleanup errors */ }
+    }
+  });
+
+  // ─── Part 4: Rate limit — 6th send throws RateLimitError ─────────────────
+
+  it("AC-008-4: 6th call to SesOtpDeliveryProvider.sendOtp() within 1 hour throws RateLimitError", async () => {
+    // Pure unit-level: the rate limiter lives in SesOtpDeliveryProvider in-memory state.
+    // No SES calls needed — use a mock that always succeeds for the first 5.
+    const targetEmail = "ac008-ratelimit@example.com";
+    const provider = new SesOtpDeliveryProvider({
+      sesClient: buildFakeClient(makeSendMock({ MessageId: "msg-id-rate" })),
+      fromAddress: "noreply@mail.mygentic.ai",
+      logger: makeLogger(),
+    });
+
+    for (let i = 0; i < 5; i++) {
+      await provider.sendOtp(targetEmail, "999999");
+    }
+
+    // 6th call to same address must throw RateLimitError
+    await expect(provider.sendOtp(targetEmail, "888888")).rejects.toBeInstanceOf(RateLimitError);
   });
 });
