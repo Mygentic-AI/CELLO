@@ -1,0 +1,256 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO ECS Operations Agent — Fargate service for the Telegram/SES registration bot.
+  IAM roles are defined in cello-iam.yaml and imported via !ImportValue.
+
+  Key design decisions:
+  - PUBLIC subnet with AssignPublicIp: ENABLED — no NAT Gateway exists in cello-vpc.yaml;
+    public subnet is required for Telegram Bot API (api.telegram.org) and SES egress.
+  - NO ALB — the Ops Agent is an outbound poller, not an inbound HTTP service.
+  - DeploymentConfiguration: MinimumHealthyPercent=0, MaximumPercent=100 — enforces
+    at-most-one Telegram getUpdates poller per bot token at all times (AC-004c).
+    Two simultaneous pollers on the same bot token cause undefined behavior.
+  - DIRECTORY_INTERNAL_URL via ALB DNS name — stable, no Cloud Map or task-IP lookup.
+
+  Dependencies: cello-iam, cello-ecr, cello-vpc, cello-ecs-directory (for cluster ARN,
+  ALB DNS name, directory SG), cello-rds (for SG reference in egress rule)
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment
+  Cpu:
+    Type: String
+    Default: "256"
+    AllowedValues: ["256", "512", "1024"]
+    Description: Fargate CPU units (256 = 0.25 vCPU)
+  Memory:
+    Type: String
+    Default: "512"
+    AllowedValues: ["512", "1024", "2048"]
+    Description: Fargate memory in MB
+  ImageUri:
+    Type: String
+    Description: "ECR image URI for the operations-agent service (e.g. {account}.dkr.ecr.{region}.amazonaws.com/cello-operations-agent:stub)"
+
+Resources:
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/cello-operations-agent-${Environment}"
+      RetentionInDays: 90
+      Tags:
+        - Key: Project
+          Value: cello
+
+  # ── Operations Agent security group ──────────────────────────────────────────
+  # AC-005: egress ONLY — HTTPS to internet (Telegram API, SES), port 8080 to
+  # directory SG (internal pre-authorize endpoint), port 5432 to RDS SG.
+  # No inbound rules — the public IP creates no new attack surface.
+  # SI-001: the Ops Agent cannot reach directory/relay private key endpoints
+  # because the IAM policy (cello-iam.yaml) only allows the four ops-agent secrets.
+
+  OpsAgentSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "CELLO Operations Agent - outbound only (Telegram/SES HTTPS, directory 8080, RDS 5432)"
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      # No SecurityGroupIngress — no inbound rules.
+      SecurityGroupEgress:
+        # HTTPS egress to 0.0.0.0/0: required for Telegram Bot API (api.telegram.org)
+        # and SES (email.us-east-1.amazonaws.com etc). Telegram/SES IPs are not enumerable.
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: "0.0.0.0/0"
+          Description: "HTTPS to Telegram Bot API and SES endpoints"
+        # Port 8080 to directory security group: internal pre-authorize endpoint.
+        # The Ops Agent calls http://<DirectoryALBDnsName>/internal/pre-authorize.
+        # This egress rule covers both the ALB (which listens on port 80 by default)
+        # and the direct task:8080 path used for VPC smoke testing (AC-009b).
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          DestinationSecurityGroupId: !ImportValue
+            Fn::Sub: "cello-${Environment}-ecs-directory-sg"
+          Description: "Port 8080 to directory ECS service for /internal/pre-authorize"
+        # Port 80 to ALB SG: the Ops Agent calls the directory via the ALB on port 80.
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          DestinationSecurityGroupId: !ImportValue
+            Fn::Sub: "cello-${Environment}-alb-sg"
+          Description: "Port 80 to ALB for /internal/pre-authorize via directory ALB"
+        # Port 5432 to RDS security group: cello_ops_agent database role access.
+        # The Ops Agent reads/writes registrations and pre_authorization_tokens tables.
+        # This uses the same RDS SG reference pattern as cello-ecs-directory.yaml.
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          DestinationSecurityGroupId: !ImportValue
+            Fn::Sub: "cello-${Environment}-rds-sg"
+          Description: "Port 5432 to RDS for cello_ops_agent database role"
+      Tags:
+        - Key: Name
+          Value: !Sub "cello-ops-agent-sg-${Environment}"
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── RDS SG inbound rule from Ops Agent SG (AC-005b) ─────────────────────────
+  # Adds port 5432 inbound to the RDS security group from the Ops Agent SG.
+  # Same pattern as cello-rotation.yaml: RdsIngressFromRotationLambda.
+  # Both the Ops Agent egress rule (above) AND this RDS inbound rule are required
+  # for TCP connectivity — specifying only the egress side was DEPLOY-001's bug class.
+
+  RdsIngressFromOpsAgent:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !ImportValue
+        Fn::Sub: "cello-${Environment}-rds-sg"
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref OpsAgentSecurityGroup
+      Description: "Allow Operations Agent to reach RDS on port 5432 (cello_ops_agent role)"
+
+  # ── Directory SG inbound rule from Ops Agent SG (AC-009b) ───────────────────
+  # Adds port 8080 inbound to the directory ECS SG from the Ops Agent SG.
+  # This is the layer-4 SG smoke test path: ECS Exec from the Ops Agent task can
+  # call the directory container directly on port 8080 (bypassing the ALB).
+  # Verified by: curl http://<directory-task-ip>:8080/internal/pre-authorize → HTTP 401.
+
+  DirectoryIngressFromOpsAgent:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !ImportValue
+        Fn::Sub: "cello-${Environment}-ecs-directory-sg"
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref OpsAgentSecurityGroup
+      Description: "Allow Operations Agent to reach directory ECS service on port 8080"
+
+  # ── Task definition ───────────────────────────────────────────────────────────
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "cello-operations-agent-${Environment}"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      ExecutionRoleArn: !ImportValue
+        Fn::Sub: "cello-${Environment}-ops-agent-execution-role-arn"
+      TaskRoleArn: !ImportValue
+        Fn::Sub: "cello-${Environment}-ops-agent-task-role-arn"
+      ContainerDefinitions:
+        - Name: operations-agent
+          Image: !Ref ImageUri
+          Essential: true
+          Environment:
+            - Name: CELLO_ENV
+              Value: !Ref Environment
+            # DIRECTORY_INTERNAL_URL: stable ALB DNS name — no Cloud Map or task-IP lookup.
+            # AC-009d: the Ops Agent uses the ALB on port 80, not direct task:8080.
+            # The ALB listener rule protects /internal/* from outside-VPC callers (AC-009d).
+            # Intra-VPC traffic uses the private IP — source-ip condition correctly matches.
+            - Name: DIRECTORY_INTERNAL_URL
+              Value: !Sub
+                - "http://${AlbDnsName}/internal/pre-authorize"
+                - AlbDnsName: !ImportValue
+                    Fn::Sub: "cello-${Environment}-alb-dns-name"
+            - Name: RDS_ENDPOINT
+              Value: !ImportValue
+                Fn::Sub: "cello-${Environment}-rds-endpoint"
+            - Name: RDS_PORT
+              Value: !ImportValue
+                Fn::Sub: "cello-${Environment}-rds-port"
+            - Name: RDS_DB_NAME
+              Value: !Sub "cello_${Environment}"
+            # AC-003: inject the ARN, not the value — the application fetches the live
+            # credential at connection-pool time to pick up rotated passwords without a restart.
+            - Name: RDS_CREDENTIALS_SECRET_ARN
+              Value: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/rds-credentials"
+          Secrets:
+            # AC-003: all four Ops Agent secrets are injected from Secrets Manager.
+            # These use ECS Secrets (ValueFrom) for task launch — the ARNs resolve at
+            # task start time. A ResourceNotFoundException means the secret ARN is wrong
+            # or the execution role lacks GetSecretValue permission.
+            - Name: TELEGRAM_BOT_TOKEN
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/telegram-bot-token"
+            - Name: SES_CREDENTIALS
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/ses-credentials"
+            - Name: DIRECTORY_API_KEY
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/directory-api-key"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: operations-agent
+          # No health check for the stub container — the stub returns HTTP 200 on all paths
+          # but has no dedicated health endpoint. ECS will use the container exit code.
+          # OPS-AGENT-005B will add a real health check when the application code is wired.
+
+  # ── ECS Service ───────────────────────────────────────────────────────────────
+  # AC-001: public subnet, AssignPublicIp: ENABLED — no NAT Gateway in cello-vpc.yaml.
+  #         Private subnets have no route to the internet; Telegram/SES are public endpoints.
+  # AC-004c: DeploymentConfiguration MinimumHealthyPercent=0, MaximumPercent=100 enforces
+  #          at-most-one Telegram long-poller at all times. Old task stops before new one starts.
+  #          A 30-second gap during deploys is acceptable for a registration bot.
+  # NO ALB / NO load balancer — the Ops Agent is an outbound poller, not an inbound service.
+
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub "cello-operations-agent-${Environment}"
+      Cluster: !ImportValue
+        Fn::Sub: "cello-${Environment}-cluster-arn"
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      EnableExecuteCommand: true
+      # AC-004c: at-most-one constraint for Telegram long-polling.
+      # MinimumHealthyPercent=0: ECS stops the old task before starting the new one.
+      # MaximumPercent=100: only one task can run at a time (0% → stop → 100% → start).
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # AC-001 / AC-004b: PUBLIC subnet required — no NAT Gateway in cello-vpc.yaml.
+          # The Ops Agent needs direct internet egress for Telegram API and SES calls.
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !ImportValue
+              Fn::Sub: "cello-${Environment}-public-subnet-a"
+          SecurityGroups:
+            - !Ref OpsAgentSecurityGroup
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  OpsAgentServiceArn:
+    Value: !Ref Service
+    Export:
+      Name: !Sub "cello-${Environment}-ops-agent-service-arn"
+
+  OpsAgentSecurityGroupId:
+    Value: !Ref OpsAgentSecurityGroup
+    Export:
+      Name: !Sub "cello-${Environment}-ops-agent-sg"
+
+  OpsAgentLogGroupName:
+    Value: !Ref LogGroup
+    Export:
+      Name: !Sub "cello-${Environment}-ops-agent-log-group"

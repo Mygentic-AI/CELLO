@@ -210,6 +210,107 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # ── Operations Agent task execution role (ECS agent: pull images, write logs, read secrets) ──
+
+  OpsAgentTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !If
+        - IsPrimaryRegion
+        - !Sub "cello-${Environment}-ops-agent-execution-role"
+        - !Sub "cello-${Environment}-${AWS::Region}-ops-agent-execution-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: OpsAgentSecretsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # SI-001: enumerate exact secret ARNs — no wildcard that would grant access
+              # to directory/relay key material. The Ops Agent must not reach node private
+              # keys, envelope keys, or directory/relay RDS credentials.
+              - Sid: SecretsManagerGetForExecution
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/telegram-bot-token*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/ses-credentials*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/directory-api-key*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/rds-credentials*"
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── Operations Agent task role (application code: secrets, logs, ECS Exec) ──
+  # AC-006 (OPS-AGENT-005A): Permissions are ONLY:
+  #   - secretsmanager:GetSecretValue on the four Ops Agent secret ARNs
+  #   - logs:CreateLogStream + logs:PutLogEvents on the Ops Agent log group
+  #   - ssmmessages:* for ECS Exec (debugging)
+  # No S3, no KMS, no IAM, no access to directory/relay secret ARNs.
+  # SI-001: even if the Ops Agent container is compromised, the attacker cannot
+  # read directory or relay private keys — IAM policy does not grant that access.
+
+  OpsAgentTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !If
+        - IsPrimaryRegion
+        - !Sub "cello-${Environment}-ops-agent-task-role"
+        - !Sub "cello-${Environment}-${AWS::Region}-ops-agent-task-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: OpsAgentPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # SI-001: enumerate exact secret ARNs — no wildcard.
+              - Sid: SecretsManagerOpsAgentOnly
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/telegram-bot-token*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/ses-credentials*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/directory-api-key*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/rds-credentials*"
+              - Sid: CloudWatchLogsOpsAgent
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/cello-operations-agent-${Environment}:*"
+              # ECS Exec requires ssmmessages permissions on the task role.
+              - Sid: EcsExecSsmMessages
+                Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
 Outputs:
   DirectoryTaskRoleArn:
     Value: !GetAtt DirectoryTaskRole.Arn
@@ -230,3 +331,13 @@ Outputs:
     Value: !GetAtt RelayTaskExecutionRole.Arn
     Export:
       Name: !Sub "cello-${Environment}-relay-execution-role-arn"
+
+  OpsAgentTaskRoleArn:
+    Value: !GetAtt OpsAgentTaskRole.Arn
+    Export:
+      Name: !Sub "cello-${Environment}-ops-agent-task-role-arn"
+
+  OpsAgentTaskExecutionRoleArn:
+    Value: !GetAtt OpsAgentTaskExecutionRole.Arn
+    Export:
+      Name: !Sub "cello-${Environment}-ops-agent-execution-role-arn"

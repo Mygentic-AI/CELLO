@@ -75,6 +75,13 @@
         "cello-e2e-tests-pipeline"
       ],
       "description": "e2e-tests is a leaf package"
+    },
+    {
+      "prefix": "packages/operations-agent/",
+      "pipelines": [
+        "cello-operations-agent-pipeline"
+      ],
+      "description": "operations-agent is a leaf package — Telegram/SES registration bot"
     }
   ],
   "rootConfigFiles": [
@@ -90,6 +97,7 @@
     "cello-adapter-claude-code-pipeline",
     "cello-directory-pipeline",
     "cello-relay-pipeline",
-    "cello-e2e-tests-pipeline"
+    "cello-e2e-tests-pipeline",
+    "cello-operations-agent-pipeline"
   ]
 }

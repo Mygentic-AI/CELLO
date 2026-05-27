@@ -1,0 +1,10 @@
+version: 0.2
+# Staging deploy buildspec for the Operations Agent ECS service.
+# Placeholder until OPS-AGENT-005B wires the real application build.
+# Pattern: read IMAGE_URI from SSM, register new task definition, update ECS service.
+# See infra/buildspecs/staging-deploy-directory.yml for the reference implementation.
+phases:
+  build:
+    commands:
+      - echo "Operations Agent staging deploy — placeholder for OPS-AGENT-005B"
+      - echo "CELLO_ENV=${CELLO_ENV}"

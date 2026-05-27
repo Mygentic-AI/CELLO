@@ -58,7 +58,11 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              # App credential: read AWSCURRENT/AWSPENDING, write AWSPENDING, update stages
+              # App credential: read AWSCURRENT/AWSPENDING, write AWSPENDING, update stages.
+              # Covers both directory/rds-credentials (cello_service) and
+              # ops-agent/rds-credentials (cello_ops_agent) — same Lambda handles both.
+              # AC-009c (OPS-AGENT-005A): handler.py reads ROLE_NAME from the secret JSON
+              # "username" field (not hardcoded) — verified at lines 210-234 of handler.py.
               - Sid: AppCredentialAccess
                 Effect: Allow
                 Action:
@@ -69,6 +73,8 @@ Resources:
                 Resource:
                   - !ImportValue
                     Fn::Sub: "cello-${Environment}-rds-credentials-arn"
+                  - !ImportValue
+                    Fn::Sub: "cello-${Environment}-ops-agent-rds-credentials-arn"
               # GetRandomPassword is not a resource-level action — must use Resource: "*"
               - Sid: GetRandomPassword
                 Effect: Allow
@@ -222,6 +228,26 @@ Resources:
     Properties:
       SecretId: !ImportValue
         Fn::Sub: "cello-${Environment}-rds-credentials-arn"
+      RotationLambdaARN: !GetAtt RotationLambdaFunction.Arn
+      RotationRules:
+        AutomaticallyAfterDays: 30
+
+  # ── Wire rotation schedule to the ops-agent/rds-credentials secret (AC-009c) ─
+  # The same rotation Lambda handles both cello_service (directory) and cello_ops_agent
+  # (ops-agent) password rotation. The Lambda reads the username from the secret JSON
+  # "username" field — not hardcoded — so it works for any role name.
+  #
+  # First-deploy sequence (AC-009e): deploy.sh detects PLACEHOLDER value in this secret
+  # after the directory stack deploys (Flyway creates the cello_ops_agent role), then
+  # triggers rotate-secret before deploying the cello-ecs-operations-agent stack.
+  # On subsequent deploys (secret has a real value), the rotation check is skipped.
+
+  OpsAgentRdsCredentialsRotationSchedule:
+    Type: AWS::SecretsManager::RotationSchedule
+    DependsOn: SecretsManagerInvokePermission
+    Properties:
+      SecretId: !ImportValue
+        Fn::Sub: "cello-${Environment}-ops-agent-rds-credentials-arn"
       RotationLambdaARN: !GetAtt RotationLambdaFunction.Arn
       RotationRules:
         AutomaticallyAfterDays: 30

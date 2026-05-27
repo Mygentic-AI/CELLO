@@ -73,6 +73,37 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  OperationsAgentRepo:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    Properties:
+      RepositoryName: cello-operations-agent
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: MUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Expire untagged images after 14 days",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 14
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
 Outputs:
   DirectoryRepoUri:
     Value: !GetAtt DirectoryRepo.RepositoryUri
@@ -83,3 +114,8 @@ Outputs:
     Value: !GetAtt RelayRepo.RepositoryUri
     Export:
       Name: !Sub "cello-${Environment}-ecr-relay-uri"
+
+  OperationsAgentRepoUri:
+    Value: !GetAtt OperationsAgentRepo.RepositoryUri
+    Export:
+      Name: !Sub "cello-${Environment}-ecr-operations-agent-uri"

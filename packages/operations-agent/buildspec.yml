@@ -1,0 +1,8 @@
+version: 0.2
+# Operations Agent CodeBuild buildspec.
+# OPS-AGENT-005A: placeholder — pipeline infrastructure verified with stub image.
+# OPS-AGENT-005B: replace with real build (pnpm install, typecheck, test, Docker build, ECR push).
+phases:
+  install:
+    commands:
+      - echo "Operations Agent buildspec — placeholder for OPS-AGENT-005B"

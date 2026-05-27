@@ -63,6 +63,7 @@ ACCOUNT_ID=$(aws sts get-caller-identity \
 IMAGE_TAG="${CELLO_IMAGE_TAG:-stub}"
 DIR_IMAGE="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/cello-directory:${IMAGE_TAG}"
 RELAY_IMAGE="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/cello-relay:${IMAGE_TAG}"
+OPS_AGENT_IMAGE="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/cello-operations-agent:${IMAGE_TAG}"
 
 # ── VPC CIDR per region (Decision 1 from m5-infrastructure-decisions) ────────
 
@@ -134,12 +135,12 @@ fi
 
 # ── Observability helpers ─────────────────────────────────────────────────────
 
-# cello-cicd deploys to us-east-1 only — adjust count per region
-# +1 for cello-rotation (SECOPS-004), +1 for cello-waf (SECOPS-003), +1 for cello-cloudwatch (SECOPS-002)
+# cello-cicd deploys to us-east-1 only — adjust count per region.
+# +1 for cello-ecs-operations-agent (OPS-AGENT-005A)
 if [[ "${REGION}" == "us-east-1" ]]; then
-  STACK_COUNT=13
+  STACK_COUNT=14
 else
-  STACK_COUNT=12
+  STACK_COUNT=13
 fi
 DEPLOY_START=$(date +%s)
 
@@ -331,8 +332,8 @@ image_exists() {
     >/dev/null 2>&1
 }
 
-if image_exists "cello-directory" && image_exists "cello-relay"; then
-  echo "  Images exist: cello-directory:${IMAGE_TAG}, cello-relay:${IMAGE_TAG}"
+if image_exists "cello-directory" && image_exists "cello-relay" && image_exists "cello-operations-agent"; then
+  echo "  Images exist: cello-directory:${IMAGE_TAG}, cello-relay:${IMAGE_TAG}, cello-operations-agent:${IMAGE_TAG}"
 else
   echo "  Images not found for tag '${IMAGE_TAG}' — building and pushing stubs..."
   "${SCRIPT_DIR}/build-stubs.sh" "${REGION}"
@@ -384,6 +385,97 @@ else
   echo "  AlbDnsName:       ${ALB_DNS_NAME}"
   echo "  AlbHostedZoneId:  ${ALB_HOSTED_ZONE_ID}"
 fi
+
+# ── STEP 8b: First-deploy detection for Ops Agent RDS credentials (AC-009e) ──
+# After the directory stack deploys, Flyway creates the cello_ops_agent PostgreSQL role
+# (via migration V25 from OPS-AGENT-000). However, the role has no usable password until
+# the rotation Lambda runs. This is the same class as M5 SECOPS-004 bug #4.
+#
+# Detection: check if cello/{env}/ops-agent/rds-credentials still contains the placeholder.
+# If so: trigger rotation and poll until AWSCURRENT changes (rotation complete).
+# Then: deploy the cello-ecs-operations-agent stack.
+# If not (subsequent deploys): skip rotation and deploy directly.
+#
+# This logic is in deploy.sh code, not a manual runbook step — required for
+# the region-expansion goal: "zero manual steps in a brand-new region".
+# M5 Rule 7: every fix must pass "would this work in a brand-new region with zero manual steps?"
+
+OPS_AGENT_RDS_SECRET_ID="cello/${ENVIRONMENT}/ops-agent/rds-credentials"
+
+echo ""
+echo "── Checking Ops Agent RDS credential rotation (AC-009e) ────────────────"
+
+ops_agent_rds_secret_current=$(aws secretsmanager get-secret-value \
+  --secret-id "${OPS_AGENT_RDS_SECRET_ID}" \
+  --region "${REGION}" \
+  --query "SecretString" \
+  --output text 2>/dev/null || echo "MISSING")
+
+if [[ "${ops_agent_rds_secret_current}" == "MISSING" ]]; then
+  echo "  WARNING: ${OPS_AGENT_RDS_SECRET_ID} not found — skipping rotation check."
+  echo "           Run bootstrap.sh first to provision the placeholder."
+elif echo "${ops_agent_rds_secret_current}" | grep -q "PLACEHOLDER_POPULATE_VIA_CLI"; then
+  echo "  Ops Agent RDS secret contains PLACEHOLDER — triggering initial rotation..."
+  echo "  This sets the cello_ops_agent PostgreSQL role password (created by Flyway V25)."
+
+  OPS_AGENT_RDS_SECRET_ARN=$(aws secretsmanager describe-secret \
+    --secret-id "${OPS_AGENT_RDS_SECRET_ID}" \
+    --region "${REGION}" \
+    --query "ARN" \
+    --output text 2>/dev/null || echo "")
+
+  if [[ -z "${OPS_AGENT_RDS_SECRET_ARN}" ]]; then
+    echo "  ERROR: Cannot resolve ARN for ${OPS_AGENT_RDS_SECRET_ID}. Aborting rotation." >&2
+    exit 1
+  fi
+
+  aws secretsmanager rotate-secret \
+    --secret-id "${OPS_AGENT_RDS_SECRET_ARN}" \
+    --region "${REGION}" >/dev/null
+
+  echo "  Rotation triggered. Polling until AWSCURRENT changes (up to 5 minutes)..."
+  ROTATION_TIMEOUT=300
+  ROTATION_POLL_INTERVAL=10
+  ROTATION_ELAPSED=0
+  ROTATION_DONE=false
+
+  while [[ ${ROTATION_ELAPSED} -lt ${ROTATION_TIMEOUT} ]]; do
+    current_val=$(aws secretsmanager get-secret-value \
+      --secret-id "${OPS_AGENT_RDS_SECRET_ID}" \
+      --region "${REGION}" \
+      --query "SecretString" \
+      --output text 2>/dev/null || echo "")
+
+    if ! echo "${current_val}" | grep -q "PLACEHOLDER_POPULATE_VIA_CLI"; then
+      echo "  Rotation complete (${ROTATION_ELAPSED}s). Ops Agent RDS credential is live."
+      ROTATION_DONE=true
+      break
+    fi
+
+    sleep ${ROTATION_POLL_INTERVAL}
+    ROTATION_ELAPSED=$(( ROTATION_ELAPSED + ROTATION_POLL_INTERVAL ))
+    echo "  Waiting for rotation... (${ROTATION_ELAPSED}s / ${ROTATION_TIMEOUT}s)"
+  done
+
+  if [[ "${ROTATION_DONE}" != "true" ]]; then
+    echo "ERROR: Ops Agent RDS rotation did not complete within ${ROTATION_TIMEOUT}s." >&2
+    echo "       Check the rotation Lambda logs: /aws/lambda/cello-${ENVIRONMENT}-rds-rotation" >&2
+    echo "       Common causes: Flyway V25 not applied (cello_ops_agent role does not exist)," >&2
+    echo "       Lambda VPC connectivity issues, or rotation Lambda code not deployed." >&2
+    exit 1
+  fi
+else
+  echo "  Ops Agent RDS secret already populated — skipping rotation."
+fi
+
+# ── STEP 9a: cello-ecs-operations-agent — Operations Agent ECS service ────────
+# depends on: cello-iam, cello-ecr, cello-vpc, cello-ecs-directory (cluster ARN, ALB DNS)
+# Position: after directory (provides cluster + ALB DNS name) and before WAF (no dep).
+# AC-001: public subnet, AssignPublicIp: ENABLED; no ALB; MinimumHealthyPercent=0.
+
+deploy_stack "cello-ecs-operations-agent-${ENVIRONMENT}" "cello-ecs-operations-agent.yaml" \
+  "Environment=${ENVIRONMENT}" \
+  "ImageUri=${OPS_AGENT_IMAGE}"
 
 # ── STEP 8a: cello-waf — WAF WebACL associated with directory ALB ────────────
 # depends on: cello-ecs-directory (imports cello-${ENVIRONMENT}-alb-arn via
@@ -472,6 +564,7 @@ for stack in \
   "cello-rds-${ENVIRONMENT}" \
   "cello-rotation-${ENVIRONMENT}" \
   "cello-ecs-directory-${ENVIRONMENT}" \
+  "cello-ecs-operations-agent-${ENVIRONMENT}" \
   "cello-waf-${ENVIRONMENT}" \
   "cello-ecs-relay-${ENVIRONMENT}" \
   "cello-cloudwatch-${ENVIRONMENT}" \
