@@ -89,6 +89,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { MessagingChannel, ChannelIdentity, Logger } from "@cello-protocol/interfaces";
+import { CONTACT_PROMPT_PREFIX } from "@cello-protocol/interfaces";
 
 // ─── Telegram API types ───────────────────────────────────────────────────────
 
@@ -166,16 +167,6 @@ export type StartOptions = {
    */
   skipPolling?: boolean;
 };
-
-// ─── Contact prompt detection ─────────────────────────────────────────────────
-
-/**
- * Sentinel prefix emitted by RegistrationStateMachine for messages that require a
- * contact-sharing keyboard in Telegram. The adapter strips the prefix before sending
- * and attaches a ReplyKeyboardMarkup with request_contact button.
- * Must stay in sync with CONTACT_PROMPT_PREFIX in state-machine.ts.
- */
-const CONTACT_PROMPT_PREFIX = "__REQUEST_CONTACT__:";
 
 // ─── TelegramAdapter ──────────────────────────────────────────────────────────
 
@@ -496,6 +487,7 @@ export class TelegramAdapter implements MessagingChannel {
       // SI-002: log only botUsername, never the token
       this.#logger.error("telegram.poller.conflict", { botUsername: this.#botUsername });
       process.exit(1);
+      return []; // unreachable in production; prevents fall-through when mocked in tests
     }
 
     if (!response.ok) {

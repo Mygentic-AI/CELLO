@@ -20,9 +20,7 @@
  */
 
 import type { MessagingChannel, ChannelIdentity } from "../messaging-channel.js";
-
-/** Sentinel prefix for contact-prompt messages — strip before sending to any channel. */
-const CONTACT_PROMPT_PREFIX = "__REQUEST_CONTACT__:";
+import { CONTACT_PROMPT_PREFIX } from "../messaging-channel.js";
 
 /**
  * CliAdapter — implements MessagingChannel for local development.

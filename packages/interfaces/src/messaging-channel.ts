@@ -11,6 +11,19 @@
  */
 
 /**
+ * Sentinel prefix for messages that require a contact-sharing keyboard.
+ * MessagingChannel adapters that support request_contact (e.g. TelegramAdapter) strip
+ * this prefix before sending and attach the appropriate keyboard UI. Adapters that do
+ * not (e.g. CliAdapter) strip the prefix and send the plain text.
+ *
+ * Canonical home: defined here in the interfaces package so both adapter implementations
+ * (TelegramAdapter in operations-agent, CliAdapter in interfaces/stubs) and the
+ * state machine (operations-agent) can all import from one location. A rename is
+ * a compile error everywhere simultaneously.
+ */
+export const CONTACT_PROMPT_PREFIX = "__REQUEST_CONTACT__:";
+
+/**
  * ChannelIdentity — identifies the origin of an inbound message.
  * The `channel` field is the discriminant.
  *

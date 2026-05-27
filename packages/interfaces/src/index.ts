@@ -14,6 +14,7 @@ export type { CheckpointStatusProvider, SealStagingStatus } from "./checkpoint-s
 export type { NotificationQueue, QueuedNotification } from "./notification-queue.js";
 export type { ICheckpointTransport, CheckpointProposal, CheckpointSignatureResponse } from "./checkpoint-transport.js";
 export type { MessagingChannel, ChannelIdentity } from "./messaging-channel.js";
+export { CONTACT_PROMPT_PREFIX } from "./messaging-channel.js";
 export type { OtpDeliveryProvider } from "./otp-delivery-provider.js";
 export type { TokenValidator, TokenValidationResult } from "./token-validator.js";
 export type { PreAuthorizationClient, PreAuthorizationToken, PreAuthorizationTokenRow } from "./pre-authorization-client.js";

@@ -46,6 +46,7 @@ import type {
   PreAuthorizationClient,
   Logger,
 } from "@cello-protocol/interfaces";
+import { CONTACT_PROMPT_PREFIX } from "@cello-protocol/interfaces";
 import type { RegistrationRepository } from "./repository.js";
 import { generateOtp, generateOtpSalt, hashOtp, verifyOtp } from "./otp.js";
 import { hashPhone, normalizePhone } from "./phone.js";
@@ -61,13 +62,9 @@ const MAX_OTP_ATTEMPTS = 3;
 /** Registration expiry — 7 days */
 const REGISTRATION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 
-/**
- * Sentinel prefix for messages that require a contact-sharing keyboard in Telegram.
- * MessagingChannel adapters that support request_contact (e.g. TelegramAdapter) strip
- * this prefix before sending and attach the appropriate keyboard UI. Adapters that do
- * not support it (e.g. CliAdapter) strip the prefix and send the plain text.
- */
-export const CONTACT_PROMPT_PREFIX = "__REQUEST_CONTACT__:";
+// CONTACT_PROMPT_PREFIX is imported from @cello-protocol/interfaces — canonical home.
+// Re-exported here for backward compatibility with any code that imports it from state-machine.
+export { CONTACT_PROMPT_PREFIX };
 
 /** Rate limit: max OTP sends per email domain per hour */
 const OTP_RATE_LIMIT_PER_HOUR = 5;

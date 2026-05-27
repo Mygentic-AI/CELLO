@@ -124,6 +124,14 @@ describe("AC-004 / SI-001: resolveIdentity — contact.user_id mismatch", () => 
       },
     };
 
+    // Register a handler to capture what the mismatch delivers to the state machine
+    let capturedFrom: string | undefined;
+    let capturedMessage: string | undefined;
+    adapter.onMessage((from, message) => {
+      capturedFrom = from;
+      capturedMessage = message;
+    });
+
     // Inject the update directly
     await adapter.processUpdate(contactUpdate);
 
@@ -143,6 +151,10 @@ describe("AC-004 / SI-001: resolveIdentity — contact.user_id mismatch", () => 
     expect(mismatchLog!.context.fromId).toBe(1234);
     expect(mismatchLog!.context.contactUserId).toBe(9999);
     expect(typeof mismatchLog!.context.correlationId).toBe("string");
+
+    // Handler must receive from="1234" and message="__contact_mismatch__" so the state machine re-prompts
+    expect(capturedFrom).toBe("1234");
+    expect(capturedMessage).toBe("__contact_mismatch__");
   });
 });
 
@@ -179,6 +191,14 @@ describe("H-002 / SI-001: resolveIdentity — contact.user_id absent (field not 
       },
     };
 
+    // Register a handler to capture what the mismatch delivers to the state machine
+    let capturedFrom: string | undefined;
+    let capturedMessage: string | undefined;
+    adapter.onMessage((from, message) => {
+      capturedFrom = from;
+      capturedMessage = message;
+    });
+
     await adapter.processUpdate(contactUpdate);
 
     // resolveIdentity must return phoneNumber = undefined (never the phone number)
@@ -197,6 +217,10 @@ describe("H-002 / SI-001: resolveIdentity — contact.user_id absent (field not 
     // contactUserId must be undefined (absent), not null
     expect(mismatchLog!.context.contactUserId).toBeUndefined();
     expect(typeof mismatchLog!.context.correlationId).toBe("string");
+
+    // Handler must receive from="5678" and message="__contact_mismatch__" so the state machine re-prompts
+    expect(capturedFrom).toBe("5678");
+    expect(capturedMessage).toBe("__contact_mismatch__");
   });
 });
 
@@ -232,6 +256,79 @@ describe("AC-005: send() — ECONNREFUSED", () => {
     expect(apiErrorLog!.context.errorCode).toBe("ECONNREFUSED");
     expect(typeof apiErrorLog!.context.description).toBe("string");
     expect(typeof apiErrorLog!.context.correlationId).toBe("string");
+  });
+});
+
+// ─── H-001: send() — contact prompt sentinel prefix ──────────────────────────
+
+describe("send() — contact prompt sentinel prefix", () => {
+  it("strips __REQUEST_CONTACT__: prefix and attaches ReplyKeyboardMarkup with request_contact=true", async () => {
+    const logger = makeTestLogger();
+    const token = "fake-token-for-testing";
+
+    const capturedBodies: Array<Record<string, unknown>> = [];
+
+    const fetchFn = vi.fn().mockImplementation(async (url: string, options?: RequestInit) => {
+      if (typeof url === "string" && url.includes("getMe")) {
+        return { ok: true, status: 200, json: async () => ME_RESPONSE };
+      }
+      if (typeof url === "string" && url.includes("sendMessage")) {
+        if (options?.body) {
+          capturedBodies.push(JSON.parse(options.body as string) as Record<string, unknown>);
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: 1 } }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true, result: [] }) };
+    }) as unknown as typeof fetch;
+
+    const adapter = new TelegramAdapter({ token, logger, fetch: fetchFn });
+    await adapter.start({ skipPolling: true });
+
+    // sentinel-prefix path: prefix stripped, ReplyKeyboardMarkup attached
+    await adapter.send("123", "__REQUEST_CONTACT__:Please share your phone");
+
+    expect(capturedBodies).toHaveLength(1);
+    const body = capturedBodies[0];
+    // Prefix must be stripped — text is plain message content only
+    expect(body.text).toBe("Please share your phone");
+    // ReplyKeyboardMarkup must be present with request_contact=true
+    const keyboard = (body.reply_markup as { keyboard?: unknown[][] }).keyboard;
+    expect(keyboard).toBeDefined();
+    expect(Array.isArray(keyboard)).toBe(true);
+    const firstButton = (keyboard as Array<Array<{ request_contact?: boolean }>>)[0][0];
+    expect(firstButton.request_contact).toBe(true);
+  });
+
+  it("sends plain text without reply_markup when message has no sentinel prefix", async () => {
+    const logger = makeTestLogger();
+    const token = "fake-token-for-testing";
+
+    const capturedBodies: Array<Record<string, unknown>> = [];
+
+    const fetchFn = vi.fn().mockImplementation(async (url: string, options?: RequestInit) => {
+      if (typeof url === "string" && url.includes("getMe")) {
+        return { ok: true, status: 200, json: async () => ME_RESPONSE };
+      }
+      if (typeof url === "string" && url.includes("sendMessage")) {
+        if (options?.body) {
+          capturedBodies.push(JSON.parse(options.body as string) as Record<string, unknown>);
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: 2 } }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true, result: [] }) };
+    }) as unknown as typeof fetch;
+
+    const adapter = new TelegramAdapter({ token, logger, fetch: fetchFn });
+    await adapter.start({ skipPolling: true });
+
+    // non-prefix path: plain text, no keyboard
+    await adapter.send("123", "Hello");
+
+    expect(capturedBodies).toHaveLength(1);
+    const body = capturedBodies[0];
+    expect(body.text).toBe("Hello");
+    // reply_markup must be absent on plain messages
+    expect(body.reply_markup).toBeUndefined();
   });
 });
 
