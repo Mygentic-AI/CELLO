@@ -296,6 +296,26 @@ Implementation story. Delivers the email OTP transport layer for the registratio
 **Fix:** Added a `describe.skipIf(!isIntegrationEnabled)` block with four parts covering all AC-008 sub-requirements. Guarded on `CELLO_ENV=local && SES_INTEGRATION_TEST=true`.
 **Rule:** Every blocking gate AC must have a test. A comment is not a test.
 
+### 4. AC-008-1 used `console.warn` + `return` instead of `it.skipIf`
+**Symptom:** The SES sandbox test guarded its skip condition inside the test body with `if (!sandboxRecipient) { console.warn(...); return; }`. A runtime guard means: assertions before the guard can silently pass even when the test was meant to be skipped.
+**Fix:** Converted to `it.skipIf(!sandboxRecipient)(...)` at test-definition time. Guard removed from body.
+**Rule:** Skip conditions belong at test-definition time, not inside the test body.
+
+### 5. AC-008-4 rate-limit check was hidden inside the integration gate block
+**Symptom:** The rate-limit check in AC-008-4 had no external dependencies but lived inside `describe.skipIf(!isIntegrationEnabled)`, so it never ran in CI.
+**Fix:** Moved to the top-level unit test suite as `AC-008-4: rate limit (unit, always runs)`.
+**Rule:** A test that requires no external system must not be gated behind an integration env var.
+
+### 6. Flyway assertion used the wrong query — could not detect checksum mismatches
+**Symptom:** The AC-008 Flyway gate queried `WHERE success = false`. Flyway detects checksum mismatches at startup and throws before writing any row — so no `success = false` entry is ever inserted for this failure mode. The gate was inert against the exact attack it was meant to catch.
+**Fix:** Replaced with the per-row pattern from `telegram-adapter.test.ts`: iterate every row in `flyway_schema_history`, assert `success = true` and `checksum != -1`. Added explicit presence checks for V24 and V25.
+**Rule:** Before writing a Flyway integrity assertion, verify which failure mode it actually catches. `success = false` catches mid-execution crashes, not post-apply modification. The per-row checksum check catches both.
+
+### 7. `err.name ?? "UnknownError"` passed through empty-string `.name`
+**Symptom:** The `??` operator only substitutes for `null`/`undefined`. An error object with `name = ""` would produce an empty `sesErrorType` in log events and `DeliveryError`, yielding confusing diagnostics.
+**Fix:** Changed to `err.name || "UnknownError"` so the empty string also falls back to the default.
+**Rule:** For user-visible diagnostic strings derived from error properties, use `||` not `??` so both null/undefined and empty string are handled.
+
 **Downstream stories unblocked:**
 - OPS-AGENT-005B: wire application code — `SesOtpDeliveryProvider` is ready to inject into `RegistrationEngine` as the `OtpDeliveryProvider`; composition root wires it for `CELLO_ENV != local`; SES credentials and `fromAddress` come from Secrets Manager
 

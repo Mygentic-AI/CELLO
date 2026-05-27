@@ -118,17 +118,19 @@ Story completed: OPS-AGENT-003 — TelegramAdapter implementing MessagingChannel
 - `TelegramAdapter` in `packages/operations-agent/src/telegram-adapter.ts` — implements `MessagingChannel` interface over the Telegram Bot API
 - Long-polling via `getUpdates` (timeout=25s); `start()` calls `getMe` to obtain `botUsername` for logging
 - `pollOnce()` exposed as public for testing; background polling loop via `#runPollingLoop()`
-- Contact event handling with `contact.user_id === message.from.id` verification (SI-001)
-- `resolveIdentity(from)` returns `phoneNumber` only when `contact.user_id` matches sender (SI-001 enforcement)
-- `isContactPromptMessage()` attaches `ReplyKeyboardMarkup` with `request_contact` button to contact-prompt messages
-- All 6 `telegram.*` events emitted at correct levels with correct context fields (no token in any log event — SI-002)
-- HTTP 409 Conflict → `telegram.poller.conflict` at ERROR + `process.exit(1)` (AC-006c safety net)
-- Offset acknowledgement model documented: `getUpdates offset = last_processed_update_id + 1`, no external persistence needed (AC-006b)
+- Contact event handling with `contact.user_id === message.from.id` verification (SI-001); absent `user_id` treated as mismatch
+- `resolveIdentity(from)` returns `phoneNumber` only when `contact.user_id` matches sender (SI-001); returns `phoneNumber=undefined` on any mismatch
+- `CONTACT_PROMPT_PREFIX` sentinel (`"__REQUEST_CONTACT__:"`) — `send()` detects this prefix, strips it before sending to Telegram, and attaches `ReplyKeyboardMarkup` with `request_contact` button; canonical definition lives in `packages/interfaces/src/messaging-channel.ts` and is imported by all three consumers (`state-machine.ts`, `telegram-adapter.ts`, `cli-adapter.ts`) — no string duplication, drift is a compile error
+- `CliAdapter.send()` strips `CONTACT_PROMPT_PREFIX` before printing to stdout
+- All 6 `telegram.*` events emitted at correct levels with correct context fields; no token in any log event (SI-002); all 6 events registered in canonical event taxonomy
+- HTTP 409 Conflict → `telegram.poller.conflict` at ERROR + `process.exit(1)` + explicit `return []` to prevent fall-through when exit is mocked in tests
+- 1s backoff on non-409 `#getUpdates` errors (prevents tight retry loop under API failure)
+- Offset acknowledgement: `this.#offset = update.update_id + 1` after each update; Telegram server-side acknowledgement is the persistence mechanism — no DB/disk write needed; crash-window duplicates handled by state machine's idempotent `channel_user_id` lookup (SI-003)
 
 **Key implementation decisions:**
-- `contact.user_id` check: if `contact.user_id` is absent or does not match `message.from.id`, `resolveIdentity()` returns `phoneNumber=undefined` and state machine is not allowed to advance past `AWAITING_CONTACT` (SI-001)
-- HTTP 409 exit: on `getUpdates` returning 409, the adapter logs `telegram.poller.conflict` at ERROR and calls `process.exit(1)` — ECS `MinimumHealthyPercent=0` ensures only one task is active after restart; this is the safety net for split-brain polling
-- Offset acknowledgement: `this.#offset = update.update_id + 1` after processing each update; Telegram server-side acknowledgement is the persistence mechanism — no DB/disk write needed; crash-window duplicates handled by state machine's idempotent `channel_user_id` lookup
+- `contact.user_id` check: if `contact.user_id` is absent or does not match `message.from.id`, `resolveIdentity()` returns `phoneNumber=undefined`; state machine cannot advance past `AWAITING_CONTACT` (SI-001)
+- HTTP 409 exit: on `getUpdates` returning 409, adapter logs `telegram.poller.conflict` at ERROR and calls `process.exit(1)`; ECS `MinimumHealthyPercent=0` ensures only one task is active after restart; `return []` after `process.exit(1)` prevents fall-through into the non-ok error branch when exit is mocked
+- `CONTACT_PROMPT_PREFIX` is the single source of truth for contact-keyboard signalling; lives in `@cello-protocol/interfaces` so any package can import it without circular dependencies
 - Bot token logging invariant: `#baseUrl` contains the token but is never logged; only `botUsername` (from `getMe`) appears in log events (SI-002)
 
 **Test structure:**
@@ -137,7 +139,7 @@ Story completed: OPS-AGENT-003 — TelegramAdapter implementing MessagingChannel
 - AC-003: real `sendMessage` HTTP call; returns early (not fails) if bot queue is empty
 - AC-006: `it.skip` with documented manual test procedure — requires human to drive full registration flow
 - AC-007-integration-gate: Flyway checksum integrity + >= 2 real HTTP call count (TELEGRAM_BOT_TOKEN + CELLO_ENV=local required)
-- Unit tests (AC-004, AC-005, AC-006b, AC-006c, SI-001, SI-002) run without TELEGRAM_BOT_TOKEN
+- Unit tests (AC-004, AC-005, AC-006b, AC-006c, SI-001, SI-002, send() sentinel path, `__contact_mismatch__` handler dispatch) run without TELEGRAM_BOT_TOKEN
 
 **Downstream stories now unblocked:**
 - OPS-AGENT-005B: wire application code — `TelegramAdapter` is ready to inject into `RegistrationEngine` as the `MessagingChannel`; `TELEGRAM_BOT_TOKEN` env var needed in ECS task definition; composition root in `server.ts` wires `TelegramAdapter` for `CELLO_ENV != local`
@@ -190,7 +192,7 @@ Story completed: OPS-AGENT-004 — SES OTP delivery provider.
 - AC-008-integration-gate test written, gated on `CELLO_ENV=local && SES_INTEGRATION_TEST=true`
 - `DeliveryError` and `RateLimitError` exported from package index
 
-**Review history:** code-review (8 findings, all fixed), sprint-review pass 1 (1 blocking + 1 medium, both fixed), sprint-review pass 2 → APPROVED.
+**Review history:** code-review round 1 (8 findings, all fixed), sprint-review pass 1 (1 blocking + 1 medium, both fixed), sprint-review pass 2 → APPROVED. Post-merge sprint-reviewer findings (3: M-001 wrong Flyway query, L-001 runtime guard instead of `it.skipIf`, L-002 rate-limit test hidden in integration gate — all fixed, commit `7fa1eb9`). Post-merge code-review round 2 (3: FINDING-001 high same Flyway query bug, FINDING-002/003 low — all fixed, commit `d544759`).
 
 **Downstream stories now unblocked:**
 - OPS-AGENT-005B: wire application code — inject `SesOtpDeliveryProvider` as `OtpDeliveryProvider` in composition root; SES credentials and `fromAddress` from Secrets Manager; `CELLO_ENV != local` gates production adapter selection
