@@ -1,8 +1,35 @@
 version: 0.2
-# Operations Agent CodeBuild buildspec.
-# OPS-AGENT-005A: placeholder — pipeline infrastructure verified with stub image.
-# OPS-AGENT-005B: replace with real build (pnpm install, typecheck, test, Docker build, ECR push).
+# Operations Agent CI build — OPS-AGENT-005A
+#
+# This story (OPS-AGENT-005A) establishes the pipeline infrastructure using a stub image.
+# OPS-AGENT-005B replaces the Docker build step below with the real application image
+# (pnpm install, typecheck, test against @cello-protocol/operations-agent).
+#
+# The typecheck and test steps are skipped while packages/operations-agent/ contains
+# only pipeline scaffolding and no application source. Once OPS-AGENT-005B ships the
+# application package, remove the skip guards and uncomment the real steps.
 phases:
   install:
+    runtime-versions:
+      nodejs: 24
     commands:
-      - echo "Operations Agent buildspec — placeholder for OPS-AGENT-005B"
+      - npm install -g pnpm@10.33.2
+      - pnpm install --frozen-lockfile
+  build:
+    commands:
+      # ── Typecheck and test (OPS-AGENT-005B: uncomment when application source lands) ──
+      # - pnpm --filter @cello-protocol/operations-agent run typecheck
+      # - pnpm --filter @cello-protocol/operations-agent run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
+      # ── Docker build → ECR push ──────────────────────────────────────────────
+      # OPS-AGENT-005A: build stub image from infra/stub/Dockerfile (no application source yet).
+      # OPS-AGENT-005B: replace with: docker build --platform linux/amd64 -t ${IMAGE_URI} -f packages/operations-agent/Dockerfile .
+      - export IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
+      - export ECR_REPO=257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-operations-agent
+      - export IMAGE_URI=${ECR_REPO}:${IMAGE_TAG}
+      - aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 257394457473.dkr.ecr.us-east-1.amazonaws.com
+      - docker build --platform linux/amd64 -t ${IMAGE_URI} -f infra/stub/Dockerfile .
+      - docker push ${IMAGE_URI}
+      - aws ssm put-parameter --name /cello/${CELLO_ENV}/pipeline/operations-agent-image-uri --value "${IMAGE_URI}" --type String --overwrite --region us-east-1
+artifacts:
+  files:
+    - packages/operations-agent/buildspec.yml

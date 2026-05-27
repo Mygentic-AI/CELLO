@@ -259,6 +259,26 @@ read_output() {
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEPLOYMENT SEQUENCE — 14 stacks in dependency order (15 in us-east-1 with cello-cicd)
+#
+# Step 0:  cello-ecr                    — ECR repos
+# Step 1:  cello-iam                    — IAM roles
+# Step 2:  cello-secrets                — Secrets Manager placeholders
+# Step 3:  cello-vpc                    — VPC, subnets, security groups
+# Step 4:  cello-kms                    — KMS key
+# Step 5:  cello-s3                     — S3 buckets
+# Step 6:  cello-rds                    — RDS PostgreSQL
+# Step 6a: cello-rotation               — RDS credential rotation Lambda
+# Step 6.5: pre-flight image check
+# Step 6.6: SSM parameters
+# Step 7:  cello-ecs-directory          — directory ECS service + ALB
+# Step 8:  read ALB outputs
+# Step 8a: Ops Agent RDS rotation check — first-deploy credential setup
+# Step 9:  cello-ecs-operations-agent   — Operations Agent ECS service
+# Step 10: cello-waf                    — WAF WebACL for directory ALB
+# Step 11: cello-ecs-relay              — relay ECS service
+# Step 12: cello-cloudwatch             — CloudWatch alarms + dashboards
+# Step 13: cello-route53                — Route 53 ALIAS records + ACM certs
+# Step 14: cello-cicd                   — CI/CD pipelines (us-east-1 only)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ── STEP 0: cello-ecr — ECR repos (no dependencies, must exist before ECS) ──
@@ -386,7 +406,7 @@ else
   echo "  AlbHostedZoneId:  ${ALB_HOSTED_ZONE_ID}"
 fi
 
-# ── STEP 8b: First-deploy detection for Ops Agent RDS credentials (AC-009e) ──
+# ── STEP 8a: First-deploy detection for Ops Agent RDS credentials (AC-009e) ──
 # The cello_ops_agent PostgreSQL role is created by Flyway migration V25 (OPS-AGENT-000).
 # However, Flyway is NOT run automatically by this script — it is a manual post-deploy
 # step (see "Next steps" at the end of this script and infra/scripts/run-flyway.sh).
@@ -472,7 +492,7 @@ else
   echo "  Ops Agent RDS secret already populated — skipping rotation."
 fi
 
-# ── STEP 9a: cello-ecs-operations-agent — Operations Agent ECS service ────────
+# ── STEP 9: cello-ecs-operations-agent — Operations Agent ECS service ─────────
 # depends on: cello-iam, cello-ecr, cello-vpc, cello-ecs-directory (cluster ARN, ALB DNS)
 # Position: after directory (provides cluster + ALB DNS name) and before WAF (no dep).
 # AC-001: public subnet, AssignPublicIp: ENABLED; no ALB; MinimumHealthyPercent=0.
@@ -481,7 +501,7 @@ deploy_stack "cello-ecs-operations-agent-${ENVIRONMENT}" "cello-ecs-operations-a
   "Environment=${ENVIRONMENT}" \
   "ImageUri=${OPS_AGENT_IMAGE}"
 
-# ── STEP 8a: cello-waf — WAF WebACL associated with directory ALB ────────────
+# ── STEP 10: cello-waf — WAF WebACL associated with directory ALB ────────────
 # depends on: cello-ecs-directory (imports cello-${ENVIRONMENT}-alb-arn via
 # cross-stack reference; CloudFormation enforces ordering automatically)
 # GeoBlockingEnabled defaults to "false" — geo-blocking is a manual operator
@@ -490,7 +510,7 @@ deploy_stack "cello-ecs-operations-agent-${ENVIRONMENT}" "cello-ecs-operations-a
 deploy_stack "cello-waf-${ENVIRONMENT}" "cello-waf.yaml" \
   "Environment=${ENVIRONMENT}"
 
-# ── STEP 9: cello-ecs-relay — relay ECS service ───────────────────────────────
+# ── STEP 11: cello-ecs-relay — relay ECS service ─────────────────────────────
 # depends on: cello-iam, cello-vpc, cello-ecs-directory (for cluster ARN)
 
 deploy_stack "cello-ecs-relay-${ENVIRONMENT}" "cello-ecs-relay.yaml" \
@@ -500,13 +520,13 @@ deploy_stack "cello-ecs-relay-${ENVIRONMENT}" "cello-ecs-relay.yaml" \
   "ImageUri=${RELAY_IMAGE}" \
   "DirectoryNodePubkey=${RELAY_DIRECTORY_PUBKEY}"
 
-# ── STEP 10: cello-cloudwatch — CloudWatch alarms and dashboards ──────────────
+# ── STEP 12: cello-cloudwatch — CloudWatch alarms and dashboards ─────────────
 # depends on: cello-ecs-directory, cello-ecs-relay (alarm dimensions reference ECS services)
 
 deploy_stack "cello-cloudwatch-${ENVIRONMENT}" "cello-cloudwatch.yaml" \
   "Environment=${ENVIRONMENT}"
 
-# ── STEP 11: cello-route53 — Route 53 ALIAS records and ACM certs ────────────
+# ── STEP 13: cello-route53 — Route 53 ALIAS records and ACM certs ────────────
 # depends on: cello-ecs-directory (ALB outputs read in Step 8)
 
 deploy_stack "cello-route53-${ENVIRONMENT}" "cello-route53.yaml" \
@@ -517,7 +537,7 @@ deploy_stack "cello-route53-${ENVIRONMENT}" "cello-route53.yaml" \
   "AlbHostedZoneId=${ALB_HOSTED_ZONE_ID}" \
   "Subdomain=${SUBDOMAIN}"
 
-# ── STEP 12: cello-cicd — CI/CD infrastructure (us-east-1 only) ──────────────
+# ── STEP 14: cello-cicd — CI/CD infrastructure (us-east-1 only) ─────────────
 # DEPLOY-005 AC-009: STAGING_DIRECTORY_URL is read from cello-ecs-directory stack outputs
 # here (ALB_DNS_NAME was already populated in Step 8) and passed to the cello-cicd stack
 # as a parameter. The CodeBuild SmokeTestBuild project receives it via EnvironmentVariables
