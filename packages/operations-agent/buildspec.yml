@@ -28,7 +28,7 @@ phases:
       - export ECR_REPO=${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/cello-operations-agent
       - export IMAGE_URI=${ECR_REPO}:${IMAGE_TAG}
       - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
-      - docker build --platform linux/amd64 -t ${IMAGE_URI} -f infra/stub/Dockerfile .
+      - docker build --platform linux/amd64 -t ${IMAGE_URI} -f infra/stub/Dockerfile infra/stub
       - docker push ${IMAGE_URI}
       - aws ssm put-parameter --name /cello/${CELLO_ENV}/pipeline/operations-agent-image-uri --value "${IMAGE_URI}" --type String --overwrite --region ${AWS_DEFAULT_REGION}
 artifacts:

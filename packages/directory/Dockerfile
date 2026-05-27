@@ -37,12 +37,13 @@ COPY packages/crypto/ packages/crypto/
 COPY packages/transport/ packages/transport/
 COPY packages/directory/ packages/directory/
 
-# Build all packages in dependency order
+# Build all packages in dependency order (tsconfig.build.json excludes tests
+# so the relay package — only needed by test files — is not required here)
 RUN pnpm --filter @cello-protocol/interfaces run typecheck && \
     pnpm --filter @cello-protocol/protocol-types run typecheck && \
     pnpm --filter @cello-protocol/crypto run typecheck && \
     pnpm --filter @cello-protocol/transport run typecheck && \
-    pnpm --filter @cello-protocol/directory run typecheck
+    cd packages/directory && npx tsc --build tsconfig.build.json
 
 # ─── Stage 2: Production ───────────────────────────────────────────────────
 FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-slim AS production
