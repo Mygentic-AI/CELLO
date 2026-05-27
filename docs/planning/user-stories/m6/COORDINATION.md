@@ -110,6 +110,40 @@ Story completed: OPS-AGENT-002 — PostgreSQL-backed registration state machine.
 
 ---
 
+## 2026-05-26 — OPS-AGENT-003: story closed
+
+Story completed: OPS-AGENT-003 — TelegramAdapter implementing MessagingChannel.
+
+**Delivered:**
+- `TelegramAdapter` in `packages/operations-agent/src/telegram-adapter.ts` — implements `MessagingChannel` interface over the Telegram Bot API
+- Long-polling via `getUpdates` (timeout=25s); `start()` calls `getMe` to obtain `botUsername` for logging
+- `pollOnce()` exposed as public for testing; background polling loop via `#runPollingLoop()`
+- Contact event handling with `contact.user_id === message.from.id` verification (SI-001)
+- `resolveIdentity(from)` returns `phoneNumber` only when `contact.user_id` matches sender (SI-001 enforcement)
+- `isContactPromptMessage()` attaches `ReplyKeyboardMarkup` with `request_contact` button to contact-prompt messages
+- All 6 `telegram.*` events emitted at correct levels with correct context fields (no token in any log event — SI-002)
+- HTTP 409 Conflict → `telegram.poller.conflict` at ERROR + `process.exit(1)` (AC-006c safety net)
+- Offset acknowledgement model documented: `getUpdates offset = last_processed_update_id + 1`, no external persistence needed (AC-006b)
+
+**Key implementation decisions:**
+- `contact.user_id` check: if `contact.user_id` is absent or does not match `message.from.id`, `resolveIdentity()` returns `phoneNumber=undefined` and state machine is not allowed to advance past `AWAITING_CONTACT` (SI-001)
+- HTTP 409 exit: on `getUpdates` returning 409, the adapter logs `telegram.poller.conflict` at ERROR and calls `process.exit(1)` — ECS `MinimumHealthyPercent=0` ensures only one task is active after restart; this is the safety net for split-brain polling
+- Offset acknowledgement: `this.#offset = update.update_id + 1` after processing each update; Telegram server-side acknowledgement is the persistence mechanism — no DB/disk write needed; crash-window duplicates handled by state machine's idempotent `channel_user_id` lookup
+- Bot token logging invariant: `#baseUrl` contains the token but is never logged; only `botUsername` (from `getMe`) appears in log events (SI-002)
+
+**Test structure:**
+- AC-001: real `getMe` + `getUpdates` HTTP calls to `api.telegram.org`; `telegram.polling.started` proves real API responded; any received `update_id`s verified as integers > 0 (TELEGRAM_BOT_TOKEN required)
+- AC-002: `it.skip` with documented manual test procedure — requires human to tap "Share Contact" in staging bot
+- AC-003: real `sendMessage` HTTP call; returns early (not fails) if bot queue is empty
+- AC-006: `it.skip` with documented manual test procedure — requires human to drive full registration flow
+- AC-007-integration-gate: Flyway checksum integrity + >= 2 real HTTP call count (TELEGRAM_BOT_TOKEN + CELLO_ENV=local required)
+- Unit tests (AC-004, AC-005, AC-006b, AC-006c, SI-001, SI-002) run without TELEGRAM_BOT_TOKEN
+
+**Downstream stories now unblocked:**
+- OPS-AGENT-005B: wire application code — `TelegramAdapter` is ready to inject into `RegistrationEngine` as the `MessagingChannel`; `TELEGRAM_BOT_TOKEN` env var needed in ECS task definition; composition root in `server.ts` wires `TelegramAdapter` for `CELLO_ENV != local`
+
+---
+
 ## 2026-05-26 — REPOSPLIT-001: story closed
 
 Story completed: REPOSPLIT-001 — scaffold cello-client repo, CI pipeline, ALB WebSocket transport path.

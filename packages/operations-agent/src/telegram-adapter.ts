@@ -181,6 +181,12 @@ export type StartOptions = {
  *   - "Please share your phone number using the button below to continue registration."
  *   - "Please share your phone number using the button below."
  * All contain "share your phone number".
+ *
+ * TODO: replace substring match with an explicit sentinel (e.g. `__REQUEST_CONTACT__:`
+ * prefix that the adapter strips before sending). The current substring match creates
+ * silent breakage if the state machine changes its contact-prompt wording without
+ * updating this function. A sentinel would make the contract explicit and avoid coupling
+ * this adapter to the exact wording of state machine messages.
  */
 function isContactPromptMessage(message: string): boolean {
   return message.toLowerCase().includes("share your phone number");
