@@ -10,12 +10,14 @@ description: M6 write-up — CELLO beta launch. Installable @cello-protocol/conn
 # M6 — Beta Launch
 
 **Started:** 2026-05-26
-**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001
-**Stories open:** OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002, DEMO-001, M6-E2E-001
+**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001, OPS-AGENT-005A
+**Stories open:** OPS-AGENT-005B, REPOSPLIT-002, DEMO-001, M6-E2E-001
 
 **Unblocked by OPS-AGENT-002:** OPS-AGENT-003 (Telegram adapter), OPS-AGENT-004 (SES OTP delivery), OPS-AGENT-005B (wire app code)
 
 **Unblocked by REPOSPLIT-001:** REPOSPLIT-002 (extract packages + publish @cello-protocol/connect@beta)
+
+**Unblocked by OPS-AGENT-005A:** OPS-AGENT-005B (wire application code into proven ECS deployment)
 
 ---
 
@@ -342,6 +344,69 @@ Implementation story. Delivers the email OTP transport layer for the registratio
 
 **Downstream stories unblocked:**
 - OPS-AGENT-005B: wire application code — `SesOtpDeliveryProvider` is ready to inject into `RegistrationEngine` as the `OtpDeliveryProvider`; composition root wires it for `CELLO_ENV != local`; SES credentials and `fromAddress` come from Secrets Manager
+
+---
+
+## OPS-AGENT-005A — Operations Agent Infrastructure (Mitigation A gate)
+
+Infrastructure-only story. Proves the full deployment path — ECR, ECS, Secrets Manager, SGs, IAM, CI/CD pipeline — with the existing shared stub container before any application code touches it. This is the anti-DEPLOY-003 gate: infra proven first, app code wired in 005B.
+
+**Delivered:**
+- `infra/cloudformation/cello-ecs-operations-agent.yaml` — ECS Fargate service; public subnet + `AssignPublicIp: ENABLED` (no NAT gateway in cello-vpc; Telegram/SES egress requires public IP); `MinimumHealthyPercent: 0` / `MaximumPercent: 100` (at-most-one Telegram poller invariant); no ALB (outbound poller, not inbound service); `DIRECTORY_INTERNAL_URL` set to directory ALB DNS name via cross-stack import
+- `cello-ecr.yaml` extended — `cello-operations-agent` ECR repo added with lifecycle policy and URI export
+- `cello-iam.yaml` extended — `OpsAgentTaskRole` and `OpsAgentTaskExecutionRole`: `secretsmanager:GetSecretValue` on exactly the four ops-agent secret ARNs, `ssmmessages:*` for ECS Exec, `logs:*` on ops-agent log group only; no S3, no KMS, no access to directory/relay key material (SI-001)
+- `cello-secrets.yaml` extended — four ops-agent secrets as CloudFormation-managed resources with exports; WARNING comments noting re-deploy resets manual secrets to PLACEHOLDER
+- `cello-ecs-directory.yaml` updated — `InternalPathVpcAllowRule` (priority 5, VPC CIDR allow) and `InternalPathExternalBlockRule` (priority 10, catch-all 403) protect `/internal/*` from external access; directory `Service` `DependsOn` includes both listener rules (prevents registration window before rules are active)
+- `cello-rotation.yaml` extended — `OpsAgentRdsCredentialsRotationSchedule` with `RotateImmediatelyOnUpdate: false`; rotation Lambda already reads `username` dynamically from secret JSON (no hardcoding)
+- `cello-cloudwatch.yaml` extended — `OpsAgentEcsTaskCountAlarm` fires to ops-critical when `runningCount < 1`
+- `cello-cicd.yaml` extended — `OperationsAgentPipeline` (Build→StagingDeploy→SmokeTest→ProductionDeploy); `pipeline-mappings.json` maps `packages/operations-agent/` to `cello-operations-agent-pipeline`
+- `build-stubs.sh` extended — pushes shared stub to `cello-operations-agent:stub` with `--platform linux/amd64`; no new Dockerfile
+- `bootstrap.sh` updated — `rds-credentials` uses `put_secret_if_empty`; three manual secrets print `[MANUAL REQUIRED]` operator instructions instead of writing a redundant PLACEHOLDER
+- `deploy.sh` updated — Step 8a: automated first-deploy detection (grep for PLACEHOLDER in rds-credentials JSON, trigger `rotate-secret`, poll until complete before deploying ECS stack); Step 9: `cello-ecs-operations-agent` stack; STACK_COUNT accurate (14/15)
+- `packages/operations-agent/buildspec.yml` — full CodeBuild buildspec with pnpm install, Docker build from `infra/stub/`, ECR push using dynamic account ID and `${AWS_DEFAULT_REGION}` (no hardcoded account or region)
+- `infra/buildspecs/staging-deploy-operations-agent.yml` — full ECS deploy buildspec with `rolloutState` poll loop (15-minute timeout)
+- Story YAML corrected: AC-005 updated to include port 80 egress to ALB SG with rationale; AC-006 updated to specify `ssmmessages:*` with explanation that `ecs:ExecuteCommand` is a caller-side action
+
+**Review history:** code-reviewer round 1 (9 findings: 2 critical, 2 high, 3 medium, 2 low — all fixed); sprint-reviewer BLOCKED (3 medium fixed in code, 1 blocking = live deployment gate); code-reviewer round 2 (2 findings: 1 high hardcoded ECR account ID, 1 low stale step reference — both fixed); story YAML corrected.
+
+**AC-010 integration gate status:** IaC complete and reviewed. Live deployment pending — stack listed as `NOT DEPLOYED` in STATE.md. OPS-AGENT-005B may not begin until deployment is verified (runningCount=1, secrets resolve, internet egress to api.telegram.org confirmed via ECS Exec).
+
+**Bugs found during review cycle:**
+
+### 1. rds-credentials injected as plain env var instead of ECS Secrets ValueFrom
+**Symptom:** Initial implementation passed the rds-credentials ARN as a plain `Environment` variable rather than a `Secrets`/`ValueFrom` entry. ECS would not resolve the secret value at task launch — the application would receive the ARN string, not the JSON payload.
+**Root cause:** Oversight during initial wiring; the other three secrets were correctly placed in the `Secrets` block.
+**Fix:** Removed the plain env var; added `RDS_CREDENTIALS` to the `Secrets`/`ValueFrom` block alongside the other three.
+**Rule:** All Secrets Manager values injected into ECS tasks must use `Secrets`/`ValueFrom`. Plain `Environment` entries passing ARN strings require runtime `GetSecretValue` calls and do not benefit from ECS's launch-time secret resolution or IAM execution role scoping.
+
+### 2. Directory ECS Service DependsOn missing listener rules — registration window
+**Symptom:** The directory `Service` resource had `DependsOn: HttpListener` only. The two new ALB listener rules also depend on `HttpListener`. CloudFormation would create all three in parallel after `HttpListener`, meaning the ECS service could start registering targets and serving traffic on the default rule before the `/internal/*` protection rules were active.
+**Root cause:** `DependsOn` was not updated when the listener rules were added to the template.
+**Fix:** Added both `InternalPathVpcAllowRule` and `InternalPathExternalBlockRule` to the directory `Service` `DependsOn` list.
+**Rule:** When ALB listener rules protect an endpoint, the ECS `Service` must `DependsOn` those rules. Otherwise there is a deployment window where the unprotected default rule handles requests.
+
+### 3. STACK_COUNT off by one after adding ops-agent stack
+**Symptom:** `STACK_COUNT` was not incremented when `cello-ecs-operations-agent` was added, causing incorrect counts in `infra.deploy.started` and `infra.deploy.completed` log events.
+**Fix:** Incremented both branches (us-east-1: 14→15, others: 13→14).
+**Rule:** When a deploy.sh stack step is added or removed, update `STACK_COUNT` in the same commit.
+
+### 4. OpsAgentRdsCredentialsRotationSchedule missing RotateImmediatelyOnUpdate: false
+**Symptom:** `AWS::SecretsManager::RotationSchedule` triggers an immediate rotation on stack create/update by default. At the time `cello-rotation` is updated (early in deploy.sh), the Lambda may still have placeholder code — causing the rotation to fail and the secret to enter FAILED state.
+**Fix:** Added `RotateImmediatelyOnUpdate: false`. The first rotation is handled explicitly by deploy.sh Step 8a.
+**Rule:** Any `RotationSchedule` resource whose first rotation is managed by a separate deploy-time script must set `RotateImmediatelyOnUpdate: false` to prevent the automatic trigger from racing the script.
+
+### 5. bootstrap.sh wrote PLACEHOLDER back over PLACEHOLDER for manual secrets
+**Symptom:** `put_secret_if_empty` with `PLACEHOLDER_POPULATE_VIA_CLI` as the value writes "SET" to the log but achieves nothing — the CloudFormation stack already created the secret with that value. The output was misleading: operators could mistake a SKIP for a successful provision.
+**Fix:** Replaced `put_secret_if_empty` calls for the three manual secrets with explicit `[MANUAL REQUIRED]` operator instructions printed to stdout.
+**Rule:** bootstrap.sh should print operator instructions for secrets that require manual population, not attempt a write that will always no-op.
+
+### 6. Hardcoded AWS account ID and region in buildspec.yml
+**Symptom:** ECR repo URI and docker login target hardcoded `257394457473` and `us-east-1`. A different account or a secondary-region pipeline run would push to the wrong registry or fail to authenticate.
+**Fix:** Replaced with `$(aws sts get-caller-identity --query Account --output text)` and `${AWS_DEFAULT_REGION}`.
+**Rule:** buildspec.yml files must never hardcode account IDs or regions. Use `get-caller-identity` and `AWS_DEFAULT_REGION` environment variable instead.
+
+**Downstream stories unblocked:**
+- OPS-AGENT-005B: wire application code — infra proven with stub; ECS service, secrets, SGs, and pipeline all in place; compose root wires `TelegramAdapter` + `SesOtpDeliveryProvider` + `DirectoryPreAuthorizationClient` for `CELLO_ENV != local`
 
 ---
 

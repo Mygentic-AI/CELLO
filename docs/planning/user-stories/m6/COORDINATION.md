@@ -199,6 +199,37 @@ Story completed: OPS-AGENT-004 — SES OTP delivery provider.
 
 ---
 
+## 2026-05-27 — OPS-AGENT-005A: story closed (IaC complete, live deployment gate pending)
+
+Story completed: OPS-AGENT-005A — Operations Agent IaC.
+
+**Delivered:**
+- `infra/cloudformation/cello-ecs-operations-agent.yaml` — ECS Fargate service; public subnet + `AssignPublicIp: ENABLED`; `MinimumHealthyPercent: 0` / `MaximumPercent: 100`; no ALB; `DIRECTORY_INTERNAL_URL` from directory ALB DNS name via cross-stack import
+- ECR repo `cello-operations-agent` added to `cello-ecr.yaml`; URI exported
+- `OpsAgentTaskRole` + `OpsAgentTaskExecutionRole` in `cello-iam.yaml`; `ssmmessages:*` for ECS Exec; `secretsmanager:GetSecretValue` on exactly four ops-agent ARNs; no KMS/S3/directory-relay access
+- Four ops-agent secrets in `cello-secrets.yaml` (telegram-bot-token, ses-credentials, directory-api-key, rds-credentials); all have Output exports
+- `/internal/*` ALB listener rules added to `cello-ecs-directory.yaml`: priority 5 VPC-allow, priority 10 external-403; directory `Service` `DependsOn` both rules
+- `OpsAgentRdsCredentialsRotationSchedule` in `cello-rotation.yaml` with `RotateImmediatelyOnUpdate: false`
+- `OpsAgentEcsTaskCountAlarm` in `cello-cloudwatch.yaml` → ops-critical
+- `OperationsAgentPipeline` in `cello-cicd.yaml`; `pipeline-mappings.json` maps `packages/operations-agent/` → `cello-operations-agent-pipeline`
+- `build-stubs.sh` extended with `cello-operations-agent:stub` push; `bootstrap.sh` updated with four secrets + operator instructions; `deploy.sh` Step 8a rotation detection + Step 9 ECS stack
+- `packages/operations-agent/buildspec.yml` — full buildspec with dynamic ECR account/region; `infra/buildspecs/staging-deploy-operations-agent.yml` — full ECS deploy with rolloutState poll
+
+**AC-010 integration gate status: PENDING.** IaC reviewed and clean. Stack listed as `NOT DEPLOYED` in STATE.md. Deployment must be run and verified before OPS-AGENT-005B begins.
+
+**What OPS-AGENT-005B needs to do:**
+1. Confirm AC-010 passes: ECS service STABLE with runningCount=1, secrets resolve, internet egress to api.telegram.org confirmed via ECS Exec, STATE.md updated with live resource IDs
+2. Replace stub image with real application image: `server.ts` composition root wires `TelegramAdapter` (TELEGRAM_BOT_TOKEN from Secrets Manager), `SesOtpDeliveryProvider` (ses-credentials from Secrets Manager), `DirectoryPreAuthorizationClient` (directory-api-key from Secrets Manager), `RegistrationEngine` (PostgreSQL pool from rds-credentials)
+3. `CELLO_ENV` drives adapter selection: `local` → stubs; `dev`/`staging`/`production` → real adapters
+4. `packages/operations-agent/buildspec.yml` placeholder Docker build step (currently uses `infra/stub/Dockerfile`) must be replaced with real application Dockerfile and `pnpm run typecheck` + `pnpm run test` steps uncommented
+
+**Key resource IDs (to be filled after AC-010 deployment):**
+- ECS service ARN: see STATE.md after deploy
+- Ops Agent Security Group ID: see STATE.md after deploy
+- ECR repo: `{account}.dkr.ecr.{region}.amazonaws.com/cello-operations-agent`
+
+---
+
 ## Constraints
 
 **CONSTRAINT: registrations table single-writer assumption.** The Operations Agent writes only from us-east-1. The partial unique index `UNIQUE (phone_stub_hash) WHERE state NOT IN (terminal)` is enforced locally per-node in logical replication — it does NOT prevent cross-region duplicates. Multi-region Ops Agent deployment requires schema redesign. See OPS-AGENT-000 `replication_safety` note.
