@@ -27,13 +27,18 @@ echo "Building linux/amd64 stub images for ${REGISTRY}..."
 aws ecr get-login-password --region "${REGION}" | \
   docker login --username AWS --password-stdin "${REGISTRY}"
 
+# Build the shared stub image and push to directory, relay, and operations-agent repos.
+# All three services share the same stub — no new Dockerfile.
+# AC-002 (OPS-AGENT-005A): reuses existing shared stub, tag 'stub', --platform linux/amd64.
 docker buildx build \
   --platform linux/amd64 \
   --tag "${REGISTRY}/cello-directory:stub" \
   --tag "${REGISTRY}/cello-relay:stub" \
+  --tag "${REGISTRY}/cello-operations-agent:stub" \
   --push \
   "${SCRIPT_DIR}/stub"
 
 echo "Done. Stub images pushed:"
 echo "  ${REGISTRY}/cello-directory:stub"
 echo "  ${REGISTRY}/cello-relay:stub"
+echo "  ${REGISTRY}/cello-operations-agent:stub"

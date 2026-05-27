@@ -151,6 +151,45 @@ put_secret_if_empty \
   "${HMAC_SECRET}" \
   "GitHub webhook HMAC secret"
 
+# ── 7. Operations Agent secrets (AC-004, OPS-AGENT-005A) ────────────────────
+# telegram-bot-token, ses-credentials, and directory-api-key must be populated
+# manually by the operator. CloudFormation (cello-secrets.yaml) already created
+# them with PLACEHOLDER_POPULATE_VIA_CLI — bootstrap.sh just prints operator
+# instructions, not another PLACEHOLDER write.
+#
+# rds-credentials: populated automatically by the rotation Lambda at first deploy
+# (deploy.sh Step 8b). Use put_secret_if_empty so bootstrap.sh is idempotent
+# on repeat runs (rotation-set value is treated as already populated).
+
+echo "Operations Agent secrets — manual population required:"
+echo ""
+echo "  [MANUAL REQUIRED] cello/${ENVIRONMENT}/ops-agent/telegram-bot-token"
+echo "    aws secretsmanager put-secret-value \\"
+echo "      --secret-id 'cello/${ENVIRONMENT}/ops-agent/telegram-bot-token' \\"
+echo "      --secret-string '<real-telegram-bot-token>' \\"
+echo "      --region ${REGION}"
+echo ""
+echo "  [MANUAL REQUIRED] cello/${ENVIRONMENT}/ops-agent/ses-credentials"
+echo "    aws secretsmanager put-secret-value \\"
+echo "      --secret-id 'cello/${ENVIRONMENT}/ops-agent/ses-credentials' \\"
+echo "      --secret-string '<ses-creds-json>' \\"
+echo "      --region ${REGION}"
+echo ""
+echo "  [MANUAL REQUIRED] cello/${ENVIRONMENT}/ops-agent/directory-api-key"
+echo "    aws secretsmanager put-secret-value \\"
+echo "      --secret-id 'cello/${ENVIRONMENT}/ops-agent/directory-api-key' \\"
+echo "      --secret-string '<api-key>' \\"
+echo "      --region ${REGION}"
+echo ""
+
+# rds-credentials: populated automatically by rotation Lambda at first deploy.
+# Placeholder allows deploy.sh to detect the first-deploy condition (AC-009e)
+# and trigger rotation before starting the Operations Agent ECS service.
+put_secret_if_empty \
+  "cello/${ENVIRONMENT}/ops-agent/rds-credentials" \
+  '{"username":"cello_ops_agent","password":"PLACEHOLDER_POPULATE_VIA_CLI"}' \
+  "Operations Agent RDS credentials (cello_ops_agent role — auto-populated by rotation Lambda)"
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
@@ -168,4 +207,9 @@ echo "     Endpoint: $(aws cloudformation describe-stacks \
        --query "Stacks[0].Outputs[?OutputKey=='RdsEndpoint'].OutputValue" \
        --output text 2>/dev/null || echo "(deploy RDS first)")"
 echo "  3. Register the HMAC secret in GitHub repo webhook settings"
+echo "  4. Populate Operations Agent secrets (after infra is deployed):"
+echo "       aws secretsmanager put-secret-value --secret-id cello/${ENVIRONMENT}/ops-agent/telegram-bot-token --secret-string '<bot-token>' --region ${REGION}"
+echo "       aws secretsmanager put-secret-value --secret-id cello/${ENVIRONMENT}/ops-agent/ses-credentials --secret-string '<ses-creds-json>' --region ${REGION}"
+echo "       aws secretsmanager put-secret-value --secret-id cello/${ENVIRONMENT}/ops-agent/directory-api-key --secret-string '<api-key>' --region ${REGION}"
+echo "       NOTE: ops-agent/rds-credentials is auto-populated by deploy.sh (AC-009e)"
 echo ""

@@ -198,9 +198,68 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
+  # AC-009d (OPS-AGENT-005A): Protect /internal/* — allow only intra-VPC callers.
+  # The directory /internal/pre-authorize endpoint is for the Ops Agent (intra-VPC only).
+  # External requests (source IP outside VPC CIDR) receive HTTP 403 Fixed Response.
+  #
+  # ALB listener rule priority: lower number = higher precedence.
+  #   Priority 5 (highest): /internal/* AND source-ip IN VPC CIDR → forward to target group.
+  #   Priority 10 (lower):  /internal/* (catch-all) → 403 Fixed Response.
+  #   Default rule (lowest): all other paths → forward to target group.
+  #
+  # Evaluation order: rule 5 fires first for /internal/* from inside the VPC (allow).
+  # If rule 5 doesn't match (source IP is outside VPC), rule 10 fires (block).
+  #
+  # VPC routing note: the Ops Agent has AssignPublicIp: ENABLED (public subnet), but
+  # intra-VPC traffic to the ALB always uses the source task's PRIVATE IP, not public IP.
+  # The source-ip condition (VPC CIDR) correctly matches the Ops Agent's private IP.
+  # If AC-009b returns 403 from within the VPC, the source-ip condition is misconfigured —
+  # check ALB access logs for the actual source IP.
+  #
+  # Multi-region: each VPC has a different CIDR (10.0.0.0/16, 10.1.0.0/16, 10.2.0.0/16).
+  # !ImportValue of cello-${Environment}-vpc-cidr makes this rule region-agnostic.
+
+  InternalPathVpcAllowRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    DependsOn: HttpListener
+    Properties:
+      ListenerArn: !Ref HttpListener
+      Priority: 5
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - "/internal/*"
+        - Field: source-ip
+          SourceIpConfig:
+            Values:
+              - !ImportValue
+                Fn::Sub: "cello-${Environment}-vpc-cidr"
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  InternalPathExternalBlockRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    DependsOn: HttpListener
+    Properties:
+      ListenerArn: !Ref HttpListener
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - "/internal/*"
+      Actions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: "403"
+            ContentType: "text/plain"
+            MessageBody: "Forbidden"
+
   Service:
     Type: AWS::ECS::Service
-    DependsOn: HttpListener
+    # DependsOn includes both listener rules so CloudFormation does not start
+    # registering targets before /internal/* protection rules are active (AC-009d).
+    DependsOn: [HttpListener, InternalPathVpcAllowRule, InternalPathExternalBlockRule]
     Properties:
       ServiceName: !Sub "cello-directory-${Environment}"
       Cluster: !Ref Cluster

@@ -176,6 +176,7 @@ Resources:
                   - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-directory-pipeline"
                   - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-relay-pipeline"
                   - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-e2e-tests-pipeline"
+                  - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-operations-agent-pipeline"
       Tags:
         - Key: Project
           Value: cello
@@ -281,6 +282,7 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/cello-directory"
                   - !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/cello-relay"
+                  - !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/cello-operations-agent"
               # ── ECS deploy permissions (DEPLOY-003 + DEPLOY-005) ─────────────────
               # Required for buildspec docker build → ECR push → ECS rolling deploy.
               # RegisterTaskDefinition + UpdateService + DescribeServices/TaskDefinition
@@ -306,15 +308,21 @@ Resources:
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-directory-task-role"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-relay-execution-role"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-relay-task-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-ops-agent-execution-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-ops-agent-task-role"
                   # Non-primary regions use region-scoped names (FEDERATION-E2E-001 fix)
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-eu-central-1-directory-execution-role"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-eu-central-1-directory-task-role"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-eu-central-1-relay-execution-role"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-eu-central-1-relay-task-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-eu-central-1-ops-agent-execution-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-eu-central-1-ops-agent-task-role"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-ap-northeast-1-directory-execution-role"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-ap-northeast-1-directory-task-role"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-ap-northeast-1-relay-execution-role"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-ap-northeast-1-relay-task-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-ap-northeast-1-ops-agent-execution-role"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cello-${Environment}-ap-northeast-1-ops-agent-task-role"
               # ── CloudFormation read-only for ALB URL (DEPLOY-005 AC-009) ───────────
               - Effect: Allow
                 Action:
@@ -496,6 +504,47 @@ Resources:
         Type: LINUX_CONTAINER
         Image: aws/codebuild/standard:7.0
         ComputeType: BUILD_GENERAL1_SMALL
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+
+  # ── Operations Agent CodeBuild project (AC-002b, OPS-AGENT-005A) ─────────────
+  # Triggered by changes to packages/operations-agent/ via pipeline-filter Lambda.
+  # Build→StagingDeploy→SmokeTest→ProductionDeploy pipeline.
+  # The buildspec.yml is a placeholder (OPS-AGENT-005A); OPS-AGENT-005B wires real build.
+
+  OperationsAgentBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cello-operations-agent-build
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: packages/operations-agent/buildspec.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - Name: CELLO_ENV
+            Value: !Ref Environment
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+
+  StagingDeployOperationsAgentBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cello-staging-deploy-operations-agent-build
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: infra/buildspecs/staging-deploy-operations-agent.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - Name: CELLO_ENV
+            Value: !Ref Environment
       ServiceRole: !GetAtt CodeBuildRole.Arn
 
   # ── DEPLOY-005: Staging deploy, smoke test, and production deploy CodeBuild projects ──
@@ -1115,6 +1164,128 @@ Resources:
                 - Name: SourceOutput
               OutputArtifacts:
                 - Name: BuildOutput
+
+  # ── Operations Agent pipeline (AC-002b, OPS-AGENT-005A) ──────────────────────
+  # Triggered by changes to packages/operations-agent/.
+  # Build → StagingDeploy → SmokeTest → ProductionDeploy.
+  # The StagingDeploy buildspec (staging-deploy-operations-agent.yml) is a placeholder
+  # until OPS-AGENT-005B wires the real deploy logic.
+  # ProductionDeploy reuses the existing ProductionDeployBuild project with
+  # SERVICE_NAME=cello-operations-agent override.
+
+  OperationsAgentPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      PipelineType: V2
+      Name: cello-operations-agent-pipeline
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactsBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Ref GitHubRepo
+                BranchName: !Ref GitHubBranch
+                DetectChanges: "false"
+              OutputArtifacts:
+                - Name: SourceOutput
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref OperationsAgentBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+        - Name: StagingDeploy
+          Actions:
+            - Name: StagingDeployAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref StagingDeployOperationsAgentBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: StagingDeployOpsAgentOutput
+        # SmokeTest stage uses the directory smoke test as a placeholder.
+        # Replace SmokeTestBuild with an ops-agent-specific smoke test in OPS-AGENT-005B.
+        - Name: SmokeTest
+          Actions:
+            - Name: SmokeTestAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref SmokeTestBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: SmokeTestOutput
+        - Name: ProductionDeploy
+          Actions:
+            - Name: ProductionDeployUsEast1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              RunOrder: 1
+              Configuration:
+                ProjectName: !Ref ProductionDeployBuild
+                EnvironmentVariables: >
+                  [{"name":"DEPLOY_REGION","value":"us-east-1","type":"PLAINTEXT"},
+                   {"name":"SERVICE_NAME","value":"cello-operations-agent","type":"PLAINTEXT"}]
+              InputArtifacts:
+                - Name: SourceOutput
+            - Name: ProductionDeployEuCentral1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              RunOrder: 2
+              Configuration:
+                ProjectName: !Ref ProductionDeployBuild
+                EnvironmentVariables: >
+                  [{"name":"DEPLOY_REGION","value":"eu-central-1","type":"PLAINTEXT"},
+                   {"name":"SERVICE_NAME","value":"cello-operations-agent","type":"PLAINTEXT"}]
+              InputArtifacts:
+                - Name: SourceOutput
+            - Name: ProductionDeployApNortheast1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              RunOrder: 3
+              Configuration:
+                ProjectName: !Ref ProductionDeployBuild
+                EnvironmentVariables: >
+                  [{"name":"DEPLOY_REGION","value":"ap-northeast-1","type":"PLAINTEXT"},
+                   {"name":"SERVICE_NAME","value":"cello-operations-agent","type":"PLAINTEXT"}]
+              InputArtifacts:
+                - Name: SourceOutput
 
 Outputs:
   WebhookLambdaArn:

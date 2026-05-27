@@ -1,0 +1,53 @@
+version: 0.2
+# Staging deploy buildspec for the Operations Agent ECS service.
+# OPS-AGENT-005A: reads IMAGE_URI from SSM, registers a new task definition, updates ECS service.
+# OPS-AGENT-005B: no change needed here — the build step writes the SSM parameter.
+# Pattern mirrors staging-deploy-directory.yml.
+phases:
+  build:
+    commands:
+      - |
+        set -e
+        STAGING_IMAGE_URI=$(aws ssm get-parameter --name /cello/${CELLO_ENV}/pipeline/operations-agent-image-uri --query Parameter.Value --output text --region us-east-1)
+        COMMIT_SHA=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown} | cut -c1-7)
+        START_MS=$(date +%s%3N)
+        TASK_DEF=$(aws ecs describe-task-definition \
+          --task-definition cello-operations-agent-${CELLO_ENV} \
+          --region us-east-1 \
+          --query "taskDefinition" --output json)
+        NEW_TASK_DEF=$(echo "$TASK_DEF" | jq \
+          --arg IMAGE "$STAGING_IMAGE_URI" \
+          '(.containerDefinitions[] | select(.name=="operations-agent") | .image) |= $IMAGE
+          | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+        NEW_TASK_ARN=$(aws ecs register-task-definition \
+          --region us-east-1 \
+          --cli-input-json "$NEW_TASK_DEF" \
+          --query "taskDefinition.taskDefinitionArn" --output text)
+        aws ecs update-service \
+          --cluster cello-${CELLO_ENV} \
+          --service cello-operations-agent-${CELLO_ENV} \
+          --task-definition $NEW_TASK_ARN \
+          --region us-east-1 || {
+            echo '{"event":"pipeline.staging.deploy.failed","pipeline":"cello-operations-agent-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"ecs update-service failed"}'
+            exit 1
+          }
+        WAIT_ATTEMPTS=0
+        MAX_WAIT_ATTEMPTS=60
+        while [ $WAIT_ATTEMPTS -lt $MAX_WAIT_ATTEMPTS ]; do
+          DEPLOY_STATUS=$(aws ecs describe-services --cluster cello-${CELLO_ENV} --services cello-operations-agent-${CELLO_ENV} --region us-east-1 --query 'services[0].deployments[?status==`PRIMARY`].rolloutState' --output text)
+          if [ "$DEPLOY_STATUS" = "COMPLETED" ]; then
+            break
+          elif [ "$DEPLOY_STATUS" = "FAILED" ]; then
+            echo '{"event":"pipeline.staging.deploy.failed","pipeline":"cello-operations-agent-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"ecs deployment rollout failed"}'
+            exit 1
+          fi
+          WAIT_ATTEMPTS=$((WAIT_ATTEMPTS + 1))
+          sleep 15
+        done
+        if [ $WAIT_ATTEMPTS -ge $MAX_WAIT_ATTEMPTS ]; then
+          echo '{"event":"pipeline.staging.deploy.failed","pipeline":"cello-operations-agent-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"ecs wait services-stable timed out after 15 minutes"}'
+          exit 1
+        fi
+        END_MS=$(date +%s%3N)
+        DURATION_MS=$((END_MS - START_MS))
+        echo '{"timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"pipeline.staging.deployed","pipeline":"cello-operations-agent-pipeline","commitSha":"'${COMMIT_SHA}'","imageDigest":"'${STAGING_IMAGE_URI}'","durationMs":'${DURATION_MS}'}'

@@ -25,6 +25,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-05-25 | Now uses RDS-managed master secret (no manual admin creds) |
 | cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-25 | Real image deployed via pipeline to all 3 regions; manifest fallback enabled |
+| cello-ecs-operations-agent-dev | NOT DEPLOYED | — | OPS-AGENT-005A IaC complete; deploy on next deploy.sh run (AC-008: update this row after AC-001 passes) |
 | cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL: rate-limit 1000/5min, IP reputation (BLOCK), CommonRuleSet (COUNT); logs to aws-waf-logs-cello-dev (SECOPS-003) |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-25 | Real image deployed via pipeline (commit 1af5c16) to all 3 regions |
 | cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-05-23 | 10 alarms with -dev suffix, 2 SNS topics, 1 multi-region dashboard (SECOPS-002) |
@@ -232,8 +233,12 @@ Setup with: `./infra/setup-replication.sh dev`
 | ECR repo — relay (eu-central-1) | 257394457473.dkr.ecr.eu-central-1.amazonaws.com/cello-relay | |
 | ECR repo — directory (ap-northeast-1) | 257394457473.dkr.ecr.ap-northeast-1.amazonaws.com/cello-directory | Added by FEDERATION-E2E-001 |
 | ECR repo — relay (ap-northeast-1) | 257394457473.dkr.ecr.ap-northeast-1.amazonaws.com/cello-relay | Added by FEDERATION-E2E-001 |
+| ECR repo — operations-agent (us-east-1) | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; created by cello-ecr stack |
+| ECR repo — operations-agent (eu-central-1) | 257394457473.dkr.ecr.eu-central-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; replicated via account-level ECR replication |
+| ECR repo — operations-agent (ap-northeast-1) | 257394457473.dkr.ecr.ap-northeast-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; replicated via account-level ECR replication |
 | Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:1c68fbb | Built from commit 1c68fbb, deployed 2026-05-23; includes postgresql-client for ECS Exec SQL |
 | Current relay image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay:6e0c50b | Built from commit 6e0c50b, deployed 2026-05-22 |
+| Current operations-agent image | (stub) | OPS-AGENT-005A stub; real image deployed by OPS-AGENT-005B pipeline |
 | Route 53 Hosted Zone | cello.mygentic.ai | Zone ID read at deploy time via aws route53 list-hosted-zones |
 | CodeStar Connection (us-east-1) | arn:aws:codeconnections:us-east-1:257394457473:connection/1a7fba2b-dd1d-4ebe-8372-7122b89f56b5 | AVAILABLE — override via CELLO_GITHUB_CONNECTION_ID |
 

@@ -179,6 +179,43 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # ── 2b. cello-operations-agent-ecs-task-count — AC-009 (OPS-AGENT-005A) ─────
+  # Fires ops-critical when Operations Agent running task count < 1.
+  # Same pattern as directory/relay alarms above.
+  # ECS ContainerInsights metric: ECS/ContainerInsights RunningTaskCount.
+
+  OpsAgentEcsTaskCountAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-operations-agent-ecs-task-count-${Environment}"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO Operations Agent ECS running task count dropped below 1.
+        Service: cello-operations-agent-${Environment}, Cluster: cello-${Environment}.
+        The Telegram registration bot is offline. No new registrations can be processed.
+        Investigate ECS console and CloudWatch Logs for task failures.
+      MetricName: RunningTaskCount
+      Namespace: ECS/ContainerInsights
+      Dimensions:
+        - Name: ClusterName
+          Value: !Sub "cello-${Environment}"
+        - Name: ServiceName
+          Value: !Sub "cello-operations-agent-${Environment}"
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref OpsCriticalTopic
+      OKActions:
+        - !Ref OpsCriticalTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
   # ── 3. cello-rds-cpu — AC-001 ────────────────────────────────────────────
   # Fires ops-warning when RDS CPU > 80% for 5 minutes (1 × 300s period).
   # AC-001 specifies threshold > 80%. Routes to ops-warning (not ops-critical)
