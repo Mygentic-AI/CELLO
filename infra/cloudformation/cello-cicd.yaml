@@ -1242,6 +1242,8 @@ Resources:
                 - Name: SourceOutput
               OutputArtifacts:
                 - Name: SmokeTestOutput
+        # Ops-agent is single-region (us-east-1 only) — Telegram long-polling
+        # requires exactly-one-instance globally, not per-region.
         - Name: ProductionDeploy
           Actions:
             - Name: ProductionDeployUsEast1
@@ -1255,34 +1257,6 @@ Resources:
                 ProjectName: !Ref ProductionDeployBuild
                 EnvironmentVariables: >
                   [{"name":"DEPLOY_REGION","value":"us-east-1","type":"PLAINTEXT"},
-                   {"name":"SERVICE_NAME","value":"cello-operations-agent","type":"PLAINTEXT"}]
-              InputArtifacts:
-                - Name: SourceOutput
-            - Name: ProductionDeployEuCentral1
-              ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Provider: CodeBuild
-                Version: "1"
-              RunOrder: 2
-              Configuration:
-                ProjectName: !Ref ProductionDeployBuild
-                EnvironmentVariables: >
-                  [{"name":"DEPLOY_REGION","value":"eu-central-1","type":"PLAINTEXT"},
-                   {"name":"SERVICE_NAME","value":"cello-operations-agent","type":"PLAINTEXT"}]
-              InputArtifacts:
-                - Name: SourceOutput
-            - Name: ProductionDeployApNortheast1
-              ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Provider: CodeBuild
-                Version: "1"
-              RunOrder: 3
-              Configuration:
-                ProjectName: !Ref ProductionDeployBuild
-                EnvironmentVariables: >
-                  [{"name":"DEPLOY_REGION","value":"ap-northeast-1","type":"PLAINTEXT"},
                    {"name":"SERVICE_NAME","value":"cello-operations-agent","type":"PLAINTEXT"}]
               InputArtifacts:
                 - Name: SourceOutput
