@@ -140,6 +140,60 @@ describe("AC-004 / SI-001: resolveIdentity — contact.user_id mismatch", () => 
   });
 });
 
+// ─── H-002 / SI-001: contact with absent user_id field → phoneNumber = undefined ─
+
+describe("H-002 / SI-001: resolveIdentity — contact.user_id absent (field not present)", () => {
+  it("returns phoneNumber = undefined when contact has no user_id field at all, logs telegram.contact.mismatch WARN", async () => {
+    const logger = makeTestLogger();
+    const token = "fake-token-for-testing";
+
+    const getMeFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ME_RESPONSE,
+    }) as unknown as typeof fetch;
+
+    const adapter = new TelegramAdapter({ token, logger, fetch: getMeFetch });
+    await adapter.start({ skipPolling: true });
+
+    // contact object has no user_id field at all — this is the real-world case
+    // for non-Telegram contacts (SI-001 path)
+    const contactUpdate = {
+      update_id: 200,
+      message: {
+        message_id: 2,
+        from: { id: 5678, is_bot: false, first_name: "Bob" },
+        chat: { id: 5678, type: "private" },
+        date: Math.floor(Date.now() / 1000),
+        contact: {
+          phone_number: "+9876543210",
+          first_name: "SomeoneElse",
+          // user_id field is entirely absent
+        },
+      },
+    };
+
+    await adapter.processUpdate(contactUpdate);
+
+    // resolveIdentity must return phoneNumber = undefined (never the phone number)
+    const identity = await adapter.resolveIdentity("5678");
+
+    expect(identity.channel).toBe("telegram");
+    expect(identity.channelUserId).toBe("5678");
+    const phoneNumber = "phoneNumber" in identity ? (identity as { phoneNumber?: string }).phoneNumber : undefined;
+    expect(phoneNumber).toBeUndefined();
+
+    // telegram.contact.mismatch logged at WARN
+    const mismatchLog = logger.calls.find((c) => c.event === "telegram.contact.mismatch");
+    expect(mismatchLog).toBeDefined();
+    expect(mismatchLog!.level).toBe("warn");
+    expect(mismatchLog!.context.fromId).toBe(5678);
+    // contactUserId must be undefined (absent), not null
+    expect(mismatchLog!.context.contactUserId).toBeUndefined();
+    expect(typeof mismatchLog!.context.correlationId).toBe("string");
+  });
+});
+
 // ─── AC-005: send() with ECONNREFUSED → telegram.api.error logged ────────────
 
 describe("AC-005: send() — ECONNREFUSED", () => {
@@ -264,8 +318,9 @@ describe("AC-006c: HTTP 409 from getUpdates → telegram.poller.conflict + proce
     const adapter = new TelegramAdapter({ token, logger, fetch: fetchFn });
     await adapter.start({ skipPolling: true });
 
-    // Run a poll cycle — should hit 409
-    await adapter.pollOnce();
+    // Run a poll cycle — should hit 409; with process.exit mocked, pollOnce() must
+    // still complete cleanly (M-002: assert it resolves rather than hangs/throws).
+    await expect(adapter.pollOnce()).resolves.toBeUndefined();
 
     const conflictLog = logger.calls.find((c) => c.event === "telegram.poller.conflict");
     expect(conflictLog).toBeDefined();
@@ -321,99 +376,198 @@ describe("SI-002: bot token not present in any logged event", () => {
 });
 
 // ─── Integration tests (skip if no TELEGRAM_BOT_TOKEN) ───────────────────────
+//
+// These tests use the real Telegram Bot API for start()/getMe, but exercise
+// message and contact handling via synthetic processUpdate() calls so they do
+// not require a human to send messages during the test run (M-003).
+//
+// TELEGRAM_BOT_TOKEN must be set for the token to be accepted by getMe.
+// If it is not set, all tests in this section are skipped with a clear message.
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const integrationEnabled = !!TELEGRAM_BOT_TOKEN;
 
-describe.skipIf(!integrationEnabled)("AC-001 (integration): real getUpdates returns update with integer update_id > 0", () => {
-  it("onMessage callback fires with from=userId and message=text; update_id is integer > 0; telegram.message.received logged", async () => {
+describe.skipIf(!integrationEnabled)("AC-001 (integration): processUpdate fires onMessage handler with from and text; telegram.message.received logged", () => {
+  it("injects synthetic text update via processUpdate; onMessage fires with correct from and message; telegram.message.received logged at DEBUG", async () => {
+    if (!TELEGRAM_BOT_TOKEN) {
+      // Explicit skip message (belt-and-suspenders; skipIf should catch this already)
+      return;
+    }
     const logger = makeTestLogger();
 
-    const adapter = new TelegramAdapter({ token: TELEGRAM_BOT_TOKEN!, logger });
+    const adapter = new TelegramAdapter({ token: TELEGRAM_BOT_TOKEN, logger });
     await adapter.start({ skipPolling: true });
 
-    // Poll once and expect at least one message to have been received
-    // (Requires a human to have sent /start to the bot before this test runs)
-    const receivedMessages: Array<{ from: string; message: string }> = [];
+    const received: Array<{ from: string; message: string }> = [];
     adapter.onMessage((from, message) => {
-      receivedMessages.push({ from, message });
+      received.push({ from, message });
     });
 
-    await adapter.pollOnce();
+    // Inject a synthetic text update — no network call needed, exercises the handler wiring
+    const syntheticUpdate = {
+      update_id: 1001,
+      message: {
+        message_id: 10,
+        from: { id: 7777, is_bot: false, first_name: "TestUser" },
+        chat: { id: 7777, type: "private" },
+        date: Math.floor(Date.now() / 1000),
+        text: "/start",
+      },
+    };
 
-    // We can only verify the structural properties — the test environment may have updates or not.
-    // If updates arrive, they must have integer update_id > 0.
-    const debugLogs = logger.calls.filter((c) => c.event === "telegram.message.received");
-    for (const log of debugLogs) {
-      expect(log.level).toBe("debug");
-      expect(typeof log.context.fromId).toBe("number");
-      expect(typeof log.context.messageLength).toBe("number");
-      expect(typeof log.context.correlationId).toBe("string");
-    }
+    await adapter.processUpdate(syntheticUpdate);
+
+    // onMessage must have fired with from="7777" and message="/start"
+    expect(received.length).toBe(1);
+    expect(received[0].from).toBe("7777");
+    expect(received[0].message).toBe("/start");
+
+    // telegram.message.received logged at DEBUG with required fields
+    const debugLog = logger.calls.find((c) => c.event === "telegram.message.received");
+    expect(debugLog).toBeDefined();
+    expect(debugLog!.level).toBe("debug");
+    expect(debugLog!.context.fromId).toBe(7777);
+    expect(debugLog!.context.messageLength).toBe(6); // "/start".length === 6
+    expect(typeof debugLog!.context.correlationId).toBe("string");
   });
 });
 
 describe.skipIf(!integrationEnabled)("AC-002 (integration): contact event; resolveIdentity returns phoneNumber", () => {
-  it("resolveIdentity returns channel='telegram', channelUserId, phoneNumber after contact event; telegram.contact.verified logged", async () => {
+  it("injects synthetic contact update with matching user_id; resolveIdentity returns phoneNumber; telegram.contact.verified logged", async () => {
+    if (!TELEGRAM_BOT_TOKEN) {
+      return;
+    }
     const logger = makeTestLogger();
 
-    const adapter = new TelegramAdapter({ token: TELEGRAM_BOT_TOKEN!, logger });
+    const adapter = new TelegramAdapter({ token: TELEGRAM_BOT_TOKEN, logger });
     await adapter.start({ skipPolling: true });
 
     adapter.onMessage(() => {});
 
-    // Poll once — contact events would be in the queue if the test user shared contact
-    await adapter.pollOnce();
+    // Inject a synthetic contact update where user_id matches from.id (valid contact)
+    const contactUpdate = {
+      update_id: 1002,
+      message: {
+        message_id: 11,
+        from: { id: 8888, is_bot: false, first_name: "ContactUser" },
+        chat: { id: 8888, type: "private" },
+        date: Math.floor(Date.now() / 1000),
+        contact: {
+          phone_number: "+15551234567",
+          first_name: "ContactUser",
+          user_id: 8888, // matches from.id → valid contact
+        },
+      },
+    };
 
-    // If a contact.verified was logged, verify its fields
-    const verifiedLogs = logger.calls.filter((c) => c.event === "telegram.contact.verified");
-    for (const log of verifiedLogs) {
-      expect(log.level).toBe("info");
-      expect(typeof log.context.fromId).toBe("number");
-      expect(typeof log.context.correlationId).toBe("string");
-    }
+    await adapter.processUpdate(contactUpdate);
+
+    // resolveIdentity must return channel, channelUserId, and phoneNumber
+    const identity = await adapter.resolveIdentity("8888");
+    expect(identity.channel).toBe("telegram");
+    expect(identity.channelUserId).toBe("8888");
+    expect((identity as { phoneNumber?: string }).phoneNumber).toBe("+15551234567");
+
+    // telegram.contact.verified logged at INFO
+    const verifiedLog = logger.calls.find((c) => c.event === "telegram.contact.verified");
+    expect(verifiedLog).toBeDefined();
+    expect(verifiedLog!.level).toBe("info");
+    expect(verifiedLog!.context.fromId).toBe(8888);
+    expect(typeof verifiedLog!.context.correlationId).toBe("string");
   });
 });
 
 describe.skipIf(!integrationEnabled)("AC-003 (integration): send() delivers message", () => {
-  it("send() resolves successfully when Telegram API accepts the message", async () => {
-    const logger = makeTestLogger();
-
-    const adapter = new TelegramAdapter({ token: TELEGRAM_BOT_TOKEN!, logger });
-    await adapter.start({ skipPolling: true });
-
-    // We need a real chat_id to send to — skip if we can't get one from a recent update
-    const updates: Array<{ fromId: number }> = [];
-    adapter.onMessage((from) => {
-      updates.push({ fromId: parseInt(from) });
-    });
-    await adapter.pollOnce();
-
-    if (updates.length === 0) {
-      // No recent updates — can't test send without a target
+  it("send() to a real chat_id resolves successfully when Telegram API accepts the message", async () => {
+    if (!TELEGRAM_BOT_TOKEN) {
       return;
     }
+    const logger = makeTestLogger();
 
-    const targetChatId = updates[0].fromId.toString();
-    await expect(adapter.send(targetChatId, "CELLO integration test — please ignore.")).resolves.not.toThrow();
+    const adapter = new TelegramAdapter({ token: TELEGRAM_BOT_TOKEN, logger });
+    await adapter.start({ skipPolling: true });
+
+    // Inject a synthetic update to learn a valid from-ID that can receive messages.
+    // If we had a real update in the queue from pollOnce(), we'd use that chat_id.
+    // Instead, inject one and poll once to discover if there are real updates.
+    const received: Array<string> = [];
+    adapter.onMessage((from) => {
+      received.push(from);
+    });
+
+    await adapter.pollOnce();
+
+    // If no real updates arrived, we cannot send without a target — assert that clearly
+    // rather than silently returning (M-003: no silent non-assertions).
+    expect(received.length).toBeGreaterThan(0);
+
+    const targetChatId = received[0];
+    await expect(adapter.send(targetChatId, "CELLO integration test — please ignore.")).resolves.toBeUndefined();
   });
 });
 
-describe.skipIf(!integrationEnabled)("AC-006 (integration): full /start → AWAITING_EMAIL flow via staging bot", () => {
-  it("state machine advances from INITIAL → AWAITING_CONTACT when a message arrives", async () => {
-    // This test verifies the adapter can be used in a full flow
-    // The actual DB-backed flow requires a running Postgres instance (AC-007-integration-gate)
+describe.skipIf(!integrationEnabled)("AC-006 (integration): /start → phone verification → AWAITING_EMAIL structural wiring", () => {
+  it("injects synthetic /start and contact updates; onMessage handler fires with correct args for each; resolveIdentity returns phoneNumber after verified contact", async () => {
+    if (!TELEGRAM_BOT_TOKEN) {
+      return;
+    }
     const logger = makeTestLogger();
 
-    const adapter = new TelegramAdapter({ token: TELEGRAM_BOT_TOKEN!, logger });
+    const adapter = new TelegramAdapter({ token: TELEGRAM_BOT_TOKEN, logger });
     await adapter.start({ skipPolling: true });
 
-    adapter.onMessage(() => {});
-    await adapter.pollOnce();
-
-    // AC-006 structural verification: send a message back for each received update
+    // Verify telegram.polling.started was logged (adapter initialized correctly)
     const startLogs = logger.calls.filter((c) => c.event === "telegram.polling.started");
     expect(startLogs.length).toBe(1);
     expect(startLogs[0].context.botUsername).toBeTruthy();
+
+    const received: Array<{ from: string; message: string }> = [];
+    adapter.onMessage((from, message) => {
+      received.push({ from, message });
+    });
+
+    // Step 1: inject synthetic /start update
+    await adapter.processUpdate({
+      update_id: 2001,
+      message: {
+        message_id: 20,
+        from: { id: 9999, is_bot: false, first_name: "FlowUser" },
+        chat: { id: 9999, type: "private" },
+        date: Math.floor(Date.now() / 1000),
+        text: "/start",
+      },
+    });
+
+    // onMessage must have fired with from="9999" and message="/start"
+    expect(received.length).toBe(1);
+    expect(received[0].from).toBe("9999");
+    expect(received[0].message).toBe("/start");
+
+    // Step 2: inject synthetic verified contact update (user_id matches from.id)
+    await adapter.processUpdate({
+      update_id: 2002,
+      message: {
+        message_id: 21,
+        from: { id: 9999, is_bot: false, first_name: "FlowUser" },
+        chat: { id: 9999, type: "private" },
+        date: Math.floor(Date.now() / 1000),
+        contact: {
+          phone_number: "+15559876543",
+          first_name: "FlowUser",
+          user_id: 9999, // matches from.id → valid contact
+        },
+      },
+    });
+
+    // onMessage must have fired with CONTACT:<from>:<phone>
+    expect(received.length).toBe(2);
+    expect(received[1].from).toBe("9999");
+    expect(received[1].message).toBe("CONTACT:9999:+15559876543");
+
+    // resolveIdentity now returns phoneNumber
+    const identity = await adapter.resolveIdentity("9999");
+    expect(identity.channel).toBe("telegram");
+    expect(identity.channelUserId).toBe("9999");
+    expect((identity as { phoneNumber?: string }).phoneNumber).toBe("+15559876543");
   });
 });

@@ -374,7 +374,9 @@ export class TelegramAdapter implements MessagingChannel {
       updates = await this.#getUpdates();
     } catch {
       // #getUpdates already logged the error; on 409, process.exit was called.
-      // For other errors, continue (polling loop calls pollOnce again).
+      // For other errors, back off 1 second before returning so the polling loop
+      // does not hammer the Telegram API under failure conditions (L-002).
+      await new Promise<void>((r) => setTimeout(r, 1000));
       return;
     }
 
@@ -428,7 +430,7 @@ export class TelegramAdapter implements MessagingChannel {
         // SI-001: user_id does not match from.id — shared someone else's contact
         this.#logger.warn("telegram.contact.mismatch", {
           fromId,
-          contactUserId: contactUserId ?? null,
+          contactUserId,
           correlationId,
         });
         // Do NOT deliver as CONTACT: message — state machine won't advance
