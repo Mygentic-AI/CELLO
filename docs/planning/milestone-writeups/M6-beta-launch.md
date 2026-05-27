@@ -369,7 +369,7 @@ Infrastructure-only story. Proves the full deployment path — ECR, ECS, Secrets
 
 **Review history:** code-reviewer round 1 (9 findings: 2 critical, 2 high, 3 medium, 2 low — all fixed); sprint-reviewer BLOCKED (3 medium fixed in code, 1 blocking = live deployment gate); code-reviewer round 2 (2 findings: 1 high hardcoded ECR account ID, 1 low stale step reference — both fixed); story YAML corrected.
 
-**AC-010 integration gate status:** IaC complete and reviewed. Live deployment pending — stack listed as `NOT DEPLOYED` in STATE.md. OPS-AGENT-005B may not begin until deployment is verified (runningCount=1, secrets resolve, internet egress to api.telegram.org confirmed via ECS Exec).
+**AC-010 integration gate status:** PASSED (2026-05-27). All 15 stacks deployed via `deploy.sh dev us-east-1`. `cello-ecs-operations-agent-dev` CREATE_COMPLETE, task-definition rev 1 (stub), runningCount=1, rollout COMPLETED. Secrets resolved: telegram-bot-token (real), directory-api-key (256-bit hex), rds-credentials (rotation Lambda set password). Directory INTERNAL_API_KEY wired and pipeline redeployed (image 1b52c4d). SES credentials remain at PLACEHOLDER (non-blocking for 005B — stub mode until populated).
 
 **Bugs found during review cycle:**
 
