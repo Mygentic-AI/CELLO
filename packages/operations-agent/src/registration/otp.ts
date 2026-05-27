@@ -3,9 +3,8 @@
  *
  * Phase P — Pseudocode:
  *   generateOtp():
- *     bytes = crypto.randomBytes(4)   // 32 bits of entropy
- *     num = bytes.readUInt32BE(0) % 1_000_000  // mod to 6 digits
- *     return num.toString().padStart(6, '0')    // zero-padded string
+ *     num = crypto.randomInt(0, 1_000_000)  // uniform in [0, 1000000)
+ *     return num.toString().padStart(6, '0') // zero-padded string
  *
  *   generateSalt():
  *     return crypto.randomBytes(16).toString('hex')   // 128-bit salt
@@ -22,26 +21,16 @@
  * prevents rainbow table attacks on the small 6-digit OTP space.
  */
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 
 /**
  * Generate a cryptographically random 6-digit OTP string.
- * Uses rejection sampling to eliminate modulo bias:
- *   MAX_SAFE = floor(2^32 / 1_000_000) * 1_000_000 = 4_294_000_000
- *   Values in [0, MAX_SAFE) are uniformly mapped; values >= MAX_SAFE are discarded.
- *   Retry probability ≈ 0.023% — negligible performance impact.
+ * Uses crypto.randomInt(0, 1_000_000) which provides uniform distribution
+ * over [0, 999999] without modulo bias.
  * Zero-padded to always be exactly 6 characters.
  */
 export function generateOtp(): string {
-  const MAX_SAFE = 4_294_000_000; // floor(2^32 / 1_000_000) * 1_000_000
-  while (true) {
-    const bytes = randomBytes(4);
-    const num = bytes.readUInt32BE(0);
-    if (num < MAX_SAFE) {
-      return (num % 1_000_000).toString().padStart(6, "0");
-    }
-    // ~0.023% chance of retry — negligible
-  }
+  return randomInt(0, 1_000_000).toString().padStart(6, "0");
 }
 
 /**
