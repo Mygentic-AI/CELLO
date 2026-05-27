@@ -12,38 +12,38 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 ## Environments
 
 ### dev — us-east-1
-*Last deployed: 2026-05-27 (deploy.sh pending — OPS-AGENT-005A IaC merged but not yet deployed)
+*Last deployed: 2026-05-27
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
-| cello-ecr-dev | UPDATE_COMPLETE | 2026-05-22 | PENDING UPDATE: OPS-AGENT-005A adds cello-operations-agent ECR repo |
-| cello-iam-dev | PENDING UPDATE | 2026-05-23 | OPS-AGENT-005A adds ops-agent task/execution roles; fix(ops-agent-001) adds ops-agent/directory-api-key to directory execution+task role |
-| cello-secrets-dev | PENDING UPDATE | 2026-05-22 | OPS-AGENT-005A adds ops-agent/telegram-bot-token, ses-credentials, directory-api-key, rds-credentials secrets |
-| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-25 | Port 8080 for directory SG, port 80+443 for ALB SG; SSM+SSMMessages VPC endpoints added |
-| cello-kms-dev | CREATE_COMPLETE | 2026-05-22 | |
+| cello-ecr-dev | UPDATE_COMPLETE | 2026-05-27 | cello-operations-agent ECR repo added (OPS-AGENT-005A) |
+| cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent task/execution roles; directory roles include ops-agent/directory-api-key |
+| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent secrets: telegram-bot-token, ses-credentials, directory-api-key, rds-credentials |
+| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-27 | Port 8080 for directory SG, port 80+443 for ALB SG; SSM+SSMMessages VPC endpoints; ops-agent SG added |
+| cello-kms-dev | UPDATE_COMPLETE | 2026-05-27 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | s3:ListBucket added for relay+directory task roles |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
-| cello-rotation-dev | PENDING UPDATE | 2026-05-25 | OPS-AGENT-005A adds rotation Lambda config for ops-agent RDS creds |
-| cello-ecs-directory-dev | PENDING UPDATE | 2026-05-25 | fix(ops-agent-001) adds INTERNAL_API_KEY secret injection; directory pipeline currently failing (bbf94c2 image crashes — missing INTERNAL_API_KEY env) |
-| cello-ecs-operations-agent-dev | NOT DEPLOYED | — | OPS-AGENT-005A IaC committed (commit a569144); deploy via deploy.sh dev us-east-1 |
-| cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL: rate-limit 1000/5min, IP reputation (BLOCK), CommonRuleSet (COUNT); logs to aws-waf-logs-cello-dev (SECOPS-003) |
+| cello-rotation-dev | UPDATE_COMPLETE | 2026-05-27 | Rotation Lambda covers ops-agent RDS creds (AC-009e) |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-27 | INTERNAL_API_KEY injected; /internal/* ALB rules (AC-009d); real image via pipeline |
+| cello-ecs-operations-agent-dev | CREATE_COMPLETE | 2026-05-27 | Stub image running; real image via pipeline (OPS-AGENT-005B) |
+| cello-waf-dev | UPDATE_COMPLETE | 2026-05-27 | WAFv2 WebACL: rate-limit 1000/5min, IP reputation (BLOCK), CommonRuleSet (COUNT); logs to aws-waf-logs-cello-dev |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-25 | Real image deployed via pipeline (commit 1af5c16) to all 3 regions |
-| cello-cloudwatch-dev | PENDING UPDATE | 2026-05-23 | OPS-AGENT-005A adds ops-agent ECS alarms |
-| cello-route53-dev | CREATE_COMPLETE | 2026-05-22 | |
-| cello-cicd-dev | PENDING UPDATE | 2026-05-25 | OPS-AGENT-005A adds cello-operations-agent-pipeline |
+| cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-05-27 | Ops-agent ECS alarms added |
+| cello-route53-dev | UPDATE_COMPLETE | 2026-05-27 | |
+| cello-cicd-dev | UPDATE_COMPLETE | 2026-05-27 | cello-operations-agent-pipeline added |
 | Lambda: cello-github-webhook-receiver-dev | DEPLOYED (real code) | 2026-05-22 | |
-| Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-22 | pipeline-mappings.json updated to add operations-agent path filter |
+| Lambda: cello-pipeline-filter-dev | DEPLOYED (real code) | 2026-05-27 | pipeline-mappings.json includes operations-agent path filter |
 | ECR Replication (account-level) | CONFIGURED | 2026-05-24 | us-east-1 → eu-central-1 + ap-northeast-1; filter: prefix "cello-" |
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-24 | 167ca6...27b5 (directory node pubkey) |
 | Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | Replication user password (alphanumeric, 32-char) |
 
-**Pre-existing ops-agent secrets (created 2026-05-25, NOT yet at env-namespaced path):**
-| Secret | Path | Notes |
-|---|---|---|
-| Telegram bot token (prod) | `cello/ops-agent/telegram-bot-token` | Real value; CF expects `cello/dev/ops-agent/telegram-bot-token` — copy after deploy.sh |
-| Telegram bot token (staging) | `cello/ops-agent/telegram-bot-token-staging` | Real value; CF expects `cello/dev/ops-agent/telegram-bot-token-staging` — copy after deploy.sh |
-| directory-api-key | not yet created | CF creates `cello/dev/ops-agent/directory-api-key` as placeholder; populate with random key; same value goes into directory as INTERNAL_API_KEY |
-| ses-credentials | not yet created | CF creates `cello/dev/ops-agent/ses-credentials` as placeholder; populate manually |
+**Ops-agent secrets (us-east-1):**
+| Secret | Path | Status | Notes |
+|---|---|---|---|
+| Telegram bot token (prod) | `cello/dev/ops-agent/telegram-bot-token` | POPULATED | @CelloConnectBot token; copied from legacy path `cello/ops-agent/telegram-bot-token` |
+| directory-api-key / INTERNAL_API_KEY | `cello/dev/ops-agent/directory-api-key` | POPULATED | 256-bit random hex; shared by directory (INTERNAL_API_KEY) and ops-agent (DIRECTORY_API_KEY) |
+| Ops-agent RDS credentials | `cello/dev/ops-agent/rds-credentials` | POPULATED (rotated) | Rotation Lambda set real password for `cello_ops_agent` PostgreSQL role |
+| SES credentials | `cello/dev/ops-agent/ses-credentials` | PLACEHOLDER | Needs manual population with SES SMTP credentials |
 
 #### Key Resources — dev us-east-1
 
@@ -77,6 +77,12 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | Pipeline Filter Lambda | arn:aws:lambda:us-east-1:257394457473:function:cello-pipeline-filter-dev |
 | Directory Node Public Key | 167ca6b145bfdd3696af8f4befd883c3dc610f4a9c8d52a30f6a22f669dc27b5 |
 | Relay Node Public Key | 8c3a882b15ad39f42044bac2044c76f00535e3ff345767b9fda7b4e665efc4e6 |
+| ECS Ops-Agent Security Group | sg-07cc257e60bed1e49 |
+| Ops-Agent Service ARN | arn:aws:ecs:us-east-1:257394457473:service/cello-dev/cello-operations-agent-dev |
+| Ops-Agent Log Group | /ecs/cello-operations-agent-dev |
+| Ops-Agent Execution Role | arn:aws:iam::257394457473:role/cello-dev-ops-agent-execution-role |
+| Ops-Agent Task Role | arn:aws:iam::257394457473:role/cello-dev-ops-agent-task-role |
+| Ops-Agent Pipeline | cello-operations-agent-pipeline (us-east-1 only) |
 | SNS Topic — ops-critical | arn:aws:sns:us-east-1:257394457473:cello-ops-critical-dev |
 | SNS Topic — ops-warning | arn:aws:sns:us-east-1:257394457473:cello-ops-warning-dev |
 | CloudWatch Dashboard | cello-operations-dev |
@@ -244,7 +250,7 @@ Setup with: `./infra/setup-replication.sh dev`
 | ECR repo — operations-agent (us-east-1) | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; created by cello-ecr stack |
 | ECR repo — operations-agent (eu-central-1) | 257394457473.dkr.ecr.eu-central-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; replicated via account-level ECR replication |
 | ECR repo — operations-agent (ap-northeast-1) | 257394457473.dkr.ecr.ap-northeast-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; replicated via account-level ECR replication |
-| Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:1c68fbb | Built from commit 1c68fbb, deployed 2026-05-23; includes postgresql-client for ECS Exec SQL |
+| Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:1b52c4d | Built from commit 1b52c4d, deployed 2026-05-27; includes INTERNAL_API_KEY + /internal/* ALB rules |
 | Current relay image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay:6e0c50b | Built from commit 6e0c50b, deployed 2026-05-22 |
 | Current operations-agent image | (stub) | OPS-AGENT-005A stub; real image deployed by OPS-AGENT-005B pipeline |
 | Route 53 Hosted Zone | cello.mygentic.ai | Zone ID read at deploy time via aws route53 list-hosted-zones |
