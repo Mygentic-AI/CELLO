@@ -483,6 +483,15 @@ describe("generateOtp — SI-001: CSPRNG (not Math.random())", () => {
 });
 
 // ─── SI-002: Email address never in logs ─────────────────────────────────────
+//
+// The three tests below cover: (1) success path — only domain in logs;
+// (2) no-@ input — guard value "[invalid-email-domain]" used instead;
+// (3) bounce path — full address absent from error log.
+//
+// The pre-bounce re-attempt path (second call with an already-bounced address) is NOT
+// covered here because it emits no log events at all — it only throws DeliveryError
+// before any logger call is reached. That behavioral contract is covered structurally
+// by the AC-004 test "does not call SES on a second sendOtp() with the same bounced address".
 
 describe("SesOtpDeliveryProvider — SI-002: domain-only logging", () => {
   it("never logs the full email address — only the domain portion", async () => {
@@ -621,10 +630,20 @@ describe.skipIf(!isIntegrationEnabled)("AC-008 integration gate (SES_INTEGRATION
     // Flyway checksum gate — AC-008 requires zero checksum errors on all applied migrations.
     // This catches the FEDERATION-002 pattern where a previously-applied migration was
     // modified, causing Flyway to report a checksum mismatch on the next deployment.
-    const flywayCheck = await pool.query(
-      `SELECT COUNT(*) AS failed_count FROM flyway_schema_history WHERE success = false`,
+    // NOTE: a checksum mismatch causes Flyway to throw at startup — no row with success=false
+    // is written for that failure mode. The correct check is to inspect every row's checksum
+    // and success fields once Flyway has accepted the schema history.
+    const result = await pool.query<{ version: string; checksum: number; success: boolean }>(
+      "SELECT version, checksum, success FROM flyway_schema_history ORDER BY installed_rank",
     );
-    expect(Number(flywayCheck.rows[0].failed_count)).toBe(0);
+    for (const row of result.rows) {
+      expect(row.success, `Migration V${row.version} failed`).toBe(true);
+      expect(row.checksum, `Migration V${row.version} has placeholder checksum`).not.toBe(-1);
+    }
+    // V24 and V25 (OPS-AGENT-000 schema migrations) must be present for the state machine
+    const versions = result.rows.map((r) => r.version);
+    expect(versions).toContain("24");
+    expect(versions).toContain("25");
   });
 
   afterEach(async () => {

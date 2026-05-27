@@ -309,7 +309,7 @@ export class SesOtpDeliveryProvider implements OtpDeliveryProvider {
 
   /** Extract the error name from an unknown thrown value. */
   #errorName(err: unknown): string {
-    if (err instanceof Error) return err.name ?? "UnknownError";
+    if (err instanceof Error) return err.name || "UnknownError";
     return "UnknownError";
   }
 
