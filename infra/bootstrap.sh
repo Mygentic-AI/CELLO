@@ -152,30 +152,35 @@ put_secret_if_empty \
   "GitHub webhook HMAC secret"
 
 # ── 7. Operations Agent secrets (AC-004, OPS-AGENT-005A) ────────────────────
-# These four secrets are required by the Operations Agent ECS task.
 # telegram-bot-token, ses-credentials, and directory-api-key must be populated
-# manually by the operator after bootstrap.sh runs.
-# rds-credentials is populated automatically by the rotation Lambda at deploy time
-# (see deploy.sh Step 9a first-deploy detection, AC-009e).
+# manually by the operator. CloudFormation (cello-secrets.yaml) already created
+# them with PLACEHOLDER_POPULATE_VIA_CLI — bootstrap.sh just prints operator
+# instructions, not another PLACEHOLDER write.
 #
-# put_secret_if_empty treats PLACEHOLDER_POPULATE_VIA_CLI as empty — idempotent
-# on subsequent runs if the operator has already set the real value.
+# rds-credentials: populated automatically by the rotation Lambda at first deploy
+# (deploy.sh Step 8b). Use put_secret_if_empty so bootstrap.sh is idempotent
+# on repeat runs (rotation-set value is treated as already populated).
 
-echo "Provisioning Operations Agent secrets..."
-put_secret_if_empty \
-  "cello/${ENVIRONMENT}/ops-agent/telegram-bot-token" \
-  "PLACEHOLDER_POPULATE_VIA_CLI" \
-  "Operations Agent Telegram bot token"
-
-put_secret_if_empty \
-  "cello/${ENVIRONMENT}/ops-agent/ses-credentials" \
-  "PLACEHOLDER_POPULATE_VIA_CLI" \
-  "Operations Agent SES credentials"
-
-put_secret_if_empty \
-  "cello/${ENVIRONMENT}/ops-agent/directory-api-key" \
-  "PLACEHOLDER_POPULATE_VIA_CLI" \
-  "Operations Agent directory API key"
+echo "Operations Agent secrets — manual population required:"
+echo ""
+echo "  [MANUAL REQUIRED] cello/${ENVIRONMENT}/ops-agent/telegram-bot-token"
+echo "    aws secretsmanager put-secret-value \\"
+echo "      --secret-id 'cello/${ENVIRONMENT}/ops-agent/telegram-bot-token' \\"
+echo "      --secret-string '<real-telegram-bot-token>' \\"
+echo "      --region ${REGION}"
+echo ""
+echo "  [MANUAL REQUIRED] cello/${ENVIRONMENT}/ops-agent/ses-credentials"
+echo "    aws secretsmanager put-secret-value \\"
+echo "      --secret-id 'cello/${ENVIRONMENT}/ops-agent/ses-credentials' \\"
+echo "      --secret-string '<ses-creds-json>' \\"
+echo "      --region ${REGION}"
+echo ""
+echo "  [MANUAL REQUIRED] cello/${ENVIRONMENT}/ops-agent/directory-api-key"
+echo "    aws secretsmanager put-secret-value \\"
+echo "      --secret-id 'cello/${ENVIRONMENT}/ops-agent/directory-api-key' \\"
+echo "      --secret-string '<api-key>' \\"
+echo "      --region ${REGION}"
+echo ""
 
 # rds-credentials: populated automatically by rotation Lambda at first deploy.
 # Placeholder allows deploy.sh to detect the first-deploy condition (AC-009e)

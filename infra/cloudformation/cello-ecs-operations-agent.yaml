@@ -174,21 +174,24 @@ Resources:
                 Fn::Sub: "cello-${Environment}-rds-port"
             - Name: RDS_DB_NAME
               Value: !Sub "cello_${Environment}"
-            # AC-003: inject the ARN, not the value — the application fetches the live
-            # credential at connection-pool time to pick up rotated passwords without a restart.
-            - Name: RDS_CREDENTIALS_SECRET_ARN
-              Value: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/rds-credentials"
           Secrets:
-            # AC-003: all four Ops Agent secrets are injected from Secrets Manager.
-            # These use ECS Secrets (ValueFrom) for task launch — the ARNs resolve at
-            # task start time. A ResourceNotFoundException means the secret ARN is wrong
-            # or the execution role lacks GetSecretValue permission.
+            # AC-003: all four Ops Agent secrets are injected from Secrets Manager via
+            # ECS Secrets (ValueFrom). ARNs resolve at task launch time. A
+            # ResourceNotFoundException means the secret ARN is wrong or the execution
+            # role lacks GetSecretValue permission.
             - Name: TELEGRAM_BOT_TOKEN
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/telegram-bot-token"
             - Name: SES_CREDENTIALS
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/ses-credentials"
             - Name: DIRECTORY_API_KEY
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/directory-api-key"
+            # AC-003: rds-credentials in Secrets block so it resolves at task launch.
+            # The application re-fetches via GetSecretValue at connection-pool refresh
+            # time to pick up rotated passwords without a task restart. The ValueFrom
+            # entry here ensures the secret ARN is validated and the task fails fast
+            # (ResourceNotFoundException) if the secret does not exist.
+            - Name: RDS_CREDENTIALS
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/rds-credentials"
           LogConfiguration:
             LogDriver: awslogs
             Options:

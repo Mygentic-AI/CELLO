@@ -138,9 +138,9 @@ fi
 # cello-cicd deploys to us-east-1 only — adjust count per region.
 # +1 for cello-ecs-operations-agent (OPS-AGENT-005A)
 if [[ "${REGION}" == "us-east-1" ]]; then
-  STACK_COUNT=14
+  STACK_COUNT=15
 else
-  STACK_COUNT=13
+  STACK_COUNT=14
 fi
 DEPLOY_START=$(date +%s)
 
@@ -258,7 +258,7 @@ read_output() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# DEPLOYMENT SEQUENCE — 13 stacks in dependency order (14 in us-east-1 with cello-cicd)
+# DEPLOYMENT SEQUENCE — 14 stacks in dependency order (15 in us-east-1 with cello-cicd)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ── STEP 0: cello-ecr — ECR repos (no dependencies, must exist before ECS) ──
@@ -387,9 +387,13 @@ else
 fi
 
 # ── STEP 8b: First-deploy detection for Ops Agent RDS credentials (AC-009e) ──
-# After the directory stack deploys, Flyway creates the cello_ops_agent PostgreSQL role
-# (via migration V25 from OPS-AGENT-000). However, the role has no usable password until
-# the rotation Lambda runs. This is the same class as M5 SECOPS-004 bug #4.
+# The cello_ops_agent PostgreSQL role is created by Flyway migration V25 (OPS-AGENT-000).
+# However, Flyway is NOT run automatically by this script — it is a manual post-deploy
+# step (see "Next steps" at the end of this script and infra/scripts/run-flyway.sh).
+#
+# NOTE: In a new-region deploy, Flyway MUST be applied before this step. If the
+# cello_ops_agent role does not exist, the rotation Lambda will fail with a clear error.
+# Run Flyway first: ./infra/scripts/run-flyway.sh ${ENVIRONMENT} ${REGION} (or equivalent).
 #
 # Detection: check if cello/{env}/ops-agent/rds-credentials still contains the placeholder.
 # If so: trigger rotation and poll until AWSCURRENT changes (rotation complete).
@@ -397,7 +401,7 @@ fi
 # If not (subsequent deploys): skip rotation and deploy directly.
 #
 # This logic is in deploy.sh code, not a manual runbook step — required for
-# the region-expansion goal: "zero manual steps in a brand-new region".
+# the region-expansion goal: "zero manual steps in a brand-new region after Flyway".
 # M5 Rule 7: every fix must pass "would this work in a brand-new region with zero manual steps?"
 
 OPS_AGENT_RDS_SECRET_ID="cello/${ENVIRONMENT}/ops-agent/rds-credentials"

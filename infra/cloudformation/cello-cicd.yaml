@@ -1226,6 +1226,8 @@ Resources:
                 - Name: SourceOutput
               OutputArtifacts:
                 - Name: StagingDeployOpsAgentOutput
+        # SmokeTest stage uses the directory smoke test as a placeholder.
+        # Replace SmokeTestBuild with an ops-agent-specific smoke test in OPS-AGENT-005B.
         - Name: SmokeTest
           Actions:
             - Name: SmokeTestAction
