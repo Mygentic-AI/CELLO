@@ -85,14 +85,14 @@ describe("DEPLOY-001A: AC-001 cello-iam.yaml stack", () => {
     expect(parsed).toHaveProperty("Resources");
   });
 
-  it("cello-iam.yaml defines all four IAM roles", () => {
+  it("cello-iam.yaml defines all six IAM roles", () => {
     const template = loadTemplate("cello-iam.yaml");
     const resources = template["Resources"] as Record<string, Record<string, unknown>>;
 
     const roleResources = Object.entries(resources).filter(
       ([, v]) => (v["Type"] as string) === "AWS::IAM::Role"
     );
-    expect(roleResources.length, "must define exactly 4 IAM roles").toBe(4);
+    expect(roleResources.length, "must define exactly 6 IAM roles").toBe(6);
   });
 
   it("cello-iam.yaml exports directory-task-role-arn", () => {

@@ -304,14 +304,14 @@ describe("DEPLOY-001: AC-008 CI/CD infrastructure", () => {
     expect(buses.length).toBeGreaterThan(0);
   });
 
-  it("defines 8 CodePipelines (one per package)", () => {
+  it("defines 9 CodePipelines (one per package)", () => {
     const template = loadTemplate("cello-cicd.yaml");
     const resources = template["Resources"] as Record<string, Record<string, unknown>>;
 
     const pipelines = Object.entries(resources).filter(
       ([, v]) => v["Type"] === "AWS::CodePipeline::Pipeline"
     );
-    expect(pipelines.length).toBe(8);
+    expect(pipelines.length).toBe(9);
   });
 
   it("artifacts bucket name uses AWS::Region substitution", () => {

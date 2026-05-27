@@ -215,7 +215,7 @@ Resources:
   # Evaluation order: rule 5 fires first for /internal/* from inside the VPC (allow).
   # If rule 5 doesn't match (source IP is outside VPC), rule 10 fires (block).
   #
-  # VPC routing note: the Ops Agent has AssignPublicIp: ENABLED (public subnet), but
+  # VPC routing note: the Ops Agent uses a public subnet with public IP assignment, but
   # intra-VPC traffic to the ALB always uses the source task's PRIVATE IP, not public IP.
   # The source-ip condition (VPC CIDR) correctly matches the Ops Agent's private IP.
   # If AC-009b returns 403 from within the VPC, the source-ip condition is misconfigured —
