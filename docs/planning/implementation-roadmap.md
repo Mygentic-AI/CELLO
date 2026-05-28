@@ -1,10 +1,10 @@
 ---
 name: CELLO Implementation Roadmap
 type: plan
-date: 2026-04-25
-topics: [implementation, milestones, user-stories, test-harness, monorepo, libp2p]
+date: 2026-05-28
+topics: [implementation, milestones, user-stories, test-harness, monorepo, libp2p, multi-agent, security-gateway, shared-state, crdt]
 status: active
-description: Capability-based milestone map (M0–M14) with libp2p peer-to-peer substrate from M0, implementation decisions, test harness evolution, and milestone-by-milestone user story indexes.
+description: Capability-based milestone map (M0–M17) with libp2p peer-to-peer substrate from M0, implementation decisions, test harness evolution, and milestone-by-milestone user story indexes. Updated post-M6 to reflect multi-agent MCP (M7), portal (M8), V3 security gateway (M9), shared CRDT state (M13), and revised dependency graph.
 ---
 
 # CELLO Implementation Roadmap
@@ -43,7 +43,7 @@ A second invariant that shapes milestone boundaries: **message content never pas
 
 - **ML-DSA library (TypeScript):** `liboqs` / `node-oqs` (Open Quantum Safe project). ML-DSA (CRYSTALS-Dilithium, NIST FIPS 204) is used for all non-threshold signatures: endorsements, attestations, directory certificates, pseudonym bindings, and connection package items. These artifacts first appear in M3. The library correctly implements FIPS 204; it is labelled "experimental" by OQS in the sense that it has not gone through CMVP (FIPS-140-3) certification — that certification is not a requirement for CELLO. No FIPS-140-3-validated ML-DSA module exists in the Node.js ecosystem as of 2026; AWS-LC, Bouncy Castle, and wolfSSL all have FIPS-140-3-validated modules but only for ML-KEM (key encapsulation), not ML-DSA (signatures). The security level (ML-DSA-44 vs ML-DSA-65) is an open decision to be resolved before M3 stories are written — see the Deferred Items section.
 
-- **Test harness:** The e2e test package spins up directory, relay, and clients — each as real libp2p nodes — in a single Vitest process. libp2p binds to random loopback ports; setup is a small constant per test; teardown calls `libp2p.stop()` on every spawned node. No Docker, no manual port allocation, no inter-process coordination during development. In-memory stores keep the protocol layer fast even as the transport is real. All milestones through M13 are completable using this in-process harness — deployed always-on directory/relay infrastructure is an Alpha deployment concern that begins at M5, independent of protocol milestone progress through M4.
+- **Test harness:** The e2e test package spins up directory, relay, and clients — each as real libp2p nodes — in a single Vitest process. libp2p binds to random loopback ports; setup is a small constant per test; teardown calls `libp2p.stop()` on every spawned node. No Docker, no manual port allocation, no inter-process coordination during development. In-memory stores keep the protocol layer fast even as the transport is real. All milestones through M16 are completable using this in-process harness — deployed always-on directory/relay infrastructure is an Alpha deployment concern that begins at M5, independent of protocol milestone progress through M4.
 
 - **Initial agent integration:** Claude Code sessions. OpenClaw, Hermes, and IronClaw come later per the integration stages in the day-0 plan.
 
@@ -59,36 +59,47 @@ A second invariant that shapes milestone boundaries: **message content never pas
 | M3 — Connections & Policy | Registration (stubbed OTP), connection request flow, trust data relay with selective disclosure, `SignalRequirementPolicy` evaluation, accept/decline. Connection package items (pseudonym binding, attestations, endorsements) are signed with ML-DSA via `liboqs` / `node-oqs` — this is the first milestone where ML-DSA is load-bearing. The ML-DSA security level (44 vs 65) must be decided before M3 stories are written. **Pre-M3 stub review required:** before writing M3 stories, review all `stubs` sections in M1 and M2 stories — each stub names at least one M3 story that must be written. Provisionally: CELLO-M3-SESSION-001 (session initiation MCP tool surface), CELLO-M3-CONNECTION-001 (accept/decline flow with trust data and policy evaluation). | Agents control who reaches them. A receiver can require specific trust signals and enforce it. The one-round negotiation works — what you disclose, what you withhold. |
 | M4 — Persistence | Directory PostgreSQL schema (single node) with RLS append-only enforcement and hash chain on every INSERT; KMS envelope encryption for K_server_X shares; pgaudit log shipping; MMR single-node construction; analytics cron job. Client SQLCipher database with key provider abstraction, cloud backup, agent hash queue as protocol primitive, signed relay ACK storage. Relay WAL for crash recovery. Pre-seal reconciliation protocol. | The persistence foundation. Every subsequent milestone writes into infrastructure built here. The directory's tamper-evident append-only store is correct and verifiable. The client's encrypted local database is live. Pre-seal reconciliation works under relay failure. |
 | M5 — Production Infrastructure | Alpha deployment on AWS: RDS PostgreSQL with logical replication across 6 regional nodes, ECS for directory and relay services, CloudWatch alarms and dashboards, WAF, DDoS mitigation at infrastructure level, secrets rotation, certificate management, pgaudit shipping to S3. Staging environment functionally equivalent to production. CI/CD pipeline gating on staging before production promotion. Checkpoint cross-signing across federation nodes. | The network is real. A node failure is survivable. The CI/CD pipeline gates every deployment on a staging smoke test. Operational security is in place from the first production commit. |
-| M6 — Operations Agent | WhatsApp and Telegram bot (CELLO Operations Agent) for operator lifecycle management. Phone + email verification flow, pre-authorization token delivery, registration ceremony via `cello_register(token)`. Operator notification path: FALLBACK_CANARY alerts, anomaly signals, security events routed to bot channel. Baileys-based WhatsApp persistent WebSocket on ECS. | Operators can register agents and receive security alerts via the channels they already use. The registration ceremony works end-to-end from phone verification through FROST DKG. |
-| M7 — Portal & Trust Signals | Web portal: operator dashboard, agent management, trust signal registration (LinkedIn, GitHub, phone, device attestation), bio management, recovery contact designation, successor designation. Portal-to-directory write API. Trust signal pickup queue (encrypted async delivery). | Operators have a full web interface. Trust signals are verifiable and operator-owned. The cold-start trust profile is complete. |
-| M8 — Discovery & Notifications | Bio, search (BM25 + vector), contact aliases with revocation, notification event queue. | The full cold-start flow: search → discover → connect → converse. Contact aliases enable sharing outside the directory. An agent can be found by another agent that has never heard of it. Investor-visible: the network effect is demonstrable. |
-| M9 — Prompt Injection Defense | Six-layer pipeline: Layer 1 deterministic sanitization, Layer 2 DeBERTa scanner, Layer 3 outbound gate, Layer 4 redaction, Layer 5 runtime governance, Layer 6 access control. | Messages are safe from injection. Each layer catches different attack classes. Standalone value — works without the network. |
-| M10 — Social Trust | Pre-computed endorsements, anti-farming (same-owner rejection), Sybil floor (conductance scoring, provisional period, carrier signals). | Trust is social. Connection policies can require N endorsements from shared contacts. Fake identity networks are expensive to create. |
-| M11 — Compromise & Recovery | Continuous compromise detection, "Not Me" revocation with K_server burn and session termination, social recovery (M-of-N, 48-hour wait), key rotation, trust floor based on pre-compromise history. | Compromise is survivable. Detection is continuous, revocation is instant, recovery preserves earned trust. |
-| M12 — Group Rooms | N-party Merkle tree, concurrent mode with GCD floor control, owner/admin model, throttle manifest with cost protection, violation enforcement with auto-mute, 20-participant cap. | Groups work with provable records. Floor control prevents chaos, throttle manifests protect wallets, violations escalate logarithmically. |
-| M13 — Commerce | Push-publish subscriptions with per-delivery micropayments, inference billing (rate card, signed cumulative token counts in Merkle leaves, ABORT-BILLING), purchase attestations, merchant CRM data stash, fraud detection. | Agents can trade. Token counts are signed and verifiable. Fraudulent billing is caught by the buyer's client or by deterministic arbitration. |
-| M14 — Federation | Multi-node directory with primary/backup replication, consensus for state changes, relay operator separation from directory operators, client-side latency monitoring with proactive session migration, MMR inclusion proof verification against federation-signed checkpoints. **Infrastructure prerequisite:** directory and relay must be split onto separately operated infrastructure before M14 ships — co-location is acceptable through M1–M13 development per the Alpha topology, but the separation requirement is a hard gate for Federation. | The network decentralizes. A node failure mid-session is survivable — the client detects it, migrates, and the session continues. Fabricated conversations are detectable via MMR inclusion proofs now that federation-signed checkpoints exist. |
+| M6 — Operations Agent | Telegram bot (CELLO Operations Agent) for operator lifecycle management. Phone + email verification flow, pre-authorization token delivery, registration ceremony via `cello_register(token)`. Operator notification path: FALLBACK_CANARY alerts, anomaly signals, security events routed to bot channel. Installable client published as `@cello/connect`. Demo agent on EC2 for self-service testing. | Operators can register agents and receive security alerts via Telegram. A stranger who reads about CELLO can install the client, register an agent, and have a conversation without cloning the repo or running infrastructure. |
+| M7 — Multi-Agent MCP Server | MCP server becomes multi-agent: N named K_locals loaded simultaneously from `~/.cello/agents/<name>/key`. Three agent states: Registered (dormant), Online (live on network), Current (active for this connection). Per-connection current-agent state — switching agents in one session does not affect others. New tools: `cello_list_agents`, `cello_start_agent`, `cello_use_agent`, `cello_stop_agent`. Presence detection wired into CelloClient via `peer:connect`/`peer:disconnect`. Client-side retry queue with nonce-based deduplication. Backwards compatible with legacy `~/.cello/key`. | A single operator can run two agents on the same machine and have them communicate without env-var ceremony. Per-connection routing is correct under concurrent sessions. Messages survive transport interruptions via retry queue. |
+| M8 — Portal Skeleton | Web portal: magic link + WebAuthn/PIN authentication, operator dashboard, agent health and status, multi-agent account management. Portal-to-directory write API. **Can run in parallel with M9.** | Operators have a web interface. The registration ceremony is accessible without a terminal. Foundation for trust signal management in M10. |
+| M9 — Security Pipeline | Separate security gateway package and repository. Six-layer pipeline: Layer 1 deterministic sanitization (RE2, entropy scoring), Layer 2 DeBERTa-v3-small INT8 scanner, Layer 3 outbound gate, Layer 4 redaction (secrets, PII including SSN/CC/IP), Layer 5 call governor, Layer 6 deny-all access control. Two-tier extensibility: Tier 1 data extensions (pattern files + URL sources), Tier 2 pipeline hooks (observe/gate/redact, sync/async, HMAC auth). Content hash chain: security pass records in gateway SQLite, record_hash submitted to directory. Enterprise split-deployment: gateway runs on IT-controlled infrastructure, client connects over mTLS. Nightly verification job. **Largely independent — can run in parallel with M8 and M10. The gateway has no dependency on portal, discovery, or social trust.** | Messages are safe from injection across all six attack classes. Operators can extend the pipeline without forking client code. Enterprises can deploy the gateway on infrastructure they control — the client cannot forge what the gateway attested. |
+| M10 — Trust Signals | Trust signal registration via portal: LinkedIn, GitHub, phone, device attestation, bio management, recovery contact designation, successor designation. Trust signal pickup queue (encrypted async delivery). | Trust signals are verifiable and operator-owned. The cold-start trust profile is complete. Connection policies can require specific signal combinations. |
+| M11 — Discovery & Notifications | Bio, search (BM25 + vector), contact aliases with revocation, notification event queue. | The full cold-start flow: search → discover → connect → converse. Contact aliases enable sharing outside the directory. An agent can be found by another agent that has never heard of it. The network effect is demonstrable. |
+| M12 — Social Trust | Pre-computed endorsements, anti-farming (same-owner rejection), Sybil floor (conductance scoring, provisional period, carrier signals). | Trust is social. Connection policies can require N endorsements from shared contacts. Fake identity networks are expensive to create. |
+| M13 — Shared State | CRDT-backed collaborative documents as a first-class protocol primitive. Field-level write authority declared in schema contracts. Automerge as CRDT implementation. CRDT operation log shares the session Merkle tree with domain-separated leaves (`0x04`). Three write patterns: unilateral writes (pure CRDT, no conflict), bilateral transitions (two signatures required), append-only collections. Schema-validated operations on receipt — invalid writes are rejected and logged as trust signal events. FROST seal covers final document state. Dispute resolution via Merkle tree comparison. | Agents can collaborate on structured shared documents — workflow state, joint records, multi-party coordination — with the same non-repudiation and tamper-evidence guarantees as conversations. Stronger user acquisition story than any single-agent feature: agents can now *do work together*, not just communicate. |
+| M14 — Group Rooms | N-party Merkle tree, concurrent mode with GCD floor control, owner/admin model, throttle manifest with cost protection, violation enforcement with auto-mute, 20-participant cap. Can leverage Shared State primitives from M13 for structured group documents. | Groups work with provable records. Floor control prevents chaos, throttle manifests protect wallets, violations escalate logarithmically. |
+| M15 — Compromise & Recovery | Continuous compromise detection, "Not Me" revocation with K_server burn and session termination, social recovery (M-of-N, 48-hour wait), key rotation, trust floor based on pre-compromise history. **Core machinery (FROST, connections) has been in place since M2/M3 — this milestone wires the detection and recovery UX on top of existing cryptographic primitives. Can be scoped to start earlier if security posture demands it.** | Compromise is survivable. Detection is continuous, revocation is instant, recovery preserves earned trust. A compromised agent cannot corrupt group rooms or shared documents after revocation. |
+| M16 — Commerce | Push-publish subscriptions with per-delivery micropayments, inference billing (rate card, signed cumulative token counts in Merkle leaves, ABORT-BILLING), purchase attestations, merchant CRM data stash, fraud detection. | Agents can trade. Token counts are signed and verifiable. Fraudulent billing is caught by the buyer's client or by deterministic arbitration. |
+| M17 — Federation | Multi-node directory with primary/backup replication, consensus for state changes, relay operator separation from directory operators, client-side latency monitoring with proactive session migration, MMR inclusion proof verification against federation-signed checkpoints. **Infrastructure prerequisite:** directory and relay must be split onto separately operated infrastructure before M17 ships — co-location is acceptable through M1–M16 development per the Alpha topology, but the separation requirement is a hard gate for Federation. | The network decentralizes. A node failure mid-session is survivable — the client detects it, migrates, and the session continues. Fabricated conversations are detectable via MMR inclusion proofs now that federation-signed checkpoints exist. |
 
 ### Dependencies
 
-```
-M0 → M1 → M2 → M3   (Peer-to-peer skeleton → Directory + Merkle → FROST → Connections)
-                ↓
-               M4 → M5 → M6 → M7   (Persistence → Production → Operations Agent → Portal)
-                               ↓
-                              M8 → M10   (Discovery → Social Trust)
-                               ↓
-                              M9          (Prompt Injection Defense — largely client-side,
-                                           can overlap with M8)
+Not all milestones are sequential. The critical path runs through identity, infrastructure, and product, but several capability milestones are largely independent and can run in parallel.
 
-M2 + M3 → M11   (Compromise & Recovery needs FROST and connections)
-M1 + M3 → M12   (Group Rooms need Merkle and connections)
-M3 + M8 → M13   (Commerce needs connections and discovery)
-M5 → M14        (Federation builds on production infrastructure; MMR verification lands
-                  with federation-signed checkpoints)
+```
+M0 → M1 → M2 → M3 → M4 → M5 → M6   (Critical path: protocol → persistence → production → beta)
+                                  ↓
+                                 M7   (Multi-Agent MCP — pure adapter-layer work, no protocol changes)
+                                  ↓
+                     M8 ──────── M7   (Portal skeleton — needs M6 auth model)
+                     M9 ──────── M3   (Security gateway — needs connections; independent of portal,
+                                       discovery, social trust; can run in parallel with M8/M10)
+                    M10 ──────── M8   (Trust signals — needs portal)
+                    M11 ──── M3+M10   (Discovery — needs connections + trust signals)
+                    M12 ─────── M11   (Social trust — needs discovery)
+                    M13 ─────── M12   (Shared State — needs trusted agent networks)
+                    M14 ─────── M13   (Group Rooms — can leverage Shared State primitives)
+                    M15 ─── M2+M3     (Compromise & Recovery — core crypto in place since M2/M3;
+                                       can scope to start earlier than M14 if security demands it)
+                    M16 ─── M3+M11   (Commerce — needs connections and discovery)
+                    M17 ─────── M5   (Federation — builds on production infrastructure)
 ```
 
-M9 (Prompt Injection Defense) is the most parallelizable with other milestones — the scanning pipeline is almost entirely client-side and each layer is independent. It can overlap with M8 once M3 is complete.
+**Parallelism opportunities:**
+- M8 (Portal) and M9 (Security Gateway) can run simultaneously after M7 closes
+- M9 has no dependency on M8, M10, M11, or M12 — the gateway is a standalone package
+- M15 (Compromise & Recovery) depends only on M2/M3 cryptographic primitives — its placement after M14 is a product sequencing choice, not a hard technical dependency
+- M17 (Federation) depends on M5 infrastructure, not on any capability milestone
 
 ---
 
@@ -102,15 +113,18 @@ M9 (Prompt Injection Defense) is the most parallelizable with other milestones �
 | M3 | All of M2 plus: registration, connection request/accept/decline, policy evaluation against trust signals, selective disclosure of trust data. Two-agent flows now start from "strangers" not "pre-connected." |
 | M4 | All of M3 plus: directory persists all entities with RLS enforcement and hash chain verified on every INSERT; client SQLCipher database live; relay WAL crash-recovery verified (crash relay mid-session, restart, seal completes); pre-seal reconciliation verified (simulate one-sided delivery failure, gap-fill resolves, seal proceeds); SEAL_UNILATERAL with B offline and notification on reconnect. |
 | M5 | All of M4 plus: multi-node directory with logical replication across Alpha node set; checkpoint cross-signing across nodes; CI/CD pipeline gates staging before production promotion; relay failure with session migration to new relay. |
-| M6 | All of M5 plus: operator registers agent via WhatsApp/Telegram bot end-to-end (phone verification → pre-auth token → FROST DKG → registered agent); security alert delivered to bot channel. |
-| M7 | All of M6 plus: trust signal registered via portal, hash verified in directory; bio update flow; recovery contact designation; portal-to-directory write API verified. |
-| M8 | All of M7 plus: agent publishes bio, second agent searches and discovers it, connects via contact alias, full cold-start-to-conversation flow in one test. |
-| M9 | All of M8 plus: injection payloads through each defense layer, Layer 1 sanitization on incoming messages, Layer 2 scan invocation, Layer 3 outbound gate blocking exfiltration, Layer 4 redaction, Layer 5 cost/volume cap enforcement. |
-| M10 | All of M9 plus: endorsement creation and verification, policy requiring N endorsements, same-owner endorsement rejection, provisional period enforcement. |
-| M11 | All of M10 plus: compromise detection triggers, "Not Me" cascade (K_server burn, all sessions terminated), social recovery ceremony, key rotation with continued conversations, trust floor preservation. |
-| M12 | All of M11 plus: 3+ clients in a group room, concurrent message ordering, floor control, throttle manifest enforcement, violation → auto-mute escalation. |
-| M13 | All of M12 plus: inference session with rate card, signed cumulative billing in Merkle leaves, buyer-side token count verification, ABORT-BILLING on cap exceeded, push-publish subscription lifecycle. |
-| M14 | All of M13 plus: multi-node directory with primary failure and backup promotion, client session migration, relay operator separation, data replicated across nodes, MMR inclusion proofs verified against federation-signed checkpoints. |
+| M6 | All of M5 plus: operator registers agent via Telegram bot end-to-end (phone verification → pre-auth token → FROST DKG → registered agent); `@cello/connect` installed from npm; demo agent responds with tamper-evident record. |
+| M7 | All of M6 plus: two named agents loaded on one MCP server, both online simultaneously; per-connection routing verified; retry queue drains in order after reconnect; nonce deduplication prevents duplicates. |
+| M8 | All of M7 plus: portal login via magic link + WebAuthn; agent health visible in dashboard; multi-agent account management via web UI. |
+| M9 | All of M8 plus: injection payloads through each defense layer; Layer 1 sanitization on incoming messages; Layer 2 DeBERTa scan invocation; Layer 3 outbound gate blocking exfiltration; Layer 4 redaction (secrets, PII, SSN, CC, IP); gateway SQLite record_hash matches directory attestation; nightly verification detects tampered record. |
+| M10 | All of M9 plus: trust signal registered via portal, hash verified in directory; bio update flow; recovery contact designation; portal-to-directory write API verified. |
+| M11 | All of M10 plus: agent publishes bio, second agent searches and discovers it, connects via contact alias, full cold-start-to-conversation flow in one test. |
+| M12 | All of M11 plus: endorsement creation and verification, policy requiring N endorsements, same-owner endorsement rejection, provisional period enforcement. |
+| M13 | All of M12 plus: two agents create a shared document; concurrent writes to different fields merge cleanly; invalid write (wrong authority) is rejected; FROST seal covers final document state; Merkle tree includes both chat and CRDT operation leaves. |
+| M14 | All of M13 plus: 3+ clients in a group room, concurrent message ordering, floor control, throttle manifest enforcement, violation → auto-mute escalation. |
+| M15 | All of M14 plus: compromise detection triggers, "Not Me" cascade (K_server burn, all sessions terminated), social recovery ceremony, key rotation with continued conversations, trust floor preservation. |
+| M16 | All of M15 plus: inference session with rate card, signed cumulative billing in Merkle leaves, buyer-side token count verification, ABORT-BILLING on cap exceeded, push-publish subscription lifecycle. |
+| M17 | All of M16 plus: multi-node directory with primary failure and backup promotion, client session migration, relay operator separation, data replicated across nodes, MMR inclusion proofs verified against federation-signed checkpoints. |
 
 Every milestone's tests continue running in subsequent milestones. The harness only grows — nothing is replaced.
 
@@ -190,9 +204,9 @@ M1 is a hard cut from M0. Peers speak `protocol_version = 1` only; v0 envelopes 
 
 The directory in M1 is a bookend authority, not an in-path relay. It creates session records, signs session assignments with a single directory signing key (pinned in client configuration; FROST replaces this pinning in M2), and recomputes the tree from scratch at seal. Between session establishment and seal, the directory libp2p connection stays open for notifications but carries no message hashes or content.
 
-Seal in M1 is bilateral K_local — both parties sign a SEAL control leaf (`leaf_kind = 0x02`) committing to the final Merkle root. The directory independently recomputes the tree from the relay's handoff, verifies `prev_root` chaining and the `last_seen_seq` causal invariant across all leaves, and records the sealed root. A relay that misordered, forged, or dropped leaves produces a provable inconsistency at this check. FROST notarization arrives in M2; CLEAN/FLAGGED attestations arrive in M11 (SEAL leaves in M1 carry `attestation = "PENDING"`).
+Seal in M1 is bilateral K_local — both parties sign a SEAL control leaf (`leaf_kind = 0x02`) committing to the final Merkle root. The directory independently recomputes the tree from the relay's handoff, verifies `prev_root` chaining and the `last_seen_seq` causal invariant across all leaves, and records the sealed root. A relay that misordered, forged, or dropped leaves produces a provable inconsistency at this check. FROST notarization arrives in M2; CLEAN/FLAGGED attestations arrive in M15 (SEAL leaves in M1 carry `attestation = "PENDING"`).
 
-Inclusion proofs are RFC 6962 standard — `cello_get_inclusion_proof` returns a format-compliant proof verifiable by any RFC 6962 implementation against the sealed root, with no CELLO-specific knowledge required. MMR inclusion proofs (the fabricated-conversation defense across the global sealed-conversation ledger) are deferred to M14 per the Deferred Items section below.
+Inclusion proofs are RFC 6962 standard — `cello_get_inclusion_proof` returns a format-compliant proof verifiable by any RFC 6962 implementation against the sealed root, with no CELLO-specific knowledge required. MMR inclusion proofs (the fabricated-conversation defense across the global sealed-conversation ledger) are deferred to M17 per the Deferred Items section below.
 
 ---
 
@@ -213,7 +227,7 @@ M2 is a hard cut at the session bookends: `SessionAssignment` frames with `signa
 
 DKG in M2 uses a test-harness bootstrap (`directory.bootstrapKeyShares(agentPubkey)`) guarded by `NODE_ENV=test`. Registration (M3) replaces this with the real ceremony. The in-process test threshold is 2-of-3 (configurable); Alpha production is 3-of-5.
 
-The in-flight ceremony conflict detector (NODE-003) is the minimal canary required for the M2 security claim: a stolen K_local attempting a competing ceremony is detected and rejected. This guard is **not sufficient for production** — M11 replaces it with full anomaly detection including source fingerprinting, historical analysis, and owner push alerts.
+The in-flight ceremony conflict detector (NODE-003) is the minimal canary required for the M2 security claim: a stolen K_local attempting a competing ceremony is detected and rejected. This guard is **not sufficient for production** — M15 replaces it with full anomaly detection including source fingerprinting, historical analysis, and owner push alerts.
 
 MCP tool surface changes in M2 are covered inline within SESSION-004 and SESSION-005 — `cello_initiate_session` now runs a FROST ceremony under the hood and `cello_close_session` returns `seal_type: 'frost' | 'bilateral'`. No separate MCP/adapter story exists in M2; the agent-facing contract changes are exercised via the session stories' e2e acceptance criteria.
 
@@ -223,15 +237,15 @@ MCP tool surface changes in M2 are covered inline within SESSION-004 and SESSION
 
 Items that are part of the canonical protocol design but are deliberately not built in the milestone where they first become relevant. Each item names the milestone that owns it and the reason for the deferral.
 
-- **MMR (Meta-Merkle Tree) inclusion proofs — deferred to M14.** The MMR is the global append-only tree of sealed conversations, and the client-side inclusion-proof algorithm is the fabricated-conversation defense (agent-client §MMR inclusion proof verification; AC-25). The defense is only meaningful under federation — a single-node directory can fabricate the entire MMR, so the verification algorithm requires federation-signed checkpoints. M14 ships federation, so MMR client-side verification lands there as one capability. M4 ships single-node MMR construction; M1–M13 use in-session inclusion proofs only (tamper detection within a single conversation tree), which are sufficient for every use case before federation exists.
+- **MMR (Meta-Merkle Tree) inclusion proofs — deferred to M17.** The MMR is the global append-only tree of sealed conversations, and the client-side inclusion-proof algorithm is the fabricated-conversation defense (agent-client §MMR inclusion proof verification; AC-25). The defense is only meaningful under federation — a single-node directory can fabricate the entire MMR, so the verification algorithm requires federation-signed checkpoints. M17 ships federation, so MMR client-side verification lands there as one capability. M4 ships single-node MMR construction; M1–M16 use in-session inclusion proofs only (tamper detection within a single conversation tree), which are sufficient for every use case before federation exists.
 
 - **Consistency / audit proofs (RFC 6962 §2.1.2) — deferred, no assigned milestone.** These prove a tree is append-only between two root checkpoints. Useful for auditing long-term directory honesty, but not load-bearing for any currently specified capability (disputes use inclusion proofs; seal verification uses root comparison). Revisit if directory-honesty auditing becomes a user-facing feature.
 
-- **Session-close attestations (CLEAN / FLAGGED / PENDING) — deferred to M11.** The M1 `SEAL` control leaf carries an attestation field, but in M1 it is always `PENDING`. CLEAN/FLAGGED require the compromise-detection and arbitration machinery that M11 introduces (last-known-good anchor for compromise detection, FLAGGED→arbitration flow, trust-floor computation from prior CLEAN attestations). Keeping the field present from M1 means M11 fills in values rather than reshaping the leaf.
+- **Session-close attestations (CLEAN / FLAGGED / PENDING) — deferred to M15.** The M1 `SEAL` control leaf carries an attestation field, but in M1 it is always `PENDING`. CLEAN/FLAGGED require the compromise-detection and arbitration machinery that M11 introduces (last-known-good anchor for compromise detection, FLAGGED→arbitration flow, trust-floor computation from prior CLEAN attestations). Keeping the field present from M1 means M11 fills in values rather than reshaping the leaf.
 
 - **ML-DSA security level (ML-DSA-44 vs ML-DSA-65) — open decision, must resolve before M3.** ML-DSA-44 gives 128-bit post-quantum security (connection package ~18 KB); ML-DSA-65 gives 192-bit (connection package ~23 KB). The 5 KB difference is unlikely to be the deciding factor — the choice should track what becomes conventional in the post-quantum ecosystem as FIPS 204 adoption matures. See [[2026-04-13_1100_quantum-resistance-design|Quantum Resistance Design]] for the full size analysis.
 
-- **libp2p peer-discovery protocols (Kademlia DHT, mDNS, rendezvous) — deferred.** libp2p ships these out of the box, and they are *not* enabled on the M0–M13 directory. Peer discovery is strictly directory-mediated signaling: the directory hands each client the counterparty's Peer ID and candidate multiaddrs in a signed SessionAssignment. Enabling DHT or rendezvous would have the directory advertising and resolving Peer IDs globally, which is a different privacy posture than "directory is a phone book you authenticate to." If federation (M14) benefits from a gossip-style node-list distribution, that introduces one libp2p discovery protocol at that point — not before.
+- **libp2p peer-discovery protocols (Kademlia DHT, mDNS, rendezvous) — deferred.** libp2p ships these out of the box, and they are *not* enabled on the M0–M16 directory. Peer discovery is strictly directory-mediated signaling: the directory hands each client the counterparty's Peer ID and candidate multiaddrs in a signed SessionAssignment. Enabling DHT or rendezvous would have the directory advertising and resolving Peer IDs globally, which is a different privacy posture than "directory is a phone book you authenticate to." If federation (M17) benefits from a gossip-style node-list distribution, that introduces one libp2p discovery protocol at that point — not before.
 
 ---
 
@@ -386,14 +400,14 @@ The Vitest workspace config at root enumerates all packages. Each package's test
 
 ### Extraction Plan (Future)
 
-At production readiness, the client-side packages move to the existing `cello-agent` repository:
+At production readiness, the client-side packages move to the existing `cello-client` repository (`github.com/Mygentic-AI/cello-client`):
 
-**Extracted to `cello-agent`:**
+**Extracted to `cello-client`:**
 - `packages/client`
 - `packages/crypto`
 - `packages/transport`
 - `packages/protocol-types`
-- `packages/adapter-claude-code`
+- `packages/adapter-claude-code` (publishes as `@cello/connect`)
 - Future `packages/adapter-hermes`, `packages/adapter-ironclaw`, `packages/adapter-openclaw`
 
 **Stays in `trustless-cello` (or becomes `cello-infrastructure`):**
