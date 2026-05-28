@@ -479,45 +479,45 @@ describeIntegration("RegistrationEngine integration", () => {
       onError: (err) => { throw err; },
     });
     await failEngine.start();
-
-    // Drive to AWAITING_EMAIL_OTP
-    await failInject(failUserId, "hello");
-    await failInject(failUserId, `CONTACT:${failUserId}:+447911999000`);
-    await failInject(failUserId, "user@fail-test.com");
-
-    // Get OTP and submit the correct one — triggers requestToken() which throws
-    const otp = failCaptured[0].otp;
-    await failInject(failUserId, otp);
-
-    // (1) State must be EMAIL_CONFIRMED — not PRE_AUTH_TOKEN_ISSUED, not FAILED
-    const rawRow = await pool.query(
-      `SELECT state FROM registrations WHERE channel_user_id = $1 ORDER BY created_at DESC LIMIT 1`,
-      [failUserId],
-    );
-    expect(rawRow.rows[0].state).toBe("EMAIL_CONFIRMED");
-
-    // (2) registration.preauth.request.failed logged at ERROR with all required fields
-    const failedEvent = failEvents.find((e) => e.event === "registration.preauth.request.failed");
-    expect(failedEvent).toBeDefined();
-    expect(failedEvent?.method).toBe("error");
-    expect(failedEvent?.context?.registrationId).toBeDefined();
-    expect(failedEvent?.context?.httpStatus).toBe(503);
-    expect(failedEvent?.context?.correlationId).toBeDefined();
-
-    // (3) User received an error message
-    const errorMsg = failSent.find((m) =>
-      m.message.toLowerCase().includes("try again") ||
-      m.message.toLowerCase().includes("unavailable")
-    );
-    expect(errorMsg).toBeDefined();
-
-    failEngine.stop();
-    // Cleanup
     try {
-      const repo = new RegistrationRepository(pool);
-      const active = await repo.findActiveByChannelUser("cli", failUserId);
-      if (active) await repo.transition(active.id, "EXPIRED");
-    } catch { /* ignore */ }
+      // Drive to AWAITING_EMAIL_OTP
+      await failInject(failUserId, "hello");
+      await failInject(failUserId, `CONTACT:${failUserId}:+447911999000`);
+      await failInject(failUserId, "user@fail-test.com");
+
+      // Get OTP and submit the correct one — triggers requestToken() which throws
+      const otp = failCaptured[0].otp;
+      await failInject(failUserId, otp);
+
+      // (1) State must be EMAIL_CONFIRMED — not PRE_AUTH_TOKEN_ISSUED, not FAILED
+      const rawRow = await pool.query(
+        `SELECT state FROM registrations WHERE channel_user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [failUserId],
+      );
+      expect(rawRow.rows[0].state).toBe("EMAIL_CONFIRMED");
+
+      // (2) registration.preauth.request.failed logged at ERROR with all required fields
+      const failedEvent = failEvents.find((e) => e.event === "registration.preauth.request.failed");
+      expect(failedEvent).toBeDefined();
+      expect(failedEvent?.method).toBe("error");
+      expect(failedEvent?.context?.registrationId).toBeDefined();
+      expect(failedEvent?.context?.httpStatus).toBe(503);
+      expect(failedEvent?.context?.correlationId).toBeDefined();
+
+      // (3) User received an error message
+      const errorMsg = failSent.find((m) =>
+        m.message.toLowerCase().includes("try again") ||
+        m.message.toLowerCase().includes("unavailable")
+      );
+      expect(errorMsg).toBeDefined();
+    } finally {
+      failEngine.stop();
+      try {
+        const repo = new RegistrationRepository(pool);
+        const active = await repo.findActiveByChannelUser("cli", failUserId);
+        if (active) await repo.transition(active.id, "EXPIRED");
+      } catch { /* ignore cleanup errors */ }
+    }
   });
 
   // ─── AC-009 ─────────────────────────────────────────────────────────────────
