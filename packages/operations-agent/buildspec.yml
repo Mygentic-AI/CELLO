@@ -1,13 +1,12 @@
 version: 0.2
-# Operations Agent CI build — OPS-AGENT-005A
+# Operations Agent CI build — OPS-AGENT-005B
 #
-# This story (OPS-AGENT-005A) establishes the pipeline infrastructure using a stub image.
-# OPS-AGENT-005B replaces the Docker build step below with the real application image
-# (pnpm install, typecheck, test against @cello-protocol/operations-agent).
+# Builds the real application image from packages/operations-agent/Dockerfile.
+# Build context is the monorepo root (required for pnpm workspace resolution).
 #
-# The typecheck and test steps are skipped while packages/operations-agent/ contains
-# only pipeline scaffolding and no application source. Once OPS-AGENT-005B ships the
-# application package, remove the skip guards and uncomment the real steps.
+# Typecheck and test run before the Docker build to catch regressions early.
+# Docker build uses --platform linux/amd64 for ECS Fargate (arm64 on Apple Silicon
+# is incompatible with ECS — linux/amd64 is always required).
 phases:
   install:
     runtime-versions:
@@ -17,18 +16,18 @@ phases:
       - pnpm install --frozen-lockfile
   build:
     commands:
-      # ── Typecheck and test (OPS-AGENT-005B: uncomment when application source lands) ──
-      # - pnpm --filter @cello-protocol/operations-agent run typecheck
-      # - pnpm --filter @cello-protocol/operations-agent run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
-      # ── Docker build → ECR push ──────────────────────────────────────────────
-      # OPS-AGENT-005A: build stub image from infra/stub/Dockerfile (no application source yet).
-      # OPS-AGENT-005B: replace with: docker build --platform linux/amd64 -t ${IMAGE_URI} -f packages/operations-agent/Dockerfile .
+      # ── Typecheck and test ────────────────────────────────────────────────
+      - pnpm --filter @cello-protocol/operations-agent run typecheck
+      - CELLO_ENV=local DATABASE_URL=postgresql://postgres:dev@localhost:5433/cello_dev pnpm --filter @cello-protocol/operations-agent run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
+      # ── Docker build → ECR push ──────────────────────────────────────────
+      # Build context is monorepo root — required for pnpm workspace resolution.
+      # NEVER push Docker images from local; all image pushes go through this pipeline.
       - export IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
       - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
       - export ECR_REPO=${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/cello-operations-agent
       - export IMAGE_URI=${ECR_REPO}:${IMAGE_TAG}
       - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
-      - docker build --platform linux/amd64 -t ${IMAGE_URI} -f infra/stub/Dockerfile infra/stub
+      - docker build --platform linux/amd64 -t ${IMAGE_URI} -f packages/operations-agent/Dockerfile .
       - docker push ${IMAGE_URI}
       - aws ssm put-parameter --name /cello/${CELLO_ENV}/pipeline/operations-agent-image-uri --value "${IMAGE_URI}" --type String --overwrite --region ${AWS_DEFAULT_REGION}
 artifacts:
