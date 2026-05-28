@@ -20,8 +20,44 @@ behavior:
   - trigger: "When a registered CELLO agent sends a message to
       the demo agent's AgentID"
     action: "the demo agent receives the message via cello_receive
-      and responds with a fixed string: 'CELLO message received.
-      Your conversation is sealed and tamper-evident.'"
+      and responds with the next message in the per-session sequence
+      (tracked by session_id); each new session starts at message 1;
+      the sequence is four hardcoded messages delivered one per inbound
+      message received; after message 4 (sign-off) the session is closed
+      via cello_close_session"
+
+  - trigger: "When the first message in a session is received"
+    action: "the demo agent sends: 'Welcome to CELLO. I am the demo
+      agent — a simple Node.js process with no LLM attached. Each message
+      you send will trigger the next response in a hardcoded sequence of 4.
+      This sequence is designed to let you verify the protocol end-to-end.
+      Send your next message to continue.'"
+
+  - trigger: "When the second message in a session is received"
+    action: "the demo agent sends: 'Message 2 of 4. Your messages arrive
+      end-to-end encrypted — I never see them in plaintext, only that a
+      message was received. The protocol uses Noise XX for encryption and
+      a tamper-evident hash chain links every message in this session.
+      Send your next message to continue.'"
+
+  - trigger: "When the third message in a session is received"
+    action: "the demo agent sends: 'Message 3 of 4. This conversation
+      has been building a cryptographic audit trail since your first message.
+      Each message hash is linked to the previous one. When we close, you
+      will be able to retrieve a sealed receipt — a tamper-evident proof
+      of everything exchanged. Send your final message to trigger sign-off.'"
+
+  - trigger: "When the fourth message in a session is received"
+    action: "the demo agent sends: 'Message 4 of 4 — sign-off. The demo
+      is complete. Call cello_get_sealed_receipt() to retrieve the
+      cryptographic proof of this conversation. The receipt contains your
+      message hashes, the Merkle root, and a directory-signed checkpoint.
+      Welcome to CELLO.' then calls cello_close_session to seal the session"
+
+  - trigger: "When a fifth or subsequent message arrives in an already
+      signed-off session"
+    action: "the demo agent sends: 'This session has completed the demo
+      sequence and been sealed. Start a new session to run the demo again.'"
 
   - trigger: "When a connection request is received"
     action: "the demo agent accepts all incoming connection requests
@@ -77,12 +113,34 @@ acceptance_criteria:
 
   - id: AC-002
     given: "The demo agent is running and reachable on the network"
-    when: "another registered CELLO agent sends a message"
-    then: "the demo agent receives the message; demo.message.received
-      is logged at INFO; the demo agent responds with the canned string;
-      demo.response.sent is logged at INFO; the response is delivered
-      to the sender via cello_receive"
+    when: "another registered CELLO agent sends four sequential messages
+      in the same session"
+    then: "the demo agent responds with the correct message for each
+      position in the sequence (1 through 4); message 1 explains the
+      demo and its hardcoded nature; message 4 is the sign-off and
+      triggers cello_close_session; demo.message.received and
+      demo.response.sent are logged at INFO for each exchange;
+      all four responses are delivered to the sender via cello_receive"
     test_type: integration
+    component_under_test: demo-agent
+
+  - id: AC-002b
+    given: "Two separate sessions open simultaneously with the demo agent"
+    when: "each session sends messages independently"
+    then: "each session tracks its own position in the sequence
+      independently — session A receiving its 3rd message gets message
+      3 of 4 regardless of what position session B is at; per-session
+      state is keyed by session_id; no cross-session contamination"
+    test_type: unit
+    component_under_test: demo-agent
+
+  - id: AC-002c
+    given: "A session that has received the sign-off (message 4)"
+    when: "a fifth message arrives in that session"
+    then: "the demo agent responds explaining the session is sealed
+      and a new session should be started; cello_close_session is
+      not called a second time"
+    test_type: unit
     component_under_test: demo-agent
 
   - id: AC-003
@@ -183,9 +241,11 @@ security_invariants:
       from conversations"
     adversarial_condition: "even when hundreds of strangers message
       the demo agent, no message content persists on disk or appears
-      in logs; only the canned response is generated; verified by
-      asserting the receive handler does not pass message content
-      to any logger or file write"
+      in logs; only the sequence position (an integer) and session_id
+      are tracked in memory; the hardcoded responses are selected by
+      position, not by inspecting message content; verified by asserting
+      the receive handler does not pass message content to any logger
+      or file write"
     test_type: unit
     component_under_test: demo-agent
 
