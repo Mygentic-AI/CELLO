@@ -205,7 +205,7 @@ No further code changes needed from SECOPS-004.
 |---|---|
 | cello-protocol-types-pipeline | Succeeded |
 | cello-transport-pipeline | Succeeded |
-| cello-adapter-claude-code-pipeline | Succeeded |
+| cello-connect-pipeline | Succeeded |
 | cello-relay-pipeline | Succeeded |
 | cello-e2e-tests-pipeline | Succeeded |
 | cello-crypto-pipeline | **Failed** — test failure in `src/__tests__/ed25519.test.ts` (AC-001 keygen timing). Pre-existing, not caused by this session. Owner: whoever owns `@cello/crypto`. |

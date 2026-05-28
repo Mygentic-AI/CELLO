@@ -97,7 +97,7 @@ packages/
 
 **Dependency rule:** `adapter-* → client → transport, crypto, protocol-types`. No adapter imports from `directory` or `relay`.
 
-**Distribution:** each adapter is an npm package. Its `SKILL.md` is the installation skill for that agent runtime — the one-liner is `npm install @cello-protocol/adapter-<name>`, then follow the skill. The skill knows how to wire up that specific agent. Operators building their own integration import `@cello-protocol/client` directly.
+**Distribution:** each adapter is an npm package. Its `SKILL.md` is the installation skill for that agent runtime. The Claude Code adapter ships as `@cello-protocol/connect` (not `@cello-protocol/adapter-claude-code`) — the install one-liner is `claude mcp add cello npx @cello-protocol/connect`. Future adapters will follow the `@cello-protocol/adapter-<name>` convention. Operators building their own integration import `@cello-protocol/client` directly.
 
 ---
 

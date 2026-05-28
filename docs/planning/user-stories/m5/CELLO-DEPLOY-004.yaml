@@ -85,7 +85,7 @@ acceptance_criteria:
       Lambda, cello-pipeline-filter Lambda, cello-github-events
       EventBridge bus, 8 CodePipelines (cello-crypto-pipeline,
       cello-protocol-types-pipeline, cello-transport-pipeline,
-      cello-client-pipeline, cello-adapter-claude-code-pipeline,
+      cello-client-pipeline, cello-connect-pipeline,
       cello-directory-pipeline, cello-relay-pipeline,
       cello-e2e-tests-pipeline), S3 artifacts bucket
       cello-codepipeline-artifacts-us-east-1; none of these
