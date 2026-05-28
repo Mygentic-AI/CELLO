@@ -274,6 +274,40 @@ Two changes to the script:
 
 ---
 
+## 2026-05-28 — REPOSPLIT-002: story closed
+
+Story completed: REPOSPLIT-002 — extract five client packages into cello-client, publish `@cello-protocol/connect@beta`.
+
+**Delivered:**
+- Five packages extracted from trustless-cello into `cello-client/core/`: `@cello-protocol/protocol-types`, `@cello-protocol/crypto`, `@cello-protocol/transport`, `@cello-protocol/client`, `@cello-protocol/connect`
+- `@cello-protocol/test-fixtures` moved as private workspace package
+- `@cello-protocol/interfaces` published to npm from trustless-cello (stays server-side)
+- `@cello-protocol/connect@0.0.3` published with `beta` dist-tag — installable via `claude mcp add cello npx @cello-protocol/connect`
+- CELLO_DIRECTORY_URL defaults to `http://directory-us1.cello.mygentic.ai` (ALB is HTTP not HTTPS — verified via WS upgrade)
+- AUDIT-ME.md updated with accurate cello-client file paths
+- pnpm.overrides in cello-client now pins `@cello-protocol/interfaces@0.0.3` from npm (not local file: path)
+- ESLint added to cello-client (`pnpm run lint`)
+- CI restructured: trustless-cello checkout only happens at publish time (tag-only step); normal build/test/lint runs without sibling repo
+- trustless-cello root tsconfig.json updated to reference only `directory`, `relay`, `e2e-tests`
+
+**Review history:** sprint-coder (background agent, stopped early due to quality issues) → manual implementation in-session → code-reviewer (5 findings, all fixed) → sprint-reviewer pass 1 (2 BLOCKED) → fixes applied (interfaces publish path, protocol-types version alignment, pnpm.overrides, eslint, || true guards, PRODUCTION_DIRECTORY_URL http://) → sprint-reviewer pass 2 (1 BLOCKED — published 0.0.2 manifests had wrong interfaces dep) → bump to 0.0.3 → AC-007 smoke test PASSED.
+
+**Key issues resolved during implementation:**
+- `npm publish` vs `pnpm publish`: the latter rewrites `workspace:*` specifiers to real version numbers; using `npm publish` published a broken manifest. Fixed: all packages now publish via `pnpm publish --filter`.
+- `protocol-types@0.0.1` in trustless-cello vs `@0.0.2` on npm: interfaces@0.0.2 resolved the wrong version. Fixed: bumped trustless-cello protocol-types to 0.0.2.
+- `PRODUCTION_DIRECTORY_URL` was `https://` but ALB only accepts HTTP. Fixed: `http://directory-us1.cello.mygentic.ai`.
+
+**Post-merge actions:**
+- Smoke test passed: `npm install @cello-protocol/connect@beta` + `npx @cello-protocol/connect` → MCP server starts, own_pubkey present, transport_started=true
+- `@cello-protocol/connect@beta` dist-tag points to `0.0.3`
+- `@cello-protocol/interfaces@0.0.3` on npm, correct dep on `protocol-types@0.0.2`
+
+**Downstream stories now unblocked:**
+- DEMO-001 (code portions AC-001 through AC-007): depends only on REPOSPLIT-002 — now unblocked
+- M6-E2E-001: full stranger flow — REPOSPLIT-002 complete; depends on DEMO-001 and OPS-AGENT-005B (both done)
+
+---
+
 ## Constraints
 
 **CONSTRAINT: registrations table single-writer assumption.** The Operations Agent writes only from us-east-1. The partial unique index `UNIQUE (phone_stub_hash) WHERE state NOT IN (terminal)` is enforced locally per-node in logical replication — it does NOT prevent cross-region duplicates. Multi-region Ops Agent deployment requires schema redesign. See OPS-AGENT-000 `replication_safety` note.

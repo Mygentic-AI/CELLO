@@ -10,8 +10,8 @@ description: M6 write-up — CELLO beta launch. Installable @cello-protocol/conn
 # M6 — Beta Launch
 
 **Started:** 2026-05-26
-**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001, OPS-AGENT-005A, OPS-AGENT-005B
-**Stories open:** REPOSPLIT-002, DEMO-001, M6-E2E-001
+**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001, OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002
+**Stories open:** DEMO-001, M6-E2E-001
 
 **Unblocked by OPS-AGENT-002:** OPS-AGENT-003 (Telegram adapter), OPS-AGENT-004 (SES OTP delivery), OPS-AGENT-005B (wire app code)
 
@@ -470,6 +470,60 @@ Wiring story. Takes the proven ECS infrastructure from 005A (stub running, secre
 
 **Downstream stories unblocked:**
 - DEMO-001: registration AC-000 — Telegram bot is live in production; demo agent can register
+
+---
+
+## REPOSPLIT-002 — Extract Client Packages, Publish @cello-protocol/connect@beta
+
+Extraction and publish story. Permanently moves five packages from the trustless-cello monorepo into the cello-client repo and publishes them to npm, making CELLO installable with a single command: `claude mcp add cello npx @cello-protocol/connect`.
+
+**Delivered:**
+
+- **Package extraction**: `@cello-protocol/protocol-types`, `@cello-protocol/crypto`, `@cello-protocol/transport`, `@cello-protocol/client`, `@cello-protocol/connect` moved from `trustless-cello/packages/` to `cello-client/core/`. `@cello-protocol/test-fixtures` moved as a private workspace package.
+- **@cello-protocol/interfaces published**: stays in trustless-cello but is no longer private — published to npm at `0.0.3` so cello-client can consume it as a real dependency.
+- **@cello-protocol/connect@beta**: `0.0.3` published with `beta` dist-tag. Install: `claude mcp add cello npx @cello-protocol/connect`.
+- **CELLO_DIRECTORY_URL default**: `http://directory-us1.cello.mygentic.ai` — ALB is HTTP, WebSocket upgrade confirmed (`101 Switching Protocols`).
+- **trustless-cello post-split**: root `tsconfig.json` references only `directory`, `relay`, `e2e-tests`. Client packages now resolve from npm.
+- **cello-client improvements**: ESLint added (`pnpm run lint`), `pnpm.overrides` points to pinned npm version instead of `file:` path (AC-000 satisfied), CI restructured to skip sibling repo checkout on non-publish runs, `|| true` guards on all publish commands for idempotency.
+- **AUDIT-ME.md** updated with accurate cello-client file paths. All seven named files verified to exist.
+- **564 tests pass** in cello-client (36 test files). **1304 tests pass** in trustless-cello (104 test files).
+
+**AC-007 smoke test result (2026-05-28):**
+```
+npm install @cello-protocol/connect@beta  → 254 packages installed, zero errors
+npx @cello-protocol/connect → MCP server starts
+cello_status → { own_pubkey: "3ce94ace...", transport_started: true }
+```
+
+**Review history:** Background sprint-coder agent stopped early (quality issues) → in-session implementation → code-reviewer (5 findings, all fixed) → sprint-reviewer pass 1 BLOCKED (workspace:* in published manifest, no lint script) → sprint-reviewer pass 2 BLOCKED (0.0.2 manifests had wrong interfaces dep) → bump to 0.0.3 + additional fixes → AC-007 smoke test PASSED.
+
+**Bugs found during implementation:**
+
+### 1. `npm publish` publishes `workspace:*` literals — install fails for all consumers
+**Symptom:** `@cello-protocol/interfaces@0.0.1` was published using `npm publish` (not `pnpm publish`). pnpm rewrites `workspace:*` to real version numbers at publish time; npm does not. The published manifest contained `"@cello-protocol/protocol-types": "workspace:*"`. Any `npm install` or `pnpm add` of the package failed with `EUNSUPPORTEDPROTOCOL` / `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND`.
+**Fix:** Changed all publish commands to `pnpm publish --filter <package> --no-git-checks`. Only pnpm performs workspace specifier rewriting before uploading the manifest.
+**Rule:** In a pnpm workspace, always publish via `pnpm publish`, never `npm publish`. The manifest pnpm uploads is the rewritten one with real version numbers. `npm publish` uploads the raw `package.json` with `workspace:*` intact.
+
+### 2. `protocol-types` version mismatch — interfaces declared a non-existent dep
+**Symptom:** `@cello-protocol/protocol-types` in trustless-cello was at version `0.0.1`, but only `protocol-types@0.0.2` exists on npm (published from cello-client). When interfaces was published via pnpm, workspace rewriting resolved `workspace:*` to `0.0.1` — a version that doesn't exist. Installing interfaces would fail with `E404`.
+**Fix:** Bumped `protocol-types` in trustless-cello to `0.0.2` to match the published version.
+**Rule:** When a package in one repo depends (via `workspace:*`) on a package from another repo that has a different version on npm, the workspace version must match the npm version before publishing.
+
+### 3. `PRODUCTION_DIRECTORY_URL` was `https://` but ALB is HTTP
+**Symptom:** The production ALB accepts WebSocket connections on port 80 (HTTP). Port 443 returns `Connection refused`. The default URL `https://directory-us1.cello.mygentic.ai` caused `cello_status` to report `directory_reachable: false` and the MCP server to fail to reach the network.
+**Verification:** `curl http://directory-us1.cello.mygentic.ai` with WebSocket upgrade headers returns `HTTP/1.1 101 Switching Protocols`.
+**Fix:** Changed default to `http://directory-us1.cello.mygentic.ai`.
+**Rule:** Verify the actual protocol and port of deployed infrastructure against STATE.md before baking a URL as a compile-time constant. "Production uses HTTPS" is an assumption — check the ALB listener rules.
+
+### 4. `pnpm.overrides` with `file:` path forced local filesystem resolution
+**Symptom:** `pnpm.overrides` in cello-client's root `package.json` pointed to `file:../trustless-cello/packages/interfaces`. This meant `pnpm install` always resolved interfaces from the local filesystem, requiring trustless-cello to be checked out as a sibling. AC-000 requires cello-client to resolve interfaces from npm. Any developer without the sibling layout would have a broken install.
+**Fix:** Changed override to `"@cello-protocol/interfaces": "0.0.3"` — the pinned npm version.
+**Rule:** `pnpm.overrides` with `file:` paths are a local development convenience that must not be committed to a published package repo. They break installs for anyone without the exact filesystem layout.
+
+### 5. CI publish commands had no `|| true` — version-already-exists breaks the pipeline
+**Symptom:** pnpm publish exits non-zero on E409 (version already exists). On the third tag push (`v0.0.2-beta.2`), all packages were at `0.0.2` and already published. Every publish command failed, silently preventing republication with corrected dependencies.
+**Fix:** Added `|| true` to all five cello-client publish commands (same as the existing pattern for interfaces).
+**Rule:** In an idempotent publish pipeline, all publish commands must use `|| true` to handle the version-already-exists case. E409 is not an error in a pipeline that may be re-run with the same version.
 
 ---
 
