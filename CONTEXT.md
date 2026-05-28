@@ -4,6 +4,45 @@ This file is the canonical glossary for CELLO. Use these terms exactly in code, 
 
 ---
 
+## Identity Hierarchy
+
+CELLO has three tiers of identity. Every feature, story, and design decision that touches identity must be explicit about which tier it operates at.
+
+```
+Human Operator
+      │
+      ▼
++---------------------+
+|       Account       |  ← verified via phone + email; one per human
++----------+----------+
+           │ 1:N
+  +--------+--------+--------+
+  ▼                 ▼        ▼
+Agent_A           Agent_B  Agent_N  ← each is a unique K_local + FROST ceremony
+```
+
+**Account** — the human operator's identity anchor. Created once during onboarding, verified via phone number and email address. One Account per human. The Account is the parent of all agents the operator runs. It backs:
+- Portal login (magic link → WebAuthn/PIN)
+- Trust signal aggregation (phone, email, LinkedIn, GitHub, and future signals attach here)
+- Social recovery (M-of-N recovery contacts)
+- Succession
+
+Stored in `user_accounts`. The `phone_stub_hash` uniqueness constraint enforces one Account per phone number at the database layer.
+
+**Agent** — a cryptographic entity owned by an Account. Defined by a unique `K_local` (Ed25519 operational signing key), a unique FROST DKG ceremony producing a unique `primary_pubkey`, and a unique `agent_profiles` row. Multiple agents per Account is supported from day one — a single human operator can run Agent_A on one machine and Agent_B on another. Each agent:
+- Is cryptographically independent — compromising Agent_A does not leak Agent_B's keys
+- Inherits the parent Account's verified trust signals (phone, email, social proofs) at the time of registration; those signals propagate to counterparties as an aggregate Account trust view
+- Accumulates its own conversation history and endorsements
+- Retains its Account link across K_local rotation — K_local rotation changes the operational key, not the Account membership
+
+When a second Agent is added to an existing Account, re-verification of phone or email is not required — the Account identity is already proven. The directory issues a new pre-authorization token via the portal or bot's "add agent" flow and the new agent runs its own FROST DKG ceremony independently.
+
+Counterparties receive an aggregate Account-level trust view when connecting: they see that the Agent belongs to an Account with N verified signals, without learning which specific agent contributed which signal (privacy-preserving aggregation).
+
+**Session** — a single conversation between exactly two Agents. Has its own relay node assignment, Merkle tree, sequence numbering, and `session_id`. Multiple sessions can run concurrently on the same Agent. A Session is a protocol primitive — it does not map to an Account or span multiple Agents on either side.
+
+---
+
 ## Core Concepts
 
 **CELLO client** — the locally-running process co-located with the agent on the agent operator's hardware. Implements all protocol mechanics (signing, transport, Merkle, FROST) and exposes them as MCP tools. Not infrastructure — it is the agent operator's process.
@@ -20,13 +59,13 @@ Inbound session request (M1+): `{ "type": "cello_session_request", "from": "<cou
 
 **Hermes adapter** — injects CELLO as an additional message channel alongside Telegram/WhatsApp, using Hermes's existing message-channel model.
 
-**K_local** — the agent's operational signing key. Used for per-message signing and participation in FROST ceremonies. Rotates on agent schedule, always at session boundaries.
+**K_local** — the Agent's operational signing key. Defines Agent identity — one K_local per Agent. Used for per-message signing and participation in FROST ceremonies. Rotates on agent schedule, always at session boundaries. K_local rotation does not change Account membership — the Agent remains linked to the same Account after rotation. K_local MUST persist across restarts (see KeyProvider).
 
 **identity_key** — the agent's long-term root key. Backs the pseudonym, the local DB key, and the backup key. Rarely rotated — rotation changes the pseudonym.
 
 **K_server_X** — FROST threshold shares held by directory nodes. Neither the client nor any single directory node can produce a combined signature without the other. Used only at session establishment and conversation seal.
 
-**KeyProvider** — the abstraction over the private key backend. `getPublicKey()` and `sign(data)`. Backend varies per deployment (OS Keychain, TPM, cloud secret manager, encrypted file). The private key never leaves the provider. `KeyProvider` is for CELLO envelope signing only — it is NOT wired into libp2p's Noise handshake. See ADR-0001. K_local MUST persist across restarts — it is the agent's operational identity, tied to pseudonym, FROST ceremonies, and counterparty trust. In M0, `InMemoryKeyProvider` loads from a key file on startup (generated once, stored at `~/.cello/key` or `CELLO_KEY_FILE` env var). Generating a fresh key on every restart would break the protocol.
+**KeyProvider** — the abstraction over the private key backend. `getPublicKey()` and `sign(data)`. Backend varies per deployment (OS Keychain, TPM, cloud secret manager, encrypted file). The private key never leaves the provider. `KeyProvider` is for CELLO envelope signing only — it is NOT wired into libp2p's Noise handshake. See ADR-0001. K_local must persist across restarts — it is the Agent's operational identity, tied to pseudonym, FROST ceremonies, and counterparty trust. Generating a fresh key on every restart would break the protocol. In M0, `InMemoryKeyProvider` loads from a key file on startup (generated once, stored at `~/.cello/key` or `CELLO_KEY_FILE` env var).
 
 **Peer ID** — a libp2p transport identifier derived from a libp2p-managed keypair, not from K_local. Authenticates the transport connection (Noise handshake). In M1+, Peer IDs are ephemeral — fresh per session. K_local authenticates message content via envelope signatures. These are different keys serving different trust claims. See ADR-0001.
 
@@ -46,7 +85,7 @@ The domain context string is the cross-ceremony confusion guard — an establish
 
 **pseudonym** — the stable, pseudonymous identity used in the conversation participation table. Derived from `identity_key`, stable across K_local rotations.
 
-**session** — a single conversation between two agents. Has its own relay node assignment, Merkle tree, sequence numbering, and `session_id`. Multiple sessions can run concurrently on the same client.
+**session** — a single conversation between exactly two Agents. Has its own relay node assignment, Merkle tree, sequence numbering, and `session_id`. Multiple sessions can run concurrently on the same Agent. See the Identity Hierarchy section for how sessions relate to Accounts and Agents.
 
 **session establishment (M1→M2)** — the directory issues a signed `SessionAssignment` carrying both peers' Peer IDs and multiaddrs. In M1 the directory signs with a single key; in M2 the initiating client coordinates a FROST ceremony and the directory embeds the combined signature with `signature_type: 'frost'` and `signer_pubkey`. The accept/decline step is stubbed through M2 — both agents are pre-authorized in the test harness. M3 replaces the stub with the full connection request flow. The `SessionAssignment` format does not change between M2 and M3.
 
