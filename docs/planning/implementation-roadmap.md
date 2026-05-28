@@ -9,7 +9,7 @@ description: Capability-based milestone map (M0–M17) with libp2p peer-to-peer 
 
 # CELLO Implementation Roadmap
 
-This document defines what gets built and in what order. Fifteen capability milestones, each delivering a protocol capability that builds on the last. M0 and M1 user stories are fully specified in `docs/planning/user-stories/m0/` and `docs/planning/user-stories/m1/`; subsequent milestone stories are written just before work begins.
+This document defines what gets built and in what order. Seventeen capability milestones, each delivering a protocol capability that builds on the last. M0 through M7 user stories are fully specified in their respective `docs/planning/user-stories/m*/` directories; subsequent milestone stories are written just before work begins.
 
 For the design source, see [[protocol-map|CELLO Protocol Map]]. For the user story template, see [[user-story-format|CELLO User Story Format]]. For the development methodology (SPARC phases, parallel agent orchestration, test framework, cryptographic correctness rules), see [[day-0-agent-driven-development-plan|Day-0 Agent-Driven Development Plan]].
 
@@ -31,7 +31,7 @@ A second invariant that shapes milestone boundaries: **message content never pas
 
 - **Language:** TypeScript end-to-end — client, directory, relay, shared packages — through production. TypeScript is not a stepping stone; it is the production language for all milestones. A Rust rewrite is not planned or pending. The one scenario that would open the question: if CELLO migrates from a consortium of operator-controlled nodes to a public blockchain, directory nodes would become validator nodes, and Rust is the lingua franca of that ecosystem (Solana, Substrate, Near, Aptos, Sui). That migration is a major strategic pivot conditioned on business success — if it happens, the resources and rationale to justify a rewrite will exist at that point. Until then, TypeScript is the answer.
 
-- **Monorepo:** pnpm workspaces. Packages: `client`, `directory`, `relay`, `protocol-types`, `crypto`, `transport`, `e2e-tests`. The client is designed for extraction — it imports only from `protocol-types`, `crypto`, and `transport`, never from `directory` or `relay`. When the client moves to its own repo, the shared packages publish as npm packages. The imports don't change. `crypto` is the true leaf package (no dependencies); `protocol-types` depends on `crypto` for SHA-256 hashing during envelope construction.
+- **Monorepo (M0–M5), then split (M6+):** Started as pnpm workspaces with packages: `client`, `directory`, `relay`, `protocol-types`, `crypto`, `transport`, `e2e-tests`. The client always imported only from `protocol-types`, `crypto`, and `transport` — never from `directory` or `relay` — enforced by TypeScript project references as compile errors. This clean boundary made the M6 repo split straightforward: client-side packages moved to `cello-client` and publish as `@cello/connect` on npm; server-side packages stay in `trustless-cello`. `crypto` is the true leaf package (no dependencies); `protocol-types` depends on `crypto` for SHA-256 hashing during envelope construction.
 
 - **Network substrate:** `js-libp2p` from M0. Transports: `@libp2p/tcp` and `@libp2p/websockets`. Security: `@chainsafe/libp2p-noise`. Muxer: `@chainsafe/libp2p-yamux`. Ephemeral Peer IDs are minted per session (M1 onward) from fresh Ed25519 keypairs — the stable agent identity is K_local, not the Peer ID. The directory is itself a libp2p node exposing a custom signaling protocol (`/cello/signaling/1.0.0`); it does not enable Kademlia DHT, mDNS, or rendezvous — peer discovery is strictly via directory-mediated signaling so the directory's "phone book" role stays bounded. libp2p circuit relay v2 and DCuTR are configured from M0; they are exercised on localhost loopback in unit tests and on real networks in cross-machine integration tests.
 
@@ -249,9 +249,13 @@ Items that are part of the canonical protocol design but are deliberately not bu
 
 ---
 
-## Monorepo Structure
+## Repository Structure
 
-The repo is a pnpm-workspace monorepo designed for eventual extraction: the client-side packages (`client`, `crypto`, `transport`, `protocol-types`, `adapter-*`) will move to a separate `cello-agent` repo at production readiness. The monorepo exists because cross-package integration testing (real libp2p nodes, real crypto, in-process directory/relay) is dramatically simpler when all packages share a single Vitest workspace and a single `pnpm install`. When the client extracts, shared packages publish as `@cello-protocol/*` on npm — import paths don't change for any consumer.
+The project started as a pnpm-workspace monorepo. This was the right call for M0–M5: cross-package integration testing (real libp2p nodes, real crypto, in-process directory/relay) is dramatically simpler when all packages share a single Vitest workspace and a single `pnpm install`. The monorepo kept iteration fast while the protocol was taking shape.
+
+**Prior to the M6 soft alpha launch, the repo was split.** Client-side packages extracted to `github.com/Mygentic-AI/cello-client` and published as `@cello/connect` on npm. The split was driven by security rationale (open-sourcing the client without server-side IaC prevents handing attackers a ready-made attack sandbox), by the "stranger can install it" launch requirement, and by the natural package boundary that had been enforced by TypeScript project references since M0. Import paths did not change — the monorepo boundary was always the npm scope boundary.
+
+`trustless-cello` retains the server-side packages, infrastructure, and the protocol design vault. `cello-client` is the public-facing repo.
 
 ### Root
 
@@ -398,11 +402,9 @@ The Vitest workspace config at root enumerates all packages. Each package's test
 | M2 | `crypto/src/frost/`, `directory/src/frost/`, `e2e-tests/src/m2/` |
 | M3+ | New subdirs within existing packages; no new top-level packages until later adapters |
 
-### Extraction Plan (Future)
+### Split: `cello-client` vs `trustless-cello`
 
-At production readiness, the client-side packages move to the existing `cello-client` repository (`github.com/Mygentic-AI/cello-client`):
-
-**Extracted to `cello-client`:**
+**`cello-client` (public, `github.com/Mygentic-AI/cello-client`):**
 - `packages/client`
 - `packages/crypto`
 - `packages/transport`
@@ -410,13 +412,14 @@ At production readiness, the client-side packages move to the existing `cello-cl
 - `packages/adapter-claude-code` (publishes as `@cello/connect`)
 - Future `packages/adapter-hermes`, `packages/adapter-ironclaw`, `packages/adapter-openclaw`
 
-**Stays in `trustless-cello` (or becomes `cello-infrastructure`):**
+**`trustless-cello` (private — server-side, IaC, protocol design):**
 - `packages/directory`
 - `packages/relay`
 - `packages/e2e-tests`
-- `docs/planning/` (protocol design vault)
+- `infra/` — all IaC and CI/CD
+- `docs/planning/` — the Obsidian protocol design vault
 
-After extraction, the shared packages publish as `@cello-protocol/*` on npm. The infrastructure repo depends on the published packages for its e2e test harness. Import paths are unchanged — the monorepo boundary was always the npm scope boundary.
+The `trustless-cello` e2e harness depends on `cello-client` packages via published npm versions for integration testing against the real server packages.
 
 ---
 
