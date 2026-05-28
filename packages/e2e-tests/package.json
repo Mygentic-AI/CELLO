@@ -22,7 +22,7 @@
     "test:cross-machine": "vitest run --config vitest.cross-machine.config.ts"
   },
   "dependencies": {
-    "@cello-protocol/adapter-claude-code": "workspace:*",
+    "@cello-protocol/connect": "workspace:*",
     "@cello-protocol/client": "workspace:*",
     "@cello-protocol/crypto": "workspace:*",
     "@cello-protocol/directory": "workspace:*",

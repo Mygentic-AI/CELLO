@@ -113,7 +113,7 @@ The domain context string is the cross-ceremony confusion guard — an establish
 
 ## Package Structure (monorepo, pnpm workspaces)
 
-**npm scope: `@cello-protocol/`** — all packages publish as `@cello-protocol/package-name` (e.g. `@cello-protocol/client`, `@cello-protocol/crypto`, `@cello-protocol/adapter-claude-code`).
+**npm scope: `@cello-protocol/`** — all packages publish as `@cello-protocol/package-name` (e.g. `@cello-protocol/client`, `@cello-protocol/crypto`, `@cello-protocol/connect`).
 
 **Runtime: Node.js 24 LTS (Krypton).** TypeScript `target: ES2022`. All `package.json` files declare `"engines": { "node": ">=24" }`.
 
@@ -125,7 +125,7 @@ packages/
   crypto/           @cello-protocol/crypto          — Ed25519 (KeyProvider), SHA-256, ML-DSA (M3+), FROST (M2+)
   transport/        @cello-protocol/transport       — libp2p node bootstrap, dial, stream handling
   client/           @cello-protocol/client          — protocol core (CelloClient); no MCP, no agent runtime
-  adapter-claude-code/  @cello-protocol/adapter-claude-code  — MCP server, claude/channel notifications, stdio entrypoint; ships SKILL.md
+  adapter-claude-code/  @cello-protocol/connect             — MCP server, claude/channel notifications, stdio entrypoint; ships SKILL.md
   adapter-hermes/   @cello-protocol/adapter-hermes  — Hermes message channel integration; ships SKILL.md  (later milestone)
   adapter-ironclaw/ @cello-protocol/adapter-ironclaw — (later milestone)
   adapter-openclaw/ @cello-protocol/adapter-openclaw — (later milestone)
@@ -136,7 +136,7 @@ packages/
 
 **Dependency rule:** `adapter-* → client → transport, crypto, protocol-types`. No adapter imports from `directory` or `relay`.
 
-**Distribution:** each adapter is an npm package. Its `SKILL.md` is the installation skill for that agent runtime — the one-liner is `npm install @cello-protocol/adapter-<name>`, then follow the skill. The skill knows how to wire up that specific agent. Operators building their own integration import `@cello-protocol/client` directly.
+**Distribution:** each adapter is an npm package. Its `SKILL.md` is the installation skill for that agent runtime. The Claude Code adapter ships as `@cello-protocol/connect` (not `@cello-protocol/adapter-claude-code`) — the install one-liner is `claude mcp add cello npx @cello-protocol/connect`. Future adapters will follow the `@cello-protocol/adapter-<name>` convention. Operators building their own integration import `@cello-protocol/client` directly.
 
 ---
 
@@ -171,7 +171,7 @@ type SendResult =
   | { delivered: false; reason: SendFailureReason };
 ```
 
-`adapter-claude-code` (MCP-001) owns the receive queue, per-peer filtering, and timeout logic. `CelloClient` has no `onMessage` push model — `peekAll()` + `receive()` is the polling interface used by the adapter.
+`@cello-protocol/connect` (MCP-001) owns the receive queue, per-peer filtering, and timeout logic. `CelloClient` has no `onMessage` push model — `peekAll()` + `receive()` is the polling interface used by the adapter.
 
 ---
 

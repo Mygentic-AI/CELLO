@@ -46,7 +46,7 @@ Full circuit-relay-v2 traversal between two machines — that is covered by the 
 Full two-machine agent exchange. See `docs/planning/user-stories/m0/CELLO-E2E-001.yaml` for the complete AC checklist.
 
 Prerequisites:
-- Both machines have `@cello/adapter-claude-code` installed: `npm install -g @cello/adapter-claude-code`
+- Both machines have `@cello-protocol/connect` installed: `npm install -g @cello-protocol/connect`
 - Claude Code configured on both: `claude mcp add --transport stdio cello -- cello-mcp`
 - Both machines started with: `claude --channels server:cello`
 - Both machines on **different networks** (different NATs)

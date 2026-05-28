@@ -206,12 +206,12 @@ importers:
 
   packages/e2e-tests:
     dependencies:
-      '@cello-protocol/adapter-claude-code':
-        specifier: workspace:*
-        version: link:../adapter-claude-code
       '@cello-protocol/client':
         specifier: workspace:*
         version: link:../client
+      '@cello-protocol/connect':
+        specifier: workspace:*
+        version: link:../adapter-claude-code
       '@cello-protocol/crypto':
         specifier: workspace:*
         version: link:../crypto
