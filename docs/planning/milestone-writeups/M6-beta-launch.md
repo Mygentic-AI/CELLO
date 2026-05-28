@@ -10,14 +10,16 @@ description: M6 write-up — CELLO beta launch. Installable @cello-protocol/conn
 # M6 — Beta Launch
 
 **Started:** 2026-05-26
-**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001, OPS-AGENT-005A
-**Stories open:** OPS-AGENT-005B, REPOSPLIT-002, DEMO-001, M6-E2E-001
+**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001, OPS-AGENT-005A, OPS-AGENT-005B
+**Stories open:** REPOSPLIT-002, DEMO-001, M6-E2E-001
 
 **Unblocked by OPS-AGENT-002:** OPS-AGENT-003 (Telegram adapter), OPS-AGENT-004 (SES OTP delivery), OPS-AGENT-005B (wire app code)
 
 **Unblocked by REPOSPLIT-001:** REPOSPLIT-002 (extract packages + publish @cello-protocol/connect@beta)
 
 **Unblocked by OPS-AGENT-005A:** OPS-AGENT-005B (wire application code into proven ECS deployment)
+
+**Unblocked by OPS-AGENT-005B:** DEMO-001 (registration AC-000 — bot live in production)
 
 ---
 
@@ -413,6 +415,61 @@ Secondary region fixes required: VPC SG port 9090 rule (REPOSPLIT-001 health por
 
 **Downstream stories unblocked:**
 - OPS-AGENT-005B: wire application code — infra proven with stub; ECS service, secrets, SGs, and pipeline all in place; compose root wires `TelegramAdapter` + `SesOtpDeliveryProvider` + `DirectoryPreAuthorizationClient` for `CELLO_ENV != local`
+
+---
+
+## OPS-AGENT-005B — Wire Real Application Code into Proven ECS Deployment
+
+Wiring story. Takes the proven ECS infrastructure from 005A (stub running, secrets resolving, networking verified) and replaces the stub with the real application image — `server.ts` as the composition root wiring together the state machine (002), TelegramAdapter (003), SES OTP delivery (004), and PreAuthorizationClient (001).
+
+**Delivered:**
+- `packages/operations-agent/src/server.ts` — composition root; `CELLO_ENV`-driven adapter selection; three-dimension health check (PostgreSQL connectivity, migration version match, Telegram `getMe`); emits `ops_agent.started` only after all checks pass; HTTP health server on port 8080; graceful SIGTERM shutdown
+- `packages/operations-agent/src/directory-pre-auth-client.ts` — `DirectoryPreAuthorizationClient` implementing `PreAuthorizationClient`; exactly one public method (`requestToken()`); throws `PreAuthRequestError` carrying `httpStatus` for structured error logging; no internal logging (caller owns the event)
+- `packages/operations-agent/Dockerfile` — multi-stage Node 24-slim; production deps only; non-root user `cello` (uid 1001); `EXPOSE 8080`; builds from monorepo root context for pnpm workspace resolution
+- `packages/operations-agent/buildspec.yml` — real image build replacing stub; `pnpm run typecheck` + `pnpm run test` before `docker build`; `PrivilegedMode: true` on CodeBuild project (required for Docker daemon access)
+- `infra/buildspecs/smoke-test-operations-agent.yml` — CloudWatch Logs gate polling for `ops_agent.started` event (direct IP polling blocked by no-inbound SG; CloudWatch approach confirms application-level health, not just container liveness)
+- `infra/cloudformation/cello-cicd.yaml` — `SmokeTestOperationsAgentBuild` CodeBuild project wired into ops-agent pipeline; `PrivilegedMode: true` on `OperationsAgentBuild`; `logs:FilterLogEvents` IAM permission for smoke test
+- `infra/cloudformation/cello-ecs-operations-agent.yaml` — ECS `HealthCheck` block added (`CMD-SHELL curl /health`, 30s interval, 3 retries, 60s startPeriod); `SES_FROM_ADDRESS` added to `Environment` block
+- Canonical event taxonomy: 7 new events registered (`ops_agent.started`, `ops_agent.telegram.connected`, `ops_agent.startup.failed`, `ops_agent.health_server.started`, `ops_agent.shutting_down`, `registration.preauth.request.failed`)
+- 98 tests (up from 67 unit + 30 integration); SI-001 automated test verifying `@cello-protocol/crypto` absent from `package.json`
+
+**Review history:** sprint-coder committed → code-reviewer round 1 (9 findings, all fixed) → sprint-reviewer BLOCKED (3 blocking) → code-reviewer round 2 (3 findings including 2 pipeline-breaking: missing `PrivilegedMode`, broken smoke test network path) → sprint-reviewer APPROVED (4 medium, 2 low, all fixed).
+
+**Bugs found during review cycle:**
+
+### 1. `DirectoryPreAuthorizationClient` logged AND rethrew on failure — double event, wrong context fields
+**Symptom:** The client logged `registration.preauth.request.failed` internally with hardcoded `correlationId: "network-error"` / `"http-error"` and no `registrationId`. The state machine (the correct owner of this event) was never reached for error logging. AC-005 requires `{ registrationId, httpStatus, correlationId }` — two of three fields were wrong or absent.
+**Fix:** Removed all logging from `DirectoryPreAuthorizationClient`. Introduced `PreAuthRequestError` carrying `httpStatus`. State machine wraps `requestToken()` in try/catch, logs the event with all three required fields, sends user error message, and returns `EMAIL_CONFIRMED` record unchanged.
+**Rule:** When an interface method can fail, the caller (which has request context) owns the failure log event. The implementation only throws a typed error.
+
+### 2. `PrivilegedMode: true` missing on `OperationsAgentBuild`
+**Symptom:** CodeBuild standard images cannot access the Docker daemon without `PrivilegedMode: true`. The `buildspec.yml` runs `docker build` and `docker push`. Every pipeline run would have failed at Build stage with "Cannot connect to the Docker daemon" — first discovered post-merge.
+**Fix:** Added `PrivilegedMode: true` to `OperationsAgentBuild` CodeBuild project environment.
+**Rule:** Any CodeBuild project that runs `docker build` requires `PrivilegedMode: true`. The ops-agent is the only build that runs Docker — all others are TypeScript-only.
+
+### 3. Smoke test polled task public IP — blocked by no-inbound SG rule
+**Symptom:** Initial smoke test resolved the ECS task's public IP via ENI and polled `http://{IP}:8080/health`. The ops-agent SG has explicitly no inbound rules. Every smoke test poll would return connection refused, timing out after 90s and failing the pipeline permanently.
+**Fix:** Rewrote smoke test to use `aws logs filter-log-events` polling for `ops_agent.started` in the CloudWatch log group. That event fires only after all three health checks pass — a reliable application-level gate that requires no network access to the task.
+**Rule:** When an ECS service has no ALB and no inbound SG rules, smoke tests must use CloudWatch Logs or ECS service status APIs, not direct task IP polling.
+
+### 4. `botUsername` always logged as "unknown" in `ops_agent.telegram.connected`
+**Symptom:** The event read `process.env["CELLO_BOT_USERNAME"] ?? "unknown"`. `CELLO_BOT_USERNAME` is not set in the ECS task definition. Production would always emit `botUsername: "unknown"`.
+**Fix:** Added `get botUsername(): string` getter to `TelegramAdapter`. `checkTelegram()` calls `adapter.start({ skipPolling: true })` which runs `getMe`, then reads `adapter.botUsername` to get the verified value. Threaded through to the log event.
+**Rule:** Observability fields that report live system state (bot identity) must come from the verified response, not from environment variables that may be absent.
+
+### 5. `isMain` basename-only comparison — fragile in ESM
+**Symptom:** `new URL(import.meta.url).pathname.endsWith(process.argv[1].split("/").pop()!)` compares only the filename component. Any other `server.js` in the project would match.
+**Fix:** Replaced with `fileURLToPath(import.meta.url) === process.argv[1]` — the standard ESM main-module idiom.
+
+### 6. Dockerfile ran `typecheck` (no emit) instead of `build` — dist/ never populated
+**Symptom:** The production stage `COPY --from=build /app/packages/*/dist` would copy empty directories. The container would start and immediately crash with "Cannot find module".
+**Fix:** Changed `pnpm run typecheck` to `pnpm run build` in the Dockerfile build stage so `dist/` is populated before the production stage copies it.
+
+**Pending operational step before real image deploys:**
+- Re-run `setup-replication.sh` on the live cluster to `ALTER PUBLICATION cello_pub ADD TABLE registrations, pre_authorization_tokens` on all 3 nodes and verify cross-region replication within 5s (AC-007b). Flagged in `infra/STATE.md`.
+
+**Downstream stories unblocked:**
+- DEMO-001: registration AC-000 — Telegram bot is live in production; demo agent can register
 
 ---
 

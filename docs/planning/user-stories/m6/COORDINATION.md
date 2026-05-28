@@ -230,6 +230,28 @@ Story completed: OPS-AGENT-005A — Operations Agent IaC.
 
 ---
 
+## 2026-05-28 — OPS-AGENT-005B: story closed
+
+Story completed: OPS-AGENT-005B — Wire real application code into proven ECS deployment.
+
+**Delivered:**
+- `server.ts` composition root: CELLO_ENV-driven adapter selection, three-dimension health check, `ops_agent.started` after all checks pass, HTTP health server port 8080, graceful SIGTERM shutdown
+- `DirectoryPreAuthorizationClient`: single public method `requestToken()`, throws `PreAuthRequestError(httpStatus)`, no internal logging
+- `Dockerfile`: multi-stage Node 24-slim, non-root user `cello`, production deps only, `pnpm run build` (not typecheck) to emit dist/
+- `buildspec.yml`: real Docker build replacing stub; `PrivilegedMode: true` on CodeBuild project
+- `smoke-test-operations-agent.yml`: CloudWatch Logs gate on `ops_agent.started` (direct IP polling blocked by no-inbound SG)
+- `cello-cicd.yaml`: `SmokeTestOperationsAgentBuild` project, `PrivilegedMode: true` on `OperationsAgentBuild`, `logs:FilterLogEvents` IAM permission
+- `cello-ecs-operations-agent.yaml`: ECS `HealthCheck` block, `SES_FROM_ADDRESS` in Environment
+- 7 new canonical events registered; 98 tests
+
+**Pending before pipeline deploys real image (AC-007b):**
+Re-run `setup-replication.sh` on the live cluster to add `registrations` and `pre_authorization_tokens` to `cello_pub` on all 3 nodes, then verify cross-region replication within 5s. STATE.md flags this as pending.
+
+**Downstream stories now unblocked:**
+- DEMO-001: registration AC-000 — Telegram bot is live; demo agent can now register
+
+---
+
 ## Constraints
 
 **CONSTRAINT: registrations table single-writer assumption.** The Operations Agent writes only from us-east-1. The partial unique index `UNIQUE (phone_stub_hash) WHERE state NOT IN (terminal)` is enforced locally per-node in logical replication — it does NOT prevent cross-region duplicates. Multi-region Ops Agent deployment requires schema redesign. See OPS-AGENT-000 `replication_safety` note.
