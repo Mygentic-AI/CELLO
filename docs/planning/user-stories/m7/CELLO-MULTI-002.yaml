@@ -1,0 +1,177 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-MULTI-002
+domain: MULTI
+milestone: M7
+actor: AGENT_OPERATOR
+priority: P0
+components:
+  - connect
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the MCP server,
+  I want to manage a registry of CelloClient instances (one per named agent)
+  with independent libp2p nodes so that multiple agents can be online
+  simultaneously without sharing transport or identity state.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the MCP server starts with N discovered agents"
+    action: "a `Map<string, AgentEntry>` is created where AgentEntry holds:
+      name (string), keyProvider (FileKeyProvider), client (CelloClient | null),
+      state ('registered' | 'online' | 'current'); all agents begin in
+      'registered' state with client = null"
+
+  - trigger: "When the MCP server starts and exactly one agent is discovered"
+    action: "that agent is automatically started (CelloClient instantiated,
+      libp2p node started, directory connection established); the agent
+      transitions to 'online'; MULTI-003 per-connection state automatically
+      sets this agent as current for any new MCP connection"
+
+  - trigger: "When `cello_start_agent(name)` is called for a registered agent"
+    action: "a new CelloClient is instantiated with its own libp2p node
+      (own Peer ID, own transport key, own listen addresses); the client
+      connects to the directory, the agent transitions to 'online' state"
+
+  - trigger: "When `cello_stop_agent(name)` is called for an online agent"
+    action: "the agent's CelloClient is shut down (all sessions closed,
+      libp2p node stopped); the agent transitions back to 'registered' state;
+      the Map entry is retained with client = null"
+
+  - trigger: "When the MCP server process shuts down"
+    action: "all online agents are stopped gracefully in parallel; libp2p
+      nodes are stopped; no state is lost (sessions that were open will need
+      re-establishment on next startup)"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "Two agents `alice` and `bob` discovered at startup"
+    when: "`cello_start_agent('alice')` then `cello_start_agent('bob')` are called"
+    then: "both agents have independent CelloClient instances; each has a
+      distinct libp2p Peer ID (`alice.peerId !== bob.peerId`); both report
+      state 'online'"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-002
+    given: "Agent `alice` is online"
+    when: "`cello_stop_agent('alice')` is called"
+    then: "alice's libp2p node is stopped (`node.isStarted()` returns false);
+      alice's multiaddrs are no longer advertised; any sessions that were open
+      are closed; alice transitions to 'registered'"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-003
+    given: "Agent `alice` is online"
+    when: "`cello_start_agent('alice')` is called again"
+    then: "the call returns an error indicating the agent is already online;
+      the agent's state is unchanged"
+    test_type: unit
+    component_under_test: connect
+
+  - id: AC-004
+    given: "No agent named `ghost` exists in the registry"
+    when: "`cello_start_agent('ghost')` is called"
+    then: "the call returns an error: 'Agent not found: ghost. Available
+      agents: alice, bob'"
+    test_type: unit
+    component_under_test: connect
+
+  - id: AC-005
+    given: "Two agents `alice` and `bob` are both online"
+    when: "the process receives SIGTERM"
+    then: "both agents are stopped gracefully (libp2p nodes stopped, no
+      unhandled promise rejections); process exits cleanly within 5 seconds"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-006
+    given: "Agent `alice` and `bob` are both online"
+    when: "a test message is enqueued directly into alice's receive queue"
+    then: "alice's receive queue contains the test message AND bob's receive
+      queue remains empty — verified by calling receive() on each client and
+      asserting alice's queue is non-empty and bob's queue is empty; this
+      proves no state is shared between the two CelloClient instances"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-007
+    given: "Agent `alice` is registered (not online)"
+    when: "`cello_stop_agent('alice')` is called"
+    then: "the call returns an error indicating the agent is not online;
+      the agent's state is unchanged"
+    test_type: unit
+    component_under_test: connect
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "Each CelloClient instance must have cryptographic isolation —
+      alice's KeyProvider is never accessible from bob's client instance"
+    adversarial_condition: "a bug in one agent's message handling cannot
+      leak or use another agent's signing key"
+    test_type: unit
+    component_under_test: connect
+
+  - id: SI-002
+    statement: "libp2p nodes must use independent transport keys — no shared
+      Noise session keys between agents"
+    adversarial_condition: "each CelloClient is instantiated with a distinct
+      `createNode()` call producing a unique libp2p Peer ID and independent
+      Noise keypair; verified by asserting `alice.peerId !== bob.peerId` and
+      that both Peer IDs differ from any previously seen Peer ID in the test"
+    test_type: integration
+    component_under_test: connect
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: agent.registry.initialized
+      fields: [agentCount, agentNames]
+      context: "Emitted once at startup after discovery completes"
+    - name: agent.lifecycle.started
+      fields: [agentName, peerId]
+      context: "Emitted when an agent transitions to online"
+    - name: agent.lifecycle.stopped
+      fields: [agentName, reason]
+      context: "Emitted when an agent transitions back to registered"
+  error_events:
+    - name: agent.lifecycle.start_failed
+      fields: [agentName, error]
+      context: "Emitted when a CelloClient fails to initialize (port conflict, etc)"
+  alarms: []
+
+# ─── Implementation Notes ──────────────────────────────────
+implementation_notes: >
+  The composition root in packages/adapter-claude-code/src/bin/cello-mcp.ts
+  (lines 1-262) currently creates ONE CelloClient. This story replaces that
+  with a registry pattern: AgentRegistry class that holds the Map, handles
+  start/stop lifecycle, and provides lookup by name. The existing createNode()
+  in packages/transport/src/node.ts supports multiple independent instances
+  in one process — no transport changes needed. Each CelloClient gets its own
+  random listen port (port 0 → OS assigns).
+
+  The auto-start logic lives here: after discovery, if the registry contains
+  exactly one agent, the server calls start(name) automatically and exposes
+  an `autoStartedSingleAgent` flag that MULTI-003's per-connection state reads
+  to automatically set that agent as current on any new connection.
+
+  Multi-connection tests for AC-001, AC-004, and AC-006 must use
+  InMemoryTransport pairs from the MCP SDK (not stdio) to simulate two
+  independent connections in the same process. With stdio there is only one
+  connection per process.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M7
+  discussion_logs:
+    - "2026-05-27_1400_multi-agent-mcp-planning"
+  depends_on:
+    - CELLO-MULTI-001
+  blocks:
+    - CELLO-MULTI-003
+    - CELLO-MULTI-004
+    - CELLO-MULTI-007

@@ -1,0 +1,168 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-MULTI-001
+domain: MULTI
+milestone: M7
+actor: AGENT_OPERATOR
+priority: P0
+components:
+  - connect
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As an agent operator,
+  I want my K_local keys stored in a named directory structure
+  (`~/.cello/agents/<name>/key`) so that the MCP server can load
+  multiple named agent identities at startup, and legacy single-key
+  installations continue working without migration.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the MCP server starts and `~/.cello/agents/` directory exists"
+    action: "the server discovers all subdirectories, each treated as a named
+      agent; the subdirectory name is the agent's display name; each subdirectory
+      contains a `key` file in the existing 37-byte FileKeyProvider format
+      (magic 4 + version 1 + seed 32)"
+
+  - trigger: "When the MCP server starts and `~/.cello/agents/` does NOT exist
+    but `~/.cello/key` exists"
+    action: "the server treats the legacy key file as an agent named `default`;
+      behavior is identical to a single `~/.cello/agents/default/key` file;
+      no file migration occurs automatically"
+
+  - trigger: "When neither `~/.cello/agents/` nor `~/.cello/key` exists"
+    action: "the server starts with zero registered agents; `cello_list_agents`
+      returns an empty list; `cello_status` reports no agents available"
+
+  - trigger: "When `cello_register` completes successfully for a named agent"
+    action: "the agent's key file is persisted at `~/.cello/agents/<name>/key`
+      with 0o700 directory permissions and 0o600 file permissions"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A directory `~/.cello/agents/` containing subdirectories `alice/key`
+      and `bob/key`, each with valid 37-byte key files"
+    when: "the MCP server starts"
+    then: "both `alice` and `bob` appear in `cello_list_agents` as registered agents"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-002
+    given: "No `~/.cello/agents/` directory exists but `~/.cello/key` exists
+      with a valid 37-byte key file"
+    when: "the MCP server starts"
+    then: "an agent named `default` appears in `cello_list_agents` as a registered
+      agent; its public key matches the legacy key file"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-003
+    given: "Neither `~/.cello/agents/` nor `~/.cello/key` exists"
+    when: "the MCP server starts"
+    then: "the server starts successfully; `cello_list_agents` returns an empty list;
+      no error is thrown"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-004
+    given: "A key file at `~/.cello/agents/mallory/key` with invalid magic bytes"
+    when: "the MCP server starts"
+    then: "the server logs a warning identifying the invalid key file by path
+      and agent name; `mallory` does NOT appear in `cello_list_agents`; other
+      valid agents load normally"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-005
+    given: "A fresh system with no `~/.cello/` directory"
+    when: "an agent registers with name `my-agent` via `cello_register`"
+    then: "`~/.cello/agents/my-agent/key` exists with 37 bytes; the directory
+      has permissions 0o700; the file has permissions 0o600"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-006
+    given: "The `CELLO_KEY_FILE` environment variable is set to a custom path"
+    when: "the MCP server starts"
+    then: "the env var is ignored if `~/.cello/agents/` exists (regardless of
+      whether it is empty or not — zero agents is valid per AC-003, and the
+      presence of the directory signals that the new convention is in use);
+      if `~/.cello/agents/` does NOT exist, the env var path is treated as
+      the `default` agent (same as legacy `~/.cello/key` behavior)"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-007
+    given: "An `~/.cello/agents/` directory containing subdirectories with names
+      including alphanumeric, hyphens, and underscores"
+    when: "the MCP server starts"
+    then: "agent names are validated: must match `[a-z0-9][a-z0-9_-]{0,62}`;
+      subdirectories not matching this pattern are skipped with a warning"
+    test_type: unit
+    component_under_test: connect
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "Key files must be readable only by the owner (0o600) and their
+      parent directories must not be world-readable (0o700)"
+    adversarial_condition: "even on a shared machine, other users cannot read
+      agent key material via filesystem permissions"
+    test_type: integration
+    component_under_test: connect
+
+  - id: SI-002
+    statement: "A corrupted or malformed key file must never cause the server to
+      expose partial key material or crash — it must be skipped gracefully"
+    adversarial_condition: "an attacker who can write arbitrary bytes to the
+      agents directory cannot crash the server or cause it to leak key data
+      from other valid agents"
+    test_type: integration
+    component_under_test: connect
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: agent.storage.discovered
+      fields: [agentName, keyPath]
+      context: "Emitted once per valid agent found during startup scan"
+    - name: agent.storage.skipped
+      fields: [agentName, keyPath, reason]
+      context: "Emitted when a subdirectory is skipped (invalid name, bad key)"
+    - name: agent.storage.legacy_compat
+      fields: [keyPath]
+      context: "Emitted when falling back to legacy ~/.cello/key"
+  error_events:
+    - name: agent.storage.read_error
+      fields: [agentName, keyPath, error]
+      context: "Emitted when a key file cannot be read (permissions, IO error)"
+  alarms: []
+
+# ─── Implementation Notes ──────────────────────────────────
+implementation_notes: >
+  FileKeyProvider in packages/crypto/src/ed25519.ts (lines 45-126) already
+  handles the 37-byte format. This story adds a discovery layer above it —
+  scanning a directory and creating one FileKeyProvider per valid subdirectory.
+  The discovery logic lives in @cello-protocol/connect (packages/adapter-claude-code/),
+  not in the crypto package. The crypto package gains no new public API.
+
+  AC-005 exercises the existing `cello_register` tool's write path. The test
+  must use a real filesystem (not a unit stub) to verify that the directory
+  creation, key file write, and permission-setting all work together. A unit
+  test that mocks fs.writeFile would not catch a permission-ordering bug.
+
+  AC-007 lowercase-only name restriction (`[a-z0-9][a-z0-9_-]{0,62}`): lowercase
+  is required because macOS HFS+ is case-insensitive by default. Allowing
+  `Alice` and `alice` as distinct agent names would cause silent collisions on
+  macOS (both would map to the same directory). The restriction is enforced at
+  the storage discovery layer; `cello_register` must also enforce it at
+  registration time.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M7
+  discussion_logs:
+    - "2026-05-27_1400_multi-agent-mcp-planning"
+  depends_on: []
+  blocks:
+    - CELLO-MULTI-002

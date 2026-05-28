@@ -1,0 +1,199 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-MULTI-008
+domain: MULTI
+milestone: M7
+actor: AGENT_OPERATOR
+priority: P0
+components:
+  - connect
+  - client
+  - transport
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the M7 milestone close gate,
+  I want a live integration test proving that two agents on one MCP server
+  can exchange messages end-to-end — including retry queue drain after
+  reconnect and nonce deduplication — so that the multi-agent capability
+  is verified under realistic conditions before launch.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the M7 integration test runs"
+    action: "two agents (alice and bob) are loaded on the same MCP server;
+      both are brought online; both connect to the directory; alice initiates
+      a session with bob; messages flow bidirectionally; a network disruption
+      is simulated; retry queue and deduplication are exercised; the session
+      is sealed"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "An MCP server started with two agents (alice and bob) in
+      `~/.cello/agents/`"
+    when: "`cello_start_agent('alice')` and `cello_start_agent('bob')` are called"
+    then: "both agents are online; `cello_list_agents` shows both as online;
+      each has a distinct public key and Peer ID"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-002
+    given: "Alice and bob are both online on the same server"
+    when: "Connection 1 calls `cello_use_agent('alice')` and initiates a
+      session with bob's public key"
+    then: "session is established via the directory; both agents can exchange
+      messages; messages signed by alice verify against alice's K_local;
+      messages signed by bob verify against bob's K_local; AND `cello_status`
+      for alice includes a `session_id` that matches the directory-assigned
+      session assignment value (proving session establishment went through the
+      directory's libp2p signaling path)"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-003
+    given: "Alice and bob have an active session on the same server"
+    when: "Connection 1 (alice current) sends a message to bob; Connection 2
+      (bob current) calls `cello_receive`"
+    then: "bob receives the message; content matches what alice sent;
+      signature verification passes; AND bob's received envelope includes a
+      relay-assigned `canonicalSeq > 0` (proving the message transited the
+      relay's Merkle engine and was not delivered via an in-process shortcut)"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-004
+    given: "Alice and bob have an active session"
+    when: "bob's libp2p node transport is disrupted (simulated via `libp2p.stop()`
+      on bob's node within the same server process); alice sends 3 messages
+      while bob is unreachable"
+    then: "all 3 messages are queued in alice's retry queue; alice's send
+      calls return { delivered: false, reason: 'queued_for_retry' }"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-005
+    given: "Alice has 3 messages queued for bob"
+    when: "bob's transport is restored (bob's libp2p node restarted)"
+    then: "all 3 messages are delivered to bob in original order; bob
+      receives exactly 3 messages (no duplicates); nonces on received
+      messages are all unique; AND bob's received envelopes have ascending
+      relay-assigned `canonicalSeq` values (proving retry drain went through
+      the relay)"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-006
+    given: "Alice sends a message to bob that is delivered; the retry queue
+      also replays it (race condition simulation)"
+    when: "bob processes both the original and the replay"
+    then: "bob's receive queue contains exactly ONE copy of the message;
+      the duplicate was discarded via nonce deduplication"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-007
+    given: "The session between alice and bob is active with messages exchanged"
+    when: "`cello_close_session` is called"
+    then: "the session is sealed successfully; sealed receipt is retrievable;
+      retry queue for this session is cleared; deduplication set is cleared"
+    test_type: integration
+    component_under_test: client
+
+  - id: AC-008
+    given: "A system with only `~/.cello/key` (legacy, no agents directory)"
+    when: "the MCP server starts"
+    then: "a `default` agent is available; it auto-starts and becomes current;
+      all existing MCP tools work without calling cello_use_agent;
+      backwards compatibility is preserved. See MULTI-001 AC-002 for the full
+      backwards-compatibility specification; this AC confirms it holds in the
+      full multi-agent server context."
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-009
+    given: "Two separate MCP client connections to the same server (simulated
+      via InMemoryTransport pairs from the MCP SDK)"
+    when: "Connection 1 sets alice as current; Connection 2 sets bob as current"
+    then: "Connection 1 sending routes through alice; Connection 2 sending
+      routes through bob; neither connection's choice affects the other"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-010
+    given: "Agent alice is current for Connection 1; alice has a session with
+      an external peer"
+    when: "the external peer goes offline then comes back online"
+    then: "Connection 1 receives `cello_peer_offline` then `cello_peer_online`
+      notifications, both with agent: 'alice'"
+    test_type: integration
+    component_under_test: connect
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "Messages sent by alice must be signed with alice's K_local;
+      messages sent by bob must be signed with bob's K_local; cross-signing
+      is impossible regardless of which connection routes to which agent"
+    adversarial_condition: "even if a connection rapidly switches between
+      agents, the envelope signature always matches the sending agent's
+      K_local — never a different agent's key; verified by extracting
+      `senderPubkeyHex` from each received envelope's CBOR structure and
+      asserting it equals the named agent's known K_local public key hex"
+    test_type: integration
+    component_under_test: connect
+
+  - id: SI-002
+    statement: "The retry queue must not deliver messages to the wrong session
+      or wrong peer after reconnect — session ID and peer pubkey are checked
+      before retry delivery"
+    adversarial_condition: "if agent A has queued messages for peer X in
+      session S, and peer Y reconnects instead, the queue does NOT drain
+      to peer Y; enforced structurally by the per-session, per-peer scoping
+      of the retry queue (QueuedMessage contains sessionId and peerPubkeyHex)"
+    test_type: integration
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events: []
+  error_events: []
+  alarms: []
+  notes: "This is a gate story — it exercises all prior stories' observability
+    events but defines no new ones."
+
+# ─── Implementation Notes ──────────────────────────────────
+implementation_notes: >
+  This story is the live multi-process smoke test for M7. It follows the
+  milestone close gate pattern established in M1+. The test runs as a Vitest
+  integration test in packages/e2e-tests/src/m7/ using real libp2p nodes,
+  real directory, and real CelloClients — one per agent. The transport
+  disruption is simulated by calling libp2p.stop() on one agent's node
+  and then restarting it. The nonce race condition (AC-006) is simulated by
+  manually replaying a raw envelope with a duplicate nonce. The per-connection
+  test (AC-009) uses InMemoryTransport pairs from the MCP SDK to simulate two
+  independent connections to the same server.
+
+  Scope boundary for AC-004/AC-005: `libp2p.stop()` on bob's node within
+  the same server process triggers alice's `peer:disconnect` via the libp2p
+  event system directly — it does NOT exercise the Yamux keepalive detection
+  path (which is MULTI-005's concern). AC-004/AC-005 test the retry queue
+  DRAIN mechanism, not keepalive detection. The keepalive detection path is
+  covered by MULTI-005's unit tests with explicit keepalive configuration.
+  This scope boundary is intentional and documented — the integration gate
+  validates the full retry/dedup/reconnect flow without requiring a 10-second
+  keepalive timeout on every test run.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M7
+  discussion_logs:
+    - "2026-05-27_1400_multi-agent-mcp-planning"
+  depends_on:
+    - CELLO-MULTI-001
+    - CELLO-MULTI-002
+    - CELLO-MULTI-003
+    - CELLO-MULTI-004
+    - CELLO-MULTI-005
+    - CELLO-MULTI-006
+    - CELLO-MULTI-007
+  blocks: []
