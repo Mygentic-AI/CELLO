@@ -19,7 +19,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-ecr-dev | UPDATE_COMPLETE | 2026-05-27 | cello-operations-agent ECR repo added (OPS-AGENT-005A) |
 | cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent task/execution roles; directory roles include ops-agent/directory-api-key |
 | cello-secrets-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent secrets: telegram-bot-token, ses-credentials, directory-api-key, rds-credentials |
-| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-27 | Port 8080 for directory SG, port 80+443 for ALB SG; SSM+SSMMessages VPC endpoints; ops-agent SG added |
+| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-27 | Port 8080+9090 for directory SG, port 80+443 for ALB SG; SSM+SSMMessages VPC endpoints; ops-agent SG added |
 | cello-kms-dev | UPDATE_COMPLETE | 2026-05-27 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | s3:ListBucket added for relay+directory task roles |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
@@ -90,19 +90,19 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | WAF Log Group | aws-waf-logs-cello-dev (90-day retention) |
 
 ### dev — eu-central-1
-*Last deployed: 2026-05-25
+*Last deployed: 2026-05-28
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
 | cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-iam-dev | CREATE_COMPLETE | 2026-05-23 | Region-scoped role names |
-| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-25 | |
-| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-25 | CIDR 10.1.0.0/16; SSM+SSMMessages VPC endpoints added |
+| cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent/directory-api-key permission added to directory execution role |
+| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent secrets added (telegram-bot-token, ses-credentials, directory-api-key, rds-credentials) |
+| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-28 | CIDR 10.1.0.0/16; port 9090 SG rule added for ALB health checks |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | Directory+relay task roles in manifest bucket policy |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-05-25 | Now uses RDS-managed master secret (no manual admin creds) |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-25 | RELAY_MANIFEST env vars added |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-28 | INTERNAL_API_KEY injected; port 9090 health check; real image via pipeline |
 | cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL |
 | cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-23 | Real image via pipeline (ECR replication) |
 | cello-cloudwatch-dev | CREATE_COMPLETE | 2026-05-23 | Alarms only — dashboard skipped (us-east-1 only) |
@@ -141,19 +141,19 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | SNS Topic — ops-warning | arn:aws:sns:eu-central-1:257394457473:cello-ops-warning-dev |
 
 ### dev — ap-northeast-1
-*Last deployed: 2026-05-25
+*Last deployed: 2026-05-28
 
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
 | cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-iam-dev | CREATE_COMPLETE | 2026-05-23 | Region-scoped role names |
-| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-25 | |
-| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-25 | CIDR 10.2.0.0/16; SSM+SSMMessages VPC endpoints added |
+| cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent/directory-api-key permission added to directory execution role |
+| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent secrets added (telegram-bot-token, ses-credentials, directory-api-key, rds-credentials) |
+| cello-vpc-dev | UPDATE_COMPLETE | 2026-05-28 | CIDR 10.2.0.0/16; port 9090 SG rule added for ALB health checks |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | Directory+relay task roles in manifest bucket policy |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-05-25 | Now uses RDS-managed master secret (no manual admin creds) |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-25 | RELAY_MANIFEST env vars added |
+| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-28 | INTERNAL_API_KEY injected; port 9090 health check; real image via pipeline |
 | cello-waf-dev | CREATE_COMPLETE | 2026-05-23 | WAFv2 WebACL |
 | cello-ecs-relay-dev | CREATE_COMPLETE | 2026-05-23 | Real image via pipeline (ECR replication) |
 | cello-cloudwatch-dev | CREATE_COMPLETE | 2026-05-23 | Alarms only — dashboard skipped (us-east-1 only) |
@@ -250,7 +250,7 @@ Setup with: `./infra/setup-replication.sh dev`
 | ECR repo — operations-agent (us-east-1) | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; created by cello-ecr stack |
 | ECR repo — operations-agent (eu-central-1) | 257394457473.dkr.ecr.eu-central-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; replicated via account-level ECR replication |
 | ECR repo — operations-agent (ap-northeast-1) | 257394457473.dkr.ecr.ap-northeast-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; replicated via account-level ECR replication |
-| Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:1b52c4d | Built from commit 1b52c4d, deployed 2026-05-27; includes INTERNAL_API_KEY + /internal/* ALB rules |
+| Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:33377b0 | Built from commit 33377b0, deployed 2026-05-28 via pipeline; all 3 regions; includes INTERNAL_API_KEY + /internal/* ALB rules + port 9090 health |
 | Current relay image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay:6e0c50b | Built from commit 6e0c50b, deployed 2026-05-22 |
 | Current operations-agent image | (stub) | OPS-AGENT-005A stub; real image deployed by OPS-AGENT-005B pipeline |
 | Route 53 Hosted Zone | cello.mygentic.ai | Zone ID read at deploy time via aws route53 list-hosted-zones |
