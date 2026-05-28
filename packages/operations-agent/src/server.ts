@@ -437,9 +437,7 @@ async function main(): Promise<void> {
 // ESM equivalent of `if (require.main === module)`.
 // fileURLToPath gives a full absolute path; comparing against process.argv[1]
 // avoids the basename-only fragility of URL.pathname.endsWith().
-const isMain = fileURLToPath(import.meta.url) === process.argv[1];
-
-if (isMain || process.env["CELLO_RUN_SERVER"] === "true") {
+if (fileURLToPath(import.meta.url) === process.argv[1]) {
   main().catch((err) => {
     const logger = new StdoutLogger();
     logger.error("ops_agent.startup.failed", err instanceof Error ? err : new Error(String(err)), {

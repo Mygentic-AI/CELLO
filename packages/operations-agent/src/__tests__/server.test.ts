@@ -20,6 +20,8 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   resolveAdapters,
   buildHealthReport,
@@ -45,6 +47,30 @@ function makeLogger(): Logger {
     error: () => {},
   };
 }
+
+// ─── SI-001: @cello-protocol/crypto absent from production dependencies ───────
+
+describe("SI-001: no FROST/crypto key generation in bundle", () => {
+  /**
+   * SI-001: The operations-agent is a registration bot — it must NOT depend on
+   * @cello-protocol/crypto (key generation, FROST signing) or any FROST modules.
+   * Verified by reading package.json and asserting the package is absent from
+   * both dependencies and devDependencies. Module resolution via createRequire
+   * would find sibling workspace packages, making it unsuitable here.
+   */
+  it("@cello-protocol/crypto is absent from package.json dependencies and devDependencies", () => {
+    const pkgPath = resolve(new URL(".", import.meta.url).pathname, "../../package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const allDeps = {
+      ...pkg.dependencies,
+      ...pkg.devDependencies,
+    };
+    expect(Object.keys(allDeps)).not.toContain("@cello-protocol/crypto");
+  });
+});
 
 // ─── resolveAdapters() tests ──────────────────────────────────────────────────
 
