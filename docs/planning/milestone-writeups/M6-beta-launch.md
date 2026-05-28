@@ -371,6 +371,12 @@ Infrastructure-only story. Proves the full deployment path — ECR, ECS, Secrets
 
 **AC-010 integration gate status:** PASSED (2026-05-27). All 15 stacks deployed via `deploy.sh dev us-east-1`. `cello-ecs-operations-agent-dev` CREATE_COMPLETE, task-definition rev 1 (stub), runningCount=1, rollout COMPLETED. Secrets resolved: telegram-bot-token (real), directory-api-key (256-bit hex), rds-credentials (rotation Lambda set password). Directory INTERNAL_API_KEY wired and pipeline redeployed (image 1b52c4d). SES credentials remain at PLACEHOLDER (non-blocking for 005B — stub mode until populated).
 
+**Pipeline status (2026-05-28):** Both pipelines fully green — all 5 stages Succeeded:
+- `cello-operations-agent-pipeline`: Source→Build→StagingDeploy→SmokeTest→ProductionDeploy (us-east-1 only)
+- `cello-directory-pipeline`: Source→Build→StagingDeploy→SmokeTest→ProductionDeploy (us-east-1 + eu-central-1 + ap-northeast-1)
+
+Secondary region fixes required: VPC SG port 9090 rule (REPOSPLIT-001 health port split was only deployed to us-east-1 by deploy.sh), IAM+secrets stacks (ops-agent/directory-api-key permission), ECS directory stacks (INTERNAL_API_KEY + port 9090 health check + real image).
+
 **Bugs found during review cycle:**
 
 ### 1. rds-credentials injected as plain env var instead of ECS Secrets ValueFrom
