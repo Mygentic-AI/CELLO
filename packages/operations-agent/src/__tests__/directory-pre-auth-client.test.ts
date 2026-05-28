@@ -15,26 +15,9 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { DirectoryPreAuthorizationClient } from "../directory-pre-auth-client.js";
-import type { Logger } from "@cello-protocol/interfaces";
+import { DirectoryPreAuthorizationClient, PreAuthRequestError } from "../directory-pre-auth-client.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function makeLogger(): { logger: Logger; events: Array<{ method: string; event: string; context?: Record<string, unknown> }> } {
-  const events: Array<{ method: string; event: string; context?: Record<string, unknown> }> = [];
-  const logger: Logger = {
-    debug: (event, context) => events.push({ method: "debug", event, context: context as Record<string, unknown> }),
-    info: (event, context) => events.push({ method: "info", event, context: context as Record<string, unknown> }),
-    warn: (event, context) => events.push({ method: "warn", event, context: context as Record<string, unknown> }),
-    error: (event, errorOrContext?, context?) => {
-      const ctx = errorOrContext instanceof Error
-        ? { error: errorOrContext.message, ...context }
-        : errorOrContext as Record<string, unknown>;
-      events.push({ method: "error", event, context: ctx });
-    },
-  };
-  return { logger, events };
-}
 
 function makeFetch(statusCode: number, body: unknown): typeof globalThis.fetch {
   return async (_url: string | URL | Request, _init?: RequestInit) => {
@@ -61,11 +44,9 @@ describe("DirectoryPreAuthorizationClient", () => {
    * Verified by enumerating own prototype methods.
    */
   it("SI-002: has exactly one public method — requestToken()", () => {
-    const { logger } = makeLogger();
     const client = new DirectoryPreAuthorizationClient({
       directoryInternalUrl: "http://localhost:8080/internal/pre-authorize",
       apiKey: "test-api-key",
-      logger,
       fetch: makeFetch(200, { token: "CELLO-abc" }),
     });
 
@@ -84,11 +65,9 @@ describe("DirectoryPreAuthorizationClient", () => {
    * AC-001 / happy path: requestToken() returns a token on 200 OK.
    */
   it("returns token on 200 OK from directory", async () => {
-    const { logger } = makeLogger();
     const client = new DirectoryPreAuthorizationClient({
       directoryInternalUrl: "http://localhost:8080/internal/pre-authorize",
       apiKey: "test-key",
-      logger,
       fetch: makeFetch(200, { token: "CELLO-abc123" }),
     });
 
@@ -97,41 +76,43 @@ describe("DirectoryPreAuthorizationClient", () => {
   });
 
   /**
-   * AC-005: Throws on HTTP 500 from directory.
+   * AC-005: Throws PreAuthRequestError with httpStatus on HTTP 500 from directory.
+   * Caller uses httpStatus to populate registration.preauth.request.failed log event.
    */
-  it("throws when directory returns 500", async () => {
-    const { logger } = makeLogger();
+  it("throws PreAuthRequestError with httpStatus=500 when directory returns 500", async () => {
     const client = new DirectoryPreAuthorizationClient({
       directoryInternalUrl: "http://localhost:8080/internal/pre-authorize",
       apiKey: "test-key",
-      logger,
       fetch: makeFetch(500, { error: "internal server error" }),
     });
 
-    await expect(client.requestToken("phone-hash", "example.com")).rejects.toThrow();
+    const err = await client.requestToken("phone-hash", "example.com").catch((e) => e);
+    expect(err).toBeInstanceOf(PreAuthRequestError);
+    expect((err as PreAuthRequestError).httpStatus).toBe(500);
   });
 
   /**
-   * AC-005: Throws on connection refused (network error).
+   * AC-005: Throws PreAuthRequestError with httpStatus=0 on network error.
+   * httpStatus=0 signals a network-level failure (no HTTP response received).
    */
-  it("throws on network error (connection refused)", async () => {
-    const { logger } = makeLogger();
+  it("throws PreAuthRequestError with httpStatus=0 on network error", async () => {
     const networkError = new Error("ECONNREFUSED");
     const client = new DirectoryPreAuthorizationClient({
       directoryInternalUrl: "http://localhost:8080/internal/pre-authorize",
       apiKey: "test-key",
-      logger,
       fetch: makeThrowingFetch(networkError),
     });
 
-    await expect(client.requestToken("phone-hash", "example.com")).rejects.toThrow("ECONNREFUSED");
+    const err = await client.requestToken("phone-hash", "example.com").catch((e) => e);
+    expect(err).toBeInstanceOf(PreAuthRequestError);
+    expect((err as PreAuthRequestError).httpStatus).toBe(0);
+    expect(err.message).toMatch(/ECONNREFUSED/);
   });
 
   /**
    * Sends x-cello-internal-api-key header with the configured key.
    */
   it("sends API key header with each request", async () => {
-    const { logger } = makeLogger();
     let capturedHeaders: Record<string, string> = {};
 
     const capturingFetch: typeof globalThis.fetch = async (_url, init?) => {
@@ -146,7 +127,6 @@ describe("DirectoryPreAuthorizationClient", () => {
     const client = new DirectoryPreAuthorizationClient({
       directoryInternalUrl: "http://localhost:8080/internal/pre-authorize",
       apiKey: "secret-api-key-xyz",
-      logger,
       fetch: capturingFetch,
     });
 
@@ -158,7 +138,6 @@ describe("DirectoryPreAuthorizationClient", () => {
    * Sends phoneStubHash and emailDomain in request body.
    */
   it("sends phoneStubHash and emailDomain in POST body", async () => {
-    const { logger } = makeLogger();
     let capturedBody: unknown;
 
     const capturingFetch: typeof globalThis.fetch = async (_url, init?) => {
@@ -173,7 +152,6 @@ describe("DirectoryPreAuthorizationClient", () => {
     const client = new DirectoryPreAuthorizationClient({
       directoryInternalUrl: "http://localhost:8080/internal/pre-authorize",
       apiKey: "key",
-      logger,
       fetch: capturingFetch,
     });
 

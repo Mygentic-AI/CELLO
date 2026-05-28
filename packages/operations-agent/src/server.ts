@@ -9,7 +9,7 @@
  *     3. Call resolveAdapters(config) — fails fast if any required env var is missing
  *     4. Construct pg.Pool from RDS credentials
  *     5. Run health check:
- *        a. Query DB: SELECT version from flyway_schema_history ORDER BY installed_on DESC LIMIT 1
+ *        a. Query DB: SELECT version from flyway_schema_history ORDER BY installed_rank DESC LIMIT 1
  *        b. Verify migration version matches EXPECTED_MIGRATION_VERSION (V26)
  *        c. Call Telegram getMe endpoint (via TelegramAdapter.start({ skipPolling: true }))
  *           Or: for local env, skip Telegram check
@@ -47,6 +47,7 @@
  */
 
 import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { SESClient } from "@aws-sdk/client-ses";
 import { StdoutLogger } from "@cello-protocol/interfaces/stubs";
@@ -81,6 +82,7 @@ export type AdapterConfig = {
   telegramBotToken?: string;
   sesCredentials?: { accessKeyId: string; secretAccessKey: string };
   sesFromAddress?: string;
+  sesRegion?: string;
   directoryInternalUrl?: string;
   directoryApiKey?: string;
 };
@@ -164,8 +166,11 @@ export function resolveAdapters(config: AdapterConfig): ResolvedAdapters {
 
   const sesFromAddress = config.sesFromAddress ?? "noreply@cello.mygentic.ai";
 
-  // Construct SESClient with injected credentials (SI-003 from OPS-AGENT-004: no process.env reads)
+  // Construct SESClient with injected credentials (SI-003 from OPS-AGENT-004: no process.env reads).
+  // Region passed explicitly — AWS SDK v3 reads AWS_REGION internally, but the project uses
+  // AWS_DEFAULT_REGION as the canonical env var name (CLAUDE.md: AWS_REGION is reserved).
   const sesClient = new SESClient({
+    region: config.sesRegion ?? "us-east-1",
     credentials: {
       accessKeyId: sesCredentials.accessKeyId,
       secretAccessKey: sesCredentials.secretAccessKey,
@@ -182,7 +187,6 @@ export function resolveAdapters(config: AdapterConfig): ResolvedAdapters {
     preAuth: new DirectoryPreAuthorizationClient({
       directoryInternalUrl,
       apiKey: directoryApiKey,
-      logger,
     }),
     channelType: "telegram",
   };
@@ -249,21 +253,14 @@ async function checkDatabase(pool: pg.Pool): Promise<{
 
 async function checkTelegram(
   adapter: TelegramAdapter,
-  logger: Logger,
 ): Promise<{ connected: boolean; botUsername: string }> {
   try {
-    // start() with skipPolling=true calls getMe to verify the bot token is valid
+    // start() with skipPolling=true calls getMe to verify the bot token is valid.
+    // After start() returns, adapter.botUsername holds the verified username from getMe.
     await adapter.start({ skipPolling: true });
-    // adapter.start() throws if getMe fails; if we reach here, Telegram is reachable
-    // The botUsername is logged inside start(), but we need it here for the ops_agent.telegram.connected event.
-    // We use a small workaround: start() logs telegram.polling.started with botUsername.
-    // For ops_agent.telegram.connected we re-log after the health check passes.
-    return { connected: true, botUsername: "" };
-  } catch (err) {
-    logger.error("ops_agent.startup.failed", err instanceof Error ? err : new Error(String(err)), {
-      reason: "Telegram getMe failed",
-      component: "TelegramAdapter",
-    });
+    return { connected: true, botUsername: adapter.botUsername };
+  } catch {
+    // Caller logs ops_agent.startup.failed via the health report path — no double-log here.
     return { connected: false, botUsername: "" };
   }
 }
@@ -310,6 +307,7 @@ async function main(): Promise<void> {
       telegramBotToken: process.env["TELEGRAM_BOT_TOKEN"],
       sesCredentials,
       sesFromAddress: process.env["SES_FROM_ADDRESS"] ?? "noreply@cello.mygentic.ai",
+      sesRegion: process.env["AWS_DEFAULT_REGION"] ?? "us-east-1",
       directoryInternalUrl: process.env["DIRECTORY_INTERNAL_URL"],
       directoryApiKey: process.env["DIRECTORY_API_KEY"],
     });
@@ -359,10 +357,14 @@ async function main(): Promise<void> {
   // ── Health checks ─────────────────────────────────────────────────────────
   const { connected: dbConnected, migrationVersion } = await checkDatabase(pool);
 
+  // The composition root guarantees env !== "local" always wires TelegramAdapter.
+  // No instanceof guard needed — we rely on the composition root invariant.
   let telegramConnected = true;
-  if (env !== "local" && adapters.channel instanceof TelegramAdapter) {
-    const telegramResult = await checkTelegram(adapters.channel, logger);
+  let verifiedBotUsername = "";
+  if (env !== "local") {
+    const telegramResult = await checkTelegram(adapters.channel as TelegramAdapter);
     telegramConnected = telegramResult.connected;
+    verifiedBotUsername = telegramResult.botUsername;
   }
 
   const healthReport = buildHealthReport({
@@ -401,8 +403,9 @@ async function main(): Promise<void> {
   });
 
   if (env !== "local") {
+    // botUsername comes from the verified getMe response in checkTelegram — not an env var.
     logger.info("ops_agent.telegram.connected", {
-      botUsername: process.env["CELLO_BOT_USERNAME"] ?? "unknown",
+      botUsername: verifiedBotUsername,
     });
   }
 
@@ -431,9 +434,10 @@ async function main(): Promise<void> {
 }
 
 // ── Run if this is the main entry point ────────────────────────────────────
-// ESM equivalent of `if (require.main === module)`
-const isMain = process.argv[1] !== undefined &&
-  new URL(import.meta.url).pathname.endsWith(process.argv[1].replace(/\\/g, "/").split("/").pop()!);
+// ESM equivalent of `if (require.main === module)`.
+// fileURLToPath gives a full absolute path; comparing against process.argv[1]
+// avoids the basename-only fragility of URL.pathname.endsWith().
+const isMain = fileURLToPath(import.meta.url) === process.argv[1];
 
 if (isMain || process.env["CELLO_RUN_SERVER"] === "true") {
   main().catch((err) => {

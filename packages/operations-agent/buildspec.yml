@@ -18,7 +18,7 @@ phases:
     commands:
       # ── Typecheck and test ────────────────────────────────────────────────
       - pnpm --filter @cello-protocol/operations-agent run typecheck
-      - CELLO_ENV=local DATABASE_URL=postgresql://postgres:dev@localhost:5433/cello_dev pnpm --filter @cello-protocol/operations-agent run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
+      - CELLO_ENV=local pnpm --filter @cello-protocol/operations-agent run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
       # ── Docker build → ECR push ──────────────────────────────────────────
       # Build context is monorepo root — required for pnpm workspace resolution.
       # NEVER push Docker images from local; all image pushes go through this pipeline.

@@ -44,11 +44,11 @@ COPY packages/operations-agent/src ./packages/operations-agent/src
 COPY packages/operations-agent/tsconfig.json ./packages/operations-agent/
 COPY tsconfig.base.json ./
 
-# Build interfaces (dependency)
-RUN pnpm --filter @cello-protocol/interfaces run typecheck
+# Build interfaces (dependency) — must emit dist/ not just typecheck
+RUN pnpm --filter @cello-protocol/interfaces run build
 
-# Build operations-agent
-RUN pnpm --filter @cello-protocol/operations-agent run typecheck
+# Build operations-agent — emits dist/ for the production stage to copy
+RUN pnpm --filter @cello-protocol/operations-agent run build
 
 # ─── Stage 2: Production ──────────────────────────────────────────────────────
 FROM node:24-slim AS production
