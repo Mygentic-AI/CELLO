@@ -16,6 +16,7 @@ node_modules/
 # TypeScript build output
 packages/*/dist/
 packages/*/tsconfig.tsbuildinfo
+packages/*/*.tsbuildinfo
 
 # Claude Code local artifacts
 .claude/worktrees/
