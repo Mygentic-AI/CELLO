@@ -80,7 +80,6 @@ describe("Libp2pCheckpointTransport", () => {
     await peerNode.handle(CHECKPOINT_PROTOCOL, (stream) => {
       if (activeHandler) {
         void activeHandler(stream).catch((err) => {
-          // eslint-disable-next-line no-console
           console.error("[TEST peer handler error]", err);
         });
       } else {
