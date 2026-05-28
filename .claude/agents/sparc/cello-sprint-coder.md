@@ -191,8 +191,6 @@ For every observability AC in the story:
 
 ## Step 6 — Commit implementation
 
-Commit the implementation now, before the review. Commits are cheap and provide traceability — the history should show "implemented" then "fixed review findings" as separate commits.
-
 Stage only the files that belong to this story. Do not stage unrelated changes.
 
 ```bash
@@ -207,79 +205,16 @@ EOF
 
 The story ID must appear in the commit message subject line.
 
-## Step 7 — Code review
-
-Spawn the **`feature-dev:code-reviewer`** subagent to conduct the review. Pass it the full checklist below verbatim as the prompt — do not summarise or paraphrase it. The reviewer must read the story YAML and every implementation file; do not shortcut any step.
-
-Wait for the reviewer to return. Fix every finding at every severity — blocking, high, medium, and low. No finding is optional. Re-run the gate sequence after fixing.
-
-### AC coverage check
-
-For every AC in the story:
-- Find the named test (test name references the AC ID).
-- Verify the test actually exercises the AC — not a stub, not a bypass, not a mock.
-- For `test_type: integration` or `test_type: e2e` ACs describing multi-party protocol behavior: ask *"Would this test pass if routed through an in-process stub instead of the real protocol?"* If yes — blocking.
-
-### SI coverage check
-
-For every SI in the story:
-- Find the adversarial test that sets up the `adversarial_condition` and asserts the SI holds.
-- Verify the adversarial condition is actually triggered — not just asserted to exist.
-- Always verify: no private key material leaks into wire messages, logs, or returned objects.
-
-### Package boundary check
-
-- No imports from packages not allowed by `CONTEXT.md`'s dependency graph.
-- `@cello/test-fixtures` must not appear in `dependencies` or `peerDependencies` of any production package.
-- No production package imports from a `__tests__` directory.
-
-### Fixture discipline check
-
-- No from-scratch fixture function that sets up relay/directory/libp2p nodes. Blocking if present.
-
-### Observability check (M4+)
-
-- Every event name matches the AC exactly.
-- Every required context field is present.
-- No `console.log/error/warn` in implementation code.
-- correlationId threaded through every async flow that requires it.
-- All error paths that have observability ACs are logged.
-
-### Code discipline check
-
-- Changed lines trace directly to the story's ACs.
-- No orphaned imports, variables, or functions.
-- No TODO/FIXME in committed code.
-
-### Review verdict
-
-Fix every finding at every severity — blocking, high, medium, and low. Re-run the gate sequence after fixing. Re-run the reviewer if any blocking or high findings existed. Repeat until the reviewer returns no blocking or high findings. Do not stop and report back — fix everything, then proceed to Step 8.
-
 ---
 
-## Step 8 — Commit review fixes
+## Step 7 — Report back
 
-After fixing all findings, commit the fixes separately:
-
-```bash
-git add <only story files>
-git commit -m "$(cat <<'EOF'
-fix(STORY-ID): address review findings
-
-<brief summary of what was fixed>
-EOF
-)"
-```
-
----
-
-## Step 9 — Report back
+Your job ends here. Do NOT spawn a code reviewer or sprint reviewer. Those are run separately by the user in their own session.
 
 Return a structured report:
 
 1. **Story implemented:** ID + one-sentence summary of what it does
 2. **Files changed:** list with one-line description of each change
 3. **Gate sequence:** tests (N passed, N skipped), lint (clean/errors), typecheck (clean/errors)
-4. **Review findings:** all findings at all severities, with verdict (APPROVED or what was fixed)
-5. **Commit:** hash + message
-6. **Any assumptions or interpretations** you made during implementation
+4. **Commit:** hash + message
+5. **Any assumptions or interpretations** you made during implementation
