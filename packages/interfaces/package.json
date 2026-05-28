@@ -1,7 +1,10 @@
 {
   "name": "@cello-protocol/interfaces",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "files": ["dist/", "package.json"],
   "engines": {
     "node": ">=24"

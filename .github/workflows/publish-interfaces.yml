@@ -30,9 +30,11 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build @cello-protocol/interfaces
-        run: pnpm --filter @cello-protocol/interfaces run typecheck
+        run: |
+          pnpm --filter @cello-protocol/interfaces run typecheck
+          test -d packages/interfaces/dist && test "$(ls -A packages/interfaces/dist)" || (echo "ERROR: dist/ is empty after build" && exit 1)
 
       - name: Publish @cello-protocol/interfaces to npm
-        run: pnpm publish --filter @cello-protocol/interfaces --access public --no-git-checks
+        run: pnpm publish --filter @cello-protocol/interfaces --access public --no-git-checks --tag latest
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
