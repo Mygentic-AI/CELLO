@@ -255,6 +255,25 @@ Re-run `setup-replication.sh` on the live cluster to add `registrations` and `pr
 
 ---
 
+## 2026-05-28 — AC-007b complete: registrations + pre_authorization_tokens added to cello_pub
+
+**What was done:**
+
+`setup-replication.sh` was updated and re-run against all 3 nodes (us-east-1, eu-central-1, ap-northeast-1).
+
+Two changes to the script:
+1. `PUBLICATION_TABLES` already included `registrations` and `pre_authorization_tokens` (added when OPS-AGENT-000 wrote the script). However, the CREATE PUBLICATION path skipped when the publication already existed — it never ran `ALTER PUBLICATION SET TABLE`. Fixed: when publication exists, the script now runs `ALTER PUBLICATION cello_pub SET TABLE <all-tables>` to sync the table list.
+2. `ALTER SUBSCRIPTION ... REFRESH PUBLICATION` was not called after altering the publication. Active subscribers do not automatically pick up new tables. Added a Step 4b that refreshes all 6 subscriptions (2 per node) after the publication is updated.
+
+**Verification:**
+- All 6 replication slots streaming after re-run
+- `pg_subscription_rel.srsubstate = 'r'` (ready) for both `registrations` and `pre_authorization_tokens` on eu-central-1
+- INSERT into `registrations` on us-east-1 at 16:33:25Z appeared on eu-central-1 at 16:33:35Z (≤5 seconds)
+
+**Downstream:** DEMO-001 is unblocked. The operations agent pipeline can now deploy real image — pre-auth tokens and registrations issued in us-east-1 will replicate to eu-central-1 and ap-northeast-1 within ~5 seconds.
+
+---
+
 ## Constraints
 
 **CONSTRAINT: registrations table single-writer assumption.** The Operations Agent writes only from us-east-1. The partial unique index `UNIQUE (phone_stub_hash) WHERE state NOT IN (terminal)` is enforced locally per-node in logical replication — it does NOT prevent cross-region duplicates. Multi-region Ops Agent deployment requires schema redesign. See OPS-AGENT-000 `replication_safety` note.

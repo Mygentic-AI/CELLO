@@ -399,11 +399,23 @@ for REGION in "${REGIONS[@]}"; do
   echo "  GRANT SELECT on publication tables to cello_replication — done"
 
   # Create publication covering all append-only tables.
-  # Idempotent: if publication exists, skip. If not, create.
+  # Idempotent: if publication exists, ALTER SET TABLE to sync the full table list
+  # (covers the case where new tables were added to PUBLICATION_TABLES after initial
+  # setup — e.g. registrations + pre_authorization_tokens added for OPS-AGENT-005B).
+  # If it does not exist, CREATE it.
   CREATE_PUB_SQL="CREATE PUBLICATION cello_pub FOR TABLE ${PUBLICATION_TABLES};"
   EXEC_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${CREATE_PUB_SQL}" 2>&1)
   if echo "${EXEC_OUTPUT}" | grep -q "already exists"; then
-    echo "  Publication cello_pub already exists on ${REGION}"
+    # Publication exists — sync the table list to the current PUBLICATION_TABLES set.
+    # ALTER PUBLICATION ... SET TABLE replaces the table list atomically.
+    ALTER_PUB_SQL="ALTER PUBLICATION cello_pub SET TABLE ${PUBLICATION_TABLES};"
+    ALTER_OUTPUT=$(ecs_exec_sql "${REGION}" "${TASK_ARNS[${REGION}]}" "${RDS_EP}" "${DB_NAME}" "${B64_MASTER}" "${ALTER_PUB_SQL}" 2>&1)
+    if echo "${ALTER_OUTPUT}" | grep -qE "^ERROR:|psql:.* ERROR:"; then
+      log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"alter_publication\", \"reason\": \"psql_error\" }"
+      echo "ERROR: psql error during ALTER PUBLICATION in ${REGION}: ${ALTER_OUTPUT}" >&2
+      exit 1
+    fi
+    echo "  Publication cello_pub table list updated on ${REGION} (${TABLE_COUNT} tables)"
   elif echo "${EXEC_OUTPUT}" | grep -qE "^ERROR:|psql:.* ERROR:"; then
     log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${REGION}\", \"step\": \"create_publication\", \"reason\": \"psql_error\" }"
     echo "ERROR: psql error during publication creation in ${REGION}: ${EXEC_OUTPUT}" >&2
@@ -415,6 +427,15 @@ for REGION in "${REGIONS[@]}"; do
   log_info "infra.replication.setup.publication_created" "{ \"environment\": \"${ENVIRONMENT}\", \"region\": \"${REGION}\", \"tableCount\": ${TABLE_COUNT} }"
   echo "  Publication cello_pub ready on ${REGION}"
 done
+
+# ── Step 3b: Refresh existing subscriptions to pick up new tables ─────────────
+# When ALTER PUBLICATION adds tables to an existing publication, active subscribers
+# do not automatically start replicating the new tables. ALTER SUBSCRIPTION ...
+# REFRESH PUBLICATION is required to sync the subscriber's table list.
+# This step runs after the publication is updated (Step 3) and before slot polling
+# (Step 5). It is idempotent — safe to run even when no new tables were added.
+# Subscriptions are created in Step 4; this step runs a second pass after Step 4
+# completes. The actual refresh block appears after Step 4 below.
 
 # ── Step 4: Create subscriptions on each node (2 per node = 6 total) ──────────
 # Each node subscribes to cello_pub on each of the other two nodes.
@@ -471,6 +492,41 @@ for TARGET_REGION in "${REGIONS[@]}"; do
     fi
 
     log_info "infra.replication.setup.subscription_created" "{ \"environment\": \"${ENVIRONMENT}\", \"targetRegion\": \"${TARGET_REGION}\", \"sourceRegion\": \"${SOURCE_REGION}\", \"slotName\": \"${SLOT_NAME}\" }"
+  done
+done
+
+# ── Step 4b: Refresh subscriptions on all nodes ───────────────────────────────
+# After CREATE/ALTER PUBLICATION, refresh all subscriptions so subscribers include
+# the current table set. This is a no-op if the table list has not changed.
+# Must run after all subscriptions exist (Step 4 above).
+
+echo ""
+echo "── Refreshing subscriptions on all nodes ────────────────────────────────"
+
+for TARGET_REGION in "${REGIONS[@]}"; do
+  for SOURCE_REGION in "${REGIONS[@]}"; do
+    if [[ "${SOURCE_REGION}" == "${TARGET_REGION}" ]]; then
+      continue
+    fi
+    SUB_NAME="cello_sub_from_${SOURCE_REGION//-/_}"
+    TARGET_RDS_EP="${RDS_ENDPOINTS[${TARGET_REGION}]}"
+    TARGET_DB_NAME="${RDS_DB_NAMES[${TARGET_REGION}]}"
+    TARGET_MASTER_PASS="${MASTER_PASSWORDS[${TARGET_REGION}]}"
+    B64_TARGET_MASTER=$(printf '%s' "${TARGET_MASTER_PASS}" | base64 | tr -d '\n')
+
+    REFRESH_SQL="ALTER SUBSCRIPTION ${SUB_NAME} REFRESH PUBLICATION;"
+    REFRESH_OUTPUT=$(ecs_exec_sql "${TARGET_REGION}" "${TASK_ARNS[${TARGET_REGION}]}" \
+      "${TARGET_RDS_EP}" "${TARGET_DB_NAME}" "${B64_TARGET_MASTER}" "${REFRESH_SQL}" 2>&1)
+
+    if echo "${REFRESH_OUTPUT}" | grep -qE "^ERROR:|psql:.* ERROR:"; then
+      # Only fail on hard errors; warnings (e.g. origin=none copy_data) are acceptable
+      if echo "${REFRESH_OUTPUT}" | grep -qE "psql:.* ERROR:"; then
+        log_error "infra.replication.setup.ddl_failed" "{ \"region\": \"${TARGET_REGION}\", \"step\": \"refresh_subscription\", \"subscription\": \"${SUB_NAME}\" }"
+        echo "ERROR: ALTER SUBSCRIPTION REFRESH PUBLICATION failed on ${TARGET_REGION} for ${SUB_NAME}: ${REFRESH_OUTPUT}" >&2
+        exit 1
+      fi
+    fi
+    echo "  Refreshed ${SUB_NAME} on ${TARGET_REGION}"
   done
 done
 
