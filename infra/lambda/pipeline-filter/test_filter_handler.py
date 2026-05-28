@@ -34,7 +34,7 @@ ALL_CELLO_PIPELINES = [
     "cello-protocol-types-pipeline",
     "cello-transport-pipeline",
     "cello-client-pipeline",
-    "cello-adapter-claude-code-pipeline",
+    "cello-connect-pipeline",
     "cello-directory-pipeline",
     "cello-relay-pipeline",
     "cello-e2e-tests-pipeline",

@@ -3,12 +3,13 @@
  * for a sealed session (PERSIST-017).
  *
  * Implemented by MmrStore in @cello-protocol/directory.
- * Consumed by adapter-claude-code/src/server.ts (createMcpServer) to surface
+ * Consumed by packages/adapter-claude-code/src/server.ts (createMcpServer) to surface
  * checkpoint_status in cello_close_session, cello_get_sealed_receipt, and
  * cello_get_inclusion_proof without importing @cello-protocol/directory directly.
  *
- * The adapter-claude-code package may not import @cello-protocol/directory per the
- * CONTEXT.md dependency rule: "adapter-* → client → transport, crypto, protocol-types.
+ * @cello-protocol/connect (packages/adapter-claude-code/) may not import
+ * @cello-protocol/directory per the CONTEXT.md dependency rule:
+ * "adapter-* → client → transport, crypto, protocol-types.
  * No adapter imports from directory or relay."
  */
 

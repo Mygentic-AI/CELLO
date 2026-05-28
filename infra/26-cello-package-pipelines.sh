@@ -83,7 +83,7 @@ PACKAGES=(
   "protocol-types    cello-protocol-types-pipeline"
   "transport         cello-transport-pipeline"
   "client            cello-client-pipeline"
-  "adapter-claude-code cello-adapter-claude-code-pipeline"
+  "adapter-claude-code cello-connect-pipeline"
   "directory         cello-directory-pipeline"
   "relay             cello-relay-pipeline"
   "e2e-tests         cello-e2e-tests-pipeline"
@@ -225,7 +225,7 @@ new_projects = [
     f"arn:aws:codebuild:{region}:{acct}:project/cello-protocol-types-build",
     f"arn:aws:codebuild:{region}:{acct}:project/cello-transport-build",
     f"arn:aws:codebuild:{region}:{acct}:project/cello-client-build",
-    f"arn:aws:codebuild:{region}:{acct}:project/cello-adapter-claude-code-build",
+    f"arn:aws:codebuild:{region}:{acct}:project/cello-connect-build",
     f"arn:aws:codebuild:{region}:{acct}:project/cello-directory-build",
     f"arn:aws:codebuild:{region}:{acct}:project/cello-relay-build",
     f"arn:aws:codebuild:{region}:{acct}:project/cello-e2e-tests-build",
@@ -277,7 +277,7 @@ new_pipelines = [
     f"arn:aws:codepipeline:{region}:{acct}:cello-protocol-types-pipeline",
     f"arn:aws:codepipeline:{region}:{acct}:cello-transport-pipeline",
     f"arn:aws:codepipeline:{region}:{acct}:cello-client-pipeline",
-    f"arn:aws:codepipeline:{region}:{acct}:cello-adapter-claude-code-pipeline",
+    f"arn:aws:codepipeline:{region}:{acct}:cello-connect-pipeline",
     f"arn:aws:codepipeline:{region}:{acct}:cello-directory-pipeline",
     f"arn:aws:codepipeline:{region}:{acct}:cello-relay-pipeline",
     f"arn:aws:codepipeline:{region}:{acct}:cello-e2e-tests-pipeline",

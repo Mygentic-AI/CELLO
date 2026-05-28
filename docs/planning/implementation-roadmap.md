@@ -299,7 +299,7 @@ packages/
 │       ├── mcp/                    # tool handlers (connect, send, receive, session, seal)
 │       └── __tests__/
 │
-├── adapter-claude-code/            # @cello-protocol/adapter-claude-code — MCP server + notifications
+├── adapter-claude-code/            # @cello-protocol/connect — MCP server + notifications
 │   ├── package.json
 │   ├── tsconfig.json               # refs: client
 │   ├── buildspec.yml

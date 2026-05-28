@@ -218,10 +218,10 @@ implementation_notes:
     @cello-protocol/interfaces and add a files allowlist before this story begins.
 
   package_rename: >
-    Rename "name" in adapter-claude-code/package.json from
-    @cello-protocol/adapter-claude-code to @cello-protocol/connect before extraction.
-    Do this in trustless-cello first so workspace consumers update
-    their references cleanly.
+    DONE (commit on rename/adapter-to-connect branch, merged before REPOSPLIT-002 begins).
+    "name" in adapter-claude-code/package.json renamed from
+    @cello-protocol/adapter-claude-code to @cello-protocol/connect.
+    All workspace consumers, CI/CD pipelines, and tsconfigs updated in that commit.
 
   trustless_cello_post_split: >
     After extraction: update trustless-cello/tsconfig.json to reference

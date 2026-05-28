@@ -172,7 +172,7 @@ Resources:
                   - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-protocol-types-pipeline"
                   - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-transport-pipeline"
                   - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-client-pipeline"
-                  - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-adapter-claude-code-pipeline"
+                  - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-connect-pipeline"
                   - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-directory-pipeline"
                   - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-relay-pipeline"
                   - !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:cello-e2e-tests-pipeline"
@@ -449,7 +449,7 @@ Resources:
   AdapterClaudeCodeBuild:
     Type: AWS::CodeBuild::Project
     Properties:
-      Name: cello-adapter-claude-code-build
+      Name: cello-connect-build
       Source:
         Type: CODEPIPELINE
         BuildSpec: packages/adapter-claude-code/buildspec.yml
@@ -878,7 +878,7 @@ Resources:
     Type: AWS::CodePipeline::Pipeline
     Properties:
       PipelineType: V2
-      Name: cello-adapter-claude-code-pipeline
+      Name: cello-connect-pipeline
       RoleArn: !GetAtt CodePipelineRole.Arn
       ArtifactStore:
         Type: S3
