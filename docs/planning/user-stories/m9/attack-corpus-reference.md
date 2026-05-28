@@ -232,3 +232,4 @@ The subtle manipulation edge case (§2 "Indirect / Multi-Step Injection" — inn
 
 - [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — the six-layer architecture that this corpus informs; each §section here maps to a specific defense layer
 - [[2026-05-09_1100_dashclaw-m4-competitive-review|DashClaw Competitive Review]] — DashClaw's production pattern lists (`promptInjection.js` ~30 regex patterns, `security.js` 12 secret formats) are a baseline reference for CELLO-SCAN-003 and CELLO-REDACT-004 acceptance criteria
+- [[2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway|Security Layer V3 — Extensibility, Hook Architecture, and Split Gateway]] — V3 implementation target for M9; this corpus remains unchanged and continues to be the test fixture index for all Layer 1 and Layer 3 stories

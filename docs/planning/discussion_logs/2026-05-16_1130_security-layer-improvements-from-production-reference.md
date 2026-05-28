@@ -167,3 +167,4 @@ File-level references per finding:
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — the four-layer system model; Finding 5 (policy approval gate) extends Layer 5a
 - [[2026-04-08_1900_connection-staking-and-institutional-defense|Connection Staking and Institutional Defense]] — Finding 5's gate pyramid principle extends what is already designed here
 - [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination]] — the WebAuthn/2FA pattern Finding 5 would extend to policy mutation
+- [[2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway|Security Layer V3 — Extensibility, Hook Architecture, and Split Gateway]] — V3 incorporates Findings 1–3 and 6 as Day 1 scope; Findings 4 and 5 remain deferred; Finding 6 (audit log streaming) resolved via directory-backed hash chain rather than SIEM streaming

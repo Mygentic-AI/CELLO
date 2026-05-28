@@ -78,3 +78,4 @@ This is the non-cooperative path. It applies when the agent process is offline, 
 - [[2026-04-08_1800_account-compromise-and-recovery|Account Compromise and Recovery]] — tombstone effects section; all active sessions seal on any tombstone (this log operationalises the mechanism)
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — K_server revocation only blocks new FROST ceremonies; this log provides the mechanism to close existing sessions that K_server revocation cannot reach
 - [[2026-04-08_1530_message-delivery-and-termination|Message Delivery and Termination]] — ABORT control leaf semantics and SEAL-UNILATERAL recording
+- [[2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway|Security Layer V3 — Extensibility, Hook Architecture, and Split Gateway]] — V3 extends the WebAuthn confirmation pattern here to hook add/modify operations; same out-of-band confirmation model applied to security pipeline configuration changes

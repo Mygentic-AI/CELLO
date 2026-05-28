@@ -2,19 +2,22 @@
 name: M9 Overview — Security Scanning, Redaction, Governance
 type: design
 date: 2026-05-16
-topics: [security-architecture, prompt-injection, scanning, redaction, layer-1, layer-2, layer-3, layer-4, layer-5, layer-6, audit-logging, continuous-verification]
+topics: [security-architecture, prompt-injection, scanning, redaction, layer-1, layer-2, layer-3, layer-4, layer-5, layer-6, audit-logging, continuous-verification, extensibility, hooks, gateway, split-process]
 status: active
-description: Implementation scope, story structure, known gaps, and rewrite guidance for the M9 security milestone covering CELLO's six-layer prompt injection defense.
+description: Implementation scope, story structure, known gaps, and rewrite guidance for the M9 security milestone covering CELLO's six-layer prompt injection defense. V3 architecture (separate security gateway, hook extensibility, directory-backed hash chain) supersedes the original implementation target.
 ---
 
 # M9 Overview — Security Scanning, Redaction, and Governance
 
-M9 implements CELLO's six-layer prompt injection defense as running code in the `client` package. When M9 is complete, every message processed by a CELLO client passes through a deterministic sanitization pipeline, an LLM-based scanner, an outbound gate, a redaction pipeline, an LLM call governor, and deny-all access control — with every blocking decision logged to an append-only audit record and a nightly verification job watching for configuration drift.
+M9 implements CELLO's six-layer prompt injection defense as a **separate security gateway process**. When M9 is complete, every message processed by a CELLO client passes through an independently-deployed deterministic sanitization pipeline, an LLM-based scanner, an outbound gate, a redaction pipeline, an LLM call governor, and deny-all access control — with every blocking decision logged to an append-only audit record backed by directory attestation, and a nightly verification job watching for configuration drift and hash chain tampering.
 
-**Before implementing any story in this milestone, read:**
-- `docs/planning/prompt-injection-defense-layers-v2.md` — the canonical six-layer spec; stories are implementations of sections in that document
-- `docs/planning/discussion_logs/2026-04-11_1400_security-architecture-layers-and-trust-signal-classes.md` — the four-layer system model and why each layer exists
-- `docs/planning/discussion_logs/2026-05-16_1130_security-layer-improvements-from-production-reference.md` — six gaps identified after the stories were written; stories need to be updated before implementation
+**⚠️ V3 architecture update (2026-05-28):** The security layer has been redesigned as a separate gateway package and repository. The pipeline no longer lives in the `client` package. Read the V3 design document before touching any implementation.
+
+**Before implementing any story in this milestone, read in order:**
+1. `docs/planning/discussion_logs/2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway.md` — **V3 canonical design**; separate gateway, hook architecture, content hash chain, directory attestation, Day 1 vs Day 2 scope
+2. `docs/planning/prompt-injection-defense-layers-v2.md` — the six base layer spec; unchanged in V3, but the implementation home has moved to the gateway package
+3. `docs/planning/discussion_logs/2026-04-11_1400_security-architecture-layers-and-trust-signal-classes.md` — the four-layer system model and why each layer exists
+4. `docs/planning/discussion_logs/2026-05-16_1130_security-layer-improvements-from-production-reference.md` — six production gaps; Findings 1–3 and 6 are Day 1 in V3; Findings 4 and 5 remain deferred
 
 ---
 
@@ -23,7 +26,7 @@ M9 implements CELLO's six-layer prompt injection defense as running code in the 
 | Layer | What it does | Story |
 |---|---|---|
 | Layer 1 | 11-step deterministic sanitization (no API calls) | CELLO-SCAN-001 |
-| Layer 2 | LLM-based injection scanner (DeBERTa local; custom endpoint P1) | CELLO-SCAN-002 |
+| Layer 2 | LLM-based injection scanner (DeBERTa local; **no custom endpoint** — use an `after_sanitize` hook instead) | CELLO-SCAN-002 |
 | Layer 3 | Outbound gate — secrets, artifacts, exfiltration, ToS self-check | CELLO-SCAN-003 |
 | Layer 4 | Redaction pipeline — secrets then PII, in order | CELLO-REDACT-001 |
 | Layer 5 | LLM call governor — spend, volume, lifetime, dedup | CELLO-REDACT-002 |
@@ -120,8 +123,9 @@ Throughout: **Layer 6 (CELLO-REDACT-003)** silently denies any filesystem or URL
 
 ## Related Documents
 
-- [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] — canonical six-layer spec; all M9 stories implement sections of this document
+- [[2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway|Security Layer V3 — Extensibility, Hook Architecture, and Split Gateway]] — **V3 canonical design**; read first; supersedes V2 as the implementation target for M9
+- [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture V2]] — six base layer spec; unchanged but implementation home is now the gateway package, not `client`
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — why each layer exists; the four-layer security model that contains the six-layer prompt injection defense
-- [[2026-05-16_1130_security-layer-improvements-from-production-reference|Security Layer Improvements from Production Reference Analysis]] — six gaps to address before implementing M9 stories
+- [[2026-05-16_1130_security-layer-improvements-from-production-reference|Security Layer Improvements from Production Reference Analysis]] — six gaps; Findings 1–3 and 6 are Day 1 in V3
 - `attack-corpus-reference.md` — (same directory) the attack technique catalog stories reference; read before writing tests
 - [[2026-05-21_1456_identity-as-governance-foundation|Identity as the Foundation of Governance]] — positions M9's six layers in the broader governance landscape; identity-aware per-peer policy overrides are the mechanism that makes M9's content-level controls contextual rather than blunt

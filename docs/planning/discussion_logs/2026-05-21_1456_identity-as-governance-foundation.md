@@ -109,3 +109,4 @@ Every governance product that integrates with CELLO enhances the protocol. Third
 - [[user-stories/m9/overview.md|M9 Overview]] — implementation scope for the security scanning and governance milestone
 - [[2026-04-18_1357_connection-bond-usage-and-policy|Connection Bond Usage and Policy]] — staking as governance primitive
 - [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow and Trust Relay]] — per-peer policy at the connection layer
+- [[2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway|Security Layer V3 — Extensibility, Hook Architecture, and Split Gateway]] — V3 makes governance-with-identity concrete: per-peer defense policy overrides are contact record fields, hook governance policy is a database row, enterprise split-deployment separates operator policy from employee access
