@@ -472,10 +472,10 @@ describe("FEDERATION-001A: idempotency — IF NOT EXISTS guards", () => {
 
   it("setup-replication.sh handles publication already exists gracefully", () => {
     const script = loadScript();
-    // CREATE PUBLICATION doesn't support IF NOT EXISTS in all versions.
-    // Script tries creation, then checks for "already exists" in output.
+    // Script tries CREATE PUBLICATION; if "already exists" is returned it runs
+    // ALTER PUBLICATION ... SET TABLE to atomically update the table list.
     expect(script).toMatch(/CREATE PUBLICATION/);
-    expect(script).toMatch(/Publication.*already exists/i);
+    expect(script).toMatch(/ALTER PUBLICATION.*SET TABLE/);
   });
 
   it("setup-replication.sh handles subscription already exists gracefully", () => {
