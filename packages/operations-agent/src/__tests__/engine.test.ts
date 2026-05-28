@@ -28,8 +28,9 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import pg from "pg";
 import { RegistrationEngine } from "../registration/engine.js";
 import { RegistrationRepository } from "../registration/repository.js";
-import type { Logger, MessagingChannel, OtpDeliveryProvider, ChannelIdentity } from "@cello-protocol/interfaces";
+import type { Logger, MessagingChannel, OtpDeliveryProvider, ChannelIdentity, PreAuthorizationClient } from "@cello-protocol/interfaces";
 import { LocalPreAuthorizationClient } from "@cello-protocol/interfaces/stubs";
+import { PreAuthRequestError } from "../directory-pre-auth-client.js";
 
 const isLocal = process.env["CELLO_ENV"] === "local";
 const describeIntegration = isLocal ? describe : describe.skip;
@@ -446,6 +447,77 @@ describeIntegration("RegistrationEngine integration", () => {
     expect(typeof engineErrorEvent?.context?.["error.stack"]).toBe("string");
 
     faultyEngine.stop();
+  });
+
+  // ─── AC-005b (OPS-AGENT-005B) — directory pre-auth failure ──────────────────
+  // When the directory is unreachable, the state machine must:
+  //   (1) keep the record in EMAIL_CONFIRMED state (not advance or regress),
+  //   (2) log registration.preauth.request.failed at ERROR with { registrationId, httpStatus, correlationId },
+  //   (3) send the user an error message asking them to try again later.
+
+  it("AC-005b: directory pre-auth failure → EMAIL_CONFIRMED preserved, user notified, event logged", async () => {
+    // Use an engine with a failing PreAuthorizationClient
+    const failingPreAuth: PreAuthorizationClient = {
+      async requestToken() {
+        throw new PreAuthRequestError("connection refused", 503);
+      },
+    };
+
+    const { logger: failLogger, events: failEvents } = makeTestLogger();
+    const { channel: failChannel, sent: failSent, injectMessage: failInject } = makeTestChannel();
+    const { provider: failOtp, captured: failCaptured } = makeTestOtpDelivery();
+
+    const failUserId = `fail-preauth-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+    const failEngine = new RegistrationEngine({
+      pool,
+      channel: failChannel,
+      otpDelivery: failOtp,
+      preAuth: failingPreAuth,
+      logger: failLogger,
+      channelType: "cli",
+      onError: (err) => { throw err; },
+    });
+    await failEngine.start();
+
+    // Drive to AWAITING_EMAIL_OTP
+    await failInject(failUserId, "hello");
+    await failInject(failUserId, `CONTACT:${failUserId}:+447911999000`);
+    await failInject(failUserId, "user@fail-test.com");
+
+    // Get OTP and submit the correct one — triggers requestToken() which throws
+    const otp = failCaptured[0].otp;
+    await failInject(failUserId, otp);
+
+    // (1) State must be EMAIL_CONFIRMED — not PRE_AUTH_TOKEN_ISSUED, not FAILED
+    const rawRow = await pool.query(
+      `SELECT state FROM registrations WHERE channel_user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [failUserId],
+    );
+    expect(rawRow.rows[0].state).toBe("EMAIL_CONFIRMED");
+
+    // (2) registration.preauth.request.failed logged at ERROR with all required fields
+    const failedEvent = failEvents.find((e) => e.event === "registration.preauth.request.failed");
+    expect(failedEvent).toBeDefined();
+    expect(failedEvent?.method).toBe("error");
+    expect(failedEvent?.context?.registrationId).toBeDefined();
+    expect(failedEvent?.context?.httpStatus).toBe(503);
+    expect(failedEvent?.context?.correlationId).toBeDefined();
+
+    // (3) User received an error message
+    const errorMsg = failSent.find((m) =>
+      m.message.toLowerCase().includes("try again") ||
+      m.message.toLowerCase().includes("unavailable")
+    );
+    expect(errorMsg).toBeDefined();
+
+    failEngine.stop();
+    // Cleanup
+    try {
+      const repo = new RegistrationRepository(pool);
+      const active = await repo.findActiveByChannelUser("cli", failUserId);
+      if (active) await repo.transition(active.id, "EXPIRED");
+    } catch { /* ignore */ }
   });
 
   // ─── AC-009 ─────────────────────────────────────────────────────────────────

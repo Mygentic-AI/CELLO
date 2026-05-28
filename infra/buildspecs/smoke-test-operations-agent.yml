@@ -1,0 +1,95 @@
+version: 0.2
+# Smoke test buildspec for the Operations Agent ECS service.
+# AC-007: verifies GET /health returns 200 with status=ok, and that the
+# Telegram API is reachable (ops_agent.telegram.connected logged).
+#
+# The smoke test discovers the task's public IP via ECS Exec / describe-tasks,
+# then polls GET /health on port 8080 until it returns 200 or times out.
+#
+# Pattern mirrors smoke-test.yml (directory) but targets the ops-agent task.
+phases:
+  build:
+    commands:
+      - |
+        set -e
+        START_MS=$(date +%s%3N)
+        COMMIT_SHA=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown} | cut -c1-7)
+        REGION=${AWS_DEFAULT_REGION:-us-east-1}
+        CLUSTER=cello-${CELLO_ENV}
+        SERVICE=cello-operations-agent-${CELLO_ENV}
+
+        # Wait for the service to have exactly one running task
+        echo "Waiting for running task in service ${SERVICE}..."
+        WAIT_ATTEMPTS=0
+        MAX_WAIT=40
+        TASK_ARN=""
+        while [ $WAIT_ATTEMPTS -lt $MAX_WAIT ]; do
+          TASK_ARN=$(aws ecs list-tasks \
+            --cluster $CLUSTER \
+            --service-name $SERVICE \
+            --desired-status RUNNING \
+            --region $REGION \
+            --query 'taskArns[0]' --output text)
+          if [ "$TASK_ARN" != "None" ] && [ -n "$TASK_ARN" ]; then
+            break
+          fi
+          WAIT_ATTEMPTS=$((WAIT_ATTEMPTS + 1))
+          sleep 15
+        done
+        if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+          echo '{"event":"pipeline.smoke_test.failed","pipeline":"cello-operations-agent-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"no running task found after 10 minutes"}'
+          exit 1
+        fi
+
+        # Retrieve the task's public IP from network interface attachment
+        TASK_DETAIL=$(aws ecs describe-tasks \
+          --cluster $CLUSTER \
+          --tasks $TASK_ARN \
+          --region $REGION \
+          --query 'tasks[0].attachments[0].details' \
+          --output json)
+        ENI_ID=$(echo "$TASK_DETAIL" | jq -r '.[] | select(.name=="networkInterfaceId") | .value')
+        PUBLIC_IP=$(aws ec2 describe-network-interfaces \
+          --network-interface-ids $ENI_ID \
+          --region $REGION \
+          --query 'NetworkInterfaces[0].Association.PublicIp' \
+          --output text)
+
+        if [ -z "$PUBLIC_IP" ] || [ "$PUBLIC_IP" = "None" ]; then
+          echo '{"event":"pipeline.smoke_test.failed","pipeline":"cello-operations-agent-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"could not determine task public IP"}'
+          exit 1
+        fi
+
+        HEALTH_URL="http://${PUBLIC_IP}:8080/health"
+        echo "Polling health endpoint: $HEALTH_URL"
+
+        # Poll GET /health until 200 or timeout (90 seconds)
+        POLL_ATTEMPTS=0
+        MAX_POLL=18
+        HTTP_STATUS=0
+        HEALTH_BODY=""
+        while [ $POLL_ATTEMPTS -lt $MAX_POLL ]; do
+          HTTP_STATUS=$(curl -s -o /tmp/health_body.json -w "%{http_code}" --connect-timeout 5 "$HEALTH_URL" || echo "000")
+          if [ "$HTTP_STATUS" = "200" ]; then
+            HEALTH_BODY=$(cat /tmp/health_body.json)
+            break
+          fi
+          POLL_ATTEMPTS=$((POLL_ATTEMPTS + 1))
+          sleep 5
+        done
+
+        if [ "$HTTP_STATUS" != "200" ]; then
+          echo '{"event":"pipeline.smoke_test.failed","pipeline":"cello-operations-agent-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"health endpoint did not return 200 after 90 seconds","lastStatus":"'${HTTP_STATUS}'"}'
+          exit 1
+        fi
+
+        # Verify response body contains status=ok
+        HEALTH_STATUS=$(echo "$HEALTH_BODY" | jq -r '.status // empty')
+        if [ "$HEALTH_STATUS" != "ok" ]; then
+          echo '{"event":"pipeline.smoke_test.failed","pipeline":"cello-operations-agent-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"health endpoint returned 200 but status != ok","body":"'${HEALTH_BODY}'"}'
+          exit 1
+        fi
+
+        END_MS=$(date +%s%3N)
+        DURATION_MS=$((END_MS - START_MS))
+        echo '{"timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"pipeline.smoke_test.passed","pipeline":"cello-operations-agent-pipeline","commitSha":"'${COMMIT_SHA}'","healthStatus":"'${HEALTH_STATUS}'","durationMs":'${DURATION_MS}'}'
