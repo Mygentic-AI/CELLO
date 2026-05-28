@@ -174,6 +174,10 @@ Resources:
                 Fn::Sub: "cello-${Environment}-rds-port"
             - Name: RDS_DB_NAME
               Value: !Sub "cello_${Environment}"
+            # SES from-address — explicit in IaC so it can be overridden per environment
+            # without a code change. Default: noreply@cello.mygentic.ai
+            - Name: SES_FROM_ADDRESS
+              Value: noreply@cello.mygentic.ai
           Secrets:
             # AC-003: all four Ops Agent secrets are injected from Secrets Manager via
             # ECS Secrets (ValueFrom). ARNs resolve at task launch time. A
@@ -198,9 +202,18 @@ Resources:
               awslogs-group: !Ref LogGroup
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: operations-agent
-          # No health check for the stub container — the stub returns HTTP 200 on all paths
-          # but has no dedicated health endpoint. ECS will use the container exit code.
-          # OPS-AGENT-005B will add a real health check when the application code is wired.
+          # ECS health check polls GET /health on port 8080.
+          # The server emits ops_agent.started only after all three checks pass (DB, migration,
+          # Telegram), so a healthy response proves the application is fully initialized.
+          # Retries: 3 × 30s = 90s grace period at task start before ECS marks unhealthy.
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - "curl -sf http://localhost:8080/health || exit 1"
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
 
   # ── ECS Service ───────────────────────────────────────────────────────────────
   # AC-001: public subnet, AssignPublicIp: ENABLED — no NAT Gateway in cello-vpc.yaml.

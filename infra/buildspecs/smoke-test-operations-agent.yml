@@ -1,0 +1,60 @@
+version: 0.2
+# Smoke test buildspec for the Operations Agent ECS service.
+# AC-007: verifies that the ops-agent task started successfully by checking for the
+# ops_agent.started log event in CloudWatch Logs.
+#
+# Why CloudWatch Logs, not a direct HTTP health check:
+#   The ops-agent ECS task has no inbound security group rules (no ALB, no public
+#   inbound port). The health endpoint on port 8080 is unreachable from CodeBuild.
+#   The ops_agent.started event is emitted by server.ts ONLY after all three health
+#   checks pass (PostgreSQL, migration version, Telegram getMe). It is a reliable
+#   proxy for "the service is healthy and running."
+#
+# This approach mirrors the ECS deployment wait in staging-deploy-operations-agent.yml,
+# which already polls rolloutState=COMPLETED. The smoke test provides an additional
+# application-level gate: that the process actually started and passed health checks,
+# not just that the container is running.
+phases:
+  build:
+    commands:
+      - |
+        set -e
+        START_MS=$(date +%s%3N)
+        COMMIT_SHA=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown} | cut -c1-7)
+        REGION=${AWS_DEFAULT_REGION:-us-east-1}
+        LOG_GROUP=/ecs/cello-operations-agent-${CELLO_ENV}
+
+        # Look back 10 minutes for the ops_agent.started event.
+        # The staging deploy step waits for rolloutState=COMPLETED before this runs,
+        # so the task should already be running and the event should already be present.
+        START_TIME_MS=$(($(date +%s%3N) - 600000))
+
+        echo "Scanning CloudWatch log group ${LOG_GROUP} for ops_agent.started..."
+
+        FOUND=0
+        POLL_ATTEMPTS=0
+        MAX_POLL=12  # 12 x 15s = 3 minutes
+        while [ $POLL_ATTEMPTS -lt $MAX_POLL ]; do
+          EVENTS=$(aws logs filter-log-events \
+            --log-group-name "${LOG_GROUP}" \
+            --start-time "${START_TIME_MS}" \
+            --filter-pattern "ops_agent.started" \
+            --region "$REGION" \
+            --query 'events[*].message' \
+            --output text 2>/dev/null || echo "")
+          if [ -n "$EVENTS" ] && [ "$EVENTS" != "None" ]; then
+            FOUND=1
+            break
+          fi
+          POLL_ATTEMPTS=$((POLL_ATTEMPTS + 1))
+          sleep 15
+        done
+
+        if [ "$FOUND" = "0" ]; then
+          echo '{"event":"pipeline.smoke_test.failed","pipeline":"cello-operations-agent-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"ops_agent.started not found in CloudWatch logs after 3 minutes","logGroup":"'${LOG_GROUP}'"}'
+          exit 1
+        fi
+
+        END_MS=$(date +%s%3N)
+        DURATION_MS=$((END_MS - START_MS))
+        echo '{"timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"pipeline.smoke_test.passed","pipeline":"cello-operations-agent-pipeline","commitSha":"'${COMMIT_SHA}'","durationMs":'${DURATION_MS}'}'

@@ -343,6 +343,14 @@ export class TelegramAdapter implements MessagingChannel {
     this.#pollingActive = false;
   }
 
+  /**
+   * Returns the bot username obtained from getMe during start().
+   * Empty string until start() has been called successfully.
+   */
+  get botUsername(): string {
+    return this.#botUsername;
+  }
+
   // ─── Polling ────────────────────────────────────────────────────────────────
 
   /**

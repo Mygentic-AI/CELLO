@@ -214,7 +214,7 @@ All RDS instances have `wal_level = logical` and `rds.logical_replication = 1` (
 | Component | us-east-1 | eu-central-1 | ap-northeast-1 |
 |---|---|---|---|
 | Replication user | `cello_replication` (GRANT rds_replication) | `cello_replication` | `cello_replication` |
-| Publication | `cello_pub` (9 tables) | `cello_pub` (9 tables) | `cello_pub` (9 tables) |
+| Publication | `cello_pub` (11 tables — includes registrations, pre_authorization_tokens added OPS-AGENT-000; **setup-replication.sh must be re-run on live cluster before OPS-AGENT-005B deploys — AC-007b**) | `cello_pub` (11 tables — same, pending re-run) | `cello_pub` (11 tables — same, pending re-run) |
 | Subscriptions (inbound) | from eu-central-1, from ap-northeast-1 | from us-east-1, from ap-northeast-1 | from us-east-1, from eu-central-1 |
 
 **Replication Slots (6 total, all streaming):**

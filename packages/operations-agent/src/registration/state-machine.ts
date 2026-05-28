@@ -50,6 +50,7 @@ import { CONTACT_PROMPT_PREFIX } from "@cello-protocol/interfaces";
 import type { RegistrationRepository } from "./repository.js";
 import { generateOtp, generateOtpSalt, hashOtp, verifyOtp } from "./otp.js";
 import { hashPhone, normalizePhone } from "./phone.js";
+import { PreAuthRequestError } from "../directory-pre-auth-client.js";
 
 // ─── Configuration constants ──────────────────────────────────────────────────
 
@@ -378,11 +379,28 @@ export class RegistrationStateMachine {
       correlationId,
     });
 
-    // Request pre-auth token
-    const { token } = await preAuth.requestToken(
-      emailConfirmed.phoneStubHash,
-      record.emailDomain ?? "",
-    );
+    // Request pre-auth token — AC-005: on failure, stay in EMAIL_CONFIRMED and notify user.
+    let token: string;
+    try {
+      const result = await preAuth.requestToken(
+        emailConfirmed.phoneStubHash,
+        record.emailDomain ?? "",
+      );
+      token = result.token;
+    } catch (err) {
+      const httpStatus = err instanceof PreAuthRequestError ? err.httpStatus : 0;
+      logger.error("registration.preauth.request.failed", err instanceof Error ? err : new Error(String(err)), {
+        registrationId: record.id,
+        httpStatus,
+        correlationId,
+      });
+      await channel.send(
+        from,
+        "Registration is temporarily unavailable. Please try again in a few minutes.",
+      );
+      // Return the EMAIL_CONFIRMED record unchanged — user can retry by re-entering their OTP
+      return emailConfirmed;
+    }
 
     // Transition to PRE_AUTH_TOKEN_ISSUED
     const completed = await repository.transition(emailConfirmed.id, "PRE_AUTH_TOKEN_ISSUED");
