@@ -68,7 +68,10 @@ behavior:
       CELLO network via @cello-protocol/connect using HTTPS (443) to reach
       the production directory ALB and relay circuit relay path,
       begins listening for inbound sessions, and logs demo.started
-      at INFO once the connection is established"
+      at INFO once the connection is established; environment variables:
+      CELLO_KEY_FILE (default ~/.cello/key), CELLO_DIRECTORY_MULTIADDR
+      (required), CELLO_ENV (default production), CELLO_DB_PATH
+      (default ~/.cello/client.db — passed through to @cello-protocol/connect)"
 
   - trigger: "When the demo agent identity does not exist or has been lost"
     action: "the demo agent operator (Mygentic team) goes through the
@@ -279,6 +282,30 @@ observability:
       level: error
       trigger: "Failed to connect to CELLO network on startup"
       context_fields: [reason, directoryUrl, relayMultiaddr]
+      notes: "Add to canonical event taxonomy at story close."
+
+    - name: demo.connection_request.failed
+      level: error
+      trigger: "Error in connection request polling loop"
+      context_fields: [reason]
+      notes: "Loop continues after logging. Add to canonical event taxonomy at story close."
+
+    - name: demo.receive.failed
+      level: error
+      trigger: "Error in message receive polling loop"
+      context_fields: [reason]
+      notes: "Loop continues after logging. Add to canonical event taxonomy at story close."
+
+    - name: demo.send.failed
+      level: error
+      trigger: "cello_send MCP call throws while delivering a canned response"
+      context_fields: [sessionId, reason]
+      notes: "Add to canonical event taxonomy at story close."
+
+    - name: demo.close.failed
+      level: error
+      trigger: "cello_close_session MCP call throws after message 4"
+      context_fields: [sessionId, reason]
       notes: "Add to canonical event taxonomy at story close."
 
   alarms: []
