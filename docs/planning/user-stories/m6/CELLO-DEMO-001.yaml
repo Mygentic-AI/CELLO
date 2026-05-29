@@ -293,6 +293,18 @@ observability:
       context_fields: [reason]
       notes: "Loop continues after logging. Add to canonical event taxonomy at story close."
 
+    - name: demo.send.failed
+      level: error
+      trigger: "cello_send MCP call throws while delivering a canned response"
+      context_fields: [sessionId, reason]
+      notes: "Add to canonical event taxonomy at story close."
+
+    - name: demo.close.failed
+      level: error
+      trigger: "cello_close_session MCP call throws after message 4"
+      context_fields: [sessionId, reason]
+      notes: "Add to canonical event taxonomy at story close."
+
   alarms: []
   notes: "Demo agent is a best-effort service. No pager-level alarms.
     Monitor via periodic health check from a cron job."
