@@ -399,6 +399,12 @@ async function main(): Promise<void> {
 
   await engine.start();
 
+  // Start Telegram polling now that the engine's message handler is registered.
+  // The earlier start({ skipPolling: true }) only verified the token via getMe.
+  if (env !== "local") {
+    await (adapters.channel as TelegramAdapter).start();
+  }
+
   // ── Emit startup observability events ─────────────────────────────────────
   logger.info("ops_agent.started", {
     version,
