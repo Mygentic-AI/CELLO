@@ -158,7 +158,7 @@ function deserializeState(row: RegistrationRow): RegistrationState {
         reason: (row.state_data["reason"] as string | undefined) ?? "unknown",
       };
     default:
-      throw new Error(`Unknown registration state: ${row.state}`);
+      return { state: "FAILED", reason: `legacy/unknown state: ${row.state}` };
   }
 }
 
