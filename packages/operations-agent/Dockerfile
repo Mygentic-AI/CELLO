@@ -30,7 +30,8 @@ RUN npm install -g pnpm@10.33.2
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 
 # Copy all package.json files for workspace dependency resolution
-# (all workspace packages in lockfile need their package.json for pnpm resolution)
+# (all workspace packages in the tsconfig chain + lockfile need their package.json)
+COPY packages/crypto/package.json ./packages/crypto/
 COPY packages/interfaces/package.json ./packages/interfaces/
 COPY packages/protocol-types/package.json ./packages/protocol-types/
 COPY packages/operations-agent/package.json ./packages/operations-agent/
@@ -38,8 +39,10 @@ COPY packages/operations-agent/package.json ./packages/operations-agent/
 # Install all dependencies (includes devDependencies for build)
 RUN pnpm install --frozen-lockfile
 
-# Copy source files for packages in the build chain:
-# ops-agent → interfaces → protocol-types (tsconfig project references)
+# Copy source files for the full tsconfig project reference chain:
+# ops-agent → interfaces → protocol-types → crypto
+COPY packages/crypto/src ./packages/crypto/src
+COPY packages/crypto/tsconfig.json ./packages/crypto/
 COPY packages/protocol-types/src ./packages/protocol-types/src
 COPY packages/protocol-types/tsconfig.json ./packages/protocol-types/
 COPY packages/interfaces/src ./packages/interfaces/src
@@ -66,6 +69,7 @@ RUN npm install -g pnpm@10.33.2
 # Copy workspace manifests for production install (all workspace packages
 # referenced in lockfile need their package.json present for pnpm resolution)
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY packages/crypto/package.json ./packages/crypto/
 COPY packages/interfaces/package.json ./packages/interfaces/
 COPY packages/protocol-types/package.json ./packages/protocol-types/
 COPY packages/operations-agent/package.json ./packages/operations-agent/
