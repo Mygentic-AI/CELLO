@@ -141,7 +141,10 @@ async function main(): Promise<void> {
 
   // Spawn cello-mcp from @cello-protocol/connect
   // The binary is at node_modules/.bin/cello-mcp (installed as part of @cello-protocol/connect)
-  const celloMcpBin = join(import.meta.dirname, "..", "node_modules", ".bin", "cello-mcp");
+  // Use fileURLToPath to avoid import.meta.dirname lib compatibility issues (LOW-002)
+  const { fileURLToPath } = await import("node:url");
+  const __dirname = fileURLToPath(new URL(".", import.meta.url));
+  const celloMcpBin = join(__dirname, "..", "node_modules", ".bin", "cello-mcp");
 
   const transport = new StdioClientTransport({
     command: "node",
@@ -170,9 +173,9 @@ async function main(): Promise<void> {
       transport_started?: boolean;
     } | null;
 
-    if (!status?.own_pubkey) {
+    if (!status?.registered || !status?.own_pubkey) {
       logger.error("demo.connection.failed", {
-        reason: "cello_status returned no own_pubkey",
+        reason: "cello_status returned registered=false or no own_pubkey — agent must complete registration before starting",
         directoryUrl: DIRECTORY_URL,
         relayMultiaddr: DIRECTORY_MULTIADDR ?? "",
       });
@@ -243,8 +246,10 @@ async function main(): Promise<void> {
           const senderAgentId = parsed.sender_pubkey;
           await handleMessage({ sessionId, senderAgentId, sessions, client: demoClient, logger });
         } else if (parsed?.type === "session_sealed" && parsed.session_id) {
-          // Clean up sealed session state
-          sessions.delete(parsed.session_id);
+          // Mark sealed rather than deleting — prevents position reset if a remote peer
+          // closes before we process message 4 locally (IMPORTANT-002)
+          const s = sessions.get(parsed.session_id);
+          if (s) s.sealed = true;
         }
         // type === "timeout": loop continues naturally
       } catch (err: unknown) {
@@ -255,8 +260,10 @@ async function main(): Promise<void> {
     }
   }
 
-  // Run both loops concurrently — neither should ever resolve normally
-  await Promise.race([connectionLoop(), messageLoop()]);
+  // Run both loops concurrently. Promise.all rejects if either loop throws past its
+  // inner catch, which fires the outer .catch in main() → logs demo.connection.failed
+  // and exits. Promise.race would silently swallow a resolved loop (CRITICAL-001).
+  await Promise.all([connectionLoop(), messageLoop()]);
 }
 
 function sleep(ms: number): Promise<void> {

@@ -281,6 +281,18 @@ observability:
       context_fields: [reason, directoryUrl, relayMultiaddr]
       notes: "Add to canonical event taxonomy at story close."
 
+    - name: demo.connection_request.failed
+      level: error
+      trigger: "Error in connection request polling loop"
+      context_fields: [reason]
+      notes: "Loop continues after logging. Add to canonical event taxonomy at story close."
+
+    - name: demo.receive.failed
+      level: error
+      trigger: "Error in message receive polling loop"
+      context_fields: [reason]
+      notes: "Loop continues after logging. Add to canonical event taxonomy at story close."
+
   alarms: []
   notes: "Demo agent is a best-effort service. No pager-level alarms.
     Monitor via periodic health check from a cron job."
