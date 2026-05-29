@@ -352,7 +352,10 @@ async function main(): Promise<void> {
     process.env["DATABASE_URL"] ??
     `postgresql://${rdsUsername}:${encodeURIComponent(rdsPassword)}@${process.env["RDS_ENDPOINT"] ?? "localhost"}:${process.env["RDS_PORT"] ?? "5432"}/${process.env["RDS_DB_NAME"] ?? "cello_dev"}`;
 
-  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const pool = new pg.Pool({
+    connectionString: databaseUrl,
+    ssl: env !== "local" ? { rejectUnauthorized: false } : false,
+  });
 
   // ── Health checks ─────────────────────────────────────────────────────────
   const { connected: dbConnected, migrationVersion } = await checkDatabase(pool);
