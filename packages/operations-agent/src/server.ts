@@ -244,7 +244,8 @@ async function checkDatabase(pool: pg.Pool): Promise<{
     const result = await pool.query<{ version: number }>(
       "SELECT version FROM flyway_schema_history ORDER BY installed_rank DESC LIMIT 1",
     );
-    const version = result.rows[0]?.version ?? null;
+    const raw = result.rows[0]?.version ?? null;
+    const version = raw !== null ? Number(raw) : null;
     return { connected: true, migrationVersion: version };
   } catch {
     return { connected: false, migrationVersion: null };
