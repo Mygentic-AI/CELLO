@@ -1,0 +1,30 @@
+{
+  "name": "cello-demo-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CELLO demo agent — 4-message hardcoded sequence, no LLM",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cello-protocol/connect": "0.0.3",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0"
+  }
+}
