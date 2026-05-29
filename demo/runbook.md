@@ -170,6 +170,9 @@ ExecStart=/usr/bin/node dist/index.js
 Restart=on-failure
 RestartSec=5
 Environment=NODE_ENV=production
+# Required: create /etc/systemd/system/cello-demo.service.d/env.conf before starting.
+# It must set CELLO_DIRECTORY_MULTIADDR, CELLO_KEY_FILE, and CELLO_ENV.
+# See Step 6f below. Without this override the agent will exit on startup.
 
 [Install]
 WantedBy=multi-user.target

@@ -135,20 +135,27 @@ async function main(): Promise<void> {
     CELLO_ENV,
     CELLO_DB_PATH: DB_PATH,
   };
-  if (DIRECTORY_MULTIADDR) {
-    subprocessEnv["CELLO_DIRECTORY_MULTIADDR"] = DIRECTORY_MULTIADDR;
+  // CELLO_DIRECTORY_MULTIADDR is required — fail fast rather than starting silently non-functional (LOW-004)
+  if (!DIRECTORY_MULTIADDR) {
+    logger.error("demo.connection.failed", {
+      reason: "CELLO_DIRECTORY_MULTIADDR is required — set it in the systemd drop-in (see runbook.md Step 6f)",
+      directoryUrl: DIRECTORY_URL,
+      relayMultiaddr: "",
+    });
+    process.exit(1);
   }
+  subprocessEnv["CELLO_DIRECTORY_MULTIADDR"] = DIRECTORY_MULTIADDR;
 
   // Spawn cello-mcp from @cello-protocol/connect
-  // The binary is at node_modules/.bin/cello-mcp (installed as part of @cello-protocol/connect)
   // Use fileURLToPath to avoid import.meta.dirname lib compatibility issues (LOW-002)
+  // Use the symlink as the command directly so the OS resolves the shebang (IMPORTANT-004)
   const { fileURLToPath } = await import("node:url");
   const __dirname = fileURLToPath(new URL(".", import.meta.url));
   const celloMcpBin = join(__dirname, "..", "node_modules", ".bin", "cello-mcp");
 
   const transport = new StdioClientTransport({
-    command: "node",
-    args: [celloMcpBin],
+    command: celloMcpBin,
+    args: [],
     env: subprocessEnv,
   });
 
@@ -173,11 +180,15 @@ async function main(): Promise<void> {
       transport_started?: boolean;
     } | null;
 
-    if (!status?.registered || !status?.own_pubkey) {
+    if (!status?.registered || !status?.own_pubkey || !status?.directory_reachable) {
       logger.error("demo.connection.failed", {
-        reason: "cello_status returned registered=false or no own_pubkey — agent must complete registration before starting",
+        reason: !status?.registered
+          ? "cello_status returned registered=false — agent must complete registration before starting"
+          : !status?.own_pubkey
+          ? "cello_status returned no own_pubkey"
+          : "cello_status returned directory_reachable=false — check CELLO_DIRECTORY_MULTIADDR and network connectivity",
         directoryUrl: DIRECTORY_URL,
-        relayMultiaddr: DIRECTORY_MULTIADDR ?? "",
+        relayMultiaddr: DIRECTORY_MULTIADDR,
       });
       process.exit(1);
     }

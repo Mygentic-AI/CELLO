@@ -107,8 +107,14 @@ export async function handleMessage({
 
   // Select response by position (never by inspecting message content — SI-002)
   const response = DEMO_MESSAGES[session.position]!;
-  await client.send(sessionId, response);
+  const { delivered } = await client.send(sessionId, response);
   logger.info("demo.response.sent", { recipientAgentId: senderAgentId, sessionId });
+
+  // Only advance and seal after confirmed delivery — if send fails we leave the session
+  // open so the peer can retry and receive the correct message (IMPORTANT-005)
+  if (!delivered) {
+    return;
+  }
 
   session.position++;
 
