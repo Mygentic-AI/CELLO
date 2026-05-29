@@ -346,6 +346,31 @@ Story completed: REPOSPLIT-002 — extract five client packages into cello-clien
 
 ---
 
+## 2026-05-29 — DEMO-001: story code complete, merged to main
+
+Story completed (code): DEMO-001 — Standalone demo agent with 4-message cryptographic walkthrough sequence.
+
+**Delivered (merged to main, commit a8846ca):**
+- `demo/` at trustless-cello repo root — standalone npm package (`@cello-protocol/connect@0.0.3` dependency, NOT in pnpm-workspace.yaml)
+- `demo/src/index.ts` — MCP stdio subprocess, two concurrent polling loops (connection requests + messages), startup guards for `CELLO_DIRECTORY_MULTIADDR`, `registered=true`, `directory_reachable=true`
+- `demo/src/message-handler.ts` — pure session state machine; SI-002 enforced at type boundary (no content parameter)
+- `demo/cello-demo.service` — systemd unit with `Restart=on-failure`, `cello-demo` system user
+- `demo/runbook.md` — full AWS CLI provisioning runbook (IAM instance profile with AmazonSSMManagedInstanceCore, SG zero-inbound/HTTPS-443-outbound, EIP, user-data script, Secrets Manager key backup)
+- 15 unit tests; 2 sprint-reviewer passes APPROVED; 2 code-reviewer passes
+
+**Pending manual steps (all require human operator — code cannot do these):**
+1. Provision EC2 instance following `demo/runbook.md` — t3.micro, us-east-1, SSM access, EIP
+2. Register via @CelloConnectBot Telegram bot — phone + email → `cello_register(token)` from EC2
+3. Back up key file to Secrets Manager immediately after registration
+4. `systemctl start cello-demo` — verify `demo.started` in journalctl
+5. **Update `infra/STATE.md`** with instance ID, EIP, SG ID, IAM role ARN, Secrets Manager path — mandatory before session closes
+6. Publish AgentID in README quick-start docs
+
+**Downstream stories:**
+- M6-E2E-001: full stranger flow — depends on demo agent being registered and reachable; AC-007 of DEMO-001 is verified as part of M6-E2E-001
+
+---
+
 ## Constraints
 
 **CONSTRAINT: registrations table single-writer assumption.** The Operations Agent writes only from us-east-1. The partial unique index `UNIQUE (phone_stub_hash) WHERE state NOT IN (terminal)` is enforced locally per-node in logical replication — it does NOT prevent cross-region duplicates. Multi-region Ops Agent deployment requires schema redesign. See OPS-AGENT-000 `replication_safety` note.

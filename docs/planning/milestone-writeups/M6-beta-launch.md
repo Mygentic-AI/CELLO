@@ -10,8 +10,8 @@ description: M6 write-up — CELLO beta launch. Installable @cello-protocol/conn
 # M6 — Beta Launch
 
 **Started:** 2026-05-26
-**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001, OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002
-**Stories open:** DEMO-001, M6-E2E-001
+**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001, OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002, DEMO-001 (code complete; pending deployment + registration)
+**Stories open:** M6-E2E-001
 
 **Unblocked by OPS-AGENT-002:** OPS-AGENT-003 (Telegram adapter), OPS-AGENT-004 (SES OTP delivery), OPS-AGENT-005B (wire app code)
 
@@ -524,6 +524,54 @@ cello_status → { own_pubkey: "3ce94ace...", transport_started: true }
 **Symptom:** pnpm publish exits non-zero on E409 (version already exists). On the third tag push (`v0.0.2-beta.2`), all packages were at `0.0.2` and already published. Every publish command failed, silently preventing republication with corrected dependencies.
 **Fix:** Added `|| true` to all five cello-client publish commands (same as the existing pattern for interfaces).
 **Rule:** In an idempotent publish pipeline, all publish commands must use `|| true` to handle the version-already-exists case. E409 is not an error in a pipeline that may be re-run with the same version.
+
+---
+
+## DEMO-001 — Persistent Demo Agent: 4-Message Cryptographic Walkthrough
+
+A standalone Node.js process (not in the monorepo, not in cello-client) that registers as a real CELLO agent on the production network and responds to incoming messages with a hardcoded 4-message sequence explaining the protocol. No LLM, no database, no HTTP server — only `@cello-protocol/connect`.
+
+**Code delivered (merged to main 2026-05-29):**
+- `demo/` directory at trustless-cello repo root — standalone npm package with own `package.json`, `tsconfig.json`, `vitest.config.ts`
+- `src/message-handler.ts` — pure session state machine; `handleMessage()` never receives message content (SI-002 enforced at type boundary); per-session `Map<string, SessionState>` keyed by `session_id`
+- `src/index.ts` — spawns `cello-mcp` binary as subprocess via MCP stdio transport; validates `CELLO_DIRECTORY_MULTIADDR` at startup; checks `registered=true` AND `directory_reachable=true` before logging `demo.started`; `Promise.all` over two concurrent loops (connection requests + message receive)
+- `cello-demo.service` — systemd unit (`Restart=on-failure`, dedicated `cello-demo` system user, env.conf drop-in required before start)
+- `runbook.md` — full AWS CLI provisioning steps: IAM instance profile (`AmazonSSMManagedInstanceCore`), SG (zero inbound, HTTPS 443 outbound only), EIP, EC2 launch with user-data script, Secrets Manager key backup, systemd start and verification
+- 15 unit tests (AC-002b session isolation, AC-002c no double-close, SI-002 content-never-logged, all 4 verbatim messages, delivery failure guard)
+
+**4-message sequence (verbatim from story YAML — not paraphrased):**
+1. Welcome + hardcoded nature explanation
+2. End-to-end encryption + Noise XX + hash chain
+3. Cryptographic audit trail + sealed receipt preview
+4. Sign-off + `cello_get_sealed_receipt()` instruction → `cello_close_session`
+
+**Observability events:** `demo.started`, `demo.message.received`, `demo.response.sent`, `demo.connection.failed`, `demo.send.failed`, `demo.close.failed`, `demo.connection_request.failed`, `demo.receive.failed` — all with correct context fields, no message content in any event.
+
+**Review history:** sprint-coder → code-reviewer pass 1 (6 findings) → sprint-reviewer pass 1 APPROVED (1 medium) → code-reviewer pass 2 (4 findings) → sprint-reviewer pass 2 APPROVED (2 low) → 2 low findings fixed immediately → merged.
+
+**Key issues resolved during review:**
+
+### 1. `Promise.race` → `Promise.all` for concurrent loops
+Using `Promise.race` meant a loop that resolved (however unlikely) would silently exit the process without logging `demo.connection.failed`. `Promise.all` ensures any unhandled rejection surfaces to the outer catch.
+
+### 2. Startup guard missing `registered=true` and `directory_reachable=true`
+Initial code only checked `own_pubkey`. An unregistered agent or a misconfigured instance (missing `CELLO_DIRECTORY_MULTIADDR`) would pass the guard and log `demo.started` while being non-functional. Both checks added; `CELLO_DIRECTORY_MULTIADDR` now fails fast at startup if unset.
+
+### 3. Binary invocation: `command: "node", args: [bin]` → `command: bin, args: []`
+Passing the cello-mcp symlink as an argument to `node` works today but breaks if `@cello-protocol/connect` ships a non-JS entry point. The OS resolves the shebang when the binary is the command.
+
+### 4. Session sealed before delivery confirmed
+After sending message 4, code unconditionally set `session.sealed = true` and called `closeSession` regardless of whether `client.send()` succeeded. If delivery failed, the peer never received the sign-off but the session was permanently sealed. Fixed: advance position and seal only when `delivered: true`.
+
+**Pending manual steps before story fully closes (AC-000, AC-004, AC-006, AC-007):**
+1. Provision EC2 instance following `demo/runbook.md` — IAM profile, SG, EIP, user-data script
+2. Register via Telegram bot (@CelloConnectBot) — phone + email verification → `cello_register(token)` from EC2
+3. Back up key file to Secrets Manager immediately after registration
+4. `systemctl start cello-demo` — verify `journalctl -u cello-demo` shows `demo.started`
+5. Update `infra/STATE.md` with instance ID, EIP, SG ID, IAM role ARN, Secrets Manager path
+6. Publish AgentID in README quick-start docs
+7. Verify AC-004 (SG rules), AC-006 (systemd restart), AC-004b (`directory_reachable: true` from EC2)
+8. AC-007 verified as part of M6-E2E-001
 
 ---
 
