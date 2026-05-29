@@ -20,7 +20,10 @@ FROM public.ecr.aws/docker/library/node:24-slim AS build
 
 WORKDIR /app
 
-# Install pnpm
+# Install build tools for native deps (hnswlib-node) and pnpm
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    g++ make python3 && \
+    rm -rf /var/lib/apt/lists/*
 RUN npm install -g pnpm@10.33.2
 
 # Copy workspace manifests and lockfile first (Docker layer cache)
