@@ -68,7 +68,10 @@ behavior:
       CELLO network via @cello-protocol/connect using HTTPS (443) to reach
       the production directory ALB and relay circuit relay path,
       begins listening for inbound sessions, and logs demo.started
-      at INFO once the connection is established"
+      at INFO once the connection is established; environment variables:
+      CELLO_KEY_FILE (default ~/.cello/key), CELLO_DIRECTORY_MULTIADDR
+      (required), CELLO_ENV (default production), CELLO_DB_PATH
+      (default ~/.cello/client.db — passed through to @cello-protocol/connect)"
 
   - trigger: "When the demo agent identity does not exist or has been lost"
     action: "the demo agent operator (Mygentic team) goes through the

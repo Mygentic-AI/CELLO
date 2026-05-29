@@ -316,6 +316,34 @@ describe("Full 4-message sequence delivers correct canned responses", () => {
   });
 });
 
+// ─── Delivery failure guard ───────────────────────────────────────────────────
+
+describe("send delivery failure on message 4 does not seal the session", () => {
+  it("leaves position at 3 and does not call closeSession when send returns delivered=false", async () => {
+    const sessions = new Map<string, SessionState>();
+    const mockClient: DemoMcpClient = {
+      send: vi.fn()
+        .mockResolvedValueOnce({ delivered: true })
+        .mockResolvedValueOnce({ delivered: true })
+        .mockResolvedValueOnce({ delivered: true })
+        .mockResolvedValueOnce({ delivered: false }), // message 4 fails
+      closeSession: vi.fn().mockResolvedValue({ closed: true }),
+    };
+    const mockLogger: DemoLogger = { info: vi.fn(), error: vi.fn() };
+    const sessionId = "delivery-fail-session";
+    const senderAgentId = "test-sender";
+
+    for (let i = 0; i < 4; i++) {
+      await handleMessage({ sessionId, senderAgentId, sessions, client: mockClient, logger: mockLogger });
+    }
+
+    const session = sessions.get(sessionId)!;
+    expect(session.position).toBe(3); // did not advance past message 4
+    expect(session.sealed).toBe(false);
+    expect(mockClient.closeSession).not.toHaveBeenCalled();
+  });
+});
+
 // ─── createSessionState helper ─────────────────────────────────────────────────
 
 describe("createSessionState initializes position to 0", () => {
