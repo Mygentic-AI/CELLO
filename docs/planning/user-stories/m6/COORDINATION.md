@@ -308,6 +308,44 @@ Story completed: REPOSPLIT-002 — extract five client packages into cello-clien
 
 ---
 
+## 2026-05-29 — DEMO-001: EC2 provisioning decisions agreed
+
+**Context:** DEMO-001 requires a standalone EC2 instance for the demo agent. Existing instances were reviewed before making these decisions.
+
+**Existing instances reviewed:**
+- `cello-hermes-agent`, `ironclaw-agent`, `openclaw-agent` — us-east-1, t3.large, personal agents — not reused (key isolation)
+- `cello-whatsapp-bridge` — eu-west-1, t3.medium — not reused (key isolation)
+- `cello-falkordb` — eu-west-1, t4g.micro — no public IP, no key, different purpose
+
+**Agreed provisioning decisions:**
+
+| Item | Decision | Rationale |
+|---|---|---|
+| Region | us-east-1 | Closest to primary directory (directory-us1.cello.mygentic.ai) |
+| Instance type | t3.micro | Demo agent is outbound-only, low traffic |
+| Shared with existing instance | No | Key isolation — demo agent CELLO identity must not share fate with personal agents |
+| SSH / access method | SSM Session Manager only (no key pair, no port 22) | Stricter security, no key file to manage; matches eu-west-1 instances pattern |
+| IAM Instance Profile | Required | Role with `AmazonSSMManagedInstanceCore` — enables SSM access |
+| Elastic IP | Yes | Prevents public IP churn on stop/start; needed to keep SSH allowlist (if ever added) stable; $0 while attached |
+| Security group — inbound | Zero rules | No inbound ports; SSM access is control-plane only |
+| Security group — outbound | HTTPS (443) only | All CELLO connectivity is outbound to the ALB via WebSocket over HTTPS |
+| CELLO identity key backup | AWS Secrets Manager | After registration, key file copied to a named secret; if instance is terminated, key can be restored without re-registration through the Telegram bot |
+
+**What the sprint-coder must implement:**
+- EC2 user-data script (or Ansible playbook) that provisions Node.js, installs `@cello-protocol/connect`, writes the systemd unit, and sets up the `cello-demo` system user with `chmod 600` on the key directory
+- systemd unit at `/etc/systemd/system/cello-demo.service`, enabled, with `Restart=on-failure`
+- Runbook documenting exact AWS CLI commands to create: IAM role + instance profile, security group, EIP, EC2 instance — so the instance can be recreated from scratch with no institutional knowledge
+- Secrets Manager backup step in the runbook (manual — done by operator after registration)
+
+**What the sprint-coder cannot do (manual human steps after merge):**
+1. Actually create the AWS resources (not IaC — acceptable for M6 per story notes)
+2. Register the demo agent via the Telegram bot (AC-000 — requires OPS-AGENT-005B live)
+3. Populate STATE.md with instance ID, EIP, SG ID, IAM role ARN, Secrets Manager path — **the human doing provisioning must do this before closing the session**
+
+**STATE.md update required:** After provisioning, add a `demo-agent — us-east-1` section to STATE.md with all resource identifiers.
+
+---
+
 ## Constraints
 
 **CONSTRAINT: registrations table single-writer assumption.** The Operations Agent writes only from us-east-1. The partial unique index `UNIQUE (phone_stub_hash) WHERE state NOT IN (terminal)` is enforced locally per-node in logical replication — it does NOT prevent cross-region duplicates. Multi-region Ops Agent deployment requires schema redesign. See OPS-AGENT-000 `replication_safety` note.
