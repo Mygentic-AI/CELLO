@@ -16,7 +16,7 @@
 # (@cello-protocol/interfaces) are resolved from the workspace root's node_modules.
 
 # ─── Stage 1: Build ───────────────────────────────────────────────────────────
-FROM node:24-slim AS build
+FROM public.ecr.aws/docker/library/node:24-slim AS build
 
 WORKDIR /app
 
@@ -51,7 +51,7 @@ RUN pnpm --filter @cello-protocol/interfaces run build
 RUN pnpm --filter @cello-protocol/operations-agent run build
 
 # ─── Stage 2: Production ──────────────────────────────────────────────────────
-FROM node:24-slim AS production
+FROM public.ecr.aws/docker/library/node:24-slim AS production
 
 # AC-006: runs as non-root user cello
 RUN groupadd --gid 1001 cello && \
