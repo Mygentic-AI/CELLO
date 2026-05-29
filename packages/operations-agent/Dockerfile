@@ -30,7 +30,7 @@ RUN npm install -g pnpm@10.33.2
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 
 # Copy all package.json files for workspace dependency resolution
-# This ensures pnpm can resolve workspace: protocol references
+# (all workspace packages in lockfile need their package.json for pnpm resolution)
 COPY packages/interfaces/package.json ./packages/interfaces/
 COPY packages/protocol-types/package.json ./packages/protocol-types/
 COPY packages/operations-agent/package.json ./packages/operations-agent/
@@ -39,18 +39,13 @@ COPY packages/operations-agent/package.json ./packages/operations-agent/
 RUN pnpm install --frozen-lockfile
 
 # Copy source files for packages that operations-agent depends on
-COPY packages/protocol-types/src ./packages/protocol-types/src
-COPY packages/protocol-types/tsconfig.json ./packages/protocol-types/
 COPY packages/interfaces/src ./packages/interfaces/src
 COPY packages/interfaces/tsconfig.json ./packages/interfaces/
 COPY packages/operations-agent/src ./packages/operations-agent/src
 COPY packages/operations-agent/tsconfig.json ./packages/operations-agent/
 COPY tsconfig.base.json ./
 
-# Build interfaces (dependency) — must emit dist/ not just typecheck
-RUN pnpm --filter @cello-protocol/interfaces run build
-
-# Build operations-agent — emits dist/ for the production stage to copy
+# Build operations-agent (tsc --build follows project references to interfaces)
 RUN pnpm --filter @cello-protocol/operations-agent run build
 
 # ─── Stage 2: Production ──────────────────────────────────────────────────────
@@ -65,7 +60,8 @@ WORKDIR /app
 # Install pnpm for production install
 RUN npm install -g pnpm@10.33.2
 
-# Copy workspace manifests for production install
+# Copy workspace manifests for production install (all workspace packages
+# referenced in lockfile need their package.json present for pnpm resolution)
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY packages/interfaces/package.json ./packages/interfaces/
 COPY packages/protocol-types/package.json ./packages/protocol-types/
@@ -76,7 +72,6 @@ RUN pnpm install --frozen-lockfile --prod
 
 # Copy compiled output from build stage
 COPY --from=build /app/packages/interfaces/dist ./packages/interfaces/dist
-COPY --from=build /app/packages/protocol-types/dist ./packages/protocol-types/dist
 COPY --from=build /app/packages/operations-agent/dist ./packages/operations-agent/dist
 
 # AC-006: switch to non-root user before running
