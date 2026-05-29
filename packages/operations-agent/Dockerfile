@@ -38,7 +38,10 @@ COPY packages/operations-agent/package.json ./packages/operations-agent/
 # Install all dependencies (includes devDependencies for build)
 RUN pnpm install --frozen-lockfile
 
-# Copy source files for packages that operations-agent depends on
+# Copy source files for packages in the build chain:
+# ops-agent → interfaces → protocol-types (tsconfig project references)
+COPY packages/protocol-types/src ./packages/protocol-types/src
+COPY packages/protocol-types/tsconfig.json ./packages/protocol-types/
 COPY packages/interfaces/src ./packages/interfaces/src
 COPY packages/interfaces/tsconfig.json ./packages/interfaces/
 COPY packages/operations-agent/src ./packages/operations-agent/src
