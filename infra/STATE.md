@@ -191,6 +191,29 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | SNS Topic — ops-critical | arn:aws:sns:ap-northeast-1:257394457473:cello-ops-critical-dev |
 | SNS Topic — ops-warning | arn:aws:sns:ap-northeast-1:257394457473:cello-ops-warning-dev |
 
+### demo-agent — us-east-1
+*Provisioned: 2026-05-29*
+
+| Resource | Value |
+|---|---|
+| Instance ID | i-0ad3e7c22470f266e |
+| Instance Name | cello-demo-agent |
+| Instance Type | t3.micro |
+| AMI | ami-08e6829e013be2292 (Amazon Linux 2023, 2026-05-21) |
+| VPC | vpc-09a0338d25550f292 (default VPC, 172.31.0.0/16) |
+| Subnet | subnet-00b93e4a3f6ce8c07 (us-east-1a) |
+| EIP Allocation ID | eipalloc-01a2b0686e3bf04cc |
+| Elastic IP | 32.196.100.165 |
+| Security Group ID | sg-0b8400fa0cedb95da |
+| Security Group Name | cello-demo-sg |
+| IAM Instance Profile | cello-agent-ssm-role |
+| IAM Role | cello-agent-ssm-role |
+| Secrets Manager Key Path | cello/dev/demo-agent/identity-key |
+| Agent ID (own_pubkey) | pending registration (Step 9c) |
+| Access | SSM Session Manager only - no key pair, no inbound SG rules |
+| Inbound rules | None |
+| Outbound rules | TCP 443 to 0.0.0.0/0 only |
+
 ### dev — VPC Peering
 *Last deployed: 2026-05-23*
 
