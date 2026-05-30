@@ -25,7 +25,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-05-27 | Rotation Lambda covers ops-agent RDS creds (AC-009e) |
 | cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-27 | INTERNAL_API_KEY injected; /internal/* ALB rules (AC-009d); real image via pipeline |
-| cello-ecs-operations-agent-dev | CREATE_COMPLETE | 2026-05-27 | Stub image running; real image via pipeline (OPS-AGENT-005B) |
+| cello-ecs-operations-agent-dev | UPDATE_COMPLETE | 2026-05-30 | Real image deployed via pipeline (commit cff37b0+); task def rev 21; Telegram polling @CelloConnectStagingBot |
 | cello-waf-dev | UPDATE_COMPLETE | 2026-05-27 | WAFv2 WebACL: rate-limit 1000/5min, IP reputation (BLOCK), CommonRuleSet (COUNT); logs to aws-waf-logs-cello-dev |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-25 | Real image deployed via pipeline (commit 1af5c16) to all 3 regions |
 | cello-cloudwatch-dev | UPDATE_COMPLETE | 2026-05-27 | Ops-agent ECS alarms added |
@@ -40,10 +40,10 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 **Ops-agent secrets (us-east-1):**
 | Secret | Path | Status | Notes |
 |---|---|---|---|
-| Telegram bot token (prod) | `cello/dev/ops-agent/telegram-bot-token` | POPULATED | @CelloConnectBot token; copied from legacy path `cello/ops-agent/telegram-bot-token` |
+| Telegram bot token (staging) | `cello/dev/ops-agent/telegram-bot-token` | POPULATED | @CelloConnectStagingBot token; swapped from prod→staging 2026-05-29 (dev env should use staging bot) |
 | directory-api-key / INTERNAL_API_KEY | `cello/dev/ops-agent/directory-api-key` | POPULATED | 256-bit random hex; shared by directory (INTERNAL_API_KEY) and ops-agent (DIRECTORY_API_KEY) |
-| Ops-agent RDS credentials | `cello/dev/ops-agent/rds-credentials` | POPULATED (rotated) | Rotation Lambda set real password for `cello_ops_agent` PostgreSQL role |
-| SES credentials | `cello/dev/ops-agent/ses-credentials` | PLACEHOLDER | Needs manual population with SES SMTP credentials |
+| Ops-agent RDS credentials | `cello/dev/ops-agent/rds-credentials` | POPULATED (rotated) | Rotation Lambda set real password for `cello_ops_agent` PostgreSQL role; re-rotated 2026-05-29 |
+| SES credentials | `cello/dev/ops-agent/ses-credentials` | POPULATED | IAM user `cello-ses-smtp-dev` access key; populated 2026-05-29 |
 
 #### Key Resources — dev us-east-1
 
@@ -88,6 +88,13 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | CloudWatch Dashboard | cello-operations-dev |
 | WAF WebACL ARN | arn:aws:wafv2:us-east-1:257394457473:regional/webacl/cello-waf-dev/6b71004a-5edd-450b-90f3-d529908502c4 |
 | WAF Log Group | aws-waf-logs-cello-dev (90-day retention) |
+| IAM User (SES SMTP) | cello-ses-smtp-dev | Created 2026-05-29; access key stored in ses-credentials secret |
+
+**Manual changes (2026-05-29/30, not yet in IaC):**
+- ALB listener rule priority 5: removed `source-ip: 10.0.0.0/16` condition from `/internal/*` forward rule — API key header provides auth; source-ip restriction broke ops-agent (traffic hairpins via internet gateway, arrives with public IP)
+- Ops-agent SG `sg-07cc257e60bed1e49` egress: added `TCP 80 → 0.0.0.0/0` (directory ALB resolves to public IPs from within VPC; SG-to-SG rule was insufficient)
+- Ops-agent SG `sg-07cc257e60bed1e49` egress: added `TCP 80 → 10.0.0.0/16` (redundant with above but harmless)
+- Demo-agent IAM role `cello-agent-ssm-role`: added inline policy `cello-demo-secrets-manager` (Secrets Manager access for key backup)
 
 ### dev — eu-central-1
 *Last deployed: 2026-05-28
@@ -275,7 +282,7 @@ Setup with: `./infra/setup-replication.sh dev`
 | ECR repo — operations-agent (ap-northeast-1) | 257394457473.dkr.ecr.ap-northeast-1.amazonaws.com/cello-operations-agent | Added by OPS-AGENT-005A; replicated via account-level ECR replication |
 | Current directory image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-directory:33377b0 | Built from commit 33377b0, deployed 2026-05-28 via pipeline; all 3 regions; includes INTERNAL_API_KEY + /internal/* ALB rules + port 9090 health |
 | Current relay image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-relay:6e0c50b | Built from commit 6e0c50b, deployed 2026-05-22 |
-| Current operations-agent image | (stub) | OPS-AGENT-005A stub; real image deployed by OPS-AGENT-005B pipeline |
+| Current operations-agent image | 257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-operations-agent:cff37b0 | Real image deployed 2026-05-30 via pipeline; us-east-1 only |
 | Route 53 Hosted Zone | cello.mygentic.ai | Zone ID read at deploy time via aws route53 list-hosted-zones |
 | CodeStar Connection (us-east-1) | arn:aws:codeconnections:us-east-1:257394457473:connection/1a7fba2b-dd1d-4ebe-8372-7122b89f56b5 | AVAILABLE — override via CELLO_GITHUB_CONNECTION_ID |
 
