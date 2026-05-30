@@ -92,8 +92,12 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 **Manual changes (2026-05-29/30, IaC updated but not yet deployed — validation deploy needed):**
 - ALB listener rule priority 5: removed `source-ip: 10.0.0.0/16` condition from `/internal/*` forward rule — API key header provides auth; source-ip restriction broke ops-agent (traffic hairpins via internet gateway, arrives with public IP). IaC: `cello-ecs-directory.yaml`
+- ALB listener rule priority 10 (`/internal/*` → 403 catch-all): deleted — no longer needed without source-ip gating. IaC: `cello-ecs-directory.yaml`
 - Ops-agent SG `sg-07cc257e60bed1e49` egress: changed port 80 from DestinationSecurityGroupId (ALB SG) to `CidrIp 0.0.0.0/0`. IaC: `cello-ecs-operations-agent.yaml`
 - Ops-agent SG `sg-07cc257e60bed1e49` egress: also has `TCP 80 → 10.0.0.0/16` live (redundant, not in IaC — will be removed on next deploy)
+- Ops-agent SG `sg-07cc257e60bed1e49` egress: added `TCP 8081 → directory SG` (internal API port). IaC: `cello-ecs-operations-agent.yaml`
+- Directory SG `sg-0cc7f8493f3aff8d8` ingress: added `TCP 8081 from ops-agent SG` (internal API port). IaC: `cello-ecs-operations-agent.yaml`
+- DIRECTORY_INTERNAL_URL: changed to `http://10.0.89.234:8081/internal/pre-authorize` (direct task IP, temporary — needs CloudMap or ALB target group on 8081 for stability)
 - Demo-agent IAM role `cello-agent-ssm-role`: added inline policy `cello-demo-secrets-manager` (not in IaC — role predates CloudFormation stacks, shared with openclaw-agent)
 
 ### dev — eu-central-1

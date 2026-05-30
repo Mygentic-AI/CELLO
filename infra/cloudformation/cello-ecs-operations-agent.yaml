@@ -67,16 +67,22 @@ Resources:
           ToPort: 443
           CidrIp: "0.0.0.0/0"
           Description: "HTTPS to Telegram Bot API and SES endpoints"
-        # Port 8080 to directory security group: internal pre-authorize endpoint.
-        # The Ops Agent calls http://<DirectoryALBDnsName>/internal/pre-authorize.
-        # This egress rule covers both the ALB (which listens on port 80 by default)
-        # and the direct task:8080 path used for VPC smoke testing (AC-009b).
+        # Port 8080 to directory SG: libp2p WS listener (used for AC-009b smoke test).
         - IpProtocol: tcp
           FromPort: 8080
           ToPort: 8080
           DestinationSecurityGroupId: !ImportValue
             Fn::Sub: "cello-${Environment}-ecs-directory-sg"
-          Description: "Port 8080 to directory ECS service for /internal/pre-authorize"
+          Description: "Port 8080 to directory ECS service (libp2p WS / smoke test)"
+        # Port 8081 to directory SG: internal API server (POST /internal/pre-authorize).
+        # The directory runs its internal HTTP API on port 8081 (separate from the libp2p
+        # WS listener on 8080). Direct task-to-task via SG reference.
+        - IpProtocol: tcp
+          FromPort: 8081
+          ToPort: 8081
+          DestinationSecurityGroupId: !ImportValue
+            Fn::Sub: "cello-${Environment}-ecs-directory-sg"
+          Description: "Port 8081 to directory internal API (pre-authorize)"
         # Port 80 to 0.0.0.0/0: the Ops Agent calls the directory via the internet-facing
         # ALB on port 80. Traffic from private/public subnets resolves the ALB hostname to
         # public IPs and routes via internet gateway — SG-to-SG references don't match.
@@ -125,7 +131,7 @@ Resources:
   # call the directory container directly on port 8080 (bypassing the ALB).
   # Verified by: curl http://<directory-task-ip>:8080/internal/pre-authorize → HTTP 401.
 
-  DirectoryIngressFromOpsAgent:
+  DirectoryIngressFromOpsAgent8080:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       GroupId: !ImportValue
@@ -134,7 +140,18 @@ Resources:
       FromPort: 8080
       ToPort: 8080
       SourceSecurityGroupId: !Ref OpsAgentSecurityGroup
-      Description: "Allow Operations Agent to reach directory ECS service on port 8080"
+      Description: "Allow Operations Agent to reach directory libp2p WS on port 8080"
+
+  DirectoryIngressFromOpsAgent8081:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !ImportValue
+        Fn::Sub: "cello-${Environment}-ecs-directory-sg"
+      IpProtocol: tcp
+      FromPort: 8081
+      ToPort: 8081
+      SourceSecurityGroupId: !Ref OpsAgentSecurityGroup
+      Description: "Allow Operations Agent to reach directory internal API on port 8081"
 
   # ── Task definition ───────────────────────────────────────────────────────────
 
