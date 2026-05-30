@@ -380,3 +380,54 @@ Story completed (code): DEMO-001 — Standalone demo agent with 4-message crypto
 **CONSTRAINT: External client → directory/relay transport path.** ~~The directory's libp2p port (4000) is NOT exposed through the ALB.~~ **RESOLVED by REPOSPLIT-001 (AC-007).** Directory now accepts WebSocket connections on port 8080 through the existing ALB. CloudFormation committed; deployment required before REPOSPLIT-002 AC-003 or DEMO-001 AC-004b can be verified against live infra.
 
 ---
+
+## 2026-05-30 — DEMO-001: EC2 provisioned + Ops-Agent deployment fixes + Registration end-to-end verified
+
+**EC2 instance provisioned (Steps 1–8 of runbook):**
+- Instance `i-0ad3e7c22470f266e` running in default VPC (vpc-09a0338d25550f292), subnet us-east-1a
+- EIP `32.196.100.165` (eipalloc-01a2b0686e3bf04cc) associated
+- SG `sg-0b8400fa0cedb95da` (cello-demo-sg): zero inbound, TCP 443 outbound only
+- IAM instance profile: `cello-agent-ssm-role` (reused existing, added Secrets Manager inline policy)
+- SSM Online, Node v24.16.0, `@cello-protocol/connect@0.0.3` installed (with native deps compiled), dist/ uploaded, systemd enabled but not started
+- STATE.md updated (commit 345a0bb)
+
+**Ops-Agent deployment — 10 issues fixed to get it running (first real deploy ever):**
+1. Buildspec ran integration tests needing PostgreSQL → removed test step from buildspec
+2. Docker Hub rate limit → switched base image to ECR Public Gallery
+3. `node:24-slim` lacked build tools for `hnswlib-node` → added g++/make/python3 to Dockerfile build stage
+4. Dockerfile tried non-existent `interfaces` build script → removed (tsc --build handles via project refs)
+5. Missing `protocol-types` in Docker build context → added
+6. Missing `crypto` in Docker build context (full tsconfig chain: ops-agent → interfaces → protocol-types → crypto) → added
+7. SES credentials secret was placeholder → populated (IAM user `cello-ses-smtp-dev`)
+8. RDS `force_ssl=1` but pg.Pool had no SSL config → added `ssl: { rejectUnauthorized: false }`
+9. Flyway `version` column returned as string, strict equality `!==` against number constant → coerce with `Number()`
+10. Stale `STARTED` state in DB crashed `deserializeState()` → map unknown states to FAILED
+
+**Ops-Agent additional fixes for registration flow:**
+11. Telegram bot token: swapped from production (@CelloConnectBot) to staging (@CelloConnectStagingBot) — dev env should use staging bot
+12. Polling never started: `start({ skipPolling: true })` for health check, but polling never kicked off after engine registered its handler → added explicit `start()` call after `engine.start()`
+13. Pre-auth request failed (fetch failed): ALB source-ip restriction (`10.0.0.0/16` VPC CIDR) blocked requests from Fargate tasks arriving with public IP via internet gateway → removed source-ip condition, API key is the access control
+14. Port 80 SG egress to ALB SG didn't work (ALB resolves to public IPs, traffic routes via igw) → added `0.0.0.0/0` on port 80
+15. ALB target group on port 8080 hits libp2p WS listener, not internal API → directory internal API runs on port 8081; added SG rules for 8081 and pointed DIRECTORY_INTERNAL_URL at task IP directly (temporary; needs ALB target group on 8081 or CloudMap)
+16. `requestToken()` interface missing `registrationId` parameter → directory requires `{ phoneStubHash, emailDomain, registrationId }`; updated interface, client, stubs, and callers
+17. `EMAIL_CONFIRMED` state handler re-prompted for phone instead of retrying pre-auth → added `#retryPreAuth` method
+
+**Registration end-to-end verified (2026-05-30 09:09 local / 07:09 UTC):**
+- Full flow: `/start` → share phone → phone verified → email → OTP → registration complete
+- Token issued: `CELLO-PAC4QVHhHAkYgNimMAvXBQzQbzvH9JF1i`
+- Time from /start to token: <60 seconds
+
+**Remaining steps for DEMO-001 completion:**
+1. SSM into EC2 instance, run `cello_register` with the token
+2. chmod 600 key file, back up to Secrets Manager
+3. Create env.conf systemd drop-in with CELLO_DIRECTORY_MULTIADDR
+4. Start service, verify `demo.started`, test restart behavior (AC-006)
+5. Publish AgentID in README
+6. Update STATE.md with AgentID
+
+**Known issues to address post-M6:**
+- DIRECTORY_INTERNAL_URL uses hardcoded task IP (breaks on directory redeploy) — needs CloudMap service discovery or dedicated ALB target group on port 8081
+- Ops-agent buildspec skips integration tests — needs PostgreSQL sidecar in CodeBuild
+- IaC templates updated but not validated via deploy — need a no-op validation deploy
+
+---

@@ -563,15 +563,23 @@ Passing the cello-mcp symlink as an argument to `node` works today but breaks if
 ### 4. Session sealed before delivery confirmed
 After sending message 4, code unconditionally set `session.sealed = true` and called `closeSession` regardless of whether `client.send()` succeeded. If delivery failed, the peer never received the sign-off but the session was permanently sealed. Fixed: advance position and seal only when `delivered: true`.
 
-**Pending manual steps before story fully closes (AC-000, AC-004, AC-006, AC-007):**
-1. Provision EC2 instance following `demo/runbook.md` — IAM profile, SG, EIP, user-data script
-2. Register via Telegram bot (@CelloConnectBot) — phone + email verification → `cello_register(token)` from EC2
-3. Back up key file to Secrets Manager immediately after registration
-4. `systemctl start cello-demo` — verify `journalctl -u cello-demo` shows `demo.started`
-5. Update `infra/STATE.md` with instance ID, EIP, SG ID, IAM role ARN, Secrets Manager path
-6. Publish AgentID in README quick-start docs
-7. Verify AC-004 (SG rules), AC-006 (systemd restart), AC-004b (`directory_reachable: true` from EC2)
-8. AC-007 verified as part of M6-E2E-001
+**EC2 provisioned (2026-05-29/30):**
+- Instance `i-0ad3e7c22470f266e`, EIP `32.196.100.165`, SG `sg-0b8400fa0cedb95da`
+- SSM online, Node v24.16.0, dist/ uploaded, systemd enabled (not started)
+- STATE.md updated with all resource IDs
+
+**Registration ceremony verified end-to-end (2026-05-30):**
+- Ops-agent first real deployment required 17 fixes (see COORDINATION.md 2026-05-30 entry)
+- Full flow: /start → phone → email → OTP → token in <60 seconds via @CelloConnectStagingBot
+- Token: `CELLO-PAC4QVHhHAkYgNimMAvXBQzQbzvH9JF1i`
+
+**Remaining steps to close DEMO-001:**
+1. SSM into EC2, run `cello_register` with token → get AgentID
+2. chmod 600 key, back up to Secrets Manager
+3. Create env.conf drop-in, start service, verify `demo.started`
+4. Test restart (AC-006)
+5. Publish AgentID in README, update STATE.md
+6. AC-007 verified as part of M6-E2E-001
 
 ---
 
