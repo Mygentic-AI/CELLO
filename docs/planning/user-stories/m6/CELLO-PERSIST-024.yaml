@@ -21,12 +21,17 @@ story: >
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
   - trigger: "When cello-mcp starts and opens the SQLCipher database"
-    action: "it applies the V2 migration (15 structured tables plus 2 gap
-      tables) if not already applied; on every boot it upserts one row into
-      agents with the agent's Ed25519 pubkey, key_file_path, and
-      last_seen_at=now; client.db.v2.migration.applied is logged at INFO
-      if the migration runs, or client.db.v2.migration.skipped if it was
-      already at V2"
+    action: "it applies the V2 migration (15 structured tables plus 3 gap
+      tables — known_relays, pending_connection_requests, decided_connection_requests)
+      if not already applied; the V1 client_store table is dropped by the
+      migration (all state migrates to structured tables — client_store serves
+      no purpose and its presence would confuse future agents); on every boot
+      it upserts one row into agents with the agent's Ed25519 pubkey,
+      key_file_path, and last_seen_at=now; the existing client.store.migration.applied
+      event (emitted once per SQL file by SQLCipherClientStore) covers per-file
+      reporting; client.db.v2.migration.applied is a batch-level summary event
+      logged once after all V2 tables are created and client_store is dropped,
+      or client.db.v2.migration.skipped if already at V2"
 
   - trigger: "When cello-mcp restarts after a successful registration"
     action: "it loads the active FROST key share from frost_key_shares,
@@ -34,7 +39,9 @@ behavior:
       row from registration_state; it populates the in-memory structures
       (#registrationState, _localShares, #mlDsaProvider) before the first
       MCP tool call is accepted; the agent does not perform a new DKG
-      ceremony; cello_register returns already_registered immediately"
+      ceremony; cello_register returns already_registered immediately;
+      client.startup.state.loaded is logged with hasFrostShare=true,
+      hasMlDsaKeypair=true, hasRegistration=true"
 
   - trigger: "When cello-mcp restarts with established connections"
     action: "it loads all connection rows from connections and repopulates
@@ -58,16 +65,17 @@ behavior:
 
   - trigger: "When storeDkgResult is called after a successful DKG ceremony"
     action: "the FROST secret and public material are written to
-      frost_key_shares with is_active=1; the unique partial index
-      uq_frost_key_shares_active ensures only one active share exists per
-      agent at the DB level; client.frost.share.persisted is logged at INFO
-      with { agentPubkey, epochId, threshold, participants } and without
-      the signing_share value"
+      frost_key_shares with is_active=1, dkgMethod='network_dkg'; the unique
+      partial index uq_frost_key_shares_active ensures only one active share
+      exists per agent at the DB level; client.frost.share.persisted is logged
+      at INFO with { agentPubkey, epochId, threshold, participants, dkgMethod }
+      and without the signing_share value"
 
   - trigger: "When register() assigns an ML-DSA keypair"
     action: "the keypair is written to ml_dsa_keypairs; the raw
       secret_key_blob (2560 bytes) is stored as BLOB inside SQLCipher;
-      it is never logged or included in any diagnostic output"
+      it is never logged or included in any diagnostic output;
+      client.mldsa.keypair.persisted is logged with { agentPubkey, mlDsaPubkey }"
 
   - trigger: "When setPolicy() is called"
     action: "the policy mode and review_mode are upserted into
@@ -81,6 +89,12 @@ behavior:
       client.connection.persisted is logged at INFO with
       { agentPubkey, connectionId, counterpartyPubkey }"
 
+  - trigger: "When initiateSession or receiveSessionAssignment completes
+      and stores a SessionRecord"
+    action: "the row is upserted into sessions; client.session.persisted
+      is logged at INFO with { agentPubkey, sessionId, counterpartyPubkey,
+      status }"
+
   - trigger: "When a leaf is accepted into local_tree_leaves"
     action: "a row is inserted into session_tree_leaves immediately after
       the in-memory push; the insert is synchronous before next_expected_seq
@@ -88,7 +102,7 @@ behavior:
       { agentPubkey, sessionId, leafIndex, leafKind, sequenceNumber }"
 
   - trigger: "When addPeer() is called"
-    action: "the peer record is upserted into peers with connected=0;
+    action: "the peer record is upserted into peers;
       client.peer.persisted is logged at INFO with
       { agentPubkey, peerPubkeyHex, peerId }"
 
@@ -102,14 +116,13 @@ behavior:
       after relay replay"
 
   - trigger: "When AgentHashQueue.enqueue() writes a pending hash"
-    action: "the entry is written to pending_hashes instead of the
-      client_store KV table; on startup the AgentHashQueue is constructed
-      before relay reconnect so un-ACKed hashes are resubmitted"
+    action: "the entry is written to pending_hashes; on startup the
+      AgentHashQueue is constructed before relay reconnect so un-ACKed
+      hashes are resubmitted"
 
   - trigger: "When AgentHashQueue.processAck() stores a relay ACK"
     action: "the entry is written to relay_ack_receipts with INSERT OR
-      IGNORE semantics (first ACK wins, SI-003); the client_store KV path
-      for hq:ack:* is retired by this story"
+      IGNORE semantics (first ACK wins, SI-004)"
 
   - trigger: "When ClientBackup.backup() completes successfully"
     action: "backup metadata (destination_url, checksum, completed_at) is
@@ -127,20 +140,35 @@ acceptance_criteria:
   - id: AC-000
     given: "A cello-client database at V1 (contains only client_store table)"
     when: "the SQLCipherClientStore opens on startup"
-    then: "the V2 migration is applied exactly once in a transaction; all 15
-      structured tables and their indexes are present (agents,
-      registration_state, frost_key_shares, ml_dsa_keypairs, connection_policy,
-      connection_policy_requirements, connections, endorsements, attestations,
-      peers, sessions, session_tree_leaves, pending_hashes, relay_ack_receipts,
-      backup_metadata) plus the two gap tables (known_relays,
-      pending_connection_requests) and a decided_connection_requests table;
-      client_store remains present and unmodified; schema_migrations shows the
-      V2 row; if the database is then closed and re-opened, the migration does
-      not run again and client.db.v2.migration.skipped is logged"
+    then: "the V2 migration is applied exactly once in a transaction; the
+      client_store table is dropped; all 15 structured tables and their indexes
+      are present (agents, registration_state, frost_key_shares, ml_dsa_keypairs,
+      connection_policy, connection_policy_requirements, connections, endorsements,
+      attestations, peers, sessions, session_tree_leaves, pending_hashes,
+      relay_ack_receipts, backup_metadata) plus the 3 gap tables (known_relays,
+      pending_connection_requests, decided_connection_requests); schema_migrations
+      shows the V2 row; if the database is then closed and re-opened, the migration
+      does not run again and client.db.v2.migration.skipped is logged"
     test_type: integration
+    component_under_test: client
     notes: >
       Migration file: V2__client_schema_structured.sql.
-      All CREATE TABLE statements must use IF NOT EXISTS (idempotent).
+      client_store is intentionally DROPPED — it served as a placeholder, has no
+      production users, and its presence would mislead future agents into using
+      an unstructured KV table instead of the proper schema.
+      Schema for gap tables:
+        known_relays (relay_id TEXT PK, relay_pubkey_hex TEXT NOT NULL,
+          source TEXT NOT NULL, last_seen_at TEXT NOT NULL DEFAULT (datetime('now')))
+        pending_connection_requests (request_id TEXT NOT NULL, agent_pubkey TEXT NOT NULL,
+          from_pubkey TEXT NOT NULL, package_cbor BLOB NOT NULL,
+          arrived_at TEXT NOT NULL DEFAULT (datetime('now')), round INTEGER NOT NULL DEFAULT 1,
+          PRIMARY KEY (request_id, agent_pubkey),
+          FOREIGN KEY (agent_pubkey) REFERENCES agents(pubkey) ON DELETE CASCADE)
+        decided_connection_requests (request_id TEXT NOT NULL, agent_pubkey TEXT NOT NULL,
+          decision TEXT NOT NULL CHECK (decision IN ('accepted','rejected','more_disclosure')),
+          decided_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (request_id, agent_pubkey),
+          FOREIGN KEY (agent_pubkey) REFERENCES agents(pubkey) ON DELETE CASCADE)
 
   - id: AC-001
     given: "cello-mcp has completed registration (DKG ceremony succeeded,
@@ -150,107 +178,121 @@ acceptance_criteria:
       ownPubkeyHex AND is_active = 1; the signing_share blob is deserialized
       into FrostSecret; the commitments_cbor and verifying_shares_cbor blobs
       are deserialized into FrostPublic; storeDkgResult is called to repopulate
-      _localShares; calling cello_register via MCP returns
-      { error: 'already_registered' } without contacting the directory;
-      FrostThresholdSigner.getPrimaryPubkey() returns the same primary_pubkey
-      as before the restart"
+      _localShares; a new createClient() call is constructed from scratch using
+      only the key file and DB path (no in-memory state transfer); calling
+      cello_register via MCP returns { error: 'already_registered' } without
+      contacting the directory; FrostThresholdSigner.getPrimaryPubkey() returns
+      the same primary_pubkey as before the restart;
+      client.startup.state.loaded is logged with hasFrostShare=true"
     test_type: integration
+    component_under_test: client
     notes: >
       This is the immediate DEMO-001 blocker. Test must be a real two-process
-      test: process 1 registers, exits; process 2 starts, calls cello_register,
-      asserts already_registered. No mocks for FROST.
+      test: process 1 registers, exits; process 2 starts with a fresh createClient()
+      from the same key file and DB path — no in-memory state transfer between
+      processes. No mocks for FROST.
 
   - id: AC-002
     given: "cello-mcp has completed registration and the ML-DSA keypair is in
       ml_dsa_keypairs"
-    when: "the process is killed and restarted"
-    then: "on startup, ml_dsa_keypairs is queried for agent_pubkey =
-      ownPubkeyHex; an InMemoryMlDsaKeyProvider is reconstructed from the
-      stored secret_key_blob and ml_dsa_pubkey; the reconstructed provider is
-      passed to createClient so #mlDsaProvider is populated before the first
-      MCP tool call; calling cello_request_connection or cello_accept_connection
-      does not fail with missing_ml_dsa_key; the ML-DSA signature produced after
-      restart verifies against the same ml_dsa_pubkey as before restart"
+    when: "a new createClient() is constructed from scratch using only the key file
+      and DB path"
+    then: "ml_dsa_keypairs is queried for agent_pubkey = ownPubkeyHex; an
+      InMemoryMlDsaKeyProvider is reconstructed from the stored secret_key_blob
+      and ml_dsa_pubkey; #mlDsaProvider is populated before the first MCP tool
+      call; calling cello_request_connection or cello_accept_connection does not
+      fail with missing_ml_dsa_key; the ML-DSA signature produced after restart
+      verifies against the same ml_dsa_pubkey as before"
     test_type: integration
+    component_under_test: client
     notes: "Must test with real ML-DSA-44 keygen — no mock keypairs."
 
   - id: AC-003
     given: "cello-mcp has completed registration"
-    when: "the process is killed and restarted"
-    then: "on startup, registration_state is queried for agent_pubkey =
-      ownPubkeyHex; if a row exists, a RegistrationState object is constructed
-      and injected before the first MCP call so #registrationState is non-null;
-      cello_register returns { error: 'already_registered' } immediately; the
-      returned state contains the same agent_id, primary_pubkey, and
-      ml_dsa_pubkey as were registered before the restart"
+    when: "a new createClient() is constructed from scratch using only the key file
+      and DB path"
+    then: "registration_state is queried for agent_pubkey = ownPubkeyHex; a
+      RegistrationState object is constructed and injected so #registrationState
+      is non-null before the first MCP call; cello_register returns
+      { error: 'already_registered' } immediately; the returned state contains
+      the same agent_id, primary_pubkey, and ml_dsa_pubkey as were registered
+      before the restart"
     test_type: integration
+    component_under_test: client
 
   - id: AC-004
     given: "cello-mcp has established a connection with a peer"
-    when: "the process is killed and restarted"
-    then: "on startup, all rows from connections WHERE agent_pubkey =
-      ownPubkeyHex are loaded; #connections and #connectionsByPeer are
-      repopulated; hasConnection(counterpartyPubkey) returns true for the peer
-      connected before the restart; cello_initiate_session does not return
-      connection_required for that peer"
+    when: "a new createClient() is constructed from scratch using only the key file
+      and DB path"
+    then: "all rows from connections WHERE agent_pubkey = ownPubkeyHex are loaded;
+      #connections and #connectionsByPeer are repopulated; hasConnection(counterpartyPubkey)
+      returns true for the peer connected before the restart; cello_initiate_session
+      does not return connection_required for that peer"
     test_type: integration
+    component_under_test: client
 
   - id: AC-005
     given: "cello-mcp has a connection policy set to mode='guarded' with two
       signal requirements"
-    when: "the process is killed and restarted"
-    then: "on startup, connection_policy and connection_policy_requirements are
-      loaded; #connectionPolicy is populated with mode='guarded', the correct
-      review_mode, and the requirements array in position order; an inbound
-      connection request that would have been auto_rejected before the restart
-      is still auto_rejected after the restart"
+    when: "a new createClient() is constructed from scratch using only the key file
+      and DB path"
+    then: "connection_policy and connection_policy_requirements are loaded;
+      #connectionPolicy is populated with mode='guarded', the correct review_mode,
+      and the requirements array in position order; an inbound connection request
+      that would have been auto_rejected before the restart is still auto_rejected
+      after the restart"
     test_type: integration
+    component_under_test: client
 
   - id: AC-006
     given: "cello-mcp has an active session with 12 leaves in local_tree_leaves"
-    when: "the process is killed and restarted"
-    then: "on startup, the session row is loaded from sessions; the 12 leaf rows
-      are loaded from session_tree_leaves ordered by leaf_index ASC and
-      repopulated into SessionRecord.local_tree_leaves; the computed merkle root
-      over the reloaded leaves is identical to the root computed before the
-      restart; the 13th inbound leaf passes the prev_root check; session sequence
-      numbers (last_seen_seq, last_sent_seq, next_expected_seq) are restored from
-      the sessions row"
+    when: "a new createClient() is constructed from scratch using only the key file
+      and DB path"
+    then: "the session row is loaded from sessions; the 12 leaf rows are loaded
+      from session_tree_leaves ordered by leaf_index ASC and repopulated into
+      SessionRecord.local_tree_leaves; the computed merkle root over the reloaded
+      leaves is identical to the root computed before the restart; the 13th inbound
+      leaf passes the prev_root check; session sequence numbers (last_seen_seq,
+      last_sent_seq, next_expected_seq) are restored from the sessions row"
     test_type: integration
+    component_under_test: client
     notes: "Leaf loss is unrecoverable. The test must assert all 12 leaves are
       present and in the correct order, not just the count."
 
   - id: AC-007
     given: "cello-mcp has a session that has been sealed (status='sealed',
       frost_signature populated)"
-    when: "cello_get_sealed_receipt is called after a process restart"
+    when: "cello_get_sealed_receipt is called after constructing a new
+      createClient() from scratch"
     then: "the sealed session is loaded from sessions on startup;
       cello_get_sealed_receipt returns the sealed_root, frost_signature,
       signer_pubkey, seal_type, and close_timestamp without error; the session
       is not treated as active (no reconnect attempt)"
     test_type: integration
+    component_under_test: client
 
   - id: AC-008
-    given: "cello-mcp has pending_hashes rows (hashes submitted to relay but
-      not yet ACKed)"
-    when: "the process is killed and restarted before the ACKs arrive"
-    then: "on startup, the AgentHashQueue is constructed before relay reconnect;
-      pending_hashes rows for this agent are loaded; after relay reconnect, the
-      pending hashes are resubmitted; when ACKs arrive, relay_ack_receipts rows
-      are inserted with INSERT OR IGNORE; client_store KV keys hq:pending:* and
-      hq:ack:* are no longer used for new entries"
+    given: "pending_hashes rows exist (hashes submitted to relay but not yet ACKed)"
+    when: "a new createClient() is constructed from scratch using only the key file
+      and DB path, then connects to the relay"
+    then: "the AgentHashQueue is constructed before relay reconnect; pending_hashes
+      rows for this agent are loaded; after relay reconnect, the pending hashes are
+      resubmitted; when ACKs arrive, relay_ack_receipts rows are inserted with
+      INSERT OR IGNORE"
     test_type: integration
+    component_under_test: client
 
   - id: AC-009
     given: "endorsements and attestations rows are present in the DB for this
       agent (inserted directly for test purposes)"
-    when: "cello_request_connection is called with include_endorsements=true
-      after a process restart"
-    then: "non-expired endorsements and attestations are loaded from DB on
-      startup into #endorsements and #attestations; the assembled
+    when: "cello_request_connection is called with include_endorsements=true after
+      constructing a new createClient() from scratch"
+    then: "non-expired endorsements and attestations for this agent are loaded
+      from DB on startup into #endorsements and #attestations; the assembled
       ConnectionPackage contains the loaded endorsements and attestations (not
       empty arrays); items with expires_at <= now are excluded"
     test_type: integration
+    component_under_test: client
     notes: >
       No add-endorsement MCP tool exists at time of writing. Insert test rows
       directly into the DB for this AC. The AC is about startup load and package
@@ -259,13 +301,14 @@ acceptance_criteria:
   - id: AC-010
     given: "an inbound connection request row is in pending_connection_requests
       that has not been decided"
-    when: "the process is killed and restarted"
-    then: "on startup, pending_connection_requests rows are loaded;
-      awaitConnectionRequest() returns the reloaded request without requiring
-      the directory to replay the connection_request_inbound frame;
-      decided_connection_requests rows are loaded into #decidedRequests to
-      prevent double-decision after relay replay"
+    when: "a new createClient() is constructed from scratch using only the key file
+      and DB path"
+    then: "pending_connection_requests rows are loaded; awaitConnectionRequest()
+      returns the reloaded request without requiring the directory to replay the
+      connection_request_inbound frame; decided_connection_requests rows are loaded
+      into #decidedRequests to prevent double-decision after relay replay"
     test_type: integration
+    component_under_test: client
 
   - id: AC-011
     given: "cello-mcp starts for the very first time with no database file"
@@ -273,8 +316,10 @@ acceptance_criteria:
     then: "a new SQLCipher database is created at the configured path; the db_key
       is derived from K_local via HKDF before any table is created; V1 and V2
       migrations are both applied in order; client.db.v2.migration.applied is
-      logged; the agent proceeds to normal startup without error"
+      logged; the agent proceeds to normal startup without error; no client_store
+      table exists in the resulting database"
     test_type: integration
+    component_under_test: client
     notes: "First-install path. The database file must not exist before the test."
 
   - id: AC-012
@@ -286,124 +331,180 @@ acceptance_criteria:
       db_key derived from different K_local seeds); cello_status for each
       returns a different own_pubkey and agent_id"
     test_type: integration
+    component_under_test: client
     notes: "Multi-agent-per-device support. Each agent's DB path is
       CELLO_DB_PATH or default ~/.cello/<pubkey_prefix>.db"
+
+  - id: AC-013
+    given: "A registered agent restarts (all state loaded from DB)"
+    when: "the startup sequence completes"
+    then: "client.startup.state.loaded is emitted exactly once with
+      { agentPubkey, connectionCount, sessionCount, leafCount, pendingHashCount,
+      hasFrostShare, hasMlDsaKeypair, hasRegistration, hasPolicy }; for a
+      registered agent, hasFrostShare=true, hasMlDsaKeypair=true,
+      hasRegistration=true"
+    test_type: integration
+    component_under_test: client
 
 # ─── Security Invariants ─────────────────────────────────────
 security_invariants:
   - id: SI-001
-    description: >
+    statement: >
       signing_share (FrostSecret.signingShare, 32 bytes) MUST NOT appear in any
       log event, error message, or diagnostic output. It is stored as a raw BLOB
       in frost_key_shares and protected by SQLCipher at rest. Any code path that
       handles this value must treat it as opaque bytes that are never serialized
       to a string or logged.
-    test: "Grep all log event emissions for signing_share, signingShare, or the
-      32-byte hex of any registered agent's share. Zero matches required."
+    adversarial_condition: "An attacker who obtains application logs must not be
+      able to reconstruct the FROST signing share."
+    test_type: static
+    component_under_test: client
+    test: "Grep all log event emissions in the cello-client codebase for
+      signing_share, signingShare, or the hex encoding of any test agent's share.
+      Zero matches required."
 
   - id: SI-002
-    description: >
+    statement: >
       secret_key_blob (ML-DSA-44 secret key, 2560 bytes) MUST NOT appear in any
       log event, error message, or diagnostic output. It is stored as BLOB in
       ml_dsa_keypairs and protected by SQLCipher at rest.
-    test: "Grep all log event emissions for secret_key_blob or secretKey. Zero
-      matches required."
+    adversarial_condition: "An attacker who obtains application logs must not be
+      able to reconstruct the ML-DSA secret key."
+    test_type: static
+    component_under_test: client
+    test: "Grep all log event emissions for secret_key_blob or secretKey hex.
+      Zero matches required."
 
   - id: SI-003
-    description: >
+    statement: >
       The db_key (SQLCipher encryption key derived via HKDF from K_local) MUST
       NOT be stored in the database, in any config file, or in any log event. It
       is derived at runtime from K_local each time the DB is opened and held only
-      in RAM.
-    test: "No row in any table contains the db_key value. No log event contains
-      db_key. Verified by reading the SQLCipher PRAGMA key derivation path."
+      in RAM for the duration of the DB connection.
+    adversarial_condition: "An attacker who obtains the database file without the
+      K_local seed must not be able to decrypt it."
+    test_type: integration
+    component_under_test: client
+    test: "Open the SQLCipher database file with a wrong key — verify it is
+      unreadable. Verify no row in any table and no log event contains the db_key
+      value."
 
   - id: SI-004
-    description: >
+    statement: >
       relay_ack_receipts must be append-only. INSERT OR IGNORE semantics ensure
       the first ACK wins and subsequent duplicates are silently dropped. No UPDATE
-      or DELETE is permitted on relay_ack_receipts rows.
-    test: "Attempt to UPDATE or DELETE a relay_ack_receipts row via the
-      AgentHashQueue API. Both must have no effect (no DB error, no row change)."
+      or DELETE is permitted on relay_ack_receipts rows via the AgentHashQueue API.
+    adversarial_condition: "A replayed relay ACK frame must not overwrite the
+      original ACK receipt or alter the stored signature."
+    test_type: integration
+    component_under_test: client
+    test: "Process the same relay ACK twice via AgentHashQueue.processAck(). Assert
+      relay_ack_receipts has exactly one row for that hash_hex. Assert the row
+      values match the first ACK, not the second."
 
 # ─── Observability ───────────────────────────────────────────
 observability:
   events:
     - name: client.db.v2.migration.applied
       level: info
+      trigger: "Batch-level summary fired once after all V2 DDL executes and
+        client_store is dropped. The existing client.store.migration.applied
+        event fires once per SQL file (per-file granularity); this event is
+        the batch summary."
       context_fields: [agentPubkey, tableCount, executionTimeMs]
       correlationId: false
 
     - name: client.db.v2.migration.skipped
       level: info
+      trigger: "Database already at V2 or later on startup"
       context_fields: [agentPubkey, currentVersion]
       correlationId: false
 
     - name: client.frost.share.persisted
       level: info
+      trigger: "storeDkgResult writes a new active share to frost_key_shares"
       context_fields: [agentPubkey, epochId, threshold, participants, dkgMethod]
       correlationId: false
-      notes: "signing_share MUST NOT appear"
+      notes: "signing_share MUST NOT appear (SI-001)"
 
     - name: client.frost.share.loaded
       level: info
+      trigger: "Active FROST share loaded from DB and injected into _localShares
+        on startup"
       context_fields: [agentPubkey, epochId, threshold, participants]
       correlationId: false
-      notes: "signing_share MUST NOT appear"
+      notes: "signing_share MUST NOT appear (SI-001)"
 
     - name: client.mldsa.keypair.persisted
       level: info
+      trigger: "ML-DSA-44 keypair written to ml_dsa_keypairs after register()"
       context_fields: [agentPubkey, mlDsaPubkey]
       correlationId: false
-      notes: "secret_key_blob MUST NOT appear"
+      notes: "secret_key_blob MUST NOT appear (SI-002)"
 
     - name: client.mldsa.keypair.loaded
       level: info
+      trigger: "ML-DSA-44 keypair loaded from DB and injected into #mlDsaProvider
+        on startup"
       context_fields: [agentPubkey, mlDsaPubkey]
       correlationId: false
 
     - name: client.registration.persisted
       level: info
+      trigger: "registration_state row written after successful register()"
       context_fields: [agentPubkey, agentId, primaryPubkey]
       correlationId: false
 
     - name: client.registration.loaded
       level: info
+      trigger: "registration_state row loaded and injected into #registrationState
+        on startup"
       context_fields: [agentPubkey, agentId, status]
       correlationId: false
 
     - name: client.connection.persisted
       level: info
+      trigger: "Connection record written to connections table after
+        connection_established"
       context_fields: [agentPubkey, connectionId, counterpartyPubkey]
       correlationId: false
 
     - name: client.policy.persisted
       level: info
+      trigger: "Connection policy and requirements written after setPolicy()"
       context_fields: [agentPubkey, mode, reviewMode, requirementCount]
       correlationId: false
 
     - name: client.session.persisted
       level: info
+      trigger: "Session row written to sessions after initiateSession() or
+        receiveSessionAssignment() completes"
       context_fields: [agentPubkey, sessionId, counterpartyPubkey, status]
       correlationId: true
 
     - name: client.leaf.persisted
       level: debug
+      trigger: "Leaf row inserted into session_tree_leaves in #drainReadyQueue()"
       context_fields: [agentPubkey, sessionId, leafIndex, leafKind, sequenceNumber]
       correlationId: true
 
     - name: client.peer.persisted
       level: info
+      trigger: "Peer record upserted into peers via addPeer()"
       context_fields: [agentPubkey, peerPubkeyHex, peerId]
       correlationId: false
 
     - name: client.relay.pubkey.cached
       level: debug
+      trigger: "Relay pubkey written to or read from known_relays"
       context_fields: [agentPubkey, relayId]
       correlationId: false
 
     - name: client.startup.state.loaded
       level: info
+      trigger: "All durable state loaded from DB and injected into client instance
+        during startup; emitted once after all tables have been queried and all
+        in-memory structures populated (verified by AC-013)"
       context_fields: [agentPubkey, connectionCount, sessionCount, leafCount,
         pendingHashCount, hasFrostShare, hasMlDsaKeypair, hasRegistration,
         hasPolicy]
@@ -412,22 +513,37 @@ observability:
   error_events:
     - name: client.frost.share.missing
       level: error
+      trigger: "No active FROST share row found in frost_key_shares on startup
+        for a registered agent (registration_state row exists but no active
+        frost_key_shares row)"
       context_fields: [agentPubkey, reason]
 
     - name: client.frost.share.load.failed
       level: error
+      trigger: "DB query or CBOR deserialization fails when loading the FROST share"
+      context_fields: [agentPubkey, reason]
+
+    - name: client.store.migration.failed
+      level: error
+      trigger: "V2 migration DDL fails (existing event name in SQLCipherClientStore,
+        retained)"
       context_fields: [agentPubkey, reason]
 
     - name: client.mldsa.load.failed
       level: error
+      trigger: "DB query or blob deserialization fails when loading the ML-DSA keypair"
       context_fields: [agentPubkey, reason]
 
     - name: client.session.leaves.mismatch
       level: error
+      trigger: "session_tree_leaves count for a session does not match
+        sessions.leaf_count on startup"
       context_fields: [agentPubkey, sessionId, expectedLeafCount, actualLeafCount]
 
     - name: client.relay.ack.duplicate
       level: warn
+      trigger: "INSERT OR IGNORE for relay_ack_receipts hits the UNIQUE constraint
+        (second ACK for same hash_hex + agent_pubkey)"
       context_fields: [agentPubkey, hashHex, sessionId]
 
   alarms:
@@ -437,7 +553,7 @@ observability:
 
     - condition: "client.frost.share.load.failed fires"
       fires_to: ops-critical
-      notes: "DB corruption or key mismatch"
+      notes: "DB corruption or deserialization error"
 
     - condition: "client.session.leaves.mismatch fires"
       fires_to: ops-critical
@@ -463,21 +579,23 @@ references:
     Implementation lives in cello-client repo (core/client/, core/adapter-claude-code/).
     The story YAML lives here in trustless-cello vault per vault conventions.
 
-    client_store (V1 KV table) is intentionally preserved. Existing hq:pending:*
-    and hq:ack:* keys may coexist with the new structured tables during the V1→V2
-    transition; new writes go to structured tables only. Legacy KV key removal is
-    deferred to a future cleanup story.
+    client_store (V1 KV table) is intentionally DROPPED by the V2 migration.
+    It was a placeholder with no production users. Its presence would mislead
+    future agents into using an unstructured KV table instead of the proper schema.
+    There is no backward compatibility requirement.
 
     First-install path: if no DB file exists, V1 and V2 migrations are both applied
-    on first run. The db_key is derived from K_local before any DDL executes.
+    on first run, producing a database with only the V2 structured tables. The db_key
+    is derived from K_local before any DDL executes.
 
     Multi-agent-per-device: each agent uses a distinct DB path
     (CELLO_DB_PATH or ~/.cello/<pubkey_prefix>.db) with a db_key derived from its
     own K_local. Agents cannot read each other's DBs.
 
     SPARC discipline applies. All tests written and red before implementation.
-    No mocks for SQLCipher, FROST, or ML-DSA. All ACs require real two-process
-    restart tests — in-process state resets do not cover the persistence contract.
+    No mocks for SQLCipher, FROST, or ML-DSA. All ACs require a fresh createClient()
+    constructed from only the key file and DB path — no in-memory state transfer.
+    This is the only way to verify the persistence contract.
 
     vitest worker count MUST be 1 (--pool-options.threads.maxThreads=1) due to
     Docker/SQLCipher 8GB memory constraint. Put this at the TOP of every agent
