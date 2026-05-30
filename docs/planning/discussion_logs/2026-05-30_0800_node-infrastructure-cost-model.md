@@ -282,6 +282,39 @@ GCP is 13% more expensive on average, driven primarily by GKE Autopilot costing 
 
 ---
 
+## Regional Pricing — All Candidate AWS Regions
+
+Per-node monthly cost across all regions CELLO might deploy to. Calculated from AWS published rates. Three current nodes marked ◄.
+
+Assumptions: db.t3.small RDS single-AZ + 20GB gp3, 2 Fargate tasks (directory + relay) at current allocation, 1 ALB, 4 public IPs, 7 VPC endpoints, standard fixed costs ($26.25: Secrets Manager + KMS + ECR + WAF + CloudWatch).
+
+| Region | Endpoints | RDS | Fargate | ALB | IPv4 | Fixed | **Total/mo** |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| us-east-1 N. Virginia ◄ | $50.40 | $28.22 | $42.62 | $16.20 | $14.40 | $26.25 | **$178** |
+| us-east-2 Ohio | $50.40 | $28.22 | $42.62 | $16.20 | $14.40 | $26.25 | **$178** |
+| us-west-2 Oregon | $50.40 | $28.22 | $42.62 | $16.20 | $14.40 | $26.25 | **$178** |
+| ca-central-1 Canada | $55.44 | $31.34 | $47.04 | $18.14 | $14.40 | $26.25 | **$193** |
+| eu-west-1 Ireland | $55.44 | $29.90 | $42.72 | $18.14 | $14.40 | $26.25 | **$187** |
+| eu-west-2 London | $50.40 | $34.38 | $47.17 | $18.14 | $14.40 | $26.25 | **$191** |
+| eu-north-1 Stockholm | $50.40 | $29.86 | $39.97 | $16.34 | $14.40 | $26.25 | **$177** |
+| eu-central-1 Frankfurt ◄ | $60.48 | $32.98 | $49.26 | $19.44 | $14.40 | $26.25 | **$203** |
+| ap-northeast-1 Tokyo ◄ | $70.56 | $43.08 | $52.79 | $17.50 | $14.40 | $26.25 | **$225** |
+| ap-northeast-2 Seoul | $65.52 | $37.18 | $47.45 | $17.50 | $14.40 | $26.25 | **$208** |
+| ap-southeast-1 Singapore | $65.52 | $41.64 | $50.59 | $17.50 | $14.40 | $26.25 | **$216** |
+| ap-southeast-2 Sydney | $65.52 | $42.36 | $51.26 | $17.50 | $14.40 | $26.25 | **$217** |
+| sa-east-1 São Paulo | $55.44 | $55.64 | $70.36 | $21.60 | $14.40 | $26.25 | **$244** |
+
+**Key observations from this table:**
+
+- All US regions (Virginia, Ohio, Oregon) cost identically — $178/month. Adding a second NA node means choosing on geography and latency, not cost.
+- Ireland ($187) is cheaper than Frankfurt ($203) and roughly comparable to London ($191). It is the most cost-effective EU option after Stockholm ($177).
+- Stockholm is the cheapest EU region at $177/month — worth considering if Scandinavia coverage is useful.
+- Frankfurt is more expensive than Ireland and London despite being the current EU node — worth reconsidering on cost grounds when adding more EU nodes.
+- São Paulo is the most expensive region ($244/month) due to Brazil's high RDS and Fargate rates (~2× US rates). Add last.
+- Asia Pacific ranges $208–$225. Tokyo is the most expensive in APAC; Seoul is the best value for APAC coverage.
+
+---
+
 ## Key Cost Observations
 
 1. **Private subnet endpoints are unavoidable for this architecture** on both AWS and GCP. They are the security mechanism keeping all cloud API traffic off the public internet — appropriate for a privacy-first trust infrastructure product. They represent ~30–39% of per-node cost on both platforms.
