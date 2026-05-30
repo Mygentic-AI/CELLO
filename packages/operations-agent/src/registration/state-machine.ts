@@ -142,13 +142,15 @@ export class RegistrationStateMachine {
 
       case "INITIAL":
       case "PHONE_CONFIRMED":
-      case "EMAIL_CONFIRMED":
         // Transient states that should not linger — re-prompt for contact
         await this.#deps.channel.send(
           from,
           `${CONTACT_PROMPT_PREFIX}Please share your phone number using the button below to continue registration.`,
         );
         return record;
+      case "EMAIL_CONFIRMED":
+        // Email was verified but pre-auth token request failed. Retry it.
+        return this.#retryPreAuth(record, from);
     }
   }
 
@@ -414,6 +416,48 @@ export class RegistrationStateMachine {
     });
 
     // Deliver token to user
+    await channel.send(
+      from,
+      `Registration complete! Your pre-authorization token is:\n\n${token}\n\nSet this as CELLO_REGISTRATION_TOKEN on your agent.`,
+    );
+
+    return completed;
+  }
+
+  async #retryPreAuth(record: RegistrationRecord, from: string): Promise<RegistrationRecord> {
+    const { preAuth, channel, repository, logger } = this.#deps;
+    const correlationId = randomUUID();
+
+    let token: string;
+    try {
+      const result = await preAuth.requestToken(
+        record.phoneStubHash,
+        record.emailDomain ?? "",
+      );
+      token = result.token;
+    } catch (err) {
+      const httpStatus = err instanceof PreAuthRequestError ? err.httpStatus : 0;
+      logger.error("registration.preauth.request.failed", err instanceof Error ? err : new Error(String(err)), {
+        registrationId: record.id,
+        httpStatus,
+        correlationId,
+      });
+      await channel.send(
+        from,
+        "Registration is temporarily unavailable. Please try again in a few minutes.",
+      );
+      return record;
+    }
+
+    const completed = await repository.transition(record.id, "PRE_AUTH_TOKEN_ISSUED");
+
+    const tokenId = token.slice(0, 8);
+    logger.info("registration.completed", {
+      registrationId: record.id,
+      tokenId,
+      correlationId,
+    });
+
     await channel.send(
       from,
       `Registration complete! Your pre-authorization token is:\n\n${token}\n\nSet this as CELLO_REGISTRATION_TOKEN on your agent.`,
