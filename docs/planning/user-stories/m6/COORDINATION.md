@@ -417,18 +417,43 @@ Story completed (code): DEMO-001 — Standalone demo agent with 4-message crypto
 - Token issued: `CELLO-PAC4QVHhHAkYgNimMAvXBQzQbzvH9JF1i`
 - Time from /start to token: <60 seconds
 
-**Remaining steps for DEMO-001 completion:**
-1. SSM into EC2 instance, run `cello_register` with the token
-2. chmod 600 key file, back up to Secrets Manager
-3. Create env.conf systemd drop-in with CELLO_DIRECTORY_MULTIADDR
-4. Start service, verify `demo.started`, test restart behavior (AC-006)
-5. Publish AgentID in README
+**Steps completed beyond provisioning:**
+- `cello_register` was run on the EC2 instance via a throwaway MCP client script
+- Registration succeeded: agent_id=`a2c55e2721f45cfa86cb3417a76e3f7b`, primary_pubkey=`25c1bbe579819f84fdd5420f8279095922942d1db297a909ea59b1adc14df60f`
+- Key file written to `/opt/cello-demo/keys/agent.key`, chmod 600, backed up to Secrets Manager at `cello/dev/demo-agent/identity-key`
+- env.conf systemd drop-in created with CELLO_KEY_FILE, CELLO_DIRECTORY_MULTIADDR, CELLO_ENV=production
+- Directory peer ID confirmed: `12D3KooWKtrqu3da3SGQ2JDX8ZHvKgyFDMbkM5QArrWmPMGwWjxM`
+- Port 80 added to demo-agent SG egress (directory ALB resolves to public IPs)
+- `@cello-protocol/connect@0.0.4` published to npm with NODE_ENV gate removed from FROST bootstrap
+
+**Where DEMO-001 stopped — the FROST persistence wall:**
+- `systemctl start cello-demo` fails immediately with `registered=false`
+- Root cause: `cello-mcp` runs FROST DKG bootstrap on every startup (was gated on `NODE_ENV=test`,
+  now ungated), but the directory rejects a second DKG for an already-registered agent
+- After DKG rejection, cello-mcp fell back to in-process stubs which throw in production mode
+- Root cause of root cause: FROST share is only in RAM (`_localShares` Map in frost-threshold-signer.ts)
+  — not persisted to the SQLCipher DB. On restart it's gone.
+
+**Blocker:** PERSIST-024 must be implemented before the demo agent service can start.
+- PERSIST-024 adds `frost_key_shares` table and wires `storeDkgResult()` to write to it
+- On startup, cello-mcp loads the active share and calls `storeDkgResult()` to repopulate `_localShares`
+- Then constructs `FrostThresholdSigner` with the loaded share and passes to `createClient`
+- cello-mcp also needs `ml_dsa_keypairs` wired (also lost on restart)
+
+**Remaining steps for DEMO-001 completion (after PERSIST-024 ships):**
+1. Update `@cello-protocol/connect` to 0.0.5 with PERSIST-024 wiring
+2. On EC2 instance: `npm install @cello-protocol/connect@0.0.5` (or beta)
+3. `systemctl start cello-demo` — verify `journalctl -u cello-demo` shows `demo.started`
+4. Test restart (AC-006): `systemctl kill cello-demo`, sleep 6, verify service recovers
+5. Publish AgentID (`a2c55e2721f45cfa86cb3417a76e3f7b`) in README quick-start docs
 6. Update STATE.md with AgentID
+7. Verify AC-004b: `directory_reachable=true` from EC2 (cello_status inside running service)
 
 **Known issues to address post-M6:**
-- DIRECTORY_INTERNAL_URL uses hardcoded task IP (breaks on directory redeploy) — needs CloudMap service discovery or dedicated ALB target group on port 8081
+- DIRECTORY_INTERNAL_URL uses hardcoded task IP `10.0.89.234:8081` (breaks on directory redeploy) — needs CloudMap service discovery or dedicated ALB target group on port 8081; tracked in STATE.md
 - Ops-agent buildspec skips integration tests — needs PostgreSQL sidecar in CodeBuild
 - IaC templates updated but not validated via deploy — need a no-op validation deploy
+- Demo-agent SG was designed for TCP 443 only but needed TCP 80 for directory ALB — STATE.md updated, IaC to update
 
 ---
 
