@@ -223,6 +223,9 @@ IronClaw and Hermes are extensible multi-channel agents with attack surface. A d
 **DEMO domain**
 - `DEMO-001`: Minimal demo agent — EC2, locked-down (no egress except CELLO MCP tools), CELLO client installed, registered on network, canned response handler
 
+**PERSIST domain**
+- `PERSIST-024`: Structured client-side SQLCipher schema — V2 migration with 15 tables replacing the generic `client_store` fallback. Implements FROST share persistence (immediate DEMO-001 unblock), ML-DSA keypair persistence, agent registry, session/leaf history, connections, trust signals, peers, hash queue, relay ACK receipts, backup metadata. Lives in `cello-client` repo. First-install path creates DB on startup. Depends on DEMO-001 (unblocked by identifying the gap).
+
 **E2E gate**
 - `M6-E2E-001`: Full stranger flow — install `@cello/connect`, register via Telegram bot, exchange messages with demo agent, verify tamper-evident record. Flip package from `@beta` to `latest` only after this passes.
 
@@ -233,9 +236,10 @@ REPOSPLIT-001 → REPOSPLIT-002 ────────────────
 OPS-AGENT-000 → OPS-AGENT-001 ───────────────────────────────────────────────┤
               → OPS-AGENT-002 → OPS-AGENT-003 ┐                               │
               →                 OPS-AGENT-004 ┘→ OPS-AGENT-005B ──────────── M6-E2E-001
-              → OPS-AGENT-005A ────────────────────────────────→ OPS-AGENT-005B
-REPOSPLIT-002 → DEMO-001 (code) ─────────────────────────────────────────────↗
-              OPS-AGENT-005B → DEMO-001 (registration / AC-000) ─────────────↗
+              → OPS-AGENT-005A ────────────────────────────────→ OPS-AGENT-005B   ↑
+REPOSPLIT-002 → DEMO-001 (code) ─────────────────────────────────────────────┤   │
+              OPS-AGENT-005B → DEMO-001 (registration / AC-000) ─────────────┤   │
+DEMO-001 gap discovery → PERSIST-024 ────────────────────────────────────────────┘
 ```
 
 **Parallel from day one:**
