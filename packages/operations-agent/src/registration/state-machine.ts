@@ -387,6 +387,7 @@ export class RegistrationStateMachine {
       const result = await preAuth.requestToken(
         emailConfirmed.phoneStubHash,
         record.emailDomain ?? "",
+        record.id,
       );
       token = result.token;
     } catch (err) {
@@ -433,6 +434,7 @@ export class RegistrationStateMachine {
       const result = await preAuth.requestToken(
         record.phoneStubHash,
         record.emailDomain ?? "",
+        record.id,
       );
       token = result.token;
     } catch (err) {

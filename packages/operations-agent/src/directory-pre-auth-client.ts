@@ -84,6 +84,7 @@ export class DirectoryPreAuthorizationClient implements PreAuthorizationClient {
   async requestToken(
     phoneStubHash: string,
     emailDomain: string,
+    registrationId: string,
   ): Promise<{ token: string }> {
     let response: Response;
     try {
@@ -93,7 +94,7 @@ export class DirectoryPreAuthorizationClient implements PreAuthorizationClient {
           "Content-Type": "application/json",
           "x-cello-internal-api-key": this.#apiKey,
         },
-        body: JSON.stringify({ phoneStubHash, emailDomain }),
+        body: JSON.stringify({ phoneStubHash, emailDomain, registrationId }),
       });
     } catch (err) {
       // Network-level error (ECONNREFUSED, DNS failure, timeout, etc.)

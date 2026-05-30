@@ -36,6 +36,7 @@ export class LocalPreAuthorizationClient implements PreAuthorizationClient {
   async requestToken(
     _phoneStubHash: string,
     _emailDomain: string,
+    _registrationId: string,
   ): Promise<{ token: string }> {
     const randomPart = randomBytes(8).toString("hex");
     return { token: `DEV-CELLO-${randomPart}` };
