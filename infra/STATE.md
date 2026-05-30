@@ -90,11 +90,11 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | WAF Log Group | aws-waf-logs-cello-dev (90-day retention) |
 | IAM User (SES SMTP) | cello-ses-smtp-dev | Created 2026-05-29; access key stored in ses-credentials secret |
 
-**Manual changes (2026-05-29/30, not yet in IaC):**
-- ALB listener rule priority 5: removed `source-ip: 10.0.0.0/16` condition from `/internal/*` forward rule — API key header provides auth; source-ip restriction broke ops-agent (traffic hairpins via internet gateway, arrives with public IP)
-- Ops-agent SG `sg-07cc257e60bed1e49` egress: added `TCP 80 → 0.0.0.0/0` (directory ALB resolves to public IPs from within VPC; SG-to-SG rule was insufficient)
-- Ops-agent SG `sg-07cc257e60bed1e49` egress: added `TCP 80 → 10.0.0.0/16` (redundant with above but harmless)
-- Demo-agent IAM role `cello-agent-ssm-role`: added inline policy `cello-demo-secrets-manager` (Secrets Manager access for key backup)
+**Manual changes (2026-05-29/30, IaC updated but not yet deployed — validation deploy needed):**
+- ALB listener rule priority 5: removed `source-ip: 10.0.0.0/16` condition from `/internal/*` forward rule — API key header provides auth; source-ip restriction broke ops-agent (traffic hairpins via internet gateway, arrives with public IP). IaC: `cello-ecs-directory.yaml`
+- Ops-agent SG `sg-07cc257e60bed1e49` egress: changed port 80 from DestinationSecurityGroupId (ALB SG) to `CidrIp 0.0.0.0/0`. IaC: `cello-ecs-operations-agent.yaml`
+- Ops-agent SG `sg-07cc257e60bed1e49` egress: also has `TCP 80 → 10.0.0.0/16` live (redundant, not in IaC — will be removed on next deploy)
+- Demo-agent IAM role `cello-agent-ssm-role`: added inline policy `cello-demo-secrets-manager` (not in IaC — role predates CloudFormation stacks, shared with openclaw-agent)
 
 ### dev — eu-central-1
 *Last deployed: 2026-05-28
