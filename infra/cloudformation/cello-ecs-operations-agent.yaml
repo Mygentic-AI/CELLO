@@ -77,13 +77,14 @@ Resources:
           DestinationSecurityGroupId: !ImportValue
             Fn::Sub: "cello-${Environment}-ecs-directory-sg"
           Description: "Port 8080 to directory ECS service for /internal/pre-authorize"
-        # Port 80 to ALB SG: the Ops Agent calls the directory via the ALB on port 80.
+        # Port 80 to 0.0.0.0/0: the Ops Agent calls the directory via the internet-facing
+        # ALB on port 80. Traffic from private/public subnets resolves the ALB hostname to
+        # public IPs and routes via internet gateway — SG-to-SG references don't match.
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-          DestinationSecurityGroupId: !ImportValue
-            Fn::Sub: "cello-${Environment}-alb-sg"
-          Description: "Port 80 to ALB for /internal/pre-authorize via directory ALB"
+          CidrIp: "0.0.0.0/0"
+          Description: "HTTP to directory ALB (public IPs, routed via internet gateway)"
         # Port 5432 to RDS security group: cello_ops_agent database role access.
         # The Ops Agent reads/writes registrations and pre_authorization_tokens tables.
         # This uses the same RDS SG reference pattern as cello-ecs-directory.yaml.
