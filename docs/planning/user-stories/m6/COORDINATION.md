@@ -431,3 +431,34 @@ Story completed (code): DEMO-001 — Standalone demo agent with 4-message crypto
 - IaC templates updated but not validated via deploy — need a no-op validation deploy
 
 ---
+
+## 2026-05-30 — PERSIST-024: story written, approved, pending implementation
+
+**Story:** CELLO-PERSIST-024 — Structured client-side SQLCipher schema (M6)
+
+**Triggered by:** FROST key share persistence gap discovered during DEMO-001 deployment.
+After registration, the FROST share lived only in an in-memory Map (`_localShares`). On process
+restart, cello-mcp could not find the share → `registered=false` → demo agent service (systemd)
+could not start.
+
+**What the story delivers:**
+- V2 SQLCipher migration in `cello-client` repo: 15 structured tables + 3 gap tables
+- `client_store` (V1 KV table) is **intentionally DROPPED** — it was a placeholder with no
+  production users; its presence would mislead future agents into using it instead of proper schema
+- FROST share persistence (immediate DEMO-001 unblock): `frost_key_shares` table
+- ML-DSA keypair persistence: `ml_dsa_keypairs` table
+- Agent registry, sessions + leaves, connections, policy, peers, hash queue, relay ACKs, backup
+- First-install path: DB created on process start if no file exists
+- Multi-agent per device: separate DB path per K_local, db_key derived from K_local via HKDF
+
+**Key decisions:**
+- SQLCipher V2 is a separate versioning namespace from Flyway V24+ (Postgres) — no reservation
+  needed in the Migration Version Registry above
+- Implementation lives in `cello-client` repo (`core/client/`, `core/adapter-claude-code/`)
+- All ACs require a fresh `createClient()` from key file + DB path only — no in-memory state
+  transfer between test "processes"
+- SPARC + TDD applies; no mocks for SQLCipher, FROST, or ML-DSA
+
+**Downstream:** PERSIST-024 must complete before M6-E2E-001 can close.
+
+---

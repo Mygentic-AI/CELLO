@@ -59,7 +59,7 @@ laptop battery dies, what is gone?"
 
 ---
 
-## The 16 Tables
+## The 18 Tables (15 structured + 3 gap tables)
 
 ### Dependency Order
 

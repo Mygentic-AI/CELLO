@@ -296,7 +296,9 @@ acceptance_criteria:
     notes: >
       No add-endorsement MCP tool exists at time of writing. Insert test rows
       directly into the DB for this AC. The AC is about startup load and package
-      assembly only.
+      assembly only. A future story (CONNPOL domain, M7) is expected to add
+      cello_add_endorsement and cello_add_attestation MCP tools — at that point
+      this AC can be updated to use the tool rather than direct DB insertion.
 
   - id: AC-010
     given: "an inbound connection request row is in pending_connection_requests
