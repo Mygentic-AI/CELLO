@@ -4,6 +4,8 @@
 
 CELLO is a peer-to-peer identity and trust layer for agent-to-agent communication: split-key signing (FROST), tamper-evident hash chains, and prompt-injection defense — without trusting a centralized platform.
 
+**CELLO is a federated system with sovereign nodes.** Every directory node runs in a different region, on a different cloud provider, independently. This is the foundational architectural constraint — it is not a future aspiration, it is the design. When Andre says "add a node," he means add a node in a new region on a different cloud. There is no reason to run two nodes in the same region — if the region goes down, both go down, which defeats the entire purpose. Do not make assumptions that default to single-region or single-cloud scaling patterns. Every infrastructure, cost, and architecture decision must be evaluated through the lens of: one node = one region = one independent deployment.
+
 `docs/planning/` is an **Obsidian vault** — the primary design record. All architectural decisions and discussion logs live here.
 
 ---
