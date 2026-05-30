@@ -87,7 +87,7 @@ The historical record is well-documented:
 
 When a single CA is compromised, coerced by a government, or goes rogue, it can issue fraudulent certificates for any domain and there is no cryptographic defence. That is a systemic fragility baked into the centralised model.
 
-CELLO's threshold issuance is a different trust architecture, not just a stronger implementation of the same architecture. No single node can mint an agent identity. No single operator can be coerced into issuing a fraudulent credential. No single jurisdiction can compel the network to recognise an identity it should not recognise. A threshold of independent nodes across different clouds, geographies, and legal jurisdictions must cooperate — or collude. That property has never existed in public, production CA infrastructure.
+CELLO's threshold issuance is a different trust architecture, not just a stronger implementation of the same architecture. No single node can mint an agent identity. No single operator can be coerced into issuing a fraudulent credential. No single jurisdiction can compel the network to recognise an identity it should not recognise. A threshold of independent nodes across different clouds, geographies, and legal jurisdictions must cooperate to issue credentials. An attacker would need to control or collude with that threshold of nodes — a significantly higher bar than compromising a single CA. That property has never existed in public, production CA infrastructure.
 
 ## Summary
 
