@@ -299,6 +299,7 @@ Assumptions: db.t3.small RDS single-AZ + 20GB gp3, 2 Fargate tasks (directory + 
 | eu-north-1 Stockholm | $50.40 | $29.86 | $39.97 | $16.34 | $14.40 | $26.25 | **$177** |
 | eu-central-1 Frankfurt ◄ | $60.48 | $32.98 | $49.26 | $19.44 | $14.40 | $26.25 | **$203** |
 | ap-northeast-1 Tokyo ◄ | $70.56 | $43.08 | $52.79 | $17.50 | $14.40 | $26.25 | **$225** |
+| ap-south-1 Mumbai | $60.48 | $35.02 | $50.59 | $16.42 | $14.40 | $26.25 | **$203** |
 | ap-northeast-2 Seoul | $65.52 | $37.18 | $47.45 | $17.50 | $14.40 | $26.25 | **$208** |
 | ap-southeast-1 Singapore | $65.52 | $41.64 | $50.59 | $17.50 | $14.40 | $26.25 | **$216** |
 | ap-southeast-2 Sydney | $65.52 | $42.36 | $51.26 | $17.50 | $14.40 | $26.25 | **$217** |
@@ -311,7 +312,8 @@ Assumptions: db.t3.small RDS single-AZ + 20GB gp3, 2 Fargate tasks (directory + 
 - Stockholm is the cheapest EU region at $177/month — worth considering if Scandinavia coverage is useful.
 - Frankfurt is more expensive than Ireland and London despite being the current EU node — worth reconsidering on cost grounds when adding more EU nodes.
 - São Paulo is the most expensive region ($244/month) due to Brazil's high RDS and Fargate rates (~2× US rates). Add last.
-- Asia Pacific ranges $208–$225. Tokyo is the most expensive in APAC; Seoul is the best value for APAC coverage.
+- Mumbai ($203) is excellent value for South Asia coverage — same cost bracket as Frankfurt, high quality region, covers India and the broader South Asian market.
+- Asia Pacific ranges $203–$225. Tokyo is the most expensive in APAC; Mumbai and Seoul offer the best value for coverage.
 
 ---
 
