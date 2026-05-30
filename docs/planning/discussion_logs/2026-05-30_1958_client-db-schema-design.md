@@ -49,7 +49,7 @@ laptop battery dies, what is gone?"
 | Peer registry (K_local → libp2p Peer ID) | RAM only ✗ | `peers` ✓ |
 | Pending hash queue | Partially ✗ | `pending_hashes` ✓ |
 | Relay ACK receipts | Partially ✓ | `relay_ack_receipts` ✓ |
-| Backup metadata | `client_store` ✓ | `backup_metadata` ✓ |
+| Backup metadata | Not persisted ✗ | `backup_metadata` ✓ |
 
 **What is intentionally ephemeral (not persisted, correctly so):**
 - Open transport streams (relay, directory, signaling)
@@ -79,7 +79,6 @@ agents                          ← root; everything else FKs here
   ├── pending_hashes
   ├── relay_ack_receipts
   └── backup_metadata
-client_store                    ← retained from V1, generic fallback
 ```
 
 ---
@@ -373,14 +372,6 @@ CREATE TABLE IF NOT EXISTS backup_metadata (
     FOREIGN KEY (agent_pubkey) REFERENCES agents(pubkey) ON DELETE CASCADE
 );
 
--- ── 16. client_store ─────────────────────────────────────────
--- Generic key/value fallback from V1. Retained for any state not yet
--- migrated to structured tables. Will shrink over time.
-CREATE TABLE IF NOT EXISTS client_store (
-    key        TEXT    NOT NULL PRIMARY KEY,
-    value      BLOB    NOT NULL,
-    updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
-);
 ```
 
 ---
@@ -438,7 +429,7 @@ schema should be implemented as a dedicated M7 persistence sprint.
 
 ## Related Documents
 
-- [[CELLO-PERSIST-009]] — M4 V1 schema (client_store foundation)
+- [[CELLO-PERSIST-009]] — M4 V1 schema (unstructured foundation this design replaces)
 - [[CELLO-PERSIST-011]] — M4 backup/restore
 - [[CELLO-PERSIST-E2E-001]] — M4 persistence E2E gate
 - [[CONTEXT]] — K_local, FROST, primary_pubkey definitions
