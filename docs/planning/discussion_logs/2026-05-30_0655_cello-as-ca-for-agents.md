@@ -51,6 +51,8 @@ Agent identity does not fit this model:
 
 **The friction problem.** Are you going to buy a domain name — or the equivalent — for every agent you run? Your personal assistant agent, your coordination agent, your research agent running on your laptop? The friction alone kills the use case. Agents need to be as easy to register as creating a WhatsApp account, not as bureaucratic as acquiring a domain.
 
+It is worth being explicit that CELLO's friction calibration is a deliberate design decision, not a convenience compromise. The domain certificate analogy works in the other direction too: the reason spam, phishing, and bot accounts are so prevalent on email and social platforms is that those systems have essentially zero issuance friction — anyone can create an account. CELLO sits in a carefully chosen middle ground. Friction is high enough to tie identity to a real human (phone verification, email OTP, FROST DKG ceremony) — making mass bot registration economically and operationally costly. Friction is low enough that a legitimate operator running multiple agents on different machines is practical. That calibration is the product. Too low and the network fills with bots. Too high and legitimate adoption stalls.
+
 **The centralization problem.** A centralized agent certificate authority becomes the single point of control over who participates in the agent economy. Whoever runs it decides who gets an identity. That is not acceptable for infrastructure intended to be public.
 
 **The trust model problem.** Binary valid/revoked is sufficient for domain certificates. Agents need richer signals — reputation, endorsements, history — to make trust decisions autonomously. A certificate alone does not give an agent enough information to decide whether to accept a connection from a stranger.
@@ -65,7 +67,9 @@ CELLO builds this:
 - An append-only directory no single operator controls
 - A path to permissionless node participation as the network matures (M17 federation)
 
-The FROST threshold property is worth noting here: traditional CAs are single signing authorities. A compromised CA can issue fraudulent certificates — this is a known risk the CA/Browser Forum has elaborate governance to manage. CELLO's threshold issuance means no single node can issue a fraudulent agent identity. A threshold of independent nodes across different clouds and jurisdictions must collude. That is an architecturally stronger guarantee for this use case.
+The FROST threshold property deserves stronger framing than "a better CA." Traditional CAs are single signing authorities — that is not an implementation detail, it is the root cause of every major CA compromise in history and why the CA/Browser Forum exists at all. When a CA is compromised, coerced by a government, or goes rogue, it can issue fraudulent certificates for any domain and there is no cryptographic defence. DigiNotar issued fraudulent certificates for Google domains in 2011 and the entire CA had to be revoked. That is a systemic fragility baked into the centralised model.
+
+CELLO's threshold issuance is a different trust architecture, not just a stronger implementation of the same architecture. No single node can mint an agent identity. No single operator can be coerced into issuing a fraudulent credential. No single jurisdiction can compel the network to recognise an identity it should not recognise. A threshold of independent nodes across different clouds, geographies, and legal jurisdictions must cooperate — or collude. That property has never existed in traditional CA infrastructure.
 
 ## Summary
 
@@ -74,8 +78,9 @@ CELLO is not inspired by the CA model. It is the CA model, rebuilt for agent ide
 - Same historical necessity: infrastructure precedes commerce
 - Different entity type: human-backed agents, not organizations controlling domains
 - Different trust model: reputation and signals built in, not bolted on externally
-- Different issuance model: distributed threshold, not centralized authority
-- Different friction model: as easy as registering a WhatsApp account, not acquiring a domain
+- Different issuance model: distributed threshold, not centralized authority — a fundamentally different trust architecture, not just a stronger CA
+- Different friction model: deliberately calibrated between "zero friction = bots" and "high friction = no adoption"; the calibration is the product
+- Different coercion model: no single operator, jurisdiction, or node can be compelled to issue or revoke a credential unilaterally
 
 ---
 
