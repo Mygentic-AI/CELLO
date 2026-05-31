@@ -487,3 +487,34 @@ could not start.
 **Downstream:** PERSIST-024 must complete before M6-E2E-001 can close.
 
 ---
+
+---
+
+## 2026-05-31 — PERSIST-024: story closed
+
+**Story:** CELLO-PERSIST-024 — Structured client SQLCipher schema and startup state loading
+
+**Status:** CLOSED — merged to `cello-client` main (commit `6223e2e`), `trustless-cello` main updated.
+
+**What shipped:**
+- V2 SQLCipher migration: 18 structured tables, `client_store` dropped
+- `ClientStatePersistence` class with full persist/load for all durable state
+- `loadPersistedState()` on `CelloClientImpl` — reloads all in-memory state before first MCP tool call
+- `cello-mcp.ts` composition root fully wired: db_key derived, store opened, `loadPersistedState()` called before `server.connect()`
+- All session status transitions persisted (including `transport_lost`, `seal_rejected`, `desynchronized`)
+- `AgentHashQueue.loadPending()` — restores pending hashes on restart without triggering the V2 KV crash
+- `@cello-protocol/connect` on `main` at commit `6223e2e` — ready for `0.0.5` publish
+
+**PERSIST-024 is the direct unblock for DEMO-001 completion.**
+
+**Remaining steps for DEMO-001 (owner: orchestrator):**
+1. Bump `@cello-protocol/connect` to `0.0.5` and publish to npm
+2. On EC2 instance (`i-0ad3e7c22470f266e`, EIP `32.196.100.165`): `npm install @cello-protocol/connect@0.0.5`
+3. `systemctl start cello-demo` — verify `journalctl -u cello-demo` shows `demo.started`
+4. Test restart: `systemctl kill cello-demo`, sleep 6, verify service recovers
+5. Publish AgentID (`a2c55e2721f45cfa86cb3417a76e3f7b`) in README quick-start docs
+6. Update `infra/STATE.md` with AgentID
+7. Verify `cello_status` from running service shows `directory_reachable=true`
+
+**After DEMO-001 closes:** M6-E2E-001 is unblocked.
+

@@ -10,7 +10,7 @@ description: M6 write-up — CELLO beta launch. Installable @cello-protocol/conn
 # M6 — Beta Launch
 
 **Started:** 2026-05-26
-**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001, OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002, DEMO-001 (code complete; pending deployment + registration)
+**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001, OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002, PERSIST-024, DEMO-001 (code complete; pending deployment + registration)
 **Stories open:** M6-E2E-001
 
 **Unblocked by OPS-AGENT-002:** OPS-AGENT-003 (Telegram adapter), OPS-AGENT-004 (SES OTP delivery), OPS-AGENT-005B (wire app code)
@@ -580,6 +580,54 @@ After sending message 4, code unconditionally set `session.sealed = true` and ca
 4. Test restart (AC-006)
 5. Publish AgentID in README, update STATE.md
 6. AC-007 verified as part of M6-E2E-001
+
+---
+
+---
+
+## PERSIST-024 — Structured Client SQLCipher Schema and Startup State Loading
+
+Reactive story. Discovered during DEMO-001 deployment when `systemctl start cello-demo` failed immediately — the FROST share lived only in a RAM Map (`_localShares`) and was lost on every process restart. The demo agent service could never start because `registered=false` was returned on every boot.
+
+**Delivered:**
+- `V2__client_schema_structured.sql` in `cello-client` — drops the V1 `client_store` KV placeholder, creates 18 structured tables covering every piece of durable state: `agents`, `registration_state`, `frost_key_shares`, `ml_dsa_keypairs`, `connection_policy`, `connection_policy_requirements`, `connections`, `endorsements`, `attestations`, `peers`, `sessions`, `session_tree_leaves`, `pending_hashes`, `relay_ack_receipts`, `backup_metadata`, `known_relays`, `pending_connection_requests`, `decided_connection_requests`
+- `ClientStatePersistence` class — typed methods for every persist/load operation; SI-enforcing (signing_share and secret_key_blob never logged; db_key derived at runtime from K_local via HKDF, never stored)
+- `loadPersistedState()` on `CelloClientImpl` — reloads all in-memory structures before first MCP tool call; `client.startup.state.loaded` emitted after all structures populated
+- Full persist hooks wired at every mutation point in `client.ts`: leaf accept, session status transitions (sealing, sealed, seal_deferred, transport_lost, seal_rejected, desynchronized), connections (including Round 2), pending connection requests, policy changes, peers, pending hashes, relay ACK receipts
+- `AgentHashQueue.loadPending()` — restores pending hash queue on restart from DB without touching the old KV interface (which throws after V2 migration)
+- `cello-mcp.ts` composition root fully wired: derives db_key from identity seed before zeroing it, opens `SQLCipherClientStore`, calls `loadPersistedState()` before `server.connect()`
+- `mlDsaKeygenWithBytes()` added to `@cello-protocol/crypto` — returns both the provider and the raw secret blob for DB persistence
+
+**Bugs found during review cycle (7 code review passes):**
+
+### 1. Persistence layer was dead code — `cello-mcp.ts` never wired it
+**Symptom:** `SQLCipherClientStore` was constructed and `loadPersistedState()` was implemented, but the composition root never called either. The entire story's behavior was silently a no-op.
+**Root cause:** The wiring in `cello-mcp.ts` was omitted — `dbKey` derivation, store construction, and `loadPersistedState()` call were all missing.
+**Fix:** Derive `dbKey` from `identityKeyBytes` before zeroing; construct store and persistence; call `loadPersistedState()` before `server.connect()`.
+**Rule:** The composition root is the last link in the chain. Always verify it is wired before closing a story.
+
+### 2. `AgentHashQueue.enqueue()` crashed at startup after V2 migration
+**Symptom:** An earlier fix attempted to restore pending hashes by calling `AgentHashQueue.enqueue()` at startup. But `AgentHashQueue` uses `ClientStore.set/get`, which throws after V2 drops `client_store`. Any agent with rows in `pending_hashes` would crash on startup — the MCP server never connected.
+**Root cause:** `AgentHashQueue` was designed against the V1 KV store. Passing `SQLCipherClientStore` to it post-V2 causes all persistence calls to throw.
+**Fix:** Added `loadPending()` to `AgentHashQueue` that pre-populates the in-memory queue from DB-loaded entries, bypassing `ClientStore`. Persistence is now handled by `ClientStatePersistence`; `AgentHashQueue` handles relay protocol mechanics only.
+**Rule:** When replacing a persistence mechanism, audit every consumer of the old mechanism. Silent crashes on startup are the most dangerous failure mode.
+
+### 3. Session sequence counters not persisted on leaf accept
+**Symptom:** `last_seen_seq`, `last_sent_seq`, and `next_expected_seq` were persisted only on status transitions. A crash between leaf accepts left the reloaded session with stale counters — the next inbound leaf would fail the sequence check, blocking message receipt permanently.
+**Fix:** Added `persistSession()` after every sequence counter mutation in `#drainReadyQueue`.
+**Rule:** Any field the protocol uses for ordering or deduplication must be persisted immediately after mutation, not batched with status transitions.
+
+### 4. `client.startup.state.loaded` fired before in-memory structures were populated
+**Symptom:** AC-013 requires the event to fire "after all in-memory structures populated." It was emitted inside `ClientStatePersistence.loadStartupState()` — before any structure in `CelloClientImpl` was populated.
+**Fix:** Removed the emit from `loadStartupState()`. Added it at the end of `loadPersistedState()` in `client.ts`, after FROST, ML-DSA, registration, connections, sessions, peers, and pending requests are all injected.
+**Rule:** Events documenting startup completion must fire at the actual completion point, not at the data-loading point.
+
+### 5. Several status transitions never persisted: `transport_lost`, `seal_rejected`, `desynchronized`, Round 2 connection, Round 2 pending round
+**Symptom:** Five distinct state mutations updated in-memory but skipped `persistSession()` / `persistConnection()` / `persistPendingConnectionRequest()`. Crashes at these points left the DB and RAM diverged.
+**Fix:** Added persist calls at each mutation point.
+**Rule:** Every field in the `sessions` schema row is there because some protocol behavior depends on it surviving a restart. If a field is written in RAM, it must be written to DB.
+
+**Review cycle:** 7 code-review passes, 2 sprint-reviewer passes. The first sprint-review pass found AC-001's test was exercising the persistence layer directly rather than `loadPersistedState()` through `CelloClientImpl` — the critical path was untested. Required adding a real-FROST integration test using `trustedDealer` + `loadPersistedState()` on a real `CelloClientImpl` instance.
 
 ---
 
