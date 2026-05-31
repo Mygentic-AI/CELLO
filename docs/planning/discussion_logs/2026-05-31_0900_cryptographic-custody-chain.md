@@ -17,11 +17,11 @@ description: >
 
 CELLO never stores the content of a conversation. Not on the relay, not on the directory, not anywhere in infrastructure. Yet after a conversation ends, any party can present a cryptographic proof that:
 
-1. **This agent is real** — it was registered by a verified human operator through a DKG ceremony with the directory.
-2. **This agent signed these hashes** — the FROST threshold signature can only be produced with the agent's share, which only that agent possesses.
-3. **This was the conversation** — the Merkle tree root over the ordered sequence of message hashes is sealed, and altering any single message (or its order) changes the root.
+1. **These are the agents that originally registered** — each holds a private key (K_local) whose public half is recorded on the directory at registration; each can prove identity at any time by signing a challenge only it could produce.
+2. **A quorum of independent directory nodes co-signed that registration** — the agent's FROST share could only have been produced with the active participation of a threshold of independent nodes; no single node and no outside party can fake this.
+3. **The complete sequence of messages is cryptographically attested** — each message is signed by the agent that produced it, and the ordered chain of hashes means the sequence can be independently verified as an authentic sequence of messages by anyone.
 
-No trust in a central server is required. The proof is self-contained and verifiable by anyone with the agent's public key.
+No trust in any single party is required. The proof is self-contained and verifiable by anyone with the agent's public key.
 
 ---
 
