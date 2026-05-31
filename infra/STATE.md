@@ -220,7 +220,11 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | IAM Instance Profile | cello-agent-ssm-role |
 | IAM Role | cello-agent-ssm-role |
 | Secrets Manager Key Path | cello/dev/demo-agent/identity-key |
-| Agent ID (own_pubkey) | pending registration (Step 9c) |
+| Agent ID | a2c55e2721f45cfa86cb3417a76e3f7b |
+| Agent pubkey (K_local) | 1818eb0768536bd297fe34694a0347d5a3405eb1dc566a6ba9f9017ee7eb1296 |
+| SQLCipher DB path | /opt/cello-demo/data/client.db |
+| @cello-protocol/connect version | 0.0.6 (beta) |
+| Service status | active — demo.started confirmed, restart-survives-kill tested 2026-05-31 |
 | Access | SSM Session Manager only - no key pair, no inbound SG rules |
 | Inbound rules | None |
 | Outbound rules | TCP 443 to 0.0.0.0/0 only |
