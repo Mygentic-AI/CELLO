@@ -512,6 +512,14 @@ observability:
         hasPolicy]
       correlationId: false
 
+    - name: client.leaf.duplicate
+      level: warn
+      trigger: "INSERT OR IGNORE on session_tree_leaves hits UNIQUE constraint —
+        leaf at this index already exists (duplicate leaf from relay replay or
+        concurrent write)"
+      context_fields: [agentPubkey, sessionId, leafIndex]
+      correlationId: true
+
   error_events:
     - name: client.frost.share.missing
       level: error
