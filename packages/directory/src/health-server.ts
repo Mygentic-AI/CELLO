@@ -44,7 +44,7 @@ export function createHealthServer(opts: HealthServerOptions): Server {
   });
 
   const bootstrapResponseBody = multiaddr
-    ? JSON.stringify({ multiaddr, peerId: peerId ?? null })
+    ? JSON.stringify(peerId ? { multiaddr, peerId } : { multiaddr })
     : null;
 
   const server = createServer((req, res) => {
