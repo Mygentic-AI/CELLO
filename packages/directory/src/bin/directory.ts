@@ -725,11 +725,14 @@ if (directoryHostname) {
   // Production: construct /dns4/<hostname>/tcp/80/ws/p2p/<peerId>
   bootstrapMultiaddr = `/dns4/${directoryHostname}/tcp/80/ws/p2p/${directoryPeerId}`;
 } else {
-  // Local/dev fallback: use the actual WS listen address from the node.
-  // Find the first WS listen address and append /p2p/<peerId> if not already present.
+  // Fallback: use the actual WS listen address from the node (fires when
+  // CELLO_DIRECTORY_HOSTNAME is unset and no WS listen address is available
+  // from the node — e.g. local dev or integration tests).
+  // Replace 0.0.0.0 with 127.0.0.1 so the address is routable for local clients.
   const wsAddr = result.node.listenAddresses().find((a) => a.includes("/ws"));
   if (wsAddr) {
-    bootstrapMultiaddr = wsAddr.includes("/p2p/") ? wsAddr : `${wsAddr}/p2p/${directoryPeerId}`;
+    const routeableAddr = wsAddr.replace("0.0.0.0", "127.0.0.1");
+    bootstrapMultiaddr = routeableAddr.includes("/p2p/") ? routeableAddr : `${routeableAddr}/p2p/${directoryPeerId}`;
   }
 }
 

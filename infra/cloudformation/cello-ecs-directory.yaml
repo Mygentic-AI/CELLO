@@ -248,9 +248,9 @@ Resources:
 
   Service:
     Type: AWS::ECS::Service
-    # DependsOn includes both listener rules so CloudFormation does not start
-    # registering targets before /internal/* protection rules are active (AC-009d).
-    DependsOn: [HttpListener, InternalPathVpcAllowRule, InternalPathExternalBlockRule]
+    # DependsOn ensures CloudFormation does not start registering targets before
+    # the /internal/* forward rule is active (AC-009d).
+    DependsOn: [HttpListener, InternalPathForwardRule]
     Properties:
       ServiceName: !Sub "cello-directory-${Environment}"
       Cluster: !Ref Cluster

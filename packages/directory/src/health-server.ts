@@ -10,7 +10,8 @@
  *   5. Response must complete within 5 seconds (ECS health check timeout).
  *
  * The health server runs alongside the libp2p directory node inside the same
- * ECS task. The ALB target group health check hits GET /health on port 443.
+ * ECS task on port 9090. The ALB target group health check hits GET /health on
+ * port 9090 (separated from the WS listener on port 8080).
  * The bootstrap endpoint is used by cello-mcp to auto-discover the directory
  * multiaddr without requiring manual CELLO_DIRECTORY_MULTIADDR configuration.
  */
@@ -43,7 +44,7 @@ export function createHealthServer(opts: HealthServerOptions): Server {
   });
 
   const bootstrapResponseBody = multiaddr
-    ? JSON.stringify({ multiaddr, peerId: peerId ?? "" })
+    ? JSON.stringify({ multiaddr, peerId: peerId ?? null })
     : null;
 
   const server = createServer((req, res) => {
