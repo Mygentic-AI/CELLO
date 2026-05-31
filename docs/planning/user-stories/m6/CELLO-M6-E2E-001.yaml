@@ -70,7 +70,7 @@ acceptance_criteria:
 
   - id: AC-002
     given: "The @cello-protocol/connect MCP server running on the clean machine"
-    when: "the user messages the production Telegram bot, completes
+    when: "the user messages @CelloConnectStagingBot on Telegram, completes
       phone verification (contact sharing), provides email, enters
       the OTP received via email"
     then: "the bot delivers a pre-authorization token in the format
