@@ -174,3 +174,19 @@ The SQLCipher database stores the FROST share, session state, and leaf hashes �
 - **If you have only K_local but no database**: you can prove identity but can't sign (FROST share is lost) — a new DKG is required.
 
 The database is the *persistence mechanism*, not the *trust anchor*. The trust anchor is the cryptographic binding between K_local, the FROST share, and the directory's attestation. The database just ensures that binding survives process restarts.
+
+---
+
+## What K_local Compromise Grants — and What It Doesn't
+
+If an attacker obtains K_local (and the database it encrypts), they gain the ability to conduct new sessions as that agent going forward. From the directory's perspective, they *are* that agent — until the Account holder acts.
+
+What they **cannot** do:
+
+- **Alter past conversations** — sealed conversations are already co-signed by the directory cluster. The attacker holds K_local, but the directory will not re-sign altered history. Past seals are immutable.
+- **Compromise other agents on the same Account** — each agent has an independent K_local and independent FROST share. Compromising Agent_A gives zero access to Agent_B.
+- **Survive revocation** — the moment the Account holder realizes they are not in control of that K_local, they invoke "Not Me" through the Operations Agent. The directory immediately revokes the key. From that point, the attacker's K_local is dead — the directory will not enter FROST ceremonies, establish sessions, or seal conversations for it. Account-level authority supersedes any individual K_local.
+
+The containment boundary is the agent, not the account. The worst case is: the attacker can impersonate one agent for the window between compromise and revocation.
+
+CELLO cannot prevent compromise of your local infrastructure — if an attacker has access to your machine, they can damage your database and files regardless of any protocol. What CELLO aims to ensure is that connecting to the network never becomes the vector: other agents cannot compromise your keys, the directory cannot leak your signing material, and if your local security fails, the protocol limits the blast radius to one agent for the window between compromise and revocation.
