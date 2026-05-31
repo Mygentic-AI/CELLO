@@ -711,9 +711,44 @@ for (const addr of result.node.listenAddresses()) {
 const migrationsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../db/migrations");
 const schemaVersion = readdirSync(migrationsDir).filter((f) => /^V\d+__.*\.sql$/.test(f)).length;
 
-const healthServer = createHealthServer({ nodeId, schemaVersion, logger, port: healthPort });
+// ─── Bootstrap endpoint: auto-discover directory multiaddr ────────────────────
+// CELLO_DIRECTORY_HOSTNAME is the publicly-routable hostname (e.g. the ALB DNS name or
+// Route53 record). In production this is set in the ECS task definition so the bootstrap
+// endpoint returns the correct multiaddr for external clients.
+// When not set, we fall back to the actual WS listen address from the libp2p node
+// (useful for local dev / integration tests where the real listener address is known).
+const directoryHostname = process.env["CELLO_DIRECTORY_HOSTNAME"];
+const directoryPeerId = result.node.getPeerId();
+
+let bootstrapMultiaddr: string | undefined;
+if (directoryHostname) {
+  // Production: construct /dns4/<hostname>/tcp/80/ws/p2p/<peerId>
+  bootstrapMultiaddr = `/dns4/${directoryHostname}/tcp/80/ws/p2p/${directoryPeerId}`;
+} else {
+  // Fallback: use the actual WS listen address from the node (fires when
+  // CELLO_DIRECTORY_HOSTNAME is unset and no WS listen address is available
+  // from the node — e.g. local dev or integration tests).
+  // Replace 0.0.0.0 with 127.0.0.1 so the address is routable for local clients.
+  const wsAddr = result.node.listenAddresses().find((a) => a.includes("/ws"));
+  if (wsAddr) {
+    const routeableAddr = wsAddr.replace("0.0.0.0", "127.0.0.1");
+    bootstrapMultiaddr = routeableAddr.includes("/p2p/") ? routeableAddr : `${routeableAddr}/p2p/${directoryPeerId}`;
+  }
+}
+
+const healthServer = createHealthServer({
+  nodeId,
+  schemaVersion,
+  logger,
+  port: healthPort,
+  multiaddr: bootstrapMultiaddr,
+  peerId: directoryPeerId,
+});
 healthServer.listen(healthPort, () => {
   logger.info("adapter.initialised", { adapterName: "HealthServer", implementation: "http", env, port: healthPort });
+  if (bootstrapMultiaddr) {
+    logger.info("adapter.initialised", { adapterName: "BootstrapEndpoint", multiaddr: bootstrapMultiaddr, peerId: directoryPeerId });
+  }
 });
 
 // ─── DEPLOY-002: directory.service.started ─────────────────────────────────────

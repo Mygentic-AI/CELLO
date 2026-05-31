@@ -26,6 +26,19 @@ Parameters:
     Type: String
     Description: "ECR image URI for the directory service (e.g. {account}.dkr.ecr.{region}.amazonaws.com/cello-directory:latest)"
 
+# Bootstrap endpoint hostname mapping: AWS region → public Route53 hostname.
+# Used by CELLO_DIRECTORY_HOSTNAME env var so GET /bootstrap returns the correct
+# publicly-routable multiaddr. Clients call this to auto-discover the directory
+# without manual CELLO_DIRECTORY_MULTIADDR configuration.
+Mappings:
+  DirectoryHostname:
+    us-east-1:
+      Hostname: directory-us1.cello.mygentic.ai
+    eu-central-1:
+      Hostname: directory-eu1.cello.mygentic.ai
+    ap-northeast-1:
+      Hostname: directory-ap1.cello.mygentic.ai
+
 Resources:
   Cluster:
     Type: AWS::ECS::Cluster
@@ -88,6 +101,12 @@ Resources:
             # Port 8080 matches the ALB target group (HTTP forward → container 8080).
             - Name: CELLO_DIRECTORY_WS_LISTEN_ADDR
               Value: "/ip4/0.0.0.0/tcp/8080/ws"
+            # Bootstrap endpoint: publicly-routable hostname used to build the multiaddr
+            # returned by GET /bootstrap. Clients (cello-mcp) call this endpoint to
+            # auto-discover the directory multiaddr without manual CELLO_DIRECTORY_MULTIADDR config.
+            # Format: /dns4/<hostname>/tcp/80/ws/p2p/<peer-id>
+            - Name: CELLO_DIRECTORY_HOSTNAME
+              Value: !FindInMap [DirectoryHostname, !Ref "AWS::Region", Hostname]
             - Name: HOME
               Value: /tmp
             - Name: CELLO_RELAY_MULTIADDR
@@ -229,9 +248,9 @@ Resources:
 
   Service:
     Type: AWS::ECS::Service
-    # DependsOn includes both listener rules so CloudFormation does not start
-    # registering targets before /internal/* protection rules are active (AC-009d).
-    DependsOn: [HttpListener, InternalPathVpcAllowRule, InternalPathExternalBlockRule]
+    # DependsOn ensures CloudFormation does not start registering targets before
+    # the /internal/* forward rule is active (AC-009d).
+    DependsOn: [HttpListener, InternalPathForwardRule]
     Properties:
       ServiceName: !Sub "cello-directory-${Environment}"
       Cluster: !Ref Cluster
