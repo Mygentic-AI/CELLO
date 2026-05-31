@@ -711,9 +711,41 @@ for (const addr of result.node.listenAddresses()) {
 const migrationsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../db/migrations");
 const schemaVersion = readdirSync(migrationsDir).filter((f) => /^V\d+__.*\.sql$/.test(f)).length;
 
-const healthServer = createHealthServer({ nodeId, schemaVersion, logger, port: healthPort });
+// ─── Bootstrap endpoint: auto-discover directory multiaddr ────────────────────
+// CELLO_DIRECTORY_HOSTNAME is the publicly-routable hostname (e.g. the ALB DNS name or
+// Route53 record). In production this is set in the ECS task definition so the bootstrap
+// endpoint returns the correct multiaddr for external clients.
+// When not set, we fall back to the actual WS listen address from the libp2p node
+// (useful for local dev / integration tests where the real listener address is known).
+const directoryHostname = process.env["CELLO_DIRECTORY_HOSTNAME"];
+const directoryPeerId = result.node.getPeerId();
+
+let bootstrapMultiaddr: string | undefined;
+if (directoryHostname) {
+  // Production: construct /dns4/<hostname>/tcp/80/ws/p2p/<peerId>
+  bootstrapMultiaddr = `/dns4/${directoryHostname}/tcp/80/ws/p2p/${directoryPeerId}`;
+} else {
+  // Local/dev fallback: use the actual WS listen address from the node.
+  // Find the first WS listen address and append /p2p/<peerId> if not already present.
+  const wsAddr = result.node.listenAddresses().find((a) => a.includes("/ws"));
+  if (wsAddr) {
+    bootstrapMultiaddr = wsAddr.includes("/p2p/") ? wsAddr : `${wsAddr}/p2p/${directoryPeerId}`;
+  }
+}
+
+const healthServer = createHealthServer({
+  nodeId,
+  schemaVersion,
+  logger,
+  port: healthPort,
+  multiaddr: bootstrapMultiaddr,
+  peerId: directoryPeerId,
+});
 healthServer.listen(healthPort, () => {
   logger.info("adapter.initialised", { adapterName: "HealthServer", implementation: "http", env, port: healthPort });
+  if (bootstrapMultiaddr) {
+    logger.info("adapter.initialised", { adapterName: "BootstrapEndpoint", multiaddr: bootstrapMultiaddr, peerId: directoryPeerId });
+  }
 });
 
 // ─── DEPLOY-002: directory.service.started ─────────────────────────────────────
