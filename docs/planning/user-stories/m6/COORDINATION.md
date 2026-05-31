@@ -518,3 +518,24 @@ could not start.
 
 **After DEMO-001 closes:** M6-E2E-001 is unblocked.
 
+---
+
+## 2026-05-31 — DEMO-001: story closed
+
+**Status:** CLOSED.
+
+**What shipped:**
+- `@cello-protocol/connect@0.0.6` (beta) live on npm — includes PERSIST-024 wiring and db/migrations in tarball
+- EC2 instance `i-0ad3e7c22470f266e` running `cello-demo.service` — `demo.started` confirmed, restart test passed
+- AgentID `a2c55e2721f45cfa86cb3417a76e3f7b` — registered, FROST share persisted to SQLCipher DB at `/opt/cello-demo/data/client.db`
+- `infra/STATE.md` updated with AgentID, agent pubkey, DB path, service status
+- cello-client `README.md` quick-start section added with AgentID
+
+**Deployment issues encountered:**
+1. `db/migrations` not in npm tarball — `files` only listed `dist/`; fixed in `0.0.6` by adding `"db/"` to allowlist
+2. `cello-demo` system user has no home directory — `~/.cello/client.db` default unwritable; fixed by adding `CELLO_DB_PATH=/opt/cello-demo/data/client.db` to env.conf
+3. `register-agent.mjs` did not forward `CELLO_DB_PATH` to spawned cello-mcp — fixed before re-running registration
+4. Two re-registration ceremonies required — first token's FROST share was not persisted (missing migrations); second succeeded after 0.0.6 deployed
+
+**M6 open stories:** M6-E2E-001 only — unblocked now.
+

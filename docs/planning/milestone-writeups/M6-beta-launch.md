@@ -10,7 +10,7 @@ description: M6 write-up — CELLO beta launch. Installable @cello-protocol/conn
 # M6 — Beta Launch
 
 **Started:** 2026-05-26
-**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001, OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002, PERSIST-024, DEMO-001 (code complete; pending deployment + registration)
+**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001, OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002, PERSIST-024, DEMO-001
 **Stories open:** M6-E2E-001
 
 **Unblocked by OPS-AGENT-002:** OPS-AGENT-003 (Telegram adapter), OPS-AGENT-004 (SES OTP delivery), OPS-AGENT-005B (wire app code)
@@ -573,13 +573,32 @@ After sending message 4, code unconditionally set `session.sealed = true` and ca
 - Full flow: /start → phone → email → OTP → token in <60 seconds via @CelloConnectStagingBot
 - Token: `CELLO-PAC4QVHhHAkYgNimMAvXBQzQbzvH9JF1i`
 
-**Remaining steps to close DEMO-001:**
-1. SSM into EC2, run `cello_register` with token → get AgentID
-2. chmod 600 key, back up to Secrets Manager
-3. Create env.conf drop-in, start service, verify `demo.started`
-4. Test restart (AC-006)
-5. Publish AgentID in README, update STATE.md
-6. AC-007 verified as part of M6-E2E-001
+**Deployment completed (2026-05-31):**
+- Three npm patch releases required: `0.0.5` (PERSIST-024 wiring), `0.0.6` (db/migrations missing from tarball — `files` field only listed `dist/`; SQLCipher migration files were not in the published package, so every startup failed with `SQLITE_CANTOPEN`)
+- Two additional issues found during deployment: (1) `cello-demo` user has no home directory — `~/.cello/client.db` default path unwritable; fixed by adding `CELLO_DB_PATH=/opt/cello-demo/data/client.db` to `env.conf`; (2) `register-agent.mjs` did not pass `CELLO_DB_PATH` to the spawned cello-mcp process — fixed before re-running registration
+- Two re-registration ceremonies required (first token consumed but FROST share not persisted due to missing migrations; second token persisted successfully after 0.0.6 deploy)
+- `demo.started` confirmed in journalctl; restart test (systemctl kill → auto-recover → demo.started again) passed
+- AgentID `a2c55e2721f45cfa86cb3417a76e3f7b` published in cello-client README quick-start; `infra/STATE.md` updated
+
+**DEMO-001 is closed. M6-E2E-001 is unblocked.**
+
+### Deployment bugs found:
+
+#### 1. db/migrations not in npm tarball
+**Symptom:** Every startup failed with `SQLITE_CANTOPEN` / `ENOENT: no such file or directory, scandir '.../node_modules/@cello-protocol/client/db/migrations'`. The V2 migration file was never found.
+**Root cause:** `@cello-protocol/client/package.json` listed only `"files": ["dist/", "package.json"]`. The `db/` directory was never included.
+**Fix:** Added `"db/"` to the files allowlist. Bumped `@cello-protocol/client` to `0.0.5` and `@cello-protocol/connect` to `0.0.6`.
+**Rule:** Any directory referenced at runtime that lives outside `dist/` must be explicitly in the `files` allowlist. Build-time paths are not runtime paths.
+
+#### 2. cello-demo user has no home directory
+**Symptom:** `SQLITE_CANTOPEN: unable to open database file` — cello-mcp tried to create `~/.cello/client.db` but the `cello-demo` system user has no home directory.
+**Fix:** Added `CELLO_DB_PATH=/opt/cello-demo/data/client.db` to the systemd env.conf drop-in; created `/opt/cello-demo/data/` owned by `cello-demo`.
+**Rule:** System users created with `--no-create-home` have no `$HOME`. Never rely on `homedir()` defaults for service accounts — always set explicit paths via env vars.
+
+#### 3. register-agent.mjs did not forward CELLO_DB_PATH to cello-mcp subprocess
+**Symptom:** Even after adding `CELLO_DB_PATH` to env.conf, running `register-agent.mjs` as `cello-demo` user still failed to persist — the script spawns `cello-mcp` with its own env block that did not include `CELLO_DB_PATH`.
+**Fix:** Updated `register-agent.mjs` to include `CELLO_DB_PATH: '/opt/cello-demo/data/client.db'` in the spawn env.
+**Rule:** Any script that spawns a subprocess with an explicit env block must forward all vars the subprocess needs. `...process.env` alone is not sufficient if the parent env does not yet include the var.
 
 ---
 
