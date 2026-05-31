@@ -429,6 +429,7 @@ schema should be implemented as a dedicated M7 persistence sprint.
 
 ## Related Documents
 
+- [[2026-05-31_0900_cryptographic-custody-chain|Cryptographic Custody Chain]] — explains why the database persists what it does: K_local, FROST shares, and leaf hashes form the custody chain
 - [[CELLO-PERSIST-009]] — M4 V1 schema (unstructured foundation this design replaces)
 - [[CELLO-PERSIST-011]] — M4 backup/restore
 - [[CELLO-PERSIST-E2E-001]] — M4 persistence E2E gate

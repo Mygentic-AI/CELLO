@@ -1,7 +1,7 @@
 ---
 name: CELLO Protocol Map
 type: design
-date: 2026-05-21
+date: 2026-05-31
 topics: [identity, trust, FROST, merkle-tree, connection-policy, endorsements, PSI, prompt-injection, dispute-resolution, discovery, compliance, recovery, key-management, federation, transport, sybil-defense, persistence, MCP-tools, quantum-resistance, session-termination, notifications, succession]
 status: active
 description: Top-level orientation document — protocol domains, what's decided, where to find the deep reference, which discussion logs matter, and readiness for user stories.
@@ -53,6 +53,7 @@ Device attestation (TPM, Play Integrity, App Attest) requires a native app and i
 - [[2026-04-11_1000_sybil-floor-and-trust-farming-defenses|Sybil Floor and Trust Farming Defenses]] — 8-layer anti-Sybil architecture
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — four-class trust signal taxonomy
 - [[2026-05-16_0800_trust-signal-verification-architecture|Trust Signal Verification Architecture]] — OAuth proof of account ownership (Passport.js per-provider strategies); browser-based profile extraction; community-driven oracle model for longer-term verification; M7 implementation architecture
+- [[2026-05-30_0655_cello-as-ca-for-agents|CELLO as Certificate Authority for Agents]] — K_local as the structural equivalent of a TLS certificate; why existing CA infrastructure cannot serve agents; FROST threshold issuance vs traditional CA trust model
 
 **Readiness: Stable.** All design decisions resolved. No blocking open items. Implementation choices (API selection, scoring weights) are engineering decisions.
 
@@ -75,6 +76,8 @@ Consensus is only needed for directory state changes and canonical sequence numb
 - [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — FROST at session/seal only; directory as passive notary
 - [[2026-04-15_1100_key-rotation-design|Key Rotation Design]] — per-agent K_server; independent rotation; envelope encryption
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — transport feasibility; bootstrap discovery; NAT traversal
+- [[2026-05-30_0637_federation-transport-sovereignty-and-mtls|Federation Transport, Node Sovereignty, and Mutual TLS]] — identifies VPC Peering gap vs sovereign intent; establishes mTLS over public endpoints as the fix; extends mTLS to internal API security
+- [[2026-05-30_0800_node-infrastructure-cost-model|Node Infrastructure Cost Model]] — per-node cost breakdown from AWS CUR; scaling projections to 6, 10, 20 nodes; regional pricing variance
 
 **Also see:**
 - [[open-decisions|Open Decisions]] — 12 resolved decisions (FROST, Ed25519, SHA-256, thresholds, Merkle construction, sequence numbers)
@@ -129,6 +132,8 @@ Multi-party (N>2) conversations separate authorship from ordering. Two modes: se
 - [[2026-05-14_1702_relay-session-mechanics-and-recovery|Relay Session Mechanics and Recovery]] — relay WAL scoped to crash recovery only; agent-side hash queue as first-class protocol primitive; pre-seal reconciliation protocol; relay failure does not interrupt P2P conversation
 - [[2026-05-14_1702_arbitration-mechanics-and-dispute-resolution|Arbitration Mechanics and Dispute Resolution]] — four-scenario matrix for complaints; UNSUBSTANTIATED vs REFUSED vs upheld verdicts; refusal as a distinct negative signal; client backup as the non-repudiation obligation
 - [[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol Primitive — CRDTs]] — Goals as first-class CELLO primitive using CRDTs; CRDT operation log as the Merkle tree; field-level write authority; non-repudiation applies to document mutations exactly as to messages
+- [[2026-05-27_1400_multi-agent-mcp-planning|Multi-Agent MCP Server Planning]] — M7 multi-agent support: agent states, per-connection state, presence detection, retry queue, nonce deduplication
+- [[2026-05-31_0900_cryptographic-custody-chain|Cryptographic Custody Chain]] — how K_local + FROST share together prove conversation integrity without storing content; per-message signing, hash chain, and sealed Merkle root
 
 **Readiness: Stable.** Delivery failure handling, termination protocol, multi-party support, group rooms, and notification system are fully designed. Multi-session fan-in/fan-out and relay recovery mechanics added in May 2026 and are stable. Shared-state (CRDTs/Goals) and arbitration mechanics are designed; user stories not yet written.
 
@@ -140,7 +145,7 @@ Multi-party (N>2) conversations separate authorship from ordering. Two modes: se
 
 The receiver's scan is the security boundary. The sender's scan is an honesty signal recorded in the Merkle leaf. Scan results (score, model_hash, sanitization_stats) are part of the conversation record for dispute resolution. The ML model supply chain is secured by SHA-256 hash pinning in the SDK source code. The gate pyramid (connection → message → pattern → classifier → LLM) ensures attack traffic is shed before reaching expensive inference.
 
-**Canonical source:** [[end-to-end-flow|end-to-end-flow.md]] — Part 7: Prompt Injection Defense (§7.1–§7.2); also [[prompt-injection-defense-layers-v2|Prompt Injection Defense Architecture]] for the full 6-layer specification
+**Canonical source:** [[end-to-end-flow|end-to-end-flow.md]] — Part 7: Prompt Injection Defense (§7.1–§7.2); also [[2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway|Security Layer V3]] (supersedes V2) for the full extensible architecture with pipeline hooks and split gateway
 
 **Key discussion logs:**
 - [[2026-04-11_1400_security-architecture-layers-and-trust-signal-classes|Security Architecture Layers and Trust Signal Classes]] — four-layer system model; where scanning fits
@@ -259,6 +264,13 @@ These documents span multiple domains and are important for understanding how th
 | [[day-0-agent-driven-development-plan\|Day-0 Development Plan]] | Implementation plan using Claude-Flow multi-agent orchestration |
 | [[2026-05-13_2044_a2a-interoperability-and-positioning\|A2A Interoperability and Strategic Positioning]] | Privacy × Trust grid; CELLO as the only top-right quadrant (sovereign privacy + provable trust); why A2A is a delegation protocol that doesn't compete; A2A compatibility shim as edge adapter |
 | [[2026-05-21_1456_identity-as-governance-foundation\|Identity as the Foundation of Governance]] | How CELLO's identity primitives make governance a database row; governance without identity is a tax on everyone; competitive positioning against governance tooling market |
+| [[2026-05-30_0655_cello-as-ca-for-agents\|CELLO as Certificate Authority for Agents]] | K_local as agent certificate; FROST threshold issuance vs traditional CA; why existing CA infrastructure cannot serve agents |
+| [[2026-05-31_0900_cryptographic-custody-chain\|Cryptographic Custody Chain]] | How K_local + FROST share prove conversation integrity without storing content; per-message signing, hash chain, sealed Merkle root; blast radius of K_local compromise |
+| [[2026-05-31_1143_hash-custodian-positioning\|Hash Custodian — Core Positioning Statement]] | Core design philosophy: minimum trade-offs from pure P2P; what CELLO stores (hashes) vs what it doesn't (content); frames drawbacks from user's perspective |
+| [[2026-05-30_0637_federation-transport-sovereignty-and-mtls\|Federation Transport and Mutual TLS]] | Sovereign node intent vs VPC Peering gap; mTLS over public endpoints; certificate lifecycle as paramount concern |
+| [[2026-05-30_0800_node-infrastructure-cost-model\|Node Infrastructure Cost Model]] | Per-node AWS cost breakdown; scaling projections; regional pricing variance for expansion planning |
+| [[2026-05-30_1958_client-db-schema-design\|Client-Side SQLCipher Schema]] | 16-table schema for all client-side persistence: FROST shares, sessions, leaves, connections, trust signals, backup metadata |
+| [[2026-05-28_1000_security-layer-v3-extensibility-and-split-gateway\|Security Layer V3]] | Supersedes V2: separate gateway package, pipeline hooks, directory-backed content hash chain, enterprise split-deployment |
 
 ---
 
@@ -305,3 +317,4 @@ All 12 design problems are closed. All 12 open decisions are resolved. The proto
 - [[2026-04-18_1620_commerce-attestation-and-fraud-detection|Commerce Attestation and Fraud Detection]] — signed purchase attestations; behavioral fraud detection; ephemeral chat log review for flagged accounts; KYC on sellers
 - [[2026-04-19_2045_group-room-design|Group Room Design]] — complete design of Class 3 group rooms: two-flag room model, ownership/admin structure, CONCURRENT+GCD conversation mode, digest batching, attention modes, violation enforcement with logarithmic auto-mute, wallet protection, relay defense, and 20-participant cap
 - [[2026-04-24_1530_inference-billing-protocol|Inference Billing Protocol]] — token-priced specialized inference: rate card binding at session establishment, signed cumulative billing in Merkle leaves, Layer 5 cost cap enforcement, ABORT-BILLING termination, three tokenizer verification modes (local, hosted opt-in, trust-only)
+- [[2026-05-27_1400_multi-agent-mcp-planning|Multi-Agent MCP Server Planning]] — M7 multi-agent support: agent states, storage convention, new MCP tools, presence detection, retry queue, nonce deduplication

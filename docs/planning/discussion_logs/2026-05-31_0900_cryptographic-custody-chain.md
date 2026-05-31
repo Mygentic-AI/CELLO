@@ -190,3 +190,14 @@ What they **cannot** do:
 The containment boundary is the agent, not the account. The worst case is: the attacker can impersonate one agent for the window between compromise and revocation.
 
 CELLO cannot prevent compromise of your local infrastructure — if an attacker has access to your machine, they can damage your database and files regardless of any protocol. What CELLO aims to ensure is that connecting to the network never becomes the vector: other agents cannot compromise your keys, the directory cannot leak your signing material, and if your local security fails, the protocol limits the blast radius to one agent for the window between compromise and revocation.
+
+---
+
+## Related Documents
+
+- [[2026-05-31_1143_hash-custodian-positioning|Hash Custodian — Core Positioning Statement]] — companion piece: what CELLO stores (hashes) vs what it doesn't (content), and the design philosophy behind minimum trade-offs from pure P2P
+- [[2026-05-30_0655_cello-as-ca-for-agents|CELLO as Certificate Authority for Agents]] — the CA parallel: K_local as the structural equivalent of a TLS certificate, and why FROST threshold issuance is fundamentally different from traditional CAs
+- [[2026-05-30_1958_client-db-schema-design|Client-Side SQLCipher Schema Design]] — the database schema that persists K_local, FROST shares, session state, and leaf hashes discussed in this document
+- [[2026-04-17_1100_not-me-session-termination|"Not Me" Session Termination]] — the revocation mechanism referenced in the compromise section: dual-path forced abort on all active sessions
+- [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — canonical narrative covering registration, sessions, and seal ceremonies in full
+- [[2026-04-15_0900_session-level-frost-signing|Session-Level FROST Signing]] — FROST at session/seal only; the directory as passive notary between bookend ceremonies

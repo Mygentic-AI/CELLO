@@ -117,6 +117,8 @@ The CA compromise history cited in this document is factually grounded and indep
 
 ## Related Documents
 
+- [[2026-05-31_0900_cryptographic-custody-chain|Cryptographic Custody Chain]] — how K_local + FROST share form an unbroken proof chain; extends the CA parallel into the conversation integrity story
+- [[2026-05-31_1143_hash-custodian-positioning|Hash Custodian — Core Positioning Statement]] — positions the hash custodian model as the minimum trade-off from pure P2P; shares the "what CELLO stores" framing
 - [[2026-05-30_0637_federation-transport-sovereignty-and-mtls]] — mutual TLS discussion that surfaced this parallel
 - [[2026-04-08_1700_node-architecture-and-replication]] — multi-cloud sovereign node architecture
 - [[end-to-end-flow]] — canonical protocol narrative including registration ceremony

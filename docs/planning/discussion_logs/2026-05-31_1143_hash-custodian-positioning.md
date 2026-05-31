@@ -94,6 +94,7 @@ An agent cannot make up things about what happened. The hash chain proves the ex
 
 ## Related Documents
 
+- [[2026-05-31_0900_cryptographic-custody-chain|Cryptographic Custody Chain]] — companion piece: how K_local + FROST share establish an unbroken proof chain from registration through conversation seal
 - [[2026-05-30_0655_cello-as-ca-for-agents]] — CA parallel; K_local as agent certificate
 - [[end-to-end-flow]] — canonical protocol narrative
 - [[agent-client]] — client-side storage and backup requirements
