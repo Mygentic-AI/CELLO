@@ -24,7 +24,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | s3:ListBucket added for relay+directory task roles |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-05-27 | Rotation Lambda covers ops-agent RDS creds (AC-009e) |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-05-27 | INTERNAL_API_KEY injected; /internal/* ALB rules (AC-009d); real image via pipeline |
+| cello-ecs-directory-dev | PIPELINE DEPLOYING | 2026-05-31 | INTERNAL_API_KEY injected; /internal/* ALB rules (AC-009d); GET /bootstrap endpoint added (M6-E2E-001 fix); CELLO_DIRECTORY_HOSTNAME wired via !FindInMap for all 3 regions; pipeline triggered by commit 8af3779 |
 | cello-ecs-operations-agent-dev | UPDATE_COMPLETE | 2026-05-30 | Real image deployed via pipeline (commit cff37b0+); task def rev 21; Telegram polling @CelloConnectStagingBot |
 | cello-waf-dev | UPDATE_COMPLETE | 2026-05-27 | WAFv2 WebACL: rate-limit 1000/5min, IP reputation (BLOCK), CommonRuleSet (COUNT); logs to aws-waf-logs-cello-dev |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-25 | Real image deployed via pipeline (commit 1af5c16) to all 3 regions |
