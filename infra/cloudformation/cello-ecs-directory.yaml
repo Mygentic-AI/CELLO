@@ -212,6 +212,27 @@ Resources:
         - Key: Project
           Value: cello
 
+  # M6-E2E-001: Bootstrap target group routes GET /bootstrap to port 9090 (health server).
+  # Port 8080 only accepts WebSocket upgrades; plain HTTP GET /bootstrap must go to 9090.
+  BootstrapTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 9090
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: "9090"
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      Tags:
+        - Key: Project
+          Value: cello
+
   HttpListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
@@ -221,6 +242,22 @@ Resources:
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
+
+  # M6-E2E-001: Route GET /bootstrap to the health server (port 9090).
+  # Clients call this to auto-discover the directory multiaddr.
+  BootstrapPathRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    DependsOn: HttpListener
+    Properties:
+      ListenerArn: !Ref HttpListener
+      Priority: 4
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - "/bootstrap"
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BootstrapTargetGroup
 
   # AC-009d (OPS-AGENT-005A): /internal/* path protection.
   # The directory /internal/pre-authorize endpoint is authenticated by x-cello-internal-api-key
@@ -250,7 +287,7 @@ Resources:
     Type: AWS::ECS::Service
     # DependsOn ensures CloudFormation does not start registering targets before
     # the /internal/* forward rule is active (AC-009d).
-    DependsOn: [HttpListener, InternalPathForwardRule]
+    DependsOn: [HttpListener, InternalPathForwardRule, BootstrapPathRule]
     Properties:
       ServiceName: !Sub "cello-directory-${Environment}"
       Cluster: !Ref Cluster
@@ -273,6 +310,9 @@ Resources:
         - ContainerName: directory
           ContainerPort: 8080
           TargetGroupArn: !Ref TargetGroup
+        - ContainerName: directory
+          ContainerPort: 9090
+          TargetGroupArn: !Ref BootstrapTargetGroup
       Tags:
         - Key: Project
           Value: cello
