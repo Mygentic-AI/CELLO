@@ -39,7 +39,7 @@ Every message envelope carries an Ed25519 signature under K_local. This is per-m
 
 The FROST share is produced during a Distributed Key Generation (DKG) ceremony between the agent and the directory cluster. Neither side can sign alone — the agent holds one share, the directory holds the other. Together they produce a valid signature under the **primary_pubkey** (the FROST group key).
 
-The FROST share proves: **the directory participated in creating this signing authority, binding it to a verified Account.** The directory only participates in DKG after the operator has passed phone + email verification. So a valid FROST signature is an indirect attestation that a verified human stands behind this agent.
+**The FROST share proves:** this agent was legitimately registered, and that registration was co-signed by a quorum of uncompromised directory nodes. No single node can fake this — the FROST ceremony requires a threshold of independent nodes to participate. The directory cluster only enters a DKG ceremony for an authorized Account. So possession of a valid FROST share is the directory cluster's collective attestation: this agent is real, and its signing authority was created in a ceremony the cluster co-signed.
 
 ---
 
@@ -48,13 +48,13 @@ The FROST share proves: **the directory participated in creating this signing au
 ```
 Human Operator
     │
-    │ phone + email verification
+    │ onboarding ceremony
     ▼
 Account (directory-side)
     │
-    │ pre-authorization token
+    │ Account authorized → cluster enters DKG
     ▼
-Agent runs DKG ←───────────── Directory participates
+Agent runs DKG ←───────────── Directory cluster participates (quorum)
     │                              │
     │ produces FROST share         │ holds complementary share
     │                              │
@@ -68,7 +68,7 @@ Session Seal = FROST threshold signature over Merkle root
 
 **Registration binds identity to the directory's attestation:**
 - The agent proves it holds K_local (signs a challenge during registration).
-- The directory verifies the Account is legitimate (phone, email, trust signals).
+- The directory cluster verifies the Account is legitimate and a quorum of nodes co-signs the DKG ceremony.
 - DKG runs — producing a FROST share cryptographically bound to K_local's pubkey as the participant identifier.
 - The directory records: "K_local pubkey X has primary_pubkey Y, belonging to Account Z."
 
@@ -141,7 +141,7 @@ Given a sealed session, a verifier can confirm:
 |-------|----------------|
 | "Agent X produced this conversation" | FROST signature under X's primary_pubkey — requires X's share, which only X holds |
 | "The directory vouched for Agent X" | primary_pubkey was produced via DKG with the directory — the directory wouldn't participate without Account verification |
-| "A verified human owns this agent" | The Account behind the agent passed phone + email verification before the directory issued the pre-authorization token that enabled DKG |
+| "A verified human owns this agent" | The Account behind the agent was authorized before the directory cluster co-signed the DKG ceremony — the cluster only enters DKG for legitimate Accounts |
 | "These exact messages were exchanged, in this order" | Merkle root over ordered leaf hashes — change any content or ordering and the root changes, invalidating the seal |
 | "No messages were added or removed after the seal" | The seal signature is over the root at seal time — any post-seal modification produces a different root that doesn't match the signed value |
 | "The conversation happened at approximately this time" | Session timestamp in the TBS, relay ACK timestamps in receipts |
