@@ -175,3 +175,26 @@ This gives the LLM a clear entry point when it sees the CELLO tools for the firs
 **Problem:** Directory generates a new libp2p transport key on every startup (`"implementation":"generated"`). Every deploy invalidates every client's cached peer ID. Clients need to re-bootstrap on every directory restart.
 
 **Fix:** Persist the transport key in Secrets Manager or SSM Parameter Store so it survives restarts. This is part of the broader F-011 restart-state audit.
+
+---
+
+## F-015: cello-mcp does too much at startup — blocks MCP server registration
+
+**Found:** Throughout AC-001 to AC-004 — MCP server times out on first install (42s compile + network), requires reconnect after directory restarts, feels slow every new Claude session.
+
+**Problem:** `cello-mcp` currently does on startup:
+1. Compile SQLCipher (first install)
+2. Open SQLCipher DB
+3. Fetch `/bootstrap` from directory
+4. Dial directory over libp2p
+5. Attempt FROST bootstrap
+
+All of this blocks the MCP server from responding to Claude Code's tool registration. Every other MCP tool (GitHub, filesystem, databases) starts in <1s because they don't do network operations at startup.
+
+**Fix:** Lazy startup. `cello-mcp` should:
+1. Start immediately, register all tools
+2. Connect to directory in background
+3. On `cello_status`: return current connection state (connecting/connected/failed)
+4. On any tool that requires directory: await background connection with a timeout, return clear status if not ready
+
+Users should never see a timeout or hang when Claude Code starts. The connection happens in the background and tools report their readiness state clearly.
