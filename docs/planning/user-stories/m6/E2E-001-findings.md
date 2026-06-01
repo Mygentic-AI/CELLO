@@ -198,3 +198,25 @@ All of this blocks the MCP server from responding to Claude Code's tool registra
 4. On any tool that requires directory: await background connection with a timeout, return clear status if not ready
 
 Users should never see a timeout or hang when Claude Code starts. The connection happens in the background and tools report their readiness state clearly.
+
+---
+
+## F-016: FEEDBACK. FEEDBACK. FEEDBACK.
+
+**This is the most important finding in this document.**
+
+Every single operation. Every single step. Every single state change. The LLM and the user must always know what is happening.
+
+**The principle:** No tool call, no background operation, no startup step should ever be silent. If something is happening, say so. If something is taking time, say why. If something failed, say exactly what and what to do next.
+
+**What this means in practice:**
+
+- `cello-mcp` startup: narrate every step to stderr. "Opening database... Fetching directory address... Connecting to directory... Ready."
+- `cello_request_connection`: "Dialing directory... Sending connection request to target... Waiting for target to accept..." Not one silent 300-second wait.
+- First-run reconnect: "This is your first connection. Bootstrapping may take up to 30 seconds. Please wait."
+- Background reconnect: "Directory connection lost. Reconnecting... Connected."
+- Any error: exact reason + exact next step. Not "error: timeout". "Connection request timed out after 30s — the target agent may be offline. Try again with cello_request_connection."
+
+**The bar:** If a user (or an LLM) cannot tell at every moment exactly what CELLO is doing and what to do next, the feedback is insufficient.
+
+**Location. Location. Location. For CELLO: Feedback. Feedback. Feedback.**
