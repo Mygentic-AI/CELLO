@@ -94,6 +94,13 @@ export function createHealthServer(opts: HealthServerOptions): Server {
         res.end(JSON.stringify({ error: "not_found" }));
         return;
       }
+      // MED-2 (DX-001): Output validation — never return a value that isn't a 64-char
+      // lowercase hex string. Malformed data from the store must not be forwarded to callers.
+      if (!/^[0-9a-f]{64}$/.test(kLocalPubkey)) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "internal_error" }));
+        return;
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ k_local_pubkey: kLocalPubkey }));
       return;

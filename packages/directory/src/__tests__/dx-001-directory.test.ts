@@ -285,6 +285,76 @@ describe("AC-007a: GET /agent-lookup endpoint", () => {
       expect(res.status).toBe(503);
     });
   });
+
+  describe("MED-2: output validation — malformed pubkey from store returns 500", () => {
+    // Specification:
+    // If getKLocalPubkeyByAgentId returns a value that is not a 64-char lowercase hex string,
+    // the server must return 500 { error: 'internal_error' } rather than forwarding the malformed value.
+    // This prevents corrupted or mis-formatted data from propagating to callers.
+
+    let port: number;
+    let close: () => Promise<void>;
+
+    beforeAll(async () => {
+      const server = createHealthServer({
+        nodeId: "test-node",
+        schemaVersion: 27,
+        logger: noopLogger,
+        port: 0,
+        // Resolver returns a malformed pubkey (not 64 hex chars)
+        getKLocalPubkeyByAgentId: (_agentId: string) => "not-a-valid-hex-pubkey",
+      });
+      ({ port, close } = await startServer(server));
+    });
+
+    afterAll(async () => { await close(); });
+
+    it("returns 500 internal_error when resolver returns malformed pubkey", async () => {
+      const res = await fetch(`http://127.0.0.1:${port}/agent-lookup?agent_id=${knownAgentId}`);
+      expect(res.status).toBe(500);
+      const body = await res.json() as { error: string };
+      expect(body.error).toBe("internal_error");
+    });
+
+    it("returns 500 when resolver returns uppercase hex (not lowercase)", async () => {
+      const server2 = createHealthServer({
+        nodeId: "test-node-uc",
+        schemaVersion: 27,
+        logger: noopLogger,
+        port: 0,
+        // Uppercase hex — fails /^[0-9a-f]{64}$/ because of uppercase letters
+        getKLocalPubkeyByAgentId: (_agentId: string) => "A".repeat(64),
+      });
+      const { port: port2, close: close2 } = await startServer(server2);
+      try {
+        const res = await fetch(`http://127.0.0.1:${port2}/agent-lookup?agent_id=${knownAgentId}`);
+        expect(res.status).toBe(500);
+        const body = await res.json() as { error: string };
+        expect(body.error).toBe("internal_error");
+      } finally {
+        await close2();
+      }
+    });
+
+    it("returns 500 when resolver returns a 32-char hex (too short)", async () => {
+      const server3 = createHealthServer({
+        nodeId: "test-node-short",
+        schemaVersion: 27,
+        logger: noopLogger,
+        port: 0,
+        getKLocalPubkeyByAgentId: (_agentId: string) => "a".repeat(32), // 32 chars — too short
+      });
+      const { port: port3, close: close3 } = await startServer(server3);
+      try {
+        const res = await fetch(`http://127.0.0.1:${port3}/agent-lookup?agent_id=${knownAgentId}`);
+        expect(res.status).toBe(500);
+        const body = await res.json() as { error: string };
+        expect(body.error).toBe("internal_error");
+      } finally {
+        await close3();
+      }
+    });
+  });
 });
 
 // ─── AC-006 (directory side): empty phone_stub accepted with pre_auth_token ───
