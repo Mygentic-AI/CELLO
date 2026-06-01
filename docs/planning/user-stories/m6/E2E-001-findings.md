@@ -152,3 +152,26 @@ This gives the LLM a clear entry point when it sees the CELLO tools for the firs
 **Workaround:** On startup, derive a stable stand-in from SHA-256(k_local_pubkey).
 
 **Fix:** Add `agent_id TEXT NOT NULL` column to `agent_profiles` table and write it during registration.
+
+---
+
+## F-013: connection_request_in_flight with no cancel or retry mechanism
+
+**Found:** AC-004 — after a failed connection attempt, subsequent calls return `connection_request_in_flight` indefinitely.
+
+**Problem:** No way to cancel an in-flight request. No timeout visible to the user. No retry mechanism. User is stuck until the request times out server-side (unknown duration). Dismal UX.
+
+**Fix:** 
+- Add `cello_cancel_connection_request({ target_pubkey })` tool
+- Show timeout remaining in `cello_status`  
+- Auto-expire in-flight requests after a reasonable timeout (e.g. 30s) with a clear error
+
+---
+
+## F-014: directory transport key not persisted — peer ID changes on every restart
+
+**Found:** AC-004 — after pipeline deploy, directory got a new peer ID, breaking all connected clients.
+
+**Problem:** Directory generates a new libp2p transport key on every startup (`"implementation":"generated"`). Every deploy invalidates every client's cached peer ID. Clients need to re-bootstrap on every directory restart.
+
+**Fix:** Persist the transport key in Secrets Manager or SSM Parameter Store so it survives restarts. This is part of the broader F-011 restart-state audit.
