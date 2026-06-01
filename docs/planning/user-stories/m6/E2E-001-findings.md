@@ -116,3 +116,13 @@ This gives the LLM a clear entry point when it sees the CELLO tools for the firs
 
 **Fix:** Detect `process.stdin.isTTY` — if true, print install instructions and exit:
 "This is an MCP server. Install with: claude mcp add cello npx @cello-protocol/connect"
+
+---
+
+## F-010: cello_request_connection requires raw pubkey, not agent_id
+
+**Found:** AC-004 — tool schema has `target_pubkey` (64-char hex) but the story says "connect with the demo agent's AgentID".
+
+**Problem:** A stranger knows the demo agent's agent_id (published in README) but not its raw K_local pubkey. No directory lookup tool exists to resolve agent_id → pubkey.
+
+**Fix:** Accept `target_agent_id` as an alternative parameter. When provided, the client calls a directory lookup to resolve it to a pubkey before requesting the connection.
