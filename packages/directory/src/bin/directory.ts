@@ -39,7 +39,7 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import pg from "pg";
 import { FileKeyProvider, InMemoryKeyProvider } from "@cello-protocol/crypto";
-import { createDirectoryNode } from "../directory-node.js";
+import { createDirectoryNode, ClientDelegatedSigner } from "../directory-node.js";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
 import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper, InMemoryNotificationQueue, DevTokenValidator } from "@cello-protocol/interfaces/stubs";
 import type { AuditLogShipper, NotificationQueue, TokenValidator } from "@cello-protocol/interfaces";
@@ -649,6 +649,26 @@ try {
   const msg = err instanceof Error ? err.message : String(err);
   logger.error("adapter.init.failed", { adapterName: "CelloDirectoryNode", reason: msg });
   process.exit(1);
+}
+
+// Restore ClientDelegatedSigners for all profiles loaded from DB at startup.
+// Without this, agents that registered before this directory instance started
+// cannot initiate sessions (frost_signer_not_configured).
+if (store instanceof PgDirectoryStore) {
+  const loadedProfiles = store.getAllLoadedProfiles();
+  for (const profile of loadedProfiles) {
+    const primaryPubkeyBytes = Buffer.from(profile.primary_pubkey, "hex");
+    const delegatedSigner = new ClientDelegatedSigner(profile.k_local_pubkey, new Uint8Array(primaryPubkeyBytes));
+    // setStreams is called here with an empty map; the directory will call setStreams
+    // again on the delegatedSigner when the agent connects (via #delegatedSigners.get).
+    // The delegated signer delegates ceremonies back to the live client over the
+    // signaling stream — it doesn't need streams at construction time.
+    result.directory.registerThresholdSigner(profile.k_local_pubkey, delegatedSigner);
+    result.directory.registerPrimaryPubkey(profile.k_local_pubkey, new Uint8Array(primaryPubkeyBytes));
+  }
+  if (loadedProfiles.length > 0) {
+    logger.info("adapter.signers.restored", { count: loadedProfiles.length });
+  }
 }
 
 // FEDERATION-E2E-001: swap InMemoryCheckpointTransport placeholder with

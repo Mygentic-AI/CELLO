@@ -2695,7 +2695,7 @@ function verifySealLeaves(
 
 import type { ThresholdSignature, FrostContext } from "@cello-protocol/crypto/frost/types.js";
 
-class ClientDelegatedSigner implements IThresholdSigner {
+export class ClientDelegatedSigner implements IThresholdSigner {
   readonly #agentPubkeyHex: string;
   readonly #primaryPubkey: Uint8Array;
   // Pending ceremony resolvers: ceremonyId → resolve function

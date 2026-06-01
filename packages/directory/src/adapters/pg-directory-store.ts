@@ -733,6 +733,11 @@ export class PgDirectoryStore implements DirectoryStore {
     return this.#profilesByLocalKey.has(pubkeyHex) || this.#profilesByPrimaryKey.has(pubkeyHex);
   }
 
+  /** Returns all profiles loaded into memory (used for post-startup signer registration). */
+  getAllLoadedProfiles(): AgentProfile[] {
+    return Array.from(this.#profilesByLocalKey.values());
+  }
+
   hasPhoneStubHash(_phoneStubHashHex: string): boolean {
     return false; // backing store read in PERSIST-003+
   }
