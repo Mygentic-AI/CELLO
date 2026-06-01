@@ -227,7 +227,10 @@ IronClaw and Hermes are extensible multi-channel agents with attack surface. A d
 - `PERSIST-024`: Structured client-side SQLCipher schema — V2 migration with 15 tables replacing the generic `client_store` fallback. Implements FROST share persistence (immediate DEMO-001 unblock), ML-DSA keypair persistence, agent registry, session/leaf history, connections, trust signals, peers, hash queue, relay ACK receipts, backup metadata. Lives in `cello-client` repo. First-install path creates DB on startup. Depends on DEMO-001 (unblocked by identifying the gap).
 
 **E2E gate**
-- `M6-E2E-001`: Full stranger flow — install `@cello/connect`, register via Telegram bot, exchange messages with demo agent, verify tamper-evident record. Flip package from `@beta` to `latest` only after this passes.
+- `M6-E2E-001`: Full stranger flow — install `@cello/connect`, register via Telegram bot, exchange messages with demo agent, verify tamper-evident record. Flip package from `@beta` to `latest` only after this passes. **Status: IN PROGRESS** — AC-001 through AC-004 verified (2026-06-01); blocked on DX-001 completing before ACs 005-010 can be run.
+
+**DX domain (reactive — discovered during E2E-001 verification)**
+- `M6-DX-001`: Client DX fixes — startup progress, TTY detection, lazy startup, `cello_setup_guidance` tool, `token` parameter rename, `target_agent_id` lookup, per-stage timeouts, FROST signer directoryNodes fix after restart. Required before M6-E2E-001 can complete. **Status: IN PROGRESS** — sprint-coder dispatched 2026-06-01.
 
 ### Dependency Graph
 
