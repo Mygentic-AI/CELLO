@@ -37,12 +37,13 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-24 | 167ca6...27b5 (directory node pubkey) |
 | Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | Replication user password (alphanumeric, 32-char) |
 
-**Directory transport key secrets (all regions) — created 2026-06-01:**
-| Secret | Path | Status |
-|---|---|---|
-| Directory transport key (us-east-1) | `cello/dev/directory/transport-key` | POPULATED — stable peer ID |
-| Directory transport key (eu-central-1) | `cello/dev/directory/transport-key` | POPULATED — stable peer ID |
-| Directory transport key (ap-northeast-1) | `cello/dev/directory/transport-key` | POPULATED — stable peer ID |
+**Directory transport key secrets (all regions) — pending deploy.sh to create via CF:**
+| Secret | Path | Status | Value (hex) |
+|---|---|---|---|
+| Directory transport key (us-east-1) | `cello/dev/directory/transport-key` | PENDING CF creation | `82f16e6a2f51fcbb6f50abc684f4bee01b97d342cb191397473e5eb5516c73b9` |
+| Directory transport key (eu-central-1) | `cello/dev/directory/transport-key` | PENDING CF creation | `abd0a2c3038e8ce0ea992654bc9f5e4a0b77ecfb5e22e65509281c2a86b7158b` |
+| Directory transport key (ap-northeast-1) | `cello/dev/directory/transport-key` | PENDING CF creation | `74a8370ed3ce486be9fa5407ccc947b23308f996767f17eb09e0c886ae0a73ec` |
+NOTE: After deploy.sh creates these secrets, populate them with the values above via CLI (bootstrap.sh put_secret pattern).
 
 **Ops-agent secrets (us-east-1):**
 | Secret | Path | Status | Notes |
