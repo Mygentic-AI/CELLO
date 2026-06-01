@@ -673,10 +673,10 @@ if (store instanceof PgDirectoryStore) {
   for (const profile of loadedProfiles) {
     const primaryPubkeyBytes = Buffer.from(profile.primary_pubkey, "hex");
     const delegatedSigner = new ClientDelegatedSigner(profile.k_local_pubkey, new Uint8Array(primaryPubkeyBytes));
-    // setStreams is called here with an empty map; the directory will call setStreams
-    // again on the delegatedSigner when the agent connects (via #delegatedSigners.get).
-    // The delegated signer delegates ceremonies back to the live client over the
-    // signaling stream — it doesn't need streams at construction time.
+    // The signer starts with #streams = null. The directory calls setStreams with
+    // the live streams map when the agent authenticates on the signaling channel
+    // (directory-node.ts auth handler). Until then, ceremony calls return
+    // DIRECTORY_BELOW_THRESHOLD — correct behavior for an offline agent.
     result.directory.registerDelegatedSigner(profile.k_local_pubkey, delegatedSigner);
     result.directory.registerThresholdSigner(profile.k_local_pubkey, delegatedSigner);
     result.directory.registerPrimaryPubkey(profile.k_local_pubkey, new Uint8Array(primaryPubkeyBytes));
