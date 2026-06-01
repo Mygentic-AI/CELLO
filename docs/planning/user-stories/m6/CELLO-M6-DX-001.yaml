@@ -1,0 +1,305 @@
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M6-DX-001
+domain: MCP Tool Surface
+milestone: M6
+actor: AGENT
+priority: P0
+components:
+  - client
+  - adapter-claude-code
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the AI agent using CELLO MCP tools,
+  I want every tool to give me clear feedback about what is happening,
+  guide me through setup when I haven't registered yet, and complete
+  operations without silent hangs or opaque timeouts,
+  so that I can use CELLO correctly the first time without prior knowledge
+  of the protocol.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When cello-mcp starts and the MCP server is initializing"
+    action: "the process writes startup progress to stderr at each step:
+      database open, bootstrap fetch, directory dial, state load, and
+      final ready/registered status; progress is emitted before the step
+      begins and includes success or failure outcome on completion"
+
+  - trigger: "When cello-mcp starts and the process stdin is a TTY
+      (i.e. the binary is run directly in a terminal rather than as an
+      MCP subprocess)"
+    action: "the process prints an install instruction message to stdout
+      and exits with code 0 without attempting to start the MCP server"
+
+  - trigger: "When cello-mcp starts and CELLO_DIRECTORY_MULTIADDR is
+      not set"
+    action: "the client fetches GET /bootstrap from CELLO_DIRECTORY_URL
+      before starting the libp2p node; if the fetch succeeds it uses the
+      returned multiaddr; if the fetch fails it logs the failure and
+      continues without threshold signing"
+
+  - trigger: "When cello-mcp starts and a FROST key share exists in the
+      local SQLCipher database for this agent"
+    action: "loadPersistedState() reconstructs a FrostThresholdSigner with
+      directoryNodes wired from the current directoryEndpoint (not undefined);
+      the reconstructed signer can participate in FROST ceremonies with
+      the directory without performing a new DKG ceremony"
+
+  - trigger: "When any MCP tool that requires registration is called and
+      the agent is not registered"
+    action: "the tool returns a structured error with a human-readable
+      setup message explaining that registration is required, how to
+      obtain a token from @CelloConnectStagingBot, and that
+      cello_setup_guidance() provides the full setup guide"
+
+  - trigger: "When cello_setup_guidance is called"
+    action: "the tool returns the full CELLO setup guide (all 6 steps
+      always shown) followed by the agent's current status and a pointer
+      to the next required step"
+
+  - trigger: "When cello_register is called"
+    action: "the tool accepts a single required parameter 'token'
+      (the pre-authorization token from the Telegram bot, e.g. CELLO-...);
+      phone_stub is not exposed as a parameter; internally the client sends
+      an empty string or placeholder for phone_stub in the register_request
+      frame"
+
+  - trigger: "When cello_request_connection or cello_initiate_session is
+      called with a target_agent_id parameter (32 hex chars)"
+    action: "the client resolves the agent_id to a k_local_pubkey via a
+      directory lookup before proceeding; if the lookup fails, the tool
+      returns an error naming the agent_id that was not found"
+
+  - trigger: "When cello_request_connection is waiting for the target
+      agent to respond"
+    action: "the client emits progress to the MCP response stream at each
+      stage: dialing directory (10s timeout), sending connection request
+      (10s timeout), waiting for target to accept (90s timeout); if any
+      stage times out the tool returns immediately with the stage name and
+      a suggested next action"
+
+  - trigger: "When cello-mcp starts"
+    action: "the MCP server connects, registers all tools, and begins
+      accepting tool calls immediately; directory connection happens in
+      background; tools that require the directory wait up to 10s for the
+      background connection before returning directory_unreachable"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "cello-mcp starts with no prior state and a valid CELLO_DIRECTORY_URL"
+    when: "the process starts"
+    then: "stderr emits the following progress lines in order:
+      'cello: starting...',
+      'cello: opening database...',
+      'cello: fetching directory address...' (with ok/failed outcome),
+      'cello: connecting to directory...' (with ok/failed outcome),
+      'cello: loading agent state...',
+      one of: 'cello: ready (not registered — call cello_setup_guidance for setup)'
+              or 'cello: ready (registered as <agent_id>)'"
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: "Unit test: capture stderr output and assert each line present in order."
+
+  - id: AC-002
+    given: "cello-mcp binary is invoked directly in a TTY (process.stdin.isTTY === true)"
+    when: "the process starts"
+    then: "stdout contains the install instruction message including the
+      'claude mcp add cello npx @cello-protocol/connect' command; the
+      process exits with code 0; no MCP server is started; no network
+      connection is attempted"
+    test_type: unit
+    component_under_test: adapter-claude-code
+    notes: "Mock process.stdin.isTTY = true in test."
+
+  - id: AC-003
+    given: "A registered agent whose FROST share is in the local SQLCipher database;
+      cello-mcp is restarted (process killed and restarted with same key file
+      and DB path)"
+    when: "on startup, loadPersistedState() runs"
+    then: "the FrostThresholdSigner reconstructed from the DB share has
+      directoryNodes populated (not undefined) with a NetworkDirectoryNode
+      pointing at the current directoryEndpoint; calling cello_initiate_session
+      after restart succeeds without a new DKG ceremony; client.frost.share.loaded
+      is emitted with { agentPubkey, epochId, threshold, participants }"
+    test_type: integration
+    component_under_test: client
+    notes: >
+      This is the root cause fix for directory_below_threshold after restart.
+      Test requires: (1) real FROST DKG in process A, (2) process A exits,
+      (3) process B starts fresh from same key+DB, (4) process B calls
+      cello_initiate_session and succeeds. No in-memory state transfer between
+      processes. No mocks for FROST or SQLCipher.
+      MANDATORY: --pool-options.threads.maxThreads=1
+
+  - id: AC-004
+    given: "An unregistered agent (no registration_state row in DB)"
+    when: "any tool that requires registration is called
+      (cello_send, cello_receive, cello_request_connection, cello_initiate_session,
+      cello_close_session, cello_get_sealed_receipt, cello_list_sessions,
+      cello_list_connections)"
+    then: "the tool returns a structured response containing:
+      error.reason = 'not_registered',
+      error.message = a human-readable string that mentions cello_setup_guidance
+      and @CelloConnectStagingBot; the tool does not hang or throw"
+    test_type: unit
+    component_under_test: adapter-claude-code
+    notes: "One test per affected tool. Mock registered=false."
+
+  - id: AC-005
+    given: "An agent in any registration state"
+    when: "cello_setup_guidance is called"
+    then: "the response contains the full 6-step setup guide (always shown,
+      never collapsed based on current state) AND a 'Your current status'
+      section that shows: Registered (YES/NO + agent_id if registered),
+      Connections (count), Sessions (count), Directory (reachable/unreachable),
+      and a '→ You are at Step N' pointer; the guide text includes the demo
+      agent ID a2c55e2721f45cfa86cb3417a76e3f7b"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-006
+    given: "cello_register is called with only { token: 'CELLO-...' }"
+    when: "the tool processes the call"
+    then: "the tool accepts the call without error (phone_stub is not required);
+      the register_request frame sent to the directory contains k_local_pubkey
+      and ml_dsa_pubkey as usual; phone_stub in the frame is an empty string
+      or a non-null placeholder that satisfies the directory's non-empty check"
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      The tool schema change: phone_stub is removed from the MCP input schema.
+      The parameter formerly named pre_auth_token is renamed to token.
+      Internally phone_stub = '' is sent in the frame.
+      Integration test: call cello_register({ token: 'DEV-test-token' }) in
+      CELLO_ENV=local and verify registration succeeds end-to-end.
+
+  - id: AC-007
+    given: "A registered agent with a connection to the demo agent"
+    when: "cello_request_connection is called with
+      { target_agent_id: 'a2c55e2721f45cfa86cb3417a76e3f7b' } (32 hex chars)"
+    then: "the client resolves the agent_id to a k_local_pubkey via a directory
+      lookup; the connection request proceeds using the resolved pubkey;
+      the result is equivalent to calling cello_request_connection with the
+      raw pubkey directly"
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      Detection by length: 32 chars = agent_id (requires lookup),
+      64 chars = raw pubkey (used directly). Both formats accepted by the tool.
+      Directory lookup endpoint: GET /agent-lookup?agent_id=<hex> (or equivalent
+      — confirm the actual endpoint with the directory codebase before implementing).
+
+  - id: AC-008
+    given: "cello_request_connection is called with a valid target"
+    when: "the operation runs"
+    then: "progress messages are returned incrementally or on error:
+      if directory dial fails within 10s: error with message 'Could not reach
+      directory. Check your network connection.'
+      if request send fails within 10s: error with message 'Connection request
+      not delivered to directory.'
+      if target does not respond within 90s: error with message 'Target agent
+      did not respond within 90s. The agent may be offline. Try again with
+      cello_request_connection.'
+      On success: returns result immediately without waiting for timeouts"
+    test_type: unit
+    component_under_test: adapter-claude-code
+    notes: >
+      Unit test: mock each stage to time out and assert the correct error
+      message is returned for each. The 300s monolithic timeout is replaced
+      by per-stage timeouts: 10s + 10s + 90s = 110s worst case.
+
+  - id: AC-009
+    given: "cello-mcp starts"
+    when: "the MCP server initializes"
+    then: "all cello_* tools are registered and available to Claude Code within
+      2 seconds of process start, regardless of whether the directory connection
+      has completed; cello_status returns { transport_started: true } immediately;
+      a subsequent call to cello_status after directory connection completes
+      returns { directory_reachable: true }"
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: >
+      Lazy startup: the MCP server starts and registers tools immediately.
+      Directory connection happens in background. Tools that need directory
+      await the background connection (up to 10s) before returning
+      directory_unreachable. This prevents the 30s Claude Code MCP timeout
+      on first install.
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The registration token (parameter 'token') MUST NOT appear in any
+      log event, error message, stderr progress line, or MCP tool response"
+    adversarial_condition: "even when the token is passed to cello_register and
+      the registration fails"
+    test_type: unit
+    component_under_test: adapter-claude-code
+    notes: "The token is a single-use credential. Log it and it's exposed in
+      ~/.claude/logs or any transcript."
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: client.startup.progress
+      level: info
+      trigger: "Each named startup step in cello-mcp (database open, bootstrap
+        fetch, directory dial, state load)"
+      context_fields: [step, outcome, durationMs]
+      correlationId: false
+      notes: "Written to stderr, not via Logger. Visible in MCP server output."
+
+    - name: client.frost.share.loaded
+      level: info
+      trigger: "FROST share loaded from DB and FrostThresholdSigner reconstructed
+        with directoryNodes on startup"
+      context_fields: [agentPubkey, epochId, threshold, participants]
+      correlationId: false
+      notes: "Already defined in PERSIST-024. directoryNodes must be non-null
+        post this story — verify in AC-003."
+
+  error_events:
+    - name: client.bootstrap.fetch.failed
+      level: warn
+      trigger: "GET /bootstrap from directory URL fails or times out"
+      context_fields: [directoryUrl, reason, durationMs]
+
+    - name: client.connection.request.stage.timeout
+      level: warn
+      trigger: "A per-stage timeout fires during cello_request_connection"
+      context_fields: [stage, timeoutMs, targetPubkey]
+
+  alarms: []
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M6
+  discussion_logs:
+    - "2026-06-01"
+  depends_on:
+    - CELLO-PERSIST-024
+    - CELLO-REPOSPLIT-002
+  blocks:
+    - CELLO-M6-E2E-001
+  notes: >
+    Implementation lives in cello-client repo (core/client/, core/adapter-claude-code/).
+    This story fixes all DX issues discovered during M6-E2E-001 stranger flow
+    verification. See docs/planning/user-stories/m6/E2E-001-findings.md for the
+    full findings log (F-001 through F-016) that this story addresses.
+
+    Findings addressed:
+      F-001: phone_stub removed from cello_register (→ AC-006)
+      F-004: unregistered tools return guidance (→ AC-004)
+      F-006: cello_setup_guidance tool (→ AC-005)
+      F-008/F-016: startup progress to stderr (→ AC-001)
+      F-009: TTY detection (→ AC-002)
+      F-010: target_agent_id lookup in connection/session tools (→ AC-007)
+      F-013: per-stage timeouts replacing 300s monolith (→ AC-008)
+      F-015: lazy startup (→ AC-009)
+      FROST signer not wired after restart: directoryNodes undefined (→ AC-003)
+
+    SPARC discipline applies. All tests written red before implementation.
+    MANDATORY: --pool-options.threads.maxThreads=1 for all vitest runs.
+    No mocks for FROST or SQLCipher in AC-003.
+    Version bump: @cello-protocol/connect 0.0.8 → 0.0.9.
+    Publish tag: v0.0.9-beta.1 (NOT v0.0.9 — beta tag only until M6-E2E-001 passes).
