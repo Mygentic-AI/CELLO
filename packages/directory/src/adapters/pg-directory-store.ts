@@ -16,6 +16,7 @@
  */
 
 import pg from "pg";
+import { createHash } from "node:crypto";
 import { configurePgTypes } from "../pg-type-config.js";
 import type {
   DirectoryStore,
@@ -218,9 +219,11 @@ export class PgDirectoryStore implements DirectoryStore {
       phone_stub_hash: string;
       registered_at: number;
       status: string;
-      agent_id: string;
-    }>(`SELECT k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, agent_id FROM agent_profiles WHERE status = 'active'`);
+    }>(`SELECT k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status FROM agent_profiles WHERE status = 'active'`);
     for (const row of result.rows) {
+      // agent_id is not persisted to agent_profiles — derive a stable stand-in from k_local_pubkey.
+      // The real fix is to add agent_id to the agent_profiles schema (post-M6 story).
+      const agentId = createHash("sha256").update(row.k_local_pubkey, "utf8").digest("hex").slice(0, 32);
       const profile = {
         k_local_pubkey: row.k_local_pubkey,
         primary_pubkey: row.primary_pubkey,
@@ -228,7 +231,7 @@ export class PgDirectoryStore implements DirectoryStore {
         phone_stub_hash: row.phone_stub_hash,
         registered_at: Number(row.registered_at),
         status: row.status as "active",
-        agent_id: row.agent_id,
+        agent_id: agentId,
         profile: {},
       };
       this.#profilesByLocalKey.set(row.k_local_pubkey, profile);
