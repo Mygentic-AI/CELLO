@@ -6,8 +6,10 @@
 
 ALTER TABLE agent_profiles ADD COLUMN agent_id TEXT;
 
--- Backfill existing rows with the same deterministic derivation used in loadProfiles()
-UPDATE agent_profiles SET agent_id = encode(digest(k_local_pubkey, 'sha256'), 'hex');
+-- Backfill existing rows. substr(..., 1, 32) truncates to 32 chars, matching the
+-- format used by newly registered agents (randomBytes(16).toString("hex") = 32 chars).
+-- Uses built-in sha256() + encode() — no pgcrypto extension required.
+UPDATE agent_profiles SET agent_id = substr(encode(sha256(k_local_pubkey::bytea), 'hex'), 1, 32);
 
 -- Make non-nullable and unique now that all rows have a value
 ALTER TABLE agent_profiles ALTER COLUMN agent_id SET NOT NULL;

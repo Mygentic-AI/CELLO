@@ -695,7 +695,7 @@ export class PgDirectoryStore implements DirectoryStore {
   async getAgentsByAccount(accountId: string): Promise<AgentProfile[]> {
     const result = await this.#pool.query<Record<string, unknown>>(
       `SELECT k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash,
-              registered_at, status, account_id
+              registered_at, status, account_id, agent_id
        FROM agent_profiles
        WHERE account_id = $1
        ORDER BY registered_at ASC`,
@@ -711,6 +711,7 @@ export class PgDirectoryStore implements DirectoryStore {
         registered_at: number;
         status: string;
         account_id: string;
+        agent_id: string | null;
       }>("agent_profiles", row);
       return {
         k_local_pubkey: deserialized.k_local_pubkey,
@@ -719,11 +720,8 @@ export class PgDirectoryStore implements DirectoryStore {
         phone_stub_hash: deserialized.phone_stub_hash,
         registered_at: deserialized.registered_at,
         status: deserialized.status as "active",
-        // profile and agent_id are not stored in the agent_profiles table —
-        // they are TypeScript-only fields populated at registration time.
-        // getAgentsByAccount returns them as empty defaults.
         profile: {} as Record<string, unknown>,
-        agent_id: "",
+        agent_id: deserialized.agent_id ?? createHash("sha256").update(deserialized.k_local_pubkey, "utf8").digest("hex").slice(0, 32),
       };
     });
   }

@@ -415,6 +415,11 @@ if (transportKeyHex && transportKeyHex !== "PLACEHOLDER_POPULATE_VIA_CLI") {
   // This ensures the directory peer ID is stable across restarts and redeploys.
   transportPrivateKey = Buffer.from(transportKeyHex, "hex");
   logger.info("adapter.initialised", { adapterName: "TransportKey", implementation: "secrets_manager", env });
+} else if (env !== "local") {
+  // Non-local with missing/placeholder key — fail fast. Silently generating a random key
+  // in ECS would produce an unstable peer ID, breaking all connected clients on every restart.
+  logger.error("adapter.config.missing", { missingKey: "CELLO_DIRECTORY_TRANSPORT_KEY_HEX", env });
+  process.exit(1);
 } else {
   // Local: load from file or generate once and persist.
   try {
