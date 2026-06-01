@@ -212,8 +212,6 @@ Resources:
         - Key: Project
           Value: cello
 
-  # M6-E2E-001: Bootstrap target group routes GET /bootstrap to port 9090 (health server).
-  # Port 8080 only accepts WebSocket upgrades; plain HTTP GET /bootstrap must go to 9090.
   BootstrapTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -243,8 +241,6 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
-  # M6-E2E-001: Route GET /bootstrap to the health server (port 9090).
-  # Clients call this to auto-discover the directory multiaddr.
   BootstrapPathRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     DependsOn: HttpListener
@@ -283,7 +279,7 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
-  Service:
+  DirectoryService:
     Type: AWS::ECS::Service
     # DependsOn ensures CloudFormation does not start registering targets before
     # the /internal/* forward rule is active (AC-009d).
@@ -324,7 +320,7 @@ Outputs:
       Name: !Sub "cello-${Environment}-cluster-arn"
 
   DirectoryServiceArn:
-    Value: !Ref Service
+    Value: !Ref DirectoryService
     Export:
       Name: !Sub "cello-${Environment}-directory-service-arn"
 
