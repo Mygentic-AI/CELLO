@@ -247,10 +247,14 @@ acceptance_criteria:
       frame.phone_stub.length === 0 check entirely.
 
       PART 2: In the same function, when #pendingPreAuthData exists for the key,
-      use preAuthData.phoneStubHash for the AgentProfile.phone_stub_hash instead
-      of SHA-256(frame.phone_stub). This is critical — using SHA-256('') for every
-      pre_auth_token registration would store the same phone_stub_hash for all of
-      them, causing phone_already_claimed on the second registration.
+      set phoneStubHash = preAuthData.phoneStubHash BEFORE the hasPhoneStubHash
+      duplicate check at Step 3 (line 1417), not only before the AgentProfile
+      field assignment at line 1510. Using SHA-256('') for every pre_auth_token
+      registration would store the same phone_stub_hash for all of them; the
+      first registration would store SHA-256(''), and the second registration's
+      Step 3 check would find that hash already claimed, returning phone_already_claimed.
+      Setting phoneStubHash from preAuthData before Step 3 ensures each agent's
+      real phone hash (from the token) is used for the uniqueness check.
 
       Result: phone_stub is a legacy field in the wire format. When a pre_auth_token
       was consumed (the M6+ path), phone_stub_hash always comes from the token,
