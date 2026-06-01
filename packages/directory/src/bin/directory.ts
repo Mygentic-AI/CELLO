@@ -141,6 +141,7 @@ const store = await (async () => {
     const databaseUrl = requireEnv("DATABASE_URL");
     pgPool = new pg.Pool({ connectionString: databaseUrl });
     const s = new PgDirectoryStore(pgPool, logger, nodeId, awsRegion);
+    await s.loadProfiles();
     logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env });
     return s;
   }
@@ -169,6 +170,7 @@ const store = await (async () => {
   }
   pgPool = new pg.Pool({ connectionString: databaseUrl });
   const s = new PgDirectoryStore(pgPool, logger, nodeId, awsRegion);
+  await s.loadProfiles();
   logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env });
   return s;
 })();

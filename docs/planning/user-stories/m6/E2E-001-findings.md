@@ -126,3 +126,17 @@ This gives the LLM a clear entry point when it sees the CELLO tools for the firs
 **Problem:** A stranger knows the demo agent's agent_id (published in README) but not its raw K_local pubkey. No directory lookup tool exists to resolve agent_id → pubkey.
 
 **Fix:** Accept `target_agent_id` as an alternative parameter. When provided, the client calls a directory lookup to resolve it to a pubkey before requesting the connection.
+
+---
+
+## F-011: Directory loses all agent profiles on restart (critical)
+
+**Found:** AC-004 — `target_not_found` for the demo agent after directory service recreation.
+
+**Problem:** `PgDirectoryStore` uses in-memory Maps for profile lookups but never loads existing profiles from PostgreSQL at startup. After any restart, every previously registered agent is invisible until they re-register. This affects ALL agents, not just the demo agent.
+
+**Root cause:** The `setProfile()` method writes to both DB and memory, but the constructor doesn't read from DB. A restart starts with empty Maps.
+
+**Hotfix applied:** Added `loadProfiles()` method to `PgDirectoryStore` that reads all active `agent_profiles` rows at startup. Called from both local and production composition root paths.
+
+**Broader issue (tracked separately):** The directory holds ~15 in-memory Maps/Sets. Many of these (threshold signers, primary pubkeys, delegated signers, session participants) also don't survive restarts. A full audit of directory restart-state persistence is needed as a dedicated story. The question to answer: "what breaks for a connected client that didn't restart when the directory does?"

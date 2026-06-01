@@ -210,6 +210,33 @@ export class PgDirectoryStore implements DirectoryStore {
     this.#region = region;
   }
 
+  async loadProfiles(): Promise<void> {
+    const result = await this.#pool.query<{
+      k_local_pubkey: string;
+      primary_pubkey: string;
+      ml_dsa_pubkey: string;
+      phone_stub_hash: string;
+      registered_at: number;
+      status: string;
+      agent_id: string;
+    }>(`SELECT k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, agent_id FROM agent_profiles WHERE status = 'active'`);
+    for (const row of result.rows) {
+      const profile = {
+        k_local_pubkey: row.k_local_pubkey,
+        primary_pubkey: row.primary_pubkey,
+        ml_dsa_pubkey: row.ml_dsa_pubkey,
+        phone_stub_hash: row.phone_stub_hash,
+        registered_at: Number(row.registered_at),
+        status: row.status as "active",
+        agent_id: row.agent_id,
+        profile: {},
+      };
+      this.#profilesByLocalKey.set(row.k_local_pubkey, profile);
+      this.#profilesByPrimaryKey.set(row.primary_pubkey, profile);
+    }
+    this.#logger.info("adapter.profiles.loaded", { count: result.rows.length });
+  }
+
   /**
    * FEDERATION-001 AC-011 / SI-004: Verify pg type parsers are configured correctly.
    *
