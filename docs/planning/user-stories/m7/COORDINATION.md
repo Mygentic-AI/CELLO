@@ -79,3 +79,21 @@ Key design decisions that implementation agents must know:
 7. **CONTEXT.md must be updated** by the MULTI-006 implementer to add `queued_for_retry` to `SendFailureReason` and add `nonce` field to the `SendResult` failure variant. This is documented in MULTI-006 implementation_notes.
 
 8. **Test harness for multi-connection stories** (MULTI-003, MULTI-004): use `InMemoryTransport` pairs from the MCP SDK to simulate two independent connections. Do not attempt stdio multi-connection.
+
+---
+
+## Cross-Repo CI/CD Gap (post-REPOSPLIT)
+
+**Identified:** 2026-06-01
+
+After REPOSPLIT completed (~4 days ago), the CodePipelines in trustless-cello that validated `packages/crypto/`, `packages/protocol-types/`, `packages/transport/`, `packages/client/`, and `packages/adapter-claude-code/` stopped triggering — that code now lives in the cello-client repo.
+
+**Current state:**
+- GitHub Actions (cello-client) runs unit tests + publishes to npm on tag push — no cross-repo validation
+- CodePipelines (trustless-cello) are orphaned — watching paths that no longer change
+- A breaking change to `@cello-protocol/transport` in cello-client would publish to npm without validating against directory/relay/e2e
+
+**Required fix (backlog story):**
+Wire cello-client as a second source into the integration validation pipelines so a push to cello-client main triggers: build shared packages → build directory/relay → run e2e suite → block npm publish if failed.
+
+Label: `infra`, `cicd`, post-M7.
