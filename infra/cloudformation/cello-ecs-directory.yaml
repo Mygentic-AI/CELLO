@@ -246,6 +246,22 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
+  # AC-007a (DX-001): /agent-lookup path rule — routes to BootstrapTargetGroup (port 9090).
+  # Same target group as /bootstrap since both live on the health server at port 9090.
+  AgentLookupPathRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    DependsOn: HttpListener
+    Properties:
+      ListenerArn: !Ref HttpListener
+      Priority: 3
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - "/agent-lookup"
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BootstrapTargetGroup
+
   BootstrapPathRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     DependsOn: HttpListener
@@ -288,7 +304,7 @@ Resources:
     Type: AWS::ECS::Service
     # DependsOn ensures CloudFormation does not start registering targets before
     # the /internal/* forward rule is active (AC-009d).
-    DependsOn: [HttpListener, InternalPathForwardRule, BootstrapPathRule]
+    DependsOn: [HttpListener, InternalPathForwardRule, BootstrapPathRule, AgentLookupPathRule]
     Properties:
       ServiceName: !Sub "cello-directory-${Environment}"
       Cluster: !Ref Cluster
