@@ -594,3 +594,21 @@ FROST signer bug (blocking AC-005 cello_initiate_session):
 - F-007: Windows not supported in beta
 - F-013 broader: cello_cancel_connection_request tool needed
 - Directory restart-state audit (F-011 broader scope) — dedicated story needed post-M6
+
+---
+
+## 2026-06-01 — M6-DX-001 CLOSED
+
+Story APPROVED by sprint-reviewer. All 11 ACs delivered and tested.
+
+**Merged:** `feature/M6-DX-001` → `main` on cello-client (commit `d97552c`). Pushed to origin.
+**Published:** `@cello-protocol/connect@0.0.9-beta.1` live on npm beta dist-tag.
+**Directory pipeline:** deploying V27 migration + `/agent-lookup` endpoint + ALB rules across all 3 regions (triggered 2026-06-01 ~20:42 UTC+2).
+
+**What unblocks:** M6-E2E-001 ACs 005-010 can resume once directory pipeline completes (~1h from trigger time).
+
+**Known post-M6 issues (tracked, non-blocking):**
+- Cross-repo CI/CD gap post-REPOSPLIT — noted in M7 COORDINATION.md
+- Directory restart-state audit (F-011 broader scope) — post-M6 story needed
+- `cello_cancel_connection_request` tool missing
+- Windows support deferred to post-beta

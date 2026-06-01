@@ -10,8 +10,8 @@ description: M6 write-up — CELLO beta launch. Installable @cello-protocol/conn
 # M6 — Beta Launch
 
 **Started:** 2026-05-26
-**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001, OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002, PERSIST-024, DEMO-001
-**Stories open:** M6-E2E-001
+**Stories closed:** OPS-AGENT-000, OPS-AGENT-001, OPS-AGENT-002, OPS-AGENT-003, OPS-AGENT-004, REPOSPLIT-001, OPS-AGENT-005A, OPS-AGENT-005B, REPOSPLIT-002, PERSIST-024, DEMO-001, M6-DX-001
+**Stories open:** M6-E2E-001 (ACs 005-010 pending — directory pipeline deploying 2026-06-01)
 
 **Unblocked by OPS-AGENT-002:** OPS-AGENT-003 (Telegram adapter), OPS-AGENT-004 (SES OTP delivery), OPS-AGENT-005B (wire app code)
 
@@ -660,7 +660,7 @@ Reactive story. Discovered during DEMO-001 deployment when `systemctl start cell
 ## M6-E2E-001 — Stranger Flow Verification (IN PROGRESS)
 
 **Started:** 2026-06-01
-**Status:** ACs 001-004 verified. Blocked on M6-DX-001 completing before ACs 005-010.
+**Status:** ACs 001-004 verified. M6-DX-001 CLOSED 2026-06-01. Directory pipeline deploying DX-001 fixes. Resuming ACs 005-010 once pipeline completes (~1h).
 
 ### Infrastructure fixes deployed during E2E-001 verification
 
@@ -705,7 +705,7 @@ Versions published during M6:
 - `0.0.6` — db/migrations in tarball fix (beta, current latest)
 - `0.0.7` — bootstrap auto-discovery (accidentally published to latest, reverted)
 - `0.0.8` — SQLCipher v6, platform-aware errors, bootstrap auto-discovery (beta)
-- `0.0.9` — M6-DX-001 DX fixes (pending M6-DX-001 completion)
+- `0.0.9-beta.1` — M6-DX-001 DX fixes (published 2026-06-01; beta dist-tag)
 
 ### DX findings summary
 
@@ -717,3 +717,26 @@ Versions published during M6:
 - No startup progress — user sees nothing during 10-20s startup
 
 All addressed in M6-DX-001.
+
+---
+
+## M6-DX-001 — Client DX Improvements (CLOSED 2026-06-01)
+
+**Delivered:**
+- AC-001: Startup progress lines to stderr (`cello: opening database... ok`, etc.)
+- AC-002: TTY detection — binary prints install instructions and exits when run directly in a terminal
+- AC-003: FROST signer `directoryNodeStubs` populated on restart — fixes `directory_below_threshold` after MCP reconnect
+- AC-004: 20 tools return `not_registered` error with `cello_setup_guidance` pointer when agent is unregistered
+- AC-005: `cello_setup_guidance` tool — 6-step onboarding guide tailored to current registration state
+- AC-006: `cello_register` takes `{ token }` only — `phone_stub` removed from user-facing schema
+- AC-007: `target_agent_id` accepted in `cello_initiate_session` and `cello_request_connection`; `/agent-lookup` endpoint on directory health server; ALB rules for `/agent-lookup` and `/bootstrap`
+- AC-008: Per-stage timeouts in `cello_request_connection` (10s dial, 10s send, 90s wait) with stage-specific error reasons
+- AC-009: Lazy startup — MCP server registers tools and responds to `tools/list` within 2s of process start before any background I/O completes
+- AC-010: `PgDirectoryStore.loadProfiles()` called at directory startup — agent profiles survive restarts
+- AC-011: `agent_id` persisted to `agent_profiles` table (V27 migration)
+
+**npm:** `@cello-protocol/connect@0.0.9-beta.1` published 2026-06-01 to beta dist-tag.
+
+**Infrastructure:** V27 migration, `/agent-lookup` health endpoint, ALB listener rules for `/bootstrap` and `/agent-lookup` deploying via pipeline 2026-06-01.
+
+**SKILL.md and cello-chat.md** rewritten for production — no M-number references, usage patterns documented, tool list ordered by usage flow.
