@@ -37,6 +37,13 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | SSM: /cello/dev/directory/manifest-signer-pubkey | CREATED | 2026-05-24 | 167ca6...27b5 (directory node pubkey) |
 | Secret: cello/dev/directory/rds-replication-credentials | CREATED | 2026-05-25 | Replication user password (alphanumeric, 32-char) |
 
+**Directory transport key secrets (all regions) — created 2026-06-01:**
+| Secret | Path | Status |
+|---|---|---|
+| Directory transport key (us-east-1) | `cello/dev/directory/transport-key` | POPULATED — stable peer ID |
+| Directory transport key (eu-central-1) | `cello/dev/directory/transport-key` | POPULATED — stable peer ID |
+| Directory transport key (ap-northeast-1) | `cello/dev/directory/transport-key` | POPULATED — stable peer ID |
+
 **Ops-agent secrets (us-east-1):**
 | Secret | Path | Status | Notes |
 |---|---|---|---|
