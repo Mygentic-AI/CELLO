@@ -181,11 +181,14 @@ export class PgDirectoryStore implements DirectoryStore {
   // In-memory profile cache — two indexes for the two lookup patterns:
   //   #profilesByLocalKey:   k_local_pubkey (own_pubkey) → profile
   //   #profilesByPrimaryKey: primary_pubkey (FROST group key) → profile
+  //   #profilesByAgentId:    agent_id (32 hex chars) → profile
   // The connection pre-check (directory-node.ts line 1152) looks up by whatever
   // target_pubkey the initiating agent supplies. Agents supply the target's k_local_pubkey
   // (own_pubkey), but having both indexes means either key works robustly.
+  // AC-007a (DX-001): #profilesByAgentId supports GET /agent-lookup?agent_id=<hex>.
   readonly #profilesByLocalKey = new Map<string, AgentProfile>();
   readonly #profilesByPrimaryKey = new Map<string, AgentProfile>();
+  readonly #profilesByAgentId = new Map<string, AgentProfile>();
 
   /**
    * Pseudocode for constructor (FEDERATION-001 AC-011):
@@ -237,6 +240,7 @@ export class PgDirectoryStore implements DirectoryStore {
       };
       this.#profilesByLocalKey.set(row.k_local_pubkey, profile);
       this.#profilesByPrimaryKey.set(row.primary_pubkey, profile);
+      this.#profilesByAgentId.set(agentId, profile);
     }
     this.#logger.info("adapter.profiles.loaded", { count: result.rows.length });
   }
@@ -521,10 +525,14 @@ export class PgDirectoryStore implements DirectoryStore {
   // ─── Agent profiles ───────────────────────────────────────────────────────
 
   setProfile(profile: AgentProfile, correlationId?: string): void {
-    // Cache by both keys immediately — connection pre-check uses k_local_pubkey,
+    // Cache by all keys immediately — connection pre-check uses k_local_pubkey,
     // but indexing by primary_pubkey too means either key works robustly.
+    // AC-007a (DX-001): also index by agent_id for /agent-lookup endpoint.
     this.#profilesByLocalKey.set(profile.k_local_pubkey, profile);
     this.#profilesByPrimaryKey.set(profile.primary_pubkey, profile);
+    if (profile.agent_id) {
+      this.#profilesByAgentId.set(profile.agent_id, profile);
+    }
 
     // ACCOUNT-001: if account_id is provided, fire INSERT with account_id and emit
     // account.agent.linked only after the INSERT confirms success (MEDIUM finding #3:
@@ -737,6 +745,15 @@ export class PgDirectoryStore implements DirectoryStore {
   /** Returns all profiles loaded into memory (used for post-startup signer registration). */
   getAllLoadedProfiles(): AgentProfile[] {
     return Array.from(this.#profilesByLocalKey.values());
+  }
+
+  /**
+   * AC-007a (DX-001): Look up a profile by agent_id (32 hex chars).
+   * Returns the profile if found in memory, undefined otherwise.
+   * Used by the health server's GET /agent-lookup endpoint.
+   */
+  getProfileByAgentId(agentId: string): AgentProfile | undefined {
+    return this.#profilesByAgentId.get(agentId);
   }
 
   hasPhoneStubHash(_phoneStubHashHex: string): boolean {

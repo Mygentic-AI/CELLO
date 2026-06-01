@@ -780,6 +780,11 @@ const healthServer = createHealthServer({
   port: healthPort,
   multiaddr: bootstrapMultiaddr,
   peerId: directoryPeerId,
+  // AC-007a (DX-001): resolver for GET /agent-lookup?agent_id=<32hex>
+  getKLocalPubkeyByAgentId: (agentId: string): string | undefined => {
+    const profile = store.getProfileByAgentId(agentId);
+    return profile?.k_local_pubkey;
+  },
 });
 healthServer.listen(healthPort, () => {
   logger.info("adapter.initialised", { adapterName: "HealthServer", implementation: "http", env, port: healthPort });

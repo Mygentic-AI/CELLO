@@ -1387,9 +1387,14 @@ export class CelloDirectoryNode {
   ): Promise<void> {
     // SI-004: auth gate — authedPubkeyHex is already verified above (only reached after auth)
 
-    // Step 1: Validate phone_stub non-empty
-    if (!frame.phone_stub || frame.phone_stub.length === 0) {
-      // HIGH-3: clean up pending pre-auth data on all early-return paths
+    // Step 1: Validate phone_stub non-empty.
+    // AC-006 (DX-001) PART 1: When #tokenValidator is wired (M6+ path), phone_stub may be
+    // empty — the pre_auth_token provides the real phone_stub_hash via #pendingPreAuthData
+    // (set during DKG Round 1). We defer the empty check to Step 3b (post-DKG).
+    // When #tokenValidator is NOT wired (legacy/test path), reject immediately on empty.
+    const phoneStubIsEmpty = !frame.phone_stub || frame.phone_stub.length === 0;
+    if (phoneStubIsEmpty && !this.#tokenValidator) {
+      // Legacy path: no token validator configured and empty phone_stub → reject
       this.#pendingPreAuthData.delete(frame.k_local_pubkey);
       this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "invalid_verification" }));
       return;
@@ -1408,16 +1413,6 @@ export class CelloDirectoryNode {
         primary_pubkey: existingProfile.primary_pubkey,
         ml_dsa_pubkey: existingProfile.ml_dsa_pubkey,
       }));
-      return;
-    }
-
-    // Step 3: Check phone stub hash (SI-001: never store or log raw phone_stub)
-    // FIPS 180-4 SHA-256
-    const phoneStubHash = createHash("sha256").update(frame.phone_stub, "utf8").digest("hex");
-    if (this.#store.hasPhoneStubHash(phoneStubHash)) {
-      // HIGH-3: clean up pending pre-auth data on all early-return paths
-      this.#pendingPreAuthData.delete(frame.k_local_pubkey);
-      this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "phone_already_claimed" }));
       return;
     }
 
@@ -1450,6 +1445,8 @@ export class CelloDirectoryNode {
     // The client opens /cello/frost/1.0.0 streams, runs DKG rounds, derives primary_pubkey,
     // and sends dkg_complete on this signaling stream.
     // The signaling stream loop routes dkg_complete to us via #pendingDkgComplete.
+    // IMPORTANT: During this await, DKG Round 1 fires on the frost stream and may call
+    // #pendingPreAuthData.set(). So pendingPreAuthData IS available after this await.
     const DKG_TIMEOUT_MS = 30_000;
     let primaryPubkeyFromDkg: string;
     try {
@@ -1498,6 +1495,35 @@ export class CelloDirectoryNode {
       return;
     }
 
+    // Step 3b (post-DKG): Compute phoneStubHash now that DKG has completed and
+    // #pendingPreAuthData is available (set during DKG round 1 on the frost stream).
+    // AC-006 (DX-001) PART 2: Use preAuthData.phoneStubHash when pre_auth_token was consumed.
+    // This MUST happen before the hasPhoneStubHash check to ensure each agent's real
+    // phone hash is used for uniqueness, not SHA-256('') which would be the same for all.
+    let phoneStubHash: string;
+    const preAuthDataForHash = this.#pendingPreAuthData.get(frame.k_local_pubkey);
+    if (preAuthDataForHash) {
+      // Pre-auth path: use the token's phone_stub_hash (real phone hash, not SHA-256(''))
+      phoneStubHash = preAuthDataForHash.phoneStubHash;
+    } else if (phoneStubIsEmpty) {
+      // No pre_auth_token and empty phone_stub: reject (should have been caught above,
+      // but belt-and-suspenders guard in case #pendingPreAuthData was not set by DKG)
+      this.#pendingPreAuthData.delete(frame.k_local_pubkey);
+      this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "invalid_verification" }));
+      return;
+    } else {
+      // Legacy path: hash the client-supplied phone_stub (SI-001: FIPS 180-4 SHA-256)
+      phoneStubHash = createHash("sha256").update(frame.phone_stub, "utf8").digest("hex");
+    }
+
+    // Phone stub hash uniqueness check (SI-001: never store or log raw phone_stub)
+    if (this.#store.hasPhoneStubHash(phoneStubHash)) {
+      // HIGH-3: clean up pending pre-auth data on all early-return paths
+      this.#pendingPreAuthData.delete(frame.k_local_pubkey);
+      this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "phone_already_claimed" }));
+      return;
+    }
+
     // Step 6: Create AgentProfile and send register_success
     // SI-001: phone_stub raw value NEVER stored
     // SI-002: only reached after successful FROST DKG
@@ -1517,22 +1543,21 @@ export class CelloDirectoryNode {
 
     // OPS-AGENT-001 AC-005b: Account deduplication — link agent_profile to account.
     // This runs fire-and-forget: account linking failure does not block registration.
-    if (this.#pgPool) {
-      const preAuthData = this.#pendingPreAuthData.get(frame.k_local_pubkey);
-      this.#pendingPreAuthData.delete(frame.k_local_pubkey);
-      if (preAuthData) {
-        void linkAgentToAccount(this.#pgPool, {
-          agentProfileId: agentId,
-          kLocalPubkey: frame.k_local_pubkey,
-          phoneStubHash: preAuthData.phoneStubHash,
-        }).catch((err: unknown) => {
-          const reason = err instanceof Error ? err.message : String(err);
-          this.#logger?.error("preauth.account.link.failed", {
-            agentId,
-            reason,
-          });
+    // Note: preAuthDataForHash was fetched above in Step 3b; use it here to avoid a second
+    // map lookup. Also delete the entry from #pendingPreAuthData (cleanup on success path).
+    this.#pendingPreAuthData.delete(frame.k_local_pubkey);
+    if (this.#pgPool && preAuthDataForHash) {
+      void linkAgentToAccount(this.#pgPool, {
+        agentProfileId: agentId,
+        kLocalPubkey: frame.k_local_pubkey,
+        phoneStubHash: preAuthDataForHash.phoneStubHash,
+      }).catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        this.#logger?.error("preauth.account.link.failed", {
+          agentId,
+          reason,
         });
-      }
+      });
     }
 
     // OBS-001 AC-004: agent registered log

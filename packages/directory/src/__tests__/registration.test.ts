@@ -312,7 +312,10 @@ describe("REG-001: Directory registration", () => {
     expect(profile!.agent_id).toBe(originalAgentId);
   });
 
-  it("AC-003: different agent, same phone stub → phone_already_claimed; no DKG for B", async () => {
+  it("AC-003: different agent, same phone stub → phone_already_claimed after DKG", async () => {
+    // DX-001 AC-006: The phone_stub_hash uniqueness check is now deferred to post-DKG
+    // (Step 3b) so that the pre_auth_token path can supply the real hash.
+    // As a result, agent B's DKG runs before phone_already_claimed is returned.
     const dirKey = generateKeypair();
     const { node: dirNode, stop: stopDir } = await createDirectoryNode({
       keyProvider: dirKey,
@@ -348,19 +351,17 @@ describe("REG-001: Directory registration", () => {
     );
     expect(frameA["type"]).toBe("register_success");
 
-    // Agent B tries same phone stub
+    // Agent B tries same phone stub — DKG runs first, then phone_already_claimed is returned
     const { stream: streamB, reader: readerB } = await doAuth(clientNodeB, dirNode.getPeerId(), keyB);
     const mlDsaB = await mlDsaKeygen();
     const pubB = await keyB.getPublicKey();
+    const pubBHex = Buffer.from(pubB).toString("hex");
+    const mlDsaBHex = Buffer.from(await mlDsaB.getPublicKey()).toString("hex");
 
-    sendFrame(streamB, CBOR_ENC.encode({
-      type: "register_request",
-      phone_stub: "+5555555555",
-      k_local_pubkey: Buffer.from(pubB).toString("hex"),
-      ml_dsa_pubkey: Buffer.from(await mlDsaB.getPublicKey()).toString("hex"),
-    }));
-
-    const frameB = await readerB.readFrameWithTimeout(5000);
+    const frameB = await doRegister(
+      streamB, readerB, clientNodeB, dirNode.getPeerId(), dirNode.listenAddresses(),
+      pubBHex, mlDsaBHex, "+5555555555",
+    );
     expect(frameB["type"]).toBe("register_error");
     expect(frameB["reason"]).toBe("phone_already_claimed");
   });

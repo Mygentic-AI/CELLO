@@ -17,6 +17,7 @@
  */
 
 import { createServer, type Server } from "node:http";
+import { parse as parseUrl } from "node:url";
 import type { Logger } from "@cello-protocol/interfaces";
 
 export interface HealthServerOptions {
@@ -28,6 +29,12 @@ export interface HealthServerOptions {
   multiaddr?: string;
   /** Peer ID hex string. When provided alongside multiaddr, returned in GET /bootstrap. */
   peerId?: string;
+  /**
+   * AC-007a (DX-001): Resolver for GET /agent-lookup?agent_id=<32hex>.
+   * Returns the k_local_pubkey (64 hex chars) for the given agent_id, or undefined if not found.
+   * Injected from the composition root so health-server has no direct dependency on PgDirectoryStore.
+   */
+  getKLocalPubkeyByAgentId?: (agentId: string) => string | undefined;
 }
 
 /**
@@ -35,7 +42,7 @@ export interface HealthServerOptions {
  * the /health and /bootstrap endpoints. The caller is responsible for calling .listen().
  */
 export function createHealthServer(opts: HealthServerOptions): Server {
-  const { nodeId, schemaVersion, multiaddr, peerId } = opts;
+  const { nodeId, schemaVersion, multiaddr, peerId, getKLocalPubkeyByAgentId } = opts;
 
   const healthResponseBody = JSON.stringify({
     status: "ok",
@@ -62,6 +69,33 @@ export function createHealthServer(opts: HealthServerOptions): Server {
         res.writeHead(503, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "not ready" }));
       }
+      return;
+    }
+
+    // AC-007a (DX-001): GET /agent-lookup?agent_id=<32hex>
+    // Returns { k_local_pubkey: '<64hex>' } if found, 404 { error: 'not_found' } if not.
+    // Routed via ALB BootstrapTargetGroup (port 9090), same as /bootstrap.
+    if (req.method === "GET" && req.url?.startsWith("/agent-lookup")) {
+      const parsed = parseUrl(req.url, true);
+      const agentId = parsed.query["agent_id"];
+      if (typeof agentId !== "string" || !/^[0-9a-f]{32}$/i.test(agentId)) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid_agent_id", message: "agent_id must be exactly 32 lowercase hex chars" }));
+        return;
+      }
+      if (!getKLocalPubkeyByAgentId) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "not_ready" }));
+        return;
+      }
+      const kLocalPubkey = getKLocalPubkeyByAgentId(agentId);
+      if (!kLocalPubkey) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "not_found" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ k_local_pubkey: kLocalPubkey }));
       return;
     }
 
