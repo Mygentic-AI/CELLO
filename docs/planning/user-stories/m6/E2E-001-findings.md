@@ -140,3 +140,15 @@ This gives the LLM a clear entry point when it sees the CELLO tools for the firs
 **Hotfix applied:** Added `loadProfiles()` method to `PgDirectoryStore` that reads all active `agent_profiles` rows at startup. Called from both local and production composition root paths.
 
 **Broader issue (tracked separately):** The directory holds ~15 in-memory Maps/Sets. Many of these (threshold signers, primary pubkeys, delegated signers, session participants) also don't survive restarts. A full audit of directory restart-state persistence is needed as a dedicated story. The question to answer: "what breaks for a connected client that didn't restart when the directory does?"
+
+---
+
+## F-012: agent_id not persisted to agent_profiles table
+
+**Found:** During F-011 hotfix — loadProfiles() crashed with `column "agent_id" does not exist`.
+
+**Problem:** `agent_id` is generated at registration time and stored in the in-memory AgentProfile object, but the `agent_profiles` INSERT never writes it to the DB. It's lost on restart.
+
+**Workaround:** On startup, derive a stable stand-in from SHA-256(k_local_pubkey).
+
+**Fix:** Add `agent_id TEXT NOT NULL` column to `agent_profiles` table and write it during registration.
