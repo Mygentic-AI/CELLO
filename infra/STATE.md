@@ -24,7 +24,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | s3:ListBucket added for relay+directory task roles |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-05-27 | Rotation Lambda covers ops-agent RDS creds (AC-009e) |
-| cello-ecs-directory-dev | UPDATE_COMPLETE | 2026-06-01 | INTERNAL_API_KEY injected; /internal/* ALB rules (AC-009d); GET /bootstrap on port 9090 via BootstrapTargetGroup + BootstrapPathRule (priority 4); CELLO_DIRECTORY_HOSTNAME=directory-us1.cello.mygentic.ai; Service recreated as DirectoryService (LogicalId rename to escape stuck CF state); image 014c3e6 (loadProfiles at startup — confirmed 5 profiles loaded); deregistration_delay=0 on both TGs |
+| cello-ecs-directory-dev | DEPLOYED (manual force-deploy) | 2026-06-01 | All M6-E2E-001 fixes deployed: profiles+signers restored at startup (5 agents), V27 agent_id column, transport key from Secrets Manager (stable peer ID: 12D3KooWS46wUj6NYvoAsocxZnxth5EgYD2ZXCm7coMkXUWgS1j3), schemaVersion=27 |
 | cello-ecs-operations-agent-dev | UPDATE_COMPLETE | 2026-05-30 | Real image deployed via pipeline (commit cff37b0+); task def rev 21; Telegram polling @CelloConnectStagingBot |
 | cello-waf-dev | UPDATE_COMPLETE | 2026-05-27 | WAFv2 WebACL: rate-limit 1000/5min, IP reputation (BLOCK), CommonRuleSet (COUNT); logs to aws-waf-logs-cello-dev |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-25 | Real image deployed via pipeline (commit 1af5c16) to all 3 regions |
