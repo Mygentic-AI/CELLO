@@ -29,9 +29,9 @@ behavior:
       'cello: opening database... ok' or 'cello: opening database... failed: <reason>',
       'cello: fetching directory address... ok (<peerId[:16]>...)' or
         'cello: fetching directory address... failed: <reason>',
+      'cello: loading agent state...',
       'cello: connecting to directory... ok' or
         'cello: connecting to directory... failed: <reason>',
-      'cello: loading agent state...',
       'cello: ready (not registered — call cello_setup_guidance for setup)' or
         'cello: ready (registered as <agent_id>)'"
 
@@ -127,13 +127,17 @@ acceptance_criteria:
         'cello: opening database... failed: <reason>' (on failure),
       'cello: fetching directory address... ok (12D3KooW...)' (on success) or
         'cello: fetching directory address... failed: <reason>' (on failure),
+      'cello: loading agent state...',
       'cello: connecting to directory... ok' (on success) or
         'cello: connecting to directory... failed: <reason>' (on failure),
-      'cello: loading agent state...',
       'cello: ready (not registered — call cello_setup_guidance for setup)'
         (when unregistered) or
       'cello: ready (registered as <agent_id>)' (when registered);
-      each step line is emitted as a single complete line (not two lines)"
+      each step line is emitted as a single complete line (not two lines);
+      note: loading agent state precedes connecting to directory because
+      setDirectoryEndpoint must be called before loadPersistedState() to
+      correctly populate directoryNodeStubs in the reconstructed FrostThresholdSigner
+      (AC-003 requirement)"
     test_type: unit
     component_under_test: adapter-claude-code
     notes: >
@@ -156,32 +160,30 @@ acceptance_criteria:
     given: "A registered agent whose FROST share is persisted in the local SQLCipher
       database (written by the registration DKG ceremony in process A)"
     when: "process A is killed; process B starts fresh from the same key file
-      and DB path (no in-memory state transfer); process B calls
-      cello_initiate_session targeting another registered agent"
+      and DB path (no in-memory state transfer)"
     then: "in process B: loadPersistedState() loads the FROST share from DB and
       constructs a FrostThresholdSigner with directoryNodes set to a
       NetworkDirectoryNode pointing at the current directoryEndpoint (directoryNodes
       is not undefined or null); client.frost.share.loaded is emitted with
       { agentPubkey, epochId, threshold, participants };
-      cello_initiate_session succeeds (returns { ok: true, session_id: '<hex>' });
-      the directory's log contains at least one 'FROST Ceremony begin' entry for
-      this agent in this process B session (proving the ceremony ran via real
-      libp2p stream, not a stub)"
-    test_type: integration
+      getRegistrationState() returns non-null (confirming registration state
+      survived the restart)"
+    test_type: unit
     component_under_test: client
     notes: >
-      Root cause: loadPersistedState() in client.ts line 664 constructs
-      FrostThresholdSigner with directoryNodes: undefined. Fix: pass
-      directoryNodes populated from this.#directoryEndpoint.
+      Unit test verifies in-process signer reconstruction and directoryNodeStubs
+      wiring. The test uses trustedDealer to write a FROST share to the SQLCipher
+      DB, then reconstructs a CelloClientImpl from scratch (key file + DB path
+      only, no in-memory state transfer) and calls loadPersistedState(). Verified
+      by: client.frost.share.loaded emission with non-null epochId, and
+      getRegistrationState() returning non-null.
 
-      The 'FROST Ceremony begin' directory log entry is the transport-observable
-      that proves the ceremony ran via real network round-trips, not an in-process
-      bypass. A stub signer that always returns success cannot produce this log
-      entry in the directory node.
+      Transport-observable (FROST Ceremony begin in live directory logs) is
+      verified by M6-E2E-001 AC-003.
 
-      Test infrastructure: use createSessionFixture() with opts.register: true
-      for process A. Process B creates a new CelloClientImpl from scratch using
-      only the key file and DB path. No mocks for FROST or SQLCipher.
+      Root cause: loadPersistedState() in client.ts constructs FrostThresholdSigner
+      with directoryNodes: undefined. Fix: pass directoryNodes populated from
+      this.#directoryEndpoint.
       MANDATORY: --pool-options.threads.maxThreads=1
 
   - id: AC-004
