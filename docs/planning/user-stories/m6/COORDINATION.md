@@ -539,3 +539,58 @@ could not start.
 
 **M6 open stories:** M6-E2E-001 only — unblocked now.
 
+
+---
+
+## 2026-06-01 — M6-E2E-001: Stranger flow verification IN PROGRESS
+
+**Status:** In progress. ACs 001-004 verified, ACs 005-010 blocked on M6-DX-001 completing.
+
+**What was done (2026-06-01):**
+
+AC-001 ✅ — `claude mcp add cello npx @cello-protocol/connect@beta` installed successfully.
+AC-002 ✅ — Telegram registration completed via @CelloConnectStagingBot. Token received.
+AC-003 ✅ — `cello_register` succeeded. Agent registered: `00a71840909a9375e12e004f9da2b3e7`.
+AC-004 ✅ — Connection to demo agent accepted: `connection_id: 4c8d3147d24bcf90e1965b19ed6e70c8`.
+
+**Blockers surfaced during verification (all tracked in E2E-001-findings.md):**
+
+Infrastructure issues fixed during session:
+- F-003: bootstrap endpoint unreachable (ALB routing gap) — FIXED (BootstrapTargetGroup + BootstrapPathRule deployed)
+- F-011: directory loses agent profiles on restart — FIXED (loadProfiles() at startup, confirmed 5 profiles loaded)
+- F-012: agent_id not persisted to agent_profiles — FIXED (V27 migration, agent_id column)
+- F-014: directory transport key not persisted — FIXED (Secrets Manager, stable peer ID 12D3KooWS46wUj...)
+
+Client DX issues (blocking ACs 005-010, addressed in M6-DX-001):
+- F-001: phone_stub in cello_register user-facing API
+- F-004: unregistered tools give no guidance
+- F-006: no cello_setup_guidance tool
+- F-008/F-016: no startup progress feedback
+- F-009: TTY detection — binary hangs when run directly
+- F-010: cello_request_connection requires raw pubkey, not agent_id
+- F-013: 300s monolithic timeout in cello_request_connection
+- F-015: lazy startup — MCP server blocks on network operations
+
+FROST signer bug (blocking AC-005 cello_initiate_session):
+- `loadPersistedState()` in client.ts reconstructs FrostThresholdSigner with `directoryNodes: undefined`
+- Ceremony fails with `directory_below_threshold` on every restart
+- Fix: pass `this.#directoryEndpoint` when reconstructing signer (AC-003 of M6-DX-001)
+
+**npm versioning issues during session:**
+- `@cello-protocol/connect` accidentally published to `latest` instead of `beta` (v0.0.7)
+- Reverted latest to 0.0.6 manually. CI workflow fixed to default to `beta`.
+- v0.0.8-beta published correctly with bootstrap auto-discovery
+- v0.0.9 will be published after M6-DX-001 completes
+
+**What needs to happen before M6-E2E-001 can continue:**
+1. M6-DX-001 sprint-coder must complete and pass all reviews
+2. `@cello-protocol/connect@0.0.9-beta.1` must be published
+3. Restart Claude Code from outside the trustless-cello repo
+4. Use `@cello-protocol/connect@0.0.9` for the E2E run
+5. Continue from AC-005 (cello_initiate_session → demo agent 4-message sequence)
+
+**Known post-M6 issues (not blocking close):**
+- F-005: token pasted in chat (token config file deferred)
+- F-007: Windows not supported in beta
+- F-013 broader: cello_cancel_connection_request tool needed
+- Directory restart-state audit (F-011 broader scope) — dedicated story needed post-M6

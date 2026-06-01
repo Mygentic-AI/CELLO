@@ -654,3 +654,66 @@ Reactive story. Discovered during DEMO-001 deployment when `systemctl start cell
 - [[COORDINATION]] (M6) — migration version registry, downstream story hints
 - [[M5-infrastructure-deployment]] — infrastructure state this milestone builds on
 - [[CONTEXT]] — canonical glossary
+
+---
+
+## M6-E2E-001 — Stranger Flow Verification (IN PROGRESS)
+
+**Started:** 2026-06-01
+**Status:** ACs 001-004 verified. Blocked on M6-DX-001 completing before ACs 005-010.
+
+### Infrastructure fixes deployed during E2E-001 verification
+
+These were not planned stories — they were discovered by actually running the stranger flow:
+
+#### 1. Bootstrap endpoint unreachable (F-003)
+**Symptom:** `GET /bootstrap` returned "Only WebSocket connections are supported."
+**Root cause:** Port 9090 (health server) not exposed via ALB. Port 8080 only accepts WebSocket upgrades.
+**Fix:** Added `BootstrapTargetGroup` (port 9090) and `BootstrapPathRule` (priority 4) to the ALB. ECS `Service` recreated as `DirectoryService` (LogicalId rename) to add a second `LoadBalancers` entry — ECS does not allow updating LoadBalancers on an existing service.
+**Rule:** Any new HTTP endpoint on the directory health server requires a corresponding ALB listener rule and target group pointing to port 9090.
+
+#### 2. Directory loses all agent profiles on restart (F-011)
+**Symptom:** `target_not_found` for the demo agent after directory service recreation.
+**Root cause:** `PgDirectoryStore` uses in-memory Maps for profile lookups but never loads from PostgreSQL at startup. After any restart, every previously registered agent is invisible.
+**Fix:** Added `loadProfiles()` to `PgDirectoryStore` — reads all active `agent_profiles` rows at startup. Confirmed: `adapter.profiles.loaded { count: 5 }` on first deploy.
+**Broader issue:** The directory holds ~15 in-memory Maps/Sets. Many don't survive restarts. A full audit story is needed post-M6.
+
+#### 3. agent_id not persisted to agent_profiles (F-012)
+**Symptom:** `loadProfiles()` crashed with `column "agent_id" does not exist`.
+**Root cause:** `agent_id` is generated at registration and kept in memory but never written to the `agent_profiles` table.
+**Fix:** V27 migration adds `agent_id TEXT` column (nullable, backfilled by code not by UPDATE to preserve append-only rule). `setProfile()` now writes `agent_id`. `loadProfiles()` reads it with SHA-256 fallback for pre-V27 rows.
+**Rule:** Every field in the AgentProfile type must have a corresponding DB column. In-memory-only fields are lost on restart.
+
+#### 4. Directory transport key not persisted — peer ID changes on every restart (F-014)
+**Symptom:** Every directory deploy generated a new peer ID, breaking all connected clients.
+**Root cause:** `cello-mcp` stores `CELLO_DIRECTORY_MULTIADDR` with a specific peer ID. When the directory restarts with a new transport key, the peer ID changes and all clients fail to connect.
+**Fix:** Transport key stored in Secrets Manager (`cello/dev/directory/transport-key`). Directory loads it via `CELLO_DIRECTORY_TRANSPORT_KEY_HEX` env var injected by ECS. Peer ID is now stable across restarts.
+**Rule:** Any key that determines a stable identity (peer ID, node pubkey) must be persisted in Secrets Manager, not generated fresh at startup.
+
+#### 5. FROST signer not wired with directoryNodes after restart
+**Symptom:** `cello_initiate_session` returned `directory_below_threshold` after MCP server reconnect.
+**Root cause:** `loadPersistedState()` in `client.ts` reconstructs `FrostThresholdSigner` with `directoryNodes: undefined`. The signer can verify signatures but cannot participate in FROST ceremonies (which requires routing round-trip frames to the directory). Fixed in M6-DX-001 AC-003.
+
+### npm versioning issues
+
+During the E2E session, `@cello-protocol/connect@0.0.7` was accidentally published to the `latest` dist-tag (tag should have been `beta`). The CI workflow was fixed to default all tag publishes to `beta`; only exact `vX.Y.Z` tags (no suffix) go to `latest`. `latest` was manually reverted to `0.0.6`.
+
+Versions published during M6:
+- `0.0.3` — initial REPOSPLIT-002 publish
+- `0.0.4` — FROST bootstrap NODE_ENV gate removed
+- `0.0.5` — PERSIST-024 wiring
+- `0.0.6` — db/migrations in tarball fix (beta, current latest)
+- `0.0.7` — bootstrap auto-discovery (accidentally published to latest, reverted)
+- `0.0.8` — SQLCipher v6, platform-aware errors, bootstrap auto-discovery (beta)
+- `0.0.9` — M6-DX-001 DX fixes (pending M6-DX-001 completion)
+
+### DX findings summary
+
+16 DX issues documented in `E2E-001-findings.md`. The most impactful:
+- No `cello_setup_guidance` tool — LLM has no onboarding entry point
+- `phone_stub` in `cello_register` — strangers don't know what this is
+- 300s monolithic timeout in `cello_request_connection` — silent hang
+- Lazy startup not implemented — MCP server blocks Claude Code's 30s timeout on first install
+- No startup progress — user sees nothing during 10-20s startup
+
+All addressed in M6-DX-001.
