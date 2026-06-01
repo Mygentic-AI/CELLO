@@ -409,13 +409,22 @@ if (env === "local") {
 }
 
 let transportPrivateKey: Uint8Array;
-try {
-  transportPrivateKey = readFileSync(transportKeyPath);
-} catch {
-  transportPrivateKey = randomBytes(32);
-  mkdirSync(join(homedir(), ".cello"), { recursive: true });
-  writeFileSync(transportKeyPath, transportPrivateKey, { mode: 0o600 });
-  logger.info("adapter.initialised", { adapterName: "TransportKey", implementation: "generated", env });
+const transportKeyHex = process.env["CELLO_DIRECTORY_TRANSPORT_KEY_HEX"];
+if (transportKeyHex && transportKeyHex !== "PLACEHOLDER_POPULATE_VIA_CLI") {
+  // Production/dev/staging: transport key injected via Secrets Manager at ECS task launch.
+  // This ensures the directory peer ID is stable across restarts and redeploys.
+  transportPrivateKey = Buffer.from(transportKeyHex, "hex");
+  logger.info("adapter.initialised", { adapterName: "TransportKey", implementation: "secrets_manager", env });
+} else {
+  // Local: load from file or generate once and persist.
+  try {
+    transportPrivateKey = readFileSync(transportKeyPath);
+  } catch {
+    transportPrivateKey = randomBytes(32);
+    mkdirSync(join(homedir(), ".cello"), { recursive: true });
+    writeFileSync(transportKeyPath, transportPrivateKey, { mode: 0o600 });
+    logger.info("adapter.initialised", { adapterName: "TransportKey", implementation: "generated", env });
+  }
 }
 
 // ─── PERSIST-005: PersistentShareStore for K_server_X share persistence ───────
@@ -663,6 +672,7 @@ if (store instanceof PgDirectoryStore) {
     // again on the delegatedSigner when the agent connects (via #delegatedSigners.get).
     // The delegated signer delegates ceremonies back to the live client over the
     // signaling stream — it doesn't need streams at construction time.
+    result.directory.registerDelegatedSigner(profile.k_local_pubkey, delegatedSigner);
     result.directory.registerThresholdSigner(profile.k_local_pubkey, delegatedSigner);
     result.directory.registerPrimaryPubkey(profile.k_local_pubkey, new Uint8Array(primaryPubkeyBytes));
   }

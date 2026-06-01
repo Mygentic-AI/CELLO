@@ -89,6 +89,17 @@ put_secret_if_empty \
   "${DIR_PRIVATE_KEY}" \
   "Directory node Ed25519 private key"
 
+# ── 1b. Directory transport key (libp2p) ────────────────────────────────────
+# A stable transport key ensures the directory peer ID is stable across ECS restarts.
+# This is a random 32-byte key — not an Ed25519 key. Generated once, never rotated.
+
+echo "Generating directory transport key..."
+DIR_TRANSPORT_KEY=$(openssl rand -hex 32)
+put_secret_if_empty \
+  "cello/${ENVIRONMENT}/directory/transport-key" \
+  "${DIR_TRANSPORT_KEY}" \
+  "Directory libp2p transport key (32-byte hex) — stable peer ID"
+
 # ── 2. Relay node Ed25519 private key ────────────────────────────────────────
 
 echo "Generating relay node key pair..."

@@ -150,6 +150,11 @@ Resources:
             # the same value is injected into the Ops Agent as DIRECTORY_API_KEY.
             - Name: INTERNAL_API_KEY
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/directory-api-key"
+            # CELLO_DIRECTORY_TRANSPORT_KEY_HEX: libp2p transport key (32-byte hex).
+            # Persisted in Secrets Manager so the directory peer ID is stable across ECS restarts.
+            # Without this, every deploy generates a new peer ID breaking all connected clients.
+            - Name: CELLO_DIRECTORY_TRANSPORT_KEY_HEX
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/directory/transport-key"
           LogConfiguration:
             LogDriver: awslogs
             Options:

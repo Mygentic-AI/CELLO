@@ -1016,6 +1016,11 @@ export class CelloDirectoryNode {
           authedPubkeyHex = Buffer.from(resp.pubkey).toString("hex");
           this.#streams.set(authedPubkeyHex, stream);
 
+          // If a ClientDelegatedSigner was pre-registered (from DB profile restore at startup),
+          // update it with the live streams map so FROST ceremonies can route back to this client.
+          const existingDelegated = this.#delegatedSigners.get(authedPubkeyHex);
+          if (existingDelegated) existingDelegated.setStreams(this.#streams);
+
           // OBS-001 AC-003: peer authenticated on signaling
           protocolLog("AUTH", `Peer ${truncHex(authedPubkeyHex)} authenticated (signaling)`);
 
@@ -1323,6 +1328,11 @@ export class CelloDirectoryNode {
    */
   registerThresholdSigner(pubkeyHex: string, signer: IThresholdSigner): void {
     this.#thresholdSigners.set(pubkeyHex, signer);
+  }
+
+  /** Register a ClientDelegatedSigner so FROST ceremony results can be routed back to the client. */
+  registerDelegatedSigner(pubkeyHex: string, signer: ClientDelegatedSigner): void {
+    this.#delegatedSigners.set(pubkeyHex, signer);
   }
 
   /**

@@ -219,11 +219,12 @@ export class PgDirectoryStore implements DirectoryStore {
       phone_stub_hash: string;
       registered_at: number;
       status: string;
-    }>(`SELECT k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status FROM agent_profiles WHERE status = 'active'`);
+      agent_id: string | null;
+    }>(`SELECT k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, agent_id FROM agent_profiles WHERE status = 'active'`);
     for (const row of result.rows) {
-      // agent_id is not persisted to agent_profiles — derive a stable stand-in from k_local_pubkey.
-      // The real fix is to add agent_id to the agent_profiles schema (post-M6 story).
-      const agentId = createHash("sha256").update(row.k_local_pubkey, "utf8").digest("hex").slice(0, 32);
+      // V27 migration adds agent_id column. Rows created before V27 have a backfilled value.
+      // Fallback to SHA-256 derivation for any null rows (should not occur post-V27).
+      const agentId = row.agent_id ?? createHash("sha256").update(row.k_local_pubkey, "utf8").digest("hex").slice(0, 32);
       const profile = {
         k_local_pubkey: row.k_local_pubkey,
         primary_pubkey: row.primary_pubkey,
@@ -540,8 +541,8 @@ export class PgDirectoryStore implements DirectoryStore {
       const agentId = profile.k_local_pubkey;
       void this.#pool.query(
         `INSERT INTO agent_profiles
-           (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, account_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
+           (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, account_id, agent_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
          ON CONFLICT (k_local_pubkey) DO NOTHING`,
         [
           profile.k_local_pubkey,
@@ -551,6 +552,7 @@ export class PgDirectoryStore implements DirectoryStore {
           profile.registered_at,
           profile.status,
           accountId,
+          profile.agent_id,
         ],
       ).then(() => {
         // ACCOUNT-001: log account.agent.linked only after INSERT confirms success.
@@ -578,8 +580,8 @@ export class PgDirectoryStore implements DirectoryStore {
       this.#fire(
         this.#pool.query(
           `INSERT INTO agent_profiles
-             (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status)
-           VALUES ($1,$2,$3,$4,$5,$6)
+             (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, agent_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
            ON CONFLICT (k_local_pubkey) DO NOTHING`,
           [
             profile.k_local_pubkey,
@@ -588,6 +590,7 @@ export class PgDirectoryStore implements DirectoryStore {
             profile.phone_stub_hash,
             profile.registered_at,
             profile.status,
+            profile.agent_id,
           ],
         ),
         "agent_profiles",
