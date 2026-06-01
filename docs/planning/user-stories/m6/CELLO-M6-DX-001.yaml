@@ -56,11 +56,11 @@ behavior:
       is emitted with { agentPubkey, epochId, threshold, participants }"
 
   - trigger: "When any MCP tool that requires registration is called and the
-      agent is not registered (cello_send, cello_receive, cello_request_connection,
-      cello_initiate_session, cello_close_session, cello_get_sealed_receipt,
-      cello_list_sessions, cello_list_connections, cello_await_session,
-      cello_await_connection_request, cello_backup, cello_restore,
-      cello_get_inclusion_proof, cello_set_policy, cello_get_policy,
+      agent is not registered (cello_send, cello_receive, cello_receive_session,
+      cello_request_connection, cello_initiate_session, cello_close_session,
+      cello_get_sealed_receipt, cello_list_sessions, cello_list_connections,
+      cello_await_session, cello_await_connection_request, cello_backup,
+      cello_restore, cello_get_inclusion_proof, cello_set_policy, cello_get_policy,
       cello_accept_connection, cello_reject_connection,
       cello_request_more_disclosure, cello_respond_to_disclosure_request)"
     action: "the tool returns a structured error with error.reason = 'not_registered'
@@ -187,11 +187,11 @@ acceptance_criteria:
   - id: AC-004
     given: "An unregistered agent (no registration_state row in DB)"
     when: "any of the following tools is called: cello_send, cello_receive,
-      cello_request_connection, cello_initiate_session, cello_close_session,
-      cello_get_sealed_receipt, cello_list_sessions, cello_list_connections,
-      cello_await_session, cello_await_connection_request, cello_backup,
-      cello_restore, cello_get_inclusion_proof, cello_set_policy, cello_get_policy,
-      cello_accept_connection, cello_reject_connection,
+      cello_receive_session, cello_request_connection, cello_initiate_session,
+      cello_close_session, cello_get_sealed_receipt, cello_list_sessions,
+      cello_list_connections, cello_await_session, cello_await_connection_request,
+      cello_backup, cello_restore, cello_get_inclusion_proof, cello_set_policy,
+      cello_get_policy, cello_accept_connection, cello_reject_connection,
       cello_request_more_disclosure, cello_respond_to_disclosure_request"
     then: "the tool returns { error: { reason: 'not_registered', message: '<string>' } }
       where message contains the words 'cello_setup_guidance' and
@@ -238,11 +238,24 @@ acceptance_criteria:
       The tool schema change: phone_stub is removed from the MCP input schema.
       The parameter formerly named pre_auth_token is renamed to token.
       Internally phone_stub = '' (empty string) is sent in the register_request frame.
-      The directory's non-empty check accepts '' — confirm this in the directory
-      codebase before implementing (directory-node.ts #processRegisterRequest,
-      currently checks frame.phone_stub.length === 0).
-      If the directory rejects empty string, the fix must also update the directory
-      check to accept '' when a valid pre_auth_token is present.
+
+      The directory fix is TWO PARTS — both required:
+
+      PART 1: In #processRegisterRequest (directory-node.ts), when
+      #pendingPreAuthData has an entry for frame.k_local_pubkey (i.e., a valid
+      pre_auth_token was consumed in DKG round 1), bypass the
+      frame.phone_stub.length === 0 check entirely.
+
+      PART 2: In the same function, when #pendingPreAuthData exists for the key,
+      use preAuthData.phoneStubHash for the AgentProfile.phone_stub_hash instead
+      of SHA-256(frame.phone_stub). This is critical — using SHA-256('') for every
+      pre_auth_token registration would store the same phone_stub_hash for all of
+      them, causing phone_already_claimed on the second registration.
+
+      Result: phone_stub is a legacy field in the wire format. When a pre_auth_token
+      was consumed (the M6+ path), phone_stub_hash always comes from the token,
+      never from the client-supplied phone_stub value. The client sends '' as a
+      no-op wire value.
 
   - id: AC-007a
     given: "A registered agent"
@@ -256,9 +269,13 @@ acceptance_criteria:
     test_type: integration
     component_under_test: adapter-claude-code
     notes: >
-      The /agent-lookup endpoint must be confirmed in the directory codebase.
-      If it does not exist, it must be added as part of this story
-      (components includes directory for this reason).
+      The /agent-lookup endpoint does NOT currently exist in the directory.
+      It must be added to the health server (health-server.ts, port 9090) as part
+      of this story — NOT to the libp2p WebSocket server on port 8080 (which only
+      accepts WebSocket upgrades). The endpoint is a plain HTTP GET, reachable via
+      the ALB on port 80 with a path rule for /agent-lookup.
+      IaC: add an ALB listener rule for /agent-lookup → BootstrapTargetGroup
+      (same target group as /bootstrap, already routes to port 9090).
       Detection by length: 32 hex chars = agent_id (lookup required),
       64 hex chars = raw pubkey (used directly, no lookup).
       Both formats must be accepted by cello_request_connection and
@@ -311,11 +328,17 @@ acceptance_criteria:
     test_type: integration
     component_under_test: adapter-claude-code
     notes: >
-      Lazy startup: both SQLCipher DB open and directory connection happen in
-      background tasks. The MCP server must register tools and respond to the
-      initial tool-list request before either background task completes.
-      The 2-second target requires that no blocking I/O runs on the main thread
-      before server.connect() is called.
+      Lazy startup: SQLCipher DB open, client.loadPersistedState(), bootstrap fetch,
+      directory dial, and FROST bootstrap ALL move to background tasks. The MCP
+      server must register tools and respond to the initial tool-list request
+      before any of these complete. The 2-second target requires that no blocking
+      I/O runs on the main thread before server.connect() is called.
+
+      Coordination with AC-003: since loadPersistedState() moves to background,
+      the FROST signer restoration (AC-003's fix) happens asynchronously. Tools
+      that require the FROST signer (cello_initiate_session) must await the
+      background ready signal before proceeding, up to 10 seconds.
+
       Test: spawn cello-mcp as a subprocess, connect an MCP client via stdio,
       send tools/list request, assert response arrives within 2s, assert
       cello_status.transport_started = true.
@@ -416,6 +439,14 @@ observability:
       context_fields: [agentId, endpoint, httpStatus, reason, durationMs]
 
   alarms: []
+  notes: >
+    The following events are new and MUST be added to the canonical event taxonomy
+    in docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
+    before the story is marked done:
+    client.startup.progress, client.bootstrap.fetch.failed,
+    client.connection.request.stage.timeout, client.directory.agent_lookup.failed.
+    Verify client.frost.share.loaded and adapter.profiles.loaded are already in
+    the taxonomy (from PERSIST-024 and F-011 hotfix respectively); add them if not.
 
 # ─── References ─────────────────────────────────────────────
 references:
