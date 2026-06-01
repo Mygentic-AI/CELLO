@@ -28,7 +28,7 @@ phases:
             exit 1
           }
         WAIT_ATTEMPTS=0
-        MAX_WAIT_ATTEMPTS=60
+        MAX_WAIT_ATTEMPTS=240
         while [ $WAIT_ATTEMPTS -lt $MAX_WAIT_ATTEMPTS ]; do
           DEPLOY_STATUS=$(aws ecs describe-services --cluster cello-${CELLO_ENV} --services cello-directory-${CELLO_ENV} --region us-east-1 --query 'services[0].deployments[?status==`PRIMARY`].rolloutState' --output text)
           if [ "$DEPLOY_STATUS" = "COMPLETED" ]; then
@@ -41,7 +41,7 @@ phases:
           sleep 15
         done
         if [ $WAIT_ATTEMPTS -ge $MAX_WAIT_ATTEMPTS ]; then
-          echo '{"event":"pipeline.staging.deploy.failed","pipeline":"cello-directory-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"ecs wait services-stable timed out after 15 minutes"}'
+          echo '{"event":"pipeline.staging.deploy.failed","pipeline":"cello-directory-pipeline","commitSha":"'${COMMIT_SHA}'","reason":"ecs wait services-stable timed out after 60 minutes"}'
           exit 1
         fi
         END_MS=$(date +%s%3N)
