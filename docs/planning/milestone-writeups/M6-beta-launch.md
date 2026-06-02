@@ -918,3 +918,100 @@ This is infrastructure debt that compounds. Every deploy can silently break othe
 ### The Lesson
 
 Any infrastructure change (deploy, restart, IP change) must leave every connected service in a working state without manual intervention. If it doesn't, it's a reliability bug, not just a devops inconvenience. This is the #1 infrastructure priority for M7.
+
+---
+
+## Additional Gaps Found During E2E Testing (2026-06-02)
+
+### /agent-lookup ALB rule missing
+
+The `/agent-lookup` endpoint exists on the directory health server (port 9090) but had no ALB listener rule routing to it. Every call to `cello_request_connection({ target_agent_id: '...' })` returned `agent_not_found` even for registered agents. Fixed manually: added ALB listener rule priority 6 routing `/agent-lookup` to the port-9090 Bootstrap target group.
+
+**NOT in IaC.** Must be added to `cello-ecs-directory.yaml` as a listener rule. Post-M6 story required.
+
+**Also missing from IaC:** The port-8081 internal API target group (`cello-dir-internal-api-dev`) and its ALB rule (priority 5 updated from port 8080 to 8081), and the ALB SG → directory port-8081 ingress rule. All created manually today.
+
+---
+
+### Signaling stream resilience — agents go silent after directory restart
+
+When the directory restarts, every connected agent's signaling stream drops. The agents don't automatically reconnect. Result: agents are invisible to connection requests and session initiation silently fails with `target_offline`. Requires manual restart of each agent service.
+
+**Root cause:** No reconnect logic in the client. The signaling stream is opened once at startup and never re-opened if it drops.
+
+**Temporary fix:** Manually restart each agent after a directory deploy.
+
+**Permanent fix (post-M6 story):**
+- Heartbeat/keepalive on the signaling stream to detect disconnection
+- Automatic reconnect with exponential backoff
+- Client-visible status transition (`directory_reachable: false`) on stream drop
+- The demo agent's systemd `Restart=on-failure` only helps if the process crashes — silent stream drop doesn't crash the process
+
+---
+
+### Demo agent re-registration requires manual operator steps
+
+Every time the demo agent needs to re-register (key rotation, DB wipe, share corruption), the operator must:
+1. SSM into EC2
+2. Stop service, delete DB
+3. Manually construct a synthetic registration row in Postgres (bypassing FK constraints)
+4. Issue a pre-auth token
+5. Run registration script
+6. Back up key to Secrets Manager
+7. Start service
+
+This is fragile, error-prone, and requires deep knowledge of the system. At minimum, there should be a runbook. Better: a `cello_admin_register` tool or script that automates the whole flow.
+
+---
+
+### Demo agent key file is the same as its identity — no separation
+
+The demo agent uses `agent.key` as both its Ed25519 identity AND its SQLCipher database key derivation seed. If the key file is lost or corrupted, the agent cannot re-use its registered identity (pubkey) and must re-register with a new identity. There's no way to recover a registered identity without the key file.
+
+**This is by design** (the key IS the identity). But it means the Secrets Manager backup of `agent.key` is critical — losing it permanently loses the demo agent's registered identity. The README and runbook should make this explicit.
+
+---
+
+### EXPECTED_MIGRATION_VERSION coupling — every migration requires ops-agent update
+
+The ops-agent validates its schema version at startup. When a new migration is added to the directory, the ops-agent fails to start until `EXPECTED_MIGRATION_VERSION` is updated. Today this required:
+1. Code change to `server.ts`
+2. Pipeline deploy (~15 minutes)
+3. Task def update
+
+**Fixed:** Moved to env var in task def. Schema bumps now only require a task def env var update.
+
+**Remaining gap:** IaC (`cello-ecs-operations-agent.yaml`) hardcodes `EXPECTED_MIGRATION_VERSION: "27"`. Every migration still requires an IaC update. Consider changing the check to "at least N" instead of "exactly N" — forward compatibility is generally safe for additive migrations.
+
+---
+
+### `directory_below_threshold` is a catch-all error — not actionable
+
+The error name `directory_below_threshold` is returned by the directory for ANY FROST ceremony failure regardless of actual cause: missing share, wrong secret type, signShare throw, ceremony timeout. The client cannot distinguish between these cases. All appear identical to the user and debugging requires CloudWatch log analysis.
+
+**Recommended fix:** Map the actual `AGENT_NOT_BOOTSTRAPPED`, `CEREMONY_TIMEOUT`, `CEREMONY_EXHAUSTED` reasons through to the client so the LLM can give actionable guidance ("the directory doesn't have your share — re-register") vs ("the ceremony timed out — try again").
+
+---
+
+### npx cache causes first MCP connection failure on version bump
+
+When `@cello-protocol/connect` is pinned to a new version (e.g. `npx --yes @cello-protocol/connect@0.0.16`), Claude Code's first MCP connection attempt fails because SQLCipher native compilation exceeds the 30-second timeout. On `/mcp` reconnect, the server is already running and responds immediately.
+
+**Root cause:** F-002 from E2E-001 findings — never fully fixed. SQLCipher compilation takes 20-40 seconds on first install.
+
+**Permanent fix:** Switch `@journeyapps/sqlcipher` to `better-sqlite3` (pre-built binaries, no compilation). This was identified in the original DX audit and deferred.
+
+---
+
+### Relay manifest staleness — relay must re-register after any IP change
+
+The relay manifest in S3 contains the relay's health check URL as a direct task IP. When the relay redeploys, the IP changes, the manifest becomes stale, and the directory's relay pool marks the relay as unavailable. Every `cello_initiate_session` fails with `relay_unavailable`.
+
+**Today's fix:** Re-signed manifest with new IP via `infra/sign-manifest.sh`, then restarted directory to reload it.
+
+**Why this keeps happening:** The relay doesn't re-register with the directory on startup unless `CELLO_DIRECTORY_MULTIADDR` is set. In production ECS, this env var is not set — the relay has no mechanism to announce its new IP.
+
+**Post-M6 fix:**
+1. Set `CELLO_DIRECTORY_MULTIADDR` in the relay ECS task def so it dials the directory on startup
+2. When relay connects and calls `relay_register`, directory re-signs and re-uploads the manifest automatically
+3. `RelayPoolManager` polls S3 periodically (no directory restart needed)
