@@ -887,3 +887,34 @@ These tests do not exist and should be written as part of post-M6 story backlog.
 4. **Schema version bump — ops-agent startup.** Apply a new migration. Verify the ops-agent fails to start with a clear error, then succeeds after `EXPECTED_MIGRATION_VERSION` is updated. Validates the guard works and that the operational procedure is correct.
 
 The common pattern: **tests that cross a process boundary or a deployment event.** These are the class of bugs most resistant to unit tests and most damaging in production. They require integration tests that simulate real operational events (restart, redeploy, schema bump).
+
+---
+
+## Infrastructure Brittleness — Systemic Problem (2026-06-02)
+
+### The Pattern
+
+Every service in the CELLO stack that talks to another service stores a **direct task IP** somewhere — in a manifest file, an env var, or hardcoded config. When ANY service redeploys (getting a new ECS task with a new private IP), every other service that pointed to it breaks silently.
+
+Instances found today:
+1. **`DIRECTORY_INTERNAL_URL`** — ops-agent pointed to `http://10.0.89.234:8081`, broke when directory redeployed. Fixed by pointing to ALB.
+2. **Relay manifest `healthCheckUrl`** — contained `http://10.0.117.145:4000/health`, broke when relay redeployed May 28. Fixed by re-signing manifest with new IP `10.0.21.210:4000`.
+3. **Relay manifest not auto-refreshed** — directory loads manifest once at startup. Manifest update requires directory restart.
+
+### Why This Is Unacceptable
+
+This is infrastructure debt that compounds. Every deploy can silently break other services. The more services we add, the worse it gets. The developer experience consequence: troubleshooting a single feature (session initiation) required a full day of cascading fixes across the relay, ops-agent, and directory — none of which were related to the feature itself.
+
+### The Fix (post-M6 stories required)
+
+1. **CloudMap service discovery** — all services register with `cello-dev.local` DNS. No task IPs anywhere. `http://relay.cello-dev.local:4000/health` resolves to the current task regardless of redeploys.
+
+2. **ALB for all inter-service HTTP** — ops-agent → directory internal API already fixed (port 8081 target group). Apply same pattern to relay health checks.
+
+3. **Relay manifest auto-refresh** — `RelayPoolManager` should poll S3 every N minutes and reload the manifest without requiring a directory restart.
+
+4. **Relay re-registration on startup** — relay should dial the directory on startup and call `relay_register` regardless of whether `CELLO_DIRECTORY_MULTIADDR` is set. Current behavior: only registers if the env var is provided.
+
+### The Lesson
+
+Any infrastructure change (deploy, restart, IP change) must leave every connected service in a working state without manual intervention. If it doesn't, it's a reliability bug, not just a devops inconvenience. This is the #1 infrastructure priority for M7.
