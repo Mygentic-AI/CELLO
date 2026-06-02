@@ -21,7 +21,7 @@ export function jsonReviver(_key: string, value: unknown): unknown {
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     const rec = value as Record<string, unknown>;
     if (rec.__type === "Uint8Array" && typeof rec.hex === "string") {
-      return Buffer.from(rec.hex as string, "hex");
+      return new Uint8Array(Buffer.from(rec.hex as string, "hex"));
     }
   }
   return value;

@@ -507,6 +507,9 @@ export class PgDirectoryStore implements DirectoryStore {
       [pubkeyHex],
     );
 
+    // pg auto-parses JSONB columns into JS objects, so row.payload is already parsed.
+    // Re-stringify then jsonParse runs the Uint8Array reviver over the full object tree,
+    // restoring any {__type:"Uint8Array",hex:"..."} sentinels to real Uint8Array instances.
     const notifications: DirectoryNotification[] = result.rows.map(
       (row) => jsonParse<DirectoryNotification>(JSON.stringify(row.payload)),
     );
@@ -964,6 +967,8 @@ export class PgDirectoryStore implements DirectoryStore {
       [targetPubkey],
     );
 
+    // pg auto-parses JSONB columns into JS objects, so row.payload is already parsed.
+    // Re-stringify then jsonParse runs the Uint8Array reviver over the full object tree.
     const requests: PendingConnectionRequest[] = result.rows.map(
       (row) => jsonParse<PendingConnectionRequest>(JSON.stringify(row.payload)),
     );
