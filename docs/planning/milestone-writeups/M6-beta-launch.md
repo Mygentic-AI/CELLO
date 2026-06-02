@@ -740,3 +740,21 @@ All addressed in M6-DX-001.
 **Infrastructure:** V27 migration, `/agent-lookup` health endpoint, ALB listener rules for `/bootstrap` and `/agent-lookup` deploying via pipeline 2026-06-01.
 
 **SKILL.md and cello-chat.md** rewritten for production — no M-number references, usage patterns documented, tool list ordered by usage flow.
+
+---
+
+## Signaling Stream Presence Fix (0.0.13, in progress)
+
+**Bug found during M6-E2E-001 AC-005:** The demo agent held a libp2p connection (TCP + Noise) to the directory but never opened the CELLO signaling stream. Without the signaling stream, the agent is not in the directory's `#streams` map and is effectively invisible — connection requests get queued as "target offline" and never delivered.
+
+**Root cause:** `registerHandler()` runs at startup before the background init sets `#directoryEndpoint`. The proactive announce path is always skipped. The demo agent's polling tools (`cello_await_connection_request`, `cello_receive`) never trigger the signaling auth either. Result: agent is connected at the transport layer but never "present" at the protocol layer.
+
+**Fix:** Add `client.announceToDirectory()` public method that opens the persistent signaling stream. Called from `cello-mcp.ts` after background init completes and `node.dial()` succeeds.
+
+**Post-M6 concern — signaling stream resilience:** This fix addresses startup only. If the signaling stream drops mid-session (directory restart, network interruption, idle timeout), the agent silently becomes invisible again with no automatic recovery. This is a known gap that requires a dedicated story post-M6:
+- Heartbeat/keepalive on the signaling stream to detect disconnection
+- Automatic reconnect with exponential backoff when the stream drops
+- Client-visible status transition (`directory_reachable` → `directory_lost` → `directory_reachable`) so the LLM knows when it's offline
+- Queued outbound operations that retry after reconnection rather than failing immediately
+
+This is the most critical reliability gap for beta users — an agent that was working can silently stop receiving messages with no indication to the user.
