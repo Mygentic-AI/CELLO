@@ -674,6 +674,52 @@ A previous agent (overnight, ~8 hours before this fix) attempted to unstick the 
 
 ---
 
+## 2026-06-02 — Demo agent restored + package versioning fixed
+
+**Context:** Demo agent (`i-0ad3e7c22470f266e`) was crash-looping after being upgraded to
+`@cello-protocol/connect@0.0.11`. Root cause investigation and fixes documented here.
+
+**Root cause of crash loop:**
+`@cello-protocol/client` had DX-001 changes in source (phone_stub removal, token parameter rename)
+but its version was never bumped past `0.0.5`. Every publish of `connect` (0.0.6 → 0.0.11)
+froze the dependency at the stale `client@0.0.5`. The `cello_register` MCP tool schema in the
+installed binary still required `phone_stub`, causing the demo agent's registration check to fail
+with an input validation error, which caused `registered=false`, which caused the outer process
+to exit with code 1 on every startup.
+
+**What was investigated (dead ends):**
+- DB path mismatch — ruled out (only one `client.db` on the filesystem)
+- Wrong SQLCipher key — ruled out (DB opened correctly, correct pubkey in logs)
+- Missing DB migrations — ruled out (V2 schema present, `migration.skipped` confirmed)
+- Directory registration missing — ruled out (agent_id column is NULL for all rows due to V27
+  backfill gap, but `primary_pubkey` `25c1bbe5...` confirmed present in `agent_profiles`)
+
+**Actual fix sequence:**
+1. Confirmed `@cello-protocol/client` versions: local `0.0.5`, npm beta `0.0.5` — in sync but
+   pre-DX-001 content never published under a new version number
+2. Bumped `@cello-protocol/client` to `0.0.6`, `@cello-protocol/connect` to `0.0.12`
+3. Added CI verification step to `ci.yml`: after publish, confirms every package's local version
+   matches npm — fails loudly if any package was not bumped before tagging
+4. Tagged `v0.0.12` on cello-client → CI published `client@0.0.6` and `connect@0.0.12` to beta
+5. Updated EC2 instance: `npm install @cello-protocol/connect@0.0.12` (9 packages changed,
+   `client` updated from `0.0.5` → `0.0.6`)
+6. Fixed `/tmp/cello-mcp-stderr.log` ownership (`chown cello-demo`) — SSM runs as root and
+   leaves the file root-owned; service runs as `cello-demo` and cannot open it
+7. Added `/etc/tmpfiles.d/cello-mcp.conf` to recreate the file with correct ownership on boot
+8. `register-agent-v2.mjs` run with corrected API (`token` parameter, `NODE_ENV=test`):
+   returned `already_registered` — FROST share was in DB from prior registration, not lost
+9. `systemctl start cello-demo` → `demo.started` confirmed
+
+**Outcome:** Demo agent running on `connect@0.0.12` / `client@0.0.6`. AgentID unchanged:
+`a2c55e2721f45cfa86cb3417a76e3f7b`.
+
+**Key lessons documented in `demo/CLAUDE.md`** (new file — operator guide for future sessions).
+
+**Rule added to CI:** version verification step after publish prevents silent version drift.
+If a package is not bumped before tagging, the job fails immediately on that tag.
+
+---
+
 ## 2026-06-01 — M6-DX-001 CLOSED
 
 Story APPROVED by sprint-reviewer. All 11 ACs delivered and tested.
