@@ -84,8 +84,17 @@ export class PersistentShareStore implements ShareStore {
     for (const { agentId, epochId, plaintext } of rows) {
       try {
         const json = new TextDecoder().decode(plaintext);
-        const parsed = JSON.parse(json) as { secret: LocalShare["secret"]; pub: LocalShare["pub"] };
-        this.#memory.storeShare(agentId, epochId, { secret: parsed.secret, pub: parsed.pub });
+        const parsed = JSON.parse(json) as Record<string, unknown>;
+        if (!parsed.secret || typeof parsed.secret !== "object") {
+          throw new Error("invalid share format: missing or non-object secret");
+        }
+        if (!parsed.pub || typeof parsed.pub !== "object") {
+          throw new Error("invalid share format: missing or non-object pub");
+        }
+        this.#memory.storeShare(agentId, epochId, {
+          secret: parsed.secret as LocalShare["secret"],
+          pub: parsed.pub as LocalShare["pub"],
+        });
         loaded++;
       } catch (err: unknown) {
         failed++;

@@ -163,8 +163,14 @@ export class EncryptedPgShareStore {
     for (const row of result.rows) {
       const keyId = this.#keyId(row.agent_id, row.epoch_id);
       const ciphertext = new Uint8Array(row.encrypted_share);
-      const plaintext = await this.#provider.decrypt(ciphertext, keyId);
-      shares.push({ agentId: row.agent_id, epochId: row.epoch_id, plaintext });
+      try {
+        const plaintext = await this.#provider.decrypt(ciphertext, keyId);
+        shares.push({ agentId: row.agent_id, epochId: row.epoch_id, plaintext });
+      } catch (err: unknown) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        this.#logger.error("key.decrypted.failed", error, { keyId, agentId: row.agent_id });
+        throw err;
+      }
     }
     return shares;
   }
