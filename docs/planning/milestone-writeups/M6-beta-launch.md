@@ -778,3 +778,44 @@ Both fixes address startup only. If the signaling stream drops mid-session (dire
 - Queued outbound operations that retry after reconnection
 
 This is the most critical reliability gap for beta users.
+
+---
+
+## PERSIST-005 Serialization Bug — Uint8Array Corruption Through JSON (2026-06-02)
+
+### What happened
+
+After the cold-start share loading fix landed (directory now loads FROST shares from Postgres at startup), `cello_initiate_session` still failed with `directory_below_threshold`. The FROST ceremony progressed further than before (~1.2s instead of ~362ms), but still failed at the sign step.
+
+Root cause: `PersistentShareStore.#serializeSecret()` used `JSON.stringify({ secret, pub })` to serialize the entire `LocalShare` before encrypting it to the database. `FrostSecret.signingShare` is a `Uint8Array`. `JSON.stringify` converts `Uint8Array` to a plain object with numeric string keys (`{"0":1,"1":2,...}`). `JSON.parse` restores a plain object — not a `Uint8Array`. When `@noble/curves` `signShare()` receives this plain object where it expects a `Uint8Array`, it throws. The catch in `signRawMessage` maps any throw to `AGENT_NOT_BOOTSTRAPPED`, which propagates back as `directory_below_threshold`.
+
+**The shares were written to the database. The shares were loaded from the database. The shares appeared valid (structural checks passed). The ceremony failed cryptographically with no indication of why.**
+
+### Why every test missed this
+
+1. **Local development always uses InMemoryShareStore.** `CELLO_ENV=local` means `pgPool` is null, so `PersistentShareStore` is never instantiated. All local DKG tests, all local ceremony tests, all E2E tests — none of them ever go through the serialization path.
+
+2. **PERSIST-005 tests used `randomBytes(32)` as "share bytes".** The persistence tests verified that bytes go in and bytes come out correctly. They did NOT verify that real FROST share objects survive the round-trip. A real `FrostSecret` with a `Uint8Array` `signingShare` was never serialized and then used in a live signing ceremony.
+
+3. **The sprint reviewer verified ACs against PERSIST-005.** PERSIST-005 AC-003 says "the directory service retrieves and decrypts the share via EnvelopeKeyProvider.decrypt() — the decrypted bytes equal the original plaintext share exactly." This was verified: decrypted bytes DO equal the original bytes. But "bytes equal" is not the same as "FROST types are preserved." The bytes came back correctly; the objects they represented did not.
+
+4. **No integration test ran a full cycle: DKG → restart → session initiation.** This is the only test that would have caught this. It was not written. The story never required it.
+
+### Why this is serious
+
+This is not just a missed unit test. It reveals a structural gap in the test strategy:
+
+**We have no tests that validate behavior across a process boundary for persistent state.** Every test that exercises FROST ceremonies runs within a single process lifetime. The persistence layer was tested in isolation (bytes in, bytes out). The FROST layer was tested in isolation (ceremonies work with in-memory shares). The integration between them — load from DB, then use in ceremony — was never tested.
+
+This is the category of bug that is extremely hard to catch with unit tests by design: it only manifests after a restart, which no unit test simulates. But it should have been caught by:
+- An integration test that explicitly restarts the directory and verifies existing agents can still initiate sessions
+- A PERSIST-005 AC that said "after directory restart, agents registered before the restart can initiate sessions" (this AC did not exist)
+- A sprint reviewer rule: any story that adds persistence must have a round-trip test that exercises the persisted data in its actual use context, not just as raw bytes
+
+### The retrospective question
+
+The sprint reviewer checked that PERSIST-005 ACs were met. They were. The story was approved correctly. The story was simply under-specified — it defined the building blocks (encrypt, store, decrypt) without defining the end-to-end invariant (FROST share survives restart and can be used for signing). 
+
+The lesson is not "the sprint reviewer failed." The lesson is: **persistence stories must require an end-to-end correctness AC** — one that takes the persisted data and uses it for its actual purpose after a fresh process start. Raw byte equality is necessary but not sufficient.
+
+Fix: replace `JSON.stringify/parse` with a serializer that converts `Uint8Array` to hex strings and back, preserving all type information through the round-trip.
