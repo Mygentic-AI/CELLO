@@ -611,6 +611,22 @@ FROST signer bug (blocking AC-005 cello_initiate_session):
 
 ---
 
+## 2026-06-02 — Directory 3-region deploy: IAM fix applied manually
+
+**Context:** Directory pipeline deploy (image c58ecb2) completed in us-east-1 but stalled in eu-central-1 and ap-northeast-1 for 8+ hours. Tasks were crash-looping with `ResourceInitializationError`.
+
+**Root cause:** The regional execution roles (`cello-dev-eu-central-1-directory-execution-role` and `cello-dev-ap-northeast-1-directory-execution-role`) were missing `cello/dev/directory/transport-key` from their `DirectorySecretsAccess` inline policy. The IAM stack template (`cello-iam.yaml`) was updated in commit `fd1b97f` to include `transport-key*` with region wildcard, but the IAM CloudFormation stack was only redeployed to us-east-1 (primary region). The eu-central-1 and ap-northeast-1 stacks still had the old 5-secret policy (missing `transport-key`).
+
+**Fix applied:** `aws iam put-role-policy` on both regional roles to add `transport-key*`. Then `--force-new-deployment` on both services. Both regions reached steady state within 2 minutes.
+
+**IaC status:** Template is already correct (`cello-iam.yaml` line 60). The manual fix aligns live state with what IaC declares. Next pipeline deploy of the IAM stack to eu-central-1 and ap-northeast-1 will be a no-op (policy already matches).
+
+**Outcome:** All 3 directory nodes now running image c58ecb2, HEALTHY, steady state.
+
+**Rule:** When the IAM stack template changes, it must be deployed to ALL 3 regions — not just us-east-1. Each region creates its own role (condition: `IsPrimaryRegion`). A single-region IAM deploy leaves the other two with stale policies.
+
+---
+
 ## 2026-06-01 — M6-DX-001 CLOSED
 
 Story APPROVED by sprint-reviewer. All 11 ACs delivered and tested.

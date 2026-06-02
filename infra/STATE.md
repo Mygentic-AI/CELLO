@@ -101,6 +101,8 @@ NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-
 **Manual changes (2026-06-02, IaC updated — deploy needed to apply to CF stacks):**
 - `cello-dev-directory-execution-role` DirectorySecretsAccess policy: changed region from `us-east-1` to `*` for all secret ARNs — IAM role is global but tasks run in eu-central-1/ap-northeast-1 and need their own regional secrets. IaC: `cello-iam.yaml` (both DirectorySecretsAccess and DirectoryPermissions statements).
 - `cello-dev-directory-task-role` DirectoryPermissions policy: same change — added eu-central-1 and ap-northeast-1 ARNs manually; IaC updated to use `*` region.
+- `cello-dev-eu-central-1-directory-execution-role` DirectorySecretsAccess policy: added `transport-key*` (was missing — only had 5 secrets). IaC already correct (cello-iam.yaml line 60); regional IAM stack deploy was missed.
+- `cello-dev-ap-northeast-1-directory-execution-role` DirectorySecretsAccess policy: same fix — added `transport-key*`.
 
 **Manual changes (2026-05-29/30, IaC updated but not yet deployed — validation deploy needed):**
 - ALB listener rule priority 5: removed `source-ip: 10.0.0.0/16` condition from `/internal/*` forward rule — API key header provides auth; source-ip restriction broke ops-agent (traffic hairpins via internet gateway, arrives with public IP). IaC: `cello-ecs-directory.yaml`
@@ -118,7 +120,7 @@ NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
 | cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent/directory-api-key permission added to directory execution role |
+| cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent/directory-api-key added; **STALE: missing transport-key in execution role — fixed manually 2026-06-02, redeploy needed** |
 | cello-secrets-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent secrets added (telegram-bot-token, ses-credentials, directory-api-key, rds-credentials) |
 | cello-vpc-dev | UPDATE_COMPLETE | 2026-05-28 | CIDR 10.1.0.0/16; port 9090 SG rule added for ALB health checks |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
@@ -169,7 +171,7 @@ NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-
 | Stack | Status | Last Deployed | Notes |
 |---|---|---|---|
 | cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
-| cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent/directory-api-key permission added to directory execution role |
+| cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent/directory-api-key added; **STALE: missing transport-key in execution role — fixed manually 2026-06-02, redeploy needed** |
 | cello-secrets-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent secrets added (telegram-bot-token, ses-credentials, directory-api-key, rds-credentials) |
 | cello-vpc-dev | UPDATE_COMPLETE | 2026-05-28 | CIDR 10.2.0.0/16; port 9090 SG rule added for ALB health checks |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
