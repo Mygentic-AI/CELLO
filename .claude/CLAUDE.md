@@ -130,7 +130,9 @@ After every `@cello-protocol/connect` publish, grep the built binary before clos
 grep "npx " dist/bin/cello-mcp.js
 ```
 
-**Why:** In 0.0.9, SKILL.md had `npx --yes` correctly but the source was never updated. The binary shipped wrong. The docs are not the truth — the compiled output is.
+Every `npx @cello-protocol/connect` invocation must include `--yes`. Without it, npx shows an interactive "Ok to proceed? (y)" prompt before installing. Claude Code invokes the MCP server non-interactively — nothing answers the prompt, and the install hangs silently.
+
+**The docs are not the truth — the compiled output is.** In 0.0.9, SKILL.md had `--yes` correctly but the source was never updated.
 
 ---
 
