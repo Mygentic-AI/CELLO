@@ -98,6 +98,10 @@ NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-
 | WAF Log Group | aws-waf-logs-cello-dev (90-day retention) |
 | IAM User (SES SMTP) | cello-ses-smtp-dev | Created 2026-05-29; access key stored in ses-credentials secret |
 
+**Manual changes (2026-06-02, IaC updated — deploy needed to apply to CF stacks):**
+- `cello-dev-directory-execution-role` DirectorySecretsAccess policy: changed region from `us-east-1` to `*` for all secret ARNs — IAM role is global but tasks run in eu-central-1/ap-northeast-1 and need their own regional secrets. IaC: `cello-iam.yaml` (both DirectorySecretsAccess and DirectoryPermissions statements).
+- `cello-dev-directory-task-role` DirectoryPermissions policy: same change — added eu-central-1 and ap-northeast-1 ARNs manually; IaC updated to use `*` region.
+
 **Manual changes (2026-05-29/30, IaC updated but not yet deployed — validation deploy needed):**
 - ALB listener rule priority 5: removed `source-ip: 10.0.0.0/16` condition from `/internal/*` forward rule — API key header provides auth; source-ip restriction broke ops-agent (traffic hairpins via internet gateway, arrives with public IP). IaC: `cello-ecs-directory.yaml`
 - ALB listener rule priority 10 (`/internal/*` → 403 catch-all): deleted — no longer needed without source-ip gating. IaC: `cello-ecs-directory.yaml`
