@@ -237,8 +237,8 @@ NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-
 | Agent ID | a2c55e2721f45cfa86cb3417a76e3f7b |
 | Agent pubkey (K_local) | 1818eb0768536bd297fe34694a0347d5a3405eb1dc566a6ba9f9017ee7eb1296 |
 | SQLCipher DB path | /opt/cello-demo/data/client.db |
-| @cello-protocol/connect version | 0.0.6 (beta) |
-| Service status | active — demo.started confirmed, restart-survives-kill tested 2026-05-31 |
+| @cello-protocol/connect version | 0.0.12 (beta) — pending publish via CI tag v0.0.12 |
+| Service status | crash-looping — FROST share empty in SQLCipher DB; needs re-registration after 0.0.12 lands on npm |
 | Access | SSM Session Manager only - no key pair, no inbound SG rules |
 | Inbound rules | None |
 | Outbound rules | TCP 443 to 0.0.0.0/0 only |
