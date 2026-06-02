@@ -77,18 +77,28 @@ export class PersistentShareStore implements ShareStore {
     this.#logger = logger;
   }
 
+  async loadShares(): Promise<number> {
+    const rows = await this.#encrypted.getAllShareBytes();
+    let loaded = 0;
+    for (const { agentId, epochId, plaintext } of rows) {
+      try {
+        const json = new TextDecoder().decode(plaintext);
+        const parsed = JSON.parse(json) as { secret: LocalShare["secret"]; pub: LocalShare["pub"] };
+        this.#memory.storeShare(agentId, epochId, { secret: parsed.secret, pub: parsed.pub });
+        loaded++;
+      } catch (err: unknown) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        this.#logger.error("adapter.share.deserialize.failed", error, { agentId, epochId });
+      }
+    }
+    return loaded;
+  }
+
   getShare(agentPubkey: string, epochId: string): LocalShare | undefined {
-    // Hot path: return from memory if present
     const cached = this.#memory.getShare(agentPubkey, epochId);
     if (cached) {
       return cached;
     }
-
-    // Cold start path: retrieve from encrypted store
-    // Note: This is synchronous ShareStore interface, but EncryptedPgShareStore
-    // is async. For M4, we only support in-memory retrieval.
-    // Full cold-start recovery (deserialize from encrypted DB) requires an
-    // async getShare() method and is deferred to a future story.
     return undefined;
   }
 

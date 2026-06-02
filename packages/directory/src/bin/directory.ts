@@ -444,7 +444,8 @@ const shareStore = pgPool
   : new InMemoryShareStore();
 
 if (pgPool) {
-  logger.info("adapter.initialised", { adapterName: "ShareStore", implementation: "PersistentShareStore", env });
+  const loadedShareCount = await (shareStore as PersistentShareStore).loadShares();
+  logger.info("adapter.initialised", { adapterName: "ShareStore", implementation: "PersistentShareStore", env, sharesLoaded: loadedShareCount });
 } else {
   logger.info("adapter.initialised", { adapterName: "ShareStore", implementation: "InMemoryShareStore", env });
 }
