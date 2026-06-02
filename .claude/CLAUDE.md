@@ -122,6 +122,18 @@ These rules are extracted from the M5 retrospective (`docs/planning/discussion_l
 
 ---
 
+## npm Publish — Verification Rule
+
+After every `@cello-protocol/connect` publish, grep the built binary before closing the session:
+
+```bash
+grep "npx " dist/bin/cello-mcp.js
+```
+
+**Why:** In 0.0.9, SKILL.md had `npx --yes` correctly but the source was never updated. The binary shipped wrong. The docs are not the truth — the compiled output is.
+
+---
+
 ## Slash Commands
 
 - **`/cello-read`** — Use at session start. Loads current project state without reading everything.
