@@ -444,9 +444,9 @@ const shareStore = pgPool
   : new InMemoryShareStore();
 
 if (pgPool) {
-  const { loaded, failed } = await (shareStore as PersistentShareStore).loadShares();
+  const { loaded, failed, failedIds } = await (shareStore as PersistentShareStore).loadShares();
   if (failed > 0) {
-    logger.error("adapter.shares.load.fatal", { loaded, failed, reason: "deserialization or decryption failure" });
+    logger.error("adapter.shares.load.fatal", { loaded, failed, failedIds, reason: "deserialization or decryption failure" });
     process.exit(1);
   }
   logger.info("adapter.initialised", { adapterName: "ShareStore", implementation: "PersistentShareStore", env, sharesLoaded: loaded });
