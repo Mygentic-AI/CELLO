@@ -44,6 +44,12 @@ acceptance_criteria:
       with Agent B's K_local pubkey hex"
     test_type: integration
     component_under_test: client
+    notes: "Test location: packages/client/src/__tests__/multi-005-presence.test.ts.
+      The fixture must use createSessionFixture() from
+      packages/e2e-tests/src/session-fixture.ts with a new opts field
+      (e.g. opts.yamuxKeepalive: { interval: 1000, timeout: 3000 }) —
+      do NOT create a from-scratch libp2p node fixture. Extend the
+      shared fixture instead."
 
   - id: AC-002
     given: "Agent A has received a `peer:disconnect` for Agent B (established
@@ -54,6 +60,9 @@ acceptance_criteria:
       K_local pubkey hex"
     test_type: integration
     component_under_test: client
+    notes: "Continuation of the AC-001 test — same harness, same describe
+      block. Not an independent test that sets up disconnect state from
+      scratch."
 
   - id: AC-003
     given: "Agent A has a session with Agent B"

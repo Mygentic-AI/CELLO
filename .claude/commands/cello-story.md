@@ -156,6 +156,42 @@ The schema-design story (e.g., OPS-AGENT-000) populates this registry as part of
 
 ---
 
+## Persistence Serialization Stories (M4+ rules)
+
+If the story persists any domain object — via JSON, a database adapter, or any serialize/deserialize round-trip — apply these rules. This failure class is silent: the bytes come back correctly, the structural checks pass, and the bug only surfaces when a crypto or typed operation tries to use the deserialized value.
+
+**The PERSIST-005 incident (2026-06-02):** `PersistentShareStore` used `JSON.stringify` to serialize `LocalShare`, which contains `FrostSecret.signingShare: Uint8Array`. `JSON.stringify` converts `Uint8Array` to `{"0":1,"1":2,...}`. `JSON.parse` restores a plain object — not a `Uint8Array`. `@noble/curves` `signShare()` threw on the plain object. The catch mapped it to `AGENT_NOT_BOOTSTRAPPED`, which surfaced as `directory_below_threshold`. The shares were written. The shares were loaded. The bytes matched. The type was gone.
+
+**The rule:** Any story that serializes a typed domain object must include an AC that:
+
+1. Uses a **real instance** of the domain object — not `randomBytes(N)`, not a plain object literal. If the real type has a `Uint8Array` field, the test must use the real type with a real `Uint8Array` in that field.
+2. Verifies the loaded object can be **used for its actual purpose** after deserialization — not just that `bytes_in === bytes_out`. For a FROST share: sign something. For a key: encrypt/decrypt. For a connection record: pass it to the handler that consumes it.
+3. If the persistence survives process restarts, **at least one AC must cross a restart boundary**: persist in process A, load in a fresh process B, use in process B.
+
+**The test that only checks `bytes_in === bytes_out` is testing the encryption layer, not the domain correctness.** It will pass even when the type is corrupted. Both checks are required — but byte equality alone is not sufficient.
+
+**What a passing serialization AC looks like:**
+
+```yaml
+- id: AC-[N]-serialization-round-trip
+  given: "A real [DomainObject] instance constructed via its normal production
+    path (e.g. the output of a DKG ceremony, not a plain object literal)"
+  when: "the object is serialized, persisted, the process is restarted,
+    the object is loaded and deserialized"
+  then: "the deserialized object can be passed to [the operation that consumes it]
+    and that operation succeeds — verified by [specific observable: a signature
+    verifies, a decryption succeeds, a handler returns without error]"
+  test_type: integration
+  component_under_test: [component]
+  notes: "Byte equality between original and deserialized bytes is also
+    asserted, but is not sufficient alone — type integrity must be verified
+    by exercising the deserialized object in its actual production use."
+```
+
+**The broader concern:** Any adapter that calls `JSON.stringify/parse` on an object containing `Uint8Array`, `Buffer`, `BigInt`, `Date`, `Map`, `Set`, or any class instance is a serialization hazard. Before writing the story, enumerate every field in the domain object being persisted and confirm the serialization format preserves its type through the round-trip.
+
+---
+
 ## Observability ACs (mandatory from M4)
 
 Every story that touches M4+ code must include explicit observability acceptance criteria. Observability is not an implementation detail — it is a first-class AC like any other.
@@ -204,6 +240,7 @@ For each story, run through the Definition of Ready checklist from `user-story-f
 - [ ] Every `test_type: integration` or `test_type: e2e` AC that describes a multi-party protocol asserts the transport path (stream opens, handler invocations, frame counts) — not only the final return value
 - [ ] No AC would pass if `NODE_ENV=test` routed through a stub shortcut instead of the real protocol
 - [ ] The story does NOT require implementing a new `makeFixture()` — test infrastructure comes from `packages/e2e-tests/src/session-fixture.ts`; if a new capability is needed, the fixture is extended with a new `opts` field (with a non-breaking default), not replaced or duplicated
+- [ ] **(M4+ persistence stories)** If the story serializes any domain object to JSON, a database column, or any other format: (a) at least one AC uses a **real instance** of the domain type (not `randomBytes(N)`), (b) at least one AC verifies the deserialized object works in its **actual production use** (sign, decrypt, pass to handler — not just byte equality), and (c) if the persistence survives restarts, at least one AC crosses a **process restart boundary**. *Rationale: PERSIST-005 used `JSON.stringify` on `LocalShare.signingShare: Uint8Array`, which JSON corrupts silently to a plain object. Bytes round-tripped correctly; the type did not. The bug only surfaced when `@noble/curves` tried to use the value.*
 - [ ] **(M4+ adapter stories)** If the story touches any adapter that calls `deserializeRow()` or adds to `BIGINT_COLUMNS`, at least one AC must be a live round-trip type test: write a known BIGINT value to the real database, read it back, and assert `typeof result === 'number'` for each declared column. A static gate (PERSIST-021 AC-005) checks map completeness; this test checks coercion correctness. Both are required. *Rationale: BIGINT-as-string hit twice in M4 (initial integration tests + first live session) under a "should" policy. A class of bug that recurs under a recommendation is evidence the recommendation won't self-enforce.*
 - [ ] **(M4+)** Every significant state transition has a named log event in `domain.noun.verb` format
 - [ ] **(M4+)** Every named log event specifies its required context fields

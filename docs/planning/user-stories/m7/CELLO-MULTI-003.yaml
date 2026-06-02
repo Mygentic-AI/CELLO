@@ -63,12 +63,16 @@ acceptance_criteria:
     component_under_test: connect
 
   - id: AC-003
-    given: "A new MCP connection with no current agent set"
+    given: "A new MCP connection with no current agent set (established via
+      InMemoryTransport so the MCP dispatch path is exercised)"
     when: "the connection calls `cello_send`"
     then: "the call returns an error: 'No current agent. Call
       cello_use_agent(name) to select an agent for this connection.'"
-    test_type: unit
+    test_type: integration
     component_under_test: connect
+    notes: "Must use InMemoryTransport (not a direct internal call) so that
+      the guard is verified on the real MCP dispatch path, not on a bypassed
+      internal function."
 
   - id: AC-004
     given: "Connection 1 has alice as current; Connection 2 has bob as current"

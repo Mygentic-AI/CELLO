@@ -30,9 +30,16 @@ behavior:
       sets this agent as current for any new MCP connection"
 
   - trigger: "When `cello_start_agent(name)` is called for a registered agent"
-    action: "a new CelloClient is instantiated with its own libp2p node
-      (own Peer ID, own transport key, own listen addresses); the client
-      connects to the directory, the agent transitions to 'online' state"
+    action: "the composition root performs the full startup sequence for that
+      agent: (1) derive db_key from the agent's K_local identity seed via HKDF;
+      (2) open the agent's SQLCipher store at the path resolved by MULTI-001's
+      DB path convention; (3) call `loadPersistedState()` on the CelloClient
+      before any MCP tool call is routed to it; (4) instantiate a new CelloClient
+      with its own libp2p node (own Peer ID, own transport key, own listen
+      addresses); (5) connect to the directory; the agent transitions to 'online'
+      state; this sequence ensures that registered agents are not reported as
+      unregistered after a process restart (the bug PERSIST-024 fixed for
+      single-agent mode)"
 
   - trigger: "When `cello_stop_agent(name)` is called for an online agent"
     action: "the agent's CelloClient is shut down (all sessions closed,
@@ -106,6 +113,40 @@ acceptance_criteria:
     test_type: unit
     component_under_test: connect
 
+  - id: AC-008
+    given: "Agent `alice` was previously registered via a real DKG ceremony
+      (the fixture must complete a live DKG so that a real LocalShare with
+      real Uint8Array fields is written to alice's SQLCipher DB — do NOT
+      insert a raw bytes row directly); the process was restarted"
+    when: "`cello_start_agent('alice')` is called"
+    then: "alice's CelloClient reports `registered: true`; `cello_status` for
+      alice shows `registered: true`, `directory_reachable: true`; no new DKG
+      ceremony is attempted; this proves that `loadPersistedState()` ran and
+      the FROST share was deserialized from the SQLCipher DB and is functional
+      — verified by alice successfully initiating a session (which requires
+      signing with the loaded share, not just asserting the registered flag)"
+    test_type: integration
+    component_under_test: connect
+    notes: "The precondition (real DKG ceremony) is mandatory. A test that
+      inserts raw bytes into frost_key_shares and checks registered:true is
+      testing the byte round-trip only — it does not verify that the
+      deserialized LocalShare can actually be used for signing. This is the
+      PERSIST-005 pattern that let Uint8Array corruption through. The
+      verification step (initiating a session) is the use-after-load check."
+
+  - id: AC-009
+    given: "Two agents `alice` and `bob` each have separate SQLCipher databases
+      at `~/.cello/agents/alice/client.db` and `~/.cello/agents/bob/client.db`;
+      both databases have active sessions and connection records"
+    when: "the MCP server starts and auto-starts both agents (or they are
+      started via `cello_start_agent`)"
+    then: "alice's CelloClient is opened with alice's db_key (derived from
+      alice's K_local seed); bob's CelloClient is opened with bob's db_key;
+      alice cannot read bob's database (keys are independent); both agents
+      load their respective persisted state independently"
+    test_type: integration
+    component_under_test: connect
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
@@ -163,6 +204,19 @@ implementation_notes: >
   InMemoryTransport pairs from the MCP SDK (not stdio) to simulate two
   independent connections in the same process. With stdio there is only one
   connection per process.
+
+  PERSIST-024 wiring per agent (CRITICAL — do not omit): for each agent
+  being started, the AgentRegistry must execute this sequence before adding
+  the agent to the online registry:
+    1. Read the agent's K_local seed from key_file_path
+    2. Derive db_key = HKDF(seed, info='cello-db-key') using the same
+       derivation as the current cello-mcp.ts composition root
+    3. Open SQLCipherClientStore at the MULTI-001 DB path for this agent
+    4. Construct ClientStatePersistence(store)
+    5. Call client.loadPersistedState(persistence) before server.connect()
+  Skipping any of these steps causes registered agents to appear as
+  unregistered on every startup — the exact regression PERSIST-024 fixed.
+  AC-008 is the regression test that enforces this contract.
 
 # ─── References ─────────────────────────────────────────────
 references:

@@ -98,6 +98,20 @@ For every AC with `test_type: integration` or `test_type: e2e` that describes a 
 - "Returns `{ registered: true, primary_pubkey }`" — any stub can return this
 - "The DKG ceremony completes and primary_pubkey is 32 bytes" — satisfiable in-process via `trustedDealer`
 
+### Story Review Step 4b — Persistence serialization correctness (M4+)
+
+If the story persists any domain object — via JSON, a database adapter, or any serialize/deserialize round-trip — check:
+
+- [ ] **Real domain type in test fixture.** At least one AC must use a real instance of the domain type being persisted — not `randomBytes(N)` or a plain object literal. If the type has a `Uint8Array`, `Buffer`, `BigInt`, `Date`, `Map`, `Set`, or class instance field, the test fixture must include a real one of those. A test using `randomBytes(32)` as a stand-in for a `LocalShare` does not exercise type integrity.
+
+- [ ] **Use-after-load AC present.** At least one AC must verify the deserialized object works in its **actual production use** — not just that `bytes_in === bytes_out`. For a FROST share: it must be used in a signing operation. For a key: it must be used for encrypt/decrypt. Byte equality is necessary but not sufficient.
+
+- [ ] **Restart-boundary AC present (if persistence survives restarts).** If the persisted state is expected to survive a process restart, at least one AC must cross a restart boundary: persist in one process, load in a fresh process, use in the fresh process.
+
+**Why this matters (PERSIST-005 incident, 2026-06-02):** `PersistentShareStore` serialized `LocalShare` (containing `Uint8Array signingShare`) via `JSON.stringify`. JSON corrupts `Uint8Array` to `{"0":1,"1":2,...}`. Bytes round-tripped correctly — byte equality passed. The type was gone. `@noble/curves` threw on the plain object. The error was silently mapped to `AGENT_NOT_BOOTSTRAPPED` → `directory_below_threshold`. The ACs for PERSIST-005 tested byte round-trips only, never a real `LocalShare` in a real ceremony. No AC required a restart boundary.
+
+If any of these checks fail: **[blocking]**.
+
 ### Story Review Step 5 — Observability completeness (M4+)
 
 - [ ] Every significant state transition has a named log event in `domain.noun.verb` format
@@ -179,6 +193,22 @@ For every SI (Security Invariant) in the story:
    - No private key material (`#secretKey`, shares, seeds) leaks into wire messages, logs, or returned objects
    - `NODE_ENV !== 'test'` guards on production paths are not bypassable from test code except through the explicitly designed test injection points
    - Invalid inputs are rejected before any side effects occur
+
+---
+
+## Implementation Review Step 3b — Persistence serialization correctness (M4+)
+
+If the story persists any domain object via JSON, a database adapter, or any serialize/deserialize round-trip:
+
+1. **Test fixture uses a real domain instance.** Find the test for the persistence AC. Does it construct the object being persisted via its normal production path (DKG output, real crypto call), or does it use `randomBytes(N)` or a plain object literal? If the latter: **[blocking]**. `randomBytes(32)` as a stand-in for `LocalShare` cannot catch type corruption through JSON.
+
+2. **Use-after-load is verified.** After deserializing, does the test pass the object to the operation that actually consumes it (signing, encrypting, handler call)? Or does it only assert byte equality? Byte equality is necessary but not sufficient — **[blocking]** if use-after-load is absent.
+
+3. **Restart boundary crossed (if applicable).** If the persistence is expected to survive restarts, does any test persist in one process and load + use in a fresh process? If not: **[blocking]**.
+
+4. **Serialization format handles all field types.** Check every field of the domain object being serialized. If any field is `Uint8Array`, `Buffer`, `BigInt`, `Date`, `Map`, `Set`, or a class instance, verify the serializer explicitly handles that type. Bare `JSON.stringify` on any of these is a **[blocking]** finding — JSON corrupts them silently.
+
+**The PERSIST-005 pattern to recognise:** A test that stores `randomBytes(32)`, retrieves it, and asserts byte equality will always pass — even when the serializer destroys the type of a real domain object. This is the exact test shape that let the Uint8Array corruption ship undetected through two rounds of review.
 
 ---
 

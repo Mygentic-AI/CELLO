@@ -53,6 +53,20 @@ behavior:
       the session is over); the `message.retry.session_sealed_cleared` event
       is emitted with the discarded message count"
 
+  - trigger: "When the MCP server process restarts with messages in the retry queue"
+    action: "queued messages are NOT restored — the retry queue is intentionally
+      ephemeral (in-memory only, not persisted to SQLCipher); this is an
+      accepted limitation for M7: the peer must re-send any messages that were
+      queued at the time of restart; the nonce deduplication set is also
+      ephemeral — it is per-session and per-process; a restart clears it;
+      duplicate detection only covers the in-process window, not across
+      restarts; both limitations are acceptable for M7 because the retry queue
+      protects against transient transport failures (peer offline for seconds
+      to minutes), not against process restarts; SQLCipher persistence for the
+      retry queue and nonce set is explicitly deferred to a post-M7 story
+      (`retry_queue` and `session_seen_nonces` tables were identified in the
+      client-db-schema-design discussion log as M7+ scope)"
+
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
@@ -124,8 +138,31 @@ acceptance_criteria:
       rejected by signature verification BEFORE reaching the dedup check —
       verifying that sig-verify runs first; the dedup set is NOT consulted for
       an invalid signature. Both test sequences must be explicit and independent."
-    test_type: integration
+    test_type: unit
     component_under_test: client
+    notes: "Changed from integration to unit: crafting a malformed envelope
+      with an invalid Ed25519 signature does not require live libp2p nodes.
+      Both test sequences operate on in-memory envelope bytes."
+
+  - id: AC-010
+    given: "A nonce (32-byte Uint8Array from crypto.getRandomValues) is placed
+      in a CBOR envelope, encoded, and decoded"
+    when: "the decoded nonce is extracted from the envelope and compared
+      to the original nonce"
+    then: "the decoded nonce bytes are byte-for-byte identical to the original;
+      AND the deduplication set lookup `seenNonces.has(decoded_nonce_hex)` returns
+      true when the original nonce hex was added to the set — proving the nonce
+      survives CBOR encode/decode with consistent type representation"
+    test_type: unit
+    component_under_test: client
+    notes: "This AC exists because the entire deduplication mechanism depends
+      on nonce identity through a serialization round-trip. CBOR handles
+      Uint8Array correctly (major type 2), but the application layer must
+      convert nonce bytes to a consistent string key (hex) for the dedup set.
+      If the encode/decode produces a Buffer instead of Uint8Array, or the hex
+      conversion is inconsistent, lookups silently fail and duplicates are
+      delivered. This is the CBOR equivalent of the PERSIST-005 Uint8Array
+      corruption pattern."
 
   - id: AC-009
     given: "Agent A has 100 messages queued for Agent B (stress test)"

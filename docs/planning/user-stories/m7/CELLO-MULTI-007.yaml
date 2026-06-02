@@ -217,9 +217,24 @@ implementation_notes: >
   if not, return the ownership error before any send attempt.
 
   AC-001 and AC-006 test the negative assertion (zero notifications for the
-  wrong agent). Use a notification collector array that records all emitted
-  notifications, then assert both the positive firing AND the zero-count for
-  the non-target agent.
+  wrong agent). The notification collector is implemented by using an
+  InMemoryTransport MCP client connection whose onNotification handler pushes
+  to an array. The test creates the server with an InMemoryTransport pair,
+  registers the onNotification callback on the client side BEFORE the event
+  fires, then asserts on the array after the event. Example pattern:
+
+    const notifications: McpNotification[] = [];
+    client.onNotification((n) => notifications.push(n));
+    // ... trigger event ...
+    const aliceNotifs = notifications.filter(n => n.params?.agent === 'alice');
+    const bobNotifs = notifications.filter(n => n.params?.agent === 'bob');
+    expect(aliceNotifs).toHaveLength(1);
+    expect(bobNotifs).toHaveLength(0);
+
+  The InMemoryTransport approach is the correct mechanism for intercepting MCP
+  notifications in Vitest — it does not require stdio and gives deterministic
+  notification delivery within the same process. Do NOT poll or use timers to
+  wait for notifications; register the handler before triggering the event.
 
 # ─── References ─────────────────────────────────────────────
 references:
@@ -229,6 +244,7 @@ references:
   depends_on:
     - CELLO-MULTI-002
     - CELLO-MULTI-003
+    - CELLO-MULTI-004
     - CELLO-MULTI-005
   blocks:
     - CELLO-MULTI-008

@@ -43,12 +43,20 @@ acceptance_criteria:
       session with bob's public key"
     then: "session is established via the directory; both agents can exchange
       messages; messages signed by alice verify against alice's K_local;
-      messages signed by bob verify against bob's K_local; AND `cello_status`
-      for alice includes a `session_id` that matches the directory-assigned
-      session assignment value (proving session establishment went through the
-      directory's libp2p signaling path)"
+      messages signed by bob verify against bob's K_local; AND the session
+      returned by `cello_list_sessions` for alice includes a `session_id`
+      field whose value matches the `sessionId` from the `SessionAssignment`
+      frame that the directory sent during session initiation (proving session
+      establishment went through the directory's libp2p signaling path and not
+      an in-process shortcut)"
     test_type: integration
     component_under_test: connect
+    notes: "cello_list_sessions (not cello_status) is the correct tool to
+      retrieve the session_id for an active session. cello_status reports
+      aggregate connection state; cello_list_sessions returns per-session
+      records including the directory-assigned session_id. The SessionAssignment
+      frame's sessionId is captured from the initiation flow and compared to
+      the value in cello_list_sessions output."
 
   - id: AC-003
     given: "Alice and bob have an active session on the same server"

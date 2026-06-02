@@ -61,16 +61,23 @@ acceptance_criteria:
     component_under_test: connect
 
   - id: AC-003
-    given: "Agent `alice` is online with 2 active sessions"
+    given: "Agent `alice` is online with 2 active sessions: session S1 with a
+      reachable peer (bob's libp2p node running), and session S2 with an
+      unreachable peer (charlie's libp2p node stopped BEFORE cello_stop_agent
+      is called, so the SEAL attempt to charlie times out after 5 seconds)"
     when: "`cello_stop_agent('alice')` is called"
-    then: "cello_stop_agent sends SEAL to both sessions; sessions that sealed
-      cleanly increment sessionsClosedCount; sessions where the counterparty
-      was unreachable or timed out (>5s) increment sessionsDeferredCount and
-      transition to 'seal_deferred'; alice transitions to registered; return
-      value is `{ stopped: true, name: 'alice', sessionsClosedCount: N,
-      sessionsDeferredCount: M }` where N + M = 2"
+    then: "cello_stop_agent sends SEAL to both sessions; S1 seals cleanly
+      (sessionsClosedCount = 1); S2 times out after 5 seconds and transitions
+      to 'seal_deferred' (sessionsDeferredCount = 1); alice transitions to
+      registered; return value is `{ stopped: true, name: 'alice',
+      sessionsClosedCount: 1, sessionsDeferredCount: 1 }`"
     test_type: integration
     component_under_test: connect
+    notes: "To produce sessionsDeferredCount > 0, charlie's libp2p node must
+      be stopped BEFORE calling cello_stop_agent — this makes charlie
+      unreachable so the SEAL times out. Without this explicit setup,
+      both sessions would seal cleanly and sessionsDeferredCount would
+      always be 0, making the deferred path untested."
 
   - id: AC-004
     given: "Only one agent `default` exists"

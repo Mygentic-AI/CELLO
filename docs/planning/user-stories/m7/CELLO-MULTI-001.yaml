@@ -33,6 +33,18 @@ behavior:
     action: "the server starts with zero registered agents; `cello_list_agents`
       returns an empty list; `cello_status` reports no agents available"
 
+  - trigger: "When the MCP server starts with `~/.cello/agents/<name>/` present"
+    action: "the agent's SQLCipher database is expected at
+      `~/.cello/agents/<name>/client.db`; this is the DB path convention for
+      all named agents; if the file does not yet exist it is created on first
+      startup (PERSIST-024 first-install path)"
+
+  - trigger: "When the MCP server starts in legacy mode (`~/.cello/key` only)"
+    action: "the SQLCipher database for the implicit `default` agent is resolved
+      from the `CELLO_DB_PATH` environment variable if set, otherwise defaults
+      to `~/.cello/client.db`; this matches the DEMO-001 deployment convention
+      and requires no migration"
+
   - trigger: "When `cello_register` completes successfully for a named agent"
     action: "the agent's key file is persisted at `~/.cello/agents/<name>/key`
       with 0o700 directory permissions and 0o600 file permissions"
@@ -101,6 +113,25 @@ acceptance_criteria:
     test_type: unit
     component_under_test: connect
 
+  - id: AC-008
+    given: "An `~/.cello/agents/alice/` directory exists with a valid `key` file"
+    when: "the MCP server starts"
+    then: "the server resolves the SQLCipher database path for `alice` as
+      `~/.cello/agents/alice/client.db`; no other path convention is used;
+      `CELLO_DB_PATH` env var is ignored when `~/.cello/agents/` exists"
+    test_type: unit
+    component_under_test: connect
+
+  - id: AC-009
+    given: "No `~/.cello/agents/` directory exists; `~/.cello/key` exists;
+      `CELLO_DB_PATH=/custom/path/agent.db` is set in the environment"
+    when: "the MCP server starts in legacy mode"
+    then: "the `default` agent's SQLCipher database is opened at
+      `/custom/path/agent.db`; if `CELLO_DB_PATH` is not set, the fallback
+      is `~/.cello/client.db`"
+    test_type: unit
+    component_under_test: connect
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
@@ -157,6 +188,16 @@ implementation_notes: >
   macOS (both would map to the same directory). The restriction is enforced at
   the storage discovery layer; `cello_register` must also enforce it at
   registration time.
+
+  DB path convention (AC-008, AC-009): the canonical path for a named agent's
+  SQLCipher database is `~/.cello/agents/<name>/client.db`. This is the only
+  path the server should derive — no environment variable override applies in
+  named-agent mode. In legacy mode (no `~/.cello/agents/` directory), the DB
+  path is `CELLO_DB_PATH` env var if set, otherwise `~/.cello/client.db`.
+  This matches the DEMO-001 EC2 deployment where the demo agent is configured
+  with `CELLO_DB_PATH=/opt/cello-demo/data/client.db` in its systemd env.conf.
+  MULTI-002 reads the DB path from whatever convention this story establishes —
+  the two stories must use the same resolution logic.
 
 # ─── References ─────────────────────────────────────────────
 references:
