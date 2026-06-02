@@ -68,8 +68,11 @@ import { DirectoryPreAuthorizationClient } from "./directory-pre-auth-client.js"
 import { RegistrationEngine } from "./registration/engine.js";
 
 // ─── Expected migration version ───────────────────────────────────────────────
-// V27 is the highest migration (agent_id column on agent_profiles, M6-DX-001)
-const EXPECTED_MIGRATION_VERSION = 27;
+// Read from env so schema bumps don't require a code change + pipeline deploy.
+// Update EXPECTED_MIGRATION_VERSION in the ECS task definition env vars instead.
+const EXPECTED_MIGRATION_VERSION = process.env["EXPECTED_MIGRATION_VERSION"]
+  ? parseInt(process.env["EXPECTED_MIGRATION_VERSION"], 10)
+  : 27;
 
 // ─── Types exported for testing ───────────────────────────────────────────────
 

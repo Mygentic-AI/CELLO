@@ -175,6 +175,8 @@ Resources:
           Environment:
             - Name: CELLO_ENV
               Value: !Ref Environment
+            - Name: EXPECTED_MIGRATION_VERSION
+              Value: "27"
             # DIRECTORY_INTERNAL_URL: stable ALB DNS name — no Cloud Map or task-IP lookup.
             # AC-009d: the Ops Agent uses the ALB on port 80, not direct task:8080.
             # The ALB listener rule protects /internal/* from outside-VPC callers (AC-009d).

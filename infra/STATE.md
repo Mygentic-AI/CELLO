@@ -111,7 +111,8 @@ NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-
 - Ops-agent SG `sg-07cc257e60bed1e49` egress: also has `TCP 80 → 10.0.0.0/16` live (redundant, not in IaC — will be removed on next deploy)
 - Ops-agent SG `sg-07cc257e60bed1e49` egress: added `TCP 8081 → directory SG` (internal API port). IaC: `cello-ecs-operations-agent.yaml`
 - Directory SG `sg-0cc7f8493f3aff8d8` ingress: added `TCP 8081 from ops-agent SG` (internal API port). IaC: `cello-ecs-operations-agent.yaml`
-- DIRECTORY_INTERNAL_URL: `http://10.0.87.93:8081/internal/pre-authorize` (direct task IP — updated 2026-06-02 after multiple directory redeploys broke prior IP; ops-agent task def rev 25; BREAKS ON EVERY DIRECTORY REDEPLOY — needs CloudMap or ALB target group on 8081 for stability)
+- DIRECTORY_INTERNAL_URL: `http://cello-dir-dev-1136016900.us-east-1.elb.amazonaws.com/internal/pre-authorize` (ALB — stable, does not break on directory redeploy; ops-agent task def rev 26; EXPECTED_MIGRATION_VERSION moved to env var)
+- EXPECTED_MIGRATION_VERSION: moved from hardcoded constant to env var (ops-agent task def rev 26); currently set to 27; update in task def when schema version bumps — no code change required
 - Demo-agent IAM role `cello-agent-ssm-role`: added inline policy `cello-demo-secrets-manager` (not in IaC — role predates CloudFormation stacks, shared with openclaw-agent)
 
 ### dev — eu-central-1
