@@ -611,19 +611,66 @@ FROST signer bug (blocking AC-005 cello_initiate_session):
 
 ---
 
-## 2026-06-02 — Directory 3-region deploy: IAM fix applied manually
+## 2026-06-02 — Directory 3-region deploy: pipeline failure + IAM fix
 
-**Context:** Directory pipeline deploy (image c58ecb2) completed in us-east-1 but stalled in eu-central-1 and ap-northeast-1 for 8+ hours. Tasks were crash-looping with `ResourceInitializationError`.
+**Timeline of the overnight deploy failure (2026-06-01 ~20:42 → 2026-06-02 ~05:45 UTC+2):**
 
-**Root cause:** The regional execution roles (`cello-dev-eu-central-1-directory-execution-role` and `cello-dev-ap-northeast-1-directory-execution-role`) were missing `cello/dev/directory/transport-key` from their `DirectorySecretsAccess` inline policy. The IAM stack template (`cello-iam.yaml`) was updated in commit `fd1b97f` to include `transport-key*` with region wildcard, but the IAM CloudFormation stack was only redeployed to us-east-1 (primary region). The eu-central-1 and ap-northeast-1 stacks still had the old 5-secret policy (missing `transport-key`).
+The directory pipeline was triggered by the M6-DX-001 merge (image c58ecb2 — V27 migration, `/agent-lookup` endpoint, `/bootstrap` ALB rules). us-east-1 completed successfully. eu-central-1 and ap-northeast-1 stalled.
 
-**Fix applied:** `aws iam put-role-policy` on both regional roles to add `transport-key*`. Then `--force-new-deployment` on both services. Both regions reached steady state within 2 minutes.
+**Pipeline "Failed" status — known false positive.** CodePipeline's `aws ecs wait services-stable` has a hard 15-minute timeout. ALB target deregistration (300s drain per target × sequential regions) exceeds this. Fix already committed as `46ece5a` (increases timeout to 60 min) but the IAM pipeline hadn't picked it up. The pipeline failure indicator does NOT mean the deployment itself failed — it means the wait gave up.
+
+**Why eu-central-1 and ap-northeast-1 actually stalled (the real bug):**
+
+A previous agent (overnight, ~8 hours before this fix) attempted to unstick the deploy and created 3 bad task definition revisions:
+- eu:23 — missing `CELLO_DIRECTORY_TRANSPORT_KEY_HEX` entirely → 71 crash-loop failures in CloudWatch
+- eu:24 / ap:17 — blindly replaced `us-east-1` → region in the us-east-1 task def → corrupted `RDS_ENDPOINT` to wrong cluster ID → `UnknownHostException` in logs
+- eu:25 / ap:18 — correct approach (copied from working eu:22/ap:14 + added transport key secret + updated image to c58ecb2), but then tasks crash-looped on `ResourceInitializationError: AccessDeniedException` fetching `cello/dev/directory/transport-key` from Secrets Manager
+
+**Root cause:** The regional execution roles (`cello-dev-eu-central-1-directory-execution-role` and `cello-dev-ap-northeast-1-directory-execution-role`) were missing `cello/dev/directory/transport-key` from their `DirectorySecretsAccess` inline policy. The IAM stack template (`cello-iam.yaml`) includes `transport-key*` with region wildcard (commit `fd1b97f`), but the IAM CloudFormation stack was only redeployed to us-east-1 (primary region). The eu-central-1 and ap-northeast-1 IAM stacks still had the old 5-secret policy.
+
+**Fix applied (2026-06-02 ~05:43 UTC+2):** `aws iam put-role-policy` on both regional roles to add `transport-key*`. Then `--force-new-deployment` on both services. Both regions reached steady state within 2 minutes.
 
 **IaC status:** Template is already correct (`cello-iam.yaml` line 60). The manual fix aligns live state with what IaC declares. Next pipeline deploy of the IAM stack to eu-central-1 and ap-northeast-1 will be a no-op (policy already matches).
 
 **Outcome:** All 3 directory nodes now running image c58ecb2, HEALTHY, steady state.
 
 **Rule:** When the IAM stack template changes, it must be deployed to ALL 3 regions — not just us-east-1. Each region creates its own role (condition: `IsPrimaryRegion`). A single-region IAM deploy leaves the other two with stale policies.
+
+---
+
+## 2026-06-02 — M6-E2E-001: RESUME POINT for fresh agent
+
+**Status:** ACs 001–004 verified on 2026-06-01. ACs 005–010 blocked on DX-001 + directory deploy. Both are now complete. **Resume from AC-005.**
+
+**What is now live and ready:**
+- Directory: all 3 regions running image `c58ecb2` (V27 migration, `/agent-lookup`, `/bootstrap` ALB rules, `loadProfiles()` on startup, agent_id persistence). HEALTHY, steady state.
+- Client: `@cello-protocol/connect@0.0.10` on npm `beta` dist-tag. Includes all DX-001 fixes (lazy startup, TTY detection, `cello_setup_guidance`, agent_id-based connection requests, FROST signer directoryNodes fix, startup progress feedback) plus the `npx --yes` fix.
+- Demo agent: EC2 instance `i-0ad3e7c22470f266e` (EIP `32.196.100.165`), running `cello-demo.service`, AgentID `a2c55e2721f45cfa86cb3417a76e3f7b`.
+
+**Test agent from AC-003 (registered 2026-06-01):**
+- AgentID: `00a71840909a9375e12e004f9da2b3e7`
+- Connection to demo agent: `connection_id: 4c8d3147d24bcf90e1965b19ed6e70c8` (accepted)
+- This agent should still be valid — `loadProfiles()` (F-011 fix) loads all registered agents from PostgreSQL on directory restart. Connection state may need re-verification.
+
+**What a fresh agent must do to continue M6-E2E-001:**
+1. Install `@cello-protocol/connect@0.0.10` (NOT 0.0.9) in a fresh Claude Code context outside the trustless-cello repo
+2. Verify the existing agent (`00a71840...`) and its connection to the demo agent are still functional — call `cello_status` and check `registered=true`, `directory_reachable=true`
+3. If the connection is stale, re-establish via `cello_request_connection` using the demo agent's AgentID
+4. **AC-005**: `cello_initiate_session` → `cello_send` → `cello_receive` (demo agent 4-message sequence)
+5. **AC-006**: `cello_get_sealed_receipt` — verify tamper-evident receipt
+6. **AC-007**: Register a SECOND agent (new Telegram flow, new token), send message between agent-1 and agent-2
+7. **AC-008**: Promote `@cello-protocol/connect` from `beta` to `latest` on npm
+8. **AC-009**: Re-use the consumed token from AC-003 → verify rejection with `PRE_AUTH_TOKEN_CONSUMED`
+9. **AC-010**: Measure total time from install to first received message (must be < 10 min excluding OTP wait)
+
+**Key files for context:**
+- Story YAML: `docs/planning/user-stories/m6/CELLO-M6-E2E-001.yaml`
+- DX findings (all resolved): `docs/planning/user-stories/m6/E2E-001-findings.md`
+- DX-001 story: `docs/planning/user-stories/m6/CELLO-M6-DX-001.yaml`
+- Demo agent code: `demo/` (repo root)
+- Demo agent runbook: `demo/runbook.md`
+
+**Critical: the FROST signer bug.** On 2026-06-01, `loadPersistedState()` reconstructed `FrostThresholdSigner` with `directoryNodes: undefined`, causing `directory_below_threshold` on every restart. This was AC-003 of M6-DX-001 and is fixed in `@0.0.9-beta.1` and later. If AC-005 fails with `directory_below_threshold`, the fix didn't make it into the installed version — verify `npm ls @cello-protocol/connect` shows `0.0.10`.
 
 ---
 
