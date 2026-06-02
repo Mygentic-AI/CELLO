@@ -784,3 +784,52 @@ emits peer disconnect events that can be used as a trigger.
 human verifies it and the time the E2E test runs. Always restart the demo agent immediately
 before running AC-005 onwards, or check the directory logs first (look for `AUTH Peer 1818eb07`
 within the last few minutes).
+
+---
+
+## 2026-06-02 — Directory cold-start share loading, Uint8Array serialization, ops-agent operational fixes
+
+### Bugs found and fixed during M6-E2E-001 AC-005 attempt
+
+**1. Directory cold-start share loading (CRITICAL — was blocking all session initiation)**
+- Shares were written to `agent_key_shares` by PERSIST-005 but never loaded back on restart
+- `PersistentShareStore.getShare()` had `return undefined` with "deferred to future story" comment
+- Fix: `loadShares()` + `getAllShareBytes()` — loads all shares at startup, fails fatally on error
+- Deployed in image `272eb34` via pipeline
+
+**2. Uint8Array corruption in FROST share serialization (CRITICAL — broke ceremony after restart)**
+- `JSON.stringify` converts `Uint8Array` to `{"0":1,"1":2,...}` — survives structural checks but fails crypto
+- Shares were loaded from DB but `@noble/curves` `signShare()` rejected the plain objects
+- Fix: `jsonReplacer`/`jsonReviver` in `persistent-share-store.ts` + legacy format reviver for existing shares
+- Deployed in image `1a21b65`
+
+**3. Uint8Array corruption in notification_queue and pending_connection_requests (LATENT)**
+- Same JSON corruption pattern in `DirectoryNotification` and `PendingConnectionRequest` JSONB columns
+- Not yet triggered — only fires when agent is offline during notification, then reconnects
+- Fix: shared `json-typed.ts` module applied to all four call sites
+- Deployed in image `1a21b65`
+
+**4. Ops-agent DIRECTORY_INTERNAL_URL breaks on every directory redeploy**
+- Was hardcoded to task IP `10.0.89.234:8081` — invalid after any directory redeploy
+- Fixed to ALB DNS in task def rev 26 and IaC. DIRECTORY_INTERNAL_URL now stable.
+
+**5. Ops-agent EXPECTED_MIGRATION_VERSION hardcoded in source**
+- Required code change + full pipeline deploy for every schema bump
+- Fixed to env var `EXPECTED_MIGRATION_VERSION=27` in task def rev 26 and IaC
+
+**6. Ops-agent crash-loop: schema mismatch V26/V27**
+- After M6-DX-001 added V27 migration, ops-agent rejected startup with "found V27, expected V26"
+- Fixed by bumping `EXPECTED_MIGRATION_VERSION` to 27
+
+### Current state (as of 2026-06-02 ~15:50 UTC+2)
+- Directory: all 3 regions running image `1a21b65` (all persistence fixes live)
+- Ops-agent: rev 26 deploying (ALB URL, EXPECTED_MIGRATION_VERSION=27)
+- Test agent: registered `00a71840...` but needs fresh re-registration (existing K_server_X share was written with broken serializer; legacy reviver restores bytes but signShare still fails — root cause unclear, re-registration gives clean share)
+- M6-E2E-001: still at AC-005. Waiting for ops-agent rev 26, then Telegram re-registration, then retry cello_initiate_session
+
+### Resume point update
+Use `@cello-protocol/connect@0.0.14` (already installed). After ops-agent is live:
+1. Telegram `/start` → share contact → email → OTP → get new CELLO-... token
+2. Testing agent: `cello_register({ token: 'CELLO-...' })` (fresh DKG, clean share)
+3. `cello_request_connection({ target_agent_id: 'a2c55e2721f45cfa86cb3417a76e3f7b' })` (demo agent)
+4. `cello_initiate_session({ target_agent_id: 'a2c55e2721f45cfa86cb3417a76e3f7b' })`

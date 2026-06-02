@@ -819,3 +819,71 @@ The sprint reviewer checked that PERSIST-005 ACs were met. They were. The story 
 The lesson is not "the sprint reviewer failed." The lesson is: **persistence stories must require an end-to-end correctness AC** — one that takes the persisted data and uses it for its actual purpose after a fresh process start. Raw byte equality is necessary but not sufficient.
 
 Fix: replace `JSON.stringify/parse` with a serializer that converts `Uint8Array` to hex strings and back, preserving all type information through the round-trip.
+
+---
+
+## Directory Cold-Start Share Loading (2026-06-02)
+
+**Bug:** After any directory restart, no agent could initiate a session. `generateCommitment` returned `AGENT_NOT_BOOTSTRAPPED` because the in-memory share store was empty.
+
+**Root cause:** `PersistentShareStore.getShare()` had a `return undefined` for the cold-start path with a comment "deferred to a future story." The shares were correctly written to `agent_key_shares` (encrypted), but the startup code never loaded them back. PERSIST-005 story defined encrypt/store/decrypt but had no AC requiring "after restart, agents can still initiate sessions."
+
+**Fix:** Added `loadShares()` to `PersistentShareStore` and `getAllShareBytes()` to `EncryptedPgShareStore`. Called at directory startup after the envelope key provider is ready. Fails fatally if any share fails to decrypt or deserialize — wrong envelope key is a hard stop. Reports `{ loaded, failed, failedIds }` for operator diagnostics.
+
+**Lesson:** The cold-start path was never tested because every test ran within a single process lifetime. Same root cause as the Uint8Array serialization bug — see below.
+
+---
+
+## Uint8Array Corruption in notification_queue and pending_connection_requests (2026-06-02)
+
+**Bug (latent — not yet triggered in production):** `DirectoryNotification` objects (session_sealed, session_abandoned, seal_verified) stored in `notification_queue` JSONB column had their `Uint8Array` fields (session_id, sealed_root, frost_signature) corrupted to plain `{"0":1,"1":2,...}` objects. Same for `PendingConnectionRequest.frame.package_cbor` in `pending_connection_requests`. On delivery to a reconnecting agent, all downstream crypto operations would fail.
+
+**Why not triggered yet:** Only fires when an agent is offline when a notification arrives and then reconnects. In testing, agents have been online throughout.
+
+**Fix:** Extracted shared `json-typed.ts` module with `jsonReplacer`/`jsonReviver` (Uint8Array ↔ `{__type:"Uint8Array",hex:"..."}`). Applied to `enqueueNotification`, `drainNotifications`, `queuePendingConnectionRequest`, and `dequeuePendingConnectionRequests`.
+
+**Known gap:** AC-003 in persist-019 tests insert `session_sealed`/`seal_verified` using raw `JSON.stringify` and assert only `toMatchObject({ type: "..." })`. The test does not verify Uint8Array field type integrity on read-back. Fix deferred.
+
+---
+
+## Ops-Agent Operational Gaps (2026-06-02)
+
+### DIRECTORY_INTERNAL_URL breaks on every directory redeploy
+
+**Bug:** The ops-agent had `DIRECTORY_INTERNAL_URL` hardcoded to a directory task's private IP (`10.0.89.234:8081`). Every directory redeploy launches a new task with a different IP, silently breaking the pre-authorization flow. Symptom: Telegram bot responds "Registration is temporarily unavailable" after any directory deploy.
+
+**Fix:** Changed to the stable ALB DNS `http://cello-dir-dev-1136016900.us-east-1.elb.amazonaws.com/internal/pre-authorize`. Updated in task def rev 26 and IaC. Will never break on directory redeploy again.
+
+**Lesson:** Internal service-to-service URLs must use stable DNS (ALB, CloudMap) never direct task IPs. Task IPs are ephemeral by design.
+
+### EXPECTED_MIGRATION_VERSION hardcoded in source
+
+**Bug:** `server.ts` had `const EXPECTED_MIGRATION_VERSION = 26` hardcoded. Every schema migration required a code change + full pipeline deploy (15-20 min) just to bump a number.
+
+**Fix:** Moved to env var `EXPECTED_MIGRATION_VERSION` in the ECS task definition. Schema bumps now require only a task def env var update and service restart — no code change, no pipeline.
+
+**Lesson:** Schema version guards should be configuration, not code. Any value that changes on a known operational cadence (every migration = every sprint) should be an env var.
+
+### Telegram bot "try again in a few minutes" is always wrong
+
+When the pre-authorization request fails (e.g. DIRECTORY_INTERNAL_URL is stale), the bot responds "Registration is temporarily unavailable. Please try again in a few minutes." This message is never correct — the failure is always a permanent configuration issue, not a transient one. Fix the copy or remove the fallback message entirely.
+
+### Already-registered users get a new token without acknowledgement
+
+The Telegram bot issues a new pre-authorization token to a user who is already registered, without acknowledging the prior registration or asking if they want to re-register. This is both a UX gap (confusing) and a potential security concern (allows unlimited re-registrations from the same phone). Post-M6 story needed.
+
+---
+
+## Missing Integration Tests — Identified 2026-06-02
+
+These tests do not exist and should be written as part of post-M6 story backlog. Each would have caught at least one bug found during today's E2E run.
+
+1. **DKG → restart → session initiation.** Spin up a directory, register an agent (real DKG), restart the directory process, verify the existing agent can call `cello_initiate_session` and complete the FROST ceremony. Would have caught both the cold-start share loading bug AND the Uint8Array serialization bug.
+
+2. **Notification delivery to offline agent.** Queue a `session_sealed` notification for an offline agent. Bring the agent online. Verify the delivered notification has correct Uint8Array field types (not plain objects). Would have caught the notification_queue corruption bug.
+
+3. **Ops-agent after directory redeploy.** Trigger a directory deploy. Verify the ops-agent can still complete a registration flow (pre-auth token request reaches the directory). Would have caught the DIRECTORY_INTERNAL_URL breakage.
+
+4. **Schema version bump — ops-agent startup.** Apply a new migration. Verify the ops-agent fails to start with a clear error, then succeeds after `EXPECTED_MIGRATION_VERSION` is updated. Validates the guard works and that the operational procedure is correct.
+
+The common pattern: **tests that cross a process boundary or a deployment event.** These are the class of bugs most resistant to unit tests and most damaging in production. They require integration tests that simulate real operational events (restart, redeploy, schema bump).
