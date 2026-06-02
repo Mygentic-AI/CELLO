@@ -597,6 +597,20 @@ FROST signer bug (blocking AC-005 cello_initiate_session):
 
 ---
 
+## 2026-06-02 — @cello-protocol/connect@0.0.10 published
+
+**Fix:** `npx --yes` flag was missing from all three places the install command appears in the built binary — the TTY help text and the two error recovery messages (Linux and macOS). The `--yes` flag bypasses the stale npx cache and ensures the latest published version is always fetched.
+
+**Root cause:** SKILL.md had `npx --yes` correctly, but the source file `cello-mcp.ts` was never updated to match.
+
+**Versions:** `0.0.9` on npm had the bug. `0.0.10` is the fix — live on npm `beta` dist-tag.
+
+**Commit:** `89de41d` on cello-client main. Tagged `v0.0.10`, pushed to origin.
+
+**npm re-auth note:** `auth-type: web` in npm config caused `npm whoami` 401 even with a valid token in `~/.npmrc`. Fix: `npm login` via the CLI (triggers browser OAuth). Publish also required browser 2FA (EOTP).
+
+---
+
 ## 2026-06-01 — M6-DX-001 CLOSED
 
 Story APPROVED by sprint-reviewer. All 11 ACs delivered and tested.
