@@ -751,3 +751,36 @@ Story APPROVED by sprint-reviewer. All 11 ACs delivered and tested.
 - Directory restart-state audit (F-011 broader scope) — post-M6 story needed
 - `cello_cancel_connection_request` tool missing
 - Windows support deferred to post-beta
+
+---
+
+## 2026-06-02 — OPEN BUG: Demo agent goes offline after directory redeploy — no reconnect logic
+
+**Status:** UNRESOLVED. Needs a story.
+
+**What happens:** The demo agent's signaling stream to the directory silently drops whenever
+the directory ECS task is replaced (redeploy, crash, scaling event). The demo agent process
+stays alive and `cello-demo.service` reports `active`, but `cello_initiate_session` from any
+peer returns `target_offline`. The directory has no entry in its `#streams` map for the demo
+agent.
+
+**Root cause:** `announceToDirectory()` (introduced in `connect@0.0.13`) is called once at
+startup after `node.dial()`. It is never called again. When the directory task is replaced,
+the libp2p TCP connection drops silently — the demo agent has no keep-alive or reconnect loop
+to re-dial and re-authenticate.
+
+**Observed today:** Directory was redeployed at ~08:27 UTC+2. Demo agent had been running and
+authenticated since 08:27. By 10:33 (~2 hours later) when the testing agent attempted
+`cello_initiate_session`, the demo agent was `target_offline`. A manual `systemctl restart
+cello-demo` fixed it immediately.
+
+**Workaround:** `systemctl restart cello-demo` on the EC2 instance re-dials and re-authenticates.
+
+**What needs to be built:** A reconnect loop in `cello-mcp.ts` that detects when the libp2p
+connection to the directory drops and calls `announceToDirectory()` again. The libp2p node
+emits peer disconnect events that can be used as a trigger.
+
+**Impact on M6-E2E-001:** This bug means the demo agent can go offline between the time a
+human verifies it and the time the E2E test runs. Always restart the demo agent immediately
+before running AC-005 onwards, or check the directory logs first (look for `AUTH Peer 1818eb07`
+within the last few minutes).
