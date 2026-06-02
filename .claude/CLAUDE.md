@@ -122,6 +122,21 @@ These rules are extracted from the M5 retrospective (`docs/planning/discussion_l
 
 ---
 
+## npm Package — Update Procedure
+
+To update a user to a new version of `@cello-protocol/connect`, pin the exact version:
+
+```
+claude mcp remove cello
+claude mcp add cello -- npx --yes @cello-protocol/connect@0.0.10
+```
+
+**Never tell users to run `npx clear-npx-cache`.** It wipes every npx-installed tool they have. Pinning a new version is sufficient — npx fetches it fresh because the version string changed.
+
+**`claude mcp add` syntax:** Use `--` to separate claude's flags from npx's flags, otherwise `--yes` is misinterpreted.
+
+---
+
 ## Slash Commands
 
 - **`/cello-read`** — Use at session start. Loads current project state without reading everything.
