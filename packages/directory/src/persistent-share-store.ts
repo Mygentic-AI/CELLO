@@ -77,9 +77,10 @@ export class PersistentShareStore implements ShareStore {
     this.#logger = logger;
   }
 
-  async loadShares(): Promise<number> {
+  async loadShares(): Promise<{ loaded: number; failed: number }> {
     const rows = await this.#encrypted.getAllShareBytes();
     let loaded = 0;
+    let failed = 0;
     for (const { agentId, epochId, plaintext } of rows) {
       try {
         const json = new TextDecoder().decode(plaintext);
@@ -87,11 +88,12 @@ export class PersistentShareStore implements ShareStore {
         this.#memory.storeShare(agentId, epochId, { secret: parsed.secret, pub: parsed.pub });
         loaded++;
       } catch (err: unknown) {
+        failed++;
         const error = err instanceof Error ? err : new Error(String(err));
         this.#logger.error("adapter.share.deserialize.failed", error, { agentId, epochId });
       }
     }
-    return loaded;
+    return { loaded, failed };
   }
 
   getShare(agentPubkey: string, epochId: string): LocalShare | undefined {
