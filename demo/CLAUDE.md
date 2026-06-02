@@ -2,14 +2,18 @@
 
 ## Purpose
 
-The demo agent is the "is this thing on?" check for the entire CELLO protocol. It is a
-permanently-running, publicly-known agent that any new user connects to as the final proof that
-the protocol works end-to-end. The intended flow is: a stranger installs `@cello-protocol/connect`,
-registers via Telegram, connects to this agent, and receives a response — all in under 10 minutes,
-without cloning a repo or running infrastructure.
+When a new user installs `@cello-protocol/connect` and registers via Telegram, they have an
+agent — but no one to talk to. You cannot verify your setup works unless there is another agent
+on the network to exchange messages with. The demo agent solves that: it is a permanently-running,
+publicly-known agent that any user can connect to immediately after registration to confirm their
+entire stack is working. Send a message, get a response — your install is good.
 
-This agent is the gate for promoting `@cello-protocol/connect` from `beta` to `latest` on npm.
-If this agent is unreachable, that promotion cannot happen.
+The intended flow is: install `@cello-protocol/connect`, register via Telegram, connect to this
+agent, and receive a response — all in under 10 minutes, without cloning a repo or running
+infrastructure.
+
+This agent can also serve as the gate for promoting `@cello-protocol/connect` from `beta` to
+`latest` on npm — if the full stranger flow works against this agent, the protocol is shippable.
 
 ## Implementation
 
