@@ -18,6 +18,7 @@
 import pg from "pg";
 import { createHash } from "node:crypto";
 import { configurePgTypes } from "../pg-type-config.js";
+import { stringify as jsonStringify, parse as jsonParse } from "../json-typed.js";
 import type {
   DirectoryStore,
   DirectoryNotification,
@@ -458,7 +459,7 @@ export class PgDirectoryStore implements DirectoryStore {
     void this.#pool.query(
       `INSERT INTO notification_queue (pubkey_hex, payload)
        VALUES ($1, $2)`,
-      [pubkeyHex, JSON.stringify(event)],
+      [pubkeyHex, jsonStringify(event)],
     ).then(() => {
       // correlationId is always included — if undefined, CloudWatch records null rather
       // than silently omitting the field (AC spec requires correlationId as a required field).
@@ -506,8 +507,11 @@ export class PgDirectoryStore implements DirectoryStore {
       [pubkeyHex],
     );
 
+    // pg auto-parses JSONB columns into JS objects, so row.payload is already parsed.
+    // Re-stringify then jsonParse runs the Uint8Array reviver over the full object tree,
+    // restoring any {__type:"Uint8Array",hex:"..."} sentinels to real Uint8Array instances.
     const notifications: DirectoryNotification[] = result.rows.map(
-      (row) => row.payload as DirectoryNotification,
+      (row) => jsonParse<DirectoryNotification>(JSON.stringify(row.payload)),
     );
 
     if (notifications.length > 0) {
@@ -922,7 +926,7 @@ export class PgDirectoryStore implements DirectoryStore {
     this.#fire(this.#pool.query(
       `INSERT INTO pending_connection_requests (target_pubkey, payload)
        VALUES ($1, $2)`,
-      [targetPubkey, JSON.stringify(request)],
+      [targetPubkey, jsonStringify(request)],
     ), "pending_connection_requests");
     return true;
   }
@@ -963,8 +967,10 @@ export class PgDirectoryStore implements DirectoryStore {
       [targetPubkey],
     );
 
+    // pg auto-parses JSONB columns into JS objects, so row.payload is already parsed.
+    // Re-stringify then jsonParse runs the Uint8Array reviver over the full object tree.
     const requests: PendingConnectionRequest[] = result.rows.map(
-      (row) => row.payload as PendingConnectionRequest,
+      (row) => jsonParse<PendingConnectionRequest>(JSON.stringify(row.payload)),
     );
 
     if (requests.length > 0) {
