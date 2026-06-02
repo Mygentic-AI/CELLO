@@ -122,16 +122,31 @@ These rules are extracted from the M5 retrospective (`docs/planning/discussion_l
 
 ---
 
-## npm Package — Update Procedure
+## npm Publishing — @cello-protocol/connect
 
-To update a user to a new version of `@cello-protocol/connect`, pin the exact version:
+**NEVER run `npm publish`.** Use `pnpm publish` via CI only. `npm publish` ships raw `workspace:*` specifiers → broken package → version burned forever.
 
+**How to publish:**
+1. Bump version in `cello-client/core/adapter-claude-code/package.json`
+2. Commit and push to main
+3. `git tag v{version}` then `git push origin v{version}`
+4. CI handles: build → typecheck → lint → test → tarball checks → `pnpm publish`
+
+**Dist-tags:** CI publishes everything to `beta`. Promotion to `latest` is manual: `npm dist-tag add @cello-protocol/connect@X.Y.Z latest`. Only do this after explicit user approval.
+
+**After every publish, verify:**
+```bash
+npm view @cello-protocol/connect@beta dependencies --json
+# Must show real versions (0.0.X), NEVER "workspace:*"
+```
+
+**To update a local install**, pin the exact version:
 ```
 claude mcp remove cello
-claude mcp add cello -- npx --yes @cello-protocol/connect@0.0.10
+claude mcp add cello -- npx --yes @cello-protocol/connect@0.0.11
 ```
 
-**Never tell users to run `npx clear-npx-cache`.** It wipes every npx-installed tool they have. Pinning a new version is sufficient — npx fetches it fresh because the version string changed.
+**Never tell users to run `npx clear-npx-cache`.** It wipes every npx-installed tool. Pinning a new version is sufficient.
 
 **`claude mcp add` syntax:** Use `--` to separate claude's flags from npx's flags, otherwise `--yes` is misinterpreted.
 
