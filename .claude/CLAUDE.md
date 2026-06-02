@@ -122,20 +122,6 @@ These rules are extracted from the M5 retrospective (`docs/planning/discussion_l
 
 ---
 
-## npm Publish — Verification Rule
-
-After every `@cello-protocol/connect` publish, grep the built binary before closing the session:
-
-```bash
-grep "npx " dist/bin/cello-mcp.js
-```
-
-Every `npx @cello-protocol/connect` invocation must include `--yes`. Without it, npx shows an interactive "Ok to proceed? (y)" prompt before installing. Claude Code invokes the MCP server non-interactively — nothing answers the prompt, and the install hangs silently.
-
-**The docs are not the truth — the compiled output is.** In 0.0.9, SKILL.md had `--yes` correctly but the source was never updated.
-
----
-
 ## Slash Commands
 
 - **`/cello-read`** — Use at session start. Loads current project state without reading everything.
