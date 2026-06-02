@@ -68,8 +68,8 @@ import { DirectoryPreAuthorizationClient } from "./directory-pre-auth-client.js"
 import { RegistrationEngine } from "./registration/engine.js";
 
 // ─── Expected migration version ───────────────────────────────────────────────
-// V26 is the highest M6 migration (cello_ops_agent role, OPS-AGENT-000)
-const EXPECTED_MIGRATION_VERSION = 26;
+// V27 is the highest migration (agent_id column on agent_profiles, M6-DX-001)
+const EXPECTED_MIGRATION_VERSION = 27;
 
 // ─── Types exported for testing ───────────────────────────────────────────────
 
