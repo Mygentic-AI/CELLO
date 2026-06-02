@@ -44,6 +44,46 @@ import type { EncryptedPgShareStore } from "./encrypted-share-store.js";
 import type { Logger } from "@cello-protocol/interfaces";
 import { InMemoryShareStore } from "./share-store.js";
 
+// Serialization helpers that preserve Uint8Array through JSON round-trips.
+// JSON.stringify converts Uint8Array to {"0":1,"1":2,...} — a plain object that
+// @noble/curves crypto functions cannot use. These replacer/reviver functions
+// convert Uint8Array to/from {__type:"Uint8Array",hex:"..."} instead.
+function replacer(_key: string, value: unknown): unknown {
+  if (value instanceof Uint8Array) {
+    return { __type: "Uint8Array", hex: Buffer.from(value).toString("hex") };
+  }
+  return value;
+}
+
+// Detects objects that were Uint8Array before JSON serialization.
+// Handles two formats:
+//   New: { __type: "Uint8Array", hex: "..." }
+//   Old: { "0": 1, "1": 2, ... } — numeric-string keys only (legacy format)
+function isLegacyUint8ArrayObject(value: Record<string, unknown>): boolean {
+  const keys = Object.keys(value);
+  return keys.length > 0 && keys.every((k) => /^\d+$/.test(k));
+}
+
+function legacyToUint8Array(value: Record<string, unknown>): Uint8Array {
+  const len = Object.keys(value).length;
+  const arr = new Uint8Array(len);
+  for (let i = 0; i < len; i++) arr[i] = value[String(i)] as number;
+  return arr;
+}
+
+function reviver(_key: string, value: unknown): unknown {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const rec = value as Record<string, unknown>;
+    if (rec.__type === "Uint8Array" && typeof rec.hex === "string") {
+      return Buffer.from(rec.hex as string, "hex");
+    }
+    if (isLegacyUint8ArrayObject(rec)) {
+      return legacyToUint8Array(rec);
+    }
+  }
+  return value;
+}
+
 /**
  * PersistentShareStore — ShareStore with encrypted PostgreSQL persistence.
  *
@@ -85,7 +125,7 @@ export class PersistentShareStore implements ShareStore {
     for (const { agentId, epochId, plaintext } of rows) {
       try {
         const json = new TextDecoder("utf-8", { fatal: true }).decode(plaintext);
-        const parsed = JSON.parse(json) as unknown;
+        const parsed = JSON.parse(json, reviver) as unknown;
         if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
           throw new Error(`invalid share format: expected object, got ${Array.isArray(parsed) ? "array" : typeof parsed}`);
         }
@@ -156,12 +196,7 @@ export class PersistentShareStore implements ShareStore {
    * for FROST shares that enables cross-implementation compatibility.
    */
   #serializeSecret(share: LocalShare): Uint8Array {
-    // Serialize the entire LocalShare (including pub) as JSON
-    // FrostSecret and FrostPublic are plain JS objects and can be JSON-serialized
-    const json = JSON.stringify({
-      secret: share.secret,
-      pub: share.pub,
-    });
+    const json = JSON.stringify({ secret: share.secret, pub: share.pub }, replacer);
     return new TextEncoder().encode(json);
   }
 }
