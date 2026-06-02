@@ -75,7 +75,7 @@ function reviver(_key: string, value: unknown): unknown {
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     const rec = value as Record<string, unknown>;
     if (rec.__type === "Uint8Array" && typeof rec.hex === "string") {
-      return Buffer.from(rec.hex as string, "hex");
+      return new Uint8Array(Buffer.from(rec.hex as string, "hex"));
     }
     if (isLegacyUint8ArrayObject(rec)) {
       return legacyToUint8Array(rec);
@@ -136,6 +136,21 @@ export class PersistentShareStore implements ShareStore {
         if (!record.pub || typeof record.pub !== "object") {
           throw new Error("invalid share format: missing or non-object pub");
         }
+        const secretRec = record.secret as Record<string, unknown>;
+        const pubRec = record.pub as Record<string, unknown>;
+        this.#logger.info("frost.debug.loadShares.share_types", {
+          agentShort: agentId.slice(0, 16), epochId,
+          secretKeys: Object.keys(secretRec),
+          secretSigningShareType: typeof secretRec.signingShare,
+          secretSigningShareIsUint8Array: secretRec.signingShare instanceof Uint8Array,
+          secretSigningShareIsBuffer: Buffer.isBuffer(secretRec.signingShare),
+          secretIdentifierType: typeof secretRec.identifier,
+          pubKeys: Object.keys(pubRec),
+          pubCommitmentsIsArray: Array.isArray(pubRec.commitments),
+          pubCommitmentsLength: Array.isArray(pubRec.commitments) ? pubRec.commitments.length : null,
+          pubCommitments0IsUint8Array: Array.isArray(pubRec.commitments) ? pubRec.commitments[0] instanceof Uint8Array : null,
+          pubVerifyingSharesKeys: Object.keys(pubRec.verifyingShares as Record<string, unknown> ?? {}).slice(0, 3),
+        });
         this.#memory.storeShare(agentId, epochId, {
           secret: record.secret as LocalShare["secret"],
           pub: record.pub as LocalShare["pub"],
@@ -153,6 +168,10 @@ export class PersistentShareStore implements ShareStore {
 
   getShare(agentPubkey: string, epochId: string): LocalShare | undefined {
     const cached = this.#memory.getShare(agentPubkey, epochId);
+    this.#logger.info("frost.debug.getShare", {
+      agentShort: agentPubkey.slice(0, 16), epochId, found: !!cached,
+      memoryStoreSize: (this.#memory as unknown as { _shares?: Map<string, unknown> })?._shares?.size ?? "unknown",
+    });
     if (cached) {
       return cached;
     }

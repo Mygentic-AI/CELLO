@@ -390,28 +390,57 @@ export class FrostDirectoryHandler {
     | { ok: true; nodeId: string; nonceCommitment: NonceCommitments }
     | { ok: false; reason: "AGENT_NOT_BOOTSTRAPPED" | "EPOCH_EXPIRED" | "NONCE_ALREADY_PENDING" }
   > {
-    // Check epoch expiry before share lookup — an expired epoch should be rejected even if a
-    // share was stored (the share is from a prior epoch and should no longer be used).
+    const agentShort = agentPubkey.slice(0, 16);
+    this.#logger?.info("frost.debug.generateCommitment.enter", { agentShort, epochId, nodeId: this.#nodeId });
+
     if (this.#isExpiredEpoch(agentPubkey, epochId)) {
+      this.#logger?.warn("frost.debug.generateCommitment.epoch_expired", { agentShort, epochId });
       return { ok: false, reason: "EPOCH_EXPIRED" };
     }
+
     const share = this.#shareStore.getShare(agentPubkey, epochId);
+    this.#logger?.info("frost.debug.generateCommitment.share_lookup", {
+      agentShort, epochId,
+      shareFound: !!share,
+      shareSecretType: share ? typeof (share.secret as unknown as Record<string, unknown>)?.signingShare : "N/A",
+      shareSecretIsUint8Array: share ? ((share.secret as unknown as Record<string, unknown>)?.signingShare instanceof Uint8Array) : false,
+      sharePubType: share ? typeof share.pub : "N/A",
+      shareStoreSize: (this.#shareStore as unknown as { size?: number })?.size ?? "unknown",
+    });
+
     if (!share) {
+      this.#logger?.error("frost.debug.generateCommitment.no_share", { agentShort, epochId, nodeId: this.#nodeId });
       return { ok: false, reason: "AGENT_NOT_BOOTSTRAPPED" };
     }
+
     const cacheKey = `${agentPubkey}:${epochId}`;
-    // Sweep expired entries on each generateCommitment call (LOW-3: prevent memory leak)
     const now = Date.now();
+    let expiredCount = 0;
     for (const [k, entry] of this.#pendingNonces) {
-      if (now > entry.expiresAt) this.#pendingNonces.delete(k);
+      if (now > entry.expiresAt) { this.#pendingNonces.delete(k); expiredCount++; }
     }
-    // HIGH-2: reject if a non-expired nonce is already pending — the coordinator must consume it first
+    this.#logger?.info("frost.debug.generateCommitment.nonce_sweep", { agentShort, expiredCount, pendingNonceCount: this.#pendingNonces.size });
+
     if (this.#pendingNonces.has(cacheKey)) {
+      const existing = this.#pendingNonces.get(cacheKey)!;
+      this.#logger?.warn("frost.debug.generateCommitment.nonce_already_pending", {
+        agentShort, epochId, expiresInMs: existing.expiresAt - now
+      });
       return { ok: false, reason: "NONCE_ALREADY_PENDING" };
     }
-    const nonce = ed25519_FROST.commit(share.secret);
-    // Cache pending nonce keyed by (agentPubkey, epochId) — consumed exclusively by signRawMessage
+
+    let nonce: ReturnType<typeof ed25519_FROST.commit>;
+    try {
+      nonce = ed25519_FROST.commit(share.secret);
+      this.#logger?.info("frost.debug.generateCommitment.nonce_generated", { agentShort, epochId, nodeId: this.#nodeId });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.#logger?.error("frost.debug.generateCommitment.commit_threw", { agentShort, epochId, error: msg });
+      return { ok: false, reason: "AGENT_NOT_BOOTSTRAPPED" };
+    }
+
     this.#pendingNonces.set(cacheKey, { nonce: nonce.nonces, share, expiresAt: now + FrostDirectoryHandler.#PENDING_NONCE_TTL_MS });
+    this.#logger?.info("frost.debug.generateCommitment.success", { agentShort, epochId, nodeId: this.#nodeId, pendingNonceCount: this.#pendingNonces.size });
     return { ok: true, nodeId: this.#nodeId, nonceCommitment: nonce.commitments };
   }
 
@@ -484,43 +513,59 @@ export class FrostDirectoryHandler {
     peerIdString: string;
     ceremonyId: string;
   }): Promise<CeremonyRoundResult> {
-    const { agentPubkey, epochId, framedMsg, commitmentList, peerIdString } = params;
+    const { agentPubkey, epochId, framedMsg, commitmentList, peerIdString, ceremonyId } = params;
+    const agentShort = agentPubkey.slice(0, 16);
 
-    // Conflict check (same as handleCeremonyRound)
+    this.#logger?.info("frost.debug.signRawMessage.enter", {
+      agentShort, epochId, ceremonyId, peerIdString: peerIdString.slice(0, 16),
+      framedMsgLength: framedMsg?.length, framedMsgIsUint8Array: framedMsg instanceof Uint8Array,
+      commitmentListLength: commitmentList?.length, nodeId: this.#nodeId,
+    });
+
     const conflictKey = `${agentPubkey}:${epochId}`;
     const inFlightEntry = this.#inFlight.get(conflictKey);
+    this.#logger?.info("frost.debug.signRawMessage.conflict_check", {
+      agentShort, conflictFound: !!inFlightEntry,
+      inFlightPeerId: inFlightEntry?.peerIdString?.slice(0, 16),
+      requestingPeerId: peerIdString.slice(0, 16),
+    });
+
     if (inFlightEntry && inFlightEntry.peerIdString !== peerIdString) {
-      this.#fireFallbackCanary({
-        type: "FALLBACK_CANARY",
-        agentPubkey,
-        epochId,
-        inFlightPeerId: inFlightEntry.peerIdString,
-        conflictingPeerId: peerIdString,
-        timestamp: Date.now(),
-      });
+      this.#logger?.warn("frost.debug.signRawMessage.ceremony_conflict", { agentShort, epochId });
+      this.#fireFallbackCanary({ type: "FALLBACK_CANARY", agentPubkey, epochId, inFlightPeerId: inFlightEntry.peerIdString, conflictingPeerId: peerIdString, timestamp: Date.now() });
       return { ok: false, reason: "CEREMONY_CONFLICT" };
     }
 
-    // Retrieve and consume the cached nonce from the prior generateCommitment call.
-    // CRIT-1: a cached nonce is REQUIRED for signRawMessage — no fallback to fresh nonce.
-    // The commitment for this nonce was already sent to the coordinator and included in
-    // commitmentList. A fresh nonce would have no matching commitment in the list,
-    // violating RFC 9591 §4.6 (binding factor input must include every participant's commitment).
     const cacheKey = `${agentPubkey}:${epochId}`;
     const pending = this.#pendingNonces.get(cacheKey);
-    if (!pending || Date.now() > pending.expiresAt) {
-      // No cached nonce or expired — the two-step commit→sign flow was not followed (or timed out).
-      // Return AGENT_NOT_BOOTSTRAPPED so the coordinator excludes this node.
-      if (pending) this.#pendingNonces.delete(cacheKey); // clean up expired entry
+    const now = Date.now();
+    this.#logger?.info("frost.debug.signRawMessage.nonce_lookup", {
+      agentShort, epochId, pendingFound: !!pending,
+      pendingExpired: pending ? now > pending.expiresAt : null,
+      expiresInMs: pending ? pending.expiresAt - now : null,
+      totalPendingNonces: this.#pendingNonces.size,
+      allPendingKeys: [...this.#pendingNonces.keys()].map(k => k.slice(0, 32)),
+    });
+
+    if (!pending || now > pending.expiresAt) {
+      if (pending) this.#pendingNonces.delete(cacheKey);
+      this.#logger?.error("frost.debug.signRawMessage.no_nonce", { agentShort, epochId, hadExpired: !!pending });
       return { ok: false, reason: "AGENT_NOT_BOOTSTRAPPED" };
     }
-    this.#pendingNonces.delete(cacheKey); // consume — RFC 9591: one-time use
+    this.#pendingNonces.delete(cacheKey);
 
     const { nonce, share } = pending;
+    this.#logger?.info("frost.debug.signRawMessage.share_from_nonce", {
+      agentShort, epochId,
+      shareSecretType: typeof (share.secret as unknown as Record<string, unknown>)?.signingShare,
+      shareSecretIsUint8Array: (share.secret as unknown as Record<string, unknown>)?.signingShare instanceof Uint8Array,
+      sharePubCommitmentsLength: (share.pub as unknown as Record<string, unknown[]>)?.commitments?.length,
+      nonceType: typeof nonce,
+    });
 
     let partialSig: Uint8Array;
     try {
-      // commitmentList already includes this node's commitment (sent in frost_commit_response).
+      this.#logger?.info("frost.debug.signRawMessage.calling_signShare", { agentShort, epochId });
       partialSig = ed25519_FROST.signShare(
         share.secret,
         share.pub,
@@ -528,8 +573,19 @@ export class FrostDirectoryHandler {
         commitmentList,
         framedMsg,
       );
+      this.#logger?.info("frost.debug.signRawMessage.signShare_success", { agentShort, epochId, sigLength: partialSig.length });
     } catch (err) {
-      this.#logger?.error("frost.sign.share.failed", { error: err instanceof Error ? err.message : "unknown" });
+      const msg = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      this.#logger?.error("frost.debug.signRawMessage.signShare_threw", {
+        agentShort, epochId, error: msg, stack,
+        secretSigningShareType: typeof (share.secret as unknown as Record<string, unknown>)?.signingShare,
+        secretIdentifierType: typeof (share.secret as unknown as Record<string, unknown>)?.identifier,
+        pubCommitmentsLength: (share.pub as unknown as Record<string, unknown[]>)?.commitments?.length,
+        pubVerifyingSharesKeys: Object.keys((share.pub as unknown as Record<string, Record<string, unknown>>)?.verifyingShares ?? {}).slice(0, 3),
+        commitmentListLength: commitmentList?.length,
+        framedMsgIsUint8Array: framedMsg instanceof Uint8Array,
+      });
       return { ok: false, reason: "AGENT_NOT_BOOTSTRAPPED" };
     }
 

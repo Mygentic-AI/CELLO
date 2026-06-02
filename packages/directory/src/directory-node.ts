@@ -741,29 +741,44 @@ export class CelloDirectoryNode {
       }
 
       if (frameType === "frost_commit_request") {
-        // Client asks this node to generate a nonce commitment for an upcoming round.
         const agentPubkey = req["agentPubkey"] as string;
         const epochId = req["epochId"] as string;
+        this.#logger?.info("frost.debug.frost_stream.commit_request", {
+          agentShort: agentPubkey?.slice(0, 16), epochId,
+          rawFrameKeys: Object.keys(req),
+          agentPubkeyType: typeof agentPubkey,
+          epochIdType: typeof epochId,
+        });
 
         const result = await this.#frostHandler.generateCommitment(agentPubkey, epochId);
+        this.#logger?.info("frost.debug.frost_stream.commit_response", {
+          agentShort: agentPubkey?.slice(0, 16), epochId, resultOk: result.ok,
+          reason: result.ok ? null : (result as { reason: string }).reason,
+        });
         stream.send(lp.encode.single(
           result.ok
             ? CBOR_ENC.encode({ type: "frost_commit_response", ok: true, nodeId: result.nodeId, nonceCommitment: result.nonceCommitment })
-            : CBOR_ENC.encode({ type: "frost_commit_response", ok: false, reason: result.reason })
+            : CBOR_ENC.encode({ type: "frost_commit_response", ok: false, reason: (result as { reason: string }).reason })
         ));
         await stream.close();
         return;
       }
 
       if (frameType === "frost_sign_request") {
-        // Client sends the pre-framed message (context\0tbs) and commitment list.
-        // The directory signs the pre-framed message directly using signRawMessage.
         const agentPubkey = req["agentPubkey"] as string;
         const epochId = req["epochId"] as string;
         const framedMsg = req["framedMsg"] as Uint8Array;
         const commitmentList = req["commitmentList"] as import("@noble/curves/abstract/frost.js").NonceCommitments[];
         const ceremonyId = req["ceremonyId"] as string;
         const peerIdString = req["peerIdString"] as string;
+
+        this.#logger?.info("frost.debug.frost_stream.sign_request", {
+          agentShort: agentPubkey?.slice(0, 16), epochId, ceremonyId,
+          framedMsgLength: framedMsg?.length, framedMsgIsUint8Array: framedMsg instanceof Uint8Array,
+          commitmentListLength: commitmentList?.length,
+          peerIdStringShort: peerIdString?.slice(0, 16),
+          rawFrameKeys: Object.keys(req),
+        });
 
         const result = await this.#frostHandler.signRawMessage({
           agentPubkey,
@@ -774,9 +789,15 @@ export class CelloDirectoryNode {
           ceremonyId,
         });
 
+        this.#logger?.info("frost.debug.frost_stream.sign_response", {
+          agentShort: agentPubkey?.slice(0, 16), epochId, resultOk: result.ok,
+          reason: result.ok ? null : (result as { reason: string }).reason,
+          sigLength: result.ok ? (result as { partialSignature: Uint8Array }).partialSignature?.length : null,
+        });
+
         const resp = result.ok
-          ? CBOR_ENC.encode({ type: "frost_sign_response", ok: true, partialSignature: result.partialSignature })
-          : CBOR_ENC.encode({ type: "frost_sign_response", ok: false, reason: result.reason });
+          ? CBOR_ENC.encode({ type: "frost_sign_response", ok: true, partialSignature: (result as { partialSignature: Uint8Array }).partialSignature })
+          : CBOR_ENC.encode({ type: "frost_sign_response", ok: false, reason: (result as { reason: string }).reason });
         stream.send(lp.encode.single(resp));
         await stream.close();
         return;
@@ -1016,12 +1037,21 @@ export class CelloDirectoryNode {
           authedPubkeyHex = Buffer.from(resp.pubkey).toString("hex");
           this.#streams.set(authedPubkeyHex, stream);
 
-          // If a ClientDelegatedSigner was pre-registered (from DB profile restore at startup),
-          // update it with the live streams map so FROST ceremonies can route back to this client.
           const existingDelegated = this.#delegatedSigners.get(authedPubkeyHex);
-          if (existingDelegated) existingDelegated.setStreams(this.#streams);
+          this.#logger?.info("frost.debug.auth.setStreams", {
+            authedShort: authedPubkeyHex.slice(0, 16),
+            delegatedSignerFound: !!existingDelegated,
+            streamsMapSize: this.#streams.size,
+            allStreamKeys: [...this.#streams.keys()].map(k => k.slice(0, 16)),
+            allDelegatedKeys: [...this.#delegatedSigners.keys()].map(k => k.slice(0, 16)),
+          });
+          if (existingDelegated) {
+            existingDelegated.setStreams(this.#streams);
+            this.#logger?.info("frost.debug.auth.setStreams_called", { authedShort: authedPubkeyHex.slice(0, 16) });
+          } else {
+            this.#logger?.warn("frost.debug.auth.setStreams_skipped_no_delegated", { authedShort: authedPubkeyHex.slice(0, 16) });
+          }
 
-          // OBS-001 AC-003: peer authenticated on signaling
           protocolLog("AUTH", `Peer ${truncHex(authedPubkeyHex)} authenticated (signaling)`);
 
           // ADAPTER-003: send auth ack so client can synchronize on auth completion.
@@ -1838,8 +1868,16 @@ export class CelloDirectoryNode {
     connectionId?: string,
     relayRtt?: Record<string, number>,
   ): Promise<void> {
-    // OBS-001 AC-008: session request log
     protocolLog("SESS", `Session request: ${truncHex(initiatorHex)} → ${truncHex(targetHex)}`);
+    this.#logger?.info("frost.debug.session_request.enter", {
+      initiatorShort: initiatorHex.slice(0, 16), targetShort: targetHex.slice(0, 16),
+      connectionId, requireConnectionGate: this.#requireConnectionGate,
+      streamsSize: this.#streams.size,
+      allStreamKeys: [...this.#streams.keys()].map(k => k.slice(0, 16)),
+      thresholdSignersSize: this.#thresholdSigners.size,
+      allThresholdSignerKeys: [...this.#thresholdSigners.keys()].map(k => k.slice(0, 16)),
+      delegatedSignersSize: this.#delegatedSigners.size,
+    });
 
     // SESSION-006: enforce connection gate if configured
     if (this.#requireConnectionGate) {
@@ -1848,7 +1886,6 @@ export class CelloDirectoryNode {
         this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "connection_id_required" }));
         return;
       }
-      // Verify active connection exists between initiator and target with this connection_id
       const conn = await this.#store.hasConnection(initiatorHex, targetHex);
       if (!conn || conn.connection_id !== connectionId) {
         protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: no_connection`);
@@ -1859,6 +1896,9 @@ export class CelloDirectoryNode {
 
     // (a) Verify target is currently authenticated
     const targetStream = this.#streams.get(targetHex);
+    this.#logger?.info("frost.debug.session_request.target_stream", {
+      targetShort: targetHex.slice(0, 16), targetStreamFound: !!targetStream,
+    });
     if (!targetStream) {
       protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: target_offline`);
       this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "target_offline" }));
@@ -1867,6 +1907,17 @@ export class CelloDirectoryNode {
 
     // SESSION-004 Step 1: Check for injected IThresholdSigner (CRITICAL-2: fail loudly if absent)
     const signer = this.#thresholdSigners.get(initiatorHex);
+    this.#logger?.info("frost.debug.session_request.signer_lookup", {
+      initiatorShort: initiatorHex.slice(0, 16),
+      signerFound: !!signer,
+      signerType: signer?.constructor?.name ?? "null",
+      delegatedSignerFound: !!this.#delegatedSigners.get(initiatorHex),
+      delegatedSignerStreamsNull: (() => {
+        const ds = this.#delegatedSigners.get(initiatorHex);
+        if (!ds) return "no_delegated_signer";
+        return (ds as unknown as { _streams?: unknown })._streams === null ? "NULL" : "SET";
+      })(),
+    });
     if (!signer) {
       protocolLog("SESS", `Request failed — agent ${truncHex(initiatorHex)}, reason: frost_signer_not_configured`);
       this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "frost_signer_not_configured" }));
@@ -2764,30 +2815,51 @@ export class ClientDelegatedSigner implements IThresholdSigner {
     tbs: Uint8Array,
     context: FrostContext,
   ): Promise<ThresholdSignature> {
-    if (!this.#streams) return { ok: false, error: { reason: "DIRECTORY_BELOW_THRESHOLD" } };
-    const stream = this.#streams.get(this.#agentPubkeyHex);
-    if (!stream) return { ok: false, error: { reason: "DIRECTORY_BELOW_THRESHOLD" } };
+    const agentShort = this.#agentPubkeyHex.slice(0, 16);
 
-    // Send ceremony_request to the initiating client — the client runs participateInCeremony
-    // locally (it holds the coordinator share) and replies with ceremony_result.
+    process.stdout.write(`[DEBUG] ClientDelegatedSigner.participateInCeremony: enter agent=${agentShort} ceremony=${ceremonyId.slice(0,16)}\n`);
+    process.stdout.write(`[DEBUG] ClientDelegatedSigner: #streams=${this.#streams === null ? "NULL" : `Map(${this.#streams.size})`}\n`);
+
+    if (!this.#streams) {
+      process.stdout.write(`[DEBUG] ClientDelegatedSigner: FAIL #streams is null\n`);
+      return { ok: false, error: { reason: "DIRECTORY_BELOW_THRESHOLD" } };
+    }
+
+    process.stdout.write(`[DEBUG] ClientDelegatedSigner: streams keys=[${[...this.#streams.keys()].map(k => k.slice(0,16)).join(",")}]\n`);
+    process.stdout.write(`[DEBUG] ClientDelegatedSigner: looking for agentPubkeyHex=${agentShort} in streams\n`);
+
+    const stream = this.#streams.get(this.#agentPubkeyHex);
+    process.stdout.write(`[DEBUG] ClientDelegatedSigner: stream=${stream ? `found status=${(stream as unknown as { status?: string }).status ?? "unknown"}` : "NOT FOUND"}\n`);
+
+    if (!stream) {
+      process.stdout.write(`[DEBUG] ClientDelegatedSigner: FAIL agent not in #streams\n`);
+      return { ok: false, error: { reason: "DIRECTORY_BELOW_THRESHOLD" } };
+    }
+
     try {
+      process.stdout.write(`[DEBUG] ClientDelegatedSigner: sending ceremony_request to agent=${agentShort}\n`);
       stream.send(lp.encode.single(CBOR_ENC.encode({
         type: "ceremony_request",
         ceremony_id: ceremonyId,
         tbs: new Uint8Array(tbs),
         context,
       })));
-    } catch {
+      process.stdout.write(`[DEBUG] ClientDelegatedSigner: ceremony_request sent OK, waiting for ceremony_result\n`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stdout.write(`[DEBUG] ClientDelegatedSigner: FAIL stream.send threw: ${msg}\n`);
       return { ok: false, error: { reason: "DIRECTORY_BELOW_THRESHOLD" } };
     }
 
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.#pending.delete(ceremonyId);
+        process.stdout.write(`[DEBUG] ClientDelegatedSigner: TIMEOUT waiting for ceremony_result agent=${agentShort}\n`);
         resolve({ ok: false, error: { reason: "CEREMONY_TIMEOUT" } });
       }, 30_000);
       this.#pending.set(ceremonyId, (result) => {
         clearTimeout(timer);
+        process.stdout.write(`[DEBUG] ClientDelegatedSigner: ceremony_result received agent=${agentShort} ok=${result.ok}\n`);
         resolve(result);
       });
     });
