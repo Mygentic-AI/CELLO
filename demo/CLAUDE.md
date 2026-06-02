@@ -1,5 +1,18 @@
 # Demo Agent — Operator Guide
 
+## Purpose
+
+The demo agent is the "is this thing on?" check for the entire CELLO protocol. It is a
+permanently-running, publicly-known agent that any new user connects to as the final proof that
+the protocol works end-to-end. The intended flow is: a stranger installs `@cello-protocol/connect`,
+registers via Telegram, connects to this agent, and receives a response — all in under 10 minutes,
+without cloning a repo or running infrastructure.
+
+This agent is the gate for promoting `@cello-protocol/connect` from `beta` to `latest` on npm.
+If this agent is unreachable, that promotion cannot happen.
+
+## Implementation
+
 The demo agent is a standalone Node.js process that responds to CELLO messages with a hardcoded
 4-message sequence. It has no LLM, no Telegram dependency, and no human in the loop. It spawns
 `cello-mcp` as a subprocess and drives it over stdio MCP.
