@@ -238,11 +238,12 @@ NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-
 | IAM Instance Profile | cello-agent-ssm-role |
 | IAM Role | cello-agent-ssm-role |
 | Secrets Manager Key Path | cello/dev/demo-agent/identity-key |
-| Agent ID | a2c55e2721f45cfa86cb3417a76e3f7b |
+| Agent ID | c684a3d274ad4ecc716d1d6fd420545c |
 | Agent pubkey (K_local) | 1818eb0768536bd297fe34694a0347d5a3405eb1dc566a6ba9f9017ee7eb1296 |
 | SQLCipher DB path | /opt/cello-demo/data/client.db |
-| @cello-protocol/connect version | 0.0.12 (beta) |
-| Service status | active — demo.started confirmed 2026-06-02; restart tested |
+| @cello-protocol/connect version | 0.0.14 (beta) |
+| Service status | active — re-registered 2026-06-02 after FROST share corruption fix; demo.started confirmed |
+| Previous Agent ID | a2c55e2721f45cfa86cb3417a76e3f7b (invalidated — DB wiped and re-registered 2026-06-02) |
 | Access | SSM Session Manager only - no key pair, no inbound SG rules |
 | Inbound rules | None |
 | Outbound rules | TCP 443 to 0.0.0.0/0 only |
