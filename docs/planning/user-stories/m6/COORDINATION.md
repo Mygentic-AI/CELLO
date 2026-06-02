@@ -638,14 +638,30 @@ A previous agent (overnight, ~8 hours before this fix) attempted to unstick the 
 
 ---
 
-## 2026-06-02 — M6-E2E-001: RESUME POINT for fresh agent
+## 2026-06-02 — Two client-side bugs blocking AC-005
+
+**Bug 1: Signaling stream never opened (presence)**
+The demo agent dialed the directory (TCP + Noise) but never opened the CELLO signaling stream. Without the signaling stream, it never appeared in the directory's `#streams` map — connection requests were queued as "target offline" and never delivered. Root cause: `registerHandler()` runs before the background init sets `#directoryEndpoint`, so the proactive announce path is always skipped. Fix: `client.announceToDirectory()` public method called after background init completes. Shipped in `@cello-protocol/connect@0.0.13`.
+
+**Bug 2: setBootstrapContext missing on restored FROST signer stub (THE REAL BLOCKER)**
+After `loadPersistedState()` reconstructs the `FrostThresholdSigner`, the `NetworkDirectoryNode` stub has the directory's address but NOT the agent's identity (`agentPubkeyHex` and `epochId` are both null). When a `ceremony_request` arrives from the directory, the stub calls `generateCommitment()` which checks "do I know who I am?" — answer is no — throws. The catch sends `ceremony_result { signature: null }` back to the directory. The directory sees `!result.ok` and reports `directory_below_threshold` to the client. This made it look like a directory-side issue when it was entirely client-side.
+
+Fix: call `stub.setBootstrapContext(myPubkeyHex, \`${myPubkeyHex}:epoch:1\`)` after constructing the stub in `loadPersistedState()`. One line. Shipped in `@cello-protocol/connect@0.0.14`.
+
+**Why this was missed in M6-DX-001:** DX-001 AC-003 correctly identified that `directoryNodeStubs` must be populated (the stub needs to exist). But it didn't verify that the stub also needs its bootstrap context set — because the DKG registration path calls `setBootstrapContext` via `runNetworkDkg`, and that code path was the only one ever tested. The restart/restore path was never tested with a real FROST ceremony.
+
+**Infra issue also found:** `/agent-lookup` ALB routing rule is missing. The endpoint exists on the health server (port 9090) but no listener rule forwards to it — requests fall through to the WebSocket listener on port 8080 which returns "Only WebSocket connections are supported". Must use `target_pubkey` directly until this is fixed.
+
+---
+
+## 2026-06-02 — M6-E2E-001: RESUME POINT for fresh agent (UPDATED)
 
 **Status:** ACs 001–004 verified on 2026-06-01. ACs 005–010 blocked on DX-001 + directory deploy. Both are now complete. **Resume from AC-005.**
 
 **What is now live and ready:**
-- Directory: all 3 regions running image `c58ecb2` (V27 migration, `/agent-lookup`, `/bootstrap` ALB rules, `loadProfiles()` on startup, agent_id persistence). HEALTHY, steady state.
-- Client: `@cello-protocol/connect@0.0.10` on npm `beta` dist-tag. Includes all DX-001 fixes (lazy startup, TTY detection, `cello_setup_guidance`, agent_id-based connection requests, FROST signer directoryNodes fix, startup progress feedback) plus the `npx --yes` fix.
-- Demo agent: EC2 instance `i-0ad3e7c22470f266e` (EIP `32.196.100.165`), running `cello-demo.service`, AgentID `a2c55e2721f45cfa86cb3417a76e3f7b`.
+- Directory: all 3 regions running image `c58ecb2` (V27 migration, `/bootstrap` ALB rules, `loadProfiles()` on startup, agent_id persistence). HEALTHY, steady state. Note: `/agent-lookup` ALB rule is MISSING — use `target_pubkey` directly.
+- Client: `@cello-protocol/connect@0.0.14` on npm `beta` dist-tag. Includes all DX-001 fixes, `announceToDirectory()` (0.0.13), and `setBootstrapContext` fix (0.0.14).
+- Demo agent: EC2 instance `i-0ad3e7c22470f266e` (EIP `32.196.100.165`), running `cello-demo.service`, AgentID `a2c55e2721f45cfa86cb3417a76e3f7b`. **Must be updated to 0.0.14 and restarted before E2E can proceed.**
 
 **Test agent from AC-003 (registered 2026-06-01):**
 - AgentID: `00a71840909a9375e12e004f9da2b3e7`

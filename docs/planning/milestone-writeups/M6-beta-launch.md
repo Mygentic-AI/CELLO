@@ -743,18 +743,38 @@ All addressed in M6-DX-001.
 
 ---
 
-## Signaling Stream Presence Fix (0.0.13, in progress)
+## Client-Side FROST Bugs (0.0.13 + 0.0.14)
 
-**Bug found during M6-E2E-001 AC-005:** The demo agent held a libp2p connection (TCP + Noise) to the directory but never opened the CELLO signaling stream. Without the signaling stream, the agent is not in the directory's `#streams` map and is effectively invisible — connection requests get queued as "target offline" and never delivered.
+Two bugs blocked `cello_initiate_session` during M6-E2E-001 AC-005. Both were client-side but manifested as `directory_below_threshold` — making them appear to be directory issues.
 
-**Root cause:** `registerHandler()` runs at startup before the background init sets `#directoryEndpoint`. The proactive announce path is always skipped. The demo agent's polling tools (`cello_await_connection_request`, `cello_receive`) never trigger the signaling auth either. Result: agent is connected at the transport layer but never "present" at the protocol layer.
+### Bug 1: Signaling stream never opened (0.0.13)
 
-**Fix:** Add `client.announceToDirectory()` public method that opens the persistent signaling stream. Called from `cello-mcp.ts` after background init completes and `node.dial()` succeeds.
+**Symptom:** Demo agent held a libp2p connection but was invisible to connection requests ("target offline").
 
-**Post-M6 concern — signaling stream resilience:** This fix addresses startup only. If the signaling stream drops mid-session (directory restart, network interruption, idle timeout), the agent silently becomes invisible again with no automatic recovery. This is a known gap that requires a dedicated story post-M6:
-- Heartbeat/keepalive on the signaling stream to detect disconnection
-- Automatic reconnect with exponential backoff when the stream drops
-- Client-visible status transition (`directory_reachable` → `directory_lost` → `directory_reachable`) so the LLM knows when it's offline
-- Queued outbound operations that retry after reconnection rather than failing immediately
+**Root cause:** `registerHandler()` runs before background init sets `#directoryEndpoint`. The proactive announce path is always skipped.
 
-This is the most critical reliability gap for beta users — an agent that was working can silently stop receiving messages with no indication to the user.
+**Fix:** `client.announceToDirectory()` public method called from `cello-mcp.ts` after background init completes.
+
+### Bug 2: setBootstrapContext missing on restored FROST stub (0.0.14)
+
+**Symptom:** `cello_initiate_session` returned `directory_below_threshold` with registered=true and directory_reachable=true. All infrastructure appeared healthy.
+
+**Root cause:** `loadPersistedState()` creates a `NetworkDirectoryNode` stub with the directory's address, but never tells it the agent's identity or epoch. When the directory sends a `ceremony_request`, the client's signer calls `stub.generateCommitment()` which throws ("setBootstrapContext must be called before generateCommitment"). The catch sends `ceremony_result { signature: null }`. The directory maps any `!result.ok` to `directory_below_threshold`.
+
+**Why this looked like a directory problem:** The error name `directory_below_threshold` is the directory's catch-all for any FROST ceremony failure. The actual failure (client stub lacking identity) is invisible in directory logs — it just shows "Ceremony begin → Request failed" with a ~362ms gap (the network round-trip for the failed ceremony).
+
+**Fix:** One line — `stub.setBootstrapContext(myPubkeyHex, epochId)` after constructing the stub in `loadPersistedState()`.
+
+**Why it was missed:** DX-001 AC-003 correctly identified that `directoryNodeStubs` must be populated (the stub must exist). The DKG registration path calls `setBootstrapContext` implicitly via `runNetworkDkg`. The restart/restore path was never tested with a real FROST ceremony — only with `cello_status` (which doesn't trigger a ceremony).
+
+**Retrospective lesson:** Test paths must exercise the actual operation, not just preconditions. "registered=true" and "directory_reachable=true" verified state, not behavior. Only calling `cello_initiate_session` (which triggers a FROST ceremony) would have caught this.
+
+### Post-M6 concern — signaling stream resilience
+
+Both fixes address startup only. If the signaling stream drops mid-session (directory restart, network interruption, idle timeout), the agent silently becomes invisible with no automatic recovery. This requires a dedicated story post-M6:
+- Heartbeat/keepalive on the signaling stream
+- Automatic reconnect with exponential backoff
+- Client-visible status transition (`directory_reachable` → `directory_lost` → `directory_reachable`)
+- Queued outbound operations that retry after reconnection
+
+This is the most critical reliability gap for beta users.
