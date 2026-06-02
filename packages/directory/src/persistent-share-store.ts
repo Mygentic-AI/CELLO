@@ -77,18 +77,45 @@ export class PersistentShareStore implements ShareStore {
     this.#logger = logger;
   }
 
+  async loadShares(): Promise<{ loaded: number; failed: number; failedIds: Array<{ agentId: string; epochId: string }> }> {
+    const rows = await this.#encrypted.getAllShareBytes();
+    let loaded = 0;
+    let failed = 0;
+    const failedIds: Array<{ agentId: string; epochId: string }> = [];
+    for (const { agentId, epochId, plaintext } of rows) {
+      try {
+        const json = new TextDecoder("utf-8", { fatal: true }).decode(plaintext);
+        const parsed = JSON.parse(json) as unknown;
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          throw new Error(`invalid share format: expected object, got ${Array.isArray(parsed) ? "array" : typeof parsed}`);
+        }
+        const record = parsed as Record<string, unknown>;
+        if (!record.secret || typeof record.secret !== "object") {
+          throw new Error("invalid share format: missing or non-object secret");
+        }
+        if (!record.pub || typeof record.pub !== "object") {
+          throw new Error("invalid share format: missing or non-object pub");
+        }
+        this.#memory.storeShare(agentId, epochId, {
+          secret: record.secret as LocalShare["secret"],
+          pub: record.pub as LocalShare["pub"],
+        });
+        loaded++;
+      } catch (err: unknown) {
+        failed++;
+        failedIds.push({ agentId, epochId });
+        const error = err instanceof Error ? err : new Error(String(err));
+        this.#logger.error("adapter.share.deserialize.failed", error, { agentId, epochId });
+      }
+    }
+    return { loaded, failed, failedIds };
+  }
+
   getShare(agentPubkey: string, epochId: string): LocalShare | undefined {
-    // Hot path: return from memory if present
     const cached = this.#memory.getShare(agentPubkey, epochId);
     if (cached) {
       return cached;
     }
-
-    // Cold start path: retrieve from encrypted store
-    // Note: This is synchronous ShareStore interface, but EncryptedPgShareStore
-    // is async. For M4, we only support in-memory retrieval.
-    // Full cold-start recovery (deserialize from encrypted DB) requires an
-    // async getShare() method and is deferred to a future story.
     return undefined;
   }
 

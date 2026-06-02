@@ -154,6 +154,27 @@ export class EncryptedPgShareStore {
    *
    * @param correlationId - optional correlationId for threading async flow context
    */
+  async getAllShareBytes(): Promise<Array<{ agentId: string; epochId: string; plaintext: Uint8Array }>> {
+    const result = await this.#pool.query<{ agent_id: string; epoch_id: string; encrypted_share: Buffer }>(
+      `SELECT agent_id, epoch_id, encrypted_share FROM agent_key_shares`,
+    );
+
+    const shares: Array<{ agentId: string; epochId: string; plaintext: Uint8Array }> = [];
+    for (const row of result.rows) {
+      const keyId = this.#keyId(row.agent_id, row.epoch_id);
+      const ciphertext = new Uint8Array(row.encrypted_share);
+      try {
+        const plaintext = await this.#provider.decrypt(ciphertext, keyId);
+        shares.push({ agentId: row.agent_id, epochId: row.epoch_id, plaintext });
+      } catch (err: unknown) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        this.#logger.error("key.decrypted.failed", error, { keyId, agentId: row.agent_id });
+        throw err;
+      }
+    }
+    return shares;
+  }
+
   async getShareBytes(
     agentId: string,
     epochId: string,
