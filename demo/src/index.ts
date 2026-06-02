@@ -169,16 +169,23 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Check status — verify we are registered and reachable
+  // Check status — verify we are registered and directory is reachable.
+  // With lazy startup (M6-DX-001), state loads in the background after MCP connects,
+  // so we retry for up to 30s to allow loadPersistedState() to complete.
   let agentId: string;
   try {
-    const statusResult = await mcpClient.callTool({ name: "cello_status", arguments: {} });
-    const status = parseToolResult(statusResult) as {
-      registered?: boolean;
-      own_pubkey?: string;
-      directory_reachable?: boolean;
-      transport_started?: boolean;
-    } | null;
+    const STATUS_POLL_INTERVAL_MS = 2000;
+    const STATUS_TIMEOUT_MS = 30000;
+    const deadline = Date.now() + STATUS_TIMEOUT_MS;
+    type StatusResult = { registered?: boolean; own_pubkey?: string; directory_reachable?: boolean };
+    let status: StatusResult | null = null;
+
+    while (Date.now() < deadline) {
+      const statusResult = await mcpClient.callTool({ name: "cello_status", arguments: {} });
+      status = parseToolResult(statusResult) as StatusResult | null;
+      if (status?.registered && status?.own_pubkey && status?.directory_reachable) break;
+      await sleep(STATUS_POLL_INTERVAL_MS);
+    }
 
     if (!status?.registered || !status?.own_pubkey || !status?.directory_reachable) {
       logger.error("demo.connection.failed", {

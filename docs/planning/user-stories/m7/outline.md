@@ -117,10 +117,12 @@ This is the natural extension of the existing architecture — just needs the MC
 
 **NOT in scope:**
 - Protocol changes (no new TBS fields, no wire format changes; nonce goes in signed envelope wrapper, not in Structure 1 TBS)
-- Database changes (no directory/relay schema work)
+- Directory/relay Flyway schema changes (no new server-side migrations in M7)
 - Application-level delivery receipt (separate future story — needs careful design)
 - Registration ceremony changes (agents still register the same way)
 - `cello_add_agent` — REMOVED; server loads all keys at startup, `cello_start_agent` is sufficient
+- Retry queue + nonce dedup persistence across process restarts — intentionally in-memory for M7; `retry_queue` and `session_seen_nonces` SQLCipher tables deferred post-M7 (see MULTI-006)
+- Signaling stream resilience (heartbeat, auto-reconnect on mid-session drop) — deferred post-M7; the most critical reliability gap for beta users; see post-M7 known gaps section
 
 ---
 
@@ -206,6 +208,63 @@ Agreed it should exist but needs careful design:
 - Adds round-trip to every message
 - Merkle implications need thought
 - Deferred — retry queue with TCP-level detection is sufficient for M7
+
+---
+
+## Pre-Implementation Infrastructure Prerequisites
+
+These items must be resolved before the M7 integration gate (MULTI-008) can pass. They are not story work — they are infrastructure fixes or pending deploys from M6.
+
+### 1. `/agent-lookup` ALB routing rule — MISSING
+
+The `/agent-lookup` endpoint exists on the directory health server (port 9090) and was wired in M6-DX-001 (AC-007). However the ALB listener rule pointing to it was never deployed — requests fall through to the WebSocket listener on port 8080 which returns "Only WebSocket connections are supported."
+
+**Impact:** `cello_request_connection` and `cello_initiate_session` with `target_agent_id` (32-char format) will fail to resolve the pubkey until this is fixed. MULTI-008's integration gate tests agent_id-based connection — it will fail without this rule.
+
+**Fix:** Add `AgentLookupPathRule` (priority N, path `/agent-lookup`, target port 9090) to the ALB in `cello-ecs-directory.yaml` and deploy. This is the same pattern as `BootstrapPathRule` added during M6-E2E-001 (F-003).
+
+**Who:** Orchestrator or whoever starts M7 implementation must deploy this before MULTI-008 can be verified.
+
+### 2. `cello_service` missing UPDATE grant on `agent_profiles` — production gap
+
+`cello_service` PostgreSQL role lacks an explicit `UPDATE` grant on `agent_profiles`. Tests pass as superuser. In production, `linkAgentToAccount()` (called during FROST DKG registration) executes `UPDATE agent_profiles SET account_id = ...` and will fail silently with a permission denied error.
+
+**Impact:** New agent registrations in production will not have their `account_id` linked, breaking the Account → Agent relationship. Existing registrations are unaffected (the row exists, just the FK is NULL).
+
+**Fix:** Add a V28 migration to `packages/directory/`:
+```sql
+-- V28__grant_cello_service_update_agent_profiles.sql
+GRANT UPDATE ON agent_profiles TO cello_service;
+```
+
+This can be bundled into the first M7 directory story that opens a PR, or shipped as a standalone fix before M7 implementation begins.
+
+---
+
+## Post-M7 Known Gaps
+
+These are documented limitations that will need stories after M7 closes. They are not blocking M7 but will affect beta users.
+
+### Signaling stream resilience (CRITICAL for beta)
+
+The M6 signaling stream fixes (0.0.13 `announceToDirectory()`, 0.0.14 `setBootstrapContext`) address startup only. If the signaling stream drops mid-session (directory restart, network interruption, idle TCP timeout), the agent silently becomes invisible to incoming connection requests with no recovery path.
+
+**Symptom for a user:** their agent is running and registered but other agents cannot reach them; `cello_status` shows `directory_reachable: true` (the libp2p connection is alive) but the signaling stream is dead.
+
+**What a post-M7 story needs to deliver:**
+- Heartbeat/keepalive on the signaling stream (periodic ping to detect silent drops)
+- Automatic reconnect with exponential backoff when the stream drops
+- Client-visible status: `directory_signaling: 'connected' | 'reconnecting' | 'lost'`
+- Queued outbound operations (connection requests, FROST ceremonies) that retry after reconnection
+
+### Retry queue + nonce dedup persistence
+
+Messages in the retry queue are lost on process restart. Nonce dedup set is lost on process restart (allowing duplicates across a restart window for active sessions).
+
+**What a post-M7 story needs to deliver:**
+- `retry_queue` table in SQLCipher (agent_pubkey, session_id, nonce, envelope BLOB, enqueued_at)
+- `session_seen_nonces` table in SQLCipher (session_id, agent_pubkey, nonce, seen_at)
+- V3 SQLCipher migration
 
 ---
 

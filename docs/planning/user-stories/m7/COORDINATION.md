@@ -82,6 +82,38 @@ Key design decisions that implementation agents must know:
 
 ---
 
+## Pre-Implementation Infrastructure Prerequisites
+
+Two items from M6 must be resolved before MULTI-008 can pass. Neither is a story — they are infrastructure fixes.
+
+### 1. `/agent-lookup` ALB routing rule — MISSING (blocks MULTI-008)
+
+**Status:** Not deployed as of 2026-06-02.
+
+The endpoint exists on the directory health server (port 9090) and the code was merged in M6-DX-001. The ALB listener rule was never deployed. `cello_request_connection` and `cello_initiate_session` called with `target_agent_id` (32-char format) silently fail until this is fixed. MULTI-008 tests agent_id-based routing — it will fail without this rule.
+
+**Fix:** Add `AgentLookupPathRule` to `cello-ecs-directory.yaml` (same pattern as `BootstrapPathRule`). Deploy via the directory pipeline. Whoever starts M7 implementation should do this before writing MULTI-007/MULTI-008.
+
+### 2. `cello_service` missing UPDATE grant on `agent_profiles` (blocks production registrations)
+
+**Status:** Known gap since OPS-AGENT-001. Not blocking tests (superuser in test env) but silently breaks `linkAgentToAccount()` in production.
+
+**Fix:** Add `V28__grant_cello_service_update_agent_profiles.sql` to `packages/directory/` before or during M7. Can be bundled into the first PR that opens on the directory package.
+
+---
+
+## M6 Context That Affects M7 Implementation
+
+Key facts from M6 that were not known when these stories were written:
+
+1. **SQLCipher DB per agent**: PERSIST-024 (M6) established that each agent has its own SQLCipher database. For named agents the convention is `~/.cello/agents/<name>/client.db` (added to MULTI-001). For the legacy default agent it is `CELLO_DB_PATH` or `~/.cello/client.db`. MULTI-002 must open each agent's DB and call `loadPersistedState()` as part of the start sequence — see MULTI-002 implementation_notes for the exact 5-step sequence.
+
+2. **Retry queue is intentionally in-memory for M7**: MULTI-006 does not add any SQLCipher tables. Queue and nonce set are lost on restart. This is an explicit, documented decision — not an oversight. The post-M7 known gaps section in the outline has the follow-up story spec.
+
+3. **Signaling stream drops mid-session are unhandled**: the M6 fixes (0.0.13 and 0.0.14) address startup only. This is the most critical reliability gap for beta users. M7 does not address it — documented in post-M7 known gaps.
+
+---
+
 ## Cross-Repo CI/CD Gap (post-REPOSPLIT)
 
 **Identified:** 2026-06-01
