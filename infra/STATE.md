@@ -111,8 +111,11 @@ NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-
 - Ops-agent SG `sg-07cc257e60bed1e49` egress: also has `TCP 80 → 10.0.0.0/16` live (redundant, not in IaC — will be removed on next deploy)
 - Ops-agent SG `sg-07cc257e60bed1e49` egress: added `TCP 8081 → directory SG` (internal API port). IaC: `cello-ecs-operations-agent.yaml`
 - Directory SG `sg-0cc7f8493f3aff8d8` ingress: added `TCP 8081 from ops-agent SG` (internal API port). IaC: `cello-ecs-operations-agent.yaml`
-- DIRECTORY_INTERNAL_URL: `http://cello-dir-dev-1136016900.us-east-1.elb.amazonaws.com/internal/pre-authorize` (ALB — stable, does not break on directory redeploy; ops-agent task def rev 26; EXPECTED_MIGRATION_VERSION moved to env var)
-- EXPECTED_MIGRATION_VERSION: moved from hardcoded constant to env var (ops-agent task def rev 26); currently set to 27; update in task def when schema version bumps — no code change required
+- DIRECTORY_INTERNAL_URL: `http://cello-dir-dev-1136016900.us-east-1.elb.amazonaws.com/internal/pre-authorize` (ALB — stable, does not break on directory redeploy; ops-agent task def rev 27)
+- EXPECTED_MIGRATION_VERSION: env var in ops-agent task def; currently 27; update when schema bumps — no code change required
+- ALB target group `cello-dir-internal-api-dev` (arn: `...targetgroup/cello-dir-internal-api-dev/9142c22ffdd3283e`): created 2026-06-02, port 8081, target-type ip; current target 10.0.87.93:8081. **NOT in IaC** — must be manually re-registered when directory task IP changes. Fix: add to ECS directory service LoadBalancers in IaC.
+- ALB listener rule priority 5 (`/internal/*`): updated 2026-06-02 to route to `cello-dir-internal-api-dev` TG (port 8081) instead of default TG (port 8080). **NOT yet in IaC** — cello-ecs-directory.yaml still has old rule.
+- Directory SG `sg-0cc7f8493f3aff8d8` ingress: added `TCP 8081 from ALB SG sg-0b694f5a0dcf0fbbb` (2026-06-02, rule sgr-06b678369e4499441). **NOT in IaC.**
 - Demo-agent IAM role `cello-agent-ssm-role`: added inline policy `cello-demo-secrets-manager` (not in IaC — role predates CloudFormation stacks, shared with openclaw-agent)
 
 ### dev — eu-central-1
