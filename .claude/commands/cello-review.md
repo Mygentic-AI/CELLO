@@ -15,8 +15,9 @@ Story implementation reviewer for CELLO. Use this after an implementation agent 
 
 Read in this order:
 1. `docs/planning/user-stories/{milestone}/outline.md` — **read first**. Every user story folder contains an overview document. It defines the milestone scope, dependency graph, and design decisions that individual stories assume as given. A reviewer who skips it will miss the intent behind individual ACs.
-2. `CONTEXT.md` at the repo root — canonical glossary; any term used differently is a bug
-3. `docs/planning/user-stories/{milestone}/CELLO-{STORY-ID}.yaml` — the story being reviewed
+2. `.claude/CLAUDE.md` — the system-wide invariants for this project. These are load-bearing regardless of whether the story mentions them. A story about federation transport is subject to the sovereign node and cloud-agnostic constraints even if neither word appears in the story YAML.
+3. `CONTEXT.md` at the repo root — canonical glossary; any term used differently is a bug
+4. `docs/planning/user-stories/{milestone}/CELLO-{STORY-ID}.yaml` — the story being reviewed
 4. The implementation files named in the story's `components` field
 5. **For M5+ parallel milestones:** `docs/planning/user-stories/{milestone}/COORDINATION.md` — check if this story's completion unblocks others or if it references migration version numbers from the registry
 
@@ -54,7 +55,19 @@ For every AC in the story:
 
    The diagnostic question for protocol structure: *"If one of the participants described in the AC were compromised or unavailable, would the real implementation behave the way the AC implies?"* If the answer differs from what the AC implies — because the structure was quietly collapsed — that is **blocking**.
 
-   A separate but related diagnostic question applies to implementation technology: *"Does this implementation create a dependency that the story's stated guarantees assume does not exist?"* The canonical example is sovereignty: a story may require that each node operate independently of all others, and the protocol behavior may look correct, but if the implementation uses a cloud-provider-specific replication mechanism, shared control plane, or vendor-managed coordination service, the nodes are no longer independent — they share a failure domain and a vendor. The test suite cannot see this. Look for it by asking: *"Could this node be moved to a different cloud provider, or operated by a different organization, without modifying anything except its own configuration?"* If no — and the story implies yes — that is **blocking**.
+   A separate but related diagnostic question applies to implementation technology: *"Does this implementation create a dependency that the story's stated guarantees assume does not exist?"*
+
+   This failure is a cross-document consistency failure, not a missing specification. The constraint typically exists — correctly stated somewhere in CLAUDE.md or an earlier discussion log — but it was not restated in the story the implementer read. The implementer found the story self-contained enough to work from, selected the most obvious tool for the task, and never re-read the earlier document. The mechanism chosen may be entirely correct; the violation lives one layer down, in how that mechanism was instantiated.
+
+   *The canonical example:* Postgres logical replication was the right federation mechanism. VPC Peering as the transport for it was not — it makes all nodes AWS-only. The mechanism was correct. The network transport beneath it violated the cloud-agnostic constraint that existed in an April 8 document but was absent from the April 11 document the implementer read.
+
+   When reviewing any story that involves inter-node communication, synchronization, coordination, state sharing, or infrastructure provisioning, check each layer independently against CLAUDE.md invariants:
+   - **The mechanism** — is it the right tool?
+   - **The transport** — is the network path cloud-agnostic, or does it rely on provider-specific networking (VPC Peering, AWS PrivateLink, GCP VPC sharing)?
+   - **The coordination service** — does it require a shared account, shared control plane, or vendor-managed service that couples nodes together?
+   - **The operational model** — can the node be operated by a different organization with no relationship to the others?
+
+   A correct mechanism with a violating transport is **blocking** by the same standard as a wrong mechanism. The test suite cannot see this — it must be found by reading the implementation, not the test results.
 
    If the deviation was intentional (infrastructure not yet deployed, deferred milestone), it must be recorded in the story's `stubs` section with a `replaced_by` milestone. A silent structural mismatch is never acceptable regardless of test results.
 
