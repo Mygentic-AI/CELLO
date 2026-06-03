@@ -1093,13 +1093,27 @@ The drop was not random. During message exchange (steps 4–8), the demo agent w
 
 ### Relay manifest staleness — relay must re-register after any IP change
 
-The relay manifest in S3 contains the relay's health check URL as a direct task IP. When the relay redeploys, the IP changes, the manifest becomes stale, and the directory's relay pool marks the relay as unavailable. Every `cello_initiate_session` fails with `relay_unavailable`.
+The relay manifest in S3 (`cello-relay-manifest-dev-us-east-1/relay-manifest.json`) contains the relay's health check URL as a direct task IP and the relay's libp2p peer ID. When the relay redeploys, both change. The directory's `RelayPoolManager` loads the manifest once at startup, polls `healthCheckUrl` every 30s, and marks the relay unavailable after 3 consecutive failures. The log evidence is `relay.pool.unavailable { totalRelays: 1, availableCount: 0 }`.
 
-**Today's fix:** Re-signed manifest with new IP via `infra/sign-manifest.sh`, then restarted directory to reload it.
+**Occurred twice:**
 
-**Why this keeps happening:** The relay doesn't re-register with the directory on startup unless `CELLO_DIRECTORY_MULTIADDR` is set. In production ECS, this env var is not set — the relay has no mechanism to announce its new IP.
+**First occurrence (2026-05-28):** Relay redeployed, IP changed to `10.0.117.145`, then to `10.0.21.210`. Fixed by re-signing manifest and restarting directory.
 
-**Post-M6 fix:**
-1. Set `CELLO_DIRECTORY_MULTIADDR` in the relay ECS task def so it dials the directory on startup
-2. When relay connects and calls `relay_register`, directory re-signs and re-uploads the manifest automatically
-3. `RelayPoolManager` polls S3 periodically (no directory restart needed)
+**Second occurrence (2026-06-03):** Relay redeployed as part of the M6-E2E-001 keepalive fix. Old IP `10.0.98.52` / peer ID `12D3KooWJ3cc...` — both stale. New IP `10.0.36.100` / peer ID `12D3KooWDbUVg6...`.
+
+The peer ID change is a separate root cause: `cello/dev/relay/transport-key` exists in Secrets Manager but is NOT wired into the relay ECS task def as `CELLO_RELAY_TRANSPORT_KEY_HEX`. So every relay redeploy generates a fresh transport key and therefore a new peer ID, regardless of Secrets Manager. The same fix that stabilised the directory peer ID (`CELLO_DIRECTORY_TRANSPORT_KEY_HEX` → Secrets Manager) was never applied to the relay.
+
+**First fix attempt failed with `relay.manifest.invalid` / `signature_verification_failed`:** The signing script used a recursive key-sort on the JSON payload. `buildCanonicalPayload()` in `relay-pool-manager.ts` sorts only the top-level keys (`relays`, `updatedAt`, `version`) and leaves relay entry fields in insertion order. Recursive sorting produced a different byte string → invalid signature.
+
+**Second fix attempt succeeded:** Shallow sort matching `buildCanonicalPayload()` exactly. Version bumped to 5, manifest uploaded to S3, directory force-restarted to reload it. Directory log confirms: `relay.manifest.loaded { relayCount: 1 }`, `relay.health.check.passed` expected within the next poll interval.
+
+**`infra/sign-manifest.sh` does not exist.** The fix was done via a one-off `node --input-type=module` script. A proper signing script should be created so future manifest updates are not ad-hoc.
+
+**Why this keeps happening:** The relay has no mechanism to announce its own IP and peer ID to the directory on startup. The manifest is only updated by a human.
+
+**Post-M6 fixes required:**
+1. Wire `CELLO_RELAY_TRANSPORT_KEY_HEX` from `cello/{env}/relay/transport-key` into the relay ECS task def (same pattern as directory) — stabilises peer ID across all future restarts
+2. Set `CELLO_DIRECTORY_MULTIADDR` in relay ECS task def so relay dials directory on startup and calls `relay_register`
+3. When relay connects and registers, directory re-signs and re-uploads the manifest automatically — no human intervention needed
+4. `RelayPoolManager` polls S3 periodically (no directory restart needed on manifest update)
+5. Create `infra/sign-manifest.sh` — signs and uploads a new relay manifest given a private key, relay IP, and peer ID; removes the need for ad-hoc one-off scripts
