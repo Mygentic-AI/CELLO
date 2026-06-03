@@ -67,6 +67,11 @@ All stories reviewed and sprint-approved except M6B-007 (APPROVED) and
 M6B-009 (APPROVED). M6B-006 APPROVED after 2 BLOCKED rounds.
 M6B-002 APPROVED after 2 BLOCKED rounds + medium fixes.
 
-Implementation agents may begin M6B-001 through M6B-006 in parallel (no
-inter-dependencies). M6B-007 and M6B-008 may begin only after M6B-006 merges.
-M6B-013 may begin only after M6B-005 merges.
+Implementation agents may begin in any order within each group:
+
+**No dependencies — dispatch immediately in any combination:**
+M6B-001, M6B-002, M6B-003, M6B-004, M6B-005, M6B-006, M6B-009, M6B-010, M6B-011, M6B-012
+
+**Wait for M6B-006 to merge:** M6B-007, M6B-008
+
+**Wait for M6B-005 to merge:** M6B-013
