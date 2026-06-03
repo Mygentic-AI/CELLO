@@ -941,6 +941,8 @@ The `/agent-lookup` endpoint exists on the directory health server (port 9090) b
 
 **Also missing from IaC:** The port-8081 internal API target group (`cello-dir-internal-api-dev`) and its ALB rule (priority 5 updated from port 8080 to 8081), and the ALB SG → directory port-8081 ingress rule. All created manually today.
 
+**Operational consequence:** Because this target group is not in the ECS service `LoadBalancers` block, ECS does not automatically register new tasks into it on deploy/restart. Every directory restart requires manually deregistering the old task IP and registering the new one, or the ops-agent gets HTTP 504 and the Telegram bot responds "Registration is temporarily unavailable." Observed again 2026-06-03 after a directory restart triggered by the relay manifest update. Fix: add the internal API target group to `cello-ecs-directory.yaml` in the ECS service `LoadBalancers` block so ECS manages registration automatically.
+
 ---
 
 ### Signaling stream resilience — agents go silent after directory restart
