@@ -498,6 +498,52 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # ── 11. cello-frost-ceremony-exhausted — M6B-002 ─────────────────────────
+  # Fires ops-warning when FROST ceremony failures (ceremony_exhausted) exceed 3
+  # occurrences in 5 minutes. Custom metric: derived from frost.ceremony.failed
+  # log events via MetricFilter.
+  # This is a sustained FROST failure alarm — if 3+ ceremonies fail within 300s,
+  # it indicates a directory coordination problem or threshold mismatch.
+
+  FrostCeremonyExhaustedMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub "/ecs/cello-directory-${Environment}"
+      FilterPattern: '{ $.event = "frost.ceremony.failed" && $.reason = "ceremony_exhausted" }'
+      MetricTransformations:
+        - MetricNamespace: CelloDirectory
+          MetricName: FrostCeremonyExhausted
+          MetricValue: "1"
+          DefaultValue: 0
+
+  FrostCeremonyExhaustedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-frost-ceremony-exhausted-${Environment}"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO FROST ceremonies exhausted 3+ times in 5 minutes.
+        Region: ${AWS::Region}. This indicates a sustained FROST coordination failure.
+        Investigate directory node threshold configuration, participant availability,
+        and network conditions between directory nodes. The ceremony_exhausted reason
+        means FROST retry attempts were exhausted — not a one-off timeout.
+      MetricName: FrostCeremonyExhausted
+      Namespace: CelloDirectory
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsWarningTopic
+      OKActions:
+        - !Ref OpsWarningTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
   # ═══════════════════════════════════════════════════════════════════════════
   # DASHBOARD — AC-004
   #

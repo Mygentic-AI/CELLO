@@ -384,4 +384,97 @@ describe("CELLO-M6B-002: FROST ceremony error propagation", () => {
     expect(exhausted).toBe("ceremony_exhausted");
     expect(belowThreshold).toBe("directory_below_threshold");
   });
+
+  // ─── SI-001: frost.ceremony.failed must not leak key material ────────────────
+
+  it("SI-001: frost.ceremony.failed log event contains only agentId, reason, and ceremonyId", async () => {
+    const dirKp = generateKeypair();
+    const logger = {
+      debug(_event: string, _context: Record<string, unknown>) { /* no-op */ },
+      info(_event: string, _context: Record<string, unknown>) { /* no-op */ },
+      warn(event: string, context: Record<string, unknown>) {
+        logEvents.push({ level: "warn", event, context });
+      },
+      error(_event: string, _context: Record<string, unknown>) { /* no-op */ },
+    };
+
+    const { directory, node: dirNode, stop: dirStop } = await createDirectoryNode({
+      keyProvider: dirKp,
+      relay: makeNoopRelayAdapter(),
+      relayEndpoint: { peer_id: "relay-peer", multiaddrs: [] },
+      logger,
+    });
+    scope.addCleanup(dirStop);
+
+    const initiatorKp = generateKeypair();
+    const initiatorPubkey = await initiatorKp.getPublicKey();
+    const initiatorPubkeyHex = Buffer.from(initiatorPubkey).toString("hex");
+
+    const targetKp = generateKeypair();
+    const targetPubkey = await targetKp.getPublicKey();
+    const targetPubkeyHex = Buffer.from(targetPubkey).toString("hex");
+
+    const nodeA = await createNode({ keyProvider: initiatorKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeA.start();
+    scope.addCleanup(() => nodeA.stop());
+
+    const nodeB = await createNode({ keyProvider: targetKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeB.start();
+    scope.addCleanup(() => nodeB.stop());
+
+    const dirAddr = dirNode.listenAddresses()[0]!;
+    await nodeA.dial(dirAddr);
+    await nodeB.dial(dirAddr);
+    directory.registerPeerInfo(initiatorPubkeyHex, nodeA.getPeerId(), nodeA.listenAddresses());
+    directory.registerPeerInfo(targetPubkeyHex, nodeB.getPeerId(), nodeB.listenAddresses());
+
+    // Trigger ceremony failure
+    const stubSigner = new StubThresholdSigner(initiatorPubkey, "CEREMONY_TIMEOUT");
+    directory.registerThresholdSigner(Buffer.from(initiatorPubkey).toString("hex"), stubSigner);
+
+    const streamB = await nodeB.newStream(dirNode.getPeerId(), SIGNALING_PROTOCOL_ID);
+    const readerB = new StreamReader(streamB);
+    await authenticateClient(streamB, readerB, targetKp);
+
+    const streamA = await nodeA.newStream(dirNode.getPeerId(), SIGNALING_PROTOCOL_ID);
+    const reader = new StreamReader(streamA);
+    await authenticateClient(streamA, reader, initiatorKp);
+
+    sendFrame(streamA, CBOR_ENC.encode({
+      type: "session_request",
+      target_pubkey: targetPubkey,
+    }));
+
+    await reader.readDecoded(); // consume the error response
+
+    // Verify the log event context
+    const ceremonyFailedEvent = logEvents.find((e) => e.event === "frost.ceremony.failed");
+    expect(ceremonyFailedEvent).toBeDefined();
+
+    // SI-001: Assert exact context shape — only agentId, reason, and ceremonyId
+    const context = ceremonyFailedEvent!.context;
+    const contextKeys = Object.keys(context).sort();
+    expect(contextKeys).toEqual(["agentId", "ceremonyId", "reason"]);
+
+    // SI-001: Assert no key material fields are present
+    expect(context).not.toHaveProperty("share");
+    expect(context).not.toHaveProperty("shares");
+    expect(context).not.toHaveProperty("signature");
+    expect(context).not.toHaveProperty("partial");
+    expect(context).not.toHaveProperty("partial_sig");
+    expect(context).not.toHaveProperty("partial_signature");
+    expect(context).not.toHaveProperty("commitment");
+    expect(context).not.toHaveProperty("nonce");
+    expect(context).not.toHaveProperty("secret");
+    expect(context).not.toHaveProperty("key");
+    expect(context).not.toHaveProperty("privateKey");
+    expect(context).not.toHaveProperty("keyShare");
+
+    // Verify the values are correct
+    expect(typeof context["agentId"]).toBe("string");
+    expect(context["agentId"]).toHaveLength(16); // truncated hex
+    expect(context["reason"]).toBe("ceremony_timeout");
+    expect(typeof context["ceremonyId"]).toBe("string");
+    expect(context["ceremonyId"]).toHaveLength(16); // truncated hex
+  });
 });
