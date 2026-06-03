@@ -24,6 +24,7 @@ and can run in parallel:
 | CELLO-PREP-002 | Global install + SQLCipher WAL mode | MULTI-002 |
 | CELLO-PREP-003 | Relay auto-register on startup | PREP-004 |
 | CELLO-PREP-004 | RelayPoolManager manifest polling | — |
+| CELLO-PREP-005 | Capacity hardening (pg pool, RDS upgrade, relay stream caps, session sweep) | — |
 
 **PREP-002 → MULTI-002 dependency:** PREP-002 AC-005 requires MULTI-002 to
 carry WAL mode forward when it rewrites the composition root. The MULTI-002

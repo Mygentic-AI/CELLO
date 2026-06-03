@@ -1,0 +1,315 @@
+---
+name: CELLO-PREP-005
+type: user-story
+date: 2026-06-03
+topics: [scalability, postgres, connection-pool, relay, stream-caps, session-sweep, pre-m7, capacity]
+status: draft
+description: >
+  Pre-M7 capacity hardening for 1000 concurrent users. Configures the directory
+  PostgreSQL connection pool via env var (default 50), upgrades the RDS IaC
+  default to db.t3.medium, sets explicit maxInboundStreams on the relay protocol
+  handler, and adds an idle session sweep to InMemoryRelayStore to prevent
+  unbounded memory growth from abandoned sessions.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PREP-005
+domain: PREP
+milestone: M7
+actor: OPS
+priority: P0
+components:
+  - directory
+  - relay
+  - infra
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO operator preparing for 1000 concurrent users,
+  I want the PostgreSQL connection pool sized explicitly, the RDS instance
+  class upgraded, relay stream caps set deliberately, and abandoned sessions
+  swept periodically, so that concurrent load does not cause silent queuing
+  or unbounded memory growth.
+
+# ─── Context ────────────────────────────────────────────────
+# Four capacity issues identified during M6 infrastructure analysis:
+#
+# 1. pg pool defaults to 10 connections (directory/src/bin/directory.ts lines
+#    142 and 171 — both pg.Pool({ connectionString }) with no max). Under 20+
+#    concurrent FROST DKG registrations each requiring multiple DB round-trips,
+#    all requests queue behind 10 connections silently. Users see slow
+#    registration with no error, which is the worst UX failure mode.
+#    Fix: DIRECTORY_PG_POOL_MAX env var, default 50.
+#
+# 2. RDS IaC defaults to db.t3.small (cello-rds.yaml line 13). db.t3.small
+#    supports ~225 max connections shared across the 3-region directory fleet.
+#    With pool max=50 per node × 3 nodes = 150 connections, plus replication,
+#    rotation Lambda, and admin connections, this leaves minimal headroom.
+#    db.t3.medium supports ~450 max connections. With 50 per node × 3 = 150
+#    from application + ~50 overhead = 200 total — 250 connections of headroom
+#    for spikes, admin, replication. Safe to push pool max to 75 on medium if
+#    needed later.
+#    Fix: change IaC default to db.t3.medium.
+#
+# 3. Relay /cello/relay/1.0.0 handler has no maxInboundStreams (relay-node.ts
+#    lines 244-246). Falls back to yamux default of 1024 per connection. This
+#    is fine for beta but was never a deliberate choice — a libp2p version bump
+#    could silently change the default. The directory protocols set explicit
+#    caps (512, 256, 64, 8); the relay should too.
+#    Fix: maxInboundStreams: 2048 on /cello/relay/1.0.0,
+#         maxInboundStreams: 128 on /cello/directory-relay/1.0.0.
+#
+# 4. InMemoryRelayStore has no staleness sweep. Sessions that are never sealed
+#    (client disconnects without closing, network failure mid-session) stay in
+#    the #sessions Map forever. leaf_log grows with every submitted leaf.
+#    Not meaningful at beta scale but unbounded in theory. At 1000 users with
+#    normal churn, abandoned sessions accumulate. Each entry holds leaf_log
+#    CBOR bytes — a leaked 100-message session is ~50KB. 1000 leaked sessions
+#    = ~50MB. Not catastrophic but avoidable.
+#    Fix: RELAY_SESSION_MAX_IDLE_MS env var (default 86400000 = 24h). A sweep
+#    runs every hour and destroys sessions whose last leaf submission was more
+#    than MAX_IDLE_MS ago and whose status is still 'active'. Sessions in
+#    status 'sealed' are already destroyed by confirmSeal — the sweep only
+#    catches abandoned sessions. Requires adding lastActivityAt: number to
+#    RelaySessionState and updating setSession to refresh it.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the directory process starts with DIRECTORY_PG_POOL_MAX set"
+    action: "pg.Pool is constructed with max: parseInt(DIRECTORY_PG_POOL_MAX, 10);
+      if the env var is absent, the default is 50; the pool max is logged in
+      the adapter.initialised event for PgDirectoryStore"
+
+  - trigger: "When the directory process starts with DIRECTORY_PG_POOL_MAX
+    set to a value > 100"
+    action: "the directory logs a warning at WARN level:
+      directory.pool.max.high { configured: N, recommended_max: 100 };
+      the process starts and uses the configured value — the warning is
+      advisory, not a hard stop; 100 is the soft ceiling for db.t3.medium
+      shared across 3 nodes without crowding replication connections"
+
+  - trigger: "When the relay node registers its protocol handlers"
+    action: "/cello/relay/1.0.0 is registered with maxInboundStreams: 2048;
+      /cello/directory-relay/1.0.0 is registered with maxInboundStreams: 128;
+      both values are explicit — not inherited from yamux defaults"
+
+  - trigger: "When a leaf is submitted to the relay for a session"
+    action: "the session's lastActivityAt is set to Date.now();
+      this timestamp is updated on every setSession() call"
+
+  - trigger: "When the relay idle session sweep fires (every hour by default)"
+    action: "sessions with lastActivityAt < (Date.now() - RELAY_SESSION_MAX_IDLE_MS)
+      AND status 'active' are destroyed via destroySession();
+      relay.session.idle.swept is logged at INFO with sessionId and
+      idleDurationMs for each destroyed session;
+      relay.session.sweep.complete is logged at INFO with sweptCount and
+      remainingCount"
+
+  - trigger: "When RELAY_SESSION_MAX_IDLE_MS is not set"
+    action: "the default is 86400000 (24 hours); sessions idle for more than
+      24 hours without any leaf submission are considered abandoned"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The directory process starts with DIRECTORY_PG_POOL_MAX=50"
+    when: "startup completes"
+    then: "pg.Pool was constructed with max: 50; adapter.initialised is logged
+      with adapterName: 'PgDirectoryStore' and poolMax: 50; verified by
+      asserting the pool's totalCount never exceeds 50 under a 50-concurrent-
+      query test"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "The directory process starts with no DIRECTORY_PG_POOL_MAX env var"
+    when: "startup completes"
+    then: "pg.Pool was constructed with max: 50 (the default); adapter.initialised
+      logs poolMax: 50"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-003
+    given: "The directory process starts with DIRECTORY_PG_POOL_MAX=150"
+    when: "startup completes"
+    then: "directory.pool.max.high is logged at WARN with
+      configured: 150 and recommended_max: 100; the process starts
+      successfully and uses max: 150"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-004
+    given: "The updated cello-rds.yaml CloudFormation template"
+    when: "the template is inspected"
+    then: "the InstanceClass parameter default is db.t3.medium (not db.t3.small);
+      AllowedValues still includes db.t3.small for cost-sensitive environments;
+      the change is documented in a comment noting max connection counts per tier"
+    test_type: unit
+    component_under_test: infra
+
+  - id: AC-005
+    given: "The relay node is initialized"
+    when: "protocol handlers are registered"
+    then: "/cello/relay/1.0.0 is registered with maxInboundStreams: 2048;
+      /cello/directory-relay/1.0.0 is registered with maxInboundStreams: 128;
+      both verified by inspecting the node.handle() call arguments in the
+      relay-node.ts test"
+    test_type: unit
+    component_under_test: relay
+
+  - id: AC-006
+    given: "A session in InMemoryRelayStore with lastActivityAt set 25 hours ago
+      (simulated by directly setting the timestamp) and status 'active'"
+    when: "the idle sweep runs with RELAY_SESSION_MAX_IDLE_MS=86400000"
+    then: "the session is destroyed; relay.session.idle.swept is logged at INFO
+      with the session's id and idleDurationMs >= 90000000 (25 hours in ms);
+      relay.session.sweep.complete is logged with sweptCount: 1"
+    test_type: unit
+    component_under_test: relay
+
+  - id: AC-007
+    given: "A session in InMemoryRelayStore with lastActivityAt set 1 hour ago
+      and status 'active'"
+    when: "the idle sweep runs with RELAY_SESSION_MAX_IDLE_MS=86400000"
+    then: "the session is NOT destroyed; relay.session.sweep.complete is logged
+      with sweptCount: 0"
+    test_type: unit
+    component_under_test: relay
+
+  - id: AC-008
+    given: "A session in InMemoryRelayStore that has been sealed (status
+      transitions to 'sealed' and destroySession is called by confirmSeal)"
+    when: "the idle sweep runs"
+    then: "the already-destroyed session is not present in the store;
+      sweptCount does not count it (destroySession was already called by
+      the seal path — the sweep only catches sessions that were never sealed)"
+    test_type: unit
+    component_under_test: relay
+
+  - id: AC-009
+    given: "A leaf is submitted to an active relay session"
+    when: "setSession() is called to update the session state"
+    then: "the session's lastActivityAt is updated to approximately Date.now();
+      a subsequent sweep that runs before MAX_IDLE_MS has passed does not
+      destroy the session"
+    test_type: unit
+    component_under_test: relay
+
+  - id: AC-010
+    given: "The directory deployed to dev us-east-1 with DIRECTORY_PG_POOL_MAX=50
+      in the ECS task definition"
+    when: "20 concurrent agent registrations are initiated simultaneously
+      (simulate by having 20 Claude Code sessions call cello_register in
+      parallel — or use a load test script)"
+    then: "all 20 registrations complete within 60 seconds; no registration
+      returns an error; pool wait times are logged at INFO via pg's pool
+      event hooks if any exceed 5 seconds; the directory CloudWatch log group
+      shows no pg timeout errors"
+    test_type: integration
+    component_under_test: directory
+    notes: "Run manually post-deployment. The 60-second target is a practical
+      ceiling — with a pool of 50 and 20 concurrent FROST DKG ceremonies
+      (each needing ~6 DB round-trips), worst-case queuing with pool=10
+      would be significant; pool=50 means zero queuing at 20 concurrent."
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The idle session sweep must never destroy a session that is
+      currently processing a leaf submission — destroying a session mid-write
+      would corrupt the Merkle tree state for that session"
+    adversarial_condition: "the sweep checks lastActivityAt which is only
+      updated by setSession(); a session currently holding its mutex lock
+      (via #sessionLocks) has recent lastActivityAt and will not meet the
+      idle threshold; verified by asserting that a session whose mutex is
+      held at sweep time is not present in the sweptCount result — the
+      session's lastActivityAt is recent precisely because it is being
+      actively written"
+    test_type: unit
+    component_under_test: relay
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: relay.session.idle.swept
+      level: info
+      trigger: "When an idle session is destroyed by the sweep"
+      context_fields: [sessionId, idleDurationMs]
+      correlationId: false
+    - name: relay.session.sweep.complete
+      level: info
+      trigger: "After each sweep cycle completes"
+      context_fields: [sweptCount, remainingCount]
+      correlationId: false
+  error_events:
+    - name: directory.pool.max.high
+      level: warn
+      trigger: "When DIRECTORY_PG_POOL_MAX is set above 100"
+      context_fields: [configured, recommended_max]
+      correlationId: false
+  notes: >
+    relay.session.idle.swept, relay.session.sweep.complete, and
+    directory.pool.max.high must be added to the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
+    by the implementer of this story.
+
+    The adapter.initialised event for PgDirectoryStore already exists —
+    this story adds poolMax to its context_fields.
+  alarms:
+    - condition: "relay.session.sweep.complete fires with sweptCount > 50
+        in a single sweep cycle"
+      fires_to: "cello-relay-session-leak CloudWatch alarm"
+      notes: "More than 50 abandoned sessions in a single sweep indicates
+        a client-side bug causing systematic session abandonment — worth
+        investigating before it compounds."
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes: >
+  1. Directory pg pool (packages/directory/src/bin/directory.ts):
+     Replace both pg.Pool({ connectionString }) calls with:
+       const poolMax = parseInt(process.env["DIRECTORY_PG_POOL_MAX"] ?? "50", 10);
+       pgPool = new pg.Pool({ connectionString: databaseUrl, max: poolMax });
+     Add poolMax to the adapter.initialised log event.
+     Add DIRECTORY_PG_POOL_MAX to the ECS task definition environment block in
+     cello-ecs-directory.yaml with value "50".
+
+  2. RDS IaC (infra/cloudformation/cello-rds.yaml):
+     Change InstanceClass Default from db.t3.small to db.t3.medium.
+     Add comment: "db.t3.medium: ~450 max connections. With 50/node × 3 nodes
+     = 150 app + ~50 overhead = 200 total, leaving 250 connections of headroom."
+     NOTE: changing the RDS instance class on an existing stack causes a brief
+     (~2-5 minute) outage while the instance resizes. Schedule this during a
+     low-traffic window. The PREP-005 implementer must NOT deploy this during
+     an active E2E test session.
+
+  3. Relay stream caps (packages/relay/src/relay-node.ts lines 244-248):
+     Change:
+       await this.#node.handle(RELAY_PROTOCOL_ID, (stream) => { ... });
+       await this.#node.handle(DIRECTORY_RELAY_PROTOCOL_ID, (stream) => { ... });
+     To:
+       await this.#node.handle(RELAY_PROTOCOL_ID, (stream) => { ... },
+         { maxInboundStreams: 2048 });
+       await this.#node.handle(DIRECTORY_RELAY_PROTOCOL_ID, (stream) => { ... },
+         { maxInboundStreams: 128 });
+
+  4. RelaySessionState timestamp (packages/relay/src/relay-store.ts and
+     packages/relay/src/relay-types.ts if RelaySessionState is defined there):
+     Add lastActivityAt: number to the RelaySessionState interface.
+     Set it to Date.now() in InMemoryRelayStore.recordSession().
+     Update it to Date.now() in InMemoryRelayStore.setSession().
+
+  5. Idle sweep (packages/relay/src/relay-node.ts):
+     Add startIdleSweep(intervalMs: number, maxIdleMs: number): void method.
+     Call it after node.start() with:
+       const sweepIntervalMs = 3_600_000; // 1 hour
+       const maxIdleMs = parseInt(process.env["RELAY_SESSION_MAX_IDLE_MS"]
+         ?? "86400000", 10);
+       this.startIdleSweep(sweepIntervalMs, maxIdleMs);
+     Add stopIdleSweep() and call it in the SIGTERM handler.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M7
+  discussion_logs:
+    - "2026-06-03_1146_beta-launch-brittleness-analysis"
+  depends_on: []
+  blocks: []

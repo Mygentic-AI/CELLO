@@ -5,11 +5,12 @@ date: 2026-06-03
 topics: [relay, infrastructure, auto-register, manifest, iac, ecs, pre-m7]
 status: draft
 description: >
-  Pre-M7 relay auto-registration on startup. Wires CELLO_DIRECTORY_MULTIADDR
-  into the relay ECS task definition so the relay dials the directory on every
-  startup and calls relay_register. On successful registration, the directory
-  re-signs the relay manifest and uploads it to S3. Eliminates the manual
-  sign-manifest.sh intervention required after every relay redeploy.
+  Pre-M7 relay auto-registration on startup. Wires CELLO_RELAY_TRANSPORT_KEY_HEX
+  and CELLO_DIRECTORY_MULTIADDR into the relay ECS task definition so the relay
+  has a stable peer ID and dials the directory on every startup. On successful
+  registration, the directory re-signs the relay manifest and uploads it to S3.
+  Creates infra/sign-manifest.sh for operator use. Eliminates the ad-hoc manual
+  intervention required after every relay redeploy.
 ---
 # ─── Identity ───────────────────────────────────────────────
 id: CELLO-PREP-003
@@ -25,28 +26,42 @@ components:
 # ─── Intent ─────────────────────────────────────────────────
 story: >
   As the CELLO operator,
-  I want the relay to dial the directory and call relay_register on every
-  ECS startup without requiring CELLO_DIRECTORY_MULTIADDR to be manually
-  updated after each deploy, so that the relay manifest in S3 reflects the
-  current relay address automatically and session initiation does not break
-  after relay redeployments.
+  I want the relay to have a stable peer ID across restarts and to dial the
+  directory and call relay_register on every ECS startup, so that the relay
+  manifest in S3 always reflects the current relay address without any manual
+  intervention, and session initiation does not break after relay redeployments.
 
 # ─── Context ────────────────────────────────────────────────
-# Current state (documented in M6 write-up, Infrastructure Brittleness section):
+# Current state (documented in M6 write-up and second relay staleness incident
+# 2026-06-03, commit 31523ae):
 #
-# The relay binary already supports relay_register and calls it at startup —
-# BUT only when CELLO_DIRECTORY_MULTIADDR is set. In the ECS task definition,
-# CELLO_DIRECTORY_MULTIADDR is NOT set, so the relay starts without registering.
-# Every relay redeploy gets a new ECS task with a new private IP. The relay
-# manifest in S3 still contains the old IP. The directory's RelayPoolManager
-# health checks fail (old IP unreachable). Session initiation fails with
-# relay_unavailable.
+# TWO separate root causes compound to break session initiation after every
+# relay redeploy:
 #
-# When the relay peer ID was also unstable (pre-M6 fix), every redeploy also
-# changed the peer ID in CELLO_RELAY_MULTIADDR, requiring a directory task def
-# update + directory restart. The relay transport key is now persisted via
-# Secrets Manager (commit 5308958), so the peer ID is stable. But the IP in
-# the manifest is still stale.
+# Root cause A — Unstable peer ID: cello/dev/relay/transport-key exists in
+# Secrets Manager but CELLO_RELAY_TRANSPORT_KEY_HEX is NOT wired into the
+# relay ECS task def. So every relay redeploy generates a fresh transport key
+# → new libp2p peer ID. The directory's CELLO_RELAY_MULTIADDR env var encodes
+# the old peer ID and becomes stale. The pattern that stabilised the directory
+# peer ID (CELLO_DIRECTORY_TRANSPORT_KEY_HEX → Secrets Manager via ValueFrom)
+# was never applied to the relay.
+#
+# Root cause B — No auto-registration: CELLO_DIRECTORY_MULTIADDR is NOT set
+# in the relay ECS task def. The relay binary already supports relay_register
+# and calls it at startup when this env var is set — but without it, the relay
+# starts without registering. Every redeploy gets a new task IP. The manifest
+# still contains the old IP. RelayPoolManager health checks fail (old IP
+# unreachable). Session initiation fails with relay_unavailable.
+#
+# Secondary finding — sign-manifest.sh does not exist: the second fix attempt
+# used an ad-hoc `node --input-type=module` one-liner. The first attempt failed
+# with relay.manifest.invalid / signature_verification_failed because the
+# ad-hoc script used recursive key-sort while buildCanonicalPayload() in
+# relay-pool-manager.ts uses shallow key-sort (top-level only). Any future
+# manual signing that uses a different sort order will silently produce an
+# invalid signature. A proper infra/sign-manifest.sh must exist, must use
+# shallow sort matching buildCanonicalPayload() exactly, and must be
+# the documented procedure for any manual manifest update.
 #
 # The fix has two parts:
 #
@@ -83,10 +98,24 @@ story: >
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
   - trigger: "When the relay ECS task starts in any region"
-    action: "CELLO_DIRECTORY_MULTIADDR is set in the task definition;
+    action: "CELLO_RELAY_TRANSPORT_KEY_HEX is resolved from Secrets Manager
+      via ECS Secrets/ValueFrom (same pattern as CELLO_DIRECTORY_TRANSPORT_KEY_HEX
+      in the directory task def); the relay binary loads the stable transport
+      key and produces the same libp2p peer ID on every restart;
+      AND CELLO_DIRECTORY_MULTIADDR is set in the task definition;
       the relay dials the directory using the existing relay_register flow
       (packages/relay/src/bin/relay.ts lines 253-301); no code change to
       the relay binary is required — only the ECS task definition changes"
+
+  - trigger: "When an operator needs to manually update the relay manifest
+    (e.g. adding a new relay, emergency update)"
+    action: "they run infra/sign-manifest.sh with the relay definitions JSON;
+      the script uses shallow key-sort matching buildCanonicalPayload() exactly
+      (sorts only top-level keys: relays, updatedAt, version — NOT relay entry
+      fields); the resulting signature passes verification in RelayPoolManager;
+      the script requires the directory node private key from Secrets Manager
+      and the target S3 bucket as arguments; it never accepts a private key
+      as a CLI argument — only as a Secrets Manager ARN"
 
   - trigger: "When the directory receives a relay_register frame from a relay"
     action: "the directory updates its in-memory relay registry as today;
@@ -190,9 +219,40 @@ acceptance_criteria:
     test_type: integration
     component_under_test: directory
 
+  - id: AC-007a
+    given: "The updated relay ECS task definition with CELLO_RELAY_TRANSPORT_KEY_HEX
+      wired via Secrets/ValueFrom from cello/{env}/relay/transport-key"
+    when: "the relay ECS task is force-redeployed twice"
+    then: "both task instances log the same libp2p Peer ID in relay.service.started
+      (or adapter.initialised for the transport key) — the peer ID is stable
+      across restarts; CELLO_RELAY_MULTIADDR in the directory task def and the
+      relay manifest peer ID do not need updating after the redeploy"
+    test_type: integration
+    component_under_test: infra
+    notes: "Run manually. Compare the Peer ID in the relay CloudWatch log group
+      across two separate task deployments."
+
+  - id: AC-007b
+    given: "infra/sign-manifest.sh committed to the repo"
+    when: "an operator runs sign-manifest.sh against the dev environment with
+      a valid relay definitions JSON and the directory private key ARN"
+    then: "the script produces a manifest JSON with a signature that passes
+      RelayPoolManager's ed25519.verify() check; verified by loading the
+      resulting manifest into a RelayPoolManager test instance and confirming
+      relay.manifest.loaded fires without relay.manifest.invalid"
+    test_type: integration
+    component_under_test: infra
+    notes: "The script must use the EXACT same canonical JSON construction as
+      buildCanonicalPayload() in relay-pool-manager.ts: JSON.stringify with
+      keys ordered [relays, updatedAt, version] at the top level only —
+      relay entry fields (healthCheckUrl, relayId, etc.) are NOT sorted.
+      The second relay staleness incident (2026-06-03) was caused by a
+      recursive sort that produced a different byte string and an invalid
+      signature. This AC guards against that regression."
+
   - id: AC-007
     given: "The relay ECS task definition deployed to dev us-east-1 with
-      CELLO_DIRECTORY_MULTIADDR set"
+      CELLO_DIRECTORY_MULTIADDR and CELLO_RELAY_TRANSPORT_KEY_HEX set"
     when: "a new relay ECS task starts (simulate by force-deploying the service)"
     then: "relay.registered or relay.already.registered appears in the relay
       CloudWatch log group within 60 seconds of task start; AND
