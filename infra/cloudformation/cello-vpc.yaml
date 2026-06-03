@@ -195,6 +195,10 @@ Resources:
           FromPort: 4000
           ToPort: 4000
           SourceSecurityGroupId: !Ref EcsDirectorySecurityGroup
+        - IpProtocol: tcp
+          FromPort: 4001
+          ToPort: 4001
+          SourceSecurityGroupId: !Ref EcsDirectorySecurityGroup
       Tags:
         - Key: Name
           Value: !Sub "cello-ecs-relay-sg-${Environment}"
