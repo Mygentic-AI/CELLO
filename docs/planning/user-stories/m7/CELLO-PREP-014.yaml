@@ -1,0 +1,225 @@
+---
+name: CELLO-PREP-014
+type: user-story
+date: 2026-06-03
+topics: [cello-mcp, process-management, lock-file, orphan-process, pre-m7]
+status: draft
+description: >
+  Every new Claude Code session launches a fresh cello-mcp child process. Old
+  sessions' cello-mcp processes are not cleaned up — they become orphans sharing
+  the same agent identity, all holding signaling streams open to the directory.
+  After N sessions, N cello-mcp processes compete for FROST ceremonies. Fix: on
+  startup, cello-mcp writes a PID lock file and kills any prior process that holds
+  it, ensuring exactly one cello-mcp process runs per agent at all times.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PREP-014
+domain: PREP
+milestone: M7
+actor: DEV
+priority: P0
+components:
+  - adapter-claude-code
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a CELLO user running multiple Claude Code sessions,
+  I want each new cello-mcp startup to replace any previous instance rather than
+  accumulating orphan processes, so that there is always exactly one cello-mcp
+  process per agent and FROST ceremonies are not split across competing processes.
+
+# ─── Context ────────────────────────────────────────────────
+# Root cause (documented in M6 COORDINATION.md, 2026-06-03):
+#
+# Claude Code launches cello-mcp as a child process. /mcp reconnects without
+# killing the prior cello-mcp process. Starting a new Claude Code session also
+# launches a new cello-mcp child. Prior sessions' processes remain alive as
+# orphans. Over time — especially across multiple debug sessions and /mcp
+# reconnects in a single day — N processes accumulate, all:
+#   - Holding the same agent identity (same ~/.cello/client.db)
+#   - Attempting to hold the SQLCipher write lock (causing DB lock deadlock)
+#   - All connected (or trying to connect) to the directory signaling stream
+#   - All eligible to receive FROST ceremony delegation from the directory
+#
+# The directory's ClientDelegatedSigner sends ceremonies to whichever stream
+# it has registered for that agent. If multiple processes are registered, the
+# directory picks one; the others never get the ceremony_result frame.
+# Result: intermittent ceremony failures with no error logged, no signal.
+#
+# Additionally: PREP-002 adds WAL mode and MULTI-002 adds process exit on
+# permanent connection loss. But neither prevents the orphan accumulation —
+# they make each individual process more resilient, not less numerous.
+#
+# The fix is a PID lock file at ~/.cello/cello-mcp.pid (or per-agent path).
+# On startup:
+#   1. Read the lock file. If it exists and contains a PID:
+#      a. Check if the PID is still running (kill -0).
+#      b. If running, send SIGTERM. Wait up to 5 seconds for it to exit.
+#      c. If still running after 5 seconds, send SIGKILL.
+#   2. Write own PID to the lock file.
+#   3. On SIGTERM/SIGINT/process exit, remove the lock file.
+#
+# This is a standard single-instance daemon pattern. The lock file path should
+# be per-agent-identity to support the M7 multi-agent case where multiple named
+# agents run simultaneously — each needs its own lock file.
+# For M7: lock file path = ~/.cello/agents/<name>/cello-mcp.pid
+# For legacy default agent: ~/.cello/cello-mcp.pid
+#
+# IMPORTANT: the kill-prior-process step must happen BEFORE opening the SQLCipher
+# database. The prior process may hold the write lock; killing it first avoids
+# the 20-40s lock contention that causes the 30s Claude Code startup timeout.
+# This makes PREP-014 a stronger fix for the startup timeout than PREP-012
+# (replacing @journeyapps/sqlcipher) for the multi-session orphan case specifically.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When cello-mcp starts and a lock file exists with a PID of a
+    running process"
+    action: "cello-mcp sends SIGTERM to the prior process; waits up to 5 seconds
+      for it to exit; if it does not exit, sends SIGKILL; then writes its own PID
+      to the lock file and continues startup; startup.prior.process.killed is
+      logged at INFO with the prior PID"
+
+  - trigger: "When cello-mcp starts and the lock file does not exist or contains
+    a PID of a process that is no longer running"
+    action: "cello-mcp writes its own PID to the lock file and continues startup;
+      no prior process is killed"
+
+  - trigger: "When cello-mcp exits (SIGTERM, SIGINT, or normal exit)"
+    action: "the lock file is removed; startup.lock.released is logged at INFO"
+
+  - trigger: "When cello-mcp starts (M7 named agent)"
+    action: "the lock file path is ~/.cello/agents/<name>/cello-mcp.pid where
+      <name> is the agent name; different named agents do not share a lock file
+      and can run simultaneously"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A cello-mcp process A is running with PID X and has written
+      ~/.cello/cello-mcp.pid containing X"
+    when: "a second cello-mcp process B starts"
+    then: "process B sends SIGTERM to process A; process A exits within 5 seconds;
+      process B writes its own PID to ~/.cello/cello-mcp.pid; only one cello-mcp
+      process remains running; startup.prior.process.killed is logged by B
+      with the prior PID"
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: "This requires spawning real processes in the test. Use child_process.spawn
+      to start cello-mcp in a subprocess, capture its PID, then start a second
+      instance and assert the first exits. The test must clean up both processes."
+
+  - id: AC-002
+    given: "~/.cello/cello-mcp.pid contains a PID that is not currently running
+      (stale lock file from a crashed prior process)"
+    when: "cello-mcp starts"
+    then: "cello-mcp starts normally without error; it writes its own PID to
+      the lock file; no SIGTERM is sent (the prior process is not running)"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+  - id: AC-003
+    given: "A running cello-mcp process"
+    when: "the process receives SIGTERM"
+    then: "the lock file ~/.cello/cello-mcp.pid is removed before the process
+      exits; verified by asserting the file does not exist after the SIGTERM handler
+      completes"
+    test_type: integration
+    component_under_test: adapter-claude-code
+
+  - id: AC-004
+    given: "The kill-prior-process step in startup"
+    when: "the sequence of startup operations is reviewed"
+    then: "the lock file check and prior-process kill happen BEFORE the SQLCipher
+      database is opened — not after; this ensures the write lock is released
+      before the new process attempts to open the database"
+    test_type: unit
+    component_under_test: adapter-claude-code
+    notes: "The order matters: kill prior → open DB. If the DB opens first,
+      the lock contention causes the 30s startup timeout even with this fix."
+
+  - id: AC-005
+    given: "The M7 multi-agent case: two named agents 'alice' and 'bob' are
+      configured"
+    when: "both cello-mcp processes start simultaneously"
+    then: "alice's process uses ~/.cello/agents/alice/cello-mcp.pid and bob's
+      uses ~/.cello/agents/bob/cello-mcp.pid; neither kills the other; both
+      run simultaneously without interference"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The SIGTERM kill must only target a process owned by the current
+      user — cello-mcp must not attempt to kill processes owned by other users"
+    adversarial_condition: "if the lock file contains a PID of a process owned
+      by a different user (e.g. root or another user on a shared system), the
+      SIGTERM must fail gracefully (EPERM) rather than crashing; verified by
+      asserting that a kill attempt on a process with EPERM is caught, logged
+      as a warning, and startup proceeds as if the lock file was stale"
+    test_type: unit
+    component_under_test: adapter-claude-code
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: startup.prior.process.killed
+      level: info
+      trigger: "When a prior cello-mcp process is found and killed on startup"
+      context_fields: [priorPid, signal]
+      correlationId: false
+    - name: startup.lock.released
+      level: info
+      trigger: "When the lock file is removed on exit"
+      context_fields: [pid]
+      correlationId: false
+  error_events: []
+  notes: >
+    startup.prior.process.killed and startup.lock.released must be added to the
+    canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+  alarms: [] # no alarm: startup behavior; operator will see the log event
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes: >
+  Target file: cello-client/core/adapter-claude-code/src/bin/cello-mcp.ts
+  (the MCP server entry point, run as a child process by Claude Code).
+
+  Lock file path logic:
+    const agentName = process.env["CELLO_AGENT_NAME"] ?? null;
+    const lockFilePath = agentName
+      ? path.join(homedir(), ".cello", "agents", agentName, "cello-mcp.pid")
+      : path.join(homedir(), ".cello", "cello-mcp.pid");
+
+  Startup sequence (BEFORE opening SQLCipher DB):
+    1. Read lockFilePath.
+    2. If exists: parse PID from file content.
+    3. Try kill(priorPid, 0) to check if process is running.
+    4. If running: send SIGTERM. Poll (100ms intervals) for up to 5s.
+    5. If still running after 5s: send SIGKILL.
+    6. Log startup.prior.process.killed with { priorPid, signal }.
+    7. Write String(process.pid) to lockFilePath.
+    8. Continue with normal startup (open DB, start MCP server).
+
+  Exit cleanup (attach to process exit, SIGTERM, SIGINT handlers):
+    process.on("exit", () => { try { unlinkSync(lockFilePath); } catch {} });
+    // Also add to the existing SIGTERM handler in cello-mcp.ts
+
+  The lock file directory (e.g. ~/.cello/agents/alice/) must be created with
+  mkdirSync({ recursive: true }) before writing the lock file — for M7 named
+  agents the directory may not exist yet.
+
+  IMPORTANT: lock file check must happen before the line that opens the
+  SQLCipher database. Check the current startup sequence in cello-mcp.ts and
+  insert the lock file logic at the very top, before any DB operations.
+
+  Version bump required. Follow CLAUDE.md version bump procedure.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M7
+  discussion_logs:
+    - "2026-06-03_1146_beta-launch-brittleness-analysis"
+  depends_on: []
+  blocks: []
