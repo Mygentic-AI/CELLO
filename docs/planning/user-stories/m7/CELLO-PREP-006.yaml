@@ -22,6 +22,8 @@ priority: P0
 components:
   - directory
   - client
+  - adapter-claude-code
+  - infra
 
 # ─── Intent ─────────────────────────────────────────────────
 story: >
@@ -33,7 +35,8 @@ story: >
   agent, and a broken directory connection without reading ECS logs.
 
 # ─── Context ────────────────────────────────────────────────
-# Current bug (directory-node.ts lines 1986-1989):
+# Current bug (packages/directory/src/directory-node.ts lines 1986-1989,
+# trustless-cello repo):
 #
 #   const result = await signer.participateInCeremony(...)
 #   if (!result.ok) {
@@ -44,11 +47,14 @@ story: >
 #   }
 #
 # ThresholdSignatureError.error.reason (from packages/crypto/src/frost/types.ts
-# lines 36-44) has THREE distinct values, all collapsed to one wire reason:
+# lines 36-44, trustless-cello repo) has THREE distinct values, all collapsed
+# to one wire reason. ClientDelegatedSigner is at
+# packages/directory/src/directory-node.ts line 2784 (trustless-cello repo):
 #
-#   "DIRECTORY_BELOW_THRESHOLD" — ClientDelegatedSigner: streams map is null or
-#     agent not in streams map or stream.send threw. Means the directory-side
-#     ceremony delegation mechanism is broken. True "below threshold."
+#   "DIRECTORY_BELOW_THRESHOLD" — ClientDelegatedSigner: #streams is null or
+#     the agent is not in the #streams map, or stream.send threw (lines 2823-2851).
+#     Means the directory-side ceremony delegation mechanism is broken.
+#     True "below threshold."
 #
 #   "CEREMONY_TIMEOUT" — ClientDelegatedSigner line 2858: the 30-second timer fired
 #     waiting for ceremony_result from the client. Means the client-side cello-mcp
@@ -69,17 +75,23 @@ story: >
 # All three surface identically. This has burned significant debugging time across
 # every milestone since M3.
 #
-# The fix is minimal — 4 files across 2 repos:
+# The fix touches 6 files across 2 repos:
 #   1. packages/directory/src/directory-types.ts — add 2 new SessionRequestErrorReason values
 #   2. packages/directory/src/directory-node.ts — map result.error.reason to wire reason
 #   3. cello-client/core/client/src/types.ts — add 2 new InitiateSessionResult failure reasons
 #   4. cello-client/core/client/src/client.ts — add 2 new if-branches at lines 5360-5369
+#   5. cello-client/core/client/src/mcp-server.ts line 479 — add per-reason message fields
+#   6. infra/cloudformation/cello-cloudwatch.yaml — new frost failure alarm
 #
 # NOTE: ceremony_exhausted is still coarser than ideal — it collapses
 # AGENT_NOT_BOOTSTRAPPED, EPOCH_EXPIRED, and share_verification_failed into one
 # reason. A future story could propagate the specific frost-handler reason through
 # the ceremony_result message, but that requires a protocol change. This story
 # achieves 80% of the debugging value with zero protocol changes.
+#
+# PRE-EXISTING OUT-OF-SCOPE GAP: the existing client.ts switch at line 5360-5369
+# does not handle "not_registered", "peer_not_registered" separately — they fall
+# through to "directory_unreachable". This is known but out of scope for this story.
 
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
@@ -104,16 +116,17 @@ behavior:
   - trigger: "When the client receives a session_request_error with reason
     'ceremony_timeout'"
     action: "initiateSession resolves with { ok: false, reason: 'ceremony_timeout' };
-      the cello_initiate_session or cello_request_connection tool returns a message
-      describing timeout and suggesting the operator verify the agent's MCP process
-      is responsive"
+      the cello_initiate_session tool (which calls initiateSession) returns a JSON
+      response with reason: 'ceremony_timeout' and a message field describing the
+      timeout and suggesting the operator verify the agent's MCP process is responsive"
 
   - trigger: "When the client receives a session_request_error with reason
     'ceremony_exhausted'"
     action: "initiateSession resolves with { ok: false, reason: 'ceremony_exhausted' };
-      the cello_initiate_session or cello_request_connection tool returns a message
-      indicating the agent may not be bootstrapped and suggesting cello_register be
-      called if registration was not completed"
+      the cello_initiate_session tool returns a JSON response with reason:
+      'ceremony_exhausted' and a message field indicating the agent may not be
+      bootstrapped and suggesting cello_register be called if registration was not
+      completed"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -147,18 +160,23 @@ acceptance_criteria:
     component_under_test: directory
 
   - id: AC-004
-    given: "A compiled TypeScript build of packages/directory"
-    when: "the SessionRequestErrorReason type is inspected"
-    then: "the type union includes 'ceremony_timeout' and 'ceremony_exhausted' as
-      members in addition to the existing members; the TypeScript compiler rejects
-      any code that passes one of the new values to a function expecting the old
-      type union without the new members — verified by adding a @ts-expect-error
-      test that the compiler would have previously accepted"
+    given: "The updated packages/directory/src/directory-types.ts with two new
+      SessionRequestErrorReason members ('ceremony_timeout', 'ceremony_exhausted')"
+    when: "the TypeScript compiler processes a file that passes the string literal
+      'ceremony_timeout' to the mapCeremonyFailure function return-typed as
+      SessionRequestErrorReason"
+    then: "compilation succeeds without error; conversely, if the two new members
+      are temporarily removed from SessionRequestErrorReason, the mapCeremonyFailure
+      switch statement's return types fail to satisfy the declared return type
+      (TypeScript exhaustiveness check produces a compile error) — verified by
+      a test that runs tsc with the new members present (must pass) and confirms
+      the type union is correct by attempting a type assignment of each new member
+      to a SessionRequestErrorReason variable"
     test_type: unit
     component_under_test: directory
 
   - id: AC-005
-    given: "The updated client.ts in cello-client"
+    given: "The updated core/client/src/client.ts in cello-client"
     when: "a session_request_error frame arrives with reason: 'ceremony_timeout'"
     then: "initiateSession returns { ok: false, reason: 'ceremony_timeout' };
       the reason string 'ceremony_timeout' appears verbatim in the return value
@@ -167,7 +185,7 @@ acceptance_criteria:
     component_under_test: client
 
   - id: AC-006
-    given: "The updated client.ts in cello-client"
+    given: "The updated core/client/src/client.ts in cello-client"
     when: "a session_request_error frame arrives with reason: 'ceremony_exhausted'"
     then: "initiateSession returns { ok: false, reason: 'ceremony_exhausted' };
       the reason string 'ceremony_exhausted' appears verbatim in the return value"
@@ -175,54 +193,80 @@ acceptance_criteria:
     component_under_test: client
 
   - id: AC-007
-    given: "The updated types.ts in cello-client"
+    given: "The updated core/client/src/types.ts in cello-client"
     when: "the InitiateSessionResult type is inspected"
     then: "the failure union includes 'ceremony_timeout' and 'ceremony_exhausted'
-      as members alongside the existing members; a variable typed as
-      InitiateSessionResult with reason: 'ceremony_exhausted' compiles without error"
+      as members alongside the existing members; a TypeScript variable declared as
+      InitiateSessionResult assigned the value { ok: false, reason: 'ceremony_exhausted' }
+      compiles without error"
     test_type: unit
     component_under_test: client
 
   - id: AC-008
-    given: "A DirectoryNode with a ClientDelegatedSigner whose #streams map does not
-      contain the initiating agent (simulating a not-bootstrapped or disconnected agent
-      — causes ClientDelegatedSigner to return CEREMONY_EXHAUSTED via resolveFromClient(null)
-      OR DIRECTORY_BELOW_THRESHOLD via the stream-not-found path)"
-    when: "a session_request is processed by the directory node in a test where the
-      agent's signaling stream exists but the underlying FROST ceremony returns null
-      (inject via a test-only IThresholdSigner stub that returns CEREMONY_EXHAUSTED)"
+    given: "A DirectoryNode constructed via createDirectoryNode with a stub
+      IThresholdSigner (injected via the thresholdSigners registration path) that
+      returns { ok: false, error: { reason: 'CEREMONY_EXHAUSTED' } }"
+    when: "a CelloClient dials the directory, authenticates the signaling stream,
+      and sends a session_request frame — following the pattern in
+      packages/directory/src/__tests__/session004.test.ts (real libp2p streams,
+      no NODE_ENV=test shortcut, stub IThresholdSigner injected via the
+      registerThresholdSigner path)"
     then: "the session_request_error frame received by the client has reason:
-      'ceremony_exhausted' (NOT 'directory_below_threshold'); the client-side
-      initiateSession call resolves with { ok: false, reason: 'ceremony_exhausted' }"
+      'ceremony_exhausted' (NOT 'directory_below_threshold') — verified by
+      inspecting the raw decoded CBOR frame in the client's #pendingSessionRequestResolve
+      callback; the client-side initiateSession call resolves with
+      { ok: false, reason: 'ceremony_exhausted' }"
     test_type: integration
     component_under_test: directory
-    notes: "Use InMemoryTransport pairs from the MCP SDK to simulate the directory-client
-      connection. Inject the stub IThresholdSigner via a test factory option or by
-      setting the signer directly on the DirectoryNode test instance. The key assertion
-      is the frame reason — not the client return value alone."
+    notes: "Follow the session004.test.ts pattern: createNode() for client,
+      createDirectoryNode() for directory, real TCP dial+authenticate+session_request
+      sequence. The IThresholdSigner stub must be registered on the directory before
+      the client sends peer_info_announce so the stub is found when the ceremony runs.
+      The key assertion is the frame reason, verified by inspecting the CBOR frame
+      directly rather than only checking the client return value."
 
   - id: AC-009
-    given: "The cello-mcp adapter"
+    given: "The updated core/client/src/mcp-server.ts where cello_initiate_session
+      at line 479 currently returns jsonText({ ok: false, reason: result.reason })"
     when: "initiateSession returns { ok: false, reason: 'ceremony_timeout' }"
-    then: "the tool response text includes a message about timeout and suggests
-      verifying the agent's MCP process is responsive; it does NOT say 'below
-      threshold' or 'directory unavailable'"
+    then: "the tool JSON response includes reason: 'ceremony_timeout' AND a
+      message field with text about the timeout (e.g. 'The FROST signing ceremony
+      timed out. Verify the agent MCP process is responsive and retry.'); it does
+      NOT say 'below threshold' or 'directory unavailable'; verified by a unit test
+      that mocks client.initiateSession to return ceremony_timeout and asserts the
+      JSON response shape"
     test_type: unit
-    component_under_test: adapter-claude-code
-    notes: "Check packages/adapter-claude-code/src/bin/cello-mcp.ts for the
-      error message switch/if-else that formats the tool response. If ceremony_timeout
-      falls through to a generic error path, it will show the wrong message."
+    component_under_test: client
+    notes: "Target file: cello-client/core/client/src/mcp-server.ts line 479.
+      The current code is a bare passthrough: return jsonText({ ok: false, reason: result.reason }).
+      This story requires adding a per-reason message field for the two new reasons,
+      following the pattern at mcp-server.ts:1309-1315 where cello_request_connection
+      returns stage-specific error messages."
 
   - id: AC-010
-    given: "The cello-mcp adapter"
+    given: "The updated core/client/src/mcp-server.ts"
     when: "initiateSession returns { ok: false, reason: 'ceremony_exhausted' }"
-    then: "the tool response text indicates the agent may not be bootstrapped
-      and suggests calling cello_register if registration was not completed;
-      it does NOT say 'below threshold'"
+    then: "the tool JSON response includes reason: 'ceremony_exhausted' AND a
+      message field indicating the agent may not be bootstrapped and suggesting
+      cello_register if registration was not completed; it does NOT say 'below
+      threshold'; verified by a unit test that mocks client.initiateSession to
+      return ceremony_exhausted and asserts the JSON response shape"
     test_type: unit
-    component_under_test: adapter-claude-code
-    notes: "Same location as AC-009. ceremony_exhausted means the ceremony ran
-      but the agent had no share — the most useful message is 'check registration.'"
+    component_under_test: client
+    notes: "Same file as AC-009 (mcp-server.ts line 479). ceremony_exhausted
+      means the ceremony ran but the agent had no share — the most useful message
+      is 'check registration.'"
+
+  - id: AC-011
+    given: "The implementation is complete"
+    when: "the implementer reviews docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md"
+    then: "frost.ceremony.failed appears in the canonical event taxonomy with
+      level: warn, context_fields: [agentId, reason, ceremonyId], and trigger
+      description matching the observability section of this story"
+    test_type: unit
+    component_under_test: directory
+    notes: "This is a documentation gate, not a runtime test. The implementer
+      must add the event to the taxonomy file before closing the story."
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
@@ -232,10 +276,11 @@ security_invariants:
       reason string, and ceremonyId prefix"
     adversarial_condition: "an attacker who can read CloudWatch logs must not learn
       any K_server_X share material from ceremony failure logs; verified by
-      asserting that frost.ceremony.failed context_fields contain only
-      { agentId: string (16-char prefix), reason: string, ceremonyId: string (16-char prefix) }
-      and no additional fields — the Logger call site must be audited to confirm
-      no share bytes or partial sig bytes are passed as context"
+      asserting that the Logger.warn call site for frost.ceremony.failed passes
+      only { agentId: initiatorHex.slice(0, 16), reason: wireReason, ceremonyId:
+      ceremonyId.slice(0, 16) } — a test audits the call site and asserts that no
+      additional context fields exist, and that neither share bytes nor partial
+      signature bytes appear in any passed context value"
     test_type: unit
     component_under_test: directory
 
@@ -258,7 +303,7 @@ observability:
 
     frost.ceremony.failed must be added to the canonical event taxonomy in
     docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
-    by the implementer of this story.
+    by the implementer of this story. AC-011 gates on this.
   alarms:
     - condition: "frost.ceremony.failed with reason: 'ceremony_exhausted' fires
         more than 3 times in 5 minutes for the same agentId prefix"
@@ -272,7 +317,7 @@ observability:
 
 # ─── Implementation Notes ───────────────────────────────────
 implementation_notes: >
-  This story touches TWO repos. All four changes must ship in the same release
+  This story touches TWO repos. All changes must ship in the same release
   (cello-client version bump + trustless-cello deploy):
 
   1. packages/directory/src/directory-types.ts (trustless-cello)
@@ -314,6 +359,8 @@ implementation_notes: >
            case "DIRECTORY_BELOW_THRESHOLD": return "directory_below_threshold";
          }
        }
+     The exhaustive switch means any future ThresholdSignatureError reason
+     addition will produce a compile error — the new case must be mapped.
 
   3. cello-client/core/client/src/types.ts (cello-client)
      Add to InitiateSessionResult failure union (line 199):
@@ -325,20 +372,30 @@ implementation_notes: >
        if (reason === "ceremony_timeout") return { ok: false, reason: "ceremony_timeout" };
        if (reason === "ceremony_exhausted") return { ok: false, reason: "ceremony_exhausted" };
 
-  5. cello-mcp (packages/adapter-claude-code/src/bin/cello-mcp.ts) (cello-client)
-     Find the error message formatting for initiateSession failures and add cases
-     for the two new reasons. Check the switch/if-else that currently handles
-     "directory_below_threshold" and "ceremony_conflict" — add sibling branches:
-       ceremony_timeout: "The FROST signing ceremony timed out. Verify the
-         agent's MCP process is responsive and retry."
-       ceremony_exhausted: "The FROST signing ceremony failed — the agent may
-         not be bootstrapped. If registration was not completed, call
-         cello_register first."
+  5. cello-client/core/client/src/mcp-server.ts line 479 (cello-client)
+     The current code is:
+       return jsonText({ ok: false, reason: result.reason });
+     Replace with a per-reason switch so the two new errors carry human-readable
+     messages (following the pattern at mcp-server.ts:1309-1315 where
+     cello_request_connection returns stage-specific error messages):
+       if (result.reason === "ceremony_timeout") {
+         return jsonText({ ok: false, reason: result.reason,
+           message: "The FROST signing ceremony timed out. Verify the agent MCP process is responsive and retry." });
+       }
+       if (result.reason === "ceremony_exhausted") {
+         return jsonText({ ok: false, reason: result.reason,
+           message: "The FROST signing ceremony failed — the agent may not be bootstrapped. Call cello_register if registration was not completed." });
+       }
+       return jsonText({ ok: false, reason: result.reason });
 
   6. Add cello-directory-frost-failure CloudWatch alarm to
      infra/cloudformation/cello-cloudwatch.yaml — same pattern as existing
      directory alarms. Alarm condition: frost.ceremony.failed with
      reason=ceremony_exhausted fires > 3 times in 5 minutes for any agentId.
+
+  7. Add frost.ceremony.failed to the canonical event taxonomy in
+     docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+     AC-011 gates on this.
 
   Version bump required: changes to cello-client affect the npm package.
   Follow the full version bump procedure in CLAUDE.md:
