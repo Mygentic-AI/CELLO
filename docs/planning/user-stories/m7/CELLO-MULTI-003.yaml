@@ -1,3 +1,11 @@
+---
+name: CELLO-MULTI-003
+type: user-story
+date: 2026-05-28
+topics: [multi-agent, per-connection-state, cello-use-agent, mcp-server, connection-routing]
+status: draft
+description: Per-connection current-agent state and cello_use_agent switching — each MCP client connection independently tracks which agent is current without affecting other connections.
+---
 # ─── Identity ───────────────────────────────────────────────
 id: CELLO-MULTI-003
 domain: MULTI
@@ -25,7 +33,9 @@ behavior:
     one agent is online (the auto-started single-agent case from MULTI-002)"
     action: "that agent is automatically set as current for the connection;
       no explicit `cello_use_agent` call required; this is the single-agent
-      convenience behavior"
+      convenience behavior; the MULTI-002 AgentRegistry `autoStartedSingleAgent`
+      flag drives this — MULTI-003's connection handler reads that flag when
+      wiring up a new connection"
 
   - trigger: "When `cello_use_agent(name)` is called on a connection"
     action: "the named agent becomes current for THIS connection only;
@@ -42,14 +52,25 @@ behavior:
       messages sent from either connection use the same K_local and the same
       sessions; this is valid — multiple connections can share a current agent"
 
+  - trigger: "When multi-connection tests are written for this story"
+    action: "AC-001 and AC-004 require two independent MCP connections in the
+      same test process; these must use InMemoryTransport pairs from the MCP SDK
+      — not stdio; stdio supports only one connection per process; InMemoryTransport
+      allows two independent client/server pairs to share the same server instance,
+      producing observable per-connection state differences"
+
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "Agent `alice` and `bob` are both online"
+    given: "Agents `alice` and `bob` are both online; two independent MCP
+      connections established via separate InMemoryTransport pairs sharing the
+      same server instance"
     when: "Connection 1 calls `cello_use_agent('alice')` and Connection 2
       calls `cello_use_agent('bob')`"
     then: "Connection 1's `cello_status` reports current agent is alice;
-      Connection 2's `cello_status` reports current agent is bob"
+      Connection 2's `cello_status` reports current agent is bob;
+      `connection.agent.switched` is logged at INFO for each switch with
+      `connectionId`, `previousAgent` (null), and `newAgent` fields"
     test_type: integration
     component_under_test: connect
 
@@ -63,11 +84,13 @@ acceptance_criteria:
     component_under_test: connect
 
   - id: AC-003
-    given: "A new MCP connection with no current agent set (established via
-      InMemoryTransport so the MCP dispatch path is exercised)"
+    given: "A new MCP connection with no current agent set, established via
+      InMemoryTransport so the MCP dispatch path is exercised"
     when: "the connection calls `cello_send`"
     then: "the call returns an error: 'No current agent. Call
-      cello_use_agent(name) to select an agent for this connection.'"
+      cello_use_agent(name) to select an agent for this connection.';
+      `connection.no_current_agent` is logged at WARN with `connectionId`
+      and `toolName: 'cello_send'`"
     test_type: integration
     component_under_test: connect
     notes: "Must use InMemoryTransport (not a direct internal call) so that
@@ -75,7 +98,8 @@ acceptance_criteria:
       internal function."
 
   - id: AC-004
-    given: "Connection 1 has alice as current; Connection 2 has bob as current"
+    given: "Connection 1 has alice as current; Connection 2 has bob as current;
+      both connections established via separate InMemoryTransport pairs"
     when: "Connection 1 calls `cello_use_agent('bob')`"
     then: "Connection 1 now routes to bob; Connection 2 STILL routes to bob;
       both connections share the same CelloClient for bob; alice remains online"
@@ -84,7 +108,8 @@ acceptance_criteria:
 
   - id: AC-005
     given: "Only one agent (`default`) exists and is online (auto-started by
-      MULTI-002's single-agent convenience logic)"
+      MULTI-002's single-agent convenience logic, `autoStartedSingleAgent` flag
+      is true in the AgentRegistry)"
     when: "a new MCP connection is established"
     then: "the `default` agent is automatically set as current for the
       connection; `cello_status` on the new connection shows current agent
@@ -93,11 +118,23 @@ acceptance_criteria:
     component_under_test: connect
 
   - id: AC-006
-    given: "Connection 1 has alice as current"
-    when: "Connection 1 disconnects (client closes stdio)"
+    given: "Connection 1 has alice as current; connection established via
+      InMemoryTransport"
+    when: "Connection 1 disconnects (InMemoryTransport client closes)"
     then: "alice remains online; no state changes to the agent registry;
-      other connections with alice as current are unaffected"
+      other connections with alice as current are unaffected;
+      `connection.closed` is logged at INFO with `connectionId` and
+      `currentAgent: 'alice'`"
     test_type: integration
+    component_under_test: connect
+
+  - id: AC-007
+    given: "`cello_use_agent('ghost')` is called where `ghost` is registered
+      but not online"
+    when: "the call executes"
+    then: "the call returns an error: 'Agent ghost is not online.
+      Call cello_start_agent(ghost) first.'; connection current agent is unchanged"
+    test_type: unit
     component_under_test: connect
 
 # ─── Security Invariants ────────────────────────────────────
@@ -109,8 +146,9 @@ security_invariants:
     adversarial_condition: "the per-connection state Map<connectionId,
       { currentAgent: string | null }> is the only mechanism for routing
       tool calls; no global mutable state is accessible; verified by asserting
-      that setting Connection 1's current agent does not change Connection 2's
-      current agent (tested via two InMemoryTransport connections)"
+      that setting Connection 1's current agent via `cello_use_agent` does not
+      change Connection 2's current agent, using two InMemoryTransport connections
+      that share the same underlying AgentRegistry"
     test_type: unit
     component_under_test: connect
 
@@ -118,42 +156,38 @@ security_invariants:
 observability:
   events:
     - name: connection.agent.switched
-      fields: [connectionId, previousAgent, newAgent]
-      context: "Emitted when a connection changes its current agent"
+      level: info
+      trigger: "When a connection changes its current agent via cello_use_agent"
+      context_fields: [connectionId, previousAgent, newAgent]
+      correlationId: false
     - name: connection.established
-      fields: [connectionId]
-      context: "Emitted when a new MCP client connects"
+      level: info
+      trigger: "When a new MCP client connects"
+      context_fields: [connectionId]
+      correlationId: false
     - name: connection.closed
-      fields: [connectionId, currentAgent]
-      context: "Emitted when an MCP client disconnects"
+      level: info
+      trigger: "When an MCP client disconnects"
+      context_fields: [connectionId, currentAgent]
+      correlationId: false
   error_events:
     - name: connection.no_current_agent
-      fields: [connectionId, toolName]
-      context: "Emitted when a tool call is made without a current agent"
+      level: warn
+      trigger: "When a tool call requiring an agent identity is made with no
+        current agent set on this connection"
+      context_fields: [connectionId, toolName]
+      correlationId: false
+  notes: >
+    The four event names (connection.agent.switched, connection.established,
+    connection.closed, connection.no_current_agent) must be added to the
+    canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
+    by the implementer of this story.
+
+    No alarm threshold is specified: connection.no_current_agent is an expected
+    UX event (new connection, user hasn't selected an agent yet). A high rate
+    would indicate a UI/UX issue rather than a system failure.
   alarms: []
-
-# ─── Implementation Notes ──────────────────────────────────
-implementation_notes: >
-  The MCP SDK's StdioServerTransport in the current code creates a single
-  transport. For multi-connection support, the server needs to track
-  connection identity. With stdio (Claude Code's transport), there is
-  typically one connection per process — but the architecture must support
-  the model correctly for when SSE or streamable-HTTP transports are used.
-  The per-connection state is a simple Map<connectionId, { currentAgent: string | null }>.
-  For the stdio single-connection case, there's one implicit connection ID.
-
-  Multi-connection tests (AC-001, AC-004) must use InMemoryTransport pairs
-  from the MCP SDK to simulate two independent connections within the same
-  test process. Do not attempt to test multi-connection behavior via stdio —
-  stdio is one connection per process. InMemoryTransport allows two
-  independent client/server pairs to share the same AgentRegistry in the
-  same test, producing observable per-connection routing differences.
-
-  The single-agent auto-current behavior (AC-005) is driven by a flag set
-  in MULTI-002's AgentRegistry at startup. When a new connection is
-  established and this flag is true, the per-connection state layer
-  immediately sets currentAgent to the auto-started agent name without
-  waiting for cello_use_agent.
 
 # ─── References ─────────────────────────────────────────────
 references:

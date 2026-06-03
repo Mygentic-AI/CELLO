@@ -1,3 +1,11 @@
+---
+name: CELLO-MULTI-006
+type: user-story
+date: 2026-05-28
+topics: [multi-agent, retry-queue, nonce-deduplication, message-delivery, cbor, persist-005]
+status: draft
+description: Client-side retry queue holds undelivered messages and drains on peer:connect, paired with nonce-based deduplication on the receiver to prevent duplicates.
+---
 # ─── Identity ───────────────────────────────────────────────
 id: CELLO-MULTI-006
 domain: MULTI
@@ -67,10 +75,26 @@ behavior:
       (`retry_queue` and `session_seen_nonces` tables were identified in the
       client-db-schema-design discussion log as M7+ scope)"
 
+  - trigger: "When MULTI-006 is implemented"
+    action: "CONTEXT.md and packages/client/src/types.ts must be updated:
+      (1) `queued_for_retry` must be added to the `SendFailureReason` union type;
+      (2) the `SendResult` failure variant must include an optional `nonce` field:
+      `{ delivered: false, reason: 'queued_for_retry', nonce: '<hex>' }`;
+      downstream stories MULTI-007 and MULTI-008 depend on these type definitions"
+
+  - trigger: "When integration tests for this story configure the test harness"
+    action: "AC-001, AC-002, AC-003, AC-006, and AC-009 require two real CelloClient
+      instances connected via live libp2p nodes; the shared fixture at
+      packages/e2e-tests/src/session-fixture.ts must be used with
+      opts.yamuxKeepalive: { interval: 1000, timeout: 3000 } (defined in MULTI-005)
+      to make peer disconnect detection fast enough for CI; no from-scratch
+      fixture may be written"
+
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "Agent A has an active session with Agent B; Agent B goes offline"
+    given: "Agent A has an active session with Agent B via createSessionFixture()
+      with opts.yamuxKeepalive set; Agent B's libp2p node is stopped"
     when: "Agent A calls `cello_send` three times"
     then: "all three sends return { delivered: false, reason: 'queued_for_retry' };
       the retry queue for this session contains 3 entries in send order"
@@ -79,10 +103,11 @@ acceptance_criteria:
 
   - id: AC-002
     given: "Agent A has 3 messages queued for Agent B"
-    when: "Agent B comes back online (peer:connect fires)"
+    when: "Agent B's libp2p node restarts and peer:connect fires"
     then: "all 3 messages are delivered to Agent B in original order;
       Agent B receives them via `cello_receive` in the same sequence;
-      Agent A's retry queue for this session is empty"
+      Agent A's retry queue for this session is empty;
+      `message.retry.drained` is logged with `messageCount: 3`"
     test_type: integration
     component_under_test: client
 
@@ -115,7 +140,8 @@ acceptance_criteria:
     given: "Agent A has messages queued for Agent B in session S"
     when: "session S is sealed (via `cello_close_session`)"
     then: "the retry queue for session S is cleared; the queued messages are
-      discarded (they cannot be delivered to a sealed session)"
+      discarded (they cannot be delivered to a sealed session);
+      `message.retry.session_sealed_cleared` is logged with the discarded count"
     test_type: integration
     component_under_test: client
 
@@ -140,9 +166,18 @@ acceptance_criteria:
       an invalid signature. Both test sequences must be explicit and independent."
     test_type: unit
     component_under_test: client
-    notes: "Changed from integration to unit: crafting a malformed envelope
-      with an invalid Ed25519 signature does not require live libp2p nodes.
-      Both test sequences operate on in-memory envelope bytes."
+    notes: "Crafting a malformed envelope with an invalid Ed25519 signature does
+      not require live libp2p nodes. Both test sequences operate on in-memory
+      envelope bytes."
+
+  - id: AC-009
+    given: "Agent A has 100 messages queued for Agent B (stress test) via
+      createSessionFixture() with opts.yamuxKeepalive set"
+    when: "Agent B reconnects"
+    then: "all 100 messages drain in order within 5 seconds; no duplicates
+      appear in Agent B's receive queue; no messages are lost"
+    test_type: integration
+    component_under_test: client
 
   - id: AC-010
     given: "A nonce (32-byte Uint8Array from crypto.getRandomValues) is placed
@@ -163,14 +198,6 @@ acceptance_criteria:
       conversion is inconsistent, lookups silently fail and duplicates are
       delivered. This is the CBOR equivalent of the PERSIST-005 Uint8Array
       corruption pattern."
-
-  - id: AC-009
-    given: "Agent A has 100 messages queued for Agent B (stress test)"
-    when: "Agent B reconnects"
-    then: "all 100 messages drain in order within 5 seconds; no duplicates
-      appear in Agent B's receive queue; no messages are lost"
-    test_type: integration
-    component_under_test: client
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
@@ -207,53 +234,44 @@ security_invariants:
 observability:
   events:
     - name: message.retry.queued
-      fields: [sessionId, peerPubkeyHex, nonce, queueDepth]
-      context: "Emitted when a message is added to the retry queue"
+      level: info
+      trigger: "When a message is added to the retry queue on send failure"
+      context_fields: [sessionId, peerPubkeyHex, nonce, queueDepth]
+      correlationId: false
     - name: message.retry.drained
-      fields: [sessionId, peerPubkeyHex, messageCount, drainDurationMs]
-      context: "Emitted after all queued messages for a peer are retried"
+      level: info
+      trigger: "After all queued messages for a peer are successfully retried"
+      context_fields: [sessionId, peerPubkeyHex, messageCount, drainDurationMs]
+      correlationId: false
     - name: message.dedup.discarded
-      fields: [sessionId, senderPubkeyHex, nonce]
-      context: "Emitted when a duplicate nonce is detected and discarded"
+      level: info
+      trigger: "When a duplicate nonce is detected after signature verification"
+      context_fields: [sessionId, senderPubkeyHex, nonce]
+      correlationId: false
     - name: message.retry.session_sealed_cleared
-      fields: [sessionId, discardedMessageCount]
-      context: "Emitted when a session seals and its retry queue is cleared
-        (any undelivered queued messages are discarded)"
+      level: info
+      trigger: "When a session seals and its retry queue is cleared"
+      context_fields: [sessionId, discardedMessageCount]
+      correlationId: false
   error_events:
     - name: message.retry.failed
-      fields: [sessionId, peerPubkeyHex, nonce, error]
-      context: "Emitted when a retry attempt fails (peer disconnected again)"
+      level: warn
+      trigger: "When a retry attempt fails because the peer disconnected again mid-drain"
+      context_fields: [sessionId, peerPubkeyHex, nonce, error]
+      correlationId: false
+  notes: >
+    The five event names (message.retry.queued, message.retry.drained,
+    message.dedup.discarded, message.retry.session_sealed_cleared,
+    message.retry.failed) must be added to the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
+    by the implementer of this story.
+
+    No alarm threshold is specified: the retry queue is an in-memory M7
+    mechanism with no server-side deployment. message.retry.failed indicates
+    a peer that disconnected mid-drain — a normal transient condition. The
+    post-M7 signaling stream resilience story should define alarm thresholds
+    once production keepalive configuration is established.
   alarms: []
-
-# ─── Implementation Notes ──────────────────────────────────
-implementation_notes: >
-  Retry queue: a Map<sessionId, Array<QueuedMessage>> where QueuedMessage is
-  { envelope: Uint8Array, nonce: string, peerPubkeyHex: string, createdAt: Date }.
-  Lives inside CelloClient. On peer:connect, iterate all sessions with that
-  peer and drain in order. If drain fails partway (peer disconnects again),
-  remaining messages stay queued.
-
-  Nonce placement decision (authoritative — see 2026-05-27_1400_multi-agent-mcp-planning.md):
-  The nonce goes in the signed CBOR envelope wrapper as a sibling field
-  alongside the TBS bytes — NOT inside the TBS array. The envelope is already
-  signed; any field in the signed envelope surface is protected against
-  tampering. This approach avoids modifying Structure 1 TBS, avoids a
-  protocol_version bump, and keeps `protocol-types` out of M7 scope.
-
-  Structure 1 TBS is defined in CONTEXT.md as:
-  `[protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`
-  This definition is NOT changed by this story. The nonce is a separate field
-  in the outer signed envelope, not a new positional element in the TBS array.
-
-  CONTEXT.md update required: the implementer of this story must update CONTEXT.md
-  to (1) add `queued_for_retry` to the `SendFailureReason` union type, and (2)
-  extend the `SendResult` failure variant to include an optional `nonce` field:
-  `{ delivered: false, reason: 'queued_for_retry', nonce: '<hex>' }`.
-  Also update `packages/client/src/types.ts` to match.
-
-  Deduplication: Map<sessionId, Set<string>> in CelloClient. Checked in
-  #handleInboundLeafDeliver() AFTER signature verification and BEFORE
-  enqueueing to receive queue.
 
 # ─── References ─────────────────────────────────────────────
 references:
