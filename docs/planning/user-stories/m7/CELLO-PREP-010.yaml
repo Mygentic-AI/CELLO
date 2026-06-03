@@ -1,0 +1,244 @@
+---
+name: CELLO-PREP-010
+type: user-story
+date: 2026-06-03
+topics: [ops-agent, telegram, ux, migration-version, iac, pre-m7]
+status: draft
+description: >
+  Three small ops-agent + IaC gaps found during M6 E2E: (1) fix "Registration is
+  temporarily unavailable. Please try again in a few minutes." to give an honest
+  permanent-failure message; (2) add a re-registration check so already-registered
+  users see an acknowledgement instead of silently receiving a new token; (3) change
+  EXPECTED_MIGRATION_VERSION in cello-ecs-operations-agent.yaml from a hardcoded
+  string to an SSM parameter so schema bumps don't require a deploy.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PREP-010
+domain: PREP
+milestone: M7
+actor: OPS
+priority: P1
+components:
+  - operations-agent
+  - infra
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a CELLO operator and beta user,
+  I want the Telegram bot to give honest failure messages, acknowledge
+  already-registered users instead of silently re-issuing tokens, and I want
+  the schema version check to not require a full ops-agent deploy on every
+  migration bump, so that user experience is honest and operations are less
+  fragile.
+
+# ─── Context ────────────────────────────────────────────────
+# Gap 1: "try again in a few minutes" is always wrong.
+#   Location: packages/operations-agent/src/registration/state-machine.ts
+#   lines 400-403 and 447-450.
+#   Both #completeRegistration and #retryPreAuth catch a PreAuthRequestError
+#   and send the user: "Registration is temporarily unavailable. Please try
+#   again in a few minutes."
+#   This message is always wrong. The failure is that the directory pre-auth
+#   API returned an error — this is a permanent configuration/infra failure
+#   (directory down, API key wrong, network issue), not a transient delay.
+#   Retrying in a few minutes will not help. The honest message should tell
+#   the user that registration failed and they should contact support.
+#   The message cannot say "retry worked" because it never does without
+#   operator intervention.
+#
+# Gap 2: Already-registered users get a new token without acknowledgement.
+#   Location: packages/operations-agent/src/registration/engine.ts lines 162-191.
+#   findActiveByChannelUser() excludes PRE_AUTH_TOKEN_ISSUED (line 185 of
+#   repository.ts: WHERE state NOT IN ('EXPIRED','FAILED','PRE_AUTH_TOKEN_ISSUED')).
+#   When a user who already completed registration messages the bot again,
+#   no active record is found → handleNewUser is called → new registration
+#   starts → new token issued, no acknowledgement of existing registration.
+#   The user may have an active CELLO agent and be confused about getting a
+#   new token. At minimum, the engine should check for a completed registration
+#   and acknowledge it before creating a new one.
+#   Fix: before calling handleNewUser, query for the most recent registration
+#   in PRE_AUTH_TOKEN_ISSUED state for this channelUserId. If one exists
+#   and is recent (within 30 days), send the user: "You're already registered.
+#   If you need to re-register, wait 30 days or contact support."
+#   If they want to proceed despite the warning, the engine continues with
+#   handleNewUser on their next message (or the operator can expire the old record).
+#
+# Gap 3: EXPECTED_MIGRATION_VERSION is hardcoded as "27" in the task definition.
+#   Location: infra/cloudformation/cello-ecs-operations-agent.yaml line 179.
+#   After every schema migration, the operator must update this value and
+#   redeploy the ops-agent ECS stack (or update the task definition manually).
+#   A redeploy takes ~12-15 minutes. Using an SSM parameter instead means the
+#   operator can update the value in SSM and restart the task — no pipeline run.
+#   Fix: replace Value: "27" with
+#     ValueFrom: /cello/${Environment}/ops-agent/expected-migration-version
+#   Ensure the SSM parameter is created in cello-secrets.yaml with a default value.
+#   NOTE: SSM parameter reads happen at task startup (ECS resolves ValueFrom at
+#   container start), so a parameter update requires an ECS task restart but not
+#   a full pipeline deploy.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When requestToken throws a PreAuthRequestError during registration"
+    action: "the ops-agent sends the user: 'Registration failed due to a server
+      error. This is not something you can fix by retrying — please contact
+      support.'; the registration.preauth.request.failed log event is unchanged;
+      the message does NOT say 'try again in a few minutes'"
+
+  - trigger: "When a user who already has a PRE_AUTH_TOKEN_ISSUED registration
+    (within 30 days) messages the Telegram bot for the first time in a new session"
+    action: "the engine queries for a recent completed registration before calling
+      handleNewUser; if one exists, the bot sends: 'You already have a CELLO
+      pre-authorization token. If you want to re-register (you will get a new token
+      and your existing agent registration will remain active until it reconnects),
+      reply CONFIRM. Otherwise, ignore this message.'; no new registration is
+      created yet; if the user replies CONFIRM, handleNewUser proceeds normally"
+
+  - trigger: "When the ECS task for cello-ecs-operations-agent starts"
+    action: "EXPECTED_MIGRATION_VERSION is read from the SSM parameter
+      /cello/${Environment}/ops-agent/expected-migration-version, not from a
+      hardcoded string in the task definition; if the SSM parameter value is
+      updated and the task is restarted, the new version is picked up without
+      a pipeline deploy"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The requestToken call in state-machine.ts throws a PreAuthRequestError"
+    when: "the engine handles the error"
+    then: "the message sent to the user does NOT contain 'try again' or 'few minutes';
+      the message explicitly states registration failed due to a server error and
+      suggests contacting support; verified by asserting the channel.send argument
+      does not match /try again/i"
+    test_type: unit
+    component_under_test: operations-agent
+
+  - id: AC-002
+    given: "The engine handles an inbound message from a user whose most recent
+      registration has state PRE_AUTH_TOKEN_ISSUED and was created within 30 days"
+    when: "handleInboundMessage is called"
+    then: "channel.send is called with a message acknowledging existing registration
+      and asking the user to reply CONFIRM before re-registering; handleNewUser is
+      NOT called on this message; verified by asserting handleNewUser call count = 0
+      and channel.send was called with a string containing 'already' (case-insensitive)"
+    test_type: unit
+    component_under_test: operations-agent
+
+  - id: AC-003
+    given: "The engine handles a CONFIRM reply from a user whose prior message
+      triggered the re-registration warning (AC-002)"
+    when: "handleInboundMessage is called with message='CONFIRM'"
+    then: "handleNewUser is called and the registration proceeds normally"
+    test_type: unit
+    component_under_test: operations-agent
+
+  - id: AC-004
+    given: "The updated cello-ecs-operations-agent.yaml"
+    when: "the EXPECTED_MIGRATION_VERSION environment entry is inspected"
+    then: "the entry uses ValueFrom referencing SSM parameter
+      /cello/${Environment}/ops-agent/expected-migration-version
+      (not a hardcoded Value: '27')"
+    test_type: unit
+    component_under_test: infra
+
+  - id: AC-005
+    given: "The SSM parameter /cello/dev/ops-agent/expected-migration-version
+      is updated from '27' to '28' in AWS SSM"
+    when: "the ops-agent ECS task is restarted (not redeployed via pipeline)"
+    then: "the task starts with EXPECTED_MIGRATION_VERSION=28; the health check
+      reports the correct migration version matching V28; no pipeline run was
+      required — verified by confirming no new task definition revision was
+      created during the test (the same task def revision started with a new value)"
+    test_type: integration
+    component_under_test: infra
+    notes: "Run manually after deployment. Uses aws ecs stop-task + wait for
+      restart to verify that SSM parameter change alone (no deploy) picks up
+      the new value."
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The CONFIRM re-registration flow must not allow an attacker to
+      re-register as another user by spoofing the CONFIRM message out-of-sequence"
+    adversarial_condition: "the CONFIRM message must only be honored when the
+      engine has previously sent the re-registration warning to the same channelUserId
+      in the same session; a CONFIRM message from a user who did not receive the
+      warning must not trigger handleNewUser; verified by asserting that a
+      CONFIRM message from a user with no pending re-registration warning state
+      is treated as a normal inbound message (e.g. the greeting flow) rather
+      than triggering handleNewUser"
+    test_type: unit
+    component_under_test: operations-agent
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: registration.already_registered.warned
+      level: info
+      trigger: "When the re-registration warning is sent to a user with an
+        existing completed registration"
+      context_fields: [registrationId, channelUserId, existingRegistrationAge]
+      correlationId: false
+  error_events: []
+  notes: >
+    registration.already_registered.warned is a new event. Add it to the canonical
+    event taxonomy in docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+    The existing registration.preauth.request.failed event (already in the taxonomy)
+    is unchanged — only the user-facing message changes.
+  alarms: [] # no alarm: the re-registration warning and pre-auth failure are
+             # not failure modes requiring paging; pre-auth failures already log
+             # registration.preauth.request.failed at ERROR level which operators
+             # should monitor via existing log-derived alerts
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes: >
+  1. Fix "try again" message (state-machine.ts lines 402 and 449):
+     Replace both occurrences of:
+       "Registration is temporarily unavailable. Please try again in a few minutes."
+     With:
+       "Registration failed due to a server error. This is not something you can
+       fix by retrying. Please contact support if this persists."
+
+  2. Re-registration check (engine.ts, handleInboundMessage):
+     Add a new state to the engine for users who have been warned:
+       #pendingReregistration = new Set<string>()  // channelUserId values awaiting CONFIRM
+     Before calling handleNewUser, query for an existing completed registration:
+       const completed = await this.#repository.findCompletedByChannelUser(
+         this.#opts.channelType, from, 30 * 24 * 60 * 60 * 1000  // 30 days
+       );
+     Add repository.findCompletedByChannelUser:
+       SELECT id, created_at FROM registrations
+       WHERE channel = $1 AND channel_user_id = $2
+         AND state = 'PRE_AUTH_TOKEN_ISSUED'
+         AND created_at > $3  -- $3 = now - 30 days
+       ORDER BY created_at DESC LIMIT 1
+     If completed exists and the user is NOT in #pendingReregistration:
+       Log registration.already_registered.warned with the existing registration id
+       Send the warning message
+       Add to #pendingReregistration
+       Return (do not call handleNewUser)
+     If the user IS in #pendingReregistration and message is 'CONFIRM':
+       Remove from #pendingReregistration
+       Call handleNewUser (proceed with new registration)
+     Clean up #pendingReregistration after 30 minutes via a sweep timer.
+
+  3. SSM parameter (cello-ecs-operations-agent.yaml):
+     Change:
+       - Name: EXPECTED_MIGRATION_VERSION
+         Value: "27"
+     To:
+       - Name: EXPECTED_MIGRATION_VERSION
+         ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cello/${Environment}/ops-agent/expected-migration-version"
+     Add to cello-secrets.yaml (or create a new cello-ssm-parameters.yaml):
+       /cello/${Environment}/ops-agent/expected-migration-version:
+         Type: String
+         Value: "27"  (initial value; operator updates per schema bump)
+     Ensure the ops-agent ECS execution role has ssm:GetParameters on this path
+     (check cello-iam.yaml — add if missing).
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M7
+  discussion_logs:
+    - "2026-06-03_1146_beta-launch-brittleness-analysis"
+  depends_on: []
+  blocks: []
