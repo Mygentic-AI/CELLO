@@ -24,7 +24,7 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | s3:ListBucket added for relay+directory task roles |
 | cello-rds-dev | UPDATE_COMPLETE | 2026-05-25 | MasterUserSecret.SecretArn exported |
 | cello-rotation-dev | UPDATE_COMPLETE | 2026-05-27 | Rotation Lambda covers ops-agent RDS creds (AC-009e) |
-| cello-ecs-directory-dev | DEPLOYED (manual force-deploy) | 2026-06-01 | All M6-E2E-001 fixes deployed: profiles+signers restored at startup (5 agents), V27 agent_id column, transport key from Secrets Manager (stable peer ID: 12D3KooWS46wUj6NYvoAsocxZnxth5EgYD2ZXCm7coMkXUWgS1j3), schemaVersion=27 |
+| cello-ecs-directory-dev | DEPLOYED (manual force-deploy) | 2026-06-03 | Task def rev 116: CELLO_RELAY_MULTIADDR updated to relay's current peer ID (12D3KooWJ39z27EpXUfmUJG2C2XZnQMBFXhhDUsdszyFjDQeHYD3 at 10.0.21.210). Directory stable peer ID: 12D3KooWS46wUj6NYvoAsocxZnxth5EgYD2ZXCm7coMkXUWgS1j3 |
 | cello-ecs-operations-agent-dev | UPDATE_COMPLETE | 2026-05-30 | Real image deployed via pipeline (commit cff37b0+); task def rev 21; Telegram polling @CelloConnectStagingBot |
 | cello-waf-dev | UPDATE_COMPLETE | 2026-05-27 | WAFv2 WebACL: rate-limit 1000/5min, IP reputation (BLOCK), CommonRuleSet (COUNT); logs to aws-waf-logs-cello-dev |
 | cello-ecs-relay-dev | UPDATE_COMPLETE | 2026-05-25 | Real image deployed via pipeline (commit 1af5c16) to all 3 regions |
