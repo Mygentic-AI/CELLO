@@ -215,10 +215,10 @@ If any commit in this story's history touches production code outside a story-dr
 Report findings using severity levels:
 
 - **[blocking]** — must be fixed before this story is considered done. AC not covered, SI negative test missing, transport-path assertion missing for integration/e2e protocol ACs, package boundary violation, gate sequence failure. For M4+ stories: observability event name mismatch, missing required context fields, `console.log` in implementation code, dropped correlationId. For M5+ migration stories: integration gate AC missing or Flyway checksum errors present. For M5+ infrastructure stories: STATE.md not updated.
-- **[high]** — security surface, key material leak path, or correctness bug. Must be fixed before the next story begins.
-- **[medium]** — code quality, naming, style inconsistency with the rest of the codebase. Fix before milestone close.
-- **[low]** — informational. Report to user; does not block.
+- **[high]** — security surface, key material leak path, correctness bug, or any gap that would allow a hollow or wrong implementation to pass all tests. Must be fixed before this story is considered done.
+- **[medium]** — code quality, naming, missing edge case coverage, spec ambiguity, or style inconsistency. Must be fixed before the next story that depends on this one begins.
+- **[low]** — informational or cosmetic. Must be fixed before milestone close; does not block the immediate story.
 
 End your report with one of:
-- **APPROVED** — no blocking or high issues; story is done
-- **BLOCKED** — list each blocking issue with the file and line number; implementation agent must fix before this story closes
+- **APPROVED** — no blocking, high, or medium issues found; low issues listed for milestone cleanup
+- **BLOCKED** — one or more blocking, high, or medium issues found; list every finding with file and line number; nothing proceeds until all are fixed
