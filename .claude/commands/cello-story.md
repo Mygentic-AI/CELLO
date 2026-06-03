@@ -66,6 +66,25 @@ This rule exists because: the test harness is hermetic and perfectly blind to re
 7. **Read the relevant implementation files** before writing behavior triggers and ACs. If the story touches `CelloClient`, read the parts of `packages/client/src/client.ts` that the story will change. If it touches the MCP server, read `packages/adapter-claude-code/src/bin/cello-mcp.ts`. ACs written without reading the implementation produce mismatched interface names, wrong type names, and behaviors that can't be tested the way you described.
 8. **Check the milestone outline** — read `docs/planning/user-stories/{milestone}/outline.md` for the design decisions and architecture choices that individual stories are expected to honor.
 
+## Ask before you write
+
+After doing your homework, stop and ask the operator any question where the answer will materially change what you write. Do not embed an assumption in an AC when you could ask instead — a wrong assumption baked into a story propagates into implementation and review before it surfaces.
+
+**Questions worth asking before writing:**
+
+- **Scope boundaries** — "The outline says X is out of scope, but AC-003 in the previous story seems to require it. Should this story include it or stub it?"
+- **Design decisions not yet made** — "I found two approaches in the discussion logs and neither was chosen. Which one should I spec?"
+- **Deferred behavior from prior stories** — "PERSIST-024 left Y as a TODO. Should this story close it, or is it still deferred?"
+- **Conflicts between the outline and existing code** — "The outline says the DB path convention is X, but the current code does Y. Which is authoritative?"
+- **Test infrastructure gaps** — "This story needs the fixture to support Z. I don't see that in session-fixture.ts. Should I extend it here or write a separate story first?"
+- **Milestone close gate implications** — "Does this story need to pass the milestone close gate by itself, or is it only exercised via the E2E story?"
+
+**Do not ask about things you can determine yourself** by reading the code, discussion logs, or CLAUDE.md. The operator's time is for genuine ambiguity — not for questions that five minutes of reading would answer.
+
+**If the operator is not available:** make your assumption explicit at the top of the story's `implementation_notes` — "Assumed X because Y. If this is wrong, the behavior trigger and AC-003 need to change." This makes the assumption visible at review time rather than invisible at implementation time.
+
+---
+
 ## Step 1: Is there an E2E story for this milestone?
 
 Look for a story with `domain: End-to-End` or `test_type: e2e` ACs that cover the scenario you're about to specify.
