@@ -51,9 +51,20 @@ This rule exists because: the test harness is hermetic and perfectly blind to re
 
 ## Before writing any story
 
+**Do your homework first.** A story written without understanding the surrounding codebase and design history will miss constraints, duplicate existing behavior, or specify something the implementation cannot satisfy. This is not optional prep — it is how you avoid writing a story that fails review.
+
 1. Read `docs/planning/user-story-format.md` — the canonical template and field reference.
 2. Read `docs/planning/protocol-map.md` — confirm the domain and milestone for the story.
-3. Check `docs/planning/user-stories/{milestone}/` — see what stories already exist.
+3. Check `docs/planning/user-stories/{milestone}/` — see what stories already exist and what COORDINATION.md says about migration versions and parallel work.
+4. Read `.claude/CLAUDE.md` — the system-wide invariants. Any story you write is subject to every constraint in this file, whether or not the story mentions it.
+5. Read `CONTEXT.md` at the repo root — canonical glossary. Use only terms defined here.
+6. **Search the discussion logs for anything relevant to the domain you are writing about.** Run:
+   ```bash
+   grep -rl "<keyword>" docs/planning/discussion_logs/
+   ```
+   Read any log that covers the mechanism, component, or design decision your story touches. Constraints established in discussion logs often do not appear in CLAUDE.md — they live only in the log. A story author who skips this step will write stories that violate constraints the team already resolved.
+7. **Read the relevant implementation files** before writing behavior triggers and ACs. If the story touches `CelloClient`, read the parts of `packages/client/src/client.ts` that the story will change. If it touches the MCP server, read `packages/adapter-claude-code/src/bin/cello-mcp.ts`. ACs written without reading the implementation produce mismatched interface names, wrong type names, and behaviors that can't be tested the way you described.
+8. **Check the milestone outline** — read `docs/planning/user-stories/{milestone}/outline.md` for the design decisions and architecture choices that individual stories are expected to honor.
 
 ## Step 1: Is there an E2E story for this milestone?
 
@@ -217,15 +228,69 @@ interface Logger {
 
 Events go through the `Logger` interface, not `console.log`. The implementation is injected via the composition root — never imported directly.
 
-**What bad observability ACs look like:**
-- "Errors are logged" — no event name, no context fields
-- "The session start is observable" — too vague to verify
-- "Logs include the session ID" — event name still missing
+**Canonical observability YAML format** — use exactly these field names. `fields` and `context` are wrong; they will fail the `/cello-review` Step 4c check.
 
-**What good observability ACs look like:**
-- "`session.started` is logged at INFO with `{ sessionId, agentId, relayId }` within the session establishment path"
-- "If relay assignment fails, `session.relay.assignment.failed` is logged at WARN with `{ sessionId, reason, availableRelayCount }`"
+```yaml
+observability:
+  events:
+    - name: session.started
+      level: info
+      trigger: "When a session is established between two agents"
+      context_fields: [sessionId, agentId, relayId]
+      correlationId: true
+  error_events:
+    - name: session.relay.assignment.failed
+      level: warn
+      trigger: "When the relay assignment step fails during session setup"
+      context_fields: [sessionId, reason, availableRelayCount]
+      correlationId: true
+  notes: >
+    session.started and session.relay.assignment.failed must be added to
+    the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
+    by the implementer of this story.
+  alarms:
+    - condition: "session.relay.assignment.failed rate > 5% over 5 minutes"
+      fires_to: "relay-health CloudWatch alarm"
+```
+
+If `alarms` is empty, it must include a `notes` field explaining why no alarm is warranted — a bare `alarms: []` is not acceptable. Example: `alarms: [] # no alarm: this is a synchronous startup op; failure is visible immediately in cello_start_agent return value`
+
+**Observability events must be verified by ACs, not just declared in the observability block.** Listing events in the `observability:` section is metadata for the implementer — it is not a test. For each significant event, there must be a corresponding entry in `acceptance_criteria` with a `then` clause that asserts the event fired with the correct name and context fields. Without an AC, the implementer can omit the log call entirely and every test will still pass.
+
+**What bad observability looks like:**
+- Events listed only in the `observability:` block with no AC verifying they fire
+- "Errors are logged" in an AC — no event name, no context fields
+- `fields: [sessionId]` — wrong field name; must be `context_fields`
+
+**What good observability looks like:**
+- An AC with `then: "... AND 'session.started' is logged at INFO with sessionId, agentId, and relayId fields"`
+- A separate AC for the error path: `then: "session.relay.assignment.failed is logged at WARN with sessionId, reason, and availableRelayCount"`
 - "All log events in the FROST DKG flow carry the same `correlationId` minted when the ceremony is initiated"
+
+---
+
+## Writing Security Invariants
+
+Every SI must pair a `statement` with an `adversarial_condition` that describes a concrete attack or misuse scenario — not a structural assertion.
+
+**Wrong (structural assertion — does not test the invariant):**
+```yaml
+adversarial_condition: "verified by asserting that alice's KeyProvider reference
+  is unreachable from bob's client instance"
+```
+This just checks that two object references differ. A bug where both clients share the same Map but return different references would pass it.
+
+**Right (adversarial simulation — actually tests the invariant):**
+```yaml
+adversarial_condition: "a message handler executing on alice's CelloClient
+  attempts to retrieve a KeyProvider from the AgentRegistry by name — it can
+  only retrieve alice's KeyProvider, not bob's; verified by asserting that
+  calling registry.getKeyProvider('bob') from within alice's message handler
+  returns alice's key or throws, never bob's"
+```
+
+The test must actively trigger the adversarial condition and assert the system resists it. An SI whose adversarial condition is only verified by an absence check ("X is not accessible") is not a test — it is a wish. Name the attack, describe what happens when the attacker succeeds, and assert that it does not succeed.
 
 ---
 
