@@ -313,14 +313,18 @@ observability:
     by the implementer of this story. AC-011 gates on this.
   alarms:
     - condition: "frost.ceremony.failed with reason: 'ceremony_exhausted' fires
-        more than 3 times in 5 minutes for the same agentId prefix"
+        more than 3 times in 5 minutes (aggregate across all agents)"
       fires_to: "cello-directory-frost-failure CloudWatch alarm (new alarm, same
         pattern as existing directory alarms in cello-cloudwatch.yaml)"
       notes: >
-        Three consecutive ceremony_exhausted for the same agent strongly indicates
-        the agent's DKG registration is broken or the share store was lost on
-        directory restart. This is the most actionable failure mode — the operator
-        needs to know immediately.
+        Three or more ceremony_exhausted failures in 5 minutes (aggregate) indicates
+        a sustained FROST coordination problem affecting multiple agents or a single
+        agent repeatedly failing. Per-agent dimensional alarming would require
+        publishing metrics with agentId dimensions or CloudWatch Logs Insights
+        queries, which adds significant complexity for marginal value. The aggregate
+        alarm is sufficient to surface that FROST ceremony failures are occurring at
+        an actionable rate. Operators can then investigate CloudWatch Logs to
+        identify which specific agents are affected.
 
 # ─── Implementation Notes ───────────────────────────────────
 implementation_notes: >
