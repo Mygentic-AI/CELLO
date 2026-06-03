@@ -1,0 +1,241 @@
+---
+name: CELLO-PREP-012
+type: user-story
+date: 2026-06-03
+topics: [sqlcipher, native-compilation, dx, startup-time, client, pre-m7]
+status: draft
+description: >
+  Replace @journeyapps/sqlcipher (always compiles from source, 20-40 seconds on
+  first install) with a pre-built alternative so the MCP server starts within
+  Claude Code's 30-second connection timeout. The replacement must preserve
+  AES-256 encryption and the existing PRAGMA key derivation, and the storage
+  format must be compatible so existing databases do not need re-encryption.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PREP-012
+domain: PREP
+milestone: M7
+actor: DEV
+priority: P1
+components:
+  - client
+  - adapter-claude-code
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a CELLO user installing cello-mcp for the first time or after a version bump,
+  I want the MCP server to start within 30 seconds of install, so that Claude Code
+  does not time out before the server is ready and I do not need to run pkill
+  manually after every install.
+
+# ─── Context ────────────────────────────────────────────────
+# Root cause (from M6-beta-launch.md lines 1010-1014):
+#   @journeyapps/sqlcipher@^6.0.0 compiles SQLCipher from source on every
+#   first install (npm cache miss). Compilation takes 20-40 seconds on macOS/Linux.
+#   Claude Code times out MCP server startup after 30 seconds. Result: on any
+#   fresh npm install (new machine, global cache cleared, version bump with
+#   different native binary), the MCP server fails to start and the user sees
+#   "connection timed out after 30000ms".
+#   The error is especially bad after version bumps because the user was just
+#   working and the bot stopped responding — they don't know to run pkill.
+#
+# PREP-002 addresses the related deadlock (WAL mode for concurrent access).
+# This story addresses the compilation time root cause.
+#
+# Approaches evaluated:
+#   Option A: better-sqlite3 + sqlcipher extension
+#     better-sqlite3 is a synchronous SQLite binding with pre-built binaries.
+#     It does not include SQLCipher natively. There is a community extension
+#     (@sqlite.org/sqlean-crypto or @journeyapps/sqlcipher-node compiled separately).
+#     Pre-built binaries exist for macOS (arm64/x86_64) and Linux (x64).
+#     Windows support: better-sqlite3 v9.6+ has pre-built Windows binaries.
+#     Change magnitude: significant — SQLCipherClientStore uses the callback-based
+#     @journeyapps/sqlcipher API (db.serialize, db.run, db.get, db.all), which would
+#     need to be rewritten to better-sqlite3's synchronous API.
+#
+#   Option B: @sqlite.org/sqlite-wasm
+#     WebAssembly SQLite, no native compilation. Runs in Node.js environments.
+#     Does not have built-in SQLCipher but can load extension binaries.
+#     Change magnitude: very large. Different API, different module loading.
+#
+#   Option C: wait for @journeyapps/sqlcipher to provide pre-built binaries
+#     The package currently has no prebuild support. Unlikely in the near term.
+#
+# ASSUMPTION: Option A (better-sqlite3 + SQLCipher extension) is the intended
+# approach based on the M6 write-up. If the operator intends a different approach,
+# the behavior triggers and ACs must change. The implementer must validate this
+# assumption before starting.
+#
+# CRITICAL: The encryption format must be wire-compatible with the existing
+# SQLCipher databases in ~/.cello/. If the PRAGMA key format or cipher settings
+# differ, existing user databases will be unreadable after the upgrade.
+# The existing format: AES-256-CBC, PBKDF2 (default SQLCipher settings via
+# PRAGMA key = "x'<hexkey>'"). The replacement must use the same format.
+#
+# NOTE: The existing db.serialize() callback-based API is extensively used in
+# sqlcipher-client-store.ts (493 lines). Rewriting to better-sqlite3's
+# synchronous API is non-trivial. The implementer must read the full file
+# before estimating scope.
+#
+# Windows: @journeyapps/sqlcipher has os: ['darwin','linux'], which blocks
+# Windows users at install time. better-sqlite3 v9.6+ supports Windows.
+# This story should resolve the Windows blocking too (see AC-004).
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a user runs 'npm install -g @cello-protocol/connect' on a
+    clean machine with no npm cache for the package"
+    action: "the install completes and cello-mcp is ready to accept connections
+      within 30 seconds total (install + first startup)"
+
+  - trigger: "When cello-mcp opens an existing ~/.cello/client.db encrypted with
+    the previous @journeyapps/sqlcipher library"
+    action: "the database opens successfully without re-encryption; the PRAGMA
+      key = \"x'<hexkey>'\" format is honored; the existing data is readable"
+
+  - trigger: "When cello-mcp starts on Windows"
+    action: "the process starts without an install-time error about unsupported
+      platform; the SQLite library initializes correctly"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The updated @cello-protocol/connect npm package with the replacement
+      SQLite library"
+    when: "npm install -g @cello-protocol/connect is run in a Docker container
+      with no npm cache (simulate: docker run --rm node:22-alpine sh -c
+      'npm install -g @cello-protocol/connect@latest && cello-mcp --version')"
+    then: "the install and startup complete within 30 seconds total; no native
+      compilation occurs (verify by checking npm install output — no 'node-gyp'
+      or 'gyp info it worked' lines in output)"
+    test_type: integration
+    component_under_test: adapter-claude-code
+    notes: "Run manually as a local Docker test before publishing. The 30-second
+      target matches Claude Code's MCP connection timeout."
+
+  - id: AC-002
+    given: "An existing ~/.cello/client.db created with @journeyapps/sqlcipher
+      using PRAGMA key = \"x'<hexkey>'\" (AES-256-CBC, default SQLCipher settings)"
+    when: "cello-mcp opens the database with the replacement library using the
+      same key derivation"
+    then: "the database opens without error; loadPersistedState() returns the
+      previously stored state (registration state, sessions) with all fields
+      intact; verified by creating a database with the old library, migrating
+      to the new library, and asserting the state round-trips correctly"
+    test_type: integration
+    component_under_test: client
+    notes: "This is the most critical AC. If the cipher settings differ between
+      libraries, existing user databases become unreadable. Test with the actual
+      PRAGMA key format used in db-key-derivation.ts."
+
+  - id: AC-003
+    given: "The updated cello-client core/client package"
+    when: "the full persist-* test suite runs"
+    then: "all existing persist-009, persist-011, persist-022, persist-024 tests pass
+      with the replacement library; no test requires the @journeyapps/sqlcipher
+      callback-based API (db.serialize, db.run with callback)"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-004
+    given: "The updated @cello-protocol/connect package.json"
+    when: "the os field is inspected"
+    then: "there is no os restriction or the restriction includes 'win32';
+      npm install on Windows does not fail with 'Unsupported platform'"
+    test_type: unit
+    component_under_test: adapter-claude-code
+    notes: "The existing @journeyapps/sqlcipher has os: ['darwin','linux'] which
+      blocks Windows at install time with 'Unsupported platform'. This AC ensures
+      the replacement library either has no os restriction or supports Windows."
+
+  - id: AC-005
+    given: "The updated SQLCipherClientStore (or its replacement)"
+    when: "WAL mode is applied (PREP-002 AC-001 requirement)"
+    then: "PRAGMA journal_mode=WAL is supported and applied successfully with
+      the replacement library; the existing PREP-002 WAL mode AC is not broken
+      by the library switch"
+    test_type: unit
+    component_under_test: client
+    notes: "PREP-002 adds WAL mode via PRAGMA journal_mode=WAL after key verification.
+      The replacement library must support PRAGMA execution."
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The db_key (derived encryption key) must NEVER appear in any log
+      event, error message, or return value — identical constraint to the existing
+      SQLCipherClientStore SI-001"
+    adversarial_condition: "if the replacement library throws an error on
+      incorrect key, the error message must not include the key bytes; verified
+      by asserting that opening the database with a wrong key throws an error
+      whose message does not match the key hex pattern (/[0-9a-f]{64}/i)"
+    test_type: unit
+    component_under_test: client
+
+  - id: SI-002
+    statement: "The replacement library must not use a weaker cipher than
+      AES-256-CBC with the existing SQLCipher default settings"
+    adversarial_condition: "the replacement library configuration must not
+      set PRAGMA cipher_page_size, PRAGMA kdf_iter, or PRAGMA cipher_hmac_algorithm
+      to non-default values that would reduce security; verified by auditing
+      the initialization code for any cipher_* PRAGMA calls"
+    test_type: unit
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events: []
+  error_events: []
+  notes: >
+    No new log events. The adapter.initialised event for the store already
+    exists and will still fire. No taxonomy update needed.
+  alarms: [] # no alarm: startup-time improvement; no new failure mode
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes: >
+  VALIDATE ASSUMPTION FIRST: before starting, confirm that better-sqlite3 +
+  SQLCipher extension is the correct approach. Alternatives exist (sql.js,
+  wa-sqlite, @sqlite.org/sqlite-wasm) and each has different trade-offs.
+  Read the current M6 write-up and the handoff document for the operator's
+  stated intent.
+
+  COMPATIBILITY FIRST: before writing new code, create a test that:
+    1. Creates a database using the existing @journeyapps/sqlcipher
+    2. Writes known data
+    3. Opens the SAME database file using the candidate replacement library
+    4. Reads the data and asserts equality
+  If this test fails, the migration is not feasible without a re-encryption
+  step, which would break existing user databases. Do NOT proceed past this
+  test without confirming compatibility.
+
+  If better-sqlite3 + sqlcipher is the path:
+    npm install -w core/client better-sqlite3 @journeyapps/sqlcipher-prebuilt
+    or a compatible SQLCipher Node.js extension with pre-built binaries.
+    better-sqlite3 API is synchronous (no callbacks). The existing
+    sqlcipher-client-store.ts uses db.serialize() and callbacks extensively —
+    this will need a full rewrite. The new store may be simpler because
+    better-sqlite3 is synchronous.
+
+  Key files:
+    - cello-client/core/client/src/sqlcipher-client-store.ts (493 lines — full rewrite)
+    - cello-client/core/client/src/db-key-derivation.ts (key derivation — likely unchanged)
+    - cello-client/core/client/src/client-state-persistence.ts (may need updates)
+    - cello-client/core/client/package.json (dependency change)
+    - cello-client/core/adapter-claude-code/package.json (if adapter imports sqlcipher directly)
+
+  Do NOT change the PRAGMA key format. The existing format
+  PRAGMA key = "x'<hexkey>'" must be honored exactly. Changing cipher settings
+  would corrupt existing user databases.
+
+  Version bump required. Follow the CLAUDE.md version bump procedure:
+  bump client → bump connect → git tag → CI publishes to beta.
+  Do NOT npm publish manually.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M7
+  discussion_logs:
+    - "2026-06-03_1146_beta-launch-brittleness-analysis"
+  depends_on:
+    - CELLO-PREP-002
+  blocks: []
