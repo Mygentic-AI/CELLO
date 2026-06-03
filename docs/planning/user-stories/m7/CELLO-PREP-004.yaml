@@ -1,0 +1,299 @@
+---
+name: CELLO-PREP-004
+type: user-story
+date: 2026-06-03
+topics: [relay, relay-pool, manifest, polling, s3, directory, resilience, pre-m7]
+status: draft
+description: >
+  Pre-M7 RelayPoolManager manifest polling. Adds a configurable S3 poll loop
+  to RelayPoolManager so the directory automatically picks up relay manifest
+  updates without restarting. Eliminates the directory restart requirement
+  after every relay redeploy or manual sign-manifest.sh run.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PREP-004
+domain: PREP
+milestone: M7
+actor: OPS
+priority: P0
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO operator,
+  I want RelayPoolManager to periodically re-fetch the relay manifest from S3,
+  so that relay pool updates (new IP from PREP-003 auto-registration, manual
+  sign-manifest.sh runs, relay additions or removals) take effect in the
+  running directory process within a configurable window without requiring
+  a directory restart.
+
+# ─── Context ────────────────────────────────────────────────
+# Current state: RelayPoolManager.loadManifest() is called once at directory
+# startup (packages/directory/src/directory-node.ts, around line 2936). After
+# that, the in-memory relay pool is static for the lifetime of the process.
+# Any manifest update — whether from PREP-003's auto-registration or a manual
+# sign-manifest.sh run — requires a directory restart to take effect.
+#
+# A directory restart drops all connected agent signaling streams, making every
+# agent invisible until they reconnect. This is the "manual operator steps after
+# every relay redeploy" problem documented in the M6 write-up.
+#
+# The fix is a poll loop in RelayPoolManager. RelayPoolManager already has all
+# the pieces: it downloads from S3, verifies the signature, and calls
+# applyManifest() which handles version monotonicity (ignores stale manifests).
+# The poll loop simply calls loadManifest() on a configurable interval.
+#
+# applyManifest() already guards against version regression:
+#   if (manifest.version <= currentVersion) → return { ok: false }
+# This means a poll that retrieves the same manifest version is a no-op.
+# The poll loop will only apply a manifest if the version is strictly higher
+# than the current in-memory version.
+#
+# Poll interval: 2 minutes default (RELAY_MANIFEST_POLL_INTERVAL_MS env var).
+# This means a relay redeploy that triggers PREP-003's auto-registration results
+# in a new manifest in S3 within ~60 seconds; the directory picks it up within
+# the next 2-minute poll window. Total propagation time: 0–3 minutes.
+# For the beta period this is acceptable — it eliminates the indefinite staleness
+# of the current model.
+#
+# The poll loop must NOT run in CELLO_ENV=local (no S3 in local dev).
+# It must stop cleanly on process SIGTERM.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When RelayPoolManager.startPolling() is called with an interval"
+    action: "a background poll loop runs every intervalMs milliseconds;
+      each poll calls loadManifest() and handles the result:
+      if the new version > currentVersion: applyManifest() updates the pool;
+        relay.manifest.refreshed is logged at INFO with manifestVersion and relayCount
+      if the new version <= currentVersion: no-op (version monotonicity guard
+        already in applyManifest()); relay.manifest.poll.noop is logged at DEBUG
+      if loadManifest() throws: relay.manifest.poll.failed is logged at WARN
+        with reason; the poll loop continues — a transient S3 failure must not
+        stop future polls"
+
+  - trigger: "When the directory node starts with CELLO_ENV != 'local'"
+    action: "startPolling() is called with the interval from
+      RELAY_MANIFEST_POLL_INTERVAL_MS (default: 120_000 ms);
+      the poll loop begins after the initial loadManifest() at startup
+      completes — the first poll fires after one full interval, not immediately"
+
+  - trigger: "When the directory node starts with CELLO_ENV = 'local'"
+    action: "startPolling() is NOT called; no S3 poll loop runs;
+      the local test harness does not have S3 and polling would cause
+      test noise and unnecessary async activity"
+
+  - trigger: "When the directory process receives SIGTERM"
+    action: "the poll loop is cleared (clearInterval); no further polls
+      fire after SIGTERM; the graceful shutdown sequence proceeds without
+      waiting for an in-progress poll to complete"
+
+  - trigger: "When a poll retrieves a manifest with version > currentVersion"
+    action: "the relay pool is updated atomically via applyManifest();
+      health checks that were targeting the old relay IPs are replaced
+      by health checks targeting the new IPs from the updated manifest;
+      sessions already in progress are not affected (relay assignment
+      for new sessions will use the updated pool)"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A RelayPoolManager with a CloudStorageProvider stub that returns
+      manifest version N on the first call and version N+1 (new relay IP)
+      on the second call"
+    when: "startPolling(500) is called and two poll cycles complete"
+    then: "after the first poll: relay pool reflects version N (initial load);
+      after the second poll: relay pool reflects version N+1;
+      relay.manifest.refreshed is logged with manifestVersion: N+1;
+      RelayPoolManager.currentRelays contains the relay's updated
+      healthCheckUrl from version N+1"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "A RelayPoolManager that has loaded manifest version N"
+    when: "a poll retrieves manifest version N again (same version, S3 not yet updated)"
+    then: "applyManifest() returns { ok: false } (version monotonicity guard);
+      relay pool is unchanged;
+      relay.manifest.poll.noop is logged at DEBUG"
+    test_type: unit
+    component_under_test: directory
+
+  - id: AC-003
+    given: "A RelayPoolManager with a CloudStorageProvider stub that throws
+      on the second call (simulating transient S3 failure)"
+    when: "the second poll fires"
+    then: "relay.manifest.poll.failed is logged at WARN with a reason;
+      the poll loop continues — the third poll fires after the next interval;
+      RelayPoolManager.currentRelays is unchanged from the first successful load"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "A RelayPoolManager with startPolling(200) running"
+    when: "stopPolling() is called"
+    then: "no further relay.manifest.refreshed or relay.manifest.poll.noop
+      events are logged after the stop call; verified by waiting 500ms after
+      stopPolling() and asserting the event count did not increase"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A directory node started with CELLO_ENV=local"
+    when: "the node initializes RelayPoolManager"
+    then: "startPolling() is NOT called; no relay.manifest.poll.* events
+      are logged during the test; RelayPoolManager loads the manifest once
+      at startup (existing behavior) and stops"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "A directory node started with CELLO_ENV=dev and
+      RELAY_MANIFEST_POLL_INTERVAL_MS=300000 (5 minutes)"
+    when: "the node initializes"
+    then: "relay.manifest.poll.started is logged at INFO with
+      intervalMs: 300000; the poll loop does not fire within the first
+      intervalMs window (first poll fires at T + intervalMs, not at T)"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "PREP-003 deployed (relay auto-registers on startup)"
+    when: "a new relay ECS task starts and calls relay_register"
+    then: "within 3 minutes (one full poll cycle + relay startup time),
+      the directory's RelayPoolManager uses the relay's new healthCheckUrl
+      for health checks; no directory restart was required; verified by
+      observing relay.manifest.refreshed in the directory log group within
+      3 minutes of relay.registered appearing in the relay log group"
+    test_type: integration
+    component_under_test: directory
+    notes: "Live smoke test — run manually after both PREP-003 and PREP-004
+      are deployed. This verifies the full auto-recovery chain end-to-end:
+      relay redeploy → relay_register → manifest re-sign (PREP-003) →
+      poll picks up new manifest (PREP-004) → health checks use new IP."
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The poll loop must verify the manifest signature on every
+      poll — a manifest update that fails signature verification must be
+      rejected even if it has a higher version number"
+    adversarial_condition: "a test uploads a manifest to the S3 stub with
+      version N+1 but an invalid signature; the poll retrieves it and calls
+      loadManifest(); loadManifest() throws ManifestError; the relay pool
+      remains at version N; relay.manifest.invalid is logged (existing event
+      from relay.manifest.invalid in RelayPoolManager) rather than
+      relay.manifest.refreshed; an attacker who can write to S3 cannot
+      downgrade or corrupt the relay pool without a valid directory signature"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: relay.manifest.poll.started
+      level: info
+      trigger: "When startPolling() is called successfully"
+      context_fields: [intervalMs]
+      correlationId: false
+    - name: relay.manifest.refreshed
+      level: info
+      trigger: "When a poll retrieves a manifest with a higher version and
+        applyManifest() updates the pool"
+      context_fields: [manifestVersion, relayCount]
+      correlationId: false
+    - name: relay.manifest.poll.noop
+      level: debug
+      trigger: "When a poll retrieves a manifest with the same or lower
+        version (no update applied)"
+      context_fields: [currentVersion, receivedVersion]
+      correlationId: false
+  error_events:
+    - name: relay.manifest.poll.failed
+      level: warn
+      trigger: "When a poll cycle throws (S3 unavailable, network error,
+        signature invalid)"
+      context_fields: [reason, currentVersion]
+      correlationId: false
+  notes: >
+    relay.manifest.poll.started, relay.manifest.refreshed,
+    relay.manifest.poll.noop, and relay.manifest.poll.failed must be added
+    to the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
+    by the implementer of this story.
+
+    relay.manifest.invalid already exists in the taxonomy (from the initial
+    RelayPoolManager implementation) and is reused when a polled manifest
+    fails signature verification.
+  alarms:
+    - condition: "relay.manifest.poll.failed fires more than 5 times within
+        a 10-minute window"
+      fires_to: "cello-relay-manifest-poll-alarm CloudWatch alarm"
+      notes: "Persistent poll failures indicate S3 access loss or a
+        misconfigured CloudStorageProvider. 5 failures in 10 minutes with a
+        2-minute poll interval means every poll for 10 minutes has failed."
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes: >
+  RelayPoolManager change (packages/directory/src/relay-pool-manager.ts):
+
+  Add two public methods:
+    startPolling(intervalMs: number): void — starts setInterval loop
+    stopPolling(): void — calls clearInterval
+
+  startPolling() implementation:
+    this.#pollInterval = setInterval(() => {
+      this.loadManifest()
+        .then(({ manifest }) => {
+          if (manifest.version > this.#currentVersion) {
+            this.logger.info("relay.manifest.refreshed", {
+              manifestVersion: manifest.version,
+              relayCount: manifest.relays.length
+            });
+          } else {
+            this.logger.debug("relay.manifest.poll.noop", {
+              currentVersion: this.#currentVersion,
+              receivedVersion: manifest.version
+            });
+          }
+        })
+        .catch((err: unknown) => {
+          this.logger.warn("relay.manifest.poll.failed", {
+            reason: err instanceof Error ? err.message : String(err),
+            currentVersion: this.#currentVersion
+          });
+        });
+    }, intervalMs);
+    this.logger.info("relay.manifest.poll.started", { intervalMs });
+
+  Note: loadManifest() already calls applyManifest() internally which
+  handles the version monotonicity check. The poll loop does not need to
+  call applyManifest() separately.
+
+  Directory node wiring (packages/directory/src/directory-node.ts):
+  After the initial loadManifest() call at startup completes, add:
+    const pollIntervalMs = parseInt(
+      process.env["RELAY_MANIFEST_POLL_INTERVAL_MS"] ?? "120000",
+      10
+    );
+    if (celloEnv !== "local") {
+      this.#relayPoolManager.startPolling(pollIntervalMs);
+    }
+
+  In the graceful shutdown handler (SIGTERM):
+    this.#relayPoolManager.stopPolling();
+
+  IMPORTANT — sovereign node constraint: no global relay pool. Each directory
+  instance has its own RelayPoolManager reading from its own region's S3 bucket.
+  The poll loop operates per-region, not globally. This is already true of the
+  existing implementation — this story must not change that.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M7
+  discussion_logs:
+    - "2026-06-03_1146_beta-launch-brittleness-analysis"
+  depends_on:
+    - CELLO-PREP-003
+  blocks: []

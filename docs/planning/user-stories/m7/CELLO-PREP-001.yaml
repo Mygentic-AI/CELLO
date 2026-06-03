@@ -1,0 +1,201 @@
+---
+name: CELLO-PREP-001
+type: user-story
+date: 2026-06-03
+topics: [infrastructure, iac, alb, migration, agent_profiles, cloudformation, pre-m7]
+status: draft
+description: >
+  Pre-M7 IaC and database gap closure. Commits the manually-created port-8081
+  internal API ALB target group and listener rule to CloudFormation, and adds
+  V28 migration granting cello_service UPDATE on agent_profiles. All three
+  changes are gated by a deployment verification AC.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PREP-001
+domain: PREP
+milestone: M7
+actor: OPS
+priority: P0
+components:
+  - directory
+  - infra
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO operator,
+  I want the manually-created ALB target group for the directory internal API
+  (port 8081) and its listener rule committed to CloudFormation IaC, and the
+  missing cello_service UPDATE grant on agent_profiles delivered as V28,
+  so that every production gap found during M6 E2E testing is closed in IaC
+  and no manual AWS state exists outside the templates.
+
+# ─── Context ────────────────────────────────────────────────
+# This story exists because M6 E2E testing required two manual AWS changes
+# that were never committed to IaC:
+#
+# 1. Port-8081 ALB target group and listener rule (priority 5 updated from
+#    port 8080 to 8081, ALB SG → directory port-8081 ingress rule).
+#    These were created by hand during M6 E2E and are not in CloudFormation.
+#    Every new region deployment would miss them.
+#
+# 2. cello_service lacks UPDATE on agent_profiles. linkAgentToAccount() calls
+#    UPDATE agent_profiles SET account_id = ... after DKG — it passes in CI
+#    (superuser) but silently fails in production. Known since OPS-AGENT-001,
+#    documented as a known gap in the OPS-AGENT-001 write-up.
+#
+# Note: AgentLookupPathRule and BootstrapPathRule already exist in
+# cello-ecs-directory.yaml (priority 3 and 4 respectively). This story
+# does NOT need to add them — only the port-8081 internal API pieces are missing.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When cello-ecs-directory.yaml is deployed to any region"
+    action: "an ALB target group named cello-dir-internal-api-{Environment}
+      exists on port 8081 targeting the ECS directory task; an ALB listener
+      rule routes all /internal/* path-pattern requests to this target group;
+      the rule uses the same API-key-only authentication model as the existing
+      InternalPathForwardRule (no source-IP restriction — internet-facing ALB
+      routes same-VPC traffic via internet gateway); the ECS DirectoryService
+      DependsOn list includes the new internal API listener rule so registration
+      cannot begin before the endpoint is protected"
+
+  - trigger: "When a new directory ECS task starts after V28 is applied"
+    action: "cello_service role can execute UPDATE on agent_profiles;
+      linkAgentToAccount() succeeds in production (not only under superuser
+      in test environments); account_id is written to agent_profiles after
+      every successful DKG registration"
+
+  - trigger: "When V28 is applied to a PostgreSQL instance that already has
+    V1–V27 applied"
+    action: "Flyway reports zero checksum errors; the GRANT executes cleanly;
+      cello_service can immediately execute UPDATE on agent_profiles without
+      any service restart"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The updated cello-ecs-directory.yaml CloudFormation template"
+    when: "the template is validated with `aws cloudformation validate-template`"
+    then: "validation succeeds with no errors; the template contains:
+      (1) an InternalApiTargetGroup resource on port 8081;
+      (2) an InternalApiPathRule listener rule routing /internal/* to
+      InternalApiTargetGroup at a priority lower than AgentLookupPathRule
+      and BootstrapPathRule (i.e. priority >= 5);
+      (3) DirectoryService DependsOn includes InternalApiPathRule;
+      (4) the ALB security group or VPC security group allows inbound TCP
+      on port 8081 from the ALB"
+    test_type: unit
+    component_under_test: infra
+
+  - id: AC-002
+    given: "V28__grant_cello_service_update_agent_profiles.sql committed to
+      packages/directory/db/migrations/"
+    when: "the migration is applied to a local PostgreSQL instance that already
+      has V1 through V27 applied (via docker-compose with CELLO_ENV=local)"
+    then: "Flyway reports zero checksum errors on all prior migrations;
+      V28 applies cleanly; executing
+      `SET ROLE cello_service; UPDATE agent_profiles SET account_id = NULL
+      WHERE k_local_pubkey = 'nonexistent' RETURNING *` returns zero rows
+      without a permission error (i.e. UPDATE is permitted, no rows match)"
+    test_type: integration
+    component_under_test: directory
+    notes: "This is the Mitigation B integration gate AC. Must pass before
+      this story merges. Tests that cello_service can execute UPDATE on
+      agent_profiles — the exact operation linkAgentToAccount() uses."
+
+  - id: AC-003
+    given: "The updated cello-ecs-directory.yaml deployed to dev us-east-1
+      via the directory pipeline"
+    when: "the stack update completes (rolloutState COMPLETED)"
+    then: "aws elbv2 describe-target-groups returns a target group with port 8081
+      for the dev stack; aws elbv2 describe-rules returns a listener rule
+      with path /internal/* forwarding to that target group; the directory
+      ECS service reports runningCount = 1 with the new task definition;
+      a test request to http://{ALB_DNS}/internal/pre-authorize with no
+      x-cello-internal-api-key header returns HTTP 401 (not 502 or connection
+      refused) — proving the rule routes to the directory, not the default
+      WebSocket listener"
+    test_type: integration
+    component_under_test: infra
+    notes: "Run manually after deployment. Documents the live verification
+      step. A 401 proves the directory received the request and rejected it
+      on auth grounds — correct behavior."
+
+  - id: AC-004
+    given: "V28 deployed to dev us-east-1 via the directory pipeline"
+    when: "a new agent registration completes via @CelloConnectStagingBot"
+    then: "SELECT account_id FROM agent_profiles WHERE k_local_pubkey = '{pubkey}'
+      returns a non-null UUID — proving linkAgentToAccount() succeeded in
+      production with cello_service role (not superuser)"
+    test_type: integration
+    component_under_test: directory
+    notes: "Run manually after deployment. Verifies the production regression
+      from OPS-AGENT-001 is closed."
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The /internal/* ALB route must not grant public internet access
+      to the pre-authorization endpoint — API key authentication in the
+      directory code is the sole access control"
+    adversarial_condition: "an unauthenticated HTTP request to
+      http://{ALB_DNS}/internal/pre-authorize (no x-cello-internal-api-key
+      header) must return HTTP 401, not HTTP 200 or 500; verified by AC-003's
+      curl check — a 401 means the directory validated (and rejected) the
+      request, not that it never reached the application"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events: []
+  error_events: []
+  notes: >
+    No new log events. This story closes IaC gaps — it does not add new
+    application behavior. AC-002 and AC-003 are the verification gates.
+  alarms: []
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes: >
+  IaC changes (all in infra/cloudformation/cello-ecs-directory.yaml):
+
+  1. Add InternalApiTargetGroup: port 8081, same VPC/cluster as the
+     existing TargetGroup. Health check path /health on port 9090
+     (health server) — NOT on 8081 (the internal API has no health endpoint).
+     Actually the existing BootstrapTargetGroup already covers port 9090.
+     InternalApiTargetGroup needs: port 8081, protocol HTTP,
+     health check on /health port 9090.
+
+  2. Replace or augment InternalPathForwardRule: route /internal/* to
+     InternalApiTargetGroup (port 8081) instead of TargetGroup (port 8080).
+     Verify the existing InternalPathForwardRule already routes to TargetGroup —
+     if so, update the TargetGroupArn to InternalApiTargetGroup. Priority
+     must not conflict with existing rules (AgentLookupPathRule=3,
+     BootstrapPathRule=4, current InternalPathForwardRule=5).
+
+  3. Add port 8081 ingress to EcsDirectorySecurityGroup (in cello-vpc.yaml)
+     from AlbSecurityGroup — same pattern as the port 9090 rule added for
+     REPOSPLIT-001.
+
+  4. Update DirectoryService DependsOn to include InternalApiPathRule.
+
+  Migration (packages/directory/db/migrations/):
+  V28__grant_cello_service_update_agent_profiles.sql:
+    GRANT UPDATE ON agent_profiles TO cello_service;
+
+  That is the entire migration. One statement.
+
+  IMPORTANT — sovereign node constraint: the CloudFormation changes must
+  parameterize on ${Environment} throughout — no hardcoded 'dev'. Every
+  region deployment must work from the same template with a single
+  Environment parameter. This is the region-expansion test: would a fresh
+  us-west-2 deployment work with zero manual steps?
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M7
+  discussion_logs:
+    - "2026-06-03_1146_beta-launch-brittleness-analysis"
+  depends_on: []
+  blocks:
+    - CELLO-MULTI-008

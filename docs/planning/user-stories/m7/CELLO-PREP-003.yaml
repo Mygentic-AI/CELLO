@@ -1,0 +1,294 @@
+---
+name: CELLO-PREP-003
+type: user-story
+date: 2026-06-03
+topics: [relay, infrastructure, auto-register, manifest, iac, ecs, pre-m7]
+status: draft
+description: >
+  Pre-M7 relay auto-registration on startup. Wires CELLO_DIRECTORY_MULTIADDR
+  into the relay ECS task definition so the relay dials the directory on every
+  startup and calls relay_register. On successful registration, the directory
+  re-signs the relay manifest and uploads it to S3. Eliminates the manual
+  sign-manifest.sh intervention required after every relay redeploy.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PREP-003
+domain: PREP
+milestone: M7
+actor: OPS
+priority: P0
+components:
+  - relay
+  - directory
+  - infra
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO operator,
+  I want the relay to dial the directory and call relay_register on every
+  ECS startup without requiring CELLO_DIRECTORY_MULTIADDR to be manually
+  updated after each deploy, so that the relay manifest in S3 reflects the
+  current relay address automatically and session initiation does not break
+  after relay redeployments.
+
+# ─── Context ────────────────────────────────────────────────
+# Current state (documented in M6 write-up, Infrastructure Brittleness section):
+#
+# The relay binary already supports relay_register and calls it at startup —
+# BUT only when CELLO_DIRECTORY_MULTIADDR is set. In the ECS task definition,
+# CELLO_DIRECTORY_MULTIADDR is NOT set, so the relay starts without registering.
+# Every relay redeploy gets a new ECS task with a new private IP. The relay
+# manifest in S3 still contains the old IP. The directory's RelayPoolManager
+# health checks fail (old IP unreachable). Session initiation fails with
+# relay_unavailable.
+#
+# When the relay peer ID was also unstable (pre-M6 fix), every redeploy also
+# changed the peer ID in CELLO_RELAY_MULTIADDR, requiring a directory task def
+# update + directory restart. The relay transport key is now persisted via
+# Secrets Manager (commit 5308958), so the peer ID is stable. But the IP in
+# the manifest is still stale.
+#
+# The fix has two parts:
+#
+# Part 1 (relay): Set CELLO_DIRECTORY_MULTIADDR in the relay ECS task definition.
+# The relay already dials the directory and calls relay_register when this env
+# var is set (packages/relay/src/bin/relay.ts lines 253-301). Since the relay
+# transport key is now stable (peer ID constant across restarts), the directory
+# multiaddr only needs updating when the directory's peer ID changes — which is
+# rare and already handled by the directory transport key persistence.
+# The value to set: the stable ALB-based directory address, not a task IP.
+#
+# Part 2 (directory): When the directory receives relay_register_ok, it must
+# re-sign the relay manifest and upload it to S3. Currently the directory only
+# updates its in-memory relay registry; the S3 manifest is never touched after
+# initial bootstrap. After this story, a relay_register frame from a relay with
+# a new health check URL causes the directory to atomically update the manifest
+# entry, re-sign, and upload. RelayPoolManager then picks up the new manifest
+# on its next poll (PREP-004).
+#
+# IMPORTANT — sovereign node constraint: the relay_register → manifest update
+# path must work identically in every region. The directory in eu-central-1
+# must update the eu-central-1 relay manifest entry; the directory in
+# ap-northeast-1 must update the ap-northeast-1 manifest entry. The manifest
+# is region-specific (one S3 bucket per region). The story must not assume
+# a single global manifest.
+#
+# The relay's healthCheckUrl in the manifest is its current private IP on port
+# 4000 (VPC-internal health check endpoint). This IP changes on every ECS task
+# launch. The relay already sends its healthCheckUrl in the relay_register frame
+# (packages/relay/src/network-directory-adapter.ts line ~85). The directory
+# uses this value when re-signing the manifest — it does not reconstruct the
+# URL from the connection's source IP.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the relay ECS task starts in any region"
+    action: "CELLO_DIRECTORY_MULTIADDR is set in the task definition;
+      the relay dials the directory using the existing relay_register flow
+      (packages/relay/src/bin/relay.ts lines 253-301); no code change to
+      the relay binary is required — only the ECS task definition changes"
+
+  - trigger: "When the directory receives a relay_register frame from a relay"
+    action: "the directory updates its in-memory relay registry as today;
+      AND it re-signs the relay manifest for this region with the relay's
+      reported healthCheckUrl and uploads the updated manifest to S3;
+      the re-sign uses the directory's node private key (the same key used
+      by sign-manifest.sh) via the existing RelayPoolManager signing logic;
+      relay.manifest.updated is logged at INFO with relayId, region,
+      manifestVersion (incremented from the current version), and
+      healthCheckUrl"
+
+  - trigger: "When relay_register is received from a relay that is already
+    registered with the same healthCheckUrl"
+    action: "the directory processes the registration as already_registered
+      (existing behavior) AND skips the manifest re-sign if the healthCheckUrl
+      is unchanged — manifest version is not bumped for no-op registrations"
+
+  - trigger: "When relay_register is received from a relay that is already
+    registered but has a different healthCheckUrl (new ECS task, new IP)"
+    action: "the directory updates the relay's manifest entry with the new
+      healthCheckUrl, re-signs, and uploads; relay.manifest.updated is logged"
+
+  - trigger: "When the manifest re-sign or S3 upload fails"
+    action: "relay.manifest.update.failed is logged at ERROR with relayId,
+      region, and reason; the relay_register_ok frame is still sent to the
+      relay — the relay's successful registration must not be rolled back
+      because the manifest upload failed; the manifest staleness is an
+      operational issue, not a protocol error"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "The updated cello-ecs-relay.yaml CloudFormation template"
+    when: "the template is validated with `aws cloudformation validate-template`"
+    then: "CELLO_DIRECTORY_MULTIADDR is present in the relay task definition's
+      environment block; its value references the directory ALB DNS name via a
+      CloudFormation cross-stack import or parameter (not a hardcoded IP);
+      the value includes the /p2p/{peer-id} suffix (required by the relay
+      binary's peer ID validation at bin/relay.ts line 206)"
+    test_type: unit
+    component_under_test: infra
+
+  - id: AC-002
+    given: "A local relay node started with CELLO_DIRECTORY_MULTIADDR set to
+      a test directory node's multiaddr (integration test environment)"
+    when: "the relay starts"
+    then: "the relay calls relay_register over the /cello/directory-relay/1.0.0
+      libp2p stream; the directory receives the relay_register frame;
+      relay.registered or relay.already.registered is logged on the relay;
+      AND the relay starts accepting sessions (health check returns 200) —
+      proving registration completed before the service accepted traffic"
+    test_type: integration
+    component_under_test: relay
+    notes: "Uses the existing relay registration integration test infrastructure.
+      This AC verifies the existing relay startup flow works when
+      CELLO_DIRECTORY_MULTIADDR is set — no new code to test, only the
+      IaC configuration change."
+
+  - id: AC-003
+    given: "A directory node with S3 CloudStorageProvider configured and a
+      relay node that sends relay_register with healthCheckUrl:
+      'http://10.0.1.50:4000/health'"
+    when: "the directory processes the relay_register frame"
+    then: "the S3 manifest for this region is updated with the new
+      healthCheckUrl; the updated manifest passes signature verification
+      against the directory's public key; relay.manifest.updated is logged
+      at INFO with relayId, region, manifestVersion > previous version,
+      and healthCheckUrl: 'http://10.0.1.50:4000/health'"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "A relay already registered with healthCheckUrl A; it re-registers
+      with the same healthCheckUrl A (relay restart with same IP)"
+    when: "the directory processes the relay_register frame"
+    then: "relay.already.registered is logged (existing behavior);
+      relay.manifest.updated is NOT logged (no manifest change);
+      the S3 manifest version is unchanged"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-005
+    given: "A relay already registered with healthCheckUrl A; it re-registers
+      with healthCheckUrl B (new ECS task, new IP)"
+    when: "the directory processes the relay_register frame"
+    then: "relay_register_ok is sent; relay.manifest.updated is logged with
+      the new healthCheckUrl B; the S3 manifest is updated with B;
+      a RelayPoolManager that loads the manifest after the upload
+      uses healthCheckUrl B for health checks"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "The S3 upload fails (simulated by a CloudStorageProvider stub that
+      throws on upload)"
+    when: "the directory processes relay_register"
+    then: "relay_register_ok is still sent to the relay (registration succeeds);
+      relay.manifest.update.failed is logged at ERROR with relayId and reason;
+      the in-memory relay registry is updated (relay can serve sessions);
+      the S3 manifest retains its previous content"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-007
+    given: "The relay ECS task definition deployed to dev us-east-1 with
+      CELLO_DIRECTORY_MULTIADDR set"
+    when: "a new relay ECS task starts (simulate by force-deploying the service)"
+    then: "relay.registered or relay.already.registered appears in the relay
+      CloudWatch log group within 60 seconds of task start; AND
+      relay.manifest.updated appears in the directory CloudWatch log group
+      within 60 seconds (for a new IP) OR does not appear (for same IP);
+      AND cello_initiate_session succeeds from the demo agent within 2 minutes
+      of the relay task starting — proving the relay is functional without
+      manual sign-manifest.sh intervention"
+    test_type: integration
+    component_under_test: relay
+    notes: "Run manually after deployment. This is the live smoke test proving
+      the full auto-registration chain works end-to-end."
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The manifest re-sign must use the directory's node private key
+      and produce a signature verifiable by the manifest-signer-pubkey stored
+      in SSM — an attacker who can write to S3 cannot forge a valid manifest
+      without the directory's private key"
+    adversarial_condition: "after the directory uploads a new manifest,
+      verify the manifest signature using the public key from SSM
+      /cello/{env}/directory/manifest-signer-pubkey; a forged manifest
+      (bytes modified after signing) must fail signature verification;
+      verified by AC-003's assertion that the manifest passes signature
+      verification against the directory's public key"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: relay.manifest.updated
+      level: info
+      trigger: "When the directory re-signs and uploads the relay manifest
+        after a relay_register with a new healthCheckUrl"
+      context_fields: [relayId, region, manifestVersion, healthCheckUrl]
+      correlationId: false
+  error_events:
+    - name: relay.manifest.update.failed
+      level: error
+      trigger: "When manifest re-sign or S3 upload fails during relay_register"
+      context_fields: [relayId, region, reason]
+      correlationId: false
+  notes: >
+    relay.manifest.updated and relay.manifest.update.failed must be added to
+    the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
+    by the implementer of this story.
+
+    No alarm for relay.manifest.update.failed in isolation — a single failure
+    is recoverable (the next relay restart will retry). An alarm is warranted
+    when the relay has been running for >10 minutes but relay.manifest.updated
+    has never fired for it (relay appears in registry but manifest was never
+    updated). This alarm is left to a post-M7 operations story.
+  alarms:
+    - condition: "relay.manifest.update.failed fires more than 3 times within
+        a 5-minute window for the same relayId"
+      fires_to: "cello-relay-manifest-update-alarm CloudWatch alarm"
+      notes: "Persistent upload failures indicate S3 credential or bucket
+        policy issue — requires operator intervention."
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes: >
+  IaC change (infra/cloudformation/cello-ecs-relay.yaml):
+  Add to the relay task definition Environment block:
+    - Name: CELLO_DIRECTORY_MULTIADDR
+      Value: !Sub "http://${DirectoryAlbDns}/p2p/${DirectoryPeerId}"
+  Or use a CloudFormation parameter for the full multiaddr string.
+  The peer ID must be the stable one stored in Secrets Manager
+  (cello/{env}/directory/transport-key), not a hardcoded string.
+
+  Directory change (packages/directory/src/directory-node.ts):
+  In the relay_register handler (around line 510), after updating the
+  in-memory relay registry and sending relay_register_ok, add:
+    if (this.#relayPoolManager && frame.healthCheckUrl !== existingHealthCheckUrl) {
+      await this.#reSignAndUploadManifest(frame.relayId, frame.healthCheckUrl)
+        .catch(err => logger.error("relay.manifest.update.failed", { relayId, region, reason: err.message }));
+    }
+
+  The re-sign logic already exists in infra/sign-manifest.sh as a shell script.
+  The equivalent Node.js logic should use the directory's existing Ed25519 key
+  provider to sign and CloudStorageProvider to upload — both are already
+  injected into the directory node.
+
+  IMPORTANT — sovereign node constraint: this story must work in all three
+  regions independently. The eu-central-1 directory updates the eu-central-1
+  relay manifest; the us-east-1 directory updates the us-east-1 relay manifest.
+  No cross-region manifest updates. Each directory node owns its region's relay
+  manifest.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M7
+  discussion_logs:
+    - "2026-06-03_1146_beta-launch-brittleness-analysis"
+  depends_on: []
+  blocks:
+    - CELLO-PREP-004

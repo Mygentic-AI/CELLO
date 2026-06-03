@@ -1,0 +1,257 @@
+---
+name: CELLO-PREP-002
+type: user-story
+date: 2026-06-03
+topics: [dx, install, upgrade, npm, global-install, sqlcipher, wal, cello-mcp, documentation, pre-m7]
+status: draft
+description: >
+  Pre-M7 upgrade path hardening. Switches the install pattern from version-pinned
+  npx to global npm install with a stable binary name, enabling seamless upgrades
+  via npm install -g without remove/re-add. Adds SQLCipher WAL mode to eliminate
+  the DB lock deadlock when a stale process is present. Updates SKILL.md and README.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PREP-002
+domain: PREP
+milestone: M7
+actor: AGENT_OPERATOR
+priority: P0
+components:
+  - connect
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As an agent operator upgrading @cello-protocol/connect,
+  I want to install once with `npm install -g @cello-protocol/connect`
+  and upgrade with `npm install -g @cello-protocol/connect@latest`,
+  so that upgrades never require removing and re-adding the MCP server,
+  and a stale cello-mcp process does not block new process startup.
+
+# ─── Context ────────────────────────────────────────────────
+# Two problems are addressed together because they compound:
+#
+# Problem 1 — Version-pinned npx:
+# `claude mcp add cello -- npx --yes @cello-protocol/connect@0.0.22` bakes a
+# specific version into the MCP config. Every upgrade requires:
+#   claude mcp remove cello
+#   claude mcp add cello -- npx --yes @cello-protocol/connect@{new-version}
+# This is a manual intervention for every release. Most MCP servers don't have
+# this problem because they wrap a remote HTTP service that upgrades server-side.
+# CELLO cannot do this — FROST ceremonies, K_local signing, and SQLCipher all
+# execute on the operator's machine. The correct pattern for a locally-executed
+# MCP server is global install with a stable binary name: `claude mcp add cello
+# -- cello-mcp` stores "cello-mcp" in the MCP config, not a version. Upgrading
+# replaces the binary on disk; Claude Code picks it up on restart or /mcp reconnect.
+#
+# Problem 2 — SQLCipher write lock deadlock on version bump:
+# A stale cello-mcp process (dead directory connection, not self-terminated) holds
+# the SQLCipher exclusive write lock. A new process trying to open the same DB
+# at startup blocks waiting for the lock. Claude Code's 30-second MCP timeout
+# fires before the lock is released. New process never connects.
+# WAL (Write-Ahead Log) mode allows concurrent readers while a writer holds the
+# lock. A new process can complete its read-heavy startup (migration check, load
+# persisted state) without waiting for the stale process's write lock.
+# Combined with process exit on permanent connection loss (delivered in MULTI-002),
+# this eliminates the deadlock entirely.
+#
+# Note: WAL mode must be set AFTER the PRAGMA key is applied and verified
+# (it is a PRAGMA on the decrypted database). It must be set BEFORE the
+# migration runner executes so all migrations run in WAL mode.
+# MULTI-002 rewrites cello-mcp.ts into the AgentRegistry composition root —
+# it must carry WAL mode forward. AC-005 documents this requirement explicitly
+# so the MULTI-002 implementer cannot miss it.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When an operator follows the new install instructions"
+    action: "they run `npm install -g @cello-protocol/connect` once; then
+      `claude mcp add cello -- cello-mcp`; the MCP config stores the binary
+      name 'cello-mcp', not a version-pinned npx command"
+
+  - trigger: "When a new version of @cello-protocol/connect is released
+    and the operator wants to upgrade"
+    action: "the operator runs `npm install -g @cello-protocol/connect@latest`;
+      on the next Claude Code restart or /mcp reconnect, Claude Code launches
+      the new binary; no remove/re-add required"
+
+  - trigger: "When SQLCipherClientStore.open() is called and the database
+    file already exists with a write lock held by another process"
+    action: "WAL mode allows the open() call to proceed; the migration check
+      and loadPersistedState() read operations complete without waiting for
+      the other process's write lock to be released; the MCP server connects
+      to Claude Code within the 30-second timeout"
+
+  - trigger: "When SQLCipherClientStore.open() succeeds and the PRAGMA key
+    has been applied and verified"
+    action: "PRAGMA journal_mode=WAL is issued immediately, before the
+      migration runner executes; the database switches to WAL mode for all
+      subsequent operations in this process"
+
+  - trigger: "When MULTI-002 implements the AgentRegistry composition root"
+    action: "WAL mode is applied in every agent's SQLCipherClientStore.open()
+      call within the AgentRegistry startup sequence; no agent opens its
+      SQLCipher database without WAL mode — this requirement is enforced by
+      AC-005 in this story and by MULTI-002's implementation notes"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A machine with Node.js 24+ and npm installed"
+    when: "the operator runs `npm install -g @cello-protocol/connect` followed
+      by `which cello-mcp` (or `Get-Command cello-mcp` on Windows)"
+    then: "cello-mcp is on $PATH and resolves to a binary in the global npm
+      prefix; running `cello-mcp --version` (or equivalent version flag) exits
+      cleanly with a version string matching the installed package version"
+    test_type: integration
+    component_under_test: connect
+    notes: "Verified manually post-publish. The binary must be resolvable
+      without a full path — this is the requirement for `claude mcp add
+      cello -- cello-mcp` to work without specifying an absolute path."
+
+  - id: AC-002
+    given: "A machine with @cello-protocol/connect installed globally at
+      version N; `claude mcp list` shows `cello: cello-mcp` (binary name,
+      no version)"
+    when: "the operator runs `npm install -g @cello-protocol/connect@{N+1}`
+      and then restarts Claude Code (or runs /mcp)"
+    then: "Claude Code starts the new cello-mcp binary; `cello_status` returns
+      a version field matching version N+1; no `claude mcp remove` or
+      `claude mcp add` was required"
+    test_type: integration
+    component_under_test: connect
+    notes: "Verified manually. This is the golden-path upgrade test. The old
+      install command (`npx --yes @cello-protocol/connect@{version}`) must
+      NOT appear in SKILL.md or README after this story — any reference to
+      the npx version-pinned form is a regression."
+
+  - id: AC-003
+    given: "A SQLCipherClientStore opened with a valid db_key"
+    when: "open() completes successfully (key verified, migrations applied)"
+    then: "`PRAGMA journal_mode` returns 'wal'; this assertion runs as part
+      of the SQLCipherClientStore integration test suite; the PRAGMA is
+      verified by executing `PRAGMA journal_mode` after open() and asserting
+      the result row's `journal_mode` field equals 'wal'"
+    test_type: integration
+    component_under_test: connect
+
+  - id: AC-004
+    given: "Process A holds a SQLCipher write transaction open on client.db;
+      Process B (a new cello-mcp process) calls SQLCipherClientStore.open()
+      on the same file"
+    when: "Process B's open() call executes with WAL mode"
+    then: "Process B's open() completes within 5 seconds despite Process A
+      holding the write lock; the migration check query (`SELECT version FROM
+      schema_migrations`) returns results without blocking; Process B's MCP
+      server starts and registers tools within the 30-second Claude Code timeout"
+    test_type: integration
+    component_under_test: connect
+    notes: "Simulated in test by: (1) opening a SQLCipher DB in one in-process
+      'writer' that begins a transaction and does not commit; (2) opening the
+      same file in a second store instance and verifying open() completes within
+      5 seconds. This proves WAL mode enables concurrent readers. In production,
+      the 'writer' is the stale cello-mcp process."
+
+  - id: AC-005
+    given: "The MULTI-002 story (AgentRegistry) is implemented after PREP-002"
+    when: "the AgentRegistry's cello_start_agent() sequence opens each agent's
+      SQLCipherClientStore"
+    then: "each store is opened with WAL mode; this is verified by the MULTI-002
+      AC-008 integration test (which opens a real SQLCipherClientStore) reading
+      back `PRAGMA journal_mode` and asserting 'wal'; MULTI-002 must NOT
+      introduce a code path that opens a SQLCipherClientStore without WAL mode"
+    test_type: integration
+    component_under_test: connect
+    notes: "This AC exists to prevent MULTI-002 from regressing WAL mode when
+      it rewrites the composition root. MULTI-002 implementer must read PREP-002
+      before writing the store open sequence."
+
+  - id: AC-006
+    given: "The SKILL.md in packages/adapter-claude-code/ and the README in
+      cello-client/"
+    when: "this story is merged"
+    then: "both documents contain the new install/upgrade instructions:
+      install: `npm install -g @cello-protocol/connect`
+      register: `claude mcp add cello -- cello-mcp`
+      upgrade: `npm install -g @cello-protocol/connect@latest`
+      AND neither document contains the old npx version-pinned form
+      `npx --yes @cello-protocol/connect@{version}`"
+    test_type: unit
+    component_under_test: connect
+    notes: "Checked by a grep in CI or manually. The old form must not appear
+      in any user-facing documentation after this story merges."
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "WAL mode must not weaken SQLCipher encryption — the PRAGMA
+      journal_mode=WAL must be issued on an already-encrypted, key-verified
+      database, not before key application"
+    adversarial_condition: "the order in open() must be: (1) PRAGMA key,
+      (2) verify key via SELECT on sqlite_master, (3) PRAGMA journal_mode=WAL,
+      (4) run migrations; an attacker with filesystem access sees encrypted
+      WAL files, not plaintext; verified by asserting PRAGMA journal_mode=WAL
+      is issued only after #verifyKey() completes without error"
+    test_type: unit
+    component_under_test: connect
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: client.store.opened
+      level: info
+      trigger: "Already exists — extended to include journalMode field"
+      context_fields: [env, dbPath, agentId, journalMode]
+      correlationId: false
+  error_events: []
+  notes: >
+    The existing client.store.opened event already fires after open() succeeds.
+    Add journalMode: 'wal' to its context_fields so operators can confirm WAL
+    mode is active in CloudWatch logs without running PRAGMA manually.
+    No new event name — only a new context field on the existing event.
+    No alarm warranted: WAL mode failure would cause open() to throw, which
+    is already covered by the client.store.open.failed error event.
+  alarms: []
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes: >
+  1. WAL mode in SQLCipherClientStore.open() (packages/client/src/sqlcipher-client-store.ts):
+     Add after #verifyKey() returns and before #runMigrations():
+       await this.#execSql(db, "PRAGMA journal_mode=WAL");
+     Then read back and log:
+       const row = await ... db.get("PRAGMA journal_mode") ...
+       this.#logger.info("client.store.opened", { ..., journalMode: row.journal_mode })
+
+  2. SKILL.md (packages/adapter-claude-code/SKILL.md):
+     Replace the install/register section with:
+       ## Install
+       npm install -g @cello-protocol/connect
+       ## Register with Claude Code
+       claude mcp add cello -- cello-mcp
+       ## Upgrade
+       npm install -g @cello-protocol/connect@latest
+     Remove all references to `npx --yes @cello-protocol/connect@{version}`.
+
+  3. README (cello-client/README.md):
+     Same changes as SKILL.md. The quick-start section must show the global
+     install pattern.
+
+  4. Do NOT add a --version flag to cello-mcp.ts if none exists — check first.
+     If the binary already exits with a version when run in TTY mode (AC-002
+     of M6-DX-001), that behavior already satisfies AC-001. Add `--version`
+     only if the current TTY detection code does not print it.
+
+  IMPORTANT — MULTI-002 dependency: This story's AC-005 makes WAL mode a
+  requirement for MULTI-002. The MULTI-002 story must read PREP-002 before
+  implementation and must verify WAL mode in its AC-008 integration test.
+  Add a note to MULTI-002 implementation_notes referencing PREP-002 AC-005.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M7
+  discussion_logs:
+    - "2026-06-03_1146_beta-launch-brittleness-analysis"
+    - "2026-06-03_1210_backward-compatibility-and-upgrade-notification"
+    - "2026-06-01_1600_m6-dx-issues-and-resolutions"
+  depends_on: []
+  blocks:
+    - CELLO-MULTI-002

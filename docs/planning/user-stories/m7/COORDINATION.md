@@ -13,6 +13,29 @@ Read this file at the start of every session. Append, never overwrite.
 
 ---
 
+## Pre-M7 PREP Stories (must complete before MULTI-008 can pass)
+
+Four hardening stories added 2026-06-03. All four are independent of each other
+and can run in parallel:
+
+| ID | Title | Blocks |
+|----|-------|--------|
+| CELLO-PREP-001 | IaC + DB gaps (port-8081 ALB rule, V28 migration) | MULTI-008 |
+| CELLO-PREP-002 | Global install + SQLCipher WAL mode | MULTI-002 |
+| CELLO-PREP-003 | Relay auto-register on startup | PREP-004 |
+| CELLO-PREP-004 | RelayPoolManager manifest polling | — |
+
+**PREP-002 → MULTI-002 dependency:** PREP-002 AC-005 requires MULTI-002 to
+carry WAL mode forward when it rewrites the composition root. The MULTI-002
+implementer must read PREP-002 before writing the AgentRegistry store open
+sequence and must verify WAL mode in MULTI-002's AC-008 integration test.
+
+**PREP-001 → MULTI-008 dependency:** MULTI-008 behavior block explicitly
+flags the /agent-lookup ALB rule and V28 migration as prerequisites for
+AC-002 and AC-004. PREP-001 closes both.
+
+---
+
 ## Parallel Implementation Tracks
 
 M7 has two independent tracks that can execute simultaneously from day one:
