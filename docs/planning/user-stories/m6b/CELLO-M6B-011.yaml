@@ -120,7 +120,9 @@ acceptance_criteria:
     then: "channel.send is called with a message acknowledging existing registration
       and asking the user to reply CONFIRM before re-registering; handleNewUser is
       NOT called on this message; verified by asserting handleNewUser call count = 0
-      and channel.send was called with a string containing 'already' (case-insensitive)"
+      and channel.send was called with a string containing 'already' (case-insensitive);
+      BOUNDARY: if the most recent PRE_AUTH_TOKEN_ISSUED record is older than 30 days,
+      the engine proceeds to handleNewUser directly without a warning (same as a new user)"
     test_type: unit
     component_under_test: operations-agent
 
@@ -128,16 +130,24 @@ acceptance_criteria:
     given: "The engine handles a CONFIRM reply from a user whose prior message
       triggered the re-registration warning (AC-002)"
     when: "handleInboundMessage is called with message='CONFIRM'"
-    then: "handleNewUser is called and the registration proceeds normally"
+    then: "handleNewUser is called and the registration proceeds normally;
+      the CONFIRM guarantee is in-memory and scoped to the current process
+      instance — a restart between the warning and the CONFIRM causes the
+      warning to be re-sent (the user is warned again, not silently dropped),
+      which is safe and expected; verified by asserting handleNewUser.callCount = 1
+      and the registration state machine advances normally"
     test_type: unit
     component_under_test: operations-agent
 
   - id: AC-004
-    given: "The updated cello-ecs-operations-agent.yaml"
-    when: "the EXPECTED_MIGRATION_VERSION environment entry is inspected"
+    given: "The updated cello-ecs-operations-agent.yaml and cello-iam.yaml"
+    when: "the EXPECTED_MIGRATION_VERSION environment entry and execution role are inspected"
     then: "the entry uses ValueFrom referencing SSM parameter
       /cello/${Environment}/ops-agent/expected-migration-version
-      (not a hardcoded Value: '27')"
+      (not a hardcoded Value: '27'); AND cello-iam.yaml OpsAgentTaskExecutionRole
+      includes ssm:GetParameters on
+      arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cello/${Environment}/ops-agent/*
+      (without this IAM permission the task will fail to start with AccessDeniedException)"
     test_type: unit
     component_under_test: infra
 
@@ -163,10 +173,17 @@ security_invariants:
     adversarial_condition: "the CONFIRM message must only be honored when the
       engine has previously sent the re-registration warning to the same channelUserId
       in the same session; a CONFIRM message from a user who did not receive the
-      warning must not trigger handleNewUser; verified by asserting that a
-      CONFIRM message from a user with no pending re-registration warning state
-      is treated as a normal inbound message (e.g. the greeting flow) rather
-      than triggering handleNewUser"
+      warning must not trigger handleNewUser via the CONFIRM shortcut path; verified
+      by asserting:
+        (1) handleNewUser is NOT called as a direct result of the CONFIRM-path logic
+            (the #pendingReregistration.has(from) check must return false); AND
+        (2) the engine treats the message as a new-user message — channel.send is
+            called with a string containing 'already' (the re-registration warning
+            is re-sent to the user), proving the normal new-user code path executed
+            rather than silently dropping the CONFIRM;
+      A test that only asserts handleNewUser.callCount === 0 is NOT sufficient —
+      it would pass even if the CONFIRM was silently dropped. The positive assertion
+      (warning re-sent) is required."
     test_type: unit
     component_under_test: operations-agent
 
@@ -229,12 +246,17 @@ implementation_notes: >
      To:
        - Name: EXPECTED_MIGRATION_VERSION
          ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cello/${Environment}/ops-agent/expected-migration-version"
-     Add to cello-secrets.yaml (or create a new cello-ssm-parameters.yaml):
-       /cello/${Environment}/ops-agent/expected-migration-version:
-         Type: String
-         Value: "27"  (initial value; operator updates per schema bump)
-     Ensure the ops-agent ECS execution role has ssm:GetParameters on this path
-     (check cello-iam.yaml — add if missing).
+     Create a new cello-ssm-parameters.yaml (NOT cello-secrets.yaml — that file
+     contains AWS::SecretsManager::Secret resources, which is wrong for SSM):
+       AWS::SSM::Parameter resource for
+         /cello/${Environment}/ops-agent/expected-migration-version
+         Type: String, Value: "27" (initial; operator updates per schema bump)
+     Add to cello-iam.yaml OpsAgentTaskExecutionRole:
+       - Effect: Allow
+         Action: ssm:GetParameters
+         Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cello/${Environment}/ops-agent/*"
+     WITHOUT the IAM permission, the ECS task fails to start with AccessDeniedException
+     before any application code runs.
 
 # ─── References ─────────────────────────────────────────────
 references:

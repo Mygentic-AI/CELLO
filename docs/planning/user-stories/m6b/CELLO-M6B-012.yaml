@@ -109,12 +109,15 @@ acceptance_criteria:
       all seven assertions must pass for AC-001 to be satisfied"
     test_type: integration
     component_under_test: directory
-    notes: "The test must use new Uint8Array(randomBytes(16)) not randomBytes(16) for
-      the field values, because randomBytes returns a Buffer (a Node.js Buffer subclass
-      of Uint8Array). While Buffer instanceof Uint8Array is true, the round-trip test
-      is specifically checking for the __type:Uint8Array sentinel path in jsonStringify
-      and that jsonParse restores to a real Uint8Array (not Buffer). Use
-      new Uint8Array(crypto.randomBytes(16)) to construct a plain Uint8Array."
+    notes: "Use new Uint8Array(randomBytes(16)) for field values. The distinction from
+      randomBytes(16) (a Buffer) does NOT affect whether jsonStringify uses the
+      __type:Uint8Array sentinel — Buffer is a subclass of Uint8Array so both trigger
+      the sentinel path. The important constraint is using enqueueNotification (which
+      calls jsonStringify) rather than raw superPool.query + JSON.stringify. Raw
+      JSON.stringify(randomBytes(16)) produces {type:'Buffer',data:[...]} which the
+      reviver does not recognize — that is the actual bug. Whether you use Buffer or
+      Uint8Array as input to enqueueNotification does not matter; use new Uint8Array(...)
+      for clarity but do not treat the Buffer/Uint8Array distinction as the core fix."
 
   - id: AC-002
     given: "A seal_verified DirectoryNotification with real Uint8Array fields:
@@ -130,9 +133,10 @@ acceptance_criteria:
   - id: AC-003
     given: "The updated test file after AC-001 and AC-002 are added"
     when: "the full test suite for persist-019 runs"
-    then: "the existing AC-003 FIFO ordering test is unchanged and still passes;
-      AC-001 and AC-002 are new tests in a new describe block titled
-      'PERSIST-019 AC-001a/AC-001b: Uint8Array field type integrity after drain'"
+    then: "the existing FIFO ordering test (original PERSIST-019 AC-003) is unchanged
+      and still passes; the two new tests are in describe blocks titled
+      'CELLO-M6B-012 AC-001: session_sealed Uint8Array field integrity' and
+      'CELLO-M6B-012 AC-002: seal_verified Uint8Array field integrity'"
     test_type: unit
     component_under_test: directory
     notes: "AC-003 of the original story (FIFO ordering) must not be modified — only
@@ -168,7 +172,7 @@ implementation_notes: >
   Add to packages/directory/src/__tests__/persist-019-notification-queue.test.ts
   after the existing AC-003 FIFO ordering describe block:
 
-  describeIntegration("PERSIST-019 AC-001a: session_sealed Uint8Array field integrity", () => {
+  describeIntegration("CELLO-M6B-012 AC-001: session_sealed Uint8Array field integrity", () => {
     it("session_id, sealed_root, directory_signature survive enqueue→drain as Uint8Array", async () => {
       const logger = makeMockLogger();
       const store = new PgDirectoryStore(superPool, logger);
@@ -197,8 +201,11 @@ implementation_notes: >
       // __type:Uint8Array sentinel), NOT raw superPool.query + JSON.stringify.
       store.enqueueNotification(pubkeyHex, notification, correlationId);
 
-      // Give the async fire-and-forget a tick to complete
-      await new Promise(resolve => setTimeout(resolve, 50));
+      // Wait for the fire-and-forget insert using the waitForRow helper
+      // (same pattern as AC-002 and AC-008 in this test file).
+      // Do NOT use setTimeout(resolve, 50) — it is brittle under CI load.
+      // waitForRow polls with a 2-second timeout and is already in scope.
+      await waitForRow(superPool, pubkeyHex);
 
       const drained = await store.drainNotifications(pubkeyHex, correlationId);
       expect(drained).toHaveLength(1);

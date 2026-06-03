@@ -15,7 +15,7 @@ description: >
 ---
 # ─── Identity ───────────────────────────────────────────────
 id: CELLO-M6B-010
-domain: PREP
+domain: M6B
 milestone: M6B
 actor: OPS
 priority: P1
@@ -91,13 +91,33 @@ story: >
 #   DIRECTORY has no record of it. The subsequent session_request with this
 #   connection_id returns no_connection silently. The sender never knows why
 #   their cello_request_connection succeeded but cello_initiate_session fails.
-#   FIX: persist to Postgres (new table: pending_connection_requests, already
-#   partially scoped in PERSIST-019 but not implemented). On startup, load all
-#   non-expired requests. Expire after TTL (matching the in-memory TTL).
-#   NOTE: PERSIST-019 already has pending_connection_requests in the DB schema
-#   (the notification_queue migration added both tables). Check whether the
-#   directory's startup path already loads these — if so, this gap may be
-#   smaller than expected.
+#
+#   IMPORTANT — two distinct cases; only one needs this fix:
+#
+#   Case A (pre-delivery): the connection request is still in the
+#     pending_connection_requests POSTGRES TABLE — the target agent has NOT
+#     yet reconnected to receive it. In this case, the reconnect drain path
+#     (dequeuePendingConnectionRequests() called on reconnect, directory-node.ts
+#     line 1164) already handles delivery — no startup load needed for Case A.
+#
+#   Case B (post-delivery, pre-acceptance): the target received the inbound
+#     connection_request frame (the row was DELETEd from pending_connection_requests
+#     and placed in #pendingConnectionRequests), but the target has not yet
+#     called cello_accept_connection. After a restart, this in-memory record is
+#     GONE — not in the DB. This is the actual gap.
+#
+#   FIX for Case B: on the transition from queue→memory (in dequeuePendingConnectionRequests),
+#   also write to a new persistent table (e.g. active_connection_requests) that
+#   survives restart. On startup, load from this table into #pendingConnectionRequests.
+#   Delete from active_connection_requests on cello_accept_connection or on expiry.
+#
+#   Alternatively: accept that Case B is acceptable to lose on restart (the target
+#   will receive a "no_connection" error and the sender can retry). If this is the
+#   chosen approach, state it explicitly in the AC — this AC may only require a test
+#   covering the Case A path (already handled by reconnect drain).
+#
+#   The implementer MUST choose which case to fix before writing code. AC-001 covers
+#   the general end-to-end flow; the implementation notes below specify Case B fix.
 #
 # #sessionLastActivity (PERSIST-015)
 #   session_id_hex → last activity timestamp (ms).
@@ -291,10 +311,32 @@ implementation_notes: >
      the milestone. If implementing: add unilateral_sealed_at and
      unilateral_submitter columns to mmr_sessions; load on startup.
 
-  All three state types (connection requests, session participants, session activity)
-  must be loaded in the startup sequence BEFORE directory.start() registers the
-  libp2p stream handlers. Otherwise a race exists where an agent connects and sends
-  a frame before the state is restored.
+  STARTUP SEQUENCING — CRITICAL:
+  directory.start() is called INSIDE createDirectoryNode() in bin/directory.ts.
+  Once createDirectoryNode() returns, stream handlers are already registered and
+  agents can connect. This means restore methods called AFTER createDirectoryNode()
+  have a race window.
+
+  Two correct approaches (implementer must choose one):
+
+  Option A — Constructor injection (safest, no race):
+    Load the three state maps from Postgres BEFORE calling createDirectoryNode().
+    Pass them to createDirectoryNode() via new fields in DirectoryNodeOptions:
+      initialPendingConnectionRequests?: Map<...>
+      initialSessionParticipants?: Map<...>
+      initialSessionLastActivity?: Map<...>
+    CelloDirectoryNode constructor populates the maps before start() registers handlers.
+
+  Option B — Accept small race window (pragmatic):
+    Call restore methods after createDirectoryNode() returns but before the
+    ECS health check passes. The window is ~milliseconds (ECS task boot to
+    first agent connection takes seconds). Document the accepted risk explicitly.
+    Use restorePendingConnectionRequests(), restoreSessionParticipants(),
+    restoreSessionLastActivity() methods on CelloDirectoryNode called between
+    createDirectoryNode() and the first health check.
+
+  The implementation notes below use Option B for minimal code change. If the
+  operator requires zero-race semantics, use Option A.
 
 # ─── References ─────────────────────────────────────────────
 references:

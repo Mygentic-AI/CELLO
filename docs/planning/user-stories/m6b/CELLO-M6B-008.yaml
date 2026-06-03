@@ -12,7 +12,7 @@ description: >
 ---
 # ─── Identity ───────────────────────────────────────────────
 id: CELLO-M6B-008
-domain: PREP
+domain: M6B
 milestone: M6B
 actor: OPS
 priority: P0
@@ -43,6 +43,25 @@ story: >
 # the pieces: it downloads from S3, verifies the signature, and calls
 # applyManifest() which handles version monotonicity (ignores stale manifests).
 # The poll loop simply calls loadManifest() on a configurable interval.
+#
+# IMPORTANT — loadManifest() behaviour the implementer must know:
+#   1. loadManifest() returns Promise<void> — it does NOT return the manifest.
+#      The method calls applyManifest() internally and logs relay.manifest.loaded.
+#   2. loadManifest() THROWS when applyManifest() returns { ok: false } (same or
+#      stale version). The error message is "Manifest rejected: version N is not
+#      higher than current N". This means the poll loop's .catch handler fires on
+#      EVERY no-op poll — logging relay.manifest.poll.failed at WARN for something
+#      that is not a failure. The startPolling() implementation must distinguish
+#      between a stale-version error (no-op → DEBUG) and a real failure (WARN).
+#
+#   Two correct approaches for the poll implementation:
+#     A. Snapshot #currentVersion before calling loadManifest(), compare after.
+#        If throws and the message matches "Manifest rejected: version", treat as
+#        noop and log relay.manifest.poll.noop. Re-throw for real errors.
+#     B. Expose a new loadManifestIfNewer() method on RelayPoolManager that returns
+#        { updated: boolean } instead of throwing on stale. The poll loop uses this.
+#   The implementation notes use approach A (snapshot-and-compare). Approach B
+#   is cleaner but requires a larger API change.
 #
 # applyManifest() already guards against version regression:
 #   if (manifest.version <= currentVersion) → return { ok: false }
@@ -106,8 +125,8 @@ acceptance_criteria:
     then: "after the first poll: relay pool reflects version N (initial load);
       after the second poll: relay pool reflects version N+1;
       relay.manifest.refreshed is logged with manifestVersion: N+1;
-      RelayPoolManager.currentRelays contains the relay's updated
-      healthCheckUrl from version N+1"
+      RelayPoolManager.relays (the existing getter) contains the relay's
+      updated healthCheckUrl from version N+1"
     test_type: integration
     component_under_test: directory
 
@@ -243,46 +262,70 @@ implementation_notes: >
     stopPolling(): void — calls clearInterval
 
   startPolling() implementation:
+    NOTE: loadManifest() returns Promise<void>, not Promise<{ manifest }>.
+    It throws when the manifest version is not strictly higher than current.
+    Use a version snapshot to distinguish no-op from real failure:
+
     this.#pollInterval = setInterval(() => {
+      const versionBefore = this.#currentVersion;
       this.loadManifest()
-        .then(({ manifest }) => {
-          if (manifest.version > this.#currentVersion) {
-            this.logger.info("relay.manifest.refreshed", {
-              manifestVersion: manifest.version,
-              relayCount: manifest.relays.length
+        .then(() => {
+          // loadManifest() calls applyManifest() and logs relay.manifest.loaded.
+          // If we get here without throwing, the version increased.
+          if (this.#currentVersion > versionBefore) {
+            this.#logger.info("relay.manifest.refreshed", {
+              manifestVersion: this.#currentVersion,
+              relayCount: this.#currentRelays.length,
             });
           } else {
-            this.logger.debug("relay.manifest.poll.noop", {
+            // Shouldn't reach here (loadManifest throws on stale), but be defensive.
+            this.#logger.debug("relay.manifest.poll.noop", {
               currentVersion: this.#currentVersion,
-              receivedVersion: manifest.version
+              receivedVersion: this.#currentVersion,
             });
           }
         })
         .catch((err: unknown) => {
-          this.logger.warn("relay.manifest.poll.failed", {
-            reason: err instanceof Error ? err.message : String(err),
-            currentVersion: this.#currentVersion
-          });
+          const reason = err instanceof Error ? err.message : String(err);
+          // Distinguish stale-version (no-op) from real failure
+          if (reason.startsWith("Manifest rejected: version")) {
+            this.#logger.debug("relay.manifest.poll.noop", {
+              currentVersion: versionBefore,
+              receivedVersion: versionBefore,
+            });
+          } else {
+            this.#logger.warn("relay.manifest.poll.failed", {
+              reason,
+              currentVersion: this.#currentVersion,
+            });
+          }
         });
     }, intervalMs);
-    this.logger.info("relay.manifest.poll.started", { intervalMs });
+    this.#logger.info("relay.manifest.poll.started", { intervalMs });
 
-  Note: loadManifest() already calls applyManifest() internally which
-  handles the version monotonicity check. The poll loop does not need to
-  call applyManifest() separately.
+  Note: loadManifest() calls applyManifest() internally; the poll loop does
+  not call applyManifest() directly. #currentRelays and #currentVersion are
+  private — the implementation lives inside RelayPoolManager where they are
+  accessible as private fields.
 
-  Directory node wiring (packages/directory/src/directory-node.ts):
-  After the initial loadManifest() call at startup completes, add:
+  Directory node wiring — IMPORTANT: loadManifest() is called in
+  packages/directory/src/bin/directory.ts (NOT directory-node.ts).
+  The SIGTERM handler is also in bin/directory.ts. Add startPolling after
+  the initial loadManifest() call in bin/directory.ts:
     const pollIntervalMs = parseInt(
       process.env["RELAY_MANIFEST_POLL_INTERVAL_MS"] ?? "120000",
       10
     );
-    if (celloEnv !== "local") {
-      this.#relayPoolManager.startPolling(pollIntervalMs);
+    if (env !== "local") {
+      relayPoolManager.startPolling(pollIntervalMs);
     }
 
-  In the graceful shutdown handler (SIGTERM):
-    this.#relayPoolManager.stopPolling();
+  In the graceful shutdown handler in bin/directory.ts (the SIGTERM handler):
+    relayPoolManager.stopPolling();
+    relayPoolManager.stop(); // also stop health check timer
+
+  Note: The health check timer (stop()) and the manifest poll timer (stopPolling())
+  are separate — both must be called on shutdown.
 
   IMPORTANT — sovereign node constraint: no global relay pool. Each directory
   instance has its own RelayPoolManager reading from its own region's S3 bucket.

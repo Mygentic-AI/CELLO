@@ -120,33 +120,54 @@ acceptance_criteria:
       same key derivation"
     then: "the database opens without error; loadPersistedState() returns the
       previously stored state (registration state, sessions) with all fields
-      intact; verified by creating a database with the old library, migrating
-      to the new library, and asserting the state round-trips correctly"
+      intact; BLOB fields (e.g. signing_share from frost_key_shares table) must
+      come back as Uint8Array or Buffer — not a plain object; verified by:
+        (1) creating a database using the OLD library via @journeyapps/sqlcipher
+            (kept as devDependency in core/client for this test only);
+        (2) writing a row with a known signing_share Uint8Array;
+        (3) opening the SAME .db file with the REPLACEMENT library;
+        (4) reading the row back and asserting Buffer.isBuffer(row.signing_share)
+            || row.signing_share instanceof Uint8Array;
+        (5) asserting byte equality: the bytes read back match the bytes written;
+      byte equality alone (without type assertion) is NOT sufficient — a plain
+      object could satisfy bytes matching while breaking downstream crypto"
     test_type: integration
     component_under_test: client
     notes: "This is the most critical AC. If the cipher settings differ between
       libraries, existing user databases become unreadable. Test with the actual
-      PRAGMA key format used in db-key-derivation.ts."
+      PRAGMA key format used in db-key-derivation.ts.
+      @journeyapps/sqlcipher must be moved to devDependencies in core/client
+      (not removed entirely) so this compatibility test fixture can use it.
+      The final published package must not have @journeyapps/sqlcipher as a
+      production dependency — only devDependencies."
 
   - id: AC-003
     given: "The updated cello-client core/client package"
     when: "the full persist-* test suite runs"
-    then: "all existing persist-009, persist-011, persist-022, persist-024 tests pass
-      with the replacement library; no test requires the @journeyapps/sqlcipher
-      callback-based API (db.serialize, db.run with callback)"
+    then: "all existing persist-009, persist-010, persist-011, persist-012,
+      persist-014-reconciliation, persist-015-unilateral-seal, persist-022,
+      persist-024 tests pass with the replacement library; no test requires the
+      @journeyapps/sqlcipher callback-based API (db.serialize, db.run with callback);
+      IMPORTANT: persist-009's SI-003 test (lines 582-633) directly imports
+      @journeyapps/sqlcipher via createRequire and performs raw database operations —
+      this test must be rewritten to use the replacement library's raw API"
     test_type: unit
     component_under_test: client
 
   - id: AC-004
-    given: "The updated @cello-protocol/connect package.json"
-    when: "the os field is inspected"
-    then: "there is no os restriction or the restriction includes 'win32';
-      npm install on Windows does not fail with 'Unsupported platform'"
+    given: "The updated @cello-protocol/connect package published to npm"
+    when: "npm install @cello-protocol/connect is attempted on Windows"
+    then: "the install does not fail with 'Unsupported platform'; verified by
+      confirming that neither core/client/package.json nor any transitive
+      production dependency of @cello-protocol/connect has an os restriction
+      that excludes 'win32'; the os restriction is on @journeyapps/sqlcipher
+      in core/client — after replacement, that restriction must be gone"
     test_type: unit
     component_under_test: adapter-claude-code
-    notes: "The existing @journeyapps/sqlcipher has os: ['darwin','linux'] which
-      blocks Windows at install time with 'Unsupported platform'. This AC ensures
-      the replacement library either has no os restriction or supports Windows."
+    notes: "The os restriction originates from @journeyapps/sqlcipher in
+      core/client, which propagates transitively to connect. Inspecting connect's
+      own package.json os field is not sufficient — the transitive dependency
+      must also be free of the restriction after the swap."
 
   - id: AC-005
     given: "The updated SQLCipherClientStore (or its replacement)"
@@ -189,6 +210,11 @@ observability:
   notes: >
     No new log events. The adapter.initialised event for the store already
     exists and will still fire. No taxonomy update needed.
+    IMPORTANT: M6B-005 adds a journalMode context field to client.store.opened.
+    The rewrite of sqlcipher-client-store.ts must carry this field forward.
+    The implementer MUST read M6B-005's observability AC before writing the
+    new open() method — missing journalMode on client.store.opened silently
+    breaks the observability contract introduced by M6B-005.
   alarms: [] # no alarm: startup-time improvement; no new failure mode
 
 # ─── Implementation Notes ───────────────────────────────────
