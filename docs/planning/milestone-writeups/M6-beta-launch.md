@@ -660,7 +660,7 @@ Reactive story. Discovered during DEMO-001 deployment when `systemctl start cell
 ## M6-E2E-001 — Stranger Flow Verification (IN PROGRESS)
 
 **Started:** 2026-06-01
-**Status:** ACs 001-004 verified. M6-DX-001 CLOSED 2026-06-01. Directory pipeline deploying DX-001 fixes. Resuming ACs 005-010 once pipeline completes (~1h).
+**Status:** ACs 001-005 verified 2026-06-03. AC-006 blocked — sealed receipt not returned (see below). ACs 007-010 pending.
 
 ### Infrastructure fixes deployed during E2E-001 verification
 

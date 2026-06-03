@@ -833,3 +833,45 @@ Use `@cello-protocol/connect@0.0.14` (already installed). After ops-agent is liv
 2. Testing agent: `cello_register({ token: 'CELLO-...' })` (fresh DKG, clean share)
 3. `cello_request_connection({ target_agent_id: 'a2c55e2721f45cfa86cb3417a76e3f7b' })` (demo agent)
 4. `cello_initiate_session({ target_agent_id: 'a2c55e2721f45cfa86cb3417a76e3f7b' })`
+
+---
+
+## 2026-06-03 — M6-E2E-001 AC-005 verified. AC-006 blocked.
+
+### What was completed
+
+**Infrastructure fixed this session:**
+- `CELLO_ANNOUNCE_ADDRS` added to `@cello-protocol/transport` `CreateNodeOptions` and `cello-mcp.ts` (new env var, comma-separated). Published as `@cello-protocol/connect@0.0.22`.
+- Demo agent EC2 env.conf updated: `CELLO_ANNOUNCE_ADDRS=/ip4/32.196.100.165/tcp/4001`. Service restarted with `connect@0.0.22`. This fixes the `content_missing` desync — demo agent now announces its public EIP instead of private `172.31.x.x`.
+- Relay transport key fix deployed (second pipeline run with `CELLO_RELAY_TRANSPORT_KEY_HEX`): relay peer ID now stable across restarts.
+- Stale MCP / SQLCipher DB lock documented in write-up. Workaround: `pkill -f cello-mcp` then `/mcp`.
+
+**AC-005 verified (2026-06-03 ~09:30 UTC):**
+Session `a654d6eebd8bdb2dc57e368b3a798860` — full 4-message exchange with demo agent completed:
+- `cello_initiate_session` → `ok: true`
+- `cello_send` x4 → all `delivered: true`
+- `cello_receive` x4 → all 4 hardcoded demo agent responses received in sequence
+- Hash chain progressing (leaf hashes verified)
+- Elapsed time well under 10 minutes
+
+**AC-006 blocked — sealed receipt not returned:**
+After the demo agent sent message 4, it called `cello_close_session` on its side. By the time the test agent called `cello_get_sealed_receipt`, the session was already closed server-side with no seal. `cello_close_session` from the test agent returned `seal_rejected / session_not_active`.
+
+Root cause unknown — need to investigate whether:
+1. The demo agent's `cello_close_session` completes the seal and the test agent should call `cello_get_sealed_receipt` immediately after receiving message 4 (before calling close itself), OR
+2. The seal ceremony is broken and `cello_close_session` is not producing a sealed receipt even when called first.
+
+### Resume point
+1. `pkill -f cello-mcp` if needed, then `/mcp` to get a fresh MCP process
+2. `cello_request_connection` to demo agent `12ccbfd5fa4049177e4c4a81f7462641c1ab4490bfd640ea7e6407a69d06a2f8`
+3. `cello_initiate_session`
+4. Send 4 messages, receive 4 responses
+5. After receiving message 4 (demo agent sign-off), call `cello_get_sealed_receipt` BEFORE calling `cello_close_session` — test whether the seal is already available from the demo agent's close
+6. If no receipt: investigate sealing logic in `client.ts` and `cello_close_session` flow
+
+### Current infra state
+- Directory: 3 regions, image `1a21b65` + all persistence fixes
+- Relay: `connect@0.0.22` deployed, transport key stable
+- Demo agent EC2 `i-0ad3e7c22470f266e`: `connect@0.0.22`, `CELLO_ANNOUNCE_ADDRS=/ip4/32.196.100.165/tcp/4001`, running
+- Test agent pubkey: `2fa9fb0815f9b0a13fb8ef3e9f90ccc96315fdb964ac87162b3ab9611b86bbbd`
+- Demo agent pubkey: `12ccbfd5fa4049177e4c4a81f7462641c1ab4490bfd640ea7e6407a69d06a2f8`
