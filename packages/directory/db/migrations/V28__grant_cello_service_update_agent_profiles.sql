@@ -7,5 +7,11 @@
 --          not UPDATE. The bug was latent because CI tests run as superuser.
 --          This migration closes the gap discovered in OPS-AGENT-001.
 -- Story: CELLO-M6B-004
+--
+-- Rollback (if needed): REVOKE UPDATE ON agent_profiles FROM cello_service;
+--
+-- Note: Flyway will error if either agent_profiles table or cello_service role
+--       does not exist. No explicit validation needed — the GRANT statement
+--       itself is the validation.
 
 GRANT UPDATE ON agent_profiles TO cello_service;

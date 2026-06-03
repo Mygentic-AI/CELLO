@@ -371,7 +371,7 @@ describe("AC-006 (directory): empty phone_stub succeeds when pre_auth_token cons
 
   it("non-empty phone_stub continues to work (baseline — legacy path unchanged)", async () => {
     const dirKey = generateKeypair();
-    const { directory, node: dirNode, stop: stopDir } = await createDirectoryNode({
+    const { node: dirNode, stop: stopDir } = await createDirectoryNode({
       keyProvider: dirKey,
       relay: makeRelay(),
       relayEndpoint: { peer_id: "12D3KooWFakeRelay", multiaddrs: ["/ip4/127.0.0.1/tcp/19999"] },
@@ -408,7 +408,7 @@ describe("AC-006 (directory): empty phone_stub succeeds when pre_auth_token cons
 
   it("AC-006 PART 1: empty phone_stub succeeds when pre_auth_token is valid DEV token", async () => {
     const dirKey = generateKeypair();
-    const { directory, node: dirNode, stop: stopDir } = await createDirectoryNode({
+    const { node: dirNode, stop: stopDir } = await createDirectoryNode({
       keyProvider: dirKey,
       relay: makeRelay(),
       relayEndpoint: { peer_id: "12D3KooWFakeRelay", multiaddrs: ["/ip4/127.0.0.1/tcp/19999"] },
@@ -473,7 +473,7 @@ describe("AC-006 (directory): empty phone_stub succeeds when pre_auth_token cons
     };
 
     const dirKey = generateKeypair();
-    const { directory, node: dirNode, stop: stopDir } = await createDirectoryNode({
+    const { node: dirNode, stop: stopDir } = await createDirectoryNode({
       keyProvider: dirKey,
       relay: makeRelay(),
       relayEndpoint: { peer_id: "12D3KooWFakeRelay", multiaddrs: ["/ip4/127.0.0.1/tcp/19999"] },
