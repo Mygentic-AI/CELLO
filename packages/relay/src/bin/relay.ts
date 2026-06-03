@@ -175,13 +175,27 @@ const relayId = Buffer.from(relayPubkey).toString("hex");
 // Load or generate persisted transport key (ensures stable Peer ID across restarts)
 
 let transportPrivateKey: Uint8Array;
-try {
-  transportPrivateKey = readFileSync(transportKeyPath);
-} catch {
-  transportPrivateKey = randomBytes(32);
-  mkdirSync(join(homedir(), ".cello"), { recursive: true });
-  writeFileSync(transportKeyPath, transportPrivateKey, { mode: 0o600 });
-  logger.info("adapter.initialised", { adapterName: "TransportKey", implementation: "generated", env: celloEnv });
+const transportKeyHex = process.env["CELLO_RELAY_TRANSPORT_KEY_HEX"];
+if (transportKeyHex && transportKeyHex !== "PLACEHOLDER_POPULATE_VIA_CLI") {
+  // Production/dev/staging: transport key injected via Secrets Manager at ECS task launch.
+  // This ensures the relay peer ID is stable across restarts and redeploys.
+  transportPrivateKey = Buffer.from(transportKeyHex, "hex");
+  logger.info("adapter.initialised", { adapterName: "TransportKey", implementation: "secrets_manager", env: celloEnv });
+} else if (celloEnv !== "local") {
+  // Non-local with missing/placeholder key — fail fast. Silently generating a random key
+  // in ECS would produce an unstable peer ID, breaking all connected clients on every restart.
+  logRelayServiceStartFailed(logger, { reason: "CELLO_RELAY_TRANSPORT_KEY_HEX is required for non-local environments", region: awsRegion });
+  process.exit(1);
+} else {
+  // Local: load from file or generate once and persist.
+  try {
+    transportPrivateKey = readFileSync(transportKeyPath);
+  } catch {
+    transportPrivateKey = randomBytes(32);
+    mkdirSync(join(homedir(), ".cello"), { recursive: true });
+    writeFileSync(transportKeyPath, transportPrivateKey, { mode: 0o600 });
+    logger.info("adapter.initialised", { adapterName: "TransportKey", implementation: "generated", env: celloEnv });
+  }
 }
 
 // ─── Directory adapter ─────────────────────────────────────────────────────────
