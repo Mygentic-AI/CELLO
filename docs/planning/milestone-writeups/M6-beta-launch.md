@@ -915,6 +915,12 @@ This is infrastructure debt that compounds. Every deploy can silently break othe
 
 4. **Relay re-registration on startup** — relay should dial the directory on startup and call `relay_register` regardless of whether `CELLO_DIRECTORY_MULTIADDR` is set. Current behavior: only registers if the env var is provided.
 
+5. **Relay transport key not persisted — peer ID changes on every ECS restart (2026-06-03)** — The relay binary supports `CELLO_RELAY_TRANSPORT_KEY_FILE` but ECS Fargate has no persistent filesystem. Every relay redeploy generates a fresh transport key and therefore a new libp2p peer ID. The directory's `CELLO_RELAY_MULTIADDR` env var and the relay manifest `healthCheckUrl` both encode the old IP+peer-ID and break immediately. Observed twice during M6 E2E testing; required manual manifest re-sign + directory task def update + directory restart each time.
+   **Root cause:** No Secrets Manager backing for the relay transport key (unlike the directory, which persists its transport key in `cello/{env}/directory/transport-key`).
+   **Fix:** Add `CELLO_RELAY_TRANSPORT_KEY_HEX` env var support to the relay binary (identical to `CELLO_DIRECTORY_TRANSPORT_KEY_HEX` pattern). Store in `cello/{env}/relay/transport-key`. Wire into ECS task def via `Secrets`/`ValueFrom`. After first deploy, peer ID is stable across all future restarts.
+
+6. **Relay SG missing port 4001 ingress from directory (2026-06-03)** — The relay SG only allowed TCP 4000 (HTTP health check) from the directory SG. Port 4001 is the libp2p port the directory dials for `recordAssignment` during session initiation. This blocked every `cello_initiate_session` with `relay_unavailable` even though the FROST ceremony succeeded. Fixed manually (sgr-0bb2810f8c2edb71c) and reflected in `cello-vpc.yaml` IaC. Not yet deployed to eu-central-1 or ap-northeast-1.
+
 ### The Lesson
 
 Any infrastructure change (deploy, restart, IP change) must leave every connected service in a working state without manual intervention. If it doesn't, it's a reliability bug, not just a devops inconvenience. This is the #1 infrastructure priority for M7.
