@@ -42,12 +42,16 @@ story: >
 #      - CELLO_RELAY_WS_LISTEN_ADDR is not in cello-ecs-relay.yaml
 #      - There is no ALB for the relay
 #      - There is no Route53 record (relay-us1/eu1/ap1.cello.mygentic.ai)
-#      - There is no ACM certificate for the relay subdomain
-#    External clients receive a session assignment with the relay's multiaddr
-#    from the manifest. The manifest currently omits WebSocket addresses —
-#    clients dial the libp2p TCP address directly but that IP is inside the VPC
-#    and unreachable externally. After this story, the manifest will include
-#    the WebSocket multiaddr (wss://relay-us1.cello.mygentic.ai/ws → port 4002).
+#    External clients receive a session assignment with the relay's endpoint
+#    from the relay manifest. The manifest currently has placeholder or stale
+#    endpoints — clients cannot reach the relay from outside the VPC.
+#
+#    RELAY ALB PATTERN: follow the directory ALB pattern exactly.
+#    The directory ALB uses HTTP on port 80 (cello-ecs-directory.yaml line 243).
+#    TLS is terminated at the WAF layer; the ALB-to-container path is HTTP.
+#    The relay ALB will also use HTTP on port 80. No CertificateArn import in
+#    the relay ECS template — this avoids the chicken-and-egg problem where
+#    cello-ecs-relay requires an ACM cert export that cello-route53-relay creates.
 #
 # 2. Port-4001 SG fix only deployed to us-east-1.
 #    The IaC fix (commit 40543d5, cello-vpc.yaml) adding port 4001 ingress to
@@ -57,21 +61,34 @@ story: >
 #    the relay on port 4001 for the /cello/directory-relay/1.0.0 protocol.
 #    This story closes the gap by deploying the vpc stack to all three regions.
 #
+# 3. Relay manifest S3 JSON update.
+#    The relay manifest is a static S3 JSON file (RelayPoolManifest) consumed
+#    by RelayPoolManager in packages/directory/src/relay-pool-manager.ts.
+#    RelayManifestEntry has an `endpoint` field (WebSocket URL, e.g.
+#    wss://relay-us1.cello.mygentic.ai) and a `multiaddrs` field (libp2p
+#    multiaddrs for client connection). These must be updated after the relay
+#    ALB and DNS are deployed so clients receive the correct WebSocket URL
+#    in their session assignment. This is an operator step (run sign-manifest.sh
+#    with updated JSON), not a code change.
+#
 # Architecture:
-#   External client → wss://relay-us1.cello.mygentic.ai (port 443) →
-#   ALB (HTTPS → HTTP forward) → relay ECS task port 4002 (WS listener)
+#   External client → ws://relay-us1.cello.mygentic.ai (port 80) →
+#   ALB (HTTP forward) → relay ECS task port 4002 (WS listener)
 #
 #   The relay's WebSocket listener runs on /ip4/0.0.0.0/tcp/4002/ws.
 #   CELLO_RELAY_WS_LISTEN_ADDR="/ip4/0.0.0.0/tcp/4002/ws" in the task def.
-#   The relay binary passes this as a second listen address to createRelayNode.
-#   The transport package already includes webSockets() in the transport config.
 #
-# The relay ALB follows the same pattern as the directory ALB in
-# cello-ecs-directory.yaml: internet-facing, HTTPS on port 443, forwarding
-# to the container HTTP port (4002). The only differences:
-#   - Target group port: 4002 (not 8080)
-#   - Health check: port 4000 /health (relay uses 4000 for health, 4002 for WS)
-#   - No path-based routing rules (relay ALB has one target group only)
+#   NOTE: wss:// (WSS) requires TLS termination at the ALB, which requires
+#   an ACM certificate. The directory ALB uses plain ws:// for the same
+#   reason. Until TLS is added (future story), the relay endpoint in the
+#   manifest must use ws:// not wss://.
+#
+# The relay manifest endpoint and multiaddrs update is an operator step,
+# not automated by relay_register. The relay_register frame carries only
+# relayId, publicKeyHex, region, timestamp, and signature — it does not
+# carry the WebSocket URL. The manifest is re-signed via sign-manifest.sh
+# (as established in PREP-003); the operator updates the manifest JSON and
+# re-signs before pushing to S3.
 #
 # SOVEREIGN NODE CONSTRAINT: every IaC change must work identically across all
 # three deployment regions (us-east-1, eu-central-1, ap-northeast-1) with zero
@@ -81,11 +98,12 @@ story: >
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
   - trigger: "When cello-ecs-relay.yaml is deployed to any region"
-    action: "an internet-facing ALB exists for the relay; port 443 HTTPS listener
-      forwards to a target group on container port 4002; the ALB SG accepts
-      inbound TCP 443 from 0.0.0.0/0; the relay ECS task SG accepts inbound
-      TCP 4002 from the ALB SG; the ECS service LoadBalancers block includes
-      a ContainerPort 4002 entry so ECS auto-registers tasks on deploy/restart"
+    action: "an internet-facing ALB exists for the relay; port 80 HTTP listener
+      forwards to a target group on container port 4002; ALB idle timeout is
+      300 seconds (prevents silent WebSocket drops on idle connections);
+      the relay ECS task SG accepts inbound TCP 4002 from the ALB SG;
+      the ECS service LoadBalancers block includes a ContainerPort 4002 entry
+      so ECS auto-registers tasks on deploy/restart"
 
   - trigger: "When a relay ECS task starts"
     action: "CELLO_RELAY_WS_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4002/ws is set from the
@@ -93,7 +111,7 @@ behavior:
       listenAddresses and the relay binds on both port 4001 (TCP) and port 4002
       (WebSocket)"
 
-  - trigger: "When an external client dials wss://relay-us1.cello.mygentic.ai"
+  - trigger: "When an external client dials ws://relay-us1.cello.mygentic.ai"
     action: "the ALB forwards the WebSocket upgrade to the relay container on
       port 4002; the relay completes the libp2p WebSocket handshake; the client
       can submit relay leaves and participate in sessions"
@@ -107,8 +125,15 @@ behavior:
     (relay-us1, relay-eu1, relay-ap1)"
     action: "an ACM certificate is issued for relay-{region}.cello.mygentic.ai
       DNS-validated against the hosted zone; an A record ALIAS to the relay ALB
-      exists at relay-{region}.cello.mygentic.ai; HTTPS works without certificate
-      warnings"
+      exists at relay-{region}.cello.mygentic.ai"
+
+  - trigger: "After the relay ALB and DNS are deployed"
+    action: "the operator updates the relay manifest JSON (S3 bucket
+      cello-relay-manifest-{env}-{region}) with the correct endpoint:
+      ws://relay-{region}.cello.mygentic.ai and the libp2p multiaddr
+      /dns4/relay-{region}.cello.mygentic.ai/tcp/80/ws/p2p/{relay-peer-id};
+      sign-manifest.sh is run to re-sign and upload; PREP-004's poll loop
+      picks up the new manifest within 2 minutes"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -116,23 +141,25 @@ acceptance_criteria:
     given: "The updated cello-ecs-relay.yaml CloudFormation template"
     when: "the template is validated with aws cloudformation validate-template"
     then: "validation succeeds; the template contains:
-      (1) a RelayAlb resource (internet-facing, type application);
+      (1) a RelayAlb resource (internet-facing, HTTP, idle_timeout 300s);
       (2) a RelayTargetGroup on port 4002, health check on /health port 4000;
-      (3) an HTTPS listener on port 443 forwarding to RelayTargetGroup;
+      (3) an HTTP listener on port 80 forwarding to RelayTargetGroup;
       (4) the ECS Service LoadBalancers block includes ContainerPort 4002
       targeting RelayTargetGroup;
       (5) CELLO_RELAY_WS_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4002/ws in the
-      Environment block of the container definition"
+      container Environment block;
+      (6) port 4002 in the container PortMappings"
     test_type: unit
     component_under_test: infra
 
   - id: AC-002
     given: "The updated cello-vpc.yaml CloudFormation template"
     when: "the template is validated"
-    then: "EcsRelaySecurityGroup has both port 4000 and port 4001 ingress from
-      EcsDirectorySecurityGroup AND port 4002 ingress from AlbSecurityGroup;
-      the AlbSecurityGroup has port 443 inbound from 0.0.0.0/0 (already
-      present — verify it covers 443, not just 80)"
+    then: "EcsRelaySecurityGroup has:
+      port 4000 from EcsDirectorySecurityGroup (unchanged),
+      port 4001 from EcsDirectorySecurityGroup (exists since commit 40543d5),
+      port 4002 from AlbSecurityGroup (new — added by this story);
+      no direct internet ingress on port 4002 (SI-001)"
     test_type: unit
     component_under_test: infra
 
@@ -142,86 +169,89 @@ acceptance_criteria:
     then: "a RELAY_SUBDOMAIN variable is set per region alongside SUBDOMAIN:
         us-east-1 → relay-us1
         eu-central-1 → relay-eu1
-        ap-northeast-1 → relay-ap1
-      and cello-route53.yaml is deployed twice per region:
-        once for the directory subdomain (unchanged),
-        once for the relay subdomain with RelayAlbDnsName and RelayAlbHostedZoneId
-      sourced from the cello-ecs-relay stack outputs"
+        ap-northeast-1 → relay-ap1;
+      cello-route53.yaml is invoked a second time per region as stack
+      cello-route53-relay-${ENVIRONMENT} with Subdomain=${RELAY_SUBDOMAIN}
+      and AlbDnsName/AlbHostedZoneId from the cello-ecs-relay stack outputs;
+      the cello-route53-relay stack is deployed AFTER cello-ecs-relay so the
+      relay ALB exists before the DNS record is created;
+      STACK_COUNT is incremented by 1 to account for the new relay route53 stack"
     test_type: unit
     component_under_test: infra
 
   - id: AC-004
     given: "cello-ecs-relay.yaml deployed to dev us-east-1 via the relay pipeline"
     when: "the stack update completes (rolloutState COMPLETED)"
-    then: "aws elbv2 describe-load-balancers shows a relay ALB for the dev stack;
+    then: "aws elbv2 describe-load-balancers shows a relay ALB for the dev stack
+      with SchemeType internet-facing;
       aws elbv2 describe-target-groups shows a target group with port 4002;
       the relay ECS service reports runningCount 1 with the new task definition;
-      a WebSocket connection to wss://relay-us1.cello.mygentic.ai completes
-      the libp2p WebSocket handshake — verified by running
-      `wscat -c wss://relay-us1.cello.mygentic.ai` and confirming connection
-      (Noise XX and then protocol negotiation, not an HTTP 502)"
+      a WebSocket connection attempt to ws://relay-us1.cello.mygentic.ai
+      (after cello-route53-relay is deployed) completes without a connection
+      refused or HTTP 502 — verified by running `wscat -c ws://relay-us1.cello.mygentic.ai`
+      and confirming connection (protocol handshake begins, not rejected)"
     test_type: integration
     component_under_test: infra
-    notes: "Run manually post-deployment. A successful handshake (even if the
-      connection is then closed because the client has no agent context) proves
-      the ALB → relay WebSocket path is working end-to-end."
+    notes: "Run manually post-deployment. wscat is available via npm install -g wscat."
 
   - id: AC-005
-    given: "cello-vpc.yaml deployed to dev eu-central-1 and ap-northeast-1
-      (deploy.sh run or manual aws cloudformation deploy for those regions)"
+    given: "cello-vpc.yaml deployed to dev eu-central-1 and ap-northeast-1"
     when: "aws ec2 describe-security-groups for the relay SG in each secondary region"
-    then: "each region's EcsRelaySecurityGroup has three inbound rules:
-      port 4000 from EcsDirectorySecurityGroup,
-      port 4001 from EcsDirectorySecurityGroup,
-      port 4002 from AlbSecurityGroup;
-      confirmed by aws ec2 describe-security-groups --region eu-central-1 and
-      --region ap-northeast-1"
+    then: "each region's EcsRelaySecurityGroup has three inbound rules covering
+      ports 4000, 4001 (from EcsDirectorySecurityGroup) and 4002 (from AlbSecurityGroup);
+      confirmed by running:
+        aws ec2 describe-security-groups --region eu-central-1 \
+          --filters Name=group-name,Values=cello-ecs-relay-sg-dev
+        aws ec2 describe-security-groups --region ap-northeast-1 \
+          --filters Name=group-name,Values=cello-ecs-relay-sg-dev"
     test_type: integration
     component_under_test: infra
-    notes: "Run manually. This closes the secondary-region port-4001 gap from
-      commit 40543d5 that was only deployed to us-east-1."
+    notes: "This closes the secondary-region port-4001 deployment gap.
+      Relay tasks in eu-central-1 and ap-northeast-1 are unreachable by the
+      directory on port 4001 until this is deployed."
 
   - id: AC-006
-    given: "The relay manifest produced by the directory after this story"
-    when: "a client requests a session and receives a session assignment"
-    then: "the relay endpoint in the session assignment includes the WebSocket
-      multiaddr wss://relay-us1.cello.mygentic.ai (or the region-appropriate
-      relay hostname) alongside the libp2p TCP multiaddr; an external client
-      on a developer laptop can dial the WebSocket multiaddr and connect to
-      the relay without a VPN"
+    given: "After relay ALB + DNS deployed to dev us-east-1, operator updates
+      the relay manifest JSON in S3 bucket cello-relay-manifest-dev-us-east-1
+      with endpoint: ws://relay-us1.cello.mygentic.ai and multiaddrs including
+      /dns4/relay-us1.cello.mygentic.ai/tcp/80/ws/p2p/{relay-peer-id},
+      then runs sign-manifest.sh to re-sign and upload"
+    when: "an external CelloClient (running outside the VPC, e.g. on a developer
+      laptop) receives a session assignment and reads the relay endpoint"
+    then: "the session assignment relay_endpoint contains ws://relay-us1.cello.mygentic.ai
+      (not a private 10.x.x.x IP); the external client successfully connects
+      to the relay via the WebSocket URL and the session handshake completes
+      — verified by running the E2E smoke test from a laptop (not from within
+      the dev VPC)"
     test_type: integration
     component_under_test: relay
-    notes: "This AC verifies the full external-client path, not just the ALB.
-      The relay manifest must include the WS multiaddr for PREP-004's poll loop
-      to pick it up. Check how the relay registers its multiaddrs with the directory
-      (relay_register frame) — the WS listen address must be included in
-      the registration so it appears in the manifest. This may require a small
-      change to relay.ts: announce the external DNS address not just the local
-      bind address (/ip4/0.0.0.0/tcp/4002/ws → wss://relay-us1.cello.mygentic.ai)
-      via announceAddresses support added in commit 4efa049."
+    notes: "The manifest endpoint and multiaddrs update is an operator step, not
+      a code change. sign-manifest.sh must use the shallow sort (top-level keys only:
+      relays, updatedAt, version — per PREP-003 AC-007b). The relay-peer-id in the
+      multiaddr must match the CELLO_RELAY_TRANSPORT_KEY_HEX-derived peer ID (stable
+      since PREP-003). Run this after AC-004 passes."
+
+  - id: AC-007
+    given: "The implementation is complete"
+    when: "infra/cloudformation/cello-cloudwatch.yaml is reviewed"
+    then: "a CloudWatch alarm exists for the relay ALB 5xx error rate
+      (cello-relay-alb-5xx-${Environment}); the alarm fires when the ALB
+      5xx rate exceeds 5% over a 5-minute period; pattern follows existing
+      ALB alarms in the file"
+    test_type: unit
+    component_under_test: infra
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
-    statement: "The relay ALB must only accept HTTPS (port 443) from the public
-      internet — the relay WebSocket container port (4002) must not be directly
-      reachable from the internet; only the ALB SG may send traffic to port 4002"
+    statement: "The relay WebSocket container port (4002) must not be directly
+      reachable from the public internet — only the ALB SG may send traffic to
+      port 4002"
     adversarial_condition: "an attacker who knows the relay task IP must not be
       able to bypass the ALB by dialing the task IP on port 4002 directly;
-      verified by asserting that EcsRelaySecurityGroup port 4002 ingress only
-      allows SourceSecurityGroupId: AlbSecurityGroup (not CidrIp 0.0.0.0/0 or
-      the VPC CIDR); a connection attempt from outside the ALB SG to port 4002
-      is rejected at the SG layer"
-    test_type: unit
-    component_under_test: infra
-
-  - id: SI-002
-    statement: "The relay WebSocket ALB must use HTTPS (TLS) — plain HTTP must
-      not be accepted on the public endpoint"
-    adversarial_condition: "an HTTP request to http://relay-us1.cello.mygentic.ai
-      must be redirected to HTTPS or rejected — the ALB listener must not forward
-      plain HTTP to the relay container; verified by asserting the ALB has no
-      HTTP listener on port 80 or that any port 80 listener redirects to HTTPS"
+      verified by asserting EcsRelaySecurityGroup port 4002 ingress uses
+      SourceSecurityGroupId: AlbSecurityGroup (not CidrIp 0.0.0.0/0 or
+      the VPC CIDR block); AC-002 verifies this at template level"
     test_type: unit
     component_under_test: infra
 
@@ -230,80 +260,87 @@ observability:
   events: []
   error_events: []
   notes: >
-    No new log events in application code. This story is IaC-only from the
-    application perspective. Relay startup already logs adapter.initialised
-    with listenAddresses — after this story, the log will include the WS address
-    alongside the TCP address. No taxonomy update needed.
+    No new application log events. This story is IaC-only from the application
+    perspective. The relay's existing relay.service.started log includes
+    listenAddresses — after this story, the log will show two addresses (TCP + WS).
+    No event taxonomy update needed for this story.
   alarms:
-    - condition: "relay ALB 5xx error rate > 5% over 5 minutes"
-      fires_to: "extend the existing relay CloudWatch alarm in cello-cloudwatch.yaml
-        or add a new cello-relay-alb-errors alarm; follow the same pattern as the
-        directory ALB alarms"
+    - condition: "Relay ALB 5xx error rate > 5% over 5 minutes"
+      fires_to: "cello-relay-alb-5xx-${Environment} alarm in cello-cloudwatch.yaml"
       notes: >
-        A high 5xx rate on the relay ALB indicates the relay container is not
-        accepting WebSocket connections — most likely the WS listener is not
-        bound or the container is unhealthy. This is the primary observability
-        signal for the external-client path.
+        A relay ALB 5xx rate spike indicates the relay container is not
+        accepting WebSocket connections. Unlike the existing relay health alarms
+        (which monitor the relay process itself), this alarm monitors the
+        external-client access path. AC-007 gates on this alarm being present.
 
 # ─── Implementation Notes ───────────────────────────────────
 implementation_notes: >
+  DEPLOYMENT ORDER (sovereign + cross-stack dependency):
+    1. cello-vpc (all 3 regions) — adds port 4002 SG rule; also deploys port-4001
+       fix to eu-central-1 and ap-northeast-1 for the first time
+    2. cello-ecs-relay (all 3 regions) — creates ALB, TG, WS env var
+    3. cello-route53-relay (all 3 regions) — creates DNS A record aliasing to relay ALB
+    Order matters: route53-relay is deployed AFTER ecs-relay so the ALB DNS name
+    is available for the ALIAS record. Do NOT deploy route53-relay before ecs-relay.
+
   1. cello-ecs-relay.yaml additions:
      a. New parameters:
-          CertificateArn: !ImportValue "cello-${Environment}-certificate-arn-relay-${RelaySubdomain}"
-            (imported from cello-route53.yaml deployment for relay subdomain)
-          RelaySubdomain: e.g. relay-us1 (passed by deploy.sh per region)
+          RelaySubdomain: String (e.g. relay-us1) — passed by deploy.sh per region
 
-     b. New RelayAlb resource (internet-facing ALB):
-        Copy pattern from cello-ecs-directory.yaml Alb resource.
-        Set Type: internet-facing, Scheme: internet-facing.
-        SecurityGroups: !ImportValue "cello-${Environment}-alb-sg" (same ALB SG as directory).
-        Subnets: public subnets (same as directory ALB).
+     b. New RelayAlb resource (internet-facing, HTTP):
+        Copy the Alb resource from cello-ecs-directory.yaml as a template.
+        Key differences from directory:
+          - Same SecurityGroups: !ImportValue "cello-${Environment}-alb-sg"
+          - Same public Subnets: cello-${Environment}-public-subnet-a/b
+        LoadBalancerAttributes: MUST include idle_timeout.timeout_seconds: 300
+        (same as directory ALB — prevents silent WebSocket drops on idle connections)
 
      c. New RelayTargetGroup: port 4002, protocol HTTP, type ip.
-        Health check: path /health, port 4000 (relay health server), protocol HTTP.
+        Health check: path /health, port 4000 (relay health server on port 4000,
+        not 4002 — 4002 is the WS listener only).
 
-     d. New RelayAlbListener: port 443, HTTPS, DefaultAction forward to RelayTargetGroup.
-        CertificateArn: !Ref CertificateArn.
+     d. New RelayAlbListener: port 80, HTTP, DefaultAction forward to RelayTargetGroup.
+        (HTTP not HTTPS — mirrors directory ALB pattern; TLS is a future story)
 
-     e. No HTTP → HTTPS redirect listener needed if port 80 is not opened.
-        Do NOT add port 80 to the ALB (SI-002: no plain HTTP).
-
-     f. Update ECS Service LoadBalancers block to add:
+     e. Update ECS Service LoadBalancers block to add:
           - ContainerName: relay
             ContainerPort: 4002
             TargetGroupArn: !Ref RelayTargetGroup
+        Note: port 4000 is NOT in the LoadBalancers block because it is the health
+        server, not a load-balanced service port. Only 4002 is load-balanced.
 
-     g. Add CELLO_RELAY_WS_LISTEN_ADDR to container Environment:
+     f. Add CELLO_RELAY_WS_LISTEN_ADDR to container Environment:
           - Name: CELLO_RELAY_WS_LISTEN_ADDR
             Value: /ip4/0.0.0.0/tcp/4002/ws
 
-     h. Add port 4002 to TaskDefinition PortMappings:
+     g. Add port 4002 to TaskDefinition PortMappings:
           - ContainerPort: 4002
             Protocol: tcp
 
-     i. Outputs for deploy.sh cross-stack reference:
+     h. Outputs for deploy.sh:
           RelayAlbDnsName: !GetAtt RelayAlb.DNSName
           RelayAlbHostedZoneId: !GetAtt RelayAlb.CanonicalHostedZoneID
 
-  2. cello-vpc.yaml update:
-     Add port 4002 ingress to EcsRelaySecurityGroup from AlbSecurityGroup:
+  2. cello-vpc.yaml:
+     Add port 4002 ingress to EcsRelaySecurityGroup:
        - IpProtocol: tcp
          FromPort: 4002
          ToPort: 4002
          SourceSecurityGroupId: !Ref AlbSecurityGroup
-     Port 4001 from EcsDirectorySecurityGroup is already in IaC — the gap is that
-     eu-central-1 and ap-northeast-1 have not been deployed since commit 40543d5.
-     Deploying vpc stack to all three regions closes the port-4001 gap.
+     Port 4001 from EcsDirectorySecurityGroup already exists in the template
+     (since commit 40543d5). Just deploying the vpc stack to all three regions
+     will close the secondary-region port-4001 gap.
+     Also add port 4000 ingress to EcsRelaySecurityGroup from AlbSecurityGroup
+     if the ALB health check is sourced from the ALB (verify whether Fargate
+     ALB health checks originate from the ALB SG or from within the VPC CIDR —
+     on Fargate/awsvpc mode, ALB health checks originate from the ALB IPs, so
+     the ALB SG source rule is needed for port 4000 health checks too).
 
-  3. cello-route53.yaml is reused as-is:
-     deploy.sh calls it twice per region with different Subdomain parameters.
-     The second invocation passes:
-       Subdomain=relay-{regioncode}
-       AlbDnsName={RelayAlbDnsName from relay stack outputs}
-       AlbHostedZoneId={RelayAlbHostedZoneId from relay stack outputs}
+  3. cello-route53.yaml is reused as-is (no changes needed).
+     deploy.sh invokes it a second time per region with the relay subdomain.
 
   4. deploy.sh additions:
-     After the existing SUBDOMAIN= case block, add:
+     After the SUBDOMAIN= case block (line 82-87), add:
        case "${REGION}" in
          us-east-1)      RELAY_SUBDOMAIN="relay-us1" ;;
          eu-central-1)   RELAY_SUBDOMAIN="relay-eu1" ;;
@@ -311,8 +348,11 @@ implementation_notes: >
          *)              RELAY_SUBDOMAIN="relay-${REGION}" ;;
        esac
 
-     Add a deploy step after the directory route53 step:
-       Read RelayAlbDnsName and RelayAlbHostedZoneId from cello-ecs-relay stack outputs.
+     After the directory cello-route53 deploy step (line 529-538), add:
+       RELAY_ALB_DNS=$(aws cloudformation describe-stacks \
+         --stack-name cello-ecs-relay-${ENVIRONMENT} ... query RelayAlbDnsName)
+       RELAY_ALB_ZONE=$(aws cloudformation describe-stacks \
+         --stack-name cello-ecs-relay-${ENVIRONMENT} ... query RelayAlbHostedZoneId)
        deploy_stack "cello-route53-relay-${ENVIRONMENT}" "cello-route53.yaml" \
          "Environment=${ENVIRONMENT}" \
          "DomainName=${DOMAIN_NAME}" \
@@ -320,35 +360,23 @@ implementation_notes: >
          "AlbDnsName=${RELAY_ALB_DNS}" \
          "AlbHostedZoneId=${RELAY_ALB_ZONE}" \
          "Subdomain=${RELAY_SUBDOMAIN}"
-     Pass CertificateArn into cello-ecs-relay.yaml deployment from
-     cello-route53-relay stack output:
-       CertificateArn=cello-${ENVIRONMENT}-certificate-arn-${RELAY_SUBDOMAIN}
+     Increment STACK_COUNT by 1 for the new relay route53 stack.
 
-  5. Announce address for relay registration (relay.ts):
-     The relay registers with the directory via relay_register. The frame includes
-     health_check_url and multiaddrs. Currently the WS listen address is
-     /ip4/0.0.0.0/tcp/4002/ws (unroutable externally). The relay must announce
-     the external DNS address instead: wss://relay-{subdomain}.cello.mygentic.ai
-     Use the announceAddresses feature added in commit 4efa049 (cello-client transport).
-     Add CELLO_RELAY_WS_ANNOUNCE_ADDR to the ECS task def environment:
-       - Name: CELLO_RELAY_WS_ANNOUNCE_ADDR
-         Value: !Sub "wss://${RelaySubdomain}.cello.mygentic.ai"
-     In relay.ts, if CELLO_RELAY_WS_ANNOUNCE_ADDR is set, pass it as an
-     announceAddress alongside CELLO_RELAY_WS_LISTEN_ADDR so the relay
-     registers the public DNS address with the directory.
+  5. cello-cloudwatch.yaml:
+     Add cello-relay-alb-5xx-${Environment} alarm targeting the relay ALB's
+     HTTPCode_ELB_5XX_Count metric, threshold 5% over 5 minutes.
+     Follow the pattern of existing ALB alarms in the file.
 
-  SOVEREIGN NODE CONSTRAINT: every IaC change must work identically in all three
-  regions (us-east-1, eu-central-1, ap-northeast-1) with zero manual steps. The
-  RelaySubdomain parameter is the only region-varying input. All other ALB, SG,
-  and Route53 resources are parameterized on ${Environment} and ${RelaySubdomain}.
-  The region-expansion test: "would deploying to us-west-2 work with only
-  Environment and RelaySubdomain inputs and zero manual steps?" must be yes.
-
-  DEPLOYMENT ORDER (sovereign + cross-stack dependency):
-    1. deploy cello-vpc (all 3 regions) — adds port 4001 and 4002 SG rules
-    2. deploy cello-ecs-relay (all 3 regions) — creates ALB, TG, WS env var
-    3. deploy cello-route53-relay (all 3 regions) — creates ACM cert + DNS record
-    ACM certificate validation takes 1-5 minutes (DNS-validated automatically).
+  6. Relay manifest update (operator step, not a code change):
+     After relay ALB and DNS are live:
+     a. Download current manifest from s3://cello-relay-manifest-{env}-{region}/manifest.json
+     b. Update the relay entry:
+          endpoint: "ws://relay-{region}.cello.mygentic.ai"
+          multiaddrs: ["/dns4/relay-{region}.cello.mygentic.ai/tcp/80/ws/p2p/{relay-peer-id}"]
+          health_check_url: "http://relay-{region}.cello.mygentic.ai/health"
+     c. Run sign-manifest.sh to re-sign with the directory signing key
+     d. The PREP-004 poll loop picks up the new manifest within 2 minutes
+     The relay-peer-id comes from CELLO_RELAY_TRANSPORT_KEY_HEX (stable since PREP-003).
 
 # ─── References ─────────────────────────────────────────────
 references:
