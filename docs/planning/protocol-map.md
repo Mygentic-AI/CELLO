@@ -78,6 +78,7 @@ Consensus is only needed for directory state changes and canonical sequence numb
 - [[2026-04-11_1400_libp2p-dht-and-peer-connectivity|libp2p, DHT, and Peer Connectivity]] — transport feasibility; bootstrap discovery; NAT traversal
 - [[2026-05-30_0637_federation-transport-sovereignty-and-mtls|Federation Transport, Node Sovereignty, and Mutual TLS]] — identifies VPC Peering gap vs sovereign intent; establishes mTLS over public endpoints as the fix; extends mTLS to internal API security
 - [[2026-05-30_0800_node-infrastructure-cost-model|Node Infrastructure Cost Model]] — per-node cost breakdown from AWS CUR; scaling projections to 6, 10, 20 nodes; regional pricing variance
+- [[2026-06-03_1500_beta-launch-brittleness-analysis|Beta Launch Brittleness Analysis]] — two root causes of M6 operational brittleness (location-based addressing vs identity-based; permanent-connection assumption); three remediation streams; beta readiness assessment
 
 **Also see:**
 - [[open-decisions|Open Decisions]] — 12 resolved decisions (FROST, Ed25519, SHA-256, thresholds, Merkle construction, sequence numbers)
