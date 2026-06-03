@@ -143,12 +143,18 @@ endpoint, changing authentication semantics.
 
 **Policy:** Deprecation window — old behavior continues to work for a defined period while
 new behavior is available in parallel. Then the old behavior is cut at a specific version
-floor, with a well-publicized date. The window for non-security mutations is three to six
-months.
+floor, with a well-publicized date. The window for non-security mutations is **30 days**
+during the beta and early launch period.
+
+90 days is the right number for mature software with enterprise customers who have change
+control processes. At launch with a small user base, 30 days is sufficient and the
+maintenance burden of running dual behavior for longer would actively slow development.
+If user growth makes 30 days untenable, revisit. That's a good problem to have.
 
 **Pattern:** The server supports both old and new behavior simultaneously during the window.
-This is real engineering cost. It is the cost of not breaking automated deployments without
-warning.
+This is real engineering cost — it requires test suites that validate both old and new
+behavior, which is significant overhead for a small team. 30 days limits the window in
+which that overhead accumulates.
 
 ---
 
@@ -213,23 +219,43 @@ for agents that lost directory connectivity entirely.
 
 ---
 
-## Open Policy Question
+## Decided Policy
 
-What triggers a hard break vs. a deprecation window vs. fully backward compatible?
+All policy questions are resolved:
 
-This is the policy question that flows into implementation stories. The categories above give
-the framework; the specific thresholds need to be decided:
+- **Deprecation window:** 30 days for protocol mutations during beta and early launch. Revisit
+  only when user growth makes it a real constraint.
 
-- **Deprecation window duration:** 3 months proposed for protocol mutations, days for
-  security vulnerabilities.
-- **EOL behavior:** Exit with code 1 (recommended) vs. continue with degraded functionality?
-  Exit is recommended — degraded functionality is harder to reason about and easier to exploit.
-- **Version floor granularity:** Per-endpoint minimum version (finer grained, more complex)
-  vs. global minimum version (simpler, more aggressive)?
+- **EOL behavior:** Always exit with code 1. No degraded operation. See the reasoning above —
+  a crashed process generates an alert; a silently degraded process generates confusion.
 
-Recommendation: global minimum version for the beta period. Add per-endpoint granularity
-only when there's a demonstrated need (i.e., when two endpoints need different version floors
-simultaneously). Premature granularity adds maintenance burden without benefit.
+- **Version floor granularity:** Global minimum version. One number, one policy, applies to
+  all operations. Per-endpoint granularity adds maintenance overhead and testing burden with
+  no benefit at current scale. The multi-directory FROST cutover (Stream 3) is a named
+  exception — treated as a major version bump with its own pre-announcement, not handled via
+  per-endpoint logic.
+
+- **Who controls the version floor:** Andre controls it, full stop. No consortium governance
+  question exists at this stage. One day it may become shared infrastructure, but that
+  decision is years away and should not be designed for now.
+
+- **Notice period:** Minimum 30 days, with case-by-case extension for genuinely large changes.
+  30 days for a wire format rename. Potentially 60 days for the multi-directory FROST cutover
+  that requires every agent to re-register. Andre decides what warrants more — there is no
+  fixed formula. Two-stage: pre-announcement at T-30 (Telegram + GitHub release notes), then
+  enforcement notification at T-0 for agents that still haven't upgraded.
+
+- **Security break classification rule:** If the old behavior is exploitable by a third party
+  acting with correct protocol intent, it is a security break (days window). If the risk only
+  materializes through active malice by one of the two parties or internal protocol failure,
+  it is a mutation (30-day window). When in doubt, classify as security break.
+
+- **Security breaks as a bundling opportunity:** A security break creates the one moment users
+  accept mandatory upgrade friction. Bundle aggressively — any non-security changes that are
+  near-ready should be accelerated into the same release. Users upgrade once, get everything,
+  and the dual-behavior maintenance burden for multiple pending changes collapses simultaneously.
+  This requires a fast release process; the Stream 1 reliability work (faster deploys) is a
+  prerequisite for doing this well under time pressure.
 
 ---
 
