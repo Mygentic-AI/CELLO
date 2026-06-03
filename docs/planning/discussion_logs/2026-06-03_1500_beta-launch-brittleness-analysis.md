@@ -199,14 +199,51 @@ workflow is separate from infrastructure brittleness. It's the result of three c
    install on some platforms. Even after the lock issue is resolved, a platform that hits
    this timeout will appear permanently broken.
 
-The correct end state for upgrades is: drop the version pin (use `npx @cello-protocol/connect`
-without a version), fix the DB lock via WAL mode + process exit on dead connection, and the
-upgrade path becomes: `/mcp reconnect`. No remove, no re-add, no terminal command.
+**The correct fix: global install + binary name, not `npx`.**
 
-Claude Code does have a built-in "update MCP server" flow, but it only works for registered
-MCP configurations, not ad-hoc `npx` invocations. The current install command format:
-`claude mcp add cello -- npx --yes @cello-protocol/connect@0.0.22` is not compatible with
-that flow. A version-unpinned install would be.
+Most MCP servers don't have this upgrade problem because they wrap a remote HTTP service —
+the server upgrades server-side and the local stub is just a thin HTTP client that barely
+changes. CELLO cannot do this: by design, the cryptographic operations (FROST ceremonies,
+hash chain, K_local signing) execute locally. The binary must live on the user's machine.
+
+The right pattern for a locally-executed MCP server is global install with a stable binary
+name:
+
+```bash
+# Install once (compiles SQLCipher in a terminal where waiting is fine)
+npm install -g @cello-protocol/connect
+
+# Register with Claude Code (stores binary name, not a version)
+claude mcp add cello -- cello-mcp
+
+# Upgrade — no re-registration needed, ever
+npm install -g @cello-protocol/connect@latest
+```
+
+`claude mcp add cello -- cello-mcp` stores the string `cello-mcp` in Claude Code's MCP
+config — a binary name on `$PATH`, not a version-pinned npx command. When the user runs
+`npm install -g @cello-protocol/connect@latest`, the binary on disk is replaced. Claude Code
+restart or `/mcp` reconnect picks up the new binary automatically. The remove/re-add
+ceremony disappears permanently.
+
+This also moves SQLCipher compilation out of the 30-second MCP connection window. `npm install
+-g` runs in a terminal where the user can wait as long as needed. By the time they register
+with `claude mcp add`, compilation is already done.
+
+The remaining requirement for a fully clean upgrade experience is still process exit on
+permanent connection loss (Root Cause 2 above) — if the old `cello-mcp` process is still
+alive holding the DB lock, the new binary still blocks on startup. But global install plus
+process exit makes the complete upgrade path: `npm install -g ... && /mcp reconnect`. No
+remove, no re-add, no `pkill`.
+
+Claude Code does have a built-in "update MCP server" concept, but it only surfaces for
+registered MCP configurations, not ad-hoc `npx` invocations. The global binary approach
+is compatible with that flow in a way that version-pinned `npx` never was.
+
+**Deprecation gate** — for security fixes, the binary can enforce a minimum version at
+startup: if `currentVersion < minimumVersion`, print a clear upgrade instruction and
+`process.exit(1)`. This ensures stale installs fail loudly rather than silently running
+outdated code. Appropriate for any release that patches a vulnerability.
 
 ---
 
