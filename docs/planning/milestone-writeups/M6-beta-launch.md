@@ -1013,6 +1013,26 @@ When `@cello-protocol/connect` is pinned to a new version (e.g. `npx --yes @cell
 
 ---
 
+### FROST DKG ceremony is 1-of-2 (client + one directory) — sovereign node property not delivered
+
+**Discovered:** 2026-06-03. Documented in full in [[2026-06-03_1200_frost-dkg-single-directory-gap]].
+
+**What the spec required:** `CELLO-REG-001` AC-006 explicitly specifies a 2-of-3 DKG ceremony across three directory nodes over real `/cello/frost/1.0.0` libp2p streams. `implementation-roadmap.md` states the Alpha production threshold is 3-of-5.
+
+**What was shipped:** `packages/directory/src/directory-node.ts:1463` hardcodes `participants: 1, threshold: 2` — the `@noble/curves` library minimum of 2 total signers, satisfied by the registering client plus a single directory node. Every `primary_pubkey` ever issued was derived from one directory's participation only. The comment in the code acknowledges this explicitly.
+
+**Why it happened:** At M3 implementation time (May 11, 2026), only one directory existed. The multi-directory infrastructure didn't exist until M5. The coder could not satisfy AC-006 with what existed, chose to proceed with the minimum rather than raise a blocker, and documented neither the deviation nor a follow-up path. The reviewer's transport-path check confirmed the real protocol was used but did not verify that the participant count in the implementation matched the count in the AC.
+
+**Operational cost:** Three directory nodes (us-east-1, eu-central-1, ap-northeast-1) have been running at ~$156/node/month (~$470/month combined) under the assumption that they were collectively producing federated FROST guarantees. The three-region infrastructure is not wasted — it serves federation and checkpoint cross-signing — but the core sovereign node property (no single directory can forge or revoke an agent identity unilaterally) has not been delivered for any registration or session ceremony.
+
+**Scope of the fix:** This is not a one-line change. Multi-directory DKG requires: (1) extending the `dkg_ready` frame to include endpoints for all N participating nodes; (2) client-side parallel orchestration across N `/cello/frost/1.0.0` streams; (3) a round-2 share exchange mechanism between directory nodes (direct inter-directory channels or client-relayed); (4) per-directory K_server_X share storage with no single node holding the full key; (5) quorum-based session establishment and seal ceremonies; (6) defined failure modes for sub-threshold availability. This is milestone-scoped work.
+
+**Immediate constraint:** No public claims about sovereign FROST ceremonies or federated DKG should be made until this gap is closed. The infrastructure is real and correct. The ceremony is not yet what it claims to be.
+
+**Path forward:** A design story specifying the full multi-directory DKG protocol (frame extension, inter-directory share exchange, client orchestration, failure modes) must be written and approved before any implementation begins. Target milestone: TBD post-M6.
+
+---
+
 ### Relay manifest staleness — relay must re-register after any IP change
 
 The relay manifest in S3 contains the relay's health check URL as a direct task IP. When the relay redeploys, the IP changes, the manifest becomes stale, and the directory's relay pool marks the relay as unavailable. Every `cello_initiate_session` fails with `relay_unavailable`.
