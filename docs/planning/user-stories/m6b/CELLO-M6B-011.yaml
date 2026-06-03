@@ -14,7 +14,7 @@ description: >
 ---
 # ─── Identity ───────────────────────────────────────────────
 id: CELLO-M6B-011
-domain: PREP
+domain: M6B
 milestone: M6B
 actor: OPS
 priority: P1
@@ -63,18 +63,19 @@ story: >
 #   If they want to proceed despite the warning, the engine continues with
 #   handleNewUser on their next message (or the operator can expire the old record).
 #
-# Gap 3: EXPECTED_MIGRATION_VERSION is hardcoded as "27" in the task definition.
+# Gap 3: EXPECTED_MIGRATION_VERSION IaC uses hardcoded Value: "27" in the task definition.
 #   Location: infra/cloudformation/cello-ecs-operations-agent.yaml line 179.
-#   After every schema migration, the operator must update this value and
-#   redeploy the ops-agent ECS stack (or update the task definition manually).
-#   A redeploy takes ~12-15 minutes. Using an SSM parameter instead means the
-#   operator can update the value in SSM and restart the task — no pipeline run.
-#   Fix: replace Value: "27" with
-#     ValueFrom: /cello/${Environment}/ops-agent/expected-migration-version
-#   Ensure the SSM parameter is created in cello-secrets.yaml with a default value.
-#   NOTE: SSM parameter reads happen at task startup (ECS resolves ValueFrom at
-#   container start), so a parameter update requires an ECS task restart but not
-#   a full pipeline deploy.
+#   NOTE: packages/operations-agent/src/server.ts ALREADY reads from
+#   process.env["EXPECTED_MIGRATION_VERSION"] (no code change needed). The code part
+#   of this gap is done. Only the IaC change is needed.
+#   Current state: Value: "27" — after every schema migration, the operator must
+#   update this hardcoded value in CloudFormation and redeploy via pipeline (~12-15 min).
+#   Fix: replace Value: "27" with ValueFrom referencing SSM parameter
+#     /cello/${Environment}/ops-agent/expected-migration-version
+#   This way, a schema bump only requires: (1) update SSM value, (2) restart ECS task.
+#   No pipeline run needed. SSM parameter reads happen at task startup.
+#   Ensure the SSM parameter is created in cello-secrets.yaml with initial value "27"
+#   and that the ops-agent ECS execution role has ssm:GetParameters on this path.
 
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:

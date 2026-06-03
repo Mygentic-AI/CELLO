@@ -51,9 +51,7 @@ M6B fixes all three patterns systematically.
   `directory_below_threshold`. The tool response includes the exact 4-step
   re-registration recipe (delete agent_key_shares, delete agent_profiles,
   restart directory ECS task, fresh client.db + new token). Never debug this again.
-- **M6B-003**: `closeSession()` reconnects the signaling stream before sending
-  the SEAL frame, and retries on `seal_deferred`. Sessions that were failing
-  silently due to idle stream drop will now seal correctly.
+- **M6B-003**: ~~`closeSession()` reconnects the signaling stream before sending the SEAL frame, and retries on `seal_deferred`.~~ **Already implemented** — both fixes landed in cello-client commit 39a0c6a (fix/seal-reconnect-retry) on 2026-06-03. Story deleted.
 
 ### Stable infrastructure
 
@@ -92,7 +90,7 @@ M6B fixes all three patterns systematically.
 |----|-------|----------|------------|
 | M6B-001 | cello-mcp PID lock file — kill prior process on startup | P0 | — |
 | M6B-002 | FROST ceremony error propagation + re-registration recipe | P0 | — |
-| M6B-003 | closeSession reconnect-before-seal + seal_deferred retry | P0 | — |
+| ~~M6B-003~~ | ~~closeSession reconnect-before-seal + seal_deferred retry~~ | ~~P0~~ | Already done — deleted |
 | M6B-004 | ECS LoadBalancers block for port-8081 internal API + V28 migration | P0 | — |
 | M6B-005 | SQLCipher WAL mode + global install path | P0 | — |
 | M6B-006 | Relay transport key + auto-registration + manifest re-sign | P0 | — |
@@ -111,7 +109,6 @@ M6B fixes all three patterns systematically.
 ```
 M6B-001  (independent)
 M6B-002  (independent)
-M6B-003  (independent)
 M6B-004  (independent)
 M6B-005  (independent) → M6B-013
 M6B-006  (independent) → M6B-007
@@ -135,7 +132,7 @@ All 10 independent stories can be dispatched in parallel from day one.
 |-------|------|-------------|
 | M6B-001 | cello-client | `core/adapter-claude-code/src/bin/cello-mcp.ts` |
 | M6B-002 | trustless-cello + cello-client | `packages/directory/src/directory-node.ts`, `core/client/src/mcp-server.ts` |
-| M6B-003 | cello-client | `core/client/src/client.ts` |
+| ~~M6B-003~~ | ~~cello-client~~ | Already implemented — deleted |
 | M6B-004 | trustless-cello | `infra/cloudformation/cello-ecs-directory.yaml`, `cello-vpc.yaml`, V28 migration |
 | M6B-005 | cello-client | `core/client/src/sqlcipher-client-store.ts`, `SKILL.md` |
 | M6B-006 | trustless-cello + cello-client | `infra/cloudformation/cello-ecs-relay.yaml`, `packages/relay/src/` |
@@ -178,7 +175,8 @@ M6B closes when:
    `ceremony_exhausted` with the 4-step re-registration recipe in the response
    (M6B-002).
 3. `cello_close_session` after 5+ minutes of P2P messaging successfully seals
-   the session without `seal_deferred` (M6B-003).
+   the session without `seal_deferred` (M6B-003 — already implemented in
+   cello-client commit 39a0c6a; verify in E2E test).
 4. Deploying a new relay image does not break session initiation — the directory
    picks up the new manifest within 2 minutes (M6B-006 + M6B-008).
 5. The ops-agent is reachable at `https://directory-us1.cello.mygentic.ai/internal/pre-authorize`

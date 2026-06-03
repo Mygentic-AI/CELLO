@@ -32,7 +32,7 @@ These are ordered by pain elimination priority. Implement them in this order.
 |----|--------------|--------------|
 | CELLO-M6B-001 | cello-mcp PID lock file — kills prior orphan process on startup; releases SQLite write lock before new process opens DB | none |
 | CELLO-M6B-002 | `ceremony_exhausted` error reason + 4-step re-registration recipe in tool output — eliminates re-registration debugging amnesia | none |
-| CELLO-M6B-003 | `closeSession()` reconnect-before-seal + seal_deferred retry — closes M6-E2E-001 AC-006 | none |
+| ~~CELLO-M6B-003~~ | ~~`closeSession()` reconnect-before-seal + seal_deferred retry~~ — **DELETED: both fixes were already implemented in commit 39a0c6a (merged 2026-06-03) before this story was written. See cello-client fix/seal-reconnect-retry branch.** | — |
 | CELLO-M6B-004 | ECS LoadBalancers block for port-8081 internal API target group — eliminates ops-agent 504 after every directory restart | none |
 | CELLO-M6B-005 | SQLCipher WAL mode + global install path — eliminates write lock deadlock on version bump | none |
 | CELLO-M6B-006 | Relay transport key in Secrets Manager + auto-registration on startup + directory re-signs manifest | none |
@@ -73,18 +73,21 @@ Sprint review status:
 - M6B-009 (was PREP-005): APPROVED
 
 NOT YET SPRINT-REVIEWED — must be reviewed before implementation begins:
-- M6B-001 (PID lock file)
-- M6B-003 (seal_deferred reconnect+retry)
+- M6B-001 (PID lock file) — REVIEWED, all findings fixed; APPROVED
 - M6B-008 (manifest poll loop)
 - M6B-010 (directory state restoration)
 - M6B-011 (ops-agent UX)
 - M6B-012 (persist-019 Uint8Array test)
 - M6B-013 (SQLCipher replacement)
 
+REMOVED (already implemented before story was written):
+- M6B-003 — seal_deferred reconnect+retry: both fixes landed in cello-client commit
+  39a0c6a (Merge fix/seal-reconnect-retry) on 2026-06-03. Story file deleted.
+
 Implementation agents may begin in any order within each group:
 
 **No dependencies — dispatch immediately in any combination:**
-M6B-001, M6B-002, M6B-003, M6B-004, M6B-005, M6B-006, M6B-009, M6B-010, M6B-011, M6B-012
+M6B-001, M6B-002, M6B-004, M6B-005, M6B-006, M6B-009, M6B-010, M6B-011, M6B-012
 
 **Wait for M6B-006 to merge:** M6B-007, M6B-008
 
