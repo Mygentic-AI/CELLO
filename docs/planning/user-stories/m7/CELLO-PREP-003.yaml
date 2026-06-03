@@ -90,10 +90,23 @@ story: >
 #
 # The relay's healthCheckUrl in the manifest is its current private IP on port
 # 4000 (VPC-internal health check endpoint). This IP changes on every ECS task
-# launch. The relay already sends its healthCheckUrl in the relay_register frame
-# (packages/relay/src/network-directory-adapter.ts line ~85). The directory
-# uses this value when re-signing the manifest — it does not reconstruct the
-# URL from the connection's source IP.
+# launch. The relay DOES NOT currently send healthCheckUrl in the relay_register
+# frame — network-directory-adapter.ts sends only { type, relay_id,
+# public_key_hex, region, timestamp, signature }. This story adds health_check_url
+# to the relay_register wire frame. The relay learns its URL from the
+# CELLO_RELAY_HEALTH_CHECK_URL env var set in the ECS task definition (the ECS
+# task metadata endpoint could provide the IP, but an explicit env var is simpler
+# and more debuggable). The directory uses this field when re-signing the manifest.
+#
+# No-op comparison state: the directory must remember the previously-registered
+# healthCheckUrl per relay to skip the manifest re-sign when the URL is unchanged.
+# This state is held in RelayPoolManager's in-memory relay registry (the existing
+# Map of relay state keyed by relayId). This is NOT persisted to Postgres — it
+# resets on directory restart. On restart, the first relay_register (with any URL)
+# always triggers a re-sign, even if the URL hasn't changed. This is acceptable:
+# a redundant manifest update on directory restart is safe and does no harm.
+# No migration is needed; no new database column is added. This is consistent
+# with COORDINATION.md "No database migrations in M7."
 
 # ─── Behavior (EARS) ────────────────────────────────────────
 behavior:
@@ -103,9 +116,21 @@ behavior:
       in the directory task def); the relay binary loads the stable transport
       key and produces the same libp2p peer ID on every restart;
       AND CELLO_DIRECTORY_MULTIADDR is set in the task definition;
+      AND CELLO_RELAY_HEALTH_CHECK_URL is set to the relay's VPC-internal health
+      endpoint (e.g. http://10.0.1.50:4000/health — set as a static parameter
+      in the ECS task definition, or derived from ECS task metadata at startup);
       the relay dials the directory using the existing relay_register flow
-      (packages/relay/src/bin/relay.ts lines 253-301); no code change to
-      the relay binary is required — only the ECS task definition changes"
+      (packages/relay/src/bin/relay.ts lines 253-301) and includes
+      health_check_url in the relay_register wire frame"
+
+  - trigger: "When network-directory-adapter.ts sends the relay_register frame"
+    action: "the frame includes a health_check_url field containing the value
+      from CELLO_RELAY_HEALTH_CHECK_URL; if CELLO_RELAY_HEALTH_CHECK_URL is
+      not set, the relay fails to start with a clear error (the field is required
+      for auto-registration to work); this is a code change to the relay binary
+      — network-directory-adapter.ts registerWithDirectory() adds health_check_url
+      to the CBOR frame alongside the existing relay_id, public_key_hex, region,
+      timestamp, and signature fields"
 
   - trigger: "When an operator needs to manually update the relay manifest
     (e.g. adding a new relay, emergency update)"
@@ -131,7 +156,12 @@ behavior:
     registered with the same healthCheckUrl"
     action: "the directory processes the registration as already_registered
       (existing behavior) AND skips the manifest re-sign if the healthCheckUrl
-      is unchanged — manifest version is not bumped for no-op registrations"
+      matches the value stored in RelayPoolManager's in-memory relay registry
+      for this relayId — manifest version is not bumped for no-op registrations;
+      the in-memory registry is the comparison source; this state resets on
+      directory restart, meaning the first relay_register after a directory
+      restart always triggers a re-sign even if the URL is unchanged (acceptable
+      — a redundant manifest update is safe)"
 
   - trigger: "When relay_register is received from a relay that is already
     registered but has a different healthCheckUrl (new ECS task, new IP)"
@@ -150,29 +180,39 @@ acceptance_criteria:
   - id: AC-001
     given: "The updated cello-ecs-relay.yaml CloudFormation template"
     when: "the template is validated with `aws cloudformation validate-template`"
-    then: "CELLO_DIRECTORY_MULTIADDR is present in the relay task definition's
-      environment block; its value references the directory ALB DNS name via a
-      CloudFormation cross-stack import or parameter (not a hardcoded IP);
-      the value includes the /p2p/{peer-id} suffix (required by the relay
-      binary's peer ID validation at bin/relay.ts line 206)"
+    then: "all three new env vars are present in the relay task definition:
+      (1) CELLO_DIRECTORY_MULTIADDR — references the directory ALB DNS name via
+      CloudFormation cross-stack import or parameter (not a hardcoded IP) and
+      includes the /p2p/{peer-id} suffix;
+      (2) CELLO_RELAY_TRANSPORT_KEY_HEX — in the Secrets/ValueFrom block
+      referencing cello/{env}/relay/transport-key in Secrets Manager;
+      (3) CELLO_RELAY_HEALTH_CHECK_URL — in the Environment block, set to
+      the relay's VPC-internal health endpoint (e.g. a parameter or
+      constructed value — NOT a hardcoded IP; use the ECS task definition's
+      ability to reference the container's private IP via a parameter, or
+      accept this as a manual stack parameter per environment)"
     test_type: unit
     component_under_test: infra
 
   - id: AC-002
     given: "A local relay node started with CELLO_DIRECTORY_MULTIADDR set to
-      a test directory node's multiaddr (integration test environment)"
+      a test directory node's multiaddr and CELLO_RELAY_HEALTH_CHECK_URL set
+      to 'http://127.0.0.1:4000/health' (integration test environment)"
     when: "the relay starts"
     then: "the relay calls relay_register over the /cello/directory-relay/1.0.0
-      libp2p stream; the directory receives the relay_register frame;
-      relay.registered or relay.already.registered is logged on the relay;
-      AND the relay starts accepting sessions (health check returns 200) —
-      proving registration completed before the service accepted traffic"
+      libp2p stream; the CBOR frame received by the directory contains a
+      health_check_url field equal to 'http://127.0.0.1:4000/health' — verified
+      by the directory's relay_register handler asserting the field is present
+      and non-empty before calling registerRelay(); relay.registered or
+      relay.already.registered is logged on the relay; AND the relay starts
+      accepting sessions (health check returns 200) — proving registration
+      completed before the service accepted traffic"
     test_type: integration
     component_under_test: relay
-    notes: "Uses the existing relay registration integration test infrastructure.
-      This AC verifies the existing relay startup flow works when
-      CELLO_DIRECTORY_MULTIADDR is set — no new code to test, only the
-      IaC configuration change."
+    notes: "The health_check_url field in the CBOR frame is the transport-path
+      evidence that the wire format change was implemented. A test that only
+      checks relay.registered without inspecting the frame contents cannot
+      catch a missing health_check_url field."
 
   - id: AC-003
     given: "A directory node with S3 CloudStorageProvider configured and a
@@ -227,7 +267,7 @@ acceptance_criteria:
       (or adapter.initialised for the transport key) — the peer ID is stable
       across restarts; CELLO_RELAY_MULTIADDR in the directory task def and the
       relay manifest peer ID do not need updating after the redeploy"
-    test_type: integration
+    test_type: manual
     component_under_test: infra
     notes: "Run manually. Compare the Peer ID in the relay CloudWatch log group
       across two separate task deployments."
@@ -317,32 +357,55 @@ observability:
 
 # ─── Implementation Notes ───────────────────────────────────
 implementation_notes: >
-  IaC change (infra/cloudformation/cello-ecs-relay.yaml):
-  Add to the relay task definition Environment block:
-    - Name: CELLO_DIRECTORY_MULTIADDR
-      Value: !Sub "http://${DirectoryAlbDns}/p2p/${DirectoryPeerId}"
-  Or use a CloudFormation parameter for the full multiaddr string.
-  The peer ID must be the stable one stored in Secrets Manager
-  (cello/{env}/directory/transport-key), not a hardcoded string.
+  This story has THREE code change sites plus IaC changes:
 
-  Directory change (packages/directory/src/directory-node.ts):
-  In the relay_register handler (around line 510), after updating the
-  in-memory relay registry and sending relay_register_ok, add:
-    if (this.#relayPoolManager && frame.healthCheckUrl !== existingHealthCheckUrl) {
-      await this.#reSignAndUploadManifest(frame.relayId, frame.healthCheckUrl)
-        .catch(err => logger.error("relay.manifest.update.failed", { relayId, region, reason: err.message }));
-    }
+  1. Relay wire format (packages/relay/src/network-directory-adapter.ts):
+     Add health_check_url to the relay_register CBOR frame in registerWithDirectory():
+       const healthCheckUrl = params.healthCheckUrl; // new required param
+       const frame = { type: "relay_register", relay_id, public_key_hex,
+         region, health_check_url: healthCheckUrl, timestamp, signature };
+     Add healthCheckUrl as a required field to the registerWithDirectory() params
+     interface. The caller (bin/relay.ts) reads it from CELLO_RELAY_HEALTH_CHECK_URL
+     env var and fails fast at startup if not set (same pattern as other required
+     env vars at bin/relay.ts line 96).
 
-  The re-sign logic already exists in infra/sign-manifest.sh as a shell script.
-  The equivalent Node.js logic should use the directory's existing Ed25519 key
-  provider to sign and CloudStorageProvider to upload — both are already
-  injected into the directory node.
+  2. Directory relay_register handler (packages/directory/src/directory-node.ts,
+     around line 510):
+     After processing relay_register and sending relay_register_ok, extract
+     health_check_url from the incoming frame. Check RelayPoolManager's in-memory
+     registry for the previous healthCheckUrl for this relayId. If different (or
+     if this is the first registration since directory startup), call
+     reSignAndUploadManifest(relayId, healthCheckUrl). Use fire-and-forget with
+     .catch() to log relay.manifest.update.failed without blocking the response.
+     Store the new healthCheckUrl in RelayPoolManager's relay state for future
+     no-op comparisons.
 
-  IMPORTANT — sovereign node constraint: this story must work in all three
-  regions independently. The eu-central-1 directory updates the eu-central-1
-  relay manifest; the us-east-1 directory updates the us-east-1 relay manifest.
-  No cross-region manifest updates. Each directory node owns its region's relay
-  manifest.
+  3. Sign-manifest.sh (infra/sign-manifest.sh):
+     Create the script. It must use EXACTLY the same canonical JSON as
+     buildCanonicalPayload() in relay-pool-manager.ts: JSON.stringify with
+     keys in order [relays, updatedAt, version] at the top level ONLY — do
+     NOT sort relay entry fields. The script fetches the private key from
+     Secrets Manager by ARN (never accepts key material as a CLI argument).
+     Test it by running AC-007b against a real RelayPoolManager instance.
+
+  4. IaC (infra/cloudformation/cello-ecs-relay.yaml):
+     Add to Secrets block: CELLO_RELAY_TRANSPORT_KEY_HEX via ValueFrom
+       cello/{env}/relay/transport-key.
+     Add to Environment block: CELLO_DIRECTORY_MULTIADDR and
+       CELLO_RELAY_HEALTH_CHECK_URL. For HEALTH_CHECK_URL: ECS Fargate does
+       not inject the task's private IP as an env var at launch time. Options:
+       (a) use a CloudFormation parameter per-environment with the expected
+       IP range (not ideal — IP changes), or (b) have the relay binary fetch
+       its own IP from the ECS task metadata endpoint at startup
+       (169.254.170.2/v2/metadata) and construct the URL. Option (b) is
+       preferred — eliminates the need to update the task def when IP changes.
+       The binary already handles CELLO_RELAY_HEALTH_CHECK_URL as an env var;
+       if not set, fall back to fetching from ECS metadata.
+
+  IMPORTANT — sovereign node constraint: each directory node owns its region's
+  relay manifest. No cross-region manifest updates. eu-central-1 directory
+  updates the eu-central-1 S3 bucket; us-east-1 updates its own bucket.
+  The CloudStorageProvider is already region-scoped via awsRegion injection.
 
 # ─── References ─────────────────────────────────────────────
 references:
