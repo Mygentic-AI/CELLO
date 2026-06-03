@@ -1,0 +1,234 @@
+---
+name: CELLO-PREP-011
+type: user-story
+date: 2026-06-03
+topics: [testing, persist-019, notification-queue, uint8array, serialization, pre-m7]
+status: draft
+description: >
+  PERSIST-019 AC-003 inserts session_sealed and seal_verified notifications via
+  raw JSON.stringify (bypassing enqueueNotification's custom serializer), so
+  Uint8Array fields like session_id and sealed_root are stored as Buffer JSON
+  objects instead of __type:Uint8Array sentinels. The test only asserts
+  toMatchObject({ type: "..." }) — it never checks that session_id and sealed_root
+  come back as Uint8Array instances after drain. Add a companion test that uses
+  enqueueNotification and asserts Uint8Array field type integrity on drain.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PREP-011
+domain: PREP
+milestone: M7
+actor: DEV
+priority: P1
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a CELLO developer,
+  I want PERSIST-019 AC-003 to verify that Uint8Array fields in session_sealed
+  and seal_verified notifications survive the enqueue→drain round-trip with
+  correct type, so that a future JSON serialization regression (like the
+  PERSIST-005 incident) is caught by tests before it reaches production.
+
+# ─── Context ────────────────────────────────────────────────
+# The gap (identified during M6 retrospective):
+#
+# PERSIST-019 AC-003 (persist-019-notification-queue.test.ts lines 453-511)
+# inserts test notifications via raw superPool.query with JSON.stringify:
+#
+#   const n2: DirectoryNotification = {
+#     type: "session_sealed",
+#     signature_type: "single",
+#     session_id: randomBytes(16),        // Buffer/Uint8Array
+#     sealed_root: randomBytes(32),       // Buffer/Uint8Array
+#     directory_signature: randomBytes(64), // Buffer/Uint8Array
+#     close_timestamp: Date.now(),
+#   };
+#   await superPool.query(
+#     `INSERT INTO notification_queue (pubkey_hex, payload) VALUES ($1, $2)`,
+#     [pubkeyHex, JSON.stringify(n2)],
+#   );
+#
+# JSON.stringify(randomBytes(16)) produces {"type":"Buffer","data":[...]} because
+# randomBytes returns a Buffer. The real serializer (jsonStringify from json-typed.ts)
+# produces {"__type":"Uint8Array","hex":"..."} sentinels. drainNotifications's reviver
+# looks for __type:Uint8Array, not Buffer.type. As a result, the raw-inserted test
+# data bypasses the production serialization path entirely.
+#
+# The test then asserts:
+#   expect(drained[1]).toMatchObject({ type: "session_sealed" });
+# This only checks the type field. It does not check that session_id is a Uint8Array.
+# If the serializer produced a plain object instead of Uint8Array, the test would pass.
+#
+# The PERSIST-005 incident (2026-06-02): JSON.stringify on a Uint8Array silently
+# corrupts it. The serialization bug only surfaces when the deserialized value is
+# used in a cryptographic operation (e.g. Buffer.from(session_id) on a plain object).
+# Tests that only check toMatchObject({ type: "..." }) cannot catch this.
+#
+# Fix: add a new integration test that:
+#   1. Uses enqueueNotification (the real production path) to insert a session_sealed
+#      notification with real Uint8Array fields
+#   2. Calls drainNotifications to read them back
+#   3. Asserts session_id instanceof Uint8Array, sealed_root instanceof Uint8Array,
+#      directory_signature instanceof Uint8Array
+#   4. Asserts the byte values match the originals (not just type equality)
+#
+# The existing AC-003 test (FIFO ordering) is NOT modified — it tests a different
+# property (ordering). The new test is additive.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When a session_sealed notification with Uint8Array fields is enqueued
+    via enqueueNotification and then drained via drainNotifications"
+    action: "the drained notification's session_id, sealed_root, and
+      directory_signature fields are Uint8Array instances with byte values
+      identical to the originals; the round-trip preserves both type and value"
+
+  - trigger: "When a seal_verified notification with Uint8Array fields is enqueued
+    via enqueueNotification and then drained via drainNotifications"
+    action: "the drained notification's session_id and sealed_root fields are
+      Uint8Array instances with byte values identical to the originals"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A session_sealed (signature_type: 'single') DirectoryNotification with
+      real Uint8Array fields: session_id (16 bytes), sealed_root (32 bytes),
+      directory_signature (64 bytes) constructed as new Uint8Array(randomBytes(N))
+      (NOT via randomBytes directly — randomBytes returns a Buffer, not Uint8Array)"
+    when: "enqueueNotification is called with this notification, then
+      drainNotifications is called for the same pubkeyHex"
+    then: "the drained notification satisfies:
+      (1) result.type === 'session_sealed';
+      (2) result.session_id instanceof Uint8Array — the exact type, not Buffer or object;
+      (3) Buffer.from(result.session_id).toString('hex') === original session_id hex;
+      (4) result.sealed_root instanceof Uint8Array;
+      (5) Buffer.from(result.sealed_root).toString('hex') === original sealed_root hex;
+      (6) result.directory_signature instanceof Uint8Array;
+      (7) Buffer.from(result.directory_signature).toString('hex') === original sig hex;
+      all seven assertions must pass for AC-001 to be satisfied"
+    test_type: integration
+    component_under_test: directory
+    notes: "The test must use new Uint8Array(randomBytes(16)) not randomBytes(16) for
+      the field values, because randomBytes returns a Buffer (a Node.js Buffer subclass
+      of Uint8Array). While Buffer instanceof Uint8Array is true, the round-trip test
+      is specifically checking for the __type:Uint8Array sentinel path in jsonStringify
+      and that jsonParse restores to a real Uint8Array (not Buffer). Use
+      new Uint8Array(crypto.randomBytes(16)) to construct a plain Uint8Array."
+
+  - id: AC-002
+    given: "A seal_verified DirectoryNotification with real Uint8Array fields:
+      session_id (16 bytes), sealed_root (32 bytes), both as new Uint8Array(...)"
+    when: "enqueueNotification is called, then drainNotifications is called"
+    then: "the drained notification satisfies:
+      (1) result.type === 'seal_verified';
+      (2) result.session_id instanceof Uint8Array with correct bytes;
+      (3) result.sealed_root instanceof Uint8Array with correct bytes"
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "The updated test file after AC-001 and AC-002 are added"
+    when: "the full test suite for persist-019 runs"
+    then: "the existing AC-003 FIFO ordering test is unchanged and still passes;
+      AC-001 and AC-002 are new tests in a new describe block titled
+      'PERSIST-019 AC-001a/AC-001b: Uint8Array field type integrity after drain'"
+    test_type: unit
+    component_under_test: directory
+    notes: "AC-003 of the original story (FIFO ordering) must not be modified — only
+      additive tests are introduced. Both new tests must use describeIntegration (they
+      require a real database)."
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "Notification Uint8Array fields must not be silently corrupted by the
+      JSON serialization round-trip — a corrupted session_id or sealed_root would
+      allow an attacker to match a notification to the wrong session"
+    adversarial_condition: "if session_id is deserialized as a plain object instead
+      of a Uint8Array, Buffer.from(session_id) produces an empty Buffer (Buffer.from
+      of a plain object produces Buffer.from('[object Object]')); a handler using
+      this session_id to look up session state would fail to find the session and
+      silently drop the notification; verified by AC-001 asserting that
+      session_id instanceof Uint8Array and the bytes match the original — an
+      incorrect deserialization would fail both checks"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events: []
+  error_events: []
+  notes: >
+    No new log events. This story adds tests only — no production code changes.
+  alarms: [] # no alarm: test-only story; no new production behavior
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes: >
+  Add to packages/directory/src/__tests__/persist-019-notification-queue.test.ts
+  after the existing AC-003 FIFO ordering describe block:
+
+  describeIntegration("PERSIST-019 AC-001a: session_sealed Uint8Array field integrity", () => {
+    it("session_id, sealed_root, directory_signature survive enqueue→drain as Uint8Array", async () => {
+      const logger = makeMockLogger();
+      const store = new PgDirectoryStore(superPool, logger);
+
+      const pubkeyHex = randomBytes(32).toString("hex");
+      const correlationId = randomUUID();
+
+      // Use new Uint8Array(randomBytes(N)) — NOT randomBytes(N) directly.
+      // randomBytes returns Buffer; Buffer is a subclass of Uint8Array but Buffer
+      // JSON-serializes differently ({"type":"Buffer","data":[...]}) vs the
+      // __type:Uint8Array sentinel. This test validates the production path.
+      const sessionId = new Uint8Array(randomBytes(16));
+      const sealedRoot = new Uint8Array(randomBytes(32));
+      const dirSig = new Uint8Array(randomBytes(64));
+
+      const notification: DirectoryNotification = {
+        type: "session_sealed",
+        signature_type: "single",
+        session_id: sessionId,
+        sealed_root: sealedRoot,
+        directory_signature: dirSig,
+        close_timestamp: Date.now(),
+      };
+
+      // Use enqueueNotification (production path using jsonStringify with
+      // __type:Uint8Array sentinel), NOT raw superPool.query + JSON.stringify.
+      store.enqueueNotification(pubkeyHex, notification, correlationId);
+
+      // Give the async fire-and-forget a tick to complete
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const drained = await store.drainNotifications(pubkeyHex, correlationId);
+      expect(drained).toHaveLength(1);
+      const n = drained[0] as SessionSealed;
+
+      // Type integrity — must be Uint8Array, not Buffer or plain object
+      expect(n.session_id).toBeInstanceOf(Uint8Array);
+      expect(n.sealed_root).toBeInstanceOf(Uint8Array);
+      expect(n.directory_signature).toBeInstanceOf(Uint8Array);
+
+      // Value integrity — bytes must survive the round-trip unchanged
+      expect(Buffer.from(n.session_id).toString("hex"))
+        .toBe(Buffer.from(sessionId).toString("hex"));
+      expect(Buffer.from(n.sealed_root).toString("hex"))
+        .toBe(Buffer.from(sealedRoot).toString("hex"));
+      expect(Buffer.from(n.directory_signature).toString("hex"))
+        .toBe(Buffer.from(dirSig).toString("hex"));
+    });
+  });
+
+  Add a similar describeIntegration for SealVerified (AC-002) with
+  session_id and sealed_root (seal_verified has no directory_signature).
+
+  Import SessionSealed and SealVerified from @cello-protocol/protocol-types at
+  the top of the test file if not already imported.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M7
+  discussion_logs:
+    - "2026-06-03_1146_beta-launch-brittleness-analysis"
+  depends_on: []
+  blocks: []
