@@ -918,3 +918,50 @@ When a session transitions to `seal_deferred`, schedule a retry: once the signal
 - Test agent pubkey: `2fa9fb0815f9b0a13fb8ef3e9f90ccc96315fdb964ac87162b3ab9611b86bbbd`
 - Demo agent pubkey: `12ccbfd5fa4049177e4c4a81f7462641c1ab4490bfd640ea7e6407a69d06a2f8`
 - Demo agent agent_id: `a2c55e2721f45cfa86cb3417a76e3f7b`
+
+---
+
+## 2026-06-03 — Recurring re-registration failure: root cause documented
+
+**Pattern:** Every time the test agent's local DB is wiped and re-registered, `cello_initiate_session` still returns `directory_below_threshold`. This has repeated 5+ times this session.
+
+**Root cause (fully understood as of this entry):**
+
+There are three separate things that must all be wiped and re-created in sync. Previous attempts only wiped subsets:
+
+1. **Client local DB** (`~/.cello/client.db`) — holds K_local, FROST share half
+2. **`agent_profiles` row in PostgreSQL** — deleted in some sessions but not always
+3. **`agent_key_shares` row in PostgreSQL** — the K_server share; **never deleted** in any previous attempt
+4. **Directory in-memory share cache** (`PersistentShareStore`) — loaded at startup from `agent_key_shares`; stale even after DB row is deleted unless directory is restarted
+
+When only (1) is wiped, new K_local is generated but the directory still holds the old K_server share in memory from the previous DKG. The FROST ceremony fails because K_local and K_server no longer correspond, and the directory returns `directory_below_threshold`.
+
+**Why `directory_below_threshold` masks this:** Every FROST ceremony failure, regardless of cause — quorum too low, share mismatch, identity mismatch, timeout — surfaces as `directory_below_threshold`. There is no distinct error code for "K_local/K_server pair mismatch". This is a known post-M6 issue.
+
+**Correct re-registration procedure (all 4 steps required, in order):**
+
+1. Delete `agent_key_shares` row: `DELETE FROM agent_key_shares WHERE agent_id='<full-pubkey>'`
+2. Delete `agent_profiles` row: `DELETE FROM agent_profiles WHERE k_local_pubkey LIKE '<pubkey-prefix>%'`
+3. Restart the directory ECS task (`aws ecs stop-task`) — flushes in-memory share cache
+4. Kill MCP (`pkill -f cello-mcp`), delete `~/.cello/client.db`, restart MCP, get fresh token from Telegram, call `cello_register`
+
+**Why `rm ~/.cello/client.db` silently fails:** The MCP process holds the SQLite file open. `rm` on macOS removes the directory entry but the inode persists while the process has it open. `find` still shows the file. Kill the process FIRST, then delete.
+
+**This procedure is the canonical re-registration recovery path for any future session.**
+
+---
+
+## 2026-06-03 — Multiple MCP processes: stale version answers ceremony instead of current version
+
+**Symptom:** `cello_initiate_session` returns `directory_below_threshold` even after a clean re-registration with a fresh DB and correct `0.0.24` MCP config.
+
+**Root cause:** `/mcp` starts a new MCP process but does NOT kill old ones. If Claude Code was previously run with `0.0.22` configured, those processes remain alive after the config is updated and `/mcp` is re-run. Multiple processes now share the same agent identity on the directory's signaling map. When the directory sends a `ceremony_request`, it goes to whichever process holds that stream — often the stale one.
+
+`0.0.22` had a startup bug: it calls `bootstrapNetworkKeyShares` (test-only function), that throws, and the process continues with `#thresholdSigner = null`. When the ceremony arrives on that process, it sends `ok=false` back. Directory translates this to `directory_below_threshold`.
+
+**How to detect:** Run `ps aux | grep cello-mcp` — if you see more than one process, or processes from different npx cache hashes, you have stale instances.
+
+**Fix:** `pkill -f cello-mcp` kills all instances. Then `/mcp` starts a single fresh process on the current configured version.
+
+**Rule:** Always run `pkill -f cello-mcp` before `/mcp` when troubleshooting FROST ceremony failures. Never assume `/mcp` replaced the old process.
+
