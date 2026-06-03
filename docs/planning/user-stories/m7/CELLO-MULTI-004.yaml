@@ -1,3 +1,11 @@
+---
+name: CELLO-MULTI-004
+type: user-story
+date: 2026-05-28
+topics: [multi-agent, agent-lifecycle, cello-list-agents, cello-start-agent, cello-stop-agent, mcp-tools]
+status: draft
+description: Agent lifecycle MCP tools — cello_list_agents, cello_start_agent, cello_stop_agent — delegating to the AgentRegistry from MULTI-002.
+---
 # ─── Identity ───────────────────────────────────────────────
 id: CELLO-MULTI-004
 domain: MULTI
@@ -34,7 +42,25 @@ behavior:
       counterparty is unreachable or the timeout expires, the session
       transitions to 'seal_deferred'; the CelloClient is shut down; the
       libp2p node is stopped; the agent transitions to 'registered'; returns
-      { stopped: true, name, sessionsClosedCount, sessionsDeferredCount }"
+      { stopped: true, name, sessionsClosedCount, sessionsDeferredCount };
+      the 5-second stop timeout is intentionally shorter than the seal-frost-timeout
+      (15 seconds) — operator-driven stop is time-bounded for responsiveness,
+      whereas autonomous seal waits longer for ceremony completion"
+
+  - trigger: "When `cello_stop_agent(name)` is called for an agent that is
+    current for one or more connections"
+    action: "the per-connection state layer (MULTI-003) clears currentAgent to
+      null for each affected connection; subsequent tool calls on those
+      connections return the 'no current agent' error until a new agent is
+      selected via cello_use_agent"
+
+  - trigger: "When `cello_stop_agent` is called from any connection regardless
+    of which agent is current on that connection"
+    action: "the operation is permitted — there is no per-connection authorization
+      constraint; any operator connection can stop any agent; this is a
+      deliberate single-operator model decision (no multi-tenant concern in M7);
+      the security invariant is that the stop must not expose private key material
+      from any agent, including the one being stopped"
 
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
@@ -46,7 +72,8 @@ acceptance_criteria:
       { name: 'alice', state: 'online', pubkey: '<hex>' },
       { name: 'bob', state: 'registered', pubkey: '<hex>' },
       { name: 'carol', state: 'current', pubkey: '<hex>' }
-    ] sorted alphabetically by name"
+    ] sorted alphabetically by name; AND `tool.list_agents.called` is logged
+    at DEBUG with `agentCount: 3`"
     test_type: integration
     component_under_test: connect
 
@@ -56,7 +83,8 @@ acceptance_criteria:
     then: "return value contains `{ started: true, name: 'bob', pubkey: '<hex>',
       peerId: '<peerID>' }`; bob's state is 'online' in `cello_list_agents`;
       bob's libp2p node is listening on at least one multiaddr
-      (`bob.libp2p.getMultiaddrs().length > 0`)"
+      (`bob.libp2p.getMultiaddrs().length > 0`); AND `tool.start_agent.success`
+      is logged at INFO with `agentName: 'bob'` and `peerId` fields"
     test_type: integration
     component_under_test: connect
 
@@ -70,7 +98,9 @@ acceptance_criteria:
       (sessionsClosedCount = 1); S2 times out after 5 seconds and transitions
       to 'seal_deferred' (sessionsDeferredCount = 1); alice transitions to
       registered; return value is `{ stopped: true, name: 'alice',
-      sessionsClosedCount: 1, sessionsDeferredCount: 1 }`"
+      sessionsClosedCount: 1, sessionsDeferredCount: 1 }`; AND
+      `tool.stop_agent.success` is logged at INFO with `agentName: 'alice'`,
+      `sessionsClosedCount: 1`, and `sessionsDeferredCount: 1`"
     test_type: integration
     component_under_test: connect
     notes: "To produce sessionsDeferredCount > 0, charlie's libp2p node must
@@ -98,12 +128,14 @@ acceptance_criteria:
     given: "No agent named `ghost` exists"
     when: "`cello_start_agent('ghost')` is called"
     then: "returns an error: { error: 'Agent not found: ghost',
-      available: ['alice', 'bob', 'carol'] }"
+      available: ['alice', 'bob', 'carol'] }; AND `tool.start_agent.failed`
+      is logged at WARN with `agentName: 'ghost'` and `error` fields"
     test_type: unit
     component_under_test: connect
 
   - id: AC-007
-    given: "Agent `alice` is current for Connection 1"
+    given: "Agent `alice` is current for Connection 1; two connections
+      established via InMemoryTransport pairs"
     when: "`cello_stop_agent('alice')` is called from any connection"
     then: "alice transitions to registered; Connection 1's current agent
       becomes null; subsequent tool calls on Connection 1 return the
@@ -117,8 +149,22 @@ security_invariants:
   - id: SI-001
     statement: "cello_list_agents must never expose private key material —
       only the public key hex"
-    adversarial_condition: "even if the tool response is logged or displayed,
-      no private key bytes are exposed"
+    adversarial_condition: "a test constructs an AgentRegistry with a loaded
+      agent whose K_local seed is known; calls cello_list_agents and JSON-serializes
+      the full tool response; asserts that the private key seed bytes are absent
+      from the serialized output — verified by checking that the response contains
+      no byte sequence matching the 32-byte seed"
+    test_type: unit
+    component_under_test: connect
+
+  - id: SI-002
+    statement: "cello_stop_agent must not expose private key material from
+      the stopped agent — the return value and all log events must contain
+      only public identifiers"
+    adversarial_condition: "a test stops an agent whose K_local seed is known;
+      captures the tool return value and all log events emitted during the stop;
+      asserts that neither the return value nor any log event context contains
+      byte sequences matching the agent's 32-byte private key seed"
     test_type: unit
     component_under_test: connect
 
@@ -126,40 +172,43 @@ security_invariants:
 observability:
   events:
     - name: tool.list_agents.called
-      level: DEBUG
-      fields: [connectionId, agentCount]
-      context: "Emitted on each list_agents invocation (DEBUG — high-frequency
-        during normal operation)"
+      level: debug
+      trigger: "On each cello_list_agents invocation"
+      context_fields: [connectionId, agentCount]
+      correlationId: false
     - name: tool.start_agent.success
-      fields: [agentName, peerId]
-      context: "Emitted when an agent successfully comes online"
+      level: info
+      trigger: "When an agent successfully transitions to online"
+      context_fields: [agentName, peerId]
+      correlationId: false
     - name: tool.stop_agent.success
-      fields: [agentName, sessionsClosedCount, sessionsDeferredCount]
-      context: "Emitted when an agent is taken offline"
+      level: info
+      trigger: "When an agent is successfully taken offline"
+      context_fields: [agentName, sessionsClosedCount, sessionsDeferredCount]
+      correlationId: false
   error_events:
     - name: tool.start_agent.failed
-      fields: [agentName, error]
-      context: "Emitted when start_agent fails"
+      level: warn
+      trigger: "When cello_start_agent fails (agent not found, already online,
+        startup error)"
+      context_fields: [agentName, error]
+      correlationId: false
     - name: tool.stop_agent.failed
-      fields: [agentName, error]
-      context: "Emitted when stop_agent fails (e.g. agent not found, not online)"
+      level: warn
+      trigger: "When cello_stop_agent fails (agent not found, not online)"
+      context_fields: [agentName, error]
+      correlationId: false
+  notes: >
+    The tool.* prefix is new — these five event names must be added to the
+    canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
+    by the implementer of this story.
+
+    No alarm thresholds for M7: cello_stop_agent and cello_start_agent are
+    operator-driven lifecycle operations. Failures are immediately visible in
+    the tool return value. Alarm thresholds for agent lifecycle health are
+    deferred to a post-M7 operations story.
   alarms: []
-
-# ─── Implementation Notes ──────────────────────────────────
-implementation_notes: >
-  These tools delegate to the AgentRegistry introduced in MULTI-002.
-  cello_list_agents is the simplest — iterates the Map and returns state.
-  cello_start_agent calls registry.start(name) which creates CelloClient.
-  cello_stop_agent calls registry.stop(name) which initiates session sealing
-  (with a 5-second timeout per session), then closes sessions and stops the
-  libp2p node. The tool handlers are registered in
-  packages/adapter-claude-code/src/server.ts alongside the existing 12 tools.
-
-  AC-007 is the stop-while-current scenario: when cello_stop_agent is called
-  for an agent that is current on one or more connections, the per-connection
-  state layer (MULTI-003) must clear the currentAgent for each affected
-  connection, setting it to null. Subsequent tool calls on those connections
-  must return the 'no current agent' error.
 
 # ─── References ─────────────────────────────────────────────
 references:
@@ -168,5 +217,6 @@ references:
     - "2026-05-27_1400_multi-agent-mcp-planning"
   depends_on:
     - CELLO-MULTI-002
+    - CELLO-MULTI-003
   blocks:
     - CELLO-MULTI-008

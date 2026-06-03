@@ -1,3 +1,11 @@
+---
+name: CELLO-MULTI-008
+type: user-story
+date: 2026-05-28
+topics: [multi-agent, integration-gate, milestone-close, retry-queue, nonce-deduplication, per-connection-state, presence]
+status: draft
+description: M7 milestone close gate — two agents on one MCP server exchange messages end-to-end, exercising retry queue drain after reconnect and nonce deduplication under realistic conditions.
+---
 # ─── Identity ───────────────────────────────────────────────
 id: CELLO-MULTI-008
 domain: MULTI
@@ -11,7 +19,7 @@ components:
 
 # ─── Intent ─────────────────────────────────────────────────
 story: >
-  As the M7 milestone close gate,
+  As an agent operator verifying the M7 milestone,
   I want a live integration test proving that two agents on one MCP server
   can exchange messages end-to-end — including retry queue drain after
   reconnect and nonce deduplication — so that the multi-agent capability
@@ -26,11 +34,29 @@ behavior:
       is simulated; retry queue and deduplication are exercised; the session
       is sealed"
 
+  - trigger: "When the test fixture for this story is created"
+    action: "the test must extend createSessionFixture() from
+      packages/e2e-tests/src/session-fixture.ts with a new opts field for
+      multi-agent server configuration (e.g. opts.multiAgent: { agents: ['alice', 'bob'] })
+      with a non-breaking default of undefined; a from-scratch makeFixture()
+      function must NOT be written — this is enforced by /cello-review fixture
+      discipline check; the two-agent server capability added here becomes
+      available for all future milestone gate tests"
+
+  - trigger: "When infrastructure prerequisites are checked before running MULTI-008"
+    action: "two infrastructure gaps from the M7 outline must be resolved before
+      this story's ACs can pass: (1) the /agent-lookup ALB routing rule must be
+      deployed — without it, agent_id-based session initiation (AC-002) will fail
+      because target resolution falls through to the WebSocket listener; (2) the
+      cello_service PostgreSQL role must have UPDATE grant on agent_profiles —
+      without it, linkAgentToAccount() fails silently in production; both gaps
+      are documented in the M7 outline and COORDINATION.md"
+
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "An MCP server started with two agents (alice and bob) in
-      `~/.cello/agents/`"
+    given: "An MCP server started with two agents (alice and bob) loaded via
+      createSessionFixture() extended with opts.multiAgent"
     when: "`cello_start_agent('alice')` and `cello_start_agent('bob')` are called"
     then: "both agents are online; `cello_list_agents` shows both as online;
       each has a distinct public key and Peer ID"
@@ -91,9 +117,10 @@ acceptance_criteria:
     component_under_test: client
 
   - id: AC-006
-    given: "Alice sends a message to bob that is delivered; the retry queue
-      also replays it (race condition simulation)"
-    when: "bob processes both the original and the replay"
+    given: "Alice sends a message to bob (nonce N) that is delivered; the test
+      then manually injects a second copy of the same raw envelope bytes (same
+      nonce N) directly into bob's inbound handler to simulate a retry replay"
+    when: "bob processes both the original delivery and the injected duplicate"
     then: "bob's receive queue contains exactly ONE copy of the message;
       the duplicate was discarded via nonce deduplication"
     test_type: integration
@@ -142,11 +169,13 @@ security_invariants:
     statement: "Messages sent by alice must be signed with alice's K_local;
       messages sent by bob must be signed with bob's K_local; cross-signing
       is impossible regardless of which connection routes to which agent"
-    adversarial_condition: "even if a connection rapidly switches between
-      agents, the envelope signature always matches the sending agent's
-      K_local — never a different agent's key; verified by extracting
-      `senderPubkeyHex` from each received envelope's CBOR structure and
-      asserting it equals the named agent's known K_local public key hex"
+    adversarial_condition: "a test rapidly switches Connection 1 between alice
+      and bob via cello_use_agent while sending messages; extracts the
+      senderPubkeyHex from each received envelope's CBOR structure; asserts
+      each senderPubkeyHex exactly matches the pubkey of the agent that was
+      current at send time — never the other agent's pubkey; a cross-signing
+      bug would cause a mismatch between the declared sender and the actual
+      signing key"
     test_type: integration
     component_under_test: connect
 
@@ -154,10 +183,12 @@ security_invariants:
     statement: "The retry queue must not deliver messages to the wrong session
       or wrong peer after reconnect — session ID and peer pubkey are checked
       before retry delivery"
-    adversarial_condition: "if agent A has queued messages for peer X in
-      session S, and peer Y reconnects instead, the queue does NOT drain
-      to peer Y; enforced structurally by the per-session, per-peer scoping
-      of the retry queue (QueuedMessage contains sessionId and peerPubkeyHex)"
+    adversarial_condition: "a test queues messages from alice to peer X in
+      session S; then peer Y (a different peer, different pubkey) reconnects
+      while peer X remains offline; asserts that alice's retry queue does NOT
+      drain to peer Y — confirmed by peer Y receiving zero messages and the
+      queue depth for session S remaining unchanged after peer Y's reconnect
+      event fires"
     test_type: integration
     component_under_test: client
 
@@ -165,31 +196,12 @@ security_invariants:
 observability:
   events: []
   error_events: []
+  notes: >
+    This is a gate story — it exercises all prior stories' observability events
+    but defines no new ones. The gate verifies that the integrated system produces
+    correct observable outcomes; individual log event verification is the
+    responsibility of each component story's ACs.
   alarms: []
-  notes: "This is a gate story — it exercises all prior stories' observability
-    events but defines no new ones."
-
-# ─── Implementation Notes ──────────────────────────────────
-implementation_notes: >
-  This story is the live multi-process smoke test for M7. It follows the
-  milestone close gate pattern established in M1+. The test runs as a Vitest
-  integration test in packages/e2e-tests/src/m7/ using real libp2p nodes,
-  real directory, and real CelloClients — one per agent. The transport
-  disruption is simulated by calling libp2p.stop() on one agent's node
-  and then restarting it. The nonce race condition (AC-006) is simulated by
-  manually replaying a raw envelope with a duplicate nonce. The per-connection
-  test (AC-009) uses InMemoryTransport pairs from the MCP SDK to simulate two
-  independent connections to the same server.
-
-  Scope boundary for AC-004/AC-005: `libp2p.stop()` on bob's node within
-  the same server process triggers alice's `peer:disconnect` via the libp2p
-  event system directly — it does NOT exercise the Yamux keepalive detection
-  path (which is MULTI-005's concern). AC-004/AC-005 test the retry queue
-  DRAIN mechanism, not keepalive detection. The keepalive detection path is
-  covered by MULTI-005's unit tests with explicit keepalive configuration.
-  This scope boundary is intentional and documented — the integration gate
-  validates the full retry/dedup/reconnect flow without requiring a 10-second
-  keepalive timeout on every test run.
 
 # ─── References ─────────────────────────────────────────────
 references:
