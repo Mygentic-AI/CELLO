@@ -57,6 +57,7 @@ const keyPath = process.env["CELLO_RELAY_KEY_FILE"] ?? join(homedir(), ".cello",
 const directoryMultiaddr = process.env["CELLO_DIRECTORY_MULTIADDR"];
 const transportKeyPath = process.env["CELLO_RELAY_TRANSPORT_KEY_FILE"] ?? join(homedir(), ".cello", "relay-transport-key");
 const listenAddr = process.env["CELLO_RELAY_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/tcp/4001";
+const wsListenAddr = process.env["CELLO_RELAY_WS_LISTEN_ADDR"] ?? "";
 const healthPort = parseInt(process.env["CELLO_RELAY_HEALTH_PORT"] ?? "4000", 10);
 const dirPubkeyHex = process.env["CELLO_DIRECTORY_PUBKEY"];
 const startedAt = Date.now();
@@ -209,7 +210,7 @@ if (directoryMultiaddr) {
 let relayResult: Awaited<ReturnType<typeof createRelayNode>>;
 try {
   relayResult = await createRelayNode({
-    listenAddresses: [listenAddr],
+    listenAddresses: wsListenAddr ? [listenAddr, wsListenAddr] : [listenAddr],
     directoryPubkey: dirPubkey,
     keyProvider: kp,
     transportPrivateKey,
