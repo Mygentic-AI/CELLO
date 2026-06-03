@@ -82,6 +82,11 @@ story: >
 #   an ACM certificate. The directory ALB uses plain ws:// for the same
 #   reason. Until TLS is added (future story), the relay endpoint in the
 #   manifest must use ws:// not wss://.
+#   NOTE: cello-route53.yaml always provisions an ACM Certificate resource.
+#   When deployed for the relay subdomain, this creates a certificate for
+#   relay-us1.cello.mygentic.ai that is DNS-validated but not yet attached
+#   to any ALB listener. This is intentional — the future TLS story can
+#   attach the existing cert ARN to an HTTPS listener without re-issuing.
 #
 # The relay manifest endpoint and multiaddrs update is an operator step,
 # not automated by relay_register. The relay_register frame carries only
@@ -156,9 +161,12 @@ acceptance_criteria:
     given: "The updated cello-vpc.yaml CloudFormation template"
     when: "the template is validated"
     then: "EcsRelaySecurityGroup has:
-      port 4000 from EcsDirectorySecurityGroup (unchanged),
+      port 4000 from EcsDirectorySecurityGroup (unchanged — directory health polling),
       port 4001 from EcsDirectorySecurityGroup (exists since commit 40543d5),
-      port 4002 from AlbSecurityGroup (new — added by this story);
+      port 4002 from AlbSecurityGroup (new — ALB WebSocket forwarding),
+      port 4000 from AlbSecurityGroup (new — ALB health checks on Fargate awsvpc
+        mode originate from ALB IPs and require this rule; without it the ALB
+        marks tasks unhealthy and returns 502 for all WebSocket connections);
       no direct internet ingress on port 4002 (SI-001)"
     test_type: unit
     component_under_test: infra
@@ -330,11 +338,15 @@ implementation_notes: >
      Port 4001 from EcsDirectorySecurityGroup already exists in the template
      (since commit 40543d5). Just deploying the vpc stack to all three regions
      will close the secondary-region port-4001 gap.
-     Also add port 4000 ingress to EcsRelaySecurityGroup from AlbSecurityGroup
-     if the ALB health check is sourced from the ALB (verify whether Fargate
-     ALB health checks originate from the ALB SG or from within the VPC CIDR —
-     on Fargate/awsvpc mode, ALB health checks originate from the ALB IPs, so
-     the ALB SG source rule is needed for port 4000 health checks too).
+     Also add port 4000 ingress to EcsRelaySecurityGroup from AlbSecurityGroup:
+       - IpProtocol: tcp
+         FromPort: 4000
+         ToPort: 4000
+         SourceSecurityGroupId: !Ref AlbSecurityGroup
+     On Fargate/awsvpc mode, ALB health checks originate from the ALB's IPs
+     (not from within the VPC CIDR), so the AlbSecurityGroup source rule is
+     required for the health check path. Without it, the ALB marks tasks
+     unhealthy and all WebSocket connections return 502.
 
   3. cello-route53.yaml is reused as-is (no changes needed).
      deploy.sh invokes it a second time per region with the relay subdomain.
