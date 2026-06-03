@@ -63,9 +63,23 @@ All other M6B stories are independent of M7 stories and can be merged in any ord
 
 Stories extracted from M7 PREP domain and rehoused as standalone M6B milestone.
 Priority order reflects operational pain from M6 beta launch post-mortem.
-All stories reviewed and sprint-approved except M6B-007 (APPROVED) and
-M6B-009 (APPROVED). M6B-006 APPROVED after 2 BLOCKED rounds.
-M6B-002 APPROVED after 2 BLOCKED rounds + medium fixes.
+
+Sprint review status:
+- M6B-002 (was PREP-006): APPROVED (2 BLOCKED rounds + medium fixes)
+- M6B-004 (was PREP-001): APPROVED
+- M6B-005 (was PREP-002): APPROVED
+- M6B-006 (was PREP-003): APPROVED (2 BLOCKED rounds)
+- M6B-007 (was PREP-007): APPROVED (2 BLOCKED rounds + medium fix)
+- M6B-009 (was PREP-005): APPROVED
+
+NOT YET SPRINT-REVIEWED — must be reviewed before implementation begins:
+- M6B-001 (PID lock file)
+- M6B-003 (seal_deferred reconnect+retry)
+- M6B-008 (manifest poll loop)
+- M6B-010 (directory state restoration)
+- M6B-011 (ops-agent UX)
+- M6B-012 (persist-019 Uint8Array test)
+- M6B-013 (SQLCipher replacement)
 
 Implementation agents may begin in any order within each group:
 
