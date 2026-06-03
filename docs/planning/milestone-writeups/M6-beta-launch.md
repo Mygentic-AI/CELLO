@@ -1043,6 +1043,34 @@ When `@cello-protocol/connect` is pinned to a new version (e.g. `npx --yes @cell
 
 ---
 
+### Seal ceremony fails silently when signaling stream drops during message exchange — AC-006 blocked (2026-06-03)
+
+**What happened:** Session `a654d6ee` completed all 4 messages successfully (AC-005 verified). The demo agent called `cello_close_session` after sending message 4. The seal ceremony returned `seal_deferred` after 15 seconds. `cello_get_sealed_receipt` returned `session_not_sealed`. AC-006 is blocked.
+
+**Root cause (confirmed by directory and demo agent logs):**
+
+The directory's persistent signaling stream connection from the demo agent had dropped between the end of message exchange and the close call. The SEAL frame sent from the demo agent over the signaling stream went into a dead connection silently. The directory never received it, never sent `seal_verified`, and the demo agent's 15-second `seal_verified` wait timed out → `seal_deferred`.
+
+The drop was not random. During message exchange (steps 4–8), the demo agent was communicating entirely with the relay via P2P content delivery. The signaling stream to the directory was idle for ~2 minutes. The underlying TCP/WebSocket connection was killed (likely by an intermediate network device or the libp2p layer detecting a stale connection), and nothing detected or recovered from this.
+
+**Evidence:**
+- Directory logs show no `frost_commit_request` or SEAL-related events in the 07:57–07:58 UTC window
+- Demo agent logs show `status → sealing` at 07:57:31, then `status → seal_deferred` at 07:57:46 (exactly 15s later)
+- None of the `[CLIENT-DEBUG]` lines from `frost-threshold-signer.ts` appear — the FROST ceremony never started
+- `seal_verified` was never received, because SEAL frame never reached the directory
+
+**Two-part fix (ready to implement):**
+
+1. **Reconnect before sealing (Fix 1 — direct):** In `closeSession`, before sending the SEAL frame over `#persistentSignalingStream`, check if the stream is alive. If not, call `#openPersistentSignalingStream()` before sending. Pattern already exists in `initiateUnilateralSeal` (lines 1795–1800). Currently `closeSession` assumes the stream is open and sends blindly — if the stream is dead the frame is lost silently.
+
+2. **Retry on `seal_deferred` (Fix 2 — resilience):** When a session lands in `seal_deferred`, schedule a retry after reconnection. Currently `seal_deferred` is a terminal state — nothing reads it and tries again. The retry should re-send the SEAL frame once the signaling stream is restored.
+
+**What this is NOT:** This is not a demo agent bug. The fix lives in `@cello-protocol/client` — `closeSession` in `client.ts`. Every CELLO agent using `cello_close_session` is affected.
+
+**Broader pattern:** Every place that sends a frame over `#persistentSignalingStream` has the same silent-drop risk. The right long-term fix is a keepalive ping every 30 seconds to keep the connection warm. That's Fix 3 (post-AC-006).
+
+---
+
 ### FROST DKG ceremony is 1-of-2 (client + one directory) — sovereign node property not delivered
 
 **Discovered:** 2026-06-03. Documented in full in [[2026-06-03_1200_frost-dkg-single-directory-gap]].

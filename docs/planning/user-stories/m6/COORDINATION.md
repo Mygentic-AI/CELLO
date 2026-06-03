@@ -875,3 +875,46 @@ Root cause unknown — need to investigate whether:
 - Demo agent EC2 `i-0ad3e7c22470f266e`: `connect@0.0.22`, `CELLO_ANNOUNCE_ADDRS=/ip4/32.196.100.165/tcp/4001`, running
 - Test agent pubkey: `2fa9fb0815f9b0a13fb8ef3e9f90ccc96315fdb964ac87162b3ab9611b86bbbd`
 - Demo agent pubkey: `12ccbfd5fa4049177e4c4a81f7462641c1ab4490bfd640ea7e6407a69d06a2f8`
+
+---
+
+## 2026-06-03 — AC-006 root cause identified: signaling stream silent drop on close
+
+### Root cause
+
+The demo agent's persistent signaling stream connection to the directory silently dropped during the 2-minute message exchange window (messages 1–4 were delivered P2P via relay; directory connection was idle). When `cello_close_session` was called, the SEAL frame was sent over the dead stream, the directory never received it, never sent `seal_verified`, and the 15s timeout fired → `seal_deferred`. No error logged. No retry attempted.
+
+Evidence: directory logs show zero SEAL-related events 07:57–07:58 UTC. No `[CLIENT-DEBUG]` lines from `frost-threshold-signer.ts` in demo agent logs (FROST ceremony never started — `seal_verified` never arrived).
+
+### Fix plan (ready to implement)
+
+**Fix 1 — Reconnect before sealing:**
+In `client.ts` `closeSession()`, before sending the SEAL frame over `#persistentSignalingStream`, check if stream is live. If not, call `#openPersistentSignalingStream()` first. Pattern already exists in `initiateUnilateralSeal()` (lines ~1795–1800 of `client.ts`). Currently `closeSession` sends blindly into a potentially dead stream.
+
+**Fix 2 — Retry on `seal_deferred`:**
+When a session transitions to `seal_deferred`, schedule a retry: once the signaling stream is restored (peer:connect event or next `#openPersistentSignalingStream` success), re-send the SEAL frame for any `seal_deferred` sessions. Currently `seal_deferred` is terminal — nothing ever retries it.
+
+**Scope:** `@cello-protocol/client` only (`core/client/src/client.ts`). No directory changes. No demo agent changes. Both fixes ship as a patch version of `@cello-protocol/connect`.
+
+**Unit tests required:** Both fixes need tests. Fix 1: test that `closeSession` re-dials when `#persistentSignalingStream` is null/dead before sending SEAL. Fix 2: test that a `seal_deferred` session retries its seal when reconnection occurs.
+
+**Code review:** Run `feature-dev:code-reviewer` after implementation. Fix all findings at all severities. Re-run until finding count is trivially low or 4 rounds complete (whichever comes first).
+
+### After fixes ship
+
+1. Publish new `@cello-protocol/connect` patch version (tag → CI → beta dist-tag)
+2. Update demo agent on EC2: `npm install @cello-protocol/connect@{new-version} --prefix /opt/cello-demo && chown -R cello-demo:cello-demo /opt/cello-demo/node_modules && systemctl restart cello-demo`
+3. Re-run AC-005 + AC-006 from scratch (new session):
+   - `cello_request_connection` to demo agent `12ccbfd5fa4049177e4c4a81f7462641c1ab4490bfd640ea7e6407a69d06a2f8`
+   - `cello_initiate_session`
+   - Send 4 messages, receive 4 responses
+   - After message 4 response arrives: call `cello_get_sealed_receipt` (session should now be sealed by demo agent's close)
+   - Verify receipt contains `session_id`, message hashes, sealed_root
+
+### Current infra state
+- Directory: 3 regions, all persistence fixes live
+- Relay: `connect@0.0.22`, transport key stable, public WS endpoint `relay-us1.cello.mygentic.ai`
+- Demo agent EC2 `i-0ad3e7c22470f266e`: `connect@0.0.22`, running, `CELLO_ANNOUNCE_ADDRS=/ip4/32.196.100.165/tcp/4001`
+- Test agent pubkey: `2fa9fb0815f9b0a13fb8ef3e9f90ccc96315fdb964ac87162b3ab9611b86bbbd`
+- Demo agent pubkey: `12ccbfd5fa4049177e4c4a81f7462641c1ab4490bfd640ea7e6407a69d06a2f8`
+- Demo agent agent_id: `a2c55e2721f45cfa86cb3417a76e3f7b`
