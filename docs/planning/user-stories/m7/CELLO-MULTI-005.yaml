@@ -1,3 +1,11 @@
+---
+name: CELLO-MULTI-005
+type: user-story
+date: 2026-05-28
+topics: [multi-agent, presence-detection, peer-events, libp2p, yamux, keepalive, cello-client]
+status: draft
+description: Wire libp2p peer:connect and peer:disconnect events into CelloClient for presence detection, enabling retry queue drain and MCP presence notifications.
+---
 # ─── Identity ───────────────────────────────────────────────
 id: CELLO-MULTI-005
 domain: MULTI
@@ -33,36 +41,41 @@ behavior:
     action: "no disconnect event fires; the connection is seamlessly
       maintained; this is expected behavior for brief network interruptions"
 
+  - trigger: "When tests for this story configure the test harness"
+    action: "the shared fixture at packages/e2e-tests/src/session-fixture.ts
+      must be extended with opts.yamuxKeepalive: { interval: number, timeout: number }
+      with a non-breaking default of undefined (keepalive uses libp2p defaults
+      when the opt is not set); no from-scratch fixture may be written for this
+      story — this is the CELLO fixture discipline rule enforced by /cello-review"
+
 # ─── Acceptance Criteria ────────────────────────────────────
 acceptance_criteria:
   - id: AC-001
-    given: "Agent A and Agent B have an active session; both libp2p nodes
-      are connected; the test harness configures Yamux keepalive explicitly
-      (`keepAliveInterval: 1000ms, keepAliveTimeout: 3000ms`)"
+    given: "Agent A and Agent B have an active session via createSessionFixture()
+      with opts.yamuxKeepalive: { interval: 1000, timeout: 3000 }"
     when: "Agent B's libp2p node is stopped (simulating laptop close)"
-    then: "within 10 seconds, Agent A's CelloClient emits `peer:disconnect`
-      with Agent B's K_local pubkey hex"
+    then: "Agent A's CelloClient emits `peer:disconnect` with Agent B's K_local
+      pubkey hex; AND the `peer.presence.disconnected` log event shows
+      `detectionLatencyMs >= 3500` — confirming detection came from the Yamux
+      keepalive timer path (a synthetic event would show latency < 500ms because
+      it fires synchronously; a real Yamux timeout cannot fire in under
+      keepAliveInterval + keepAliveTimeout = 4000ms)"
     test_type: integration
     component_under_test: client
-    notes: "Test location: packages/client/src/__tests__/multi-005-presence.test.ts.
-      The fixture must use createSessionFixture() from
-      packages/e2e-tests/src/session-fixture.ts with a new opts field
-      (e.g. opts.yamuxKeepalive: { interval: 1000, timeout: 3000 }) —
-      do NOT create a from-scratch libp2p node fixture. Extend the
-      shared fixture instead."
 
   - id: AC-002
     given: "Agent A has received a `peer:disconnect` for Agent B (established
       by the AC-001 test sequence — same harness instance, Agent B's node
       was stopped and the disconnect event was confirmed)"
     when: "Agent B's libp2p node restarts and reconnects to Agent A"
-    then: "Agent A's CelloClient emits `peer:connect` with Agent B's
-      K_local pubkey hex"
+    then: "Agent A's CelloClient emits `peer:connect` with Agent B's K_local
+      pubkey hex; AND Agent A's libp2p node reports at least one active connection
+      to Agent B's Peer ID (confirming the reconnect went through a real libp2p
+      dial, not a synthetic emit)"
     test_type: integration
     component_under_test: client
     notes: "Continuation of the AC-001 test — same harness, same describe
-      block. Not an independent test that sets up disconnect state from
-      scratch."
+      block. Not an independent test that sets up disconnect state from scratch."
 
   - id: AC-003
     given: "Agent A has a session with Agent B"
@@ -77,8 +90,9 @@ acceptance_criteria:
   - id: AC-004
     given: "Agent A has a session with Agent B marked 'transport_lost'"
     when: "Agent B reconnects"
-    then: "the session transitions back to 'active' state;
-      Agent A can immediately send messages to B"
+    then: "the session transitions back to 'active' state; Agent A can immediately
+      send messages to B; AND `peer.presence.reconnected` is logged at INFO with
+      `peerPubkeyHex` matching Agent B and `offlineDurationMs > 0`"
     test_type: integration
     component_under_test: client
 
@@ -104,7 +118,7 @@ acceptance_criteria:
   - id: AC-007
     given: "A known peer disconnects from Agent A"
     when: "the `peer:disconnect` event is processed"
-    then: "the `peer.presence.disconnected` event is logged with
+    then: "the `peer.presence.disconnected` event is logged at INFO with
       `peerPubkeyHex` (non-empty hex string) and `detectionLatencyMs > 0`
       (measured from last confirmed activity to event time)"
     test_type: integration
@@ -114,7 +128,7 @@ acceptance_criteria:
     given: "The libp2p node emits `peer:disconnect` for a Peer ID with no
       CELLO identification mapping"
     when: "the CelloClient processes this event"
-    then: "the `peer.presence.unmapped_peerid` event is logged with the
+    then: "the `peer.presence.unmapped_peerid` event is logged at WARN with the
       raw `peerId` string; no `peer.presence.disconnected` event fires"
     test_type: unit
     component_under_test: client
@@ -137,22 +151,32 @@ security_invariants:
 observability:
   events:
     - name: peer.presence.disconnected
-      fields: [peerPubkeyHex, detectionLatencyMs]
-      context: "Emitted when a known peer's connection is lost"
+      level: info
+      trigger: "When a known peer's libp2p connection is lost via Yamux keepalive timeout"
+      context_fields: [peerPubkeyHex, detectionLatencyMs]
+      correlationId: false
     - name: peer.presence.reconnected
-      fields: [peerPubkeyHex, offlineDurationMs]
-      context: "Emitted when a previously disconnected peer reconnects"
+      level: info
+      trigger: "When a previously disconnected peer's libp2p connection is re-established"
+      context_fields: [peerPubkeyHex, offlineDurationMs]
+      correlationId: false
   error_events:
     - name: peer.presence.unmapped_peerid
-      fields: [peerId]
-      context: "Emitted when peer:disconnect fires for an unknown Peer ID
-        (no CELLO identification mapping exists)"
+      level: warn
+      trigger: "When peer:disconnect fires for a Peer ID with no CELLO identification mapping"
+      context_fields: [peerId]
+      correlationId: false
   notes: >
-    The three new event names (`peer.presence.disconnected`,
-    `peer.presence.reconnected`, `peer.presence.unmapped_peerid`) must be
-    added to the canonical event taxonomy in
-    `docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md`
+    The three new event names (peer.presence.disconnected, peer.presence.reconnected,
+    peer.presence.unmapped_peerid) must be added to the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
     by the implementer of this story.
+
+    No alarm threshold is specified: presence detection latency varies with Yamux
+    keepalive configuration (~30s on production defaults). Alarming on latency without
+    a fixed production keepalive config would produce noise. The post-M7 signaling
+    stream resilience story should define production keepalive settings and any
+    corresponding alarm thresholds.
   alarms: []
 
 # ─── Interface Changes ──────────────────────────────────────
@@ -178,14 +202,6 @@ implementation_notes: >
   existing #peers Map (which stores peerId alongside pubkey); (3) emitting
   typed events on the CelloClient instance that MULTI-006 (retry queue) and
   MULTI-007 (notifications) consume.
-
-  Test harness configuration for AC-001: the test must explicitly configure
-  Yamux keepalive in the libp2p node options (`keepAliveInterval: 1000`,
-  `keepAliveTimeout: 3000`). Without explicit configuration, default Yamux
-  keepalive timing is ~30s, producing a 60s+ test. With explicit config,
-  detection happens within approximately 4 seconds (interval + timeout).
-  The AC-001 timing assertion is 10 seconds (config + 7s buffer for CI
-  variability).
 
   AC-002 is a continuation of AC-001's test harness — not an independent
   test that sets up the disconnect state from scratch. After AC-001 confirms
