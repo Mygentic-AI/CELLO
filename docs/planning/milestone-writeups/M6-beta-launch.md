@@ -1047,6 +1047,8 @@ When `@cello-protocol/connect` is pinned to a new version (e.g. `npx --yes @cell
 
 ### Seal ceremony fails silently when signaling stream drops during message exchange — AC-006 blocked (2026-06-03)
 
+**Status: FIX UNDERWAY — `@cello-protocol/connect@0.0.25` in progress. See `/tmp/cello-seal-fix.md` for full requirements.**
+
 **What happened:** Session `a654d6ee` completed all 4 messages successfully (AC-005 verified). The demo agent called `cello_close_session` after sending message 4. The seal ceremony returned `seal_deferred` after 15 seconds. `cello_get_sealed_receipt` returned `session_not_sealed`. AC-006 is blocked.
 
 **Root cause (confirmed by directory and demo agent logs):**
@@ -1061,13 +1063,13 @@ The drop was not random. During message exchange (steps 4–8), the demo agent w
 - None of the `[CLIENT-DEBUG]` lines from `frost-threshold-signer.ts` appear — the FROST ceremony never started
 - `seal_verified` was never received, because SEAL frame never reached the directory
 
-**Two-part fix (ready to implement):**
+**Two bugs confirmed — both being fixed in 0.0.25:**
 
-1. **Reconnect before sealing (Fix 1 — direct):** In `closeSession`, before sending the SEAL frame over `#persistentSignalingStream`, check if the stream is alive. If not, call `#openPersistentSignalingStream()` before sending. Pattern already exists in `initiateUnilateralSeal` (lines 1795–1800). Currently `closeSession` assumes the stream is open and sends blindly — if the stream is dead the frame is lost silently.
+**Bug 1 — Responder path missing stream check:** The `0.0.24` fix added a signaling stream reconnect check to `initiateSessionSeal` (the initiator path at line 1742 of `client.ts`). But the **responder path** (`kind === "ctrl"` branch at line ~3335) calls `#submitSealLeaf` directly with no such check. The demo agent is always the responder — it auto-seals when it receives the initiator's SEAL ctrl frame. So the 0.0.24 fix never applied to the demo agent's seal path.
 
-2. **Retry on `seal_deferred` (Fix 2 — resilience):** When a session lands in `seal_deferred`, schedule a retry after reconnection. Currently `seal_deferred` is a terminal state — nothing reads it and tries again. The retry should re-send the SEAL frame once the signaling stream is restored.
+**Bug 2 — Design flaw: `cello_close_session` never attempts to seal:** The `cello_close_session` MCP handler calls `client.closeSession(session_id)` — a synchronous `void` teardown method that immediately deletes the session, aborts the relay stream, and cleans up all state. It does NOT seal. It never did. The demo agent's seal is triggered by the responder path (receiving the initiator's SEAL frame), not by the MCP handler. But this means: if an agent calls `cello_close_session` as initiator without first sealing, the session is torn down permanently with no receipt. CELLO's fundamental invariant — every completed session ends with a seal — is violated silently.
 
-**What this is NOT:** This is not a demo agent bug. The fix lives in `@cello-protocol/client` — `closeSession` in `client.ts`. Every CELLO agent using `cello_close_session` is affected.
+**Fix:** `cello_close_session` must call `await client.initiateSessionSeal(session_id)` first, wait for the result, then tear down. Both bugs are addressed in `@cello-protocol/connect@0.0.25`. Full requirements in `/tmp/cello-seal-fix.md`.
 
 **Broader pattern:** Every place that sends a frame over `#persistentSignalingStream` has the same silent-drop risk. The right long-term fix is a keepalive ping every 30 seconds to keep the connection warm. That's Fix 3 (post-AC-006).
 
