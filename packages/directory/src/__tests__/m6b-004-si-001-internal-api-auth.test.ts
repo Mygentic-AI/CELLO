@@ -9,15 +9,13 @@
 // This test must run against a local directory server with INTERNAL_API_KEY set.
 // It verifies the security invariant that unauthenticated requests are rejected.
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { spawn, ChildProcess } from "child_process";
+import { describe, it, expect, beforeAll } from "vitest";
 import { setTimeout } from "timers/promises";
 
 const describeIntegration =
   process.env.CELLO_ENV === "local" ? describe : describe.skip;
 
 describeIntegration("SI-001: Internal API authentication (HTTP 401)", () => {
-  let directoryProcess: ChildProcess | null = null;
   const DIRECTORY_PORT = 9090; // Health server port — /internal/* is not on this port in production, but local dev uses 9090
   const INTERNAL_API_KEY = "test-api-key-12345678";
 
@@ -38,7 +36,7 @@ describeIntegration("SI-001: Internal API authentication (HTTP 401)", () => {
           ready = true;
           break;
         }
-      } catch (err) {
+      } catch {
         // Not ready yet
       }
       await setTimeout(1000);
@@ -52,11 +50,6 @@ describeIntegration("SI-001: Internal API authentication (HTTP 401)", () => {
     }
   });
 
-  afterAll(async () => {
-    if (directoryProcess) {
-      directoryProcess.kill("SIGTERM");
-    }
-  });
 
   it("returns HTTP 401 when x-cello-internal-api-key header is missing (SI-001)", async () => {
     // Make a request to /internal/pre-authorize with no authentication header
