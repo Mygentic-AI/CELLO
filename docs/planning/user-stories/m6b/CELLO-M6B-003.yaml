@@ -1,5 +1,5 @@
 ---
-name: CELLO-PREP-013
+name: CELLO-M6B-003
 type: user-story
 date: 2026-06-03
 topics: [client, seal, seal-deferred, signaling-stream, reconnect, pre-m7]
@@ -13,9 +13,9 @@ description: >
   messaging with no directory traffic, signaling stream silently dropped.
 ---
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-PREP-013
+id: CELLO-M6B-003
 domain: PREP
-milestone: M7
+milestone: M6B
 actor: DEV
 priority: P0
 components:
@@ -244,7 +244,7 @@ implementation_notes: >
 
 # ─── References ─────────────────────────────────────────────
 references:
-  milestone: M7
+  milestone: M6B
   discussion_logs:
     - "2026-06-03_1146_beta-launch-brittleness-analysis"
   depends_on: []

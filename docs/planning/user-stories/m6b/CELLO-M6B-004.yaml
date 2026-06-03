@@ -1,5 +1,5 @@
 ---
-name: CELLO-PREP-001
+name: CELLO-M6B-004
 type: user-story
 date: 2026-06-03
 topics: [infrastructure, iac, alb, migration, agent_profiles, cloudformation, pre-m7]
@@ -11,9 +11,9 @@ description: >
   changes are gated by a deployment verification AC.
 ---
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-PREP-001
+id: CELLO-M6B-004
 domain: PREP
-milestone: M7
+milestone: M6B
 actor: OPS
 priority: P0
 components:
@@ -217,7 +217,7 @@ implementation_notes: >
 
 # ─── References ─────────────────────────────────────────────
 references:
-  milestone: M7
+  milestone: M6B
   discussion_logs:
     - "2026-06-03_1146_beta-launch-brittleness-analysis"
   depends_on: []

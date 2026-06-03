@@ -1,5 +1,5 @@
 ---
-name: CELLO-PREP-002
+name: CELLO-M6B-005
 type: user-story
 date: 2026-06-03
 topics: [dx, install, upgrade, npm, global-install, sqlcipher, wal, cello-mcp, documentation, pre-m7]
@@ -11,9 +11,9 @@ description: >
   the DB lock deadlock when a stale process is present. Updates SKILL.md and README.
 ---
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-PREP-002
+id: CELLO-M6B-005
 domain: PREP
-milestone: M7
+milestone: M6B
 actor: AGENT_OPERATOR
 priority: P0
 components:
@@ -247,7 +247,7 @@ implementation_notes: >
 
 # ─── References ─────────────────────────────────────────────
 references:
-  milestone: M7
+  milestone: M6B
   discussion_logs:
     - "2026-06-03_1146_beta-launch-brittleness-analysis"
     - "2026-06-03_1210_backward-compatibility-and-upgrade-notification"

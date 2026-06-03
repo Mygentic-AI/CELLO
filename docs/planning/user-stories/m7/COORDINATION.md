@@ -13,27 +13,22 @@ Read this file at the start of every session. Append, never overwrite.
 
 ---
 
-## Pre-M7 PREP Stories (must complete before MULTI-008 can pass)
+## Pre-M7 Hardening (Milestone 6B)
 
-Four hardening stories added 2026-06-03. All four are independent of each other
-and can run in parallel:
+The pre-M7 hardening stories have been moved to their own milestone: **M6B**.
+Stories are in `docs/planning/user-stories/m6b/`. See `m6b/COORDINATION.md`
+for the full priority-ordered list and implementation guidance.
 
-| ID | Title | Blocks |
-|----|-------|--------|
-| CELLO-PREP-001 | IaC + DB gaps (port-8081 ALB rule, V28 migration) | MULTI-008 |
-| CELLO-PREP-002 | Global install + SQLCipher WAL mode | MULTI-002 |
-| CELLO-PREP-003 | Relay auto-register on startup | PREP-004 |
-| CELLO-PREP-004 | RelayPoolManager manifest polling | — |
-| CELLO-PREP-005 | Capacity hardening (pg pool, RDS upgrade, relay stream caps, session sweep) | — |
+Two M6B stories have direct M7 dependencies:
 
-**PREP-002 → MULTI-002 dependency:** PREP-002 AC-005 requires MULTI-002 to
+**M6B-004 → MULTI-008:** M6B-004 (ECS LoadBalancers + port-8081 IaC + V28
+migration) must land before MULTI-008's integration gate. MULTI-008 AC-002
+and AC-004 depend on it.
+
+**M6B-005 → MULTI-002:** M6B-005 (WAL mode) AC-005 requires MULTI-002 to
 carry WAL mode forward when it rewrites the composition root. The MULTI-002
-implementer must read PREP-002 before writing the AgentRegistry store open
+implementer must read M6B-005 before writing the AgentRegistry store open
 sequence and must verify WAL mode in MULTI-002's AC-008 integration test.
-
-**PREP-001 → MULTI-008 dependency:** MULTI-008 behavior block explicitly
-flags the /agent-lookup ALB rule and V28 migration as prerequisites for
-AC-002 and AC-004. PREP-001 closes both.
 
 ---
 

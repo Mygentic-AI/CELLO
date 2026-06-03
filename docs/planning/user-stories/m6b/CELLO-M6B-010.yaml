@@ -1,5 +1,5 @@
 ---
-name: CELLO-PREP-009
+name: CELLO-M6B-010
 type: user-story
 date: 2026-06-03
 topics: [directory, in-memory-state, persistence, session-lifecycle, pre-m7]
@@ -14,9 +14,9 @@ description: >
   re-registration problem is a DB deletion problem, not a restoration problem.
 ---
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-PREP-009
+id: CELLO-M6B-010
 domain: PREP
-milestone: M7
+milestone: M6B
 actor: OPS
 priority: P1
 components:
@@ -298,7 +298,7 @@ implementation_notes: >
 
 # ─── References ─────────────────────────────────────────────
 references:
-  milestone: M7
+  milestone: M6B
   discussion_logs:
     - "2026-06-03_1146_beta-launch-brittleness-analysis"
   depends_on: []

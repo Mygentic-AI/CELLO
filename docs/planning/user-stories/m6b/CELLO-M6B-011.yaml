@@ -1,5 +1,5 @@
 ---
-name: CELLO-PREP-010
+name: CELLO-M6B-011
 type: user-story
 date: 2026-06-03
 topics: [ops-agent, telegram, ux, migration-version, iac, pre-m7]
@@ -13,9 +13,9 @@ description: >
   string to an SSM parameter so schema bumps don't require a deploy.
 ---
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-PREP-010
+id: CELLO-M6B-011
 domain: PREP
-milestone: M7
+milestone: M6B
 actor: OPS
 priority: P1
 components:
@@ -237,7 +237,7 @@ implementation_notes: >
 
 # ─── References ─────────────────────────────────────────────
 references:
-  milestone: M7
+  milestone: M6B
   discussion_logs:
     - "2026-06-03_1146_beta-launch-brittleness-analysis"
   depends_on: []

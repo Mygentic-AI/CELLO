@@ -1,5 +1,5 @@
 ---
-name: CELLO-PREP-005
+name: CELLO-M6B-009
 type: user-story
 date: 2026-06-03
 topics: [scalability, postgres, connection-pool, relay, stream-caps, session-sweep, pre-m7, capacity]
@@ -12,9 +12,9 @@ description: >
   unbounded memory growth from abandoned sessions.
 ---
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-PREP-005
+id: CELLO-M6B-009
 domain: PREP
-milestone: M7
+milestone: M6B
 actor: OPS
 priority: P0
 components:
@@ -308,7 +308,7 @@ implementation_notes: >
 
 # ─── References ─────────────────────────────────────────────
 references:
-  milestone: M7
+  milestone: M6B
   discussion_logs:
     - "2026-06-03_1146_beta-launch-brittleness-analysis"
   depends_on: []

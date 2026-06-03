@@ -1,5 +1,5 @@
 ---
-name: CELLO-PREP-011
+name: CELLO-M6B-012
 type: user-story
 date: 2026-06-03
 topics: [testing, persist-019, notification-queue, uint8array, serialization, pre-m7]
@@ -14,9 +14,9 @@ description: >
   enqueueNotification and asserts Uint8Array field type integrity on drain.
 ---
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-PREP-011
+id: CELLO-M6B-012
 domain: PREP
-milestone: M7
+milestone: M6B
 actor: DEV
 priority: P1
 components:
@@ -227,7 +227,7 @@ implementation_notes: >
 
 # ─── References ─────────────────────────────────────────────
 references:
-  milestone: M7
+  milestone: M6B
   discussion_logs:
     - "2026-06-03_1146_beta-launch-brittleness-analysis"
   depends_on: []

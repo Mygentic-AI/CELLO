@@ -1,5 +1,5 @@
 ---
-name: CELLO-PREP-007
+name: CELLO-M6B-007
 type: user-story
 date: 2026-06-03
 topics: [relay, websocket, alb, infrastructure, iac, route53, pre-m7, networking]
@@ -12,9 +12,9 @@ description: >
   AC-006 (external client → relay WebSocket).
 ---
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-PREP-007
+id: CELLO-M6B-007
 domain: PREP
-milestone: M7
+milestone: M6B
 actor: OPS
 priority: P0
 components:
@@ -392,9 +392,9 @@ implementation_notes: >
 
 # ─── References ─────────────────────────────────────────────
 references:
-  milestone: M7
+  milestone: M6B
   discussion_logs:
     - "2026-06-03_1146_beta-launch-brittleness-analysis"
   depends_on:
-    - CELLO-PREP-003
+    - CELLO-M6B-006
   blocks: []

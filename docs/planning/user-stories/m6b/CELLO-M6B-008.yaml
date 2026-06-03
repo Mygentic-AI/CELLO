@@ -1,5 +1,5 @@
 ---
-name: CELLO-PREP-004
+name: CELLO-M6B-008
 type: user-story
 date: 2026-06-03
 topics: [relay, relay-pool, manifest, polling, s3, directory, resilience, pre-m7]
@@ -11,9 +11,9 @@ description: >
   after every relay redeploy or manual sign-manifest.sh run.
 ---
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-PREP-004
+id: CELLO-M6B-008
 domain: PREP
-milestone: M7
+milestone: M6B
 actor: OPS
 priority: P0
 components:
@@ -291,9 +291,9 @@ implementation_notes: >
 
 # ─── References ─────────────────────────────────────────────
 references:
-  milestone: M7
+  milestone: M6B
   discussion_logs:
     - "2026-06-03_1146_beta-launch-brittleness-analysis"
   depends_on:
-    - CELLO-PREP-003
+    - CELLO-M6B-006
   blocks: []

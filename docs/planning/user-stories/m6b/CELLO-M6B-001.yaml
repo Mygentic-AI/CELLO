@@ -1,5 +1,5 @@
 ---
-name: CELLO-PREP-014
+name: CELLO-M6B-001
 type: user-story
 date: 2026-06-03
 topics: [cello-mcp, process-management, lock-file, orphan-process, pre-m7]
@@ -13,9 +13,9 @@ description: >
   it, ensuring exactly one cello-mcp process runs per agent at all times.
 ---
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-PREP-014
+id: CELLO-M6B-001
 domain: PREP
-milestone: M7
+milestone: M6B
 actor: DEV
 priority: P0
 components:
@@ -218,7 +218,7 @@ implementation_notes: >
 
 # ─── References ─────────────────────────────────────────────
 references:
-  milestone: M7
+  milestone: M6B
   discussion_logs:
     - "2026-06-03_1146_beta-launch-brittleness-analysis"
   depends_on: []

@@ -1,5 +1,5 @@
 ---
-name: CELLO-PREP-006
+name: CELLO-M6B-002
 type: user-story
 date: 2026-06-03
 topics: [frost, error-propagation, dx, debugging, directory, client, pre-m7]
@@ -14,9 +14,9 @@ description: >
   the ceremony timed out, or the agent is not bootstrapped.
 ---
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-PREP-006
+id: CELLO-M6B-002
 domain: PREP
-milestone: M7
+milestone: M6B
 actor: DEV
 priority: P0
 components:
@@ -419,7 +419,7 @@ implementation_notes: >
 
 # ─── References ─────────────────────────────────────────────
 references:
-  milestone: M7
+  milestone: M6B
   discussion_logs:
     - "2026-06-03_1146_beta-launch-brittleness-analysis"
   depends_on: []

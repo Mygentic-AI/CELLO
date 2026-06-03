@@ -1,5 +1,5 @@
 ---
-name: CELLO-PREP-012
+name: CELLO-M6B-013
 type: user-story
 date: 2026-06-03
 topics: [sqlcipher, native-compilation, dx, startup-time, client, pre-m7]
@@ -12,9 +12,9 @@ description: >
   format must be compatible so existing databases do not need re-encryption.
 ---
 # ─── Identity ───────────────────────────────────────────────
-id: CELLO-PREP-012
+id: CELLO-M6B-013
 domain: PREP
-milestone: M7
+milestone: M6B
 actor: DEV
 priority: P1
 components:
@@ -233,9 +233,9 @@ implementation_notes: >
 
 # ─── References ─────────────────────────────────────────────
 references:
-  milestone: M7
+  milestone: M6B
   discussion_logs:
     - "2026-06-03_1146_beta-launch-brittleness-analysis"
   depends_on:
-    - CELLO-PREP-002
+    - CELLO-M6B-005
   blocks: []
