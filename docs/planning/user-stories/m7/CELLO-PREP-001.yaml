@@ -38,6 +38,16 @@ story: >
 #    These were created by hand during M6 E2E and are not in CloudFormation.
 #    Every new region deployment would miss them.
 #
+#    CRITICAL: the InternalApiTargetGroup must also be added to the ECS
+#    DirectoryService LoadBalancers block (ContainerPort 8081). Without this,
+#    ECS does not auto-register new tasks into the target group on deploy or
+#    restart. Every directory restart requires manual target registration, or
+#    the ops-agent receives HTTP 504 and the Telegram bot replies "Registration
+#    is temporarily unavailable." This was observed again 2026-06-03 after a
+#    directory restart triggered by the relay manifest update. The ECS
+#    LoadBalancers block is the registration hook — without it, the target
+#    group exists but is permanently empty after any restart.
+#
 # 2. cello_service lacks UPDATE on agent_profiles. linkAgentToAccount() calls
 #    UPDATE agent_profiles SET account_id = ... after DKG — it passes in CI
 #    (superuser) but silently fails in production. Known since OPS-AGENT-001,
@@ -57,7 +67,10 @@ behavior:
       InternalPathForwardRule (no source-IP restriction — internet-facing ALB
       routes same-VPC traffic via internet gateway); the ECS DirectoryService
       DependsOn list includes the new internal API listener rule so registration
-      cannot begin before the endpoint is protected"
+      cannot begin before the endpoint is protected; the ECS DirectoryService
+      LoadBalancers block includes an entry for ContainerPort 8081 pointing at
+      InternalApiTargetGroup so ECS automatically deregisters and re-registers
+      tasks on every deploy and restart"
 
   - trigger: "When a new directory ECS task starts after V28 is applied"
     action: "cello_service role can execute UPDATE on agent_profiles;
@@ -83,7 +96,10 @@ acceptance_criteria:
       and BootstrapPathRule (i.e. priority >= 5);
       (3) DirectoryService DependsOn includes InternalApiPathRule;
       (4) the ALB security group or VPC security group allows inbound TCP
-      on port 8081 from the ALB"
+      on port 8081 from the ALB;
+      (5) DirectoryService LoadBalancers block includes a ContainerPort 8081
+      entry pointing at InternalApiTargetGroup — this is what causes ECS to
+      auto-register and auto-deregister tasks on every deploy and restart"
     test_type: unit
     component_under_test: infra
 
@@ -178,6 +194,14 @@ implementation_notes: >
      REPOSPLIT-001.
 
   4. Update DirectoryService DependsOn to include InternalApiPathRule.
+
+  5. Add ContainerPort 8081 entry to DirectoryService LoadBalancers block:
+       - ContainerName: directory
+         ContainerPort: 8081
+         TargetGroupArn: !Ref InternalApiTargetGroup
+     Without this, ECS never auto-registers tasks into InternalApiTargetGroup
+     on deploy or restart. The target group will exist but be empty, causing
+     HTTP 504 from the ALB on every /internal/* request after any restart.
 
   Migration (packages/directory/db/migrations/):
   V28__grant_cello_service_update_agent_profiles.sql:
