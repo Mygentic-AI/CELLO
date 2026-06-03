@@ -211,19 +211,20 @@ acceptance_criteria:
       packages/directory/src/__tests__/session004.test.ts (real libp2p streams,
       no NODE_ENV=test shortcut, stub IThresholdSigner injected via the
       registerThresholdSigner path)"
-    then: "the session_request_error frame received by the client has reason:
-      'ceremony_exhausted' (NOT 'directory_below_threshold') — verified by
-      inspecting the raw decoded CBOR frame in the client's #pendingSessionRequestResolve
-      callback; the client-side initiateSession call resolves with
-      { ok: false, reason: 'ceremony_exhausted' }"
+    then: "the decoded CBOR frame from the directory has reason: 'ceremony_exhausted'
+      (NOT 'directory_below_threshold') — verified using the raw StreamReader pattern
+      from session004.test.ts: send a session_request frame over the authenticated
+      stream, read the response with `await reader.readDecoded()`, assert
+      `response['reason'] === 'ceremony_exhausted'`"
     test_type: integration
     component_under_test: directory
-    notes: "Follow the session004.test.ts pattern: createNode() for client,
-      createDirectoryNode() for directory, real TCP dial+authenticate+session_request
-      sequence. The IThresholdSigner stub must be registered on the directory before
-      the client sends peer_info_announce so the stub is found when the ceremony runs.
-      The key assertion is the frame reason, verified by inspecting the CBOR frame
-      directly rather than only checking the client return value."
+    notes: "Follow packages/directory/src/__tests__/session004.test.ts: createNode()
+      for client, createDirectoryNode() for directory, real TCP dial + authenticate
+      + session_request frame exchange using StreamReader. The IThresholdSigner stub
+      must be registered on the directory (via registerThresholdSigner) before the
+      client sends peer_info_announce. Assert the raw decoded frame reason directly —
+      the higher-level client.initiateSession return value is covered by AC-005 and
+      AC-006 (unit tests) and does not need to be verified here."
 
   - id: AC-009
     given: "The updated core/client/src/mcp-server.ts where cello_initiate_session
@@ -388,10 +389,18 @@ implementation_notes: >
        }
        return jsonText({ ok: false, reason: result.reason });
 
-  6. Add cello-directory-frost-failure CloudWatch alarm to
-     infra/cloudformation/cello-cloudwatch.yaml — same pattern as existing
-     directory alarms. Alarm condition: frost.ceremony.failed with
-     reason=ceremony_exhausted fires > 3 times in 5 minutes for any agentId.
+  6. Add cello-directory-frost-failure metric filter and alarm to
+     infra/cloudformation/cello-cloudwatch.yaml. Alarming on a structured log
+     field requires TWO resources (not the same as existing ECS/RDS metric alarms):
+
+     a. AWS::Logs::MetricFilter pointing at the directory ECS log group
+        (/ecs/cello-directory-${Environment}):
+          FilterPattern: '{ $.event = "frost.ceremony.failed" && $.reason = "ceremony_exhausted" }'
+          MetricTransformations: namespace=CelloDirectory, name=FrostCeremonyExhausted, value=1
+
+     b. AWS::CloudWatch::Alarm against the FrostCeremonyExhausted custom metric:
+          Threshold: 3, Period: 300, EvaluationPeriods: 1, ComparisonOperator: GreaterThanThreshold
+          AlarmActions: [!Ref ExistingAlarmTopic or SNS ARN from parameter]
 
   7. Add frost.ceremony.failed to the canonical event taxonomy in
      docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
