@@ -965,3 +965,41 @@ When only (1) is wiped, new K_local is generated but the directory still holds t
 
 **Rule:** Always run `pkill -f cello-mcp` before `/mcp` when troubleshooting FROST ceremony failures. Never assume `/mcp` replaced the old process.
 
+---
+
+## 2026-06-03 — @cello-protocol/connect@0.0.25: responder seal + close-session seal-before-close fixes
+
+**Status:** Code complete, CI publishing to beta.
+
+### Bug 1: Responder seal path had no signaling stream check
+
+**File:** `core/client/src/client.ts`, responder path at `kind === "ctrl" && session.status === "active"`
+
+When the initiator sent a SEAL ctrl frame, the responder called `#submitSealLeaf` directly with no check on `#persistentSignalingStream`. If the stream was dead at that moment, the directory's `seal_verified` reply was lost, the 15-second FROST timeout fired, and the session ended as `seal_deferred`. The initiator path (`initiateSessionSeal`) had the reconnect guard added in 0.0.24, but the responder path was never updated.
+
+**Fix:** The responder path now checks stream liveness, reconnects via `#openPersistentSignalingStream()` if needed, re-fetches the session after the async reconnect (to avoid stale Merkle tree state in the TBS), and sets `seal_deferred` with a persist call if reconnect fails.
+
+### Bug 2: `cello_close_session` never attempted to seal
+
+**File:** `core/adapter-claude-code/src/server.ts`
+
+`cello_close_session` called `client.closeSession(session_id)` fire-and-forget with no seal attempt. CELLO's invariant is that every completed session ends with a seal. A close without sealing silently produces sessions with no tamper-evident receipt.
+
+**Fix:** `cello_close_session` now calls `await client.initiateSessionSeal(session_id)` before `closeSession()`. If the session is already sealing/sealed/deferred/rejected, the seal attempt is skipped. The response includes `seal_status: "initiated"` or `seal_status: "failed"` with the reason. Close always completes regardless of seal outcome.
+
+### Additional fixes from code review (3 rounds):
+- Re-fetch session from `#sessions` after async reconnect in responder path — stale pre-reconnect reference could have wrong Merkle tree state (accumulated leaves during `await`), producing the wrong root in the TBS.
+- Added `seal_rejected` to `alreadySealing` guard in `cello_close_session` and to `#sendMessageLocked` guard.
+- Added `seal_rejected` to `initiateSessionSeal` post-reconnect re-validation guard.
+- Fixed pre-existing `typecheck` TS6310 error (`tsc --build --noEmit` incompatible with composite project references).
+
+**Rule: every code path that closes a session MUST attempt a seal first.** `closeSession()` is teardown-only and has never sealed. All callers that want a receipt must call `initiateSessionSeal` or use `cello_close_session` (which now does this correctly).
+
+**Versions:** `@cello-protocol/client` 0.0.16 → 0.0.17, `@cello-protocol/connect` 0.0.24 → 0.0.25.
+
+**What to do after 0.0.25 is live on npm beta:**
+1. `npm install @cello-protocol/connect@0.0.25 --prefix /opt/cello-demo && chown -R cello-demo:cello-demo /opt/cello-demo/node_modules`
+2. `systemctl restart cello-demo`
+3. Wait for `AUTH Peer 12ccbfd5` in directory logs (demo agent re-authenticates)
+4. Run AC-005 + AC-006 full flow
+
