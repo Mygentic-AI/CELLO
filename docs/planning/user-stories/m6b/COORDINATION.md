@@ -72,13 +72,13 @@ Sprint review status:
 - M6B-007 (was PREP-007): APPROVED (2 BLOCKED rounds + medium fix)
 - M6B-009 (was PREP-005): APPROVED
 
-NOT YET SPRINT-REVIEWED — must be reviewed before implementation begins:
-- M6B-001 (PID lock file) — REVIEWED, all findings fixed; APPROVED
-- M6B-008 (manifest poll loop)
-- M6B-010 (directory state restoration)
-- M6B-011 (ops-agent UX)
-- M6B-012 (persist-019 Uint8Array test)
-- M6B-013 (SQLCipher replacement)
+SPRINT-REVIEWED — all findings fixed:
+- M6B-001 (PID lock file) — APPROVED (4 mediums + 3 lows fixed)
+- M6B-008 (manifest poll loop) — APPROVED (3 blocking + 2 mediums fixed)
+- M6B-010 (directory state restoration) — APPROVED (1 medium + 2 mediums fixed)
+- M6B-011 (ops-agent UX) — APPROVED (2 blocking + 3 mediums fixed)
+- M6B-012 (persist-019 Uint8Array test) — APPROVED (1 high + 2 mediums fixed)
+- M6B-013 (SQLCipher replacement) — APPROVED (1 blocking + 4 mediums fixed)
 
 REMOVED (already implemented before story was written):
 - M6B-003 — seal_deferred reconnect+retry: both fixes landed in cello-client commit
