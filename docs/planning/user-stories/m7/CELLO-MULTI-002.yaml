@@ -43,14 +43,40 @@ behavior:
       for that agent in order: (1) read the agent's K_local seed from key_file_path;
       (2) derive db_key = HKDF(seed, info='cello-db-key') using the same derivation
       as the current cello-mcp.ts composition root; (3) open the agent's SQLCipher
-      store at the path resolved by MULTI-001's DB path convention; (4) construct
-      ClientStatePersistence(store); (5) call client.loadPersistedState(persistence)
+      store at the path resolved by MULTI-001's DB path convention AND apply WAL
+      mode per PREP-002 (PRAGMA journal_mode=WAL after key verification, before
+      migrations — this is a hard requirement, not advisory; see PREP-002 AC-005);
+      (4) construct ClientStatePersistence(store); (5) call client.loadPersistedState(persistence)
       BEFORE any MCP tool call is routed to it; (6) instantiate a new CelloClient
       with its own libp2p node (own Peer ID, own transport key, own listen
       addresses); (7) connect to the directory; the agent transitions to 'online'
       state; skipping any step in this sequence causes registered agents to appear
       as unregistered on every startup — this is the exact regression PERSIST-024
       fixed for single-agent mode; AC-008 is the regression test that enforces it"
+
+  - trigger: "When an online agent's directory signaling stream drops (detected
+    via Yamux keepalive timeout, stream reset, or libp2p peer:disconnect for
+    the directory peer)"
+    action: "the AgentRegistry attempts to re-open the signaling stream using
+      the existing client.announceToDirectory() path; it retries up to 5 times
+      with exponential backoff starting at 2 seconds (2s, 4s, 8s, 16s, 30s cap);
+      agent.signaling.reconnecting is logged at WARN on each attempt with
+      agentName, attempt number, and delayMs; if any attempt succeeds,
+      agent.signaling.reconnected is logged at INFO and the agent remains online
+      with no process restart; if all 5 attempts fail, agent.signaling.lost is
+      logged at ERROR and the process calls process.exit(1) — Claude Code detects
+      the exit and restarts the MCP server, which loads all persisted state from
+      SQLCipher and re-establishes the connection from scratch"
+
+  - trigger: "When the process exits via process.exit(1) due to permanent
+    signaling stream loss"
+    action: "all online agents are stopped gracefully before exit (same as
+      SIGTERM path) — SQLCipher databases are closed cleanly so the next
+      process does not open a database left in an inconsistent state; the
+      exit code is 1 so Claude Code's MCP process supervisor detects the
+      failure and restarts the binary; on restart, WAL mode (PREP-002) allows
+      the new process to open its SQLCipher databases even briefly while any
+      stale file handles are still being closed by the OS"
 
   - trigger: "When `cello_stop_agent(name)` is called for an online agent"
     action: "the agent's CelloClient is shut down (all sessions closed,
@@ -189,6 +215,50 @@ acceptance_criteria:
     test_type: integration
     component_under_test: connect
 
+  - id: AC-012
+    given: "Agent `alice` is online with an active directory signaling stream;
+      the directory signaling stream is forcibly closed (simulated by calling
+      stream.abort() or stopping the test directory node)"
+    when: "the AgentRegistry detects the drop"
+    then: "agent.signaling.reconnecting is logged at WARN with agentName: 'alice'
+      and attempt: 1; the AgentRegistry attempts to re-open the signaling stream
+      via client.announceToDirectory(); if the test directory node is restarted
+      within the retry window, agent.signaling.reconnected is logged at INFO and
+      alice remains in 'online' state — no process.exit(1) fires; alice can still
+      receive incoming connection requests after reconnection (verified by a
+      second agent successfully requesting a connection to alice after the stream
+      was dropped and reconnected)"
+    test_type: integration
+    component_under_test: connect
+    notes: "The reconnection verification step (second agent can request connection)
+      is the transport-path evidence that the signaling stream is genuinely
+      re-established — not just that the log event fired. A log event alone does
+      not prove the stream is functional."
+
+  - id: AC-013
+    given: "Agent `alice` is online; the directory signaling stream drops and
+      all 5 reconnect attempts fail (simulated by keeping the test directory
+      node stopped throughout the retry window)"
+    when: "the 5th attempt fails"
+    then: "agent.signaling.lost is logged at ERROR with agentName: 'alice' and
+      attemptCount: 5; the process calls process.exit(1); all SQLCipher databases
+      are closed before exit (verified by asserting the store's isOpen() returns
+      false at the point of exit); the exit code is 1"
+    test_type: integration
+    component_under_test: connect
+    notes: "Use a test-only exit hook (inject a mock process.exit) so the test
+      process itself does not exit. Assert the mock was called with code 1 and
+      that store.isOpen() is false before the mock fires."
+
+  - id: AC-014
+    given: "A SQLCipherClientStore opened for agent `alice` via cello_start_agent"
+    when: "PRAGMA journal_mode is queried after open() completes"
+    then: "the result is 'wal'; this is the PREP-002 AC-005 carry-forward
+      requirement — WAL mode must be active for every agent opened by the
+      AgentRegistry, not only in the single-agent composition root"
+    test_type: integration
+    component_under_test: connect
+
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
   - id: SI-001
@@ -240,16 +310,33 @@ observability:
       trigger: "When a CelloClient fails to initialize at any startup phase"
       context_fields: [agentName, phase, error]
       correlationId: true
+    - name: agent.signaling.reconnecting
+      level: warn
+      trigger: "On each reconnect attempt after signaling stream drop"
+      context_fields: [agentName, attempt, delayMs]
+      correlationId: false
+    - name: agent.signaling.reconnected
+      level: info
+      trigger: "When a reconnect attempt succeeds — stream is live again"
+      context_fields: [agentName, attempt]
+      correlationId: false
+    - name: agent.signaling.lost
+      level: error
+      trigger: "When all reconnect attempts fail — process.exit(1) is imminent"
+      context_fields: [agentName, attemptCount]
+      correlationId: false
   notes: >
     agent.lifecycle.started and agent.lifecycle.start_failed carry a
     startupCorrelationId minted at the start of the cello_start_agent call
     so that all sub-events in the startup sequence (db_open, state_load,
     libp2p_start, directory_connect) can be correlated in the log stream.
 
-    The five event names (agent.registry.initialized, agent.lifecycle.started,
+    The eight event names (agent.registry.initialized, agent.lifecycle.started,
     agent.lifecycle.stopped, agent.registry.auto_started,
-    agent.lifecycle.start_failed) must be added to the canonical event taxonomy
-    in docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
+    agent.lifecycle.start_failed, agent.signaling.reconnecting,
+    agent.signaling.reconnected, agent.signaling.lost) must be added to the
+    canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md
     by the implementer of this story.
   alarms:
     - condition: "agent.lifecycle.start_failed fires more than once for the
@@ -263,8 +350,10 @@ references:
   milestone: M7
   discussion_logs:
     - "2026-05-27_1400_multi-agent-mcp-planning"
+    - "2026-06-03_1146_beta-launch-brittleness-analysis"
   depends_on:
     - CELLO-MULTI-001
+    - CELLO-PREP-002
   blocks:
     - CELLO-MULTI-003
     - CELLO-MULTI-004
