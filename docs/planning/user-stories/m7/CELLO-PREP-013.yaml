@@ -1,0 +1,251 @@
+---
+name: CELLO-PREP-013
+type: user-story
+date: 2026-06-03
+topics: [client, seal, seal-deferred, signaling-stream, reconnect, pre-m7]
+status: draft
+description: >
+  closeSession() sends the SEAL frame blindly into a potentially dead signaling
+  stream, causing seal_deferred when the directory never receives it. Two fixes:
+  (1) reconnect the signaling stream before sending SEAL if it's dead; (2) retry
+  any seal_deferred session once the signaling stream is restored. Root cause of
+  M6-E2E-001 AC-006 failure: session closed after 2+ minutes of P2P relay
+  messaging with no directory traffic, signaling stream silently dropped.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PREP-013
+domain: PREP
+milestone: M7
+actor: DEV
+priority: P0
+components:
+  - client
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As a CELLO agent completing a session,
+  I want cello_close_session to reliably deliver the SEAL frame to the directory
+  even when the signaling stream has been idle and silently dropped,
+  so that seal_deferred does not become the permanent outcome of any session
+  that had a gap in directory traffic.
+
+# ─── Context ────────────────────────────────────────────────
+# Root cause (documented in M6 COORDINATION.md, 2026-06-03):
+#
+# The signaling stream between the client and directory is a persistent libp2p
+# stream. It silently drops after idle periods (the stream itself closes; the
+# client does not detect this until it tries to write). During a session where
+# participants exchange messages via relay only (no directory traffic), the
+# signaling stream can drop after ~2 minutes.
+#
+# When cello_close_session is called, client.ts closeSession() sends the SEAL
+# frame via #persistentSignalingStream without first checking if the stream is
+# alive. If the stream is dead, the write silently fails. The directory never
+# receives the SEAL frame. The 15-second seal timeout fires → seal_deferred.
+# No error is logged. No retry is attempted. The session is permanently deferred.
+#
+# Evidence from M6-E2E-001 AC-006: directory logs show zero SEAL-related events
+# in the window when closeSession was called. No FROST ceremony was initiated
+# (the FROST ceremony is triggered by seal_verified arriving from the directory,
+# which never happens). The demo agent's logs show no [CLIENT-DEBUG] lines from
+# frost-threshold-signer.ts — FROST never started.
+#
+# MULTI-002 addresses a different problem: the signaling stream dropping BETWEEN
+# seal ceremonies (keepalive + reconnect-before-exit). This story addresses the
+# specific case of closeSession blindly writing to a dead stream.
+#
+# Pattern precedent: initiateUnilateralSeal() already reconnects before sealing
+# (client.ts lines ~1795-1800). closeSession() must do the same.
+#
+# Fix 1 — Reconnect before sealing (client.ts closeSession()):
+#   Before sending the SEAL frame, check if #persistentSignalingStream is live.
+#   If not, call #openPersistentSignalingStream() first. Only send the SEAL
+#   frame after the stream is confirmed open.
+#
+# Fix 2 — Retry on seal_deferred:
+#   When a session transitions to seal_deferred, the client should register
+#   a retry: once the signaling stream is next successfully opened (peer:connect
+#   event or next #openPersistentSignalingStream success), re-send the SEAL
+#   frame for any seal_deferred sessions.
+#   Currently seal_deferred is a terminal state that nothing retries.
+#   A single retry is sufficient — if the second attempt also fails, seal_deferred
+#   remains and the user is notified.
+#
+# Both fixes are in @cello-protocol/client (core/client/src/client.ts only).
+# No directory changes. No protocol changes.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When closeSession() is called and #persistentSignalingStream is null
+    or closed"
+    action: "closeSession() calls #openPersistentSignalingStream() before sending
+      the SEAL frame; the SEAL frame is sent only after the stream is confirmed
+      open; session.seal.stream.reconnected is logged at INFO with sessionId"
+
+  - trigger: "When closeSession() is called and the signaling stream reconnect
+    attempt fails (directory unreachable)"
+    action: "closeSession() returns { ok: false, reason: 'directory_unreachable' };
+      the session remains in 'sealing' state until the next retry or manual close"
+
+  - trigger: "When a session transitions to seal_deferred state"
+    action: "the client registers the session for retry; when the next
+      #openPersistentSignalingStream() succeeds (on any subsequent tool call or
+      reconnect event), the SEAL frame is re-sent for all seal_deferred sessions;
+      session.seal.retry is logged at INFO with sessionId and attemptNumber"
+
+  - trigger: "When a seal_deferred retry succeeds (directory sends seal_verified)"
+    action: "the session transitions from seal_deferred to sealed; the client
+      completes the FROST seal ceremony; cello_get_sealed_receipt returns the
+      receipt"
+
+  - trigger: "When a seal_deferred retry fails a second time"
+    action: "the session remains seal_deferred; no further automatic retries;
+      session.seal.retry.failed is logged at WARN with sessionId and reason"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A CelloClient whose #persistentSignalingStream is null (simulated by
+      calling closeSignalingStream() or setting the stream to null in a test)"
+    when: "closeSession() is called"
+    then: "#openPersistentSignalingStream() is called before the SEAL frame is sent;
+      session.seal.stream.reconnected is logged at INFO with sessionId;
+      the SEAL frame is only written to the stream AFTER the stream is open —
+      verified by asserting the stream write count is 0 before the stream opens
+      and 1 after"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-002
+    given: "A CelloClient with an active session in 'active' state and a
+    #persistentSignalingStream that is null"
+    when: "closeSession() is called and #openPersistentSignalingStream() succeeds
+      (returns true)"
+    then: "the SEAL frame is sent and the directory receives it; if the directory
+      responds with seal_verified, the session transitions to 'sealed';
+      verified by asserting the session status is 'sealed' (not 'seal_deferred')
+      after the directory responds"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-003
+    given: "A CelloClient with a session in 'seal_deferred' state (simulated by
+      a previous closeSession() that received no seal_verified within timeout)"
+    when: "#openPersistentSignalingStream() next succeeds (e.g. on a subsequent
+      cello_status or cello_initiate_session call)"
+    then: "the SEAL frame is re-sent for the seal_deferred session without any
+      explicit user action; session.seal.retry is logged at INFO with sessionId
+      and attemptNumber: 1; if the directory responds with seal_verified, the
+      session transitions to 'sealed'"
+    test_type: unit
+    component_under_test: client
+
+  - id: AC-004
+    given: "A live CelloClient and directory (e2e fixture with opts.register: true,
+      opts.networkRelay: true)"
+    when: "a session is established; the signaling stream is artificially closed
+      (by calling stream.close() on #persistentSignalingStream); then closeSession()
+      is called"
+    then: "the session is sealed (not seal_deferred); cello_get_sealed_receipt returns
+      a receipt with session_id, sealed_root, and the directory signature;
+      the directory logs show the SEAL frame was received and processed"
+    test_type: integration
+    component_under_test: client
+    notes: "This is the transport-path AC. It verifies the full reconnect-before-seal
+      path end-to-end: stream close → closeSession() → reconnect → SEAL sent → seal_verified
+      received → sealed. Follow the e2e fixture pattern with real libp2p nodes."
+
+  - id: AC-005
+    given: "The updated @cello-protocol/connect package"
+    when: "the initiateUnilateralSeal() implementation is compared to the new
+      closeSession() implementation"
+    then: "both methods use the same reconnect-before-seal pattern (the pattern
+      already present in initiateUnilateralSeal() at lines ~1795-1800 of client.ts);
+      no code duplication — extract to a shared #ensureSignalingStreamOpen() helper
+      if the pattern would be duplicated"
+    test_type: unit
+    component_under_test: client
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The seal_deferred retry must only re-send the SEAL frame for
+      sessions that this client originated — not for sessions where this client
+      is the target"
+    adversarial_condition: "a client that receives a session (participant B role)
+      must not attempt to re-seal it on reconnect; only the session initiator
+      (participant A, who called closeSession()) should retry; verified by
+      asserting that the seal_deferred retry list contains only sessions
+      where initiatedByMe === true"
+    test_type: unit
+    component_under_test: client
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: session.seal.stream.reconnected
+      level: info
+      trigger: "When closeSession() reconnects a dead signaling stream before sealing"
+      context_fields: [sessionId]
+      correlationId: true
+    - name: session.seal.retry
+      level: info
+      trigger: "When a seal_deferred session's SEAL frame is re-sent on reconnect"
+      context_fields: [sessionId, attemptNumber]
+      correlationId: true
+  error_events:
+    - name: session.seal.retry.failed
+      level: warn
+      trigger: "When a seal_deferred retry fails a second time"
+      context_fields: [sessionId, reason, attemptNumber]
+      correlationId: true
+  notes: >
+    All three events must be added to the canonical event taxonomy in
+    docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+  alarms: [] # no alarm: individual seal failures are not page-worthy;
+             # persistent seal_deferred is visible to the user via cello_status
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes: >
+  Both fixes are in cello-client/core/client/src/client.ts only.
+  No directory changes. No protocol changes. No new tables.
+
+  Fix 1 — closeSession() reconnect-before-seal:
+    Find closeSession() in client.ts. Locate the point where the SEAL frame is
+    sent to #persistentSignalingStream. Add before the send:
+      if (!this.#persistentSignalingStream) {
+        const reconnected = await this.#openPersistentSignalingStream();
+        if (!reconnected) {
+          return { ok: false, reason: 'directory_unreachable' };
+        }
+        this.#logger?.info("session.seal.stream.reconnected", { sessionId: sessionIdHex });
+      }
+    Pattern precedent: initiateUnilateralSeal() at lines ~1795-1800.
+
+  Fix 2 — seal_deferred retry:
+    Add a #sealDeferredSessions = new Set<string>() to CelloClient (sessionIdHex values).
+    When a session transitions to seal_deferred (the 15s timeout fires), add it
+    to #sealDeferredSessions.
+    In #openPersistentSignalingStream() success path (or in the peer:connect handler),
+    after the stream is confirmed open, iterate #sealDeferredSessions and re-send
+    the SEAL frame for each one. Remove from the set after successful send.
+    Only retry once automatically — if the retry also fails (seal_deferred again),
+    log session.seal.retry.failed and leave it in seal_deferred state.
+
+  Extract shared helper:
+    Both closeSession() and initiateUnilateralSeal() use the same reconnect pattern.
+    Extract to async #ensureSignalingStreamOpen(): Promise<boolean> to avoid
+    duplicating the logic in three places (closeSession, initiateUnilateralSeal,
+    seal_deferred retry).
+
+  Version bump required. Follow CLAUDE.md version bump procedure:
+  bump client → bump connect → git tag → CI publishes to beta.
+  Do NOT npm publish manually.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M7
+  discussion_logs:
+    - "2026-06-03_1146_beta-launch-brittleness-analysis"
+  depends_on: []
+  blocks: []
