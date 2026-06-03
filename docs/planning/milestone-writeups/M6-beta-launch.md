@@ -1013,6 +1013,36 @@ When `@cello-protocol/connect` is pinned to a new version (e.g. `npx --yes @cell
 
 ---
 
+### Stale MCP process blocks reconnect — SQLCipher DB lock deadlock (2026-06-03)
+
+**Symptom:** After upgrading `@cello-protocol/connect` version and re-adding the MCP server, Claude Code reports "MCP server cello connection timed out after 30000ms." `/mcp` reconnect also times out. The agent appears permanently broken.
+
+**Root cause:** A two-failure compound:
+
+1. **Signaling stream drop (ongoing bug):** The long-running cello-mcp process loses its libp2p connection to the directory after hours of uptime. It continues running but is functionally dead (`directory_reachable: false`, FROST ceremonies fail). It does NOT exit — no crash, no timeout, no self-restart. The process keeps the SQLCipher DB file exclusively locked.
+
+2. **DB lock prevents new process from starting:** When `/mcp` reconnects (or when Claude Code starts a new session), the new cello-mcp process opens SQLCipher at startup. SQLCipher holds a write lock; the stale old process holds the same lock. The new process waits — startup time balloons from 2–3s to 20–40s. Claude Code's 30-second MCP connection timeout fires before startup completes. The new process never connects. On the next `/mcp` attempt, the same thing happens.
+
+**Why it's brittle:** The stale process and the new process fight over the lock indefinitely. `pkill -f cello-mcp` resolves it instantly, but there is no mechanism for the MCP framework, systemd, or Claude Code to do this automatically.
+
+**Observed sequence (2026-06-03):**
+- Session started ~03:30 UTC; cello-mcp process uptime grew to 14,000+ seconds
+- Upgraded to `@cello-protocol/connect@0.0.22`, re-added MCP with new version pinned
+- Claude Code reported 30s timeout; `/mcp` also timed out repeatedly
+- `pkill -f cello-mcp` in a terminal, followed by `/mcp` reconnect → connected immediately
+
+**Workaround:** `pkill -f cello-mcp` in a terminal, then `/mcp`. Takes 3 seconds.
+
+**Root causes to fix (two separate issues):**
+
+1. **Signaling stream heartbeat + process exit on permanent loss:** The cello-mcp process should exit (code 1) if the directory connection drops and cannot be restored after N attempts with exponential backoff. Exiting is better than silently sitting with `directory_reachable: false` — Claude Code will re-launch the process, which triggers a clean reconnect.
+
+2. **SQLCipher write-ahead log (WAL) mode:** WAL mode allows concurrent readers while one writer is active, and more importantly, a second connection opening for reading doesn't block. Even if a stale process holds the write lock, a new process can complete its read-heavy startup (migrations check, load persisted state) without waiting. Combined with fix 1, this eliminates the deadlock even during the brief window before the old process exits.
+
+**Priority:** High. This makes every version bump into a manual terminal intervention. Unacceptable for beta users who don't know to run `pkill`.
+
+---
+
 ### FROST DKG ceremony is 1-of-2 (client + one directory) — sovereign node property not delivered
 
 **Discovered:** 2026-06-03. Documented in full in [[2026-06-03_1200_frost-dkg-single-directory-gap]].
