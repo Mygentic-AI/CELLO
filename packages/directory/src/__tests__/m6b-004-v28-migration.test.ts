@@ -28,17 +28,6 @@ describeIntegration("V28 migration integration test (AC-002)", () => {
         process.env.DATABASE_URL ||
         "postgresql://postgres:dev@localhost:5433/cello_dev",
     });
-
-    // Verify V28 is applied
-    const result = await pool.query(
-      "SELECT version FROM flyway_schema_history WHERE version = '28' ORDER BY installed_rank DESC LIMIT 1"
-    );
-    if (result.rows.length === 0) {
-      throw new Error(
-        "V28 migration not found in flyway_schema_history. " +
-          "Run migrations first with docker-compose up or flyway migrate."
-      );
-    }
   });
 
   afterAll(async () => {
@@ -48,6 +37,19 @@ describeIntegration("V28 migration integration test (AC-002)", () => {
   });
 
   it("verifies V28 is applied and no checksum errors exist", async () => {
+    // First, check if V28 is applied — this is a hard requirement for all other tests
+    const v28Check = await pool.query(
+      "SELECT version FROM flyway_schema_history WHERE version = '28' ORDER BY installed_rank DESC LIMIT 1"
+    );
+
+    if (v28Check.rows.length === 0) {
+      throw new Error(
+        "V28 migration not found in flyway_schema_history. " +
+          "Run migrations first with docker-compose up or flyway migrate. " +
+          "This is AC-002's integration gate — V28 must be applied before this test can pass."
+      );
+    }
+
     // Query flyway_schema_history to verify all migrations including V28
     const result = await pool.query(
       "SELECT version, description, success FROM flyway_schema_history ORDER BY installed_rank"
@@ -69,21 +71,23 @@ describeIntegration("V28 migration integration test (AC-002)", () => {
     // SET ROLE cello_service + UPDATE agent_profiles WHERE k_local_pubkey = ...
     await pool.query("SET ROLE cello_service");
 
-    // This should succeed (no permission error)
-    // Returns zero rows because 'nonexistent' doesn't match anything
-    const result = await pool.query(
-      `UPDATE agent_profiles
-       SET account_id = NULL
-       WHERE k_local_pubkey = $1
-       RETURNING *`,
-      ["nonexistent"]
-    );
+    try {
+      // This should succeed (no permission error)
+      // Returns zero rows because 'nonexistent' doesn't match anything
+      const result = await pool.query(
+        `UPDATE agent_profiles
+         SET account_id = NULL
+         WHERE k_local_pubkey = $1
+         RETURNING *`,
+        ["nonexistent"]
+      );
 
-    // Should return zero rows (no match), but no permission error
-    expect(result.rows).toHaveLength(0);
-
-    // Reset role
-    await pool.query("RESET ROLE");
+      // Should return zero rows (no match), but no permission error
+      expect(result.rows).toHaveLength(0);
+    } finally {
+      // Always reset role, even if UPDATE fails
+      await pool.query("RESET ROLE");
+    }
   });
 
   it("verifies GRANT is idempotent (can be run multiple times)", async () => {
@@ -117,5 +121,33 @@ describeIntegration("V28 migration integration test (AC-002)", () => {
     // We can't test this directly, but the fact that AC-002 exact test passed
     // (UPDATE with nonexistent key) proves UPDATE permission exists at SQL level.
     // RLS policies are a separate concern — V28 only adds the GRANT, not RLS UPDATE policy.
+  });
+
+  it("verifies rollback statement works (REVOKE UPDATE)", async () => {
+    // Test the documented rollback path in V28 migration comment
+    // Rollback: REVOKE UPDATE ON agent_profiles FROM cello_service;
+
+    // First, run REVOKE
+    await pool.query("REVOKE UPDATE ON agent_profiles FROM cello_service");
+
+    // Verify UPDATE is now blocked
+    await pool.query("SET ROLE cello_service");
+    await expect(
+      pool.query(
+        "UPDATE agent_profiles SET account_id = NULL WHERE k_local_pubkey = 'test'"
+      )
+    ).rejects.toThrow(/permission denied/);
+
+    // Reset role before re-granting
+    await pool.query("RESET ROLE");
+
+    // Re-grant for cleanup (restore state for other tests)
+    await pool.query("GRANT UPDATE ON agent_profiles TO cello_service");
+
+    // Verify permission is restored
+    const result = await pool.query(
+      `SELECT has_table_privilege('cello_service', 'agent_profiles', 'UPDATE') AS has_update`
+    );
+    expect(result.rows[0].has_update).toBe(true);
   });
 });

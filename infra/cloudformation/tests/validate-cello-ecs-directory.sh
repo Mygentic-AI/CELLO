@@ -57,31 +57,42 @@ else
 fi
 echo
 
-# Step 3: Check (2) InternalPathForwardRule routes /internal/* to InternalApiTargetGroup
-echo "Step 3: Checking InternalPathForwardRule listener rule..."
-if grep -A 15 'InternalPathForwardRule:' "$TEMPLATE_PATH" | grep -q '"/internal/\*"' && \
-   grep -A 15 'InternalPathForwardRule:' "$TEMPLATE_PATH" | grep -q 'TargetGroupArn: !Ref InternalApiTargetGroup'; then
-  echo -e "${GREEN}✓ PASS${NC}: InternalPathForwardRule routes /internal/* to InternalApiTargetGroup"
+# Step 3: Check (2) InternalApiPathRule routes /internal/* to InternalApiTargetGroup
+echo "Step 3: Checking InternalApiPathRule listener rule..."
+if grep -A 15 'InternalApiPathRule:' "$TEMPLATE_PATH" | grep -q '"/internal/\*"' && \
+   grep -A 15 'InternalApiPathRule:' "$TEMPLATE_PATH" | grep -q 'TargetGroupArn: !Ref InternalApiTargetGroup'; then
+  echo -e "${GREEN}✓ PASS${NC}: InternalApiPathRule routes /internal/* to InternalApiTargetGroup"
 else
-  echo -e "${RED}✗ FAILED${NC}: InternalPathForwardRule not configured correctly"
+  echo -e "${RED}✗ FAILED${NC}: InternalApiPathRule not configured correctly"
   exit 1
 fi
 
 # Check priority >= 5
-if grep -A 15 'InternalPathForwardRule:' "$TEMPLATE_PATH" | grep 'Priority:' | grep -qE 'Priority: ([5-9]|[1-9][0-9]+)'; then
-  echo -e "${GREEN}✓ PASS${NC}: InternalPathForwardRule priority >= 5"
+if grep -A 15 'InternalApiPathRule:' "$TEMPLATE_PATH" | grep 'Priority:' | grep -qE 'Priority: ([5-9]|[1-9][0-9]+)'; then
+  echo -e "${GREEN}✓ PASS${NC}: InternalApiPathRule priority >= 5"
 else
-  echo -e "${RED}✗ FAILED${NC}: InternalPathForwardRule priority not >= 5"
+  echo -e "${RED}✗ FAILED${NC}: InternalApiPathRule priority not >= 5"
   exit 1
 fi
 echo
 
-# Step 4: Check (3) DirectoryService DependsOn includes InternalPathForwardRule
-echo "Step 4: Checking DirectoryService DependsOn includes InternalPathForwardRule..."
-if grep -A 5 'DirectoryService:' "$TEMPLATE_PATH" | grep -E 'DependsOn.*InternalPathForwardRule'; then
-  echo -e "${GREEN}✓ PASS${NC}: DirectoryService DependsOn includes InternalPathForwardRule"
+# Step 4: Check (3) DirectoryService DependsOn includes InternalApiPathRule
+echo "Step 4: Checking DirectoryService DependsOn includes InternalApiPathRule..."
+if grep -A 5 'DirectoryService:' "$TEMPLATE_PATH" | grep -E 'DependsOn.*InternalApiPathRule'; then
+  echo -e "${GREEN}✓ PASS${NC}: DirectoryService DependsOn includes InternalApiPathRule"
 else
-  echo -e "${RED}✗ FAILED${NC}: DirectoryService DependsOn missing InternalPathForwardRule"
+  echo -e "${RED}✗ FAILED${NC}: DirectoryService DependsOn missing InternalApiPathRule"
+  exit 1
+fi
+
+# Also verify all required DependsOn entries are present
+# The DependsOn line is: "DependsOn: [HttpListener, InternalApiPathRule, BootstrapPathRule, AgentLookupPathRule]"
+if grep -A 5 'DirectoryService:' "$TEMPLATE_PATH" | grep 'DependsOn:' | grep -q 'HttpListener' && \
+   grep -A 5 'DirectoryService:' "$TEMPLATE_PATH" | grep 'DependsOn:' | grep -q 'BootstrapPathRule' && \
+   grep -A 5 'DirectoryService:' "$TEMPLATE_PATH" | grep 'DependsOn:' | grep -q 'AgentLookupPathRule'; then
+  echo -e "${GREEN}✓ PASS${NC}: DirectoryService DependsOn includes all required rules (HttpListener, BootstrapPathRule, AgentLookupPathRule)"
+else
+  echo -e "${RED}✗ FAILED${NC}: DirectoryService DependsOn missing one or more required rules"
   exit 1
 fi
 echo
@@ -114,8 +125,8 @@ echo "========================================"
 echo
 echo "AC-001 verification complete. All 5 criteria met:"
 echo "  (1) InternalApiTargetGroup on port 8081"
-echo "  (2) InternalPathForwardRule routes /internal/* to InternalApiTargetGroup"
-echo "  (3) DirectoryService DependsOn includes InternalPathForwardRule"
+echo "  (2) InternalApiPathRule routes /internal/* to InternalApiTargetGroup"
+echo "  (3) DirectoryService DependsOn includes InternalApiPathRule"
 echo "  (4) Port 8081 ingress rule in EcsDirectorySecurityGroup"
 echo "  (5) DirectoryService LoadBalancers includes ContainerPort 8081"
 echo

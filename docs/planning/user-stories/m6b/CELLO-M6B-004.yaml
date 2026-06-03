@@ -216,6 +216,15 @@ implementation_notes: >
   Environment parameter. This is the region-expansion test: would a fresh
   us-west-2 deployment work with zero manual steps?
 
+  DEPLOYMENT GATE (required before story close):
+  - [ ] AC-001 validation script passes locally (infra/cloudformation/tests/validate-cello-ecs-directory.sh)
+  - [ ] AC-002 integration test passes (CELLO_ENV=local pnpm --filter directory run test m6b-004-v28-migration.test.ts)
+  - [ ] Deployed to dev us-east-1 via directory pipeline
+  - [ ] AC-003 manual verification executed and passed (curl test with/without x-cello-internal-api-key header)
+  - [ ] AC-004 manual verification executed and passed (SELECT account_id after live registration)
+  - [ ] SI-001 integration test passes (m6b-004-si-001-internal-api-auth.test.ts)
+  - [ ] infra/STATE.md updated to reflect IaC transition state
+
 # ─── References ─────────────────────────────────────────────
 references:
   milestone: M6B

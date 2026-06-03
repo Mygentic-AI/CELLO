@@ -117,8 +117,15 @@ NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-
 
 **Manual changes (2026-06-02, IaC updated by CELLO-M6B-004 on 2026-06-03 — deploy pending):**
 - ALB target group `cello-dir-internal-api-dev` (arn: `...targetgroup/cello-dir-internal-api-dev/9142c22ffdd3283e`): created 2026-06-02, port 8081, target-type ip; current target 10.0.87.93:8081. **NOW IN IAC** (cello-ecs-directory.yaml InternalApiTargetGroup + LoadBalancers block). Deploy needed to apply.
-- ALB listener rule priority 5 (`/internal/*`): updated 2026-06-02 to route to `cello-dir-internal-api-dev` TG (port 8081). **NOW IN IAC** (cello-ecs-directory.yaml InternalPathForwardRule routes to InternalApiTargetGroup). Deploy needed to apply.
+- ALB listener rule priority 5 (`/internal/*`): updated 2026-06-02 to route to `cello-dir-internal-api-dev` TG (port 8081). **NOW IN IAC** (cello-ecs-directory.yaml InternalApiPathRule routes to InternalApiTargetGroup). Deploy needed to apply.
 - Directory SG `sg-0cc7f8493f3aff8d8` ingress: added `TCP 8081 from ALB SG sg-0b694f5a0dcf0fbbb` (2026-06-02, rule sgr-06b678369e4499441). **NOW IN IAC** (cello-vpc.yaml EcsDirectorySecurityGroup port 8081 ingress from ALB). Deploy needed to apply.
+
+**M6B-004 commit (2026-06-04): IaC committed for port-8081 internal API. Manual resources remain live until next dev directory deploy. After deploy, these manual resources will be replaced by CloudFormation-managed equivalents. V28 migration (GRANT UPDATE on agent_profiles to cello_service) committed to packages/directory/db/migrations/ — applies automatically on next directory start.**
+
+**SSM Parameter required for new regions (M6B-004):** CELLO_DIRECTORY_HOSTNAME now fetched from SSM Parameter Store path `/cello/{Environment}/directory/hostname` instead of hardcoded Mappings block. For region expansion, create this parameter before deploying cello-ecs-directory stack. Existing regions (us-east-1, eu-central-1, ap-northeast-1) must have this parameter created manually before next deploy:
+- us-east-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-us1.cello.mygentic.ai --type String --region us-east-1`
+- eu-central-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-eu1.cello.mygentic.ai --type String --region eu-central-1`
+- ap-northeast-1: `aws ssm put-parameter --name /cello/dev/directory/hostname --value directory-ap1.cello.mygentic.ai --type String --region ap-northeast-1`
 
 ### dev — eu-central-1
 *Last deployed: 2026-05-28
