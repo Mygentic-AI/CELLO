@@ -1,0 +1,305 @@
+---
+name: CELLO-PREP-009
+type: user-story
+date: 2026-06-03
+topics: [directory, in-memory-state, persistence, session-lifecycle, pre-m7]
+status: draft
+description: >
+  Audit and close the remaining in-memory state gaps in CelloDirectoryNode.
+  Three maps have data that should survive directory restarts but currently don't:
+  #pendingConnectionRequests (live connection negotiations silently fail),
+  #sessionLastActivity + #sessionParticipants + #unilateralSeals (PERSIST-015
+  unilateral seal correctness). The critical re-registration maps (#thresholdSigners,
+  #delegatedSigners, #primaryPubkeys) are already restored on startup — the
+  re-registration problem is a DB deletion problem, not a restoration problem.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-PREP-009
+domain: PREP
+milestone: M7
+actor: OPS
+priority: P1
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO operator,
+  I want the directory to restore all operationally significant in-memory state
+  on restart, so that a directory ECS task replacement does not silently break
+  in-flight connection negotiations or corrupt unilateral seal timing.
+
+# ─── Context ────────────────────────────────────────────────
+# Full audit of CelloDirectoryNode Maps/Sets (directory-node.ts lines 320-415):
+#
+# ── ALREADY PERSISTED + RESTORED ─────────────────────────────────────────────
+#
+# #thresholdSigners / #delegatedSigners / #primaryPubkeys
+#   Restored at startup from agent_profiles + agent_key_shares (commit 4ba524d,
+#   directory.ts lines 673-692). ClientDelegatedSigners are reconstructed with
+#   #streams=null; when the agent reconnects and re-authenticates, setStreams()
+#   is called and ceremonies work again.
+#
+# #pendingNotifications
+#   These are the PERSIST-015 notifications for offline agents. They are stored
+#   in Postgres notification_queue table (enqueueNotification uses jsonStringify →
+#   Postgres JSONB). Already persisted and drained on reconnect. Not an issue.
+#
+# ── INTENTIONALLY EPHEMERAL (reconnect restores) ──────────────────────────────
+#
+# #streams
+#   Live libp2p streams. Agents reconnect and re-authenticate after directory
+#   restart. Losing streams on restart is expected and correct.
+#
+# #peerInfo / #peerInfoAnnounced
+#   Peer addresses from Noise handshake. Restored when agent reconnects and sends
+#   peer_info_announce. Losing on restart is expected — outdated multiaddrs would
+#   be worse than empty ones (task IPs change on ECS redeploy).
+#
+# #nonces
+#   One-time-use nonces for the auth challenge. Losing them on restart is correct
+#   behavior (nonces that were never consumed are invalid after restart).
+#
+# ── IN-FLIGHT STATE (correct to lose — callers must retry) ────────────────────
+#
+# #pendingDkgCommitments / #pendingDkgComplete
+#   Active DKG round state for in-progress registrations. If the directory
+#   restarts mid-DKG, the registration fails and the agent retries. This is
+#   correct — the commitment is only valid for the current round. No change needed.
+#
+# #pendingSessions
+#   In-flight session establishment (between relay registration and both clients
+#   receiving the session_assignment). Lost on restart → client receives timeout
+#   → retries. Correct behavior for a transient state.
+#
+# #pendingFrostSeals
+#   In-flight FROST seal ceremony. Lost on restart → seal_deferred (deferred seal
+#   path handles this). Correct to lose.
+#
+# #pendingPreAuthData
+#   OTP pre-auth stash (phone_stub_hash + emailDomain) held between token request
+#   and dkg_complete. Lost on restart → ops-agent cannot complete account linking
+#   for in-flight registrations. These registrations must retry. Acceptable loss
+#   given ops-agent registration flow is short-lived (< 60s end-to-end).
+#
+# ── NEEDS FIXING ──────────────────────────────────────────────────────────────
+#
+# #pendingConnectionRequests (CONNREQ-002)
+#   connection_request_id → { senderHex, targetHex, packageCbor, requestId, disclosureRound }
+#   A live connection request that loses this state on directory restart causes
+#   the TARGET agent to receive a connection_id in the acceptance frame but the
+#   DIRECTORY has no record of it. The subsequent session_request with this
+#   connection_id returns no_connection silently. The sender never knows why
+#   their cello_request_connection succeeded but cello_initiate_session fails.
+#   FIX: persist to Postgres (new table: pending_connection_requests, already
+#   partially scoped in PERSIST-019 but not implemented). On startup, load all
+#   non-expired requests. Expire after TTL (matching the in-memory TTL).
+#   NOTE: PERSIST-019 already has pending_connection_requests in the DB schema
+#   (the notification_queue migration added both tables). Check whether the
+#   directory's startup path already loads these — if so, this gap may be
+#   smaller than expected.
+#
+# #sessionLastActivity (PERSIST-015)
+#   session_id_hex → last activity timestamp (ms).
+#   Used by the PERSIST-015 unilateral seal path: the grace period check
+#   compares (now - lastActivity) against deliveryGraceSeconds. If the directory
+#   restarts, lastActivity resets to 0 (or undefined). The next seal attempt
+#   by an offline agent's counterparty will find lastActivity = undefined and
+#   may treat the session as immediately eligible for unilateral seal, bypassing
+#   the delivery grace period.
+#   FIX: either persist lastActivity to Postgres on each update (expensive —
+#   every leaf submission updates this), OR initialize it to session creation
+#   time on startup from the MMR store (the MMR has the session genesis timestamp).
+#   The cheaper fix: on startup, initialize #sessionLastActivity for all active
+#   sessions to their genesis timestamp from the MMR. This prevents the grace
+#   period reset at the cost of potentially delaying legitimate unilateral seals
+#   for sessions that were active before restart.
+#
+# #sessionParticipants (PERSIST-015)
+#   session_id_hex → { initiatorHex: string; targetHex: string }
+#   Used to identify the absent party in a unilateral seal after the stream
+#   cleanup has removed #pendingSessions. Lost on restart → PERSIST-015 unilateral
+#   seal path cannot identify which agent to notify. The seal proceeds but the
+#   offline agent never gets the seal_unilateral_notification.
+#   FIX: #sessionParticipants can be reconstructed from Postgres on startup.
+#   The mmr_leaves table has the session_id and the agent pubkeys (participant_a,
+#   participant_b in the genesis leaf). Load all active (unsealed) sessions and
+#   populate #sessionParticipants from the MMR data.
+#
+# #unilateralSeals (PERSIST-015)
+#   session_id_hex → { sealed_root, sealed_at, submitter_hex }
+#   Records completed unilateral seals to prevent double-notification. Lost on
+#   restart → if the sealed agent reconnects before the directory checks this
+#   map, a duplicate seal_unilateral_notification could be sent.
+#   FIX: persist to Postgres (new column in mmr_sessions: unilateral_sealed_at,
+#   unilateral_submitter). On startup, load all unilaterally-sealed sessions.
+
+# ─── Behavior (EARS) ────────────────────────────────────────
+behavior:
+  - trigger: "When the directory ECS task is replaced (ECS rolling update or
+    manual stop-task)"
+    action: "when agents reconnect after restart, their pending connection requests
+      (in state 'awaiting acceptance' or 'awaiting session') are still valid —
+      the new directory process loads #pendingConnectionRequests from Postgres on
+      startup; connection_ids issued before restart are honored by the new process"
+
+  - trigger: "When the directory restarts and a PERSIST-015 unilateral seal
+    attempt arrives for a session whose participants were active before restart"
+    action: "#sessionParticipants is populated from MMR genesis leaf data on
+      startup; the absent party is correctly identified; the seal_unilateral_notification
+      is delivered to the correct agent"
+
+  - trigger: "When the directory restarts and the PERSIST-015 grace period check
+    runs for a session that was active before restart"
+    action: "#sessionLastActivity is initialized to the session genesis timestamp
+      (from the MMR) rather than zero; the grace period is calculated from genesis
+      rather than from the restart time; this prevents immediate unilateral seal
+      eligibility due to lastActivity = undefined"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A pending connection request (connection_request_id, senderHex,
+      targetHex, packageCbor, disclosureRound=1) exists in the directory when
+      the directory process is restarted"
+    when: "the new directory process starts and the TARGET agent authenticates
+      on the signaling stream"
+    then: "the connection request is present in #pendingConnectionRequests in
+      the new process; when the target agent calls cello_accept_connection with
+      the connection_request_id, the directory finds the request and routes the
+      acceptance frame to the sender — verified by asserting the sender's
+      signaling stream receives the connection_accepted frame"
+    test_type: integration
+    component_under_test: directory
+    notes: "First check whether PERSIST-019's pending_connection_requests table
+      is already loaded at startup (directory.ts startup sequence). If the load
+      already happens, this AC may just require adding a test — not new code.
+      Check by grepping for loadPendingConnectionRequests in directory.ts."
+
+  - id: AC-002
+    given: "A session with genesis timestamp T was active before a directory restart;
+      the directory restarts at time T+30s; the delivery grace period is 600s"
+    when: "a unilateral seal attempt arrives at T+60s (30s after restart)"
+    then: "#sessionLastActivity for this session_id is initialized to T (genesis
+      time from MMR), not 0 or undefined; the grace period check correctly
+      determines that only 60s have elapsed (not 600s), and rejects the unilateral
+      seal as premature; relay.seal.unilateral.rejected is logged with the correct
+      lastActivity and elapsedMs values"
+    test_type: integration
+    component_under_test: directory
+    notes: "This test requires restarting the directory (stopping and creating a
+      new CelloDirectoryNode instance with the same Postgres store). The
+      session fixture needs a new opts.restartDirectory capability or the test
+      manages the restart manually."
+
+  - id: AC-003
+    given: "A session between agentA and agentB was active before a directory restart;
+      agentB was offline at the time of restart; agentA initiates a unilateral seal
+      after restart"
+    when: "the unilateral seal completes (grace period elapsed, both participants
+      signed)"
+    then: "#sessionParticipants is populated from MMR genesis data on startup;
+      the seal_unilateral_notification is delivered to agentB when it reconnects;
+      verified by asserting agentB receives a seal_unilateral_notification with
+      the correct session_id and sealed_root after reconnecting post-restart"
+    test_type: integration
+    component_under_test: directory
+    notes: "This test requires agentB to reconnect after restart and assert
+      notification delivery. The drainNotifications path already handles
+      delivering queued notifications on reconnect — this AC verifies that the
+      notification was correctly queued via the right participant lookup."
+
+  - id: AC-004
+    given: "The implementation is complete"
+    when: "the directory bin startup sequence is reviewed"
+    then: "the startup sequence in directory.ts explicitly loads these three
+      state categories from Postgres:
+        (1) agent_profiles + agent_key_shares → #thresholdSigners etc. (already done)
+        (2) pending_connection_requests → #pendingConnectionRequests (AC-001)
+        (3) active session participants from MMR → #sessionParticipants (AC-003)
+        (4) active session genesis timestamps from MMR → #sessionLastActivity (AC-002);
+      each load step logs adapter.state.loaded with the count of rows loaded"
+    test_type: unit
+    component_under_test: directory
+
+# ─── Security Invariants ────────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "Restoring #pendingConnectionRequests from Postgres must not allow
+      expired connection requests to be honored after restart"
+    adversarial_condition: "a connection request that expired (TTL elapsed) before
+      the restart must not be loadable by the new process; the load query must
+      filter by expiry timestamp; verified by asserting that a request inserted
+      with created_at = now - (TTL + 1s) is not present in #pendingConnectionRequests
+      after startup"
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ──────────────────────────────────────────
+observability:
+  events:
+    - name: adapter.state.loaded
+      level: info
+      trigger: "After each startup state-loading step completes"
+      context_fields: [stateType, count]
+      correlationId: false
+  error_events: []
+  notes: >
+    adapter.state.loaded reuses the existing event name convention. Each load step
+    emits one event: stateType = 'pending_connection_requests' | 'session_participants'
+    | 'session_last_activity'. Add these variants to the canonical event taxonomy.
+  alarms: [] # no alarm: startup state loading; failure is fatal (process exits)
+             # and already covered by ECS service health check alarms
+
+# ─── Implementation Notes ───────────────────────────────────
+implementation_notes: >
+  VERIFY FIRST: before implementing, check whether the pending_connection_requests
+  table introduced in PERSIST-019 is already loaded at startup.
+  Run: grep -n "loadPendingConnectionRequests\|pending_connection_requests.*load\|startup.*connection" packages/directory/src/bin/directory.ts
+  If it's already loaded, AC-001 may only require a test — not new code.
+
+  1. #pendingConnectionRequests (AC-001):
+     If not already loaded: add to PgDirectoryStore a method
+     loadPendingConnectionRequests() that queries:
+       SELECT connection_request_id, sender_pubkey_hex, target_pubkey_hex,
+              package_cbor, request_id, disclosure_round
+       FROM pending_connection_requests
+       WHERE expires_at > NOW()
+     In directory.ts startup, call this after loadProfiles() and populate
+     #pendingConnectionRequests via a new method on CelloDirectoryNode:
+       directory.restorePendingConnectionRequests(requests)
+     TTL: match the in-memory TTL used for connection requests (check CONNREQ-002
+     story for the expiry duration).
+
+  2. #sessionParticipants (AC-003):
+     Query active sessions from the MMR store:
+       SELECT session_id_hex, participant_a_pubkey, participant_b_pubkey
+       FROM mmr_sessions WHERE sealed_at IS NULL
+     Call directory.restoreSessionParticipants(sessions) to populate
+     #sessionParticipants. This is a read-only reconstruction — no new table needed.
+
+  3. #sessionLastActivity (AC-002):
+     For each active session from step 2, set lastActivity to the session
+     genesis timestamp (first leaf timestamp or session creation time in mmr_sessions).
+     Call directory.restoreSessionLastActivity(sessions) to populate
+     #sessionLastActivity. Genesis time is the correct initial value — it prevents
+     the grace period from being accidentally reset to "just now" on restart.
+
+  4. #unilateralSeals:
+     Lower priority — the consequence is a duplicate notification (not a security
+     failure). Defer to a follow-up story if the above three are sufficient for
+     the milestone. If implementing: add unilateral_sealed_at and
+     unilateral_submitter columns to mmr_sessions; load on startup.
+
+  All three state types (connection requests, session participants, session activity)
+  must be loaded in the startup sequence BEFORE directory.start() registers the
+  libp2p stream handlers. Otherwise a race exists where an agent connects and sends
+  a frame before the state is restored.
+
+# ─── References ─────────────────────────────────────────────
+references:
+  milestone: M7
+  discussion_logs:
+    - "2026-06-03_1146_beta-launch-brittleness-analysis"
+  depends_on: []
+  blocks: []
