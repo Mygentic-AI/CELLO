@@ -16,7 +16,7 @@ description: >
 
 ## Context
 
-This log follows directly from [[2026-06-03_1500_beta-launch-brittleness-analysis]]. The
+This log follows directly from [[2026-06-03_1146_beta-launch-brittleness-analysis]]. The
 global install pattern (`npm install -g @cello-protocol/connect`, stable binary name) solves
 the *mechanics* of upgrading. This log addresses what happens when users haven't upgraded —
 how they find out, and how badly things break in the meantime.
@@ -199,7 +199,7 @@ agent that runs forever while silently failing every FROST ceremony.
 
 ## What This Means for the Upgrade Path Decision
 
-The global install + binary name pattern ([[2026-06-03_1500_beta-launch-brittleness-analysis]])
+The global install + binary name pattern ([[2026-06-03_1146_beta-launch-brittleness-analysis]])
 is correct. Adding version negotiation and EOL enforcement to the binary requires no change
 to the install mechanism — it's code inside `cello-mcp.ts` that checks `currentVersion`
 against whatever the directory advertises at connection time.
@@ -261,7 +261,7 @@ All policy questions are resolved:
 
 ## Related Documents
 
-- [[2026-06-03_1500_beta-launch-brittleness-analysis]] — upgrade mechanics (global install
+- [[2026-06-03_1146_beta-launch-brittleness-analysis]] — upgrade mechanics (global install
   pattern), connection resilience, infrastructure brittleness
 - [[CONTEXT]] — canonical glossary; agent identity, session, registration definitions
 - [[M6-beta-launch]] — M6 write-up; DX issues including F-002 (SQLCipher compile timeout)
