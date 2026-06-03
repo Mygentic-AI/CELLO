@@ -14,7 +14,7 @@ description: >
 ---
 # ─── Identity ───────────────────────────────────────────────
 id: CELLO-M6B-001
-domain: PREP
+domain: M6B
 milestone: M6B
 actor: DEV
 priority: P0
@@ -101,7 +101,7 @@ acceptance_criteria:
     when: "a second cello-mcp process B starts"
     then: "process B sends SIGTERM to process A; process A exits within 5 seconds;
       process B writes its own PID to ~/.cello/cello-mcp.pid; only one cello-mcp
-      process remains running; startup.prior.process.killed is logged by B
+      process remains running; client.startup.prior.process.killed is logged by B
       with the prior PID"
     test_type: integration
     component_under_test: adapter-claude-code
@@ -128,15 +128,19 @@ acceptance_criteria:
     component_under_test: adapter-claude-code
 
   - id: AC-004
-    given: "The kill-prior-process step in startup"
-    when: "the sequence of startup operations is reviewed"
-    then: "the lock file check and prior-process kill happen BEFORE the SQLCipher
-      database is opened — not after; this ensures the write lock is released
-      before the new process attempts to open the database"
-    test_type: unit
+    given: "A prior cello-mcp process A is running with an open SQLCipher write lock"
+    when: "a second cello-mcp process B starts"
+    then: "the client.startup.prior.process.killed log event from process B appears
+      in stderr BEFORE any DB-open log event — verified by capturing stderr output
+      from process B and asserting the kill event precedes the first DB operation
+      log line; this proves kill-prior-process executes before open-DB in the
+      startup sequence"
+    test_type: integration
     component_under_test: adapter-claude-code
     notes: "The order matters: kill prior → open DB. If the DB opens first,
-      the lock contention causes the 30s startup timeout even with this fix."
+      the lock contention causes the 30s startup timeout even with this fix.
+      Use child_process.spawn to capture stderr; assert event ordering from
+      the log stream."
 
   - id: AC-005
     given: "The M7 multi-agent case: two named agents 'alice' and 'bob' are
@@ -157,28 +161,39 @@ security_invariants:
       by a different user (e.g. root or another user on a shared system), the
       SIGTERM must fail gracefully (EPERM) rather than crashing; verified by
       asserting that a kill attempt on a process with EPERM is caught, logged
-      as a warning, and startup proceeds as if the lock file was stale"
+      as a warning, and startup proceeds as if the lock file was stale.
+      Since real cross-user processes are unavailable in standard CI, this is
+      tested by injecting a mock kill function that throws
+      Object.assign(new Error('EPERM'), { code: 'EPERM' }) — the unit under
+      test must accept a kill-function parameter (or use dependency injection)
+      to make this testable without OS-level setup"
     test_type: unit
     component_under_test: adapter-claude-code
 
 # ─── Observability ──────────────────────────────────────────
 observability:
   events:
-    - name: startup.prior.process.killed
+    - name: client.startup.prior.process.killed
       level: info
       trigger: "When a prior cello-mcp process is found and killed on startup"
       context_fields: [priorPid, signal]
       correlationId: false
-    - name: startup.lock.released
+      notes: >
+        signal can be "SIGTERM" (normal exit) or "SIGKILL" (escalation after 5s
+        timeout). The SIGKILL escalation case should be logged at warn level to
+        distinguish a force-kill from a clean exit.
+    - name: client.startup.lock.released
       level: info
       trigger: "When the lock file is removed on exit"
       context_fields: [pid]
       correlationId: false
   error_events: []
   notes: >
-    startup.prior.process.killed and startup.lock.released must be added to the
-    canonical event taxonomy in
+    client.startup.prior.process.killed and client.startup.lock.released must be
+    added to the canonical event taxonomy in
     docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
+    All cello-mcp startup events use the client.startup.* namespace — do not use
+    bare startup.* names.
   alarms: [] # no alarm: startup behavior; operator will see the log event
 
 # ─── Implementation Notes ───────────────────────────────────
@@ -202,9 +217,10 @@ implementation_notes: >
     7. Write String(process.pid) to lockFilePath.
     8. Continue with normal startup (open DB, start MCP server).
 
-  Exit cleanup (attach to process exit, SIGTERM, SIGINT handlers):
-    process.on("exit", () => { try { unlinkSync(lockFilePath); } catch {} });
-    // Also add to the existing SIGTERM handler in cello-mcp.ts
+  Exit cleanup — cello-mcp.ts currently has NO signal handlers; add them from scratch:
+    process.on("exit",   () => { try { unlinkSync(lockFilePath); } catch {} });
+    process.on("SIGTERM",() => { try { unlinkSync(lockFilePath); } catch {} process.exit(0); });
+    process.on("SIGINT", () => { try { unlinkSync(lockFilePath); } catch {} process.exit(0); });
 
   The lock file directory (e.g. ~/.cello/agents/alice/) must be created with
   mkdirSync({ recursive: true }) before writing the lock file — for M7 named
@@ -213,6 +229,11 @@ implementation_notes: >
   IMPORTANT: lock file check must happen before the line that opens the
   SQLCipher database. Check the current startup sequence in cello-mcp.ts and
   insert the lock file logic at the very top, before any DB operations.
+
+  CELLO_AGENT_NAME env var: this variable is not yet documented in cello-mcp.ts's
+  env-var comment block (lines 14-33). The implementer must add it to the documented
+  environment variables list at the top of the file alongside CELLO_DB_PATH,
+  CELLO_DIRECTORY_PUBKEY, etc.
 
   Version bump required. Follow CLAUDE.md version bump procedure.
 
