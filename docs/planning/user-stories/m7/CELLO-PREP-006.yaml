@@ -248,15 +248,21 @@ acceptance_criteria:
     given: "The updated core/client/src/mcp-server.ts"
     when: "initiateSession returns { ok: false, reason: 'ceremony_exhausted' }"
     then: "the tool JSON response includes reason: 'ceremony_exhausted' AND a
-      message field indicating the agent may not be bootstrapped and suggesting
-      cello_register if registration was not completed; it does NOT say 'below
-      threshold'; verified by a unit test that mocks client.initiateSession to
-      return ceremony_exhausted and asserts the JSON response shape"
+      message field containing the exact 4-step re-registration recipe:
+        'FROST ceremony exhausted — K_server share mismatch or missing. To fix:
+        1. DELETE FROM agent_key_shares WHERE agent_id=<your-pubkey> (in directory DB)
+        2. DELETE FROM agent_profiles WHERE k_local_pubkey LIKE <your-pubkey-prefix>%
+        3. Restart the directory ECS task (aws ecs stop-task) to flush in-memory share cache
+        4. pkill -f cello-mcp, rm ~/.cello/client.db, get a fresh token from Telegram, call cello_register'
+      The message must NOT say 'below threshold'; verified by a unit test that mocks
+      client.initiateSession to return ceremony_exhausted and asserts the JSON
+      response shape includes all four numbered steps"
     test_type: unit
     component_under_test: client
-    notes: "Same file as AC-009 (mcp-server.ts line 479). ceremony_exhausted
-      means the ceremony ran but the agent had no share — the most useful message
-      is 'check registration.'"
+    notes: "This is the recipe that currently takes 4+ hours to rediscover from scratch
+      each time it's needed. Having it in the tool output means the operator never
+      has to debug it again — they just follow the steps. The exact SQL and CLI
+      commands must be in the message, not vague guidance."
 
   - id: AC-011
     given: "The implementation is complete"
@@ -385,7 +391,7 @@ implementation_notes: >
        }
        if (result.reason === "ceremony_exhausted") {
          return jsonText({ ok: false, reason: result.reason,
-           message: "The FROST signing ceremony failed — the agent may not be bootstrapped. Call cello_register if registration was not completed." });
+           message: "FROST ceremony exhausted — K_server share mismatch or missing. To fix:\n1. DELETE FROM agent_key_shares WHERE agent_id='<your-pubkey>' (in directory DB)\n2. DELETE FROM agent_profiles WHERE k_local_pubkey LIKE '<pubkey-prefix>%'\n3. Restart the directory ECS task (aws ecs stop-task) to flush in-memory share cache\n4. pkill -f cello-mcp, rm ~/.cello/client.db, get a fresh token from Telegram, call cello_register" });
        }
        return jsonText({ ok: false, reason: result.reason });
 
