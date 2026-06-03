@@ -41,7 +41,24 @@ For every AC in the story:
    - If yes: **blocking**. The test asserts result, not behavior. It must also assert the transport path was used — stream open count, protocol handler invocation, frame count, or equivalent.
    - This is the M2/M3 failure mode. Tests that pass in a single Vitest process tell you nothing about whether the protocol works between separate OS processes.
 
-4. **When you find a test that is close but insufficient — decide: modify or add?**
+4. **Verify the structural contract, not just the outcome.** ACs describe both *what* should be produced and *how* it should be produced — the structure of the protocol, not just its result. A correct result achieved through the wrong structure is a failing AC even when the test is green.
+
+   When an AC specifies structural requirements — participant counts, communication topology, independence constraints, ordering, or connectivity patterns — ask: *"Does the implementation exhibit this structure, or does it produce the same output through a structurally different path?"*
+
+   Common failure patterns to look for:
+   - **Reduced participant count** — AC says 3 nodes; implementation hardcodes 1. The output shape is identical; the independence property is gone.
+   - **Collapsed topology** — AC says each participant communicates directly with every other; implementation routes everything through a single coordinator. Same output; hub-and-spoke instead of peer-to-peer.
+   - **Shared state masquerading as independence** — AC says "separate libp2p instances" or "each node verifies independently"; implementation uses in-process objects or a single verification call. Tests pass; the isolation guarantee does not exist.
+   - **Sequential substituted for concurrent** — AC implies parallel exchanges (each node contributes simultaneously); implementation serializes through one node. Result is correct; liveness and fault-tolerance properties differ.
+   - **Intermediary substituted for direct exchange** — AC says A sends to B and B sends to C; implementation has A send to a relay that forwards to both. Outcome matches; the trust model does not.
+
+   The diagnostic question for protocol structure: *"If one of the participants described in the AC were compromised or unavailable, would the real implementation behave the way the AC implies?"* If the answer differs from what the AC implies — because the structure was quietly collapsed — that is **blocking**.
+
+   A separate but related diagnostic question applies to implementation technology: *"Does this implementation create a dependency that the story's stated guarantees assume does not exist?"* The canonical example is sovereignty: a story may require that each node operate independently of all others, and the protocol behavior may look correct, but if the implementation uses a cloud-provider-specific replication mechanism, shared control plane, or vendor-managed coordination service, the nodes are no longer independent — they share a failure domain and a vendor. The test suite cannot see this. Look for it by asking: *"Could this node be moved to a different cloud provider, or operated by a different organization, without modifying anything except its own configuration?"* If no — and the story implies yes — that is **blocking**.
+
+   If the deviation was intentional (infrastructure not yet deployed, deferred milestone), it must be recorded in the story's `stubs` section with a `replaced_by` milestone. A silent structural mismatch is never acceptable regardless of test results.
+
+5. **When you find a test that is close but insufficient — decide: modify or add?**
 
    Use this decision rule:
 
