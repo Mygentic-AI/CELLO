@@ -53,15 +53,15 @@ story: >
 # still contains the old IP. RelayPoolManager health checks fail (old IP
 # unreachable). Session initiation fails with relay_unavailable.
 #
-# Secondary finding — sign-manifest.sh does not exist: the second fix attempt
-# used an ad-hoc `node --input-type=module` one-liner. The first attempt failed
-# with relay.manifest.invalid / signature_verification_failed because the
-# ad-hoc script used recursive key-sort while buildCanonicalPayload() in
-# relay-pool-manager.ts uses shallow key-sort (top-level only). Any future
-# manual signing that uses a different sort order will silently produce an
-# invalid signature. A proper infra/sign-manifest.sh must exist, must use
-# shallow sort matching buildCanonicalPayload() exactly, and must be
-# the documented procedure for any manual manifest update.
+# Secondary finding — infra/sign-manifest.sh already exists (it is committed
+# in the repo at infra/sign-manifest.sh). However the first fix attempt in the
+# second relay staleness incident (2026-06-03) used an ad-hoc
+# `node --input-type=module` one-liner because the script's interface was not
+# well-known. That one-liner used recursive key-sort; buildCanonicalPayload()
+# in relay-pool-manager.ts uses shallow key-sort (top-level only), producing
+# a different byte string and an invalid signature. The script must be verified
+# to use the correct shallow sort, and AC-007b must confirm its output passes
+# RelayPoolManager's signature verification.
 #
 # The fix has two parts:
 #
@@ -273,7 +273,7 @@ acceptance_criteria:
       across two separate task deployments."
 
   - id: AC-007b
-    given: "infra/sign-manifest.sh committed to the repo"
+    given: "infra/sign-manifest.sh (already committed to the repo)"
     when: "an operator runs sign-manifest.sh against the dev environment with
       a valid relay definitions JSON and the directory private key ARN"
     then: "the script produces a manifest JSON with a signature that passes
@@ -305,6 +305,20 @@ acceptance_criteria:
     component_under_test: relay
     notes: "Run manually after deployment. This is the live smoke test proving
       the full auto-registration chain works end-to-end."
+
+  - id: AC-008
+    given: "The updated infra/cloudformation/cello-cloudwatch.yaml template"
+    when: "the template is inspected"
+    then: "a CloudWatch metric alarm named
+      cello-relay-manifest-update-${Environment} exists; it triggers on
+      the relay.manifest.update.failed log metric filter firing > 3 times
+      within a 5-minute window; it fires to the ops-critical SNS topic
+      (same pattern as existing relay alarms in cello-cloudwatch.yaml);
+      the alarm resource is distinct from cello-relay-manifest-invalid
+      (which covers signature verification failures on manifest load, not
+      upload failures during auto-registration)"
+    test_type: unit
+    component_under_test: infra
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
@@ -352,8 +366,12 @@ observability:
     - condition: "relay.manifest.update.failed fires more than 3 times within
         a 5-minute window for the same relayId"
       fires_to: "cello-relay-manifest-update-alarm CloudWatch alarm"
-      notes: "Persistent upload failures indicate S3 credential or bucket
-        policy issue — requires operator intervention."
+      notes: "This alarm resource must be added to infra/cloudformation/
+        cello-cloudwatch.yaml by the implementer of this story — it does not
+        yet exist. The existing cello-relay-manifest-invalid alarm (line 430
+        of cello-cloudwatch.yaml) is for signature verification failures on
+        manifest load; this is a separate alarm for upload failures during
+        auto-registration. See AC-008 for the IaC requirement."
 
 # ─── Implementation Notes ───────────────────────────────────
 implementation_notes: >
