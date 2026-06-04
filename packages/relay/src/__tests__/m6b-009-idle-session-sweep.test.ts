@@ -96,10 +96,11 @@ describe("CELLO-M6B-009: Idle session sweep", () => {
 
     store.recordSession(assignment, genesisRoot);
 
-    // Get state, then directly mutate lastActivityAt after setSession updates it
-    const state = store.getSession(sessionIdHex)!;
-    // Simulate 25 hours ago by directly mutating the state object
-    state.lastActivityAt = Date.now() - 25 * 60 * 60 * 1000;
+    // Simulate 25 hours ago via the test accessor.
+    // setSession() always refreshes lastActivityAt to Date.now() — we cannot pass an
+    // old timestamp through the public API. __setLastActivityAtForTest writes directly
+    // into the Map, bypassing the timestamp refresh.
+    store.__setLastActivityAtForTest(sessionIdHex, Date.now() - 25 * 60 * 60 * 1000);
 
     // Run sweep
     const maxIdleMs = 24 * 60 * 60 * 1000; // 24 hours
@@ -127,11 +128,9 @@ describe("CELLO-M6B-009: Idle session sweep", () => {
   it("AC-007: sweep does NOT destroy sessions with recent lastActivityAt", () => {
     // AC-007: Sessions idle for 1 hour (< 24h threshold) are NOT destroyed.
     //
-    // We set lastActivityAt directly on the state object returned by getSession()
-    // rather than calling setSession(), because setSession() always refreshes
-    // lastActivityAt to Date.now() — passing old timestamps through setSession()
-    // would test a 0-second-old session, not a 1-hour-old one.
-    // AC-006 uses the same pattern for simulating an aged-out session.
+    // setSession() always refreshes lastActivityAt to Date.now() — passing an old
+    // timestamp through setSession() would test a 0-second-old session, not a
+    // 1-hour-old one. __setLastActivityAtForTest bypasses the timestamp refresh.
 
     const sessionIdHex = "d".repeat(32);
     const assignment = makeAssignment(sessionIdHex);
@@ -139,10 +138,8 @@ describe("CELLO-M6B-009: Idle session sweep", () => {
 
     store.recordSession(assignment, genesisRoot);
 
-    // Directly mutate the stored state object to simulate 1-hour-old lastActivityAt.
-    // This is the canonical test pattern for bypassing setSession's timestamp refresh.
-    const state = store.getSession(sessionIdHex)!;
-    state.lastActivityAt = Date.now() - 1 * 60 * 60 * 1000;
+    // Simulate 1-hour-old lastActivityAt via the test accessor.
+    store.__setLastActivityAtForTest(sessionIdHex, Date.now() - 1 * 60 * 60 * 1000);
 
     // Run sweep — 1 hour < 24 hour threshold, session must survive
     const maxIdleMs = 24 * 60 * 60 * 1000;
@@ -193,20 +190,23 @@ describe("CELLO-M6B-009: Idle session sweep", () => {
       store.recordSession(assignment, Buffer.alloc(32));
     });
 
-    // All idle for 25 hours — directly mutate lastActivityAt
+    // All idle for 25 hours — use test accessor to back-date lastActivityAt.
+    // Status is set via setSession so the store stores the updated status; setSession
+    // will also refresh lastActivityAt to now, which is why we call __setLastActivityAtForTest
+    // afterwards for each session.
     const idleTimestamp = Date.now() - 25 * 60 * 60 * 1000;
 
     const state1 = store.getSession(sessionIdHex1)!;
-    state1.status = "active";
-    state1.lastActivityAt = idleTimestamp;
+    store.setSession(sessionIdHex1, { ...state1, status: "active" });
+    store.__setLastActivityAtForTest(sessionIdHex1, idleTimestamp);
 
     const state2 = store.getSession(sessionIdHex2)!;
-    state2.status = "sealing";
-    state2.lastActivityAt = idleTimestamp;
+    store.setSession(sessionIdHex2, { ...state2, status: "sealing" });
+    store.__setLastActivityAtForTest(sessionIdHex2, idleTimestamp);
 
     const state3 = store.getSession(sessionIdHex3)!;
-    state3.status = "seal_rejected";
-    state3.lastActivityAt = idleTimestamp;
+    store.setSession(sessionIdHex3, { ...state3, status: "seal_rejected" });
+    store.__setLastActivityAtForTest(sessionIdHex3, idleTimestamp);
 
     // Run sweep
     const maxIdleMs = 24 * 60 * 60 * 1000;

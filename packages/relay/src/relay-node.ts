@@ -229,17 +229,20 @@ export class CelloRelayNode {
     this.#node = opts.node;
     this.#directoryPubkey = opts.directoryPubkey;
     this.#directory = opts.directory ?? null;
-    this.#store = opts.store ?? new InMemoryRelayStore();
-    this.#sessionWal = opts.sessionWal ?? null;
-    this.#ackSigningKeyProvider = opts.ackSigningKeyProvider ?? null;
-    this.#relayId = opts.relayId ?? null;
     // Logger is optional for backward compatibility; defaults to a no-op for pre-M4 callers.
+    // Initialise before #store so the default InMemoryRelayStore can receive the logger.
     this.#logger = opts.logger ?? {
       debug: () => {},
       info: () => {},
       warn: () => {},
       error: () => {},
     };
+    // Pass the logger to the default store so enqueueDelivery backpressure warnings
+    // are routed through the injected logger instead of console.warn.
+    this.#store = opts.store ?? new InMemoryRelayStore({ logger: this.#logger });
+    this.#sessionWal = opts.sessionWal ?? null;
+    this.#ackSigningKeyProvider = opts.ackSigningKeyProvider ?? null;
+    this.#relayId = opts.relayId ?? null;
   }
 
   async start(): Promise<void> {
@@ -1024,6 +1027,18 @@ export interface CreateRelayNodeOptions {
   relayId?: string;
 }
 
+/**
+ * Create and start a relay node.
+ *
+ * **Idle session sweep is NOT started automatically.**
+ * The production binary (relay.ts) calls `relay.startIdleSweep(intervalMs, maxIdleMs)`
+ * after `createRelayNode` returns. Tests should not start the sweep unless they are
+ * specifically testing sweep behaviour — the sweep runs setInterval and must be stopped
+ * via `relay.stopIdleSweep()` or it will keep the Node.js event loop alive.
+ *
+ * `stop()` calls `stopIdleSweep()` unconditionally, so callers that never started the
+ * sweep are safe — `stopIdleSweep()` is a no-op when no interval is running.
+ */
 export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
   relay: CelloRelayNode;
   node: CelloNode;
@@ -1054,6 +1069,7 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     node,
     // stopIdleSweep is called first to clear the setInterval handle before the node
     // shuts down — prevents a leaked interval from keeping Node.js alive after stop().
+    // It is safe to call when startIdleSweep() was never called.
     stop: async () => {
       relay.stopIdleSweep();
       await node.stop();

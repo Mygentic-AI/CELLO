@@ -8,6 +8,9 @@
 import type { RelaySessionState, SessionAssignment } from "./relay-types.js";
 import type { Logger } from "@cello-protocol/interfaces";
 
+// No-op logger used when no logger is injected into InMemoryRelayStore.
+const NOOP_LOGGER: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+
 export interface RelayStore {
   /** Record a new session assignment from the directory. Returns false if session already exists. */
   recordSession(assignment: SessionAssignment, genesisRoot: Uint8Array): boolean;
@@ -40,6 +43,11 @@ const DELIVERY_QUEUE_BOUND = 256;
 export class InMemoryRelayStore implements RelayStore {
   readonly #sessions = new Map<string, RelaySessionState>();
   readonly #deliveryQueues = new Map<string, Array<{ session_id: Uint8Array; leaf_kind: number; sequence_number: number; structure2_cbor: Uint8Array; structure1_cbor: Uint8Array }>>();
+  readonly #logger: Logger;
+
+  constructor(opts?: { logger?: Logger }) {
+    this.#logger = opts?.logger ?? NOOP_LOGGER;
+  }
 
   recordSession(assignment: SessionAssignment, genesisRoot: Uint8Array): boolean {
     const key = Buffer.from(assignment.session_id).toString("hex");
@@ -80,7 +88,7 @@ export class InMemoryRelayStore implements RelayStore {
     }
     if (queue.length >= DELIVERY_QUEUE_BOUND) {
       queue.shift(); // drop oldest per spec (DB-001)
-      console.warn(`[relay] relay_backpressure: delivery queue full for ${pubkeyHex.slice(0, 16)}…, oldest frame dropped`);
+      this.#logger.warn("relay.delivery.queue.full", { pubkeyHex: pubkeyHex.slice(0, 16) });
     }
     queue.push(delivery);
   }
@@ -90,6 +98,26 @@ export class InMemoryRelayStore implements RelayStore {
     if (!queue || queue.length === 0) return [];
     const items = queue.splice(0);
     return items;
+  }
+
+  /**
+   * Test-only: back-date a session's lastActivityAt without going through setSession().
+   *
+   * setSession() always refreshes lastActivityAt to Date.now(), which makes it impossible
+   * to test the idle-sweep logic using only the public API. This method directly sets
+   * the stored timestamp, allowing tests to simulate aged-out sessions without relying
+   * on the aliasing behaviour of getSession() (which returns a live Map reference today
+   * but is not contractually guaranteed to do so).
+   *
+   * Do not call from production code — the method name is intentionally prefixed with
+   * double-underscore to signal test-only use.
+   */
+  __setLastActivityAtForTest(sessionIdHex: string, ts: number): void {
+    const state = this.#sessions.get(sessionIdHex);
+    if (state === undefined) {
+      throw new Error(`__setLastActivityAtForTest: session ${sessionIdHex} not found`);
+    }
+    this.#sessions.set(sessionIdHex, { ...state, lastActivityAt: ts });
   }
 
   /**
@@ -119,10 +147,14 @@ export class InMemoryRelayStore implements RelayStore {
       }
     }
 
-    // Second pass: destroy and log each idle session
+    // Second pass: destroy and log each idle session.
+    // Delete before logging so the log reflects what actually happened — if the
+    // logger throws synchronously, the session has already been removed from memory
+    // and will not leak. Log after delete = "this session was swept", not "we intend
+    // to sweep this session".
     for (const { sessionIdHex, idleDurationMs } of toSweep) {
-      logger.info("relay.session.idle.swept", { sessionId: sessionIdHex, idleDurationMs });
       this.#sessions.delete(sessionIdHex);
+      logger.info("relay.session.idle.swept", { sessionId: sessionIdHex, idleDurationMs });
     }
 
     const sweptCount = toSweep.length;
