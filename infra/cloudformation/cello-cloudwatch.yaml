@@ -462,6 +462,44 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # ── M6B-007 AC-007: cello-relay-alb-5xx — Relay ALB 5xx error rate alarm ────
+  # Fires ops-warning when relay ALB 5xx rate exceeds 5% over 5 minutes.
+  # Metric: AWS/ApplicationELB HTTPCode_ELB_5XX_Count on the relay ALB.
+  # A 5xx spike on the relay ALB indicates the relay container is not accepting
+  # WebSocket connections — this monitors the external-client access path.
+  # ALB name matches the Name property in cello-ecs-relay.yaml RelayAlb resource.
+  # Routes to ops-warning (not ops-critical) — relay sessions degrade gracefully;
+  # clients fall back to reconnect or use another relay in the pool.
+
+  RelayAlb5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-relay-alb-5xx-${Environment}"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO relay ALB 5xx error rate exceeded 5% over 5 minutes.
+        LoadBalancer: cello-relay-${Environment}. External clients cannot connect to
+        the relay via WebSocket. Investigate relay ECS task health and container logs.
+      MetricName: HTTPCode_ELB_5XX_Count
+      Namespace: AWS/ApplicationELB
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Sub "app/cello-relay-${Environment}"
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsWarningTopic
+      OKActions:
+        - !Ref OpsWarningTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
   # ── 10. cello-audit-shipper-buffer-full — AC-001 ─────────────────────────
   # Fires ops-warning when the audit log shipper buffer is at capacity.
   # Custom metric: CELLO/Audit ShipperBufferUtilization (percentage 0-100).

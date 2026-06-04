@@ -191,14 +191,35 @@ Resources:
       GroupDescription: ECS Relay tasks - accepts traffic from ALB only
       VpcId: !Ref Vpc
       SecurityGroupIngress:
+        # Port 4000: relay health check server. Directory polls GET /health.
         - IpProtocol: tcp
           FromPort: 4000
           ToPort: 4000
           SourceSecurityGroupId: !Ref EcsDirectorySecurityGroup
+        # Port 4001: relay libp2p TCP listener. Directory dials for /cello/directory-relay/1.0.0.
+        # Present since commit 40543d5 (us-east-1). Deploying vpc to all regions closes the
+        # secondary-region gap (M6B-007 AC-005).
         - IpProtocol: tcp
           FromPort: 4001
           ToPort: 4001
           SourceSecurityGroupId: !Ref EcsDirectorySecurityGroup
+        # M6B-007 AC-002: port 4000 from AlbSecurityGroup — ALB health checks on Fargate awsvpc
+        # mode originate from ALB IPs (not from within the VPC CIDR), so the AlbSecurityGroup
+        # source is required. Without this the ALB marks relay tasks unhealthy and returns 502
+        # for all WebSocket connections from external clients.
+        - IpProtocol: tcp
+          FromPort: 4000
+          ToPort: 4000
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+        # M6B-007 AC-002 + SI-001: port 4002 from AlbSecurityGroup ONLY.
+        # The relay WebSocket container port must not be directly reachable from the public
+        # internet — only the ALB SG may send traffic to port 4002.
+        # SourceSecurityGroupId (not CidrIp) enforces SI-001: attacker who knows the task IP
+        # cannot bypass the ALB by dialing port 4002 directly.
+        - IpProtocol: tcp
+          FromPort: 4002
+          ToPort: 4002
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
       Tags:
         - Key: Name
           Value: !Sub "cello-ecs-relay-sg-${Environment}"

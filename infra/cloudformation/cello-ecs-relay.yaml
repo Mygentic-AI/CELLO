@@ -4,6 +4,9 @@ Description: >
   IAM roles are defined in cello-iam.yaml and imported via !ImportValue.
   Task role has minimal permissions: Secrets Manager GetSecretValue for relay
   private key only. No KMS, no S3, no directory secret access.
+  M6B-007: adds internet-facing ALB for public WebSocket access on port 4002
+  (ws://relay-{region}.cello.mygentic.ai → ALB port 80 → container port 4002).
+  CELLO_RELAY_WS_LISTEN_ADDR enables the relay WS listener on startup.
 
 Parameters:
   Environment:
@@ -55,6 +58,10 @@ Resources:
           PortMappings:
             - ContainerPort: 4000
               Protocol: tcp
+            # M6B-007: port 4002 is the WebSocket listener forwarded from the relay ALB.
+            # CELLO_RELAY_WS_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4002/ws binds on this port.
+            - ContainerPort: 4002
+              Protocol: tcp
           Environment:
             - Name: CELLO_ENV
               Value: !Ref Environment
@@ -66,6 +73,14 @@ Resources:
               Value: /tmp
             - Name: CELLO_DIRECTORY_PUBKEY
               Value: !Ref DirectoryNodePubkey
+            # M6B-007: enable the relay WebSocket listener on port 4002.
+            # The relay binary (CELLO_RELAY_WS_LISTEN_ADDR support: commit 9beed74)
+            # calls createRelayNode with [listenAddr, wsListenAddr] when this is set,
+            # binding both TCP (4001) and WebSocket (4002) listeners.
+            # External clients dial ws://relay-{region}.cello.mygentic.ai (ALB port 80)
+            # which forwards to this container port.
+            - Name: CELLO_RELAY_WS_LISTEN_ADDR
+              Value: /ip4/0.0.0.0/tcp/4002/ws
           Secrets:
             - Name: NODE_PRIVATE_KEY
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/relay/node-private-key"
@@ -82,8 +97,83 @@ Resources:
             Retries: 3
             StartPeriod: 30
 
+  # ── M6B-007: Relay ALB (internet-facing, HTTP) ──────────────────────────────
+  # Pattern follows cello-ecs-directory.yaml Alb resource exactly.
+  # TLS termination is a future story — plain HTTP on port 80 now, same as directory.
+  # 300-second idle timeout matches directory ALB — prevents silent WebSocket drops
+  # on idle connections (AWS default is 60 seconds, too short for libp2p sessions).
+
+  RelayAlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "cello-relay-${Environment}"
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-public-subnet-a"
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-public-subnet-b"
+      SecurityGroups:
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-alb-sg"
+      # M6B-007: 300-second idle timeout prevents silent WebSocket drops on idle
+      # connections. AWS ALB default is 60 seconds. libp2p sessions survive long
+      # quiet periods; without this the ALB closes the WS connection silently.
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: "300"
+      Tags:
+        - Key: Project
+          Value: cello
+
+  # ── M6B-007: Relay target group on container port 4002 ──────────────────────
+  # Health check uses port 4000 (relay health server) because port 4002 is the
+  # WebSocket-only listener — it does not serve HTTP health check requests.
+  # The ALB health check must hit port 4000 to get a valid HTTP 200 response.
+
+  RelayTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 4002
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      # M6B-007: health check uses port 4000 (health server) not 4002 (WS listener).
+      # On Fargate awsvpc mode, ALB health check packets originate from the ALB IPs
+      # and arrive at the task IP. The EcsRelaySecurityGroup port 4000 ingress from
+      # AlbSecurityGroup (added in cello-vpc.yaml) permits this.
+      HealthCheckPort: "4000"
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      Tags:
+        - Key: Project
+          Value: cello
+
+  # ── M6B-007: HTTP listener port 80 → RelayTargetGroup ───────────────────────
+  # HTTP only — TLS is a future story (cert would be created by cello-route53-relay,
+  # but attaching it to an HTTPS listener here requires the cert ARN which creates
+  # a chicken-and-egg ordering problem). Same pattern as directory ALB listener.
+
+  RelayAlbListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref RelayAlb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref RelayTargetGroup
+
   Service:
     Type: AWS::ECS::Service
+    # DependsOn ensures listener is active before ECS registers targets (AC-001e).
+    DependsOn: RelayAlbListener
     Properties:
       ServiceName: !Sub "cello-relay-${Environment}"
       Cluster: !ImportValue
@@ -108,6 +198,14 @@ Resources:
           SecurityGroups:
             - !ImportValue
               Fn::Sub: "cello-${Environment}-ecs-relay-sg"
+      # M6B-007: LoadBalancers block registers tasks with RelayTargetGroup on deploy/restart.
+      # ECS auto-registers new tasks and deregisters old tasks — no manual target registration.
+      # Port 4000 (health server) is NOT in this block — it is not a load-balanced service port.
+      # Only port 4002 (WS listener) is forwarded through the relay ALB.
+      LoadBalancers:
+        - ContainerName: relay
+          ContainerPort: 4002
+          TargetGroupArn: !Ref RelayTargetGroup
       Tags:
         - Key: Project
           Value: cello
@@ -117,3 +215,15 @@ Outputs:
     Value: !Ref Service
     Export:
       Name: !Sub "cello-${Environment}-relay-service-arn"
+
+  # M6B-007: ALB outputs consumed by deploy.sh Step 13b (cello-route53-relay stack).
+  # AlbDnsName and AlbHostedZoneId are read after Step 11 to pass to the route53 deploy.
+  RelayAlbDnsName:
+    Value: !GetAtt RelayAlb.DNSName
+    Export:
+      Name: !Sub "cello-${Environment}-relay-alb-dns-name"
+
+  RelayAlbHostedZoneId:
+    Value: !GetAtt RelayAlb.CanonicalHostedZoneID
+    Export:
+      Name: !Sub "cello-${Environment}-relay-alb-hosted-zone-id"
