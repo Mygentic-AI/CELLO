@@ -1,7 +1,6 @@
 // CELLO Story Implementation Workflow
 // Usage: pass { storyId: "CELLO-M6B-005", model: "opus" } as args
-// model: "opus" | "sonnet" | full model ID (default: "claude-opus-4-6") — controls sprint coder
-// reviews always use claude-sonnet-4-6
+// model: "opus" | "sonnet" (default: "opus") — controls sprint coder; reviews always use sonnet
 
 export const meta = {
   name: 'cello-story-implementation',
@@ -30,7 +29,7 @@ const idWithoutPrefix = STORY_ID.replace('CELLO-', '')
 
 function detectMilestone(id) {
   for (const m of MILESTONES) {
-    if (id.toLowerCase().startsWith(m.replace('m', 'm') + '-')) return m
+    if (id.toLowerCase().startsWith(m + '-')) return m
   }
   return 'm6'
 }
@@ -142,7 +141,7 @@ Report ALL issues with confidence >= 80. Group: Critical → Important → Mediu
 Include file path and line number for every issue.
 Check that every AC and SI in the story YAML has a corresponding implementation and test.
 Do not summarize or truncate.`,
-    { label: `code-reviewer-r${roundNum}`, phase: 'Review', model: 'us.anthropic.claude-sonnet-4-6', agentType: 'feature-dev:code-reviewer' }
+    { label: `code-reviewer-r${roundNum}`, phase: 'Review', model: 'sonnet', agentType: 'feature-dev:code-reviewer' }
   )
 
   log(`Round ${roundNum} code review complete.`)
@@ -163,7 +162,7 @@ Run gates after fixing (targeted filter only):
   cd ${CLIENT_WORKTREE} && pnpm run typecheck
 
 Commit: "fix(${STORY_ID}): address code review findings round ${roundNum}"`,
-    { label: `fix-code-r${roundNum}`, phase: 'Review', model: 'us.anthropic.claude-sonnet-4-6', agentType: 'cello-sprint-coder' }
+    { label: `fix-code-r${roundNum}`, phase: 'Review', model: 'sonnet', agentType: 'cello-sprint-coder' }
   )
 
   const sprintReviewResult = await agent(
@@ -184,7 +183,7 @@ To see changes:
 
 DO NOT summarize or truncate. Report every finding at every severity (blocking → high → medium → low).
 End with APPROVED or BLOCKED.`,
-    { label: `sprint-reviewer-r${roundNum}`, phase: 'Review', model: 'us.anthropic.claude-sonnet-4-6', agentType: 'cello-sprint-reviewer' }
+    { label: `sprint-reviewer-r${roundNum}`, phase: 'Review', model: 'sonnet', agentType: 'cello-sprint-reviewer' }
   )
 
   log(`Round ${roundNum} sprint review complete.`)
@@ -205,7 +204,7 @@ Run gates after fixing (targeted filter only):
   cd ${CLIENT_WORKTREE} && pnpm run typecheck
 
 Commit: "fix(${STORY_ID}): address sprint review findings round ${roundNum}"`,
-    { label: `fix-sprint-r${roundNum}`, phase: 'Review', model: 'us.anthropic.claude-sonnet-4-6', agentType: 'cello-sprint-coder' }
+    { label: `fix-sprint-r${roundNum}`, phase: 'Review', model: 'sonnet', agentType: 'cello-sprint-coder' }
   )
 
   return { round: roundNum, codeReview: codeReviewResult, sprintReview: sprintReviewResult }
