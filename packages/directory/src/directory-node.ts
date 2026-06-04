@@ -575,7 +575,8 @@ export class CelloDirectoryNode {
             keyProvider: this.#keyProvider,
           }).catch((err: unknown) => {
             const reason = err instanceof Error ? err.message : String(err);
-            // Distinguish config/sync issues (relay not in manifest) from operational failures
+            // Supplementary diagnostic event (in canonical taxonomy, not a story observability AC).
+            // Distinguishes config/sync issues (relay not in manifest) from operational failures
             // (S3 access, signing). Operations team needs to know whether to retry or fix config.
             if (reason.startsWith('RELAY_NOT_IN_MANIFEST:')) {
               this.#logger?.warn("relay.manifest.relay_missing", { relayId, region, reason });
