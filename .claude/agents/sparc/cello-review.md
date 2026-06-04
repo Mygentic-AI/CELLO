@@ -142,10 +142,11 @@ End with:
 
 Read in this order:
 1. `docs/planning/user-stories/{milestone}/outline.md` — **read first**. Every user story folder contains an overview document. It defines the milestone scope, dependency graph, and design decisions that individual stories assume as given. A reviewer who skips it will miss the intent behind individual ACs.
-2. `CONTEXT.md` at the repo root — canonical glossary; any term used differently is a bug
-3. `docs/planning/user-stories/{milestone}/CELLO-{STORY-ID}.yaml` — the story being reviewed
-4. The implementation files named in the story's `components` field
-5. **For M5+ stories that touch infrastructure, IaC, deployment, or AWS:** read `infra/STATE.md` to understand the current real infrastructure state before evaluating the implementation.
+2. `.claude/CLAUDE.md` at the repo root — **system-level invariants**. This is the authority for sovereign node independence, the heavy local client model, repo structure, and deployment discipline. Read it to understand what the system must never violate, not just what it does.
+3. `CONTEXT.md` at the repo root — canonical glossary; any term used differently is a bug
+4. `docs/planning/user-stories/{milestone}/CELLO-{STORY-ID}.yaml` — the story being reviewed
+5. The implementation files named in the story's `components` field
+6. **For M5+ stories that touch infrastructure, IaC, deployment, or AWS:** read `infra/STATE.md` to understand the current real infrastructure state before evaluating the implementation.
 
 If the story depends on other stories (`depends_on`), note which interfaces/types those stories define — the implementation must use them, not reinvent them.
 
@@ -258,6 +259,24 @@ For every observability AC in the story, verify the implementation:
 
 ---
 
+## Implementation Review Step 4d — Architectural assumptions check
+
+For every meaningful design decision in the implementation, ask: **what does this code assume about the world, and where is that assumption authorized?**
+
+Assumptions to look for:
+- **Participant count** — does the implementation assume a fixed number of nodes, participants, or peers? Where does CLAUDE.md authorize that count?
+- **Topology** — does the implementation assume a specific network layout, VPC structure, or connectivity model? Is that topology cloud-agnostic?
+- **Deployment environment** — does the implementation use provider-specific services, SDKs, or networking primitives that would prevent deployment on a different cloud provider or in a new region?
+- **Node availability** — does the implementation assume all nodes are reachable? Is there fallback logic when a node is unavailable?
+- **Client model** — does the implementation treat cello-mcp as a stateless, server-side process? Does it ignore process lifecycle, install size, or local DB concerns that are unique to a heavy local node?
+- **Hardcoded values** — does the implementation hardcode endpoints, counts, regions, or provider identifiers that should be configuration or discovered at runtime?
+
+For each assumption found: locate where CLAUDE.md or the story itself explicitly authorizes it. If you cannot find authorization, that is a **[blocking]** finding — not medium, not low. An unauthorized assumption is a violation of the system's design intent regardless of whether tests pass and regardless of whether any AC mentions it.
+
+**The key question:** *"If this implementation were deployed in a brand-new region on a different cloud provider with no manual steps, would it work correctly?"* If the answer is no — and CLAUDE.md does not explicitly authorize the constraint that causes it to fail — that is blocking.
+
+---
+
 ## Implementation Review Step 5 — Code discipline check
 
 **Scope (YAGNI):**
@@ -312,10 +331,10 @@ If the story deploys CloudFormation stacks, modifies AWS resources, or calls `./
 
 Report findings using severity levels:
 
-- **[blocking]** — must be fixed before this story is considered done. AC not covered, SI negative test missing, transport-path assertion missing for integration/e2e protocol ACs, package boundary violation, gate sequence failure. For M4+ stories: observability event name mismatch, missing required context fields, `console.log` in implementation code, dropped correlationId.
+- **[blocking]** — must be fixed before this story is considered done. AC not covered, SI negative test missing, transport-path assertion missing for integration/e2e protocol ACs, package boundary violation, gate sequence failure, unauthorized architectural assumption (Step 4d). For M4+ stories: observability event name mismatch, missing required context fields, `console.log` in implementation code, dropped correlationId.
 - **[high]** — security surface, key material leak path, or correctness bug. Must be fixed before the next story begins.
-- **[medium]** — code quality, naming, style inconsistency with the rest of the codebase. Fix before milestone close.
-- **[low]** — informational. Report to user; does not block.
+- **[medium]** — an issue that would cause a future reader to make a wrong decision or write incorrect code. Naming or structural problems that create genuine ambiguity about intent. Scope violations (code that no AC requires). Fix before milestone close. **A finding is not medium just because it is not blocking or high — it must clear this bar.**
+- **[low]** — style, formatting, or minor naming inconsistency where reasonable engineers could disagree. Late-round findings that are purely cosmetic. A findings list of only lows means the story is effectively done.
 
 End your report with one of:
 - **APPROVED** — no blocking or high issues; story is done

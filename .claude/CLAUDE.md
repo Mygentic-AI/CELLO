@@ -6,6 +6,14 @@ CELLO is a peer-to-peer identity and trust layer for agent-to-agent communicatio
 
 **CELLO is a federated system with sovereign nodes.** Every directory node runs in a different geographic region, independently. Nodes are distributed across cloud providers (AWS, GCP, Azure) for resilience, but there are only three cloud providers and many regions — multiple nodes will share a cloud provider, just never a region. When Andre says "add a node," he means add a node in a new region. There is no reason to run two nodes in the same region — if the region goes down, both go down, which defeats the entire purpose. Do not make assumptions that default to single-region scaling patterns. Every infrastructure, cost, and architecture decision must be evaluated through the lens of: one node = one region = one independent deployment.
 
+**Sovereign node invariant — non-negotiable.** Directory nodes are sovereign by design. Their independence serves three distinct purposes that must all be preserved simultaneously:
+
+- **Security** — no single node can complete a threshold ceremony alone. A compromised node cannot forge signatures. Any implementation that allows a single node to produce a valid ceremony output is a security violation, regardless of whether tests pass.
+- **Redundancy** — the client tolerates node failures. If a node is unreachable, the client falls back to others. The threshold is specifically designed to survive node outages. Any implementation that assumes all nodes are always available, or that silently fails when a node is down rather than routing around it, violates this invariant.
+- **Choice** — operators are not locked to a single cloud provider or region. The client selects from available nodes. Any implementation that introduces provider-specific networking, hardcodes endpoints, or makes cross-provider deployment impossible violates this invariant.
+
+**Availability and fallback are first-class protocol concerns, not operational nice-to-haves.** Health checks, manifest polling, failover logic, and graceful degradation are load-bearing features. Deferring them is not acceptable. An implementation that works only when all nodes are healthy is incomplete.
+
 `docs/planning/` is an **Obsidian vault** — the primary design record. All architectural decisions and discussion logs live here.
 
 ---
@@ -13,6 +21,37 @@ CELLO is a peer-to-peer identity and trust layer for agent-to-agent communicatio
 ## Required Reading
 
 **Read `CONTEXT.md` at the repo root before any implementation work.** Canonical glossary — terms, package structure, interface contracts. Using terms not defined there is a bug.
+
+---
+
+## Repository Structure
+
+CELLO is split across two repositories:
+
+- **`trustless-cello`** (`/Users/andrep/Documents/code/trustless-cello`) — directory node, relay node, infrastructure (CloudFormation/IaC), operations agent, e2e tests, CI/CD pipelines. This is the server-side and infrastructure repo.
+- **`cello-client`** (`/Users/andrep/Documents/code/cello-client`) — protocol core (`core/client`), cryptography (`core/crypto`), transport (`core/transport`), and all adapters (`core/adapter-claude-code`, etc.). This is what operators install and run locally.
+
+Stories that touch both repos (e.g. a protocol change that requires a directory update AND a client update) require worktrees in both repos. The workflow creates them automatically. Never assume a change is confined to one repo until you have read both sides.
+
+---
+
+## The Client Is a Heavy Local Node — Not a Thin Wrapper
+
+Most MCP servers are thin wrappers around an HTTP API: they receive a tool call, make an HTTP request, return the result. Upgrading the server is transparent to the client — operators notice nothing.
+
+**cello-mcp is fundamentally different.** It is a locally-installed protocol node that runs on the operator's machine and contains:
+- Cryptographic operations (Ed25519 signing, FROST ceremony participation)
+- A libp2p transport layer with persistent peer identity
+- A local SQLite database (SQLCipher) holding key shares, session state, and conversation history
+- FROST share state tied to specific directory nodes
+
+This has consequences that must be understood before making any implementation decision:
+
+- **Process lifecycle is the operator's concern.** cello-mcp is a long-running process that holds a SQLite write lock. Orphan processes compete for the lock and corrupt ceremony state. There is no server-side process manager cleaning this up.
+- **Install time and install size matter.** Operators wait for `npm install` on every version bump. A dependency that compiles from source adds 20-40 seconds to every install. This is a user-facing cost, not an abstract metric.
+- **Upgrades are not transparent.** A breaking protocol change requires every operator to upgrade their local binary before they can communicate with updated peers. There is no server-side rollout. Compatibility is a bilateral contract between client versions.
+- **Database migration is client-side.** Schema changes to the local SQLite DB must be applied on the operator's machine. Migrations that fail silently or corrupt existing data are unrecoverable without manual intervention.
+- **Patterns for stateless HTTP wrappers do not apply.** If an implementation decision feels natural for a thin HTTP-wrapper MCP server, pause and ask whether it still makes sense for a stateful local process with crypto, a DB, and a persistent network identity.
 
 ---
 
