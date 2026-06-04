@@ -4,12 +4,12 @@
 
 export const meta = {
   name: 'cello-story-implementation',
-  description: 'Implement a single CELLO story: preflight → worktree → sprint coder → review rounds (exit on APPROVED)',
+  description: 'Implement a single CELLO story: preflight → worktree → sprint coder → review rounds (exit when both reviewers agree all findings are low)',
   phases: [
     { title: 'Preflight', detail: 'Verify story YAML exists — abort instantly if deleted/missing' },
     { title: 'Setup', detail: 'Create git worktrees in both repos (idempotent)' },
     { title: 'Implement', detail: 'Sprint coder: full SPARC cycle' },
-    { title: 'Review', detail: 'Code review → fix → sprint review → fix (up to 3 rounds, exits on APPROVED)' },
+    { title: 'Review', detail: 'Code review → fix → sprint review → fix → consensus gate (up to 3 rounds, exits when all findings low)' },
   ],
 }
 
@@ -207,18 +207,47 @@ Commit: "fix(${STORY_ID}): address sprint review findings round ${roundNum}"`,
     { label: `fix-sprint-r${roundNum}`, phase: 'Review', model: 'sonnet', agentType: 'cello-sprint-coder' }
   )
 
-  return { round: roundNum, codeReview: codeReviewResult, sprintReview: sprintReviewResult }
+  // Aggregator: consensus gate — exit only if BOTH reviewers found nothing above low
+  const codeReviewText = typeof codeReviewResult === 'string' ? codeReviewResult : JSON.stringify(codeReviewResult)
+  const sprintReviewText = typeof sprintReviewResult === 'string' ? sprintReviewResult : JSON.stringify(sprintReviewResult)
+
+  const gate = await agent(
+    `You are a severity aggregator. Read BOTH review outputs below and answer ONE question:
+Did either reviewer surface any finding at severity ABOVE low (i.e. blocking, high, or medium)?
+
+CODE REVIEWER OUTPUT:
+${codeReviewText}
+
+SPRINT REVIEWER OUTPUT:
+${sprintReviewText}
+
+Rules:
+- If EITHER reviewer has at least one finding at blocking, high, or medium severity → return { "allLow": false }
+- If ALL findings across BOTH reviewers are low/trivial (or there are zero findings) → return { "allLow": true }
+- When in doubt, return { "allLow": false }`,
+    { label: `gate-r${roundNum}`, phase: 'Review', model: 'haiku', schema: { type: 'object', properties: { allLow: { type: 'boolean' } }, required: ['allLow'] } }
+  )
+
+  const canExit = gate && gate.allLow === true
+  return { round: roundNum, canExit, codeReview: codeReviewResult, sprintReview: sprintReviewResult }
 }
 
-const round1 = await runRound(1)
-const round2 = await runRound(2)
-const round3 = await runRound(3)
+const rounds = []
+for (let i = 1; i <= 3; i++) {
+  const result = await runRound(i)
+  rounds.push(result)
+  if (result.canExit) {
+    log(`All findings low/trivial after round ${i}. Exiting early.`)
+    break
+  }
+  if (i < 3) log(`Findings above low in round ${i}. Continuing to round ${i + 1}.`)
+}
 
-log('All 3 rounds complete.')
+log(`Done — ${rounds.length} round(s) completed.`)
 
 return {
   storyId: STORY_ID,
   worktrees: { trustlessCello: WORKTREE_PATH, celloClient: CLIENT_WORKTREE },
-  rounds: [round1, round2, round3],
+  rounds,
   status: 'done',
 }
