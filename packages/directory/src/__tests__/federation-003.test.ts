@@ -680,11 +680,14 @@ describe("FEDERATION-003 SI-003 (endpoint guard): CelloDirectoryNode rejects rel
       const tbs = buildRelayRegistrationTbs(victimRelayId, victimRelayId, timestamp);
       const attackerSignature = await attackerKp.sign(tbs); // wrong key!
 
+      // CELLO-M6B-006: include health_check_url so the frame passes the missing_fields
+      // guard and reaches the signature verification step (the adversarial condition under test).
       stream.send(lp.encode.single(CBOR_ENC.encode({
         type: "relay_register",
         relay_id: victimRelayId,
         public_key_hex: victimRelayId,
         region: "us-east-1",
+        health_check_url: "http://127.0.0.1:4000/health",
         timestamp,
         signature: attackerSignature,
       })));

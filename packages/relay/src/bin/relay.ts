@@ -320,6 +320,7 @@ if (directoryMultiaddr) {
   directoryAdapter = new NetworkDirectoryAdapter({
     directoryPeerId: dirPeerId,
     directoryMultiaddrs: [directoryMultiaddr],
+    logger,
   });
   logger.info("adapter.initialised", { adapterName: "NetworkDirectoryAdapter", directoryMultiaddr, env: celloEnv });
 }
@@ -370,11 +371,7 @@ if (directoryAdapter) {
     });
 
     if (regResult.ok) {
-      if (regResult.alreadyRegistered) {
-        logger.info("relay.already.registered", { relayId, region: awsRegion });
-      } else {
-        logger.info("relay.registered", { relayId, region: awsRegion });
-      }
+      // relay.registered / relay.already.registered are logged by the adapter (AC-002).
       registered = true;
       break;
     }

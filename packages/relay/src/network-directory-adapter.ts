@@ -16,6 +16,7 @@ import * as lp from "it-length-prefixed";
 import type { KeyProvider } from "@cello-protocol/crypto";
 import { buildRelayRegistrationTbs } from "@cello-protocol/crypto";
 import type { CelloNode } from "@cello-protocol/transport";
+import type { Logger } from "@cello-protocol/interfaces";
 import type { DirectoryAdapter } from "./relay-node.js";
 import type { SealData } from "./relay-types.js";
 
@@ -25,16 +26,21 @@ const DIRECTORY_RELAY_PROTOCOL_ID = "/cello/directory-relay/1.0.0";
 export interface NetworkDirectoryAdapterOptions {
   directoryPeerId: string;
   directoryMultiaddrs: string[];
+  /** Optional logger — when provided, relay.registered / relay.already.registered are
+   *  logged at INFO with { relayId, region } on successful registration (AC-002). */
+  logger?: Logger;
 }
 
 export class NetworkDirectoryAdapter implements DirectoryAdapter {
   readonly #directoryPeerId: string;
   readonly #directoryMultiaddrs: string[];
+  readonly #logger: Logger | undefined;
   #node: CelloNode | null = null;
 
   constructor(opts: NetworkDirectoryAdapterOptions) {
     this.#directoryPeerId = opts.directoryPeerId;
     this.#directoryMultiaddrs = opts.directoryMultiaddrs;
+    this.#logger = opts.logger;
   }
 
   connect(node: CelloNode): void {
@@ -114,6 +120,12 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
           // already registered with the same key (idempotent re-registration). This allows
           // the relay to log relay.already.registered rather than relay.registered (AC-002).
           const alreadyRegistered = resp["already_registered"] === true;
+          // AC-002: log relay.registered or relay.already.registered at INFO with { relayId, region }
+          if (alreadyRegistered) {
+            this.#logger?.info("relay.already.registered", { relayId, region });
+          } else {
+            this.#logger?.info("relay.registered", { relayId, region });
+          }
           return { ok: true, alreadyRegistered };
         }
         if (resp["type"] === "relay_register_error") {

@@ -169,9 +169,14 @@ async function defaultPingFn(url: string): Promise<PingResult> {
 
 /**
  * Build canonical JSON of the manifest body (excludes signedBy and signature).
- * Canonical JSON: sorted keys, no whitespace, UTF-8 encoded per RELAY-001 signing rules.
+ * Canonical JSON: sorted keys at the TOP LEVEL ONLY (relays, updatedAt, version).
+ * Relay entry fields are NOT sorted — only the top-level keys are sorted.
+ * UTF-8 encoded per RELAY-001 signing rules.
+ *
+ * Exported so that infra/sign-manifest.sh and tests can use the exact same
+ * construction and verify round-trip compatibility (AC-007b).
  */
-function buildCanonicalPayload(manifest: RelayPoolManifest): Uint8Array {
+export function buildCanonicalPayload(manifest: RelayPoolManifest): Uint8Array {
   const body: Record<string, unknown> = {
     version: manifest.version,
     updatedAt: manifest.updatedAt,

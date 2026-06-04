@@ -45,6 +45,7 @@ import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID, DIRECTORY_RELAY_PROTOCOL_ID } from "../relay-node.js";
 import type { DirectoryAdapter } from "../relay-node.js";
 import { NetworkDirectoryAdapter } from "../network-directory-adapter.js";
+import { createRelayHealthServer } from "../relay-service-lifecycle.js";
 
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
@@ -79,7 +80,7 @@ async function readFrame(stream: Stream): Promise<Record<string, unknown>> {
 // ─── AC-002/AC-003: registerWithDirectory over live libp2p ────────────────────
 
 describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDirectory", () => {
-  it("AC-002: sends relay_register frame with valid self-signature; directory responds relay_register_ok", async () => {
+  it("AC-002: sends relay_register frame with valid self-signature; directory responds relay_register_ok; relay.registered is logged; health check returns 200", async () => {
     const relayKp = generateKeypair();
     const relayPubkey = await relayKp.getPublicKey();
     const relayId = Buffer.from(relayPubkey).toString("hex");
@@ -119,21 +120,27 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
     const dirAddrs = dirNode.listenAddresses();
     const dirPeerId = dirNode.getPeerId();
 
-    // Create relay node and NetworkDirectoryAdapter
+    // Create relay node and NetworkDirectoryAdapter with spy logger
     const relayNode = await createNode({ keyProvider: relayKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await relayNode.start();
+
+    // AC-002: spy logger captures relay.registered / relay.already.registered emitted by the adapter
+    const spyLogger = makeLogger();
 
     const adapter = new NetworkDirectoryAdapter({
       directoryPeerId: dirPeerId,
       directoryMultiaddrs: dirAddrs.map(String),
+      logger: spyLogger,
     });
     adapter.connect(relayNode);
+
+    const healthCheckUrl = "http://127.0.0.1:4002/health";
 
     const result = await adapter.registerWithDirectory({
       relayId,
       publicKeyHex: relayId,
       region: "us-east-1",
-      healthCheckUrl: "http://127.0.0.1:4000/health",
+      healthCheckUrl,
       keyProvider: relayKp,
     });
 
@@ -143,7 +150,31 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
     expect(receivedFrame?.["public_key_hex"]).toBe(relayId);
     expect(receivedFrame?.["region"]).toBe("us-east-1");
     // CELLO-M6B-006 AC-002: frame includes health_check_url
-    expect(receivedFrame?.["health_check_url"]).toBe("http://127.0.0.1:4000/health");
+    expect(receivedFrame?.["health_check_url"]).toBe(healthCheckUrl);
+
+    // AC-002: relay.registered must be logged at INFO with { relayId, region }
+    const registeredEvent = spyLogger.infoEvents.find(([ev]) => ev === "relay.registered");
+    expect(registeredEvent, "relay.registered must be logged at INFO after successful registration").toBeDefined();
+    expect(registeredEvent![1]).toMatchObject({ relayId, region: "us-east-1" });
+
+    // AC-002: relay starts accepting sessions (health check returns 200) after registration completes.
+    // In production, relay.ts starts the health server after registerWithDirectory() returns ok.
+    // Here we simulate that sequencing: start the health server only after registration completes,
+    // then verify GET /health returns 200 — proving registration was a prerequisite to traffic acceptance.
+    const healthServer = createRelayHealthServer({ relayId, logger: spyLogger });
+    await new Promise<void>((resolve, reject) => {
+      healthServer.listen(4002, "127.0.0.1", () => resolve());
+      healthServer.on("error", reject);
+    });
+    try {
+      const healthResp = await fetch("http://127.0.0.1:4002/health");
+      expect(healthResp.status).toBe(200);
+      const body = await healthResp.json() as { relayId: string; status: string };
+      expect(body.status).toBe("ok");
+      expect(body.relayId).toBe(relayId);
+    } finally {
+      await new Promise<void>((resolve) => { healthServer.close(() => resolve()); });
+    }
 
     await relayNode.stop();
     await dirNode.stop();

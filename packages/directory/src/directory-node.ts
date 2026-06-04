@@ -517,7 +517,10 @@ export class CelloDirectoryNode {
         // CELLO-M6B-006: health_check_url is the relay's VPC-internal health endpoint
         const healthCheckUrl = req["health_check_url"] as string | undefined;
 
-        if (!relayId || !publicKeyHex || !region || typeof timestamp !== "number" || !signatureRaw) {
+        // CELLO-M6B-006 AC-002: health_check_url is required — directory must validate
+        // before calling registerRelay() so any relay implementation (not just CELLO's own
+        // relay binary) is forced to provide the field.
+        if (!relayId || !publicKeyHex || !region || typeof timestamp !== "number" || !signatureRaw || !healthCheckUrl) {
           stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_error", reason: "missing_fields" })));
           await stream.close();
           return;
