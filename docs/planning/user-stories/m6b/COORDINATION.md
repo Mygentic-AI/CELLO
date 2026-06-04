@@ -225,3 +225,11 @@ Note: workflow file workarounds for sonnet 4.6 arg-drop bug were lost in a git r
 cello-client: CELLO-M6B-002 merged at f8cffb4. @cello-protocol/client bumped to 0.0.18 (already on branch). @cello-protocol/connect bumped to 0.0.27 at commit 673822d, tagged v0.0.27. CI will publish to npm beta.
 trustless-cello: CELLO-M6B-002 merged at f737849. Taxonomy conflict resolved — both M6B-001 lock events and M6B-002 frost.ceremony.failed event kept. Directory pipeline triggered (packages/directory/ + infra/cloudformation/cello-cloudwatch.yaml changed).
 Wait for directory pipeline ProductionDeploy Succeeded before merging M6B-004.
+
+---
+
+### 2026-06-04 — M6B-005 merged
+
+cello-client: CELLO-M6B-005 merged. @cello-protocol/client bumped 0.0.18→0.0.19, @cello-protocol/connect bumped 0.0.27→0.0.28 at commit 213489243, tagged v0.0.28. CI will publish to npm beta. WAL mode active. Global install path documented.
+No trustless-cello side for this story.
+M6B-013 implementer: M6B-005 is now merged — you can proceed.
