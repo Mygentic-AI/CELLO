@@ -139,8 +139,12 @@ acceptance_criteria:
     component_under_test: adapter-claude-code
     notes: "The order matters: kill prior → open DB. If the DB opens first,
       the lock contention causes the 30s startup timeout even with this fix.
-      Use child_process.spawn to capture stderr; assert event ordering from
-      the log stream."
+      AUTOMATED TEST LIMITATION: The integration test provides partial coverage by
+      verifying event ordering in stderr but does not spawn a real SQLCipher-holding
+      process (processA). Full validation requires manual verification — see
+      cello-m6b-001-integration.test.ts header for the complete procedure. The
+      automated test ensures code ordering is correct; manual verification ensures
+      the SQLCipher lock contention bug does not return."
 
   - id: AC-005
     given: "The M7 multi-agent case: two named agents 'alice' and 'bob' are
@@ -182,6 +186,15 @@ observability:
         signal can be "SIGTERM" (normal exit) or "SIGKILL" (escalation after 5s
         timeout). The SIGKILL escalation case should be logged at warn level to
         distinguish a force-kill from a clean exit.
+    - name: client.startup.lock.acquired
+      level: info
+      trigger: "When the current process successfully writes its PID to the lock file"
+      context_fields: [pid]
+      correlationId: false
+      notes: >
+        Fired after killing any prior process (if found) and successfully writing
+        the lock file. Signals that this process is now the sole cello-mcp instance
+        for this agent.
     - name: client.startup.lock.released
       level: info
       trigger: "When the lock file is removed on exit"
@@ -189,8 +202,8 @@ observability:
       correlationId: false
   error_events: []
   notes: >
-    client.startup.prior.process.killed and client.startup.lock.released must be
-    added to the canonical event taxonomy in
+    client.startup.prior.process.killed, client.startup.lock.acquired, and
+    client.startup.lock.released must be added to the canonical event taxonomy in
     docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
     All cello-mcp startup events use the client.startup.* namespace — do not use
     bare startup.* names.
