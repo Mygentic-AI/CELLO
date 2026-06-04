@@ -248,3 +248,10 @@ No cello-client side for this story.
 trustless-cello: CELLO-M6B-006 merged at 3068aaa. Relay auto-registration on startup active. Relay transport key in Secrets Manager (cello/dev/relay/transport-key). Both relay pipeline and directory pipeline triggered.
 No cello-client side for this story.
 M6B-007 and M6B-008 are now unblocked (pending pipeline completion).
+
+---
+
+### 2026-06-04 — M6B-012 merged
+
+trustless-cello: CELLO-M6B-012 merged. PERSIST-019 AC-003 Uint8Array round-trip tests added. Directory pipeline triggered (test-only change).
+No cello-client side.
