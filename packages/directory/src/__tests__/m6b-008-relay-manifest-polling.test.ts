@@ -212,8 +212,8 @@ describe("CELLO-M6B-008: RelayPoolManager manifest polling", () => {
     const noopEvent = logger.events.find(e => e.name === "relay.manifest.poll.noop");
     expect(noopEvent).toBeDefined();
     expect(noopEvent?.context.currentVersion).toBe(1);
-    // I-2: receivedVersion must be present in the event context (required field per taxonomy)
-    expect(noopEvent?.context.receivedVersion).toBeDefined();
+    // receivedVersion must match the pre-poll snapshot (versionBefore = 1 here)
+    expect(noopEvent?.context.receivedVersion).toBe(1);
     expect(mgr.currentVersion).toBe(1);
 
     mgr.stopPolling();
@@ -270,6 +270,8 @@ describe("CELLO-M6B-008: RelayPoolManager manifest polling", () => {
     expect(failedEvent).toBeDefined();
     // reason must be the raw S3 error — not a wrapped "Manifest load failed after N attempts: ..." string
     expect(failedEvent?.context.reason).toBe("S3 unavailable");
+    // currentVersion is a required context field per observability spec
+    expect(failedEvent?.context.currentVersion).toBeDefined();
     expect(callCount).toBe(2);
 
     // relay.manifest.load.failed must NOT fire during polling — that ERROR is suppressed
@@ -424,6 +426,8 @@ describe("CELLO-M6B-008: RelayPoolManager manifest polling", () => {
     const pollFailedEvent = logger.events.find(e => e.name === "relay.manifest.poll.failed");
     expect(pollFailedEvent).toBeDefined();
     expect(pollFailedEvent?.context.reason).toMatch(/signature/i);
+    // currentVersion is a required context field per observability spec
+    expect(pollFailedEvent?.context.currentVersion).toBeDefined();
 
     const eventCountAfterBadPoll = logger.events.length;
     logger.events.length = 0;
