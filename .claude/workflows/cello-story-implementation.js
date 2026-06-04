@@ -1,26 +1,58 @@
 // CELLO Story Implementation Workflow
-// Usage: pass { storyId: "CELLO-M6B-005" } as args
-// This is the FULL workflow: worktree creation + initial implementation + 3 review rounds
+// Usage: pass { storyId: "CELLO-M6B-005", model: "opus" } as args
+// model: "opus" | "sonnet" | full model ID (default: "claude-opus-4-6") — controls sprint coder
+// reviews always use claude-sonnet-4-6
 
 export const meta = {
   name: 'cello-story-implementation',
-  description: 'Implement a single CELLO story: worktree → sprint coder → 3 rounds of (code review → fix → sprint review → fix)',
+  description: 'Implement a single CELLO story: preflight → worktree → sprint coder → review rounds (exit on APPROVED)',
   phases: [
-    { title: 'Setup', detail: 'Create git worktrees in both repos (idempotent — skips if already present)' },
-    { title: 'Implement', detail: 'Sprint coder: full SPARC cycle, initial implementation' },
-    { title: 'Round 1', detail: 'Code review → fix → sprint review → fix' },
-    { title: 'Round 2', detail: 'Code review → fix → sprint review → fix' },
-    { title: 'Round 3', detail: 'Code review → fix → sprint review → fix' },
+    { title: 'Preflight', detail: 'Verify story YAML exists — abort instantly if deleted/missing' },
+    { title: 'Setup', detail: 'Create git worktrees in both repos (idempotent)' },
+    { title: 'Implement', detail: 'Sprint coder: full SPARC cycle' },
+    { title: 'Review', detail: 'Code review → fix → sprint review → fix (up to 3 rounds, exits on APPROVED)' },
   ],
 }
 
-const STORY_ID = args && args.storyId ? args.storyId : 'CELLO-M6B-005'
+// ─── ARGS NORMALIZATION ──────────────────────────────────────────────────────
+const CODER_MODEL = args && args.model ? args.model : 'opus'
+const RAW_ID = args && args.storyId ? args.storyId : 'CELLO-M6B-005'
+const STORY_ID = RAW_ID.startsWith('CELLO-') ? RAW_ID : `CELLO-${RAW_ID}`
 const REPO = '/Users/andrep/Documents/code/trustless-cello'
 const CLIENT_REPO = '/Users/andrep/Documents/code/cello-client'
 const WORKTREE_BRANCH = STORY_ID
 const WORKTREE_PATH = `${REPO}/.claude/worktrees/${STORY_ID}`
 const CLIENT_WORKTREE = `${CLIENT_REPO}/.claude/worktrees/${STORY_ID}`
-const STORY_YAML = `${REPO}/docs/planning/user-stories/m6b/${STORY_ID}.yaml`
+
+// Auto-detect milestone directory from story ID (M6B-005 → m6b, DEMO-001 → m6, M6-E2E-001 → m6)
+const MILESTONES = ['m9', 'm7', 'm6b', 'm6', 'm5', 'm4', 'm3', 'm2', 'm1', 'm0']
+const idWithoutPrefix = STORY_ID.replace('CELLO-', '')
+
+function detectMilestone(id) {
+  for (const m of MILESTONES) {
+    if (id.toLowerCase().startsWith(m.replace('m', 'm') + '-')) return m
+  }
+  return 'm6'
+}
+
+const MILESTONE_DIR = detectMilestone(idWithoutPrefix)
+const STORY_YAML = `${REPO}/docs/planning/user-stories/${MILESTONE_DIR}/${STORY_ID}.yaml`
+
+// ─── PREFLIGHT ───────────────────────────────────────────────────────────────
+phase('Preflight')
+const preflight = await agent(
+  `Check if this file exists: ${STORY_YAML}
+If it exists, return: { "exists": true }
+If it does NOT exist, return: { "exists": false, "reason": "Story YAML not found" }`,
+  { label: 'preflight-check', phase: 'Preflight', model: 'haiku', schema: { type: 'object', properties: { exists: { type: 'boolean' }, reason: { type: 'string' } }, required: ['exists'] } }
+)
+
+if (!preflight || !preflight.exists) {
+  log(`ABORT: ${STORY_YAML} does not exist. Story was likely deleted — nothing to implement.`)
+  return { storyId: STORY_ID, status: 'skipped', reason: preflight && preflight.reason || 'Story YAML not found' }
+}
+
+log(`Story YAML confirmed. Proceeding with ${STORY_ID}.`)
 
 const WORKTREE_CONTEXT = `
 EXISTING WORKTREES (do NOT recreate):
@@ -61,7 +93,7 @@ await agent(
 
   Verify both worktrees exist with: git worktree list in each repo.
   Report which were created vs already present.`,
-  { label: 'create-worktrees', phase: 'Setup' }
+  { label: 'create-worktrees', phase: 'Setup', model: 'haiku' }
 )
 
 // ─── INITIAL IMPLEMENTATION ───────────────────────────────────────────────────
@@ -87,13 +119,13 @@ All gates must be clean before committing.
 Commit with: "feat(${STORY_ID}): <one-line summary>"
 
 Return: files changed, gate results, commit hash, assumptions made.`,
-  { label: 'sprint-coder-initial', phase: 'Implement', agentType: 'cello-sprint-coder' }
+  { label: 'sprint-coder-initial', phase: 'Implement', model: CODER_MODEL, agentType: 'cello-sprint-coder' }
 )
 
-// ─── ROUND HELPER ─────────────────────────────────────────────────────────────
-async function runRound(roundNum) {
-  phase(`Round ${roundNum}`)
+// ─── REVIEW ROUNDS (exit early on APPROVED) ──────────────────────────────────
+phase('Review')
 
+async function runRound(roundNum) {
   const codeReviewResult = await agent(
     `Review the implementation of ${STORY_ID} for bugs, logic errors, security vulnerabilities, code quality, and project conventions.
 
@@ -110,7 +142,7 @@ Report ALL issues with confidence >= 80. Group: Critical → Important → Mediu
 Include file path and line number for every issue.
 Check that every AC and SI in the story YAML has a corresponding implementation and test.
 Do not summarize or truncate.`,
-    { label: `code-reviewer-round-${roundNum}`, phase: `Round ${roundNum}`, agentType: 'feature-dev:code-reviewer' }
+    { label: `code-reviewer-r${roundNum}`, phase: 'Review', model: 'us.anthropic.claude-sonnet-4-6', agentType: 'feature-dev:code-reviewer' }
   )
 
   log(`Round ${roundNum} code review complete.`)
@@ -131,10 +163,8 @@ Run gates after fixing (targeted filter only):
   cd ${CLIENT_WORKTREE} && pnpm run typecheck
 
 Commit: "fix(${STORY_ID}): address code review findings round ${roundNum}"`,
-    { label: `fix-code-review-round-${roundNum}`, phase: `Round ${roundNum}`, agentType: 'cello-sprint-coder' }
+    { label: `fix-code-r${roundNum}`, phase: 'Review', model: 'us.anthropic.claude-sonnet-4-6', agentType: 'cello-sprint-coder' }
   )
-
-  log(`Round ${roundNum} code review fixes applied.`)
 
   const sprintReviewResult = await agent(
     `You are the CELLO sprint reviewer. Review the implementation of story ${STORY_ID}.
@@ -154,20 +184,24 @@ To see changes:
 
 DO NOT summarize or truncate. Report every finding at every severity (blocking → high → medium → low).
 End with APPROVED or BLOCKED.`,
-    { label: `sprint-reviewer-round-${roundNum}`, phase: `Round ${roundNum}`, agentType: 'cello-sprint-reviewer' }
+    { label: `sprint-reviewer-r${roundNum}`, phase: 'Review', model: 'us.anthropic.claude-sonnet-4-6', agentType: 'cello-sprint-reviewer' }
   )
 
   log(`Round ${roundNum} sprint review complete.`)
 
-  await agent(
-    `You are the CELLO sprint coder. Fix ALL findings from the sprint reviewer for story ${STORY_ID}.
+  const reviewText = typeof sprintReviewResult === 'string' ? sprintReviewResult : JSON.stringify(sprintReviewResult)
+  const approved = reviewText.includes('APPROVED')
+
+  if (!approved) {
+    await agent(
+      `You are the CELLO sprint coder. Fix ALL findings from the sprint reviewer for story ${STORY_ID}.
 
 ${WORKTREE_CONTEXT}
 
 SPRINT REVIEWER FINDINGS:
-${typeof sprintReviewResult === 'string' ? sprintReviewResult : JSON.stringify(sprintReviewResult)}
+${reviewText}
 
-Fix every finding — blocking, high, medium, AND low. No exceptions regardless of APPROVED/BLOCKED.
+Fix every finding — blocking, high, medium, AND low. No exceptions.
 
 Run gates after fixing (targeted filter only):
   cd ${CLIENT_WORKTREE} && pnpm --filter @cello-protocol/client run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
@@ -175,23 +209,28 @@ Run gates after fixing (targeted filter only):
   cd ${CLIENT_WORKTREE} && pnpm run typecheck
 
 Commit: "fix(${STORY_ID}): address sprint review findings round ${roundNum}"`,
-    { label: `fix-sprint-review-round-${roundNum}`, phase: `Round ${roundNum}`, agentType: 'cello-sprint-coder' }
-  )
+      { label: `fix-sprint-r${roundNum}`, phase: 'Review', model: 'us.anthropic.claude-sonnet-4-6', agentType: 'cello-sprint-coder' }
+    )
+  }
 
-  log(`Round ${roundNum} complete.`)
-  return { round: roundNum, codeReview: codeReviewResult, sprintReview: sprintReviewResult }
+  return { round: roundNum, approved, codeReview: codeReviewResult, sprintReview: sprintReviewResult }
 }
 
-// ─── THREE ROUNDS ─────────────────────────────────────────────────────────────
-const round1 = await runRound(1)
-const round2 = await runRound(2)
-const round3 = await runRound(3)
-
-log('All 3 rounds complete.')
+let finalResult = null
+for (let i = 1; i <= 3; i++) {
+  const result = await runRound(i)
+  finalResult = result
+  if (result.approved) {
+    log(`APPROVED at round ${i}. Done.`)
+    break
+  }
+  if (i < 3) log(`BLOCKED after round ${i}. Starting round ${i + 1}.`)
+}
 
 return {
   storyId: STORY_ID,
   worktrees: { trustlessCello: WORKTREE_PATH, celloClient: CLIENT_WORKTREE },
-  rounds: [round1, round2, round3],
-  status: 'done',
+  finalRound: finalResult.round,
+  approved: finalResult.approved,
+  status: finalResult.approved ? 'approved' : 'max-rounds-reached',
 }
