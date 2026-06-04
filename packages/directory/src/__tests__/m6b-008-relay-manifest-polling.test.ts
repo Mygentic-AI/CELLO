@@ -268,8 +268,15 @@ describe("CELLO-M6B-008: RelayPoolManager manifest polling", () => {
     await vi.advanceTimersByTimeAsync(200);
     const failedEvent = logger.events.find(e => e.name === "relay.manifest.poll.failed");
     expect(failedEvent).toBeDefined();
-    expect(failedEvent?.context.reason).toContain("S3 unavailable");
+    // reason must be the raw S3 error — not a wrapped "Manifest load failed after N attempts: ..." string
+    expect(failedEvent?.context.reason).toBe("S3 unavailable");
     expect(callCount).toBe(2);
+
+    // relay.manifest.load.failed must NOT fire during polling — that ERROR is suppressed
+    // when loadManifest() is called from the poll loop. Only the WARN-level
+    // relay.manifest.poll.failed event should appear for transient poll failures.
+    const loadFailedEvent = logger.events.find(e => e.name === "relay.manifest.load.failed");
+    expect(loadFailedEvent).toBeUndefined();
 
     logger.events.length = 0;
 

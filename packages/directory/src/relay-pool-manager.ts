@@ -218,11 +218,15 @@ export class RelayPoolManager {
    * Starts the health check loop on success.
    *
    * @param maxAttempts - override the configured maxLoadAttempts for this call only.
-   *   Pass 1 when calling from the poll loop to suppress retry-level ERROR noise:
-   *   a transient S3 failure during polling should log relay.manifest.poll.failed
-   *   at WARN (one event), not relay.manifest.load.failed at ERROR on each retry.
+   * @param suppressLoadLog - when true, skip relay.manifest.load.failed ERROR logging
+   *   and throw the raw S3 error (not the wrapped form). Used by the poll loop so that
+   *   a transient S3 failure during polling emits exactly one event
+   *   (relay.manifest.poll.failed at WARN) rather than relay.manifest.load.failed at
+   *   ERROR followed by relay.manifest.poll.failed at WARN. The poll loop handles the
+   *   error at the appropriate severity — no ERROR should fire for an expected
+   *   transient condition that resolves on the next poll cycle.
    */
-  async loadManifest(maxAttempts?: number): Promise<void> {
+  async loadManifest(maxAttempts?: number, suppressLoadLog?: boolean): Promise<void> {
     let raw: Uint8Array | undefined;
     let lastAttempt = 0;
     const effectiveMaxAttempts = maxAttempts ?? this.#maxLoadAttempts;
@@ -235,11 +239,18 @@ export class RelayPoolManager {
         break; // success
       } catch (err: unknown) {
         const reason = err instanceof Error ? err.message : String(err);
-        this.#logger.error("relay.manifest.load.failed", { reason, attempt });
+        if (!suppressLoadLog) {
+          this.#logger.error("relay.manifest.load.failed", { reason, attempt });
+        }
         if (attempt < effectiveMaxAttempts) {
           // Exponential backoff: retryDelayMs * 2^(attempt-1), capped at 60s
           const delay = Math.min(this.#retryDelayMs * Math.pow(2, attempt - 1), 60_000);
           await new Promise(r => setTimeout(r, delay));
+        } else if (suppressLoadLog) {
+          // Re-throw the raw error so the poll loop gets the original S3 error
+          // message in relay.manifest.poll.failed.reason — not the internal
+          // "Manifest load failed after N attempts: ..." wrapper.
+          throw new Error(reason);
         } else {
           throw new Error(`Manifest load failed after ${effectiveMaxAttempts} attempts: ${reason}`);
         }
@@ -248,7 +259,9 @@ export class RelayPoolManager {
 
     if (!raw) {
       const reason = "manifest not found in S3";
-      this.#logger.error("relay.manifest.load.failed", { reason, attempt: lastAttempt });
+      if (!suppressLoadLog) {
+        this.#logger.error("relay.manifest.load.failed", { reason, attempt: lastAttempt });
+      }
       throw new Error(reason);
     }
 
@@ -258,7 +271,9 @@ export class RelayPoolManager {
       manifest = JSON.parse(new TextDecoder().decode(raw)) as RelayPoolManifest;
     } catch (err: unknown) {
       const reason = err instanceof Error ? err.message : String(err);
-      this.#logger.error("relay.manifest.load.failed", { reason, attempt: 1 });
+      if (!suppressLoadLog) {
+        this.#logger.error("relay.manifest.load.failed", { reason, attempt: 1 });
+      }
       throw new Error(`Manifest JSON parse failed: ${reason}`);
     }
 
@@ -500,10 +515,12 @@ export class RelayPoolManager {
 
     this.#pollInterval = setInterval(() => {
       const versionBefore = this.#currentVersion;
-      // Pass maxAttempts=1: a transient S3 failure during polling logs one WARN
-      // (relay.manifest.poll.failed) rather than up to 4 ERROR events from retries.
-      // Retrying is not useful in the poll context — the next poll fires in intervalMs.
-      void this.loadManifest(1)
+      // Pass maxAttempts=1, suppressLoadLog=true: a transient S3 failure during polling
+      // emits exactly one WARN event (relay.manifest.poll.failed). Without suppressLoadLog,
+      // loadManifest() would also log relay.manifest.load.failed at ERROR — incorrect
+      // severity for a normal operating condition. Retrying is not useful in the poll
+      // context either — the next poll fires in intervalMs milliseconds.
+      void this.loadManifest(1, true)
         .then(() => {
           // loadManifest() calls applyManifest() internally and logs relay.manifest.loaded.
           // Note: relay.manifest.loaded also fires here (from applyManifest()) alongside
