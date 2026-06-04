@@ -462,7 +462,65 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # ── 10. cello-audit-shipper-buffer-full — AC-001 ─────────────────────────
+  # ── 10. cello-relay-manifest-poll-alarm — M6B-008 ────────────────────────
+  # Fires ops-warning when relay manifest polling fails persistently.
+  # MetricFilter extracts relay.manifest.poll.failed log events from the
+  # directory log group → custom metric CELLO/Relay ManifestPollFailures.
+  # Alarm fires when 5+ poll failures occur within a 10-minute window
+  # (2 × 5-minute evaluation periods, threshold 5 per period sum).
+  # At a 2-minute poll interval, 5 failures in 10 minutes means every poll
+  # for 10 minutes has failed — S3 access loss or misconfigured provider.
+
+  RelayManifestPollFailedMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub "/ecs/cello-directory-${Environment}"
+      FilterPattern: '"relay.manifest.poll.failed"'
+      MetricTransformations:
+        - MetricNamespace: CELLO/Relay
+          MetricName: ManifestPollFailures
+          MetricValue: "1"
+          DefaultValue: 0
+          Dimensions:
+            - Key: Environment
+              Value: !Ref Environment
+            - Key: Region
+              Value: !Ref AWS::Region
+
+  RelayManifestPollAlarm:
+    Type: AWS::CloudWatch::Alarm
+    DependsOn: RelayManifestPollFailedMetricFilter
+    Properties:
+      AlarmName: !Sub "cello-relay-manifest-poll-alarm-${Environment}"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO relay manifest polling has failed persistently.
+        Region: ${AWS::Region}. More than 5 poll failures in the last 10 minutes.
+        At a 2-minute poll interval this means every poll for 10 minutes has failed.
+        Investigate S3 access, RELAY_MANIFEST_BUCKET configuration, and IAM permissions.
+      MetricName: ManifestPollFailures
+      Namespace: CELLO/Relay
+      Dimensions:
+        - Name: Environment
+          Value: !Ref Environment
+        - Name: Region
+          Value: !Ref AWS::Region
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsWarningTopic
+      OKActions:
+        - !Ref OpsWarningTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── 11. cello-audit-shipper-buffer-full — AC-001 ─────────────────────────
   # Fires ops-warning when the audit log shipper buffer is at capacity.
   # Custom metric: CELLO/Audit ShipperBufferUtilization (percentage 0-100).
   # 90% threshold: conservative buffer-full warning; below this, shipper can absorb burst writes.

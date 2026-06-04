@@ -537,7 +537,16 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
   // M6B-008: start manifest poll loop
   // This code only runs when env !== "local" (checked at line 494),
   // so the poll loop is automatically disabled in local mode.
-  const pollIntervalMs = parseInt(process.env["RELAY_MANIFEST_POLL_INTERVAL_MS"] ?? "120000", 10);
+  const rawPollInterval = process.env["RELAY_MANIFEST_POLL_INTERVAL_MS"];
+  const pollIntervalMs = rawPollInterval ? parseInt(rawPollInterval, 10) : 120_000;
+  if (isNaN(pollIntervalMs) || pollIntervalMs < 1_000) {
+    logger.error("adapter.config.missing", {
+      missingKey: "RELAY_MANIFEST_POLL_INTERVAL_MS",
+      value: rawPollInterval,
+      reason: "must be a positive integer >= 1000",
+    });
+    process.exit(1);
+  }
   mgr.startPolling(pollIntervalMs);
 
   return mgr;

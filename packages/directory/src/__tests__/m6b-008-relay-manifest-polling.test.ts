@@ -412,6 +412,12 @@ describe("CELLO-M6B-008: RelayPoolManager manifest polling", () => {
     expect(invalidEvent?.context.reason).toBe("signature_verification_failed");
     expect(mgr.currentVersion).toBe(1); // unchanged — attacker cannot corrupt the pool
 
+    // SI-001 observability: signature failure must also produce relay.manifest.poll.failed
+    // so the poll-failure alarm fires when an attacker injects an invalid manifest.
+    const pollFailedEvent = logger.events.find(e => e.name === "relay.manifest.poll.failed");
+    expect(pollFailedEvent).toBeDefined();
+    expect(pollFailedEvent?.context.reason).toMatch(/signature/i);
+
     const eventCountAfterBadPoll = logger.events.length;
     logger.events.length = 0;
 

@@ -216,13 +216,19 @@ export class RelayPoolManager {
    * Logs relay.manifest.loaded on success.
    * Throws on signature verification failure or exhausted retries.
    * Starts the health check loop on success.
+   *
+   * @param maxAttempts - override the configured maxLoadAttempts for this call only.
+   *   Pass 1 when calling from the poll loop to suppress retry-level ERROR noise:
+   *   a transient S3 failure during polling should log relay.manifest.poll.failed
+   *   at WARN (one event), not relay.manifest.load.failed at ERROR on each retry.
    */
-  async loadManifest(): Promise<void> {
+  async loadManifest(maxAttempts?: number): Promise<void> {
     let raw: Uint8Array | undefined;
     let lastAttempt = 0;
+    const effectiveMaxAttempts = maxAttempts ?? this.#maxLoadAttempts;
 
     // DB-001: retry with exponential backoff on S3 failures
-    for (let attempt = 1; attempt <= this.#maxLoadAttempts; attempt++) {
+    for (let attempt = 1; attempt <= effectiveMaxAttempts; attempt++) {
       lastAttempt = attempt;
       try {
         raw = await this.#storage.download("relay-manifest.json");
@@ -230,12 +236,12 @@ export class RelayPoolManager {
       } catch (err: unknown) {
         const reason = err instanceof Error ? err.message : String(err);
         this.#logger.error("relay.manifest.load.failed", { reason, attempt });
-        if (attempt < this.#maxLoadAttempts) {
+        if (attempt < effectiveMaxAttempts) {
           // Exponential backoff: retryDelayMs * 2^(attempt-1), capped at 60s
           const delay = Math.min(this.#retryDelayMs * Math.pow(2, attempt - 1), 60_000);
           await new Promise(r => setTimeout(r, delay));
         } else {
-          throw new Error(`Manifest load failed after ${this.#maxLoadAttempts} attempts: ${reason}`);
+          throw new Error(`Manifest load failed after ${effectiveMaxAttempts} attempts: ${reason}`);
         }
       }
     }
@@ -494,7 +500,10 @@ export class RelayPoolManager {
 
     this.#pollInterval = setInterval(() => {
       const versionBefore = this.#currentVersion;
-      void this.loadManifest()
+      // Pass maxAttempts=1: a transient S3 failure during polling logs one WARN
+      // (relay.manifest.poll.failed) rather than up to 4 ERROR events from retries.
+      // Retrying is not useful in the poll context — the next poll fires in intervalMs.
+      void this.loadManifest(1)
         .then(() => {
           // loadManifest() calls applyManifest() internally.
           // If we get here without throwing, the manifest was applied (or was stale and threw).
