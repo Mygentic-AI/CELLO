@@ -62,9 +62,10 @@ export class InMemoryRelayStore implements RelayStore {
   }
 
   setSession(sessionIdHex: string, state: RelaySessionState): void {
-    // CELLO-M6B-009 AC-009: update lastActivityAt on every write
-    state.lastActivityAt = Date.now();
-    this.#sessions.set(sessionIdHex, state);
+    // CELLO-M6B-009 AC-009: update lastActivityAt on every write.
+    // Spread to avoid mutating the caller's object — the caller's reference retains
+    // the lastActivityAt value it passed in, while the stored copy has the refreshed timestamp.
+    this.#sessions.set(sessionIdHex, { ...state, lastActivityAt: Date.now() });
   }
 
   destroySession(sessionIdHex: string): void {
@@ -106,19 +107,26 @@ export class InMemoryRelayStore implements RelayStore {
   sweepIdleSessions(maxIdleMs: number, logger: Logger): number {
     const now = Date.now();
     const cutoff = now - maxIdleMs;
-    let sweptCount = 0;
-    const remainingBeforeSweep = this.#sessions.size;
 
+    // Collect candidates in a first pass to avoid modifying the Map while iterating it.
+    // This is defensive: ECMAScript guarantees deleting the currently-yielded key is safe,
+    // but deleting future keys during iteration causes them to be skipped. The two-pass
+    // pattern is explicit about intent and safe for future maintainers.
+    const toSweep: Array<{ sessionIdHex: string; idleDurationMs: number }> = [];
     for (const [sessionIdHex, state] of this.#sessions.entries()) {
       if (state.status === "active" && state.lastActivityAt < cutoff) {
-        const idleDurationMs = now - state.lastActivityAt;
-        logger.info("relay.session.idle.swept", { sessionId: sessionIdHex, idleDurationMs });
-        this.#sessions.delete(sessionIdHex);
-        sweptCount++;
+        toSweep.push({ sessionIdHex, idleDurationMs: now - state.lastActivityAt });
       }
     }
 
-    const remainingCount = remainingBeforeSweep - sweptCount;
+    // Second pass: destroy and log each idle session
+    for (const { sessionIdHex, idleDurationMs } of toSweep) {
+      logger.info("relay.session.idle.swept", { sessionId: sessionIdHex, idleDurationMs });
+      this.#sessions.delete(sessionIdHex);
+    }
+
+    const sweptCount = toSweep.length;
+    const remainingCount = this.#sessions.size;
     logger.info("relay.session.sweep.complete", { sweptCount, remainingCount });
 
     return sweptCount;

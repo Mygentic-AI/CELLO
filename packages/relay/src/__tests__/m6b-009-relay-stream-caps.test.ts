@@ -1,43 +1,83 @@
 /**
  * CELLO-M6B-009: Relay stream caps
  *
- * Tests:
+ * Specification (per story YAML):
  *   AC-005: /cello/relay/1.0.0 is registered with maxInboundStreams: 2048
- *   AC-005: /cello/directory-relay/1.0.0 is registered with maxInboundStreams: 128
+ *           /cello/directory-relay/1.0.0 is registered with maxInboundStreams: 128
+ *           Both verified by inspecting the node.handle() call arguments.
+ *
+ * Interpretation:
+ *   The CelloNode.handle() interface accepts an optional { maxInboundStreams } third
+ *   argument. We spy on that method before relay.start() is called to capture the
+ *   exact options passed for each protocol ID. The test fails if:
+ *     - handle() is not called with RELAY_PROTOCOL_ID and maxInboundStreams: 2048
+ *     - handle() is not called with DIRECTORY_RELAY_PROTOCOL_ID and maxInboundStreams: 128
+ *     - maxInboundStreams is absent (would mean the value is inherited from yamux defaults)
  */
 
-import { describe, it, expect } from "vitest";
-import { createRelayNode } from "../relay-node.js";
+import { describe, it, expect, vi } from "vitest";
+import { createNode } from "@cello-protocol/transport";
 import { InMemoryKeyProvider } from "@cello-protocol/crypto";
+import { CelloRelayNode, RELAY_PROTOCOL_ID, DIRECTORY_RELAY_PROTOCOL_ID } from "../relay-node.js";
 
-describe("CELLO-M6B-009: Relay stream caps", () => {
-  it("AC-005: relay protocol handlers are registered with explicit maxInboundStreams", async () => {
+describe("CELLO-M6B-009 AC-005: Relay protocol handlers use explicit maxInboundStreams", () => {
+  it("/cello/relay/1.0.0 is registered with maxInboundStreams: 2048", async () => {
     // AC-005: /cello/relay/1.0.0 is registered with maxInboundStreams: 2048
-    //         /cello/directory-relay/1.0.0 is registered with maxInboundStreams: 128
+    // Verified by spying on node.handle() before relay.start() is called.
 
     const keyProvider = new InMemoryKeyProvider(Buffer.alloc(32, 0xaa));
-    const directoryPubkey = Buffer.alloc(32, 0xdd);
-
-    const result = await createRelayNode({
-      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
-      directoryPubkey,
+    const node = await createNode({
       keyProvider,
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
     });
+    await node.start();
 
-    // Spy on the underlying libp2p node's handle method
-    // We can't directly access it from the CelloNode abstraction,
-    // so we verify the behavior indirectly by confirming the relay starts successfully.
-    // The relay-node.ts implementation at lines 244-249 explicitly sets maxInboundStreams.
+    const handleSpy = vi.spyOn(node, "handle");
 
-    // The actual verification is that the relay starts without error.
-    // If maxInboundStreams was not accepted, libp2p would throw.
-    expect(result.relay).toBeDefined();
-    expect(result.node).toBeDefined();
+    const relay = new CelloRelayNode({
+      node,
+      directoryPubkey: Buffer.alloc(32, 0xdd),
+    });
+    await relay.start();
 
-    // AC-005 is satisfied by the implementation in relay-node.ts lines 244-249.
-    // The test verifies that those lines are present and correctly structured by
-    // ensuring the relay node starts successfully with the options.
+    // Find the call for the relay protocol
+    const relayCalls = handleSpy.mock.calls.filter((args) => args[0] === RELAY_PROTOCOL_ID);
+    expect(relayCalls).toHaveLength(1);
 
-    await result.stop();
+    const relayOpts = relayCalls[0]![2];
+    expect(relayOpts).toBeDefined();
+    expect(relayOpts!.maxInboundStreams).toBe(2048);
+
+    await node.stop();
+  });
+
+  it("/cello/directory-relay/1.0.0 is registered with maxInboundStreams: 128", async () => {
+    // AC-005: /cello/directory-relay/1.0.0 is registered with maxInboundStreams: 128
+    // Verified by spying on node.handle() before relay.start() is called.
+
+    const keyProvider = new InMemoryKeyProvider(Buffer.alloc(32, 0xaa));
+    const node = await createNode({
+      keyProvider,
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+    });
+    await node.start();
+
+    const handleSpy = vi.spyOn(node, "handle");
+
+    const relay = new CelloRelayNode({
+      node,
+      directoryPubkey: Buffer.alloc(32, 0xdd),
+    });
+    await relay.start();
+
+    // Find the call for the directory-relay protocol
+    const dirRelayCalls = handleSpy.mock.calls.filter((args) => args[0] === DIRECTORY_RELAY_PROTOCOL_ID);
+    expect(dirRelayCalls).toHaveLength(1);
+
+    const dirRelayOpts = dirRelayCalls[0]![2];
+    expect(dirRelayOpts).toBeDefined();
+    expect(dirRelayOpts!.maxInboundStreams).toBe(128);
+
+    await node.stop();
   });
 });

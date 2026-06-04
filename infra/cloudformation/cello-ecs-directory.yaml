@@ -134,6 +134,12 @@ Resources:
               Value: !Sub "cello-relay-manifest-${Environment}-${AWS::Region}"
             - Name: RELAY_MANIFEST_SIGNER_PUBKEY
               Value: !Sub "{{resolve:ssm:/cello/${Environment}/directory/manifest-signer-pubkey}}"
+            # CELLO-M6B-009 AC-001/AC-010: explicit pg pool cap for 1000 concurrent users.
+            # db.t3.medium supports ~450 max connections; 50/node × 3 nodes = 150 app + ~50 overhead
+            # = 200 total, leaving 250 connections of headroom. Increase only after upgrading the
+            # RDS instance class — see cello-rds.yaml for capacity rationale.
+            - Name: DIRECTORY_PG_POOL_MAX
+              Value: "50"
           Secrets:
             # NODE_PRIVATE_KEY is safe to inject at task launch — it changes only
             # on manual key rotation, which requires a coordinated task restart

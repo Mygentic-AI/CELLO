@@ -109,7 +109,13 @@ describe("CELLO-M6B-009: Idle session sweep", () => {
   });
 
   it("AC-007: sweep does NOT destroy sessions with recent lastActivityAt", () => {
-    // AC-007: Sessions idle for 1 hour (< 24h threshold) are NOT destroyed
+    // AC-007: Sessions idle for 1 hour (< 24h threshold) are NOT destroyed.
+    //
+    // We set lastActivityAt directly on the state object returned by getSession()
+    // rather than calling setSession(), because setSession() always refreshes
+    // lastActivityAt to Date.now() — passing old timestamps through setSession()
+    // would test a 0-second-old session, not a 1-hour-old one.
+    // AC-006 uses the same pattern for simulating an aged-out session.
 
     const sessionIdHex = "d".repeat(32);
     const assignment = makeAssignment(sessionIdHex);
@@ -117,12 +123,12 @@ describe("CELLO-M6B-009: Idle session sweep", () => {
 
     store.recordSession(assignment, genesisRoot);
 
+    // Directly mutate the stored state object to simulate 1-hour-old lastActivityAt.
+    // This is the canonical test pattern for bypassing setSession's timestamp refresh.
     const state = store.getSession(sessionIdHex)!;
-    // Simulate 1 hour ago
     state.lastActivityAt = Date.now() - 1 * 60 * 60 * 1000;
-    store.setSession(sessionIdHex, state);
 
-    // Run sweep
+    // Run sweep — 1 hour < 24 hour threshold, session must survive
     const maxIdleMs = 24 * 60 * 60 * 1000;
     const swept = store.sweepIdleSessions(maxIdleMs, logger);
 
