@@ -219,14 +219,18 @@ export class RelayPoolManager {
    *
    * @param maxAttempts - override the configured maxLoadAttempts for this call only.
    * @param suppressLoadLog - when true, skip relay.manifest.load.failed ERROR logging
-   *   and throw the raw S3 error (not the wrapped form). Used by the poll loop so that
-   *   a transient S3 failure during polling emits exactly one event
-   *   (relay.manifest.poll.failed at WARN) rather than relay.manifest.load.failed at
-   *   ERROR followed by relay.manifest.poll.failed at WARN. The poll loop handles the
-   *   error at the appropriate severity — no ERROR should fire for an expected
-   *   transient condition that resolves on the next poll cycle.
+   *   and throw the raw S3 error (not wrapped). **Use ONLY in the poll loop context.**
+   *   The poll loop handles transient S3 failures at the appropriate severity (WARN),
+   *   so no ERROR should fire for an expected transient condition that resolves on the
+   *   next poll cycle. This flag ensures exactly one event fires (relay.manifest.poll.failed
+   *   at WARN) rather than relay.manifest.load.failed at ERROR followed by
+   *   relay.manifest.poll.failed at WARN. Do not use this flag in startup or manual
+   *   load paths where ERROR-level logging is correct.
+   * @param suppressLoadedLog - when true, skip relay.manifest.loaded logging.
+   *   Used by the poll loop (passed to applyManifest()) so that polling emits only
+   *   relay.manifest.refreshed, not both relay.manifest.loaded and relay.manifest.refreshed.
    */
-  async loadManifest(maxAttempts?: number, suppressLoadLog?: boolean): Promise<void> {
+  async loadManifest(maxAttempts?: number, suppressLoadLog?: boolean, suppressLoadedLog = false): Promise<void> {
     let raw: Uint8Array | undefined;
     let lastAttempt = 0;
     const effectiveMaxAttempts = maxAttempts ?? this.#maxLoadAttempts;
@@ -250,7 +254,7 @@ export class RelayPoolManager {
           // Re-throw the raw error so the poll loop gets the original S3 error
           // message in relay.manifest.poll.failed.reason — not the internal
           // "Manifest load failed after N attempts: ..." wrapper.
-          throw new Error(reason);
+          throw err;
         } else {
           throw new Error(`Manifest load failed after ${effectiveMaxAttempts} attempts: ${reason}`);
         }
@@ -307,7 +311,7 @@ export class RelayPoolManager {
     }
 
     // Apply the manifest (checks version monotonicity, updates pool state)
-    const applied = this.applyManifest(manifest);
+    const applied = this.applyManifest(manifest, suppressLoadedLog);
     if (!applied.ok) {
       throw new Error(`Manifest rejected: version ${manifest.version} is not higher than current ${this.#currentVersion}`);
     }
@@ -325,9 +329,13 @@ export class RelayPoolManager {
    * Called by loadManifest() after signature verification.
    * Exposed for testing (allows testing staleness rejection separately from sig verification).
    *
+   * @param suppressLoadedLog - when true, skip relay.manifest.loaded logging.
+   *   Used by the poll loop so that polling emits only relay.manifest.refreshed
+   *   (the authoritative "poll picked up new manifest" signal), not both
+   *   relay.manifest.loaded and relay.manifest.refreshed for the same event.
    * @returns { ok: true } on success, { ok: false } if version is stale
    */
-  applyManifest(manifest: RelayPoolManifest): { ok: boolean } {
+  applyManifest(manifest: RelayPoolManifest, suppressLoadedLog = false): { ok: boolean } {
     // SI-003: version must strictly increase
     if (manifest.version <= this.#currentVersion) {
       this.#logger.warn("relay.manifest.version.stale", {
@@ -364,11 +372,13 @@ export class RelayPoolManager {
 
     this.#currentRelays = manifest.relays;
 
-    this.#logger.info("relay.manifest.loaded", {
-      signerNodeId: manifest.signedBy,
-      relayCount: manifest.relays.length,
-      manifestVersion: manifest.version,
-    });
+    if (!suppressLoadedLog) {
+      this.#logger.info("relay.manifest.loaded", {
+        signerNodeId: manifest.signedBy,
+        relayCount: manifest.relays.length,
+        manifestVersion: manifest.version,
+      });
+    }
 
     return { ok: true };
   }
@@ -515,17 +525,16 @@ export class RelayPoolManager {
 
     this.#pollInterval = setInterval(() => {
       const versionBefore = this.#currentVersion;
-      // Pass maxAttempts=1, suppressLoadLog=true: a transient S3 failure during polling
-      // emits exactly one WARN event (relay.manifest.poll.failed). Without suppressLoadLog,
-      // loadManifest() would also log relay.manifest.load.failed at ERROR — incorrect
-      // severity for a normal operating condition. Retrying is not useful in the poll
-      // context either — the next poll fires in intervalMs milliseconds.
-      void this.loadManifest(1, true)
+      // Pass maxAttempts=1, suppressLoadLog=true, suppressLoadedLog=true:
+      // - suppressLoadLog: transient S3 failure emits exactly one WARN event
+      //   (relay.manifest.poll.failed), not ERROR (relay.manifest.load.failed)
+      // - suppressLoadedLog: poll emits only relay.manifest.refreshed (the authoritative
+      //   "poll picked up new manifest" signal), not both relay.manifest.loaded and
+      //   relay.manifest.refreshed for the same occurrence
+      void this.loadManifest(1, true, true)
         .then(() => {
-          // loadManifest() calls applyManifest() internally and logs relay.manifest.loaded.
-          // Note: relay.manifest.loaded also fires here (from applyManifest()) alongside
-          // relay.manifest.refreshed. Operators should use relay.manifest.refreshed as the
-          // authoritative "poll picked up a new manifest" signal — see canonical taxonomy.
+          // loadManifest() calls applyManifest() internally. With suppressLoadedLog=true,
+          // relay.manifest.loaded does NOT fire. Only relay.manifest.refreshed fires.
           if (this.#currentVersion > versionBefore) {
             this.#logger.info("relay.manifest.refreshed", {
               manifestVersion: this.#currentVersion,
