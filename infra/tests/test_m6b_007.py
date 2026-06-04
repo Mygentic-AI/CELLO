@@ -24,7 +24,9 @@ CELLO-M6B-007 infrastructure tests.
 #   - STACK_COUNT incremented by 1
 #
 # AC-007: cello-cloudwatch.yaml has cello-relay-alb-5xx-${Environment} alarm
-#   targeting relay ALB HTTPCode_ELB_5XX_Count, threshold 5, period 300s
+#   using metric math (Metrics list) to compute 5xx rate = HTTPCode_ELB_5XX_Count /
+#   RequestCount * 100; expression metric with ReturnData:true; threshold 5 (5%);
+#   period 300s; LoadBalancer dimension uses full ARN suffix via !ImportValue relay-alb-arn
 """
 
 import os
@@ -574,6 +576,15 @@ def test_ac003_stack_count_incremented():
 
 # ════════════════════════════════════════════════════════════════════════════
 # AC-007: cello-cloudwatch.yaml relay ALB 5xx alarm
+#
+# The alarm uses CloudWatch metric math (Metrics list) to compute a true
+# 5% error rate alarm. A simple Sum threshold on HTTPCode_ELB_5XX_Count is
+# an absolute count (not a rate) and would not satisfy the AC. The metric math
+# expression is: rate = IF(m2 > 0, m1/m2*100, 0) where:
+#   m1 = HTTPCode_ELB_5XX_Count (5xx responses)
+#   m2 = RequestCount (total requests)
+# Threshold: 5 = 5% rate. The dimension uses the full ARN suffix from the
+# RelayAlbArn export (required by AWS/ApplicationELB CloudWatch namespace).
 # ════════════════════════════════════════════════════════════════════════════
 
 def test_ac007_relay_alb_5xx_alarm_exists():
@@ -599,25 +610,53 @@ def test_ac007_alarm_name_contains_relay_alb_5xx():
 
 
 def test_ac007_alarm_metric_5xx_count():
-    """AC-007: RelayAlb5xxAlarm targets HTTPCode_ELB_5XX_Count metric."""
+    """AC-007: RelayAlb5xxAlarm uses metric math with HTTPCode_ELB_5XX_Count in Metrics list.
+
+    The alarm is a metric math alarm (Metrics list, not top-level MetricName).
+    One of the Metrics entries must reference HTTPCode_ELB_5XX_Count.
+    """
     tmpl = load_yaml("cello-cloudwatch.yaml")
     resources = _get_resources(tmpl)
     alarm = resources.get("RelayAlb5xxAlarm", {})
     props = alarm.get("Properties", {})
-    assert props.get("MetricName") == "HTTPCode_ELB_5XX_Count", (
-        f"RelayAlb5xxAlarm MetricName must be HTTPCode_ELB_5XX_Count, "
-        f"got: {props.get('MetricName')} (AC-007)"
+    metrics = props.get("Metrics", [])
+    assert len(metrics) > 0, (
+        "RelayAlb5xxAlarm must use metric math (Metrics list) to compute a rate, "
+        "not a simple MetricName threshold (AC-007)"
+    )
+    metric_names = [
+        m.get("MetricStat", {}).get("Metric", {}).get("MetricName")
+        for m in metrics
+        if "MetricStat" in m
+    ]
+    assert "HTTPCode_ELB_5XX_Count" in metric_names, (
+        f"RelayAlb5xxAlarm Metrics must include HTTPCode_ELB_5XX_Count, "
+        f"found metric names: {metric_names} (AC-007)"
     )
 
 
 def test_ac007_alarm_period_300():
-    """AC-007: RelayAlb5xxAlarm Period is 300 seconds (5 minutes)."""
+    """AC-007: RelayAlb5xxAlarm metric period is 300 seconds (5 minutes).
+
+    For metric math alarms, Period is on each MetricStat entry, not top-level.
+    """
     tmpl = load_yaml("cello-cloudwatch.yaml")
     resources = _get_resources(tmpl)
     alarm = resources.get("RelayAlb5xxAlarm", {})
-    period = alarm.get("Properties", {}).get("Period")
-    assert period == 300, (
-        f"RelayAlb5xxAlarm Period must be 300 (5 minutes), got: {period} (AC-007)"
+    props = alarm.get("Properties", {})
+    metrics = props.get("Metrics", [])
+    # All MetricStat entries must have Period 300
+    metric_stat_periods = [
+        m.get("MetricStat", {}).get("Period")
+        for m in metrics
+        if "MetricStat" in m
+    ]
+    assert all(p == 300 for p in metric_stat_periods), (
+        f"All RelayAlb5xxAlarm MetricStat entries must have Period 300 (5 minutes), "
+        f"got: {metric_stat_periods} (AC-007)"
+    )
+    assert len(metric_stat_periods) > 0, (
+        "RelayAlb5xxAlarm must have at least one MetricStat entry (AC-007)"
     )
 
 
@@ -628,18 +667,101 @@ def test_ac007_alarm_threshold_5():
     alarm = resources.get("RelayAlb5xxAlarm", {})
     threshold = alarm.get("Properties", {}).get("Threshold")
     assert threshold == 5, (
-        f"RelayAlb5xxAlarm Threshold must be 5, got: {threshold} (AC-007)"
+        f"RelayAlb5xxAlarm Threshold must be 5 (5% error rate), got: {threshold} (AC-007)"
     )
 
 
 def test_ac007_alarm_namespace_application_elb():
-    """AC-007: RelayAlb5xxAlarm Namespace is AWS/ApplicationELB."""
+    """AC-007: RelayAlb5xxAlarm uses AWS/ApplicationELB namespace in its Metrics list."""
     tmpl = load_yaml("cello-cloudwatch.yaml")
     resources = _get_resources(tmpl)
     alarm = resources.get("RelayAlb5xxAlarm", {})
-    namespace = alarm.get("Properties", {}).get("Namespace")
-    assert namespace == "AWS/ApplicationELB", (
-        f"RelayAlb5xxAlarm Namespace must be AWS/ApplicationELB, got: {namespace} (AC-007)"
+    props = alarm.get("Properties", {})
+    metrics = props.get("Metrics", [])
+    namespaces = [
+        m.get("MetricStat", {}).get("Metric", {}).get("Namespace")
+        for m in metrics
+        if "MetricStat" in m
+    ]
+    assert "AWS/ApplicationELB" in namespaces, (
+        f"RelayAlb5xxAlarm Metrics must include AWS/ApplicationELB namespace, "
+        f"found: {namespaces} (AC-007)"
+    )
+
+
+def test_ac007_alarm_uses_rate_expression():
+    """AC-007: RelayAlb5xxAlarm Metrics contains a rate expression (IF(m2 > 0, m1/m2*100, 0)).
+
+    The expression metric with ReturnData:true is what the alarm evaluates.
+    This verifies the alarm is a true rate alarm, not an absolute count alarm.
+    """
+    tmpl = load_yaml("cello-cloudwatch.yaml")
+    resources = _get_resources(tmpl)
+    alarm = resources.get("RelayAlb5xxAlarm", {})
+    props = alarm.get("Properties", {})
+    metrics = props.get("Metrics", [])
+    expression_metrics = [m for m in metrics if "Expression" in m]
+    assert len(expression_metrics) > 0, (
+        "RelayAlb5xxAlarm must include an Expression metric to compute the 5xx rate "
+        "(not a raw count alarm) (AC-007)"
+    )
+    # The expression metric with ReturnData:true is what the threshold is evaluated against
+    return_data_metrics = [m for m in expression_metrics if m.get("ReturnData") is True]
+    assert len(return_data_metrics) == 1, (
+        "RelayAlb5xxAlarm must have exactly one Expression metric with ReturnData:true "
+        f"(the evaluated rate), found: {return_data_metrics} (AC-007)"
+    )
+
+
+def test_ac007_relay_alb_arn_output_exported():
+    """AC-007 / Issue-2: cello-ecs-relay.yaml exports RelayAlbArn for use in CloudWatch dimension.
+
+    CloudWatch AWS/ApplicationELB LoadBalancer dimension requires the full ARN suffix
+    (app/<name>/<hash>). This is extracted from the exported RelayAlbArn at deploy time.
+    Without this export, the alarm would have an incomplete dimension and be permanently
+    in INSUFFICIENT_DATA.
+    """
+    tmpl = load_yaml("cello-ecs-relay.yaml")
+    outputs = tmpl.get("Outputs", {})
+    assert "RelayAlbArn" in outputs, (
+        "cello-ecs-relay.yaml must export RelayAlbArn so cello-cloudwatch.yaml can "
+        "construct the correct LoadBalancer dimension (AC-007)"
+    )
+    export = outputs["RelayAlbArn"].get("Export", {})
+    export_name = export.get("Name")
+    assert export_name is not None, "RelayAlbArn output must have an Export.Name"
+    assert _str_contains(export_name, "relay-alb-arn"), (
+        f"RelayAlbArn Export.Name must contain relay-alb-arn, got: {export_name} (AC-007)"
+    )
+
+
+def test_ac007_alarm_dimension_uses_relay_alb_arn_import():
+    """AC-007 / Issue-2: RelayAlb5xxAlarm LoadBalancer dimension uses !ImportValue relay-alb-arn.
+
+    The dimension value must use the full ARN suffix (app/<name>/<hash>) obtained by
+    splitting the imported ARN on 'loadbalancer/'. A plain app/<name> prefix without
+    the hash suffix causes permanent INSUFFICIENT_DATA on the alarm.
+    """
+    tmpl = load_yaml("cello-cloudwatch.yaml")
+    resources = _get_resources(tmpl)
+    alarm = resources.get("RelayAlb5xxAlarm", {})
+    props = alarm.get("Properties", {})
+    metrics = props.get("Metrics", [])
+    # The dimension value must reference the relay-alb-arn export
+    all_dims = []
+    for m in metrics:
+        if "MetricStat" in m:
+            dims = m.get("MetricStat", {}).get("Metric", {}).get("Dimensions", [])
+            all_dims.extend(dims)
+    # Check that at least one LoadBalancer dimension references relay-alb-arn
+    lb_dims = [d for d in all_dims if _str_contains(d.get("Name", ""), "LoadBalancer")]
+    assert len(lb_dims) > 0, (
+        "RelayAlb5xxAlarm must have LoadBalancer dimensions in its Metrics entries (AC-007)"
+    )
+    lb_dim_values = [d.get("Value") for d in lb_dims]
+    assert any(_str_contains(v, "relay-alb-arn") for v in lb_dim_values), (
+        f"RelayAlb5xxAlarm LoadBalancer dimension must reference relay-alb-arn import "
+        f"(to get the full ARN suffix including hash), found: {lb_dim_values} (AC-007)"
     )
 
 
@@ -685,6 +807,9 @@ if __name__ == "__main__":
         test_ac007_alarm_period_300,
         test_ac007_alarm_threshold_5,
         test_ac007_alarm_namespace_application_elb,
+        test_ac007_alarm_uses_rate_expression,
+        test_ac007_relay_alb_arn_output_exported,
+        test_ac007_alarm_dimension_uses_relay_alb_arn_import,
     ]
 
     passed = 0
