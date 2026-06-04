@@ -45,6 +45,14 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 | Directory transport key (ap-northeast-1) | `cello/dev/directory/transport-key` | POPULATED | `-usvz8z` |
 NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-dev stack does not yet manage them. Run deploy.sh to import them or let CF recreate (it will conflict again). For new region expansion, bootstrap.sh will create them correctly via CF.
 
+**Relay transport key secrets (all regions) — M6B-006 followup (2026-06-04):**
+| Secret | Path | Status | Notes |
+|---|---|---|---|
+| Relay transport key (us-east-1) | `cello/dev/relay/transport-key` | EXISTS | Created 2026-06-03 as part of M6B-006; managed by cello-secrets-dev stack |
+| Relay transport key (eu-central-1) | `cello/dev/relay/transport-key` | EXISTS | Created manually 2026-06-04 to unblock relay crash-loop; IaC gap — cello-secrets stack was last deployed 2026-05-27 before M6B-006 added RelayTransportKey resource; populate with real value after next cello-secrets stack deploy |
+| Relay transport key (ap-northeast-1) | `cello/dev/relay/transport-key` | EXISTS | Created manually 2026-06-04 to unblock relay crash-loop; IaC gap — cello-secrets stack was last deployed 2026-05-27 before M6B-006 added RelayTransportKey resource; populate with real value after next cello-secrets stack deploy |
+NOTE: IaC (cello-secrets.yaml RelayTransportKey resource) is correct and region-parameterized — no code change needed. The gap was that cello-secrets-dev was never redeployed to eu-central-1 and ap-northeast-1 after M6B-006. Next deploy.sh run to those regions will bring the stack under CF management.
+
 **Ops-agent secrets (us-east-1):**
 | Secret | Path | Status | Notes |
 |---|---|---|---|
@@ -134,7 +142,7 @@ NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-
 |---|---|---|---|
 | cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent/directory-api-key added; **STALE: missing transport-key in execution role — fixed manually 2026-06-02, redeploy needed** |
-| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent secrets added (telegram-bot-token, ses-credentials, directory-api-key, rds-credentials) |
+| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent secrets added; **STALE: RelayTransportKey resource added by M6B-006 not yet deployed here — relay/transport-key created manually 2026-06-04; redeploy needed** |
 | cello-vpc-dev | UPDATE_COMPLETE | 2026-05-28 | CIDR 10.1.0.0/16; port 9090 SG rule added for ALB health checks |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | Directory+relay task roles in manifest bucket policy |
@@ -185,7 +193,7 @@ NOTE: These were created manually — NOT via CloudFormation. The cello-secrets-
 |---|---|---|---|
 | cello-ecr-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-iam-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent/directory-api-key added; **STALE: missing transport-key in execution role — fixed manually 2026-06-02, redeploy needed** |
-| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent secrets added (telegram-bot-token, ses-credentials, directory-api-key, rds-credentials) |
+| cello-secrets-dev | UPDATE_COMPLETE | 2026-05-27 | ops-agent secrets added; **STALE: RelayTransportKey resource added by M6B-006 not yet deployed here — relay/transport-key created manually 2026-06-04; redeploy needed** |
 | cello-vpc-dev | UPDATE_COMPLETE | 2026-05-28 | CIDR 10.2.0.0/16; port 9090 SG rule added for ALB health checks |
 | cello-kms-dev | CREATE_COMPLETE | 2026-05-23 | |
 | cello-s3-dev | UPDATE_COMPLETE | 2026-05-25 | Directory+relay task roles in manifest bucket policy |
