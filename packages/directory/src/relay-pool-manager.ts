@@ -505,19 +505,23 @@ export class RelayPoolManager {
       // Retrying is not useful in the poll context — the next poll fires in intervalMs.
       void this.loadManifest(1)
         .then(() => {
-          // loadManifest() calls applyManifest() internally.
-          // If we get here without throwing, the manifest was applied (or was stale and threw).
+          // loadManifest() calls applyManifest() internally and logs relay.manifest.loaded.
+          // Note: relay.manifest.loaded also fires here (from applyManifest()) alongside
+          // relay.manifest.refreshed. Operators should use relay.manifest.refreshed as the
+          // authoritative "poll picked up a new manifest" signal — see canonical taxonomy.
           if (this.#currentVersion > versionBefore) {
             this.#logger.info("relay.manifest.refreshed", {
               manifestVersion: this.#currentVersion,
               relayCount: this.#currentRelays.length,
             });
           } else {
-            // Shouldn't reach here — loadManifest throws on stale version.
-            // But be defensive: log noop if somehow we got here.
+            // Defensive path: loadManifest() throws on stale versions, so control should
+            // never reach this else branch. If it does (e.g. a future loadManifest() change
+            // stops throwing on stale), log noop. Both currentVersion and receivedVersion
+            // reflect versionBefore since no update was applied.
             this.#logger.debug("relay.manifest.poll.noop", {
-              currentVersion: this.#currentVersion,
-              receivedVersion: this.#currentVersion,
+              currentVersion: versionBefore,
+              receivedVersion: versionBefore,
             });
           }
         })
