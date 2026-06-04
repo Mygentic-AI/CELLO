@@ -218,6 +218,64 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
     await relayNode.stop();
     await dirNode.stop();
   });
+
+  it("AC-003 (log coverage): directory responds with already_registered:true → relay.already.registered is logged, relay.registered is NOT logged", async () => {
+    // AC-004 in CELLO-M6B-006 states that when already_registered is true, the relay logs
+    // relay.already.registered (not relay.registered). This test exercises that code path
+    // in NetworkDirectoryAdapter lines 122-128 (network-directory-adapter.ts).
+    const relayKp = generateKeypair();
+    const relayPubkey = await relayKp.getPublicKey();
+    const relayId = Buffer.from(relayPubkey).toString("hex");
+
+    const dirNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await dirNode.start();
+
+    // Handler responds with already_registered: true (simulating idempotent re-registration
+    // where the directory detected the relay was already registered with the same key).
+    await dirNode.handle(DIRECTORY_RELAY_PROTOCOL_ID, async (stream: Stream) => {
+      try {
+        await readFrame(stream);
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_ok", already_registered: true })));
+        await stream.close();
+      } catch { stream.close().catch(() => {}); }
+    });
+
+    const relayNode = await createNode({ keyProvider: relayKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await relayNode.start();
+
+    const spyLogger = makeLogger();
+    const adapter = new NetworkDirectoryAdapter({
+      directoryPeerId: dirNode.getPeerId(),
+      directoryMultiaddrs: dirNode.listenAddresses().map(String),
+      logger: spyLogger,
+    });
+    adapter.connect(relayNode);
+
+    const result = await adapter.registerWithDirectory({
+      relayId,
+      publicKeyHex: relayId,
+      region: "eu-central-1",
+      healthCheckUrl: "http://10.0.2.5:4000/health",
+      keyProvider: relayKp,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.alreadyRegistered).toBe(true);
+    }
+
+    // relay.already.registered must be logged at INFO with { relayId, region }
+    const alreadyRegEvent = spyLogger.infoEvents.find(([ev]) => ev === "relay.already.registered");
+    expect(alreadyRegEvent, "relay.already.registered must be logged at INFO when already_registered:true").toBeDefined();
+    expect(alreadyRegEvent![1]).toMatchObject({ relayId, region: "eu-central-1" });
+
+    // relay.registered must NOT be logged when already_registered is true
+    const regEvent = spyLogger.infoEvents.find(([ev]) => ev === "relay.registered");
+    expect(regEvent, "relay.registered must NOT be logged when already_registered:true").toBeUndefined();
+
+    await relayNode.stop();
+    await dirNode.stop();
+  });
 });
 
 // ─── AC-005/AC-006/SI-002: Predecessor ACK verification ─────────────────────

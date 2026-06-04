@@ -232,9 +232,18 @@ if (healthCheckUrlFromEnv) {
   healthCheckUrl = healthCheckUrlFromEnv;
   logger.info("adapter.initialised", { adapterName: "HealthCheckUrl", source: "env", url: healthCheckUrl, env: celloEnv });
 } else if (celloEnv !== "local") {
-  // Non-local: attempt to derive health check URL from ECS task metadata endpoint.
-  // ECS_CONTAINER_METADATA_URI_V4 is injected by ECS Fargate into every container.
-  const metadataUri = process.env["ECS_CONTAINER_METADATA_URI_V4"] ?? "http://169.254.170.2/v4/metadata";
+  // Non-local: derive health check URL from ECS task metadata endpoint.
+  // ECS_CONTAINER_METADATA_URI_V4 is always injected by ECS Fargate (v1.4.0+).
+  // If absent, we are not running on ECS Fargate — the link-local address
+  // 169.254.170.2 would time out. Fail fast rather than silently hanging.
+  const metadataUri = process.env["ECS_CONTAINER_METADATA_URI_V4"];
+  if (!metadataUri) {
+    logRelayServiceStartFailed(logger, {
+      reason: "ECS_CONTAINER_METADATA_URI_V4 not set — cannot derive health check URL; set CELLO_RELAY_HEALTH_CHECK_URL explicitly",
+      region: awsRegion,
+    });
+    process.exit(1);
+  }
   let privateIp: string | null = null;
   try {
     const controller = new AbortController();

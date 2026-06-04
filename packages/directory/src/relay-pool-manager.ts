@@ -207,6 +207,11 @@ export class RelayPoolManager {
   #healthCheckTimer: ReturnType<typeof setInterval> | undefined;
   // CELLO-M6B-006: track healthCheckUrl per relay for no-op detection
   #relayHealthCheckUrls = new Map<string, string>();
+  // CELLO-M6B-006: serialize concurrent reSignManifestForRelay calls to prevent TOCTOU race.
+  // At directory restart, multiple relays reconnect simultaneously — without serialization,
+  // two concurrent calls would both read version N, both increment to N+1, and the second
+  // upload would silently overwrite the first (losing one relay's healthCheckUrl update).
+  #manifestUpdateLock: Promise<void> = Promise.resolve();
 
   constructor(opts: RelayPoolManagerOptions) {
     this.#storage = opts.storage;
@@ -547,6 +552,25 @@ export class RelayPoolManager {
    * @returns { updated: true, version } on success, { updated: false, reason } if no-op or error
    */
   async reSignManifestForRelay(params: {
+    relayId: string;
+    healthCheckUrl: string;
+    keyProvider: import("@cello-protocol/crypto").KeyProvider;
+  }): Promise<{ updated: true; version: number } | { updated: false; reason: string }> {
+    // Serialize concurrent calls: read-increment-write is not atomic on S3.
+    // At directory restart, multiple relays reconnect simultaneously. Without serialization,
+    // two concurrent calls would both read version N, both produce N+1, and the second
+    // upload would silently overwrite the first. The lock queues callers and ensures each
+    // call sees the result of the previous write before starting its own read.
+    const result = this.#manifestUpdateLock.then(async () => this.#reSignManifestForRelayInner(params));
+    // Extend the lock chain; suppress unhandled rejection on the chain tail
+    this.#manifestUpdateLock = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  }
+
+  async #reSignManifestForRelayInner(params: {
     relayId: string;
     healthCheckUrl: string;
     keyProvider: import("@cello-protocol/crypto").KeyProvider;

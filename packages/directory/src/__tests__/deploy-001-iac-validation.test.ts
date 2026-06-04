@@ -434,6 +434,78 @@ describe("DEPLOY-001: SI-003 CI/CD isolation from cello-agent in eu-west-1", () 
   });
 });
 
+// ─── CELLO-M6B-006 AC-001: ECS relay env vars ───────────────────────────────
+
+describe("M6B-006: AC-001 cello-ecs-relay.yaml contains auto-registration env vars", () => {
+  it("CELLO_DIRECTORY_MULTIADDR is in the Environment block", () => {
+    const template = loadTemplate("cello-ecs-relay.yaml");
+    const resources = template["Resources"] as Record<string, Record<string, unknown>>;
+    const taskDef = resources["TaskDefinition"];
+    expect(taskDef).toBeDefined();
+    const props = taskDef["Properties"] as Record<string, unknown>;
+    const containers = props["ContainerDefinitions"] as Array<Record<string, unknown>>;
+    expect(containers.length).toBeGreaterThan(0);
+    const env = containers[0]!["Environment"] as Array<{ Name: string; Value: unknown }>;
+    const envNames = env.map((e) => e.Name);
+    expect(envNames).toContain("CELLO_DIRECTORY_MULTIADDR");
+  });
+
+  it("CELLO_RELAY_TRANSPORT_KEY_HEX is in the Secrets block referencing cello/{env}/relay/transport-key", () => {
+    const template = loadTemplate("cello-ecs-relay.yaml");
+    const resources = template["Resources"] as Record<string, Record<string, unknown>>;
+    const taskDef = resources["TaskDefinition"];
+    const props = taskDef["Properties"] as Record<string, unknown>;
+    const containers = props["ContainerDefinitions"] as Array<Record<string, unknown>>;
+    const secrets = containers[0]!["Secrets"] as Array<{ Name: string; ValueFrom: unknown }>;
+    const transportKeySecret = secrets.find((s) => s.Name === "CELLO_RELAY_TRANSPORT_KEY_HEX");
+    expect(transportKeySecret, "CELLO_RELAY_TRANSPORT_KEY_HEX must be in Secrets").toBeDefined();
+    // ValueFrom must reference cello/{env}/relay/transport-key via Sub
+    const raw = JSON.stringify(transportKeySecret!.ValueFrom);
+    expect(raw).toContain("relay/transport-key");
+  });
+
+  it("CELLO_RELAY_HEALTH_CHECK_URL appears in the template as a commented-out optional override", () => {
+    // This env var is optional: the relay derives the URL from ECS metadata when not set.
+    // It must exist in the template as a commented-out example so operators can enable it.
+    const raw = loadTemplateRaw("cello-ecs-relay.yaml");
+    expect(raw).toContain("CELLO_RELAY_HEALTH_CHECK_URL");
+  });
+});
+
+// ─── CELLO-M6B-006 AC-008: CloudWatch relay manifest update alarm ─────────────
+
+describe("M6B-006: AC-008 cello-cloudwatch.yaml contains RelayManifestUpdateFailedAlarm", () => {
+  it("RelayManifestUpdateFailedMetricFilter resource exists with ManifestUpdateErrors metric", () => {
+    const template = loadTemplate("cello-cloudwatch.yaml");
+    const resources = template["Resources"] as Record<string, Record<string, unknown>>;
+    const filter = resources["RelayManifestUpdateFailedMetricFilter"];
+    expect(filter, "RelayManifestUpdateFailedMetricFilter must exist").toBeDefined();
+    const raw = JSON.stringify(filter);
+    expect(raw).toContain("ManifestUpdateErrors");
+    expect(raw).toContain("relay.manifest.update.failed");
+  });
+
+  it("RelayManifestUpdateFailedAlarm resource exists with correct metric, name pattern, and threshold", () => {
+    const template = loadTemplate("cello-cloudwatch.yaml");
+    const resources = template["Resources"] as Record<string, Record<string, unknown>>;
+    const alarm = resources["RelayManifestUpdateFailedAlarm"];
+    expect(alarm, "RelayManifestUpdateFailedAlarm must exist").toBeDefined();
+    const props = alarm["Properties"] as Record<string, unknown>;
+
+    // Metric name must be ManifestUpdateErrors
+    expect(props["MetricName"]).toBe("ManifestUpdateErrors");
+
+    // Alarm name must include cello-relay-manifest-update- prefix (parameterised by Environment)
+    const alarmName = JSON.stringify(props["AlarmName"]);
+    expect(alarmName).toContain("cello-relay-manifest-update-");
+
+    // Threshold must be > 3 in 5 minutes (Period: 300, Threshold: 3, GreaterThanThreshold)
+    expect(props["Period"]).toBe(300);
+    expect(props["Threshold"]).toBe(3);
+    expect(props["ComparisonOperator"]).toBe("GreaterThanThreshold");
+  });
+});
+
 // ─── SI-004: VPC Peering ports restricted ───────────────────────────────────
 
 describe("DEPLOY-001: SI-004 VPC Peering permits only ports 5432 and 4001", () => {
