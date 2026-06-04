@@ -240,3 +240,11 @@ M6B-013 implementer: M6B-005 is now merged — you can proceed.
 
 trustless-cello: CELLO-M6B-004 merged at e3b8f71. Port-8081 ALB target group committed to IaC, V28 migration (GRANT UPDATE on agent_profiles to cello_service), VPC SG updated. Directory pipeline triggered — wait for ProductionDeploy Succeeded before merging M6B-006.
 No cello-client side for this story.
+
+---
+
+### 2026-06-04 — M6B-006 merged
+
+trustless-cello: CELLO-M6B-006 merged at 3068aaa. Relay auto-registration on startup active. Relay transport key in Secrets Manager (cello/dev/relay/transport-key). Both relay pipeline and directory pipeline triggered.
+No cello-client side for this story.
+M6B-007 and M6B-008 are now unblocked (pending pipeline completion).
