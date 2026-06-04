@@ -462,6 +462,43 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # ── 9b. cello-relay-manifest-update-failed — CELLO-M6B-006 AC-008 ────────
+  # Fires ops-critical when relay manifest re-sign/upload fails > 3 times in 5 min.
+  # Custom metric: CELLO/Relay ManifestUpdateErrors (count per period).
+  # Distinct from cello-relay-manifest-invalid (which fires on signature verification
+  # failures during manifest load, not upload failures during auto-registration).
+
+  RelayManifestUpdateFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "cello-relay-manifest-update-${Environment}"
+      AlarmDescription: !Sub >
+        [${AWS::Region}] CELLO relay manifest re-sign/upload failed > 3 times in 5 minutes.
+        Region: ${AWS::Region}. Relay auto-registration completed but manifest was not updated.
+        Agents may use stale relay health check URLs. Investigate S3 access and directory signing key.
+      MetricName: ManifestUpdateErrors
+      Namespace: CELLO/Relay
+      Dimensions:
+        - Name: Environment
+          Value: !Ref Environment
+        - Name: Region
+          Value: !Ref AWS::Region
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsCriticalTopic
+      OKActions:
+        - !Ref OpsCriticalTopic
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
   # ── 10. cello-audit-shipper-buffer-full — AC-001 ─────────────────────────
   # Fires ops-warning when the audit log shipper buffer is at capacity.
   # Custom metric: CELLO/Audit ShipperBufferUtilization (percentage 0-100).

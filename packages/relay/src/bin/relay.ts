@@ -23,8 +23,12 @@
  *   CELLO_DIRECTORY_PUBKEY            — hex-encoded Ed25519 directory public key (required)
  *                                        The relay authenticates directory admin frames against this key.
  *                                        In NODE_ENV=test, a random ephemeral key is used if absent.
- *   CELLO_DIRECTORY_MULTIADDR         — directory multiaddr for seal_submission callbacks (optional)
+ *   CELLO_DIRECTORY_MULTIADDR         — directory multiaddr for seal_submission callbacks and relay_register (optional)
  *                                        Format: /ip4/<host>/tcp/<port>/p2p/<peer-id>
+ *                                        When set, the relay registers with the directory on startup.
+ *   CELLO_RELAY_HEALTH_CHECK_URL      — VPC-internal health check URL sent in relay_register
+ *                                        (default: http://127.0.0.1:{healthPort}/health)
+ *                                        In ECS, the relay fetches its private IP from task metadata.
  *   AWS_REGION                        — AWS region for observability events (default: us-east-1)
  *   WAL_DIR                           — directory for per-session WAL files (required for CELLO_ENV=dev/production)
  *                                        PERSIST-013: FileSessionWal writes one {sessionId}.wal per active session.
@@ -60,6 +64,10 @@ const listenAddr = process.env["CELLO_RELAY_LISTEN_ADDR"] ?? "/ip4/0.0.0.0/tcp/4
 const wsListenAddr = process.env["CELLO_RELAY_WS_LISTEN_ADDR"] ?? "";
 const healthPort = parseInt(process.env["CELLO_RELAY_HEALTH_PORT"] ?? "4000", 10);
 const dirPubkeyHex = process.env["CELLO_DIRECTORY_PUBKEY"];
+// CELLO-M6B-006: health check URL sent in relay_register frame so directory can update manifest.
+// In ECS, the relay fetches its private IP from the task metadata endpoint at startup.
+// For local dev, defaults to http://127.0.0.1:{healthPort}/health.
+const healthCheckUrl = process.env["CELLO_RELAY_HEALTH_CHECK_URL"] ?? `http://127.0.0.1:${healthPort}/health`;
 const startedAt = Date.now();
 
 // Logger is injected, never imported directly. StdoutLogger emits structured JSON lines.
@@ -260,6 +268,7 @@ if (directoryAdapter) {
       relayId,
       publicKeyHex: relayId, // relayId = hex(pubkey) by convention
       region: awsRegion,
+      healthCheckUrl,
       keyProvider: kp,
     });
 

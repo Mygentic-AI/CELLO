@@ -133,6 +133,7 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
       relayId,
       publicKeyHex: relayId,
       region: "us-east-1",
+      healthCheckUrl: "http://127.0.0.1:4000/health",
       keyProvider: relayKp,
     });
 
@@ -141,6 +142,8 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
     expect(receivedFrame?.["relay_id"]).toBe(relayId);
     expect(receivedFrame?.["public_key_hex"]).toBe(relayId);
     expect(receivedFrame?.["region"]).toBe("us-east-1");
+    // CELLO-M6B-006 AC-002: frame includes health_check_url
+    expect(receivedFrame?.["health_check_url"]).toBe("http://127.0.0.1:4000/health");
 
     await relayNode.stop();
     await dirNode.stop();
@@ -174,11 +177,11 @@ describe("FEDERATION-003 AC-002/AC-003: NetworkDirectoryAdapter.registerWithDire
     adapter.connect(relayNode);
 
     // First registration
-    const r1 = await adapter.registerWithDirectory({ relayId, publicKeyHex: relayId, region: "us-east-1", keyProvider: relayKp });
+    const r1 = await adapter.registerWithDirectory({ relayId, publicKeyHex: relayId, region: "us-east-1", healthCheckUrl: "http://127.0.0.1:4000/health", keyProvider: relayKp });
     expect(r1.ok).toBe(true);
 
     // Second registration — directory returns ok again (idempotent)
-    const r2 = await adapter.registerWithDirectory({ relayId, publicKeyHex: relayId, region: "us-east-1", keyProvider: relayKp });
+    const r2 = await adapter.registerWithDirectory({ relayId, publicKeyHex: relayId, region: "us-east-1", healthCheckUrl: "http://127.0.0.1:4000/health", keyProvider: relayKp });
     expect(r2.ok).toBe(true);
 
     await relayNode.stop();
@@ -561,6 +564,7 @@ describe("FEDERATION-003 DB-001: NetworkDirectoryAdapter.registerWithDirectory r
       relayId,
       publicKeyHex: relayId,
       region: "us-east-1",
+      healthCheckUrl: "http://127.0.0.1:4000/health",
       keyProvider: relayKp,
     });
 

@@ -42,13 +42,14 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
   }
 
   /**
-   * FEDERATION-003 AC-002: Register the relay's Ed25519 public key with the directory.
+   * FEDERATION-003 AC-002 + CELLO-M6B-006: Register the relay with the directory.
    *
    * Pseudocode:
    *   1. Derive the self-signature TBS: buildRelayRegistrationTbs(relayId, publicKeyHex, timestamp)
    *      (FIPS 180-4 SHA-256 over UTF-8(relayId) || UTF-8(publicKeyHex) || timestamp_BE8)
    *   2. Sign TBS with the relay's Ed25519 key (RFC 8032).
-   *   3. Send relay_register frame to directory: { type, relay_id, public_key_hex, region, timestamp, signature }
+   *   3. Send relay_register frame to directory:
+   *      { type, relay_id, public_key_hex, region, health_check_url, timestamp, signature }
    *   4. Read response:
    *      - relay_register_ok   → return { ok: true }
    *      - relay_register_error with already_registered → return { ok: true, alreadyRegistered: true }
@@ -58,17 +59,19 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
    * @param params.relayId - hex encoding of the relay's Ed25519 public key
    * @param params.publicKeyHex - same as relayId (relay_id = hex(pubkey) by convention)
    * @param params.region - AWS region where this relay runs
+   * @param params.healthCheckUrl - CELLO-M6B-006: VPC-internal health check URL
    * @param params.keyProvider - signing key for the self-signature (RFC 8032 Ed25519)
    */
   async registerWithDirectory(params: {
     relayId: string;
     publicKeyHex: string;
     region: string;
+    healthCheckUrl: string;
     keyProvider: KeyProvider;
   }): Promise<{ ok: true; alreadyRegistered?: boolean } | { ok: false; reason: string }> {
     if (!this.#node) return { ok: false, reason: "directory_unavailable" };
 
-    const { relayId, publicKeyHex, region, keyProvider } = params;
+    const { relayId, publicKeyHex, region, healthCheckUrl, keyProvider } = params;
     const timestamp = Date.now();
 
     // SI-003: sign the TBS with the relay's own private key.
@@ -81,11 +84,14 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
       return { ok: false, reason: err instanceof Error ? err.message : "sign_failed" };
     }
 
+    // CELLO-M6B-006: include health_check_url in the relay_register frame
+    // so the directory can update the manifest with the relay's current IP.
     const frame = CBOR_ENC.encode({
       type: "relay_register",
       relay_id: relayId,
       public_key_hex: publicKeyHex,
       region,
+      health_check_url: healthCheckUrl,
       timestamp,
       signature,
     }) as Uint8Array;

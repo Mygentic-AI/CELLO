@@ -24,6 +24,10 @@ Parameters:
   DirectoryNodePubkey:
     Type: String
     Description: "Hex-encoded Ed25519 public key of the directory node (64 chars)"
+  DirectoryMultiaddr:
+    Type: String
+    Description: "Directory node multiaddr including /p2p/{peer-id} suffix (e.g. /dns4/directory-us1.cello.mygentic.ai/tcp/443/wss/p2p/12D3Koo...)"
+    Default: ""
 
 Resources:
   LogGroup:
@@ -66,9 +70,24 @@ Resources:
               Value: /tmp
             - Name: CELLO_DIRECTORY_PUBKEY
               Value: !Ref DirectoryNodePubkey
+            # CELLO-M6B-006: Directory multiaddr for auto-registration on startup.
+            # The relay dials the directory and calls relay_register when this is set.
+            - Name: CELLO_DIRECTORY_MULTIADDR
+              Value: !Ref DirectoryMultiaddr
+            # CELLO-M6B-006: Health check URL is derived from ECS task metadata at startup.
+            # The relay binary fetches its private IP from 169.254.170.2/v2/metadata
+            # and constructs http://{privateIp}:4000/health. No env var needed — the binary
+            # defaults to fetching from ECS metadata when CELLO_RELAY_HEALTH_CHECK_URL is unset.
+            # Explicit override available for testing/debugging:
+            # - Name: CELLO_RELAY_HEALTH_CHECK_URL
+            #   Value: "http://10.0.1.50:4000/health"
           Secrets:
             - Name: NODE_PRIVATE_KEY
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/relay/node-private-key"
+            # CELLO-M6B-006: Stable transport key ensures consistent libp2p Peer ID across restarts.
+            # Same pattern as CELLO_DIRECTORY_TRANSPORT_KEY_HEX in the directory task def.
+            - Name: CELLO_RELAY_TRANSPORT_KEY_HEX
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/relay/transport-key"
           LogConfiguration:
             LogDriver: awslogs
             Options:

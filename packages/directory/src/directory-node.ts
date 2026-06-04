@@ -503,16 +503,19 @@ export class CelloDirectoryNode {
       const req = cborDecode(requestBytes) as Record<string, unknown>;
       const frameType = req["type"] as string | undefined;
 
-      // ─── relay_register: relay identifies itself at startup (FEDERATION-003) ──
-      // The relay sends its relayId, publicKeyHex, region, timestamp, and a self-signature.
+      // ─── relay_register: relay identifies itself at startup (FEDERATION-003 + M6B-006) ──
+      // The relay sends its relayId, publicKeyHex, region, health_check_url, timestamp, and a self-signature.
       // SI-003: we verify the Ed25519 self-signature (relay_id || public_key_hex || timestamp)
       // before writing to relay_registrations. Only the holder of the private key can sign.
+      // CELLO-M6B-006: after successful registration, re-sign the manifest if healthCheckUrl changed.
       if (frameType === "relay_register") {
         const relayId = req["relay_id"] as string | undefined;
         const publicKeyHex = req["public_key_hex"] as string | undefined;
         const region = req["region"] as string | undefined;
         const timestamp = req["timestamp"] as number | undefined;
         const signatureRaw = req["signature"] as Uint8Array | undefined;
+        // CELLO-M6B-006: health_check_url is the relay's VPC-internal health endpoint
+        const healthCheckUrl = req["health_check_url"] as string | undefined;
 
         if (!relayId || !publicKeyHex || !region || typeof timestamp !== "number" || !signatureRaw) {
           stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_error", reason: "missing_fields" })));
@@ -540,7 +543,24 @@ export class CelloDirectoryNode {
           } else {
             stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_error", reason })));
           }
+          await stream.close();
+          return;
         }
+
+        // CELLO-M6B-006: After successful registration, re-sign manifest if healthCheckUrl changed.
+        // Fire-and-forget — relay_register_ok is already sent. Manifest update failure is logged
+        // but does not block the relay's operation.
+        if (healthCheckUrl && this.#relayPoolManager) {
+          void this.#relayPoolManager.reSignManifestForRelay({
+            relayId,
+            healthCheckUrl,
+            keyProvider: this.#keyProvider,
+          }).catch((err: unknown) => {
+            const reason = err instanceof Error ? err.message : String(err);
+            this.#logger?.error("relay.manifest.update.failed", { relayId, region, reason });
+          });
+        }
+
         await stream.close();
         return;
       }
