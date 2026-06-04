@@ -25,6 +25,9 @@ import {
 import { decode, Encoder } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { generateKeypair } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
@@ -476,5 +479,51 @@ describe("CELLO-M6B-002: FROST ceremony error propagation", () => {
     expect(context["reason"]).toBe("ceremony_timeout");
     expect(typeof context["ceremonyId"]).toBe("string");
     expect(context["ceremonyId"]).toHaveLength(16); // truncated hex
+  });
+
+  // ─── AC-011: Taxonomy file verification ──────────────────────────────────────
+
+  it("AC-011: frost.ceremony.failed appears in canonical event taxonomy with correct structure", () => {
+    // Read the canonical taxonomy file from the trustless-cello repo
+    const __dirname = fileURLToPath(new URL('.', import.meta.url));
+    const taxonomyPath = join(__dirname, '../../../../docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md');
+
+    const taxonomyContent = readFileSync(taxonomyPath, 'utf8');
+    const lines = taxonomyContent.split('\n');
+
+    // Find the line containing frost.ceremony.failed
+    const eventLineIndex = lines.findIndex((line) => line.includes('`frost.ceremony.failed`'));
+    expect(eventLineIndex).toBeGreaterThan(-1);
+
+    const eventLine = lines[eventLineIndex]!;
+
+    // Parse the line structure: - `event.name` — level: X; context fields: `{ ... }`; correlationId: false; ...
+    // Example: - `frost.ceremony.failed` — level: warn; context fields: `{ agentId, reason, ceremonyId }`; correlationId: false; ...
+
+    // Assert level: warn
+    expect(eventLine).toMatch(/level:\s*warn/);
+
+    // Assert context fields contains agentId, reason, ceremonyId
+    expect(eventLine).toMatch(/context fields:\s*`\{\s*agentId/);
+    expect(eventLine).toMatch(/reason/);
+    expect(eventLine).toMatch(/ceremonyId/);
+
+    // Assert correlationId: false
+    expect(eventLine).toMatch(/correlationId:\s*false/);
+
+    // Assert package: directory
+    expect(eventLine).toMatch(/package:\s*directory/);
+
+    // Assert trigger description is non-empty and mentions ceremony failure
+    // The trigger description comes after "fired when" or similar
+    const triggerMatch = eventLine.match(/fired when\s+(.+?)\s*;/);
+    expect(triggerMatch).toBeDefined();
+    expect(triggerMatch![1]).toBeTruthy();
+    expect(triggerMatch![1].length).toBeGreaterThan(10); // non-trivial description
+
+    // Assert the trigger mentions ceremony and failure concepts
+    const triggerText = triggerMatch![1].toLowerCase();
+    expect(triggerText).toMatch(/ceremony|frost/);
+    expect(triggerText).toMatch(/fail|error|return/);
   });
 });
