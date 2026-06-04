@@ -484,9 +484,14 @@ describe("CELLO-M6B-002: FROST ceremony error propagation", () => {
   // ─── AC-011: Taxonomy file verification ──────────────────────────────────────
 
   it("AC-011: frost.ceremony.failed appears in canonical event taxonomy with correct structure", () => {
-    // Read the canonical taxonomy file from the trustless-cello repo
-    const __dirname = fileURLToPath(new URL('.', import.meta.url));
-    const taxonomyPath = join(__dirname, '../../../../docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md');
+    // Navigate to the repo root from this file's location using import.meta.url.
+    // Path: packages/directory/src/__tests__/<file> → up 4 levels → repo root.
+    // Using import.meta.url is more reliable than process.cwd() because vitest
+    // sets cwd to the package root (packages/directory) when run with --filter,
+    // which would produce a wrong path. import.meta.url always points to this
+    // source file regardless of the invocation CWD.
+    const thisFileDir = fileURLToPath(new URL('.', import.meta.url));
+    const taxonomyPath = join(thisFileDir, '../../../../docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md');
 
     const taxonomyContent = readFileSync(taxonomyPath, 'utf8');
     const lines = taxonomyContent.split('\n');
