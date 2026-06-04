@@ -534,8 +534,15 @@ export class CelloDirectoryNode {
         }
 
         try {
-          await this.#store.registerRelay({ relayId, publicKeyHex, region });
-          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_ok" })));
+          const regResult = await this.#store.registerRelay({ relayId, publicKeyHex, region });
+          // CELLO-M6B-006: if relay was already registered with same key, include already_registered: true
+          // so the relay can log relay.already.registered on its side (AC-002).
+          // regResult may be undefined in older store implementations (backwards compat).
+          if (regResult?.alreadyRegistered) {
+            stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_ok", already_registered: true })));
+          } else {
+            stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_register_ok" })));
+          }
         } catch (err: unknown) {
           const reason = err instanceof Error ? err.message : String(err);
           if (reason.includes("RELAY_IDENTITY_CONFLICT")) {

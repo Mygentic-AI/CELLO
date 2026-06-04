@@ -15,6 +15,9 @@
  *
  * AC-006: relay_register_ok sent even if S3 upload fails. The error is caught and logged
  *   as relay.manifest.update.failed. Registration is not rolled back.
+ *   Verified by two tests: (1) unit-level: reSignManifestForRelay throws on upload failure;
+ *   (2) wired: full DirectoryNode handler sends relay_register_ok before upload failure,
+ *   relay.manifest.update.failed is logged by handler's .catch() callback.
  *
  * AC-007b: infra/sign-manifest.sh uses shallow key-sort matching buildCanonicalPayload().
  *   Verified by running the same canonical payload construction as the script and confirming
@@ -29,11 +32,31 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { InMemoryKeyProvider } from "@cello-protocol/crypto";
+import { InMemoryKeyProvider, generateKeypair, buildRelayRegistrationTbs } from "@cello-protocol/crypto";
 import type { CloudStorageProvider, Logger } from "@cello-protocol/interfaces";
+import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
 import { RelayPoolManager } from "../relay-pool-manager.js";
 import type { RelayPoolManifest, RelayManifestEntry } from "../relay-pool-manager.js";
 import { ed25519 } from "@noble/curves/ed25519.js";
+import { Encoder, decode as cborDecode } from "cbor-x";
+import * as lp from "it-length-prefixed";
+import { createNode } from "@cello-protocol/transport";
+import { createDirectoryNode } from "../directory-node.js";
+import type { RelayAdapter } from "../directory-node.js";
+import type { Stream } from "@libp2p/interface";
+
+const CBOR_ENC = new Encoder({ tagUint8Array: false });
+const DIRECTORY_RELAY_PROTOCOL = "/cello/directory-relay/1.0.0";
+
+function makeNoOpRelayAdapter(): RelayAdapter {
+  return {
+    recordAssignment: () => ({ ok: false as const, reason: "stub" }),
+    discardSession: () => {},
+    submitForSeal: () => ({ ok: false as const, reason: "stub" }),
+    confirmSeal: () => {},
+    rejectSeal: () => {},
+  };
+}
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -329,7 +352,7 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
   });
 
   describe("AC-006: relay_register_ok sent even if S3 upload fails", () => {
-    it("reSignManifestForRelay throws on upload failure (caller catches with .catch())", async () => {
+    it("reSignManifestForRelay throws on upload failure (unit-level: documents fire-and-forget contract)", async () => {
       const storage = new InMemoryCloudStorage();
       const manifest = buildSignedManifest(dirKp.privateKey, dirKp.publicKeyHex, [RELAY_A], 1);
       storage.setFile("relay-manifest.json", new TextEncoder().encode(JSON.stringify(manifest)));
@@ -357,6 +380,121 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
       // The in-memory healthCheckUrl should NOT be updated (upload failed before step 8)
       // This ensures the next registration attempt will still try to re-sign
       expect(rpm.getRelayHealthCheckUrl("aaaa1111")).toBe("http://10.0.1.50:4000/health");
+    });
+
+    it("AC-006 (wired): relay_register_ok returned to relay even when S3 upload fails; relay.manifest.update.failed logged by handler", async () => {
+      // This test wires the full directory handler path:
+      // 1. Directory has a RelayPoolManager with a failing S3 storage.
+      // 2. Relay sends relay_register with health_check_url over a real libp2p stream.
+      // 3. Assert the response frame type is relay_register_ok (registration is not rolled back).
+      // 4. Assert relay.manifest.update.failed is logged by the handler's .catch() callback.
+
+      const relayKp = generateKeypair();
+      const relayPubkey = await relayKp.getPublicKey();
+      const relayId = Buffer.from(relayPubkey).toString("hex");
+
+      const dirKpWired = generateKeypair();
+
+      // Build an initial signed manifest that includes the relay
+      const storage = new InMemoryCloudStorage();
+      const relayEntry: RelayManifestEntry = {
+        relayId,
+        endpoint: "wss://relay1.example.com",
+        region: "us-east-1",
+        status: "active",
+        healthCheckUrl: "http://10.0.1.50:4000/health",
+      };
+      const dirPrivKey = new Uint8Array(32).fill(42);
+      const dirPubKey = ed25519.getPublicKey(dirPrivKey);
+      const dirPubKeyHex = Buffer.from(dirPubKey).toString("hex");
+      const initialManifest = buildSignedManifest(dirPrivKey, dirPubKeyHex, [relayEntry], 1);
+      storage.setFile("relay-manifest.json", new TextEncoder().encode(JSON.stringify(initialManifest)));
+
+      // Spy logger to capture events
+      const { logger: spyLogger, events } = makeSpyLogger();
+
+      // Configure storage to fail on upload — S3 upload will fail AFTER relay_register_ok is sent
+      // RPM must be loaded before upload failure is set, so the no-op check can be bypassed
+      const rpm = new RelayPoolManager({
+        storage,
+        signerPublicKeyHex: dirPubKeyHex,
+        logger: spyLogger,
+        pingIntervalMs: 999_999, // disable health check polling in test
+      });
+      await rpm.loadManifest();
+
+      // Now enable upload failures — next reSignManifestForRelay will fail at the upload step
+      storage.simulateUploadFailure(true);
+
+      // Store backed by InMemoryDirectoryStore — no DB required
+      const store = new InMemoryDirectoryStore();
+
+      // Create real directory node wired with the failing RelayPoolManager
+      const { node: dirNode, stop: stopDir } = await createDirectoryNode({
+        keyProvider: dirKpWired,
+        relay: makeNoOpRelayAdapter(),
+        relayEndpoint: { peer_id: "12D3KooWdeadbeef", multiaddrs: [] },
+        store,
+        relayPoolManager: rpm,
+        logger: spyLogger,
+      });
+
+      // Create a separate node to act as the relay
+      const relayNode = await createNode({
+        keyProvider: relayKp,
+        listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      });
+      await relayNode.start();
+
+      try {
+        // Connect relay node to directory node
+        const dirAddrs = dirNode.listenAddresses();
+        await relayNode.dial(String(dirAddrs[0]));
+
+        // Open stream on the directory-relay protocol
+        const stream = await relayNode.newStream(dirNode.getPeerId(), DIRECTORY_RELAY_PROTOCOL) as Stream;
+
+        // Build relay_register frame with health_check_url (new URL — will trigger re-sign)
+        const timestamp = Date.now();
+        const tbs = buildRelayRegistrationTbs(relayId, relayId, timestamp);
+        const sig = await relayKp.sign(tbs);
+
+        stream.send(lp.encode.single(CBOR_ENC.encode({
+          type: "relay_register",
+          relay_id: relayId,
+          public_key_hex: relayId,
+          region: "us-east-1",
+          health_check_url: "http://10.0.1.99:4000/health", // different URL → triggers re-sign
+          timestamp,
+          signature: sig,
+        })));
+        await stream.close();
+
+        // Read the response — must be relay_register_ok (registration not rolled back by upload failure)
+        const iter = (lp.decode(stream) as AsyncIterable<unknown>)[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
+        const { value: rawResp } = await iter.next();
+        expect(rawResp).toBeDefined();
+        const respBytes = rawResp instanceof Uint8Array ? rawResp : (rawResp as unknown as { slice(): Uint8Array }).slice();
+        const resp = cborDecode(respBytes) as { type: string; reason?: string };
+        // If this fails, resp.reason tells us why: missing_fields, RELAY_REGISTRATION_UNAUTHORIZED, etc.
+        expect(resp.type, `relay_register response: type=${resp.type} reason=${resp.reason ?? "(none)"}`).toBe("relay_register_ok");
+
+        // Wait for the fire-and-forget .catch() to execute
+        await new Promise<void>((r) => setTimeout(r, 200));
+
+        // Assert relay.manifest.update.failed was logged by the handler's .catch() callback
+        const failedEvent = events.find(e => e.event === "relay.manifest.update.failed");
+        expect(failedEvent).toBeDefined();
+        expect(failedEvent!.level).toBe("error");
+        expect(failedEvent!.context).toMatchObject({
+          relayId,
+          region: "us-east-1",
+          reason: expect.stringContaining("simulated_upload_failure"),
+        });
+      } finally {
+        await relayNode.stop();
+        await stopDir();
+      }
     });
   });
 

@@ -375,9 +375,11 @@ export interface DirectoryStore {
    * @param params.relayId - The hex-encoded Ed25519 public key of the relay (stable identifier)
    * @param params.publicKeyHex - 64-char hex of the relay's Ed25519 public key (same as relayId by convention)
    * @param params.region - AWS region where this relay runs
+   * @returns { alreadyRegistered: true } if the relay was already registered with the same key (idempotent no-op),
+   *          {} (empty object) for a fresh registration
    * @throws Error with message containing "RELAY_IDENTITY_CONFLICT" if relayId already exists with a different key
    */
-  registerRelay(params: { relayId: string; publicKeyHex: string; region: string }): Promise<void>;
+  registerRelay(params: { relayId: string; publicKeyHex: string; region: string }): Promise<{ alreadyRegistered?: boolean }>;
 
   /**
    * Retrieve the registered public key hex for a relay by its relayId.

@@ -270,16 +270,17 @@ export class InMemoryDirectoryStore implements DirectoryStore {
   // Observability events (relay.registered, relay.already.registered, relay.registration.conflict)
   // are emitted by CelloDirectoryNode, which owns the logger. The store layer does not log;
   // it throws RELAY_IDENTITY_CONFLICT so the caller can log and respond appropriately.
-  async registerRelay(params: { relayId: string; publicKeyHex: string; region: string }): Promise<void> {
+  async registerRelay(params: { relayId: string; publicKeyHex: string; region: string }): Promise<{ alreadyRegistered?: boolean }> {
     const existing = this.#relayRegistrations.get(params.relayId);
     if (existing) {
       if (existing.publicKeyHex === params.publicKeyHex) {
         // Idempotent re-registration — no-op
-        return;
+        return { alreadyRegistered: true };
       }
       throw new Error(`RELAY_IDENTITY_CONFLICT: relay_id '${params.relayId}' already registered with a different public key`);
     }
     this.#relayRegistrations.set(params.relayId, { publicKeyHex: params.publicKeyHex, region: params.region });
+    return {};
   }
 
   async getRelayPublicKey(relayId: string): Promise<string | undefined> {

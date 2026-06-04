@@ -109,11 +109,15 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
       for await (const chunk of lp.decode(stream)) {
         const raw = chunk instanceof Uint8Array ? chunk : (chunk as unknown as { slice(): Uint8Array }).slice();
         const resp = cborDecode(raw) as Record<string, unknown>;
-        if (resp["type"] === "relay_register_ok") return { ok: true };
+        if (resp["type"] === "relay_register_ok") {
+          // CELLO-M6B-006: directory sends already_registered: true when the relay was
+          // already registered with the same key (idempotent re-registration). This allows
+          // the relay to log relay.already.registered rather than relay.registered (AC-002).
+          const alreadyRegistered = resp["already_registered"] === true;
+          return { ok: true, alreadyRegistered };
+        }
         if (resp["type"] === "relay_register_error") {
           const reason = (resp["reason"] as string) ?? "directory_error";
-          // already_registered treated as success (idempotent restart)
-          if (reason === "already_registered") return { ok: true, alreadyRegistered: true };
           return { ok: false, reason };
         }
         return { ok: false, reason: "unexpected_response" };

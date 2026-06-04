@@ -74,11 +74,15 @@ Resources:
             # The relay dials the directory and calls relay_register when this is set.
             - Name: CELLO_DIRECTORY_MULTIADDR
               Value: !Ref DirectoryMultiaddr
-            # CELLO-M6B-006: Health check URL is derived from ECS task metadata at startup.
-            # The relay binary fetches its private IP from 169.254.170.2/v2/metadata
-            # and constructs http://{privateIp}:4000/health. No env var needed — the binary
-            # defaults to fetching from ECS metadata when CELLO_RELAY_HEALTH_CHECK_URL is unset.
-            # Explicit override available for testing/debugging:
+            # CELLO-M6B-006: Health check URL resolution (relay binary handles at startup).
+            # Resolution order:
+            #   1. CELLO_RELAY_HEALTH_CHECK_URL env var (explicit override, always preferred)
+            #   2. ECS task metadata endpoint (ECS_CONTAINER_METADATA_URI_V4): relay binary
+            #      fetches its private IP from the metadata service and constructs
+            #      http://{privateIp}:{healthPort}/health automatically.
+            #   3. Non-local with no env var AND metadata unavailable → relay fails to start.
+            # No env var is needed in ECS — the binary derives the URL from metadata.
+            # Set CELLO_RELAY_HEALTH_CHECK_URL explicitly to override (e.g. for testing):
             # - Name: CELLO_RELAY_HEALTH_CHECK_URL
             #   Value: "http://10.0.1.50:4000/health"
           Secrets:

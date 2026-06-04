@@ -467,6 +467,26 @@ Resources:
   # Custom metric: CELLO/Relay ManifestUpdateErrors (count per period).
   # Distinct from cello-relay-manifest-invalid (which fires on signature verification
   # failures during manifest load, not upload failures during auto-registration).
+  #
+  # The log metric filter extracts relay.manifest.update.failed events from the
+  # directory ECS log group and publishes a count to the custom metric namespace.
+  # Without this filter, the alarm remains permanently in INSUFFICIENT_DATA.
+
+  RelayManifestUpdateFailedMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub "/ecs/cello-directory-${Environment}"
+      FilterPattern: '{ $.event = "relay.manifest.update.failed" }'
+      MetricTransformations:
+        - MetricNamespace: CELLO/Relay
+          MetricName: ManifestUpdateErrors
+          MetricValue: "1"
+          DefaultValue: 0
+          Dimensions:
+            - Key: Environment
+              Value: !Ref Environment
+            - Key: Region
+              Value: !Ref AWS::Region
 
   RelayManifestUpdateFailedAlarm:
     Type: AWS::CloudWatch::Alarm
