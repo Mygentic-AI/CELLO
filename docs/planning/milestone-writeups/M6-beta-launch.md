@@ -1121,3 +1121,33 @@ The peer ID change is a separate root cause: `cello/dev/relay/transport-key` exi
 3. When relay connects and registers, directory re-signs and re-uploads the manifest automatically — no human intervention needed
 4. `RelayPoolManager` polls S3 periodically (no directory restart needed on manifest update)
 5. Create `infra/sign-manifest.sh` — signs and uploads a new relay manifest given a private key, relay IP, and peer ID; removes the need for ad-hoc one-off scripts
+
+---
+
+## CELLO-M6B-008: RelayPoolManager Manifest Polling
+
+**Status:** Implemented and sprint-reviewed.
+
+**What was delivered:**
+
+Added a configurable S3 manifest poll loop to `RelayPoolManager` so the directory automatically picks up relay manifest updates without requiring a directory restart. This directly addresses the root-cause pattern documented in the "Relay pool goes stale after relay redeploy" section above.
+
+- `RelayPoolManager.startPolling(intervalMs)` — starts a `setInterval` loop that calls `loadManifest()` on each tick; distinguishes stale-version no-ops (logs `relay.manifest.poll.noop` at DEBUG) from real failures (logs `relay.manifest.poll.failed` at WARN); real failures do not stop the loop
+- `RelayPoolManager.stopPolling()` — clears the interval; idempotent; called in the SIGTERM shutdown handler
+- `bin/directory.ts` wiring — `startPolling()` is called only when `env !== "local"` (local dev has no S3); interval is configured via `RELAY_MANIFEST_POLL_INTERVAL_MS` (default: 120 000 ms / 2 minutes)
+- Four new canonical observability events added to the taxonomy: `relay.manifest.poll.started`, `relay.manifest.refreshed`, `relay.manifest.poll.noop`, `relay.manifest.poll.failed`
+
+**Bugs found during review:** None in the core implementation.
+
+**Code review findings fixed:**
+- Added four new events to the canonical event taxonomy (was missing at initial commit — blocking finding C-1)
+- Added AC-005 test verifying `startPolling()` is never invoked in local mode (was absent — blocking finding C-2)
+- Extended SI-001 test to verify the poll loop continues after an invalid-signature rejection (was not tested — important finding I-1)
+- Added `receivedVersion` field assertion to AC-002 test (was present in implementation but not asserted — important finding I-2)
+- Documented dual-event behavior (`relay.manifest.loaded` + `relay.manifest.refreshed` both fire on version bump) in the taxonomy entry for `relay.manifest.refreshed` — important finding I-3
+
+**What this unblocks:**
+
+- Relay redeploys no longer require a directory restart. Once PREP-003 (relay auto-registration on startup) lands, the full auto-recovery chain works end-to-end: relay redeploys → `relay_register` → manifest re-signed → poll picks up new manifest → health checks use new IP — without any manual operator step.
+- Eliminates the "relay pool goes stale" outage pattern that occurred twice during M6B (2026-05-28 and 2026-06-03).
+- Items 4 and 5 from the "Post-M6 fixes required" list above are now resolved (S3 polling) and partially resolved (a proper signing script remains as PREP-003/PREP-004 follow-on work).

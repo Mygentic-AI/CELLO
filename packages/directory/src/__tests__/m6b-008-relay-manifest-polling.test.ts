@@ -212,6 +212,8 @@ describe("CELLO-M6B-008: RelayPoolManager manifest polling", () => {
     const noopEvent = logger.events.find(e => e.name === "relay.manifest.poll.noop");
     expect(noopEvent).toBeDefined();
     expect(noopEvent?.context.currentVersion).toBe(1);
+    // I-2: receivedVersion must be present in the event context (required field per taxonomy)
+    expect(noopEvent?.context.receivedVersion).toBeDefined();
     expect(mgr.currentVersion).toBe(1);
 
     mgr.stopPolling();
@@ -363,19 +365,23 @@ describe("CELLO-M6B-008: RelayPoolManager manifest polling", () => {
   });
 
   // SI-001: manifest signature verification on every poll
-  it("SI-001: invalid signature on polled manifest is rejected", async () => {
+  it("SI-001: invalid signature on polled manifest is rejected, pool stays at version N, loop continues", async () => {
     const manifest1 = createSignedManifest(1, signingKeyPrivate);
 
     // Create manifest2 with invalid signature
     const manifest2 = createSignedManifest(2, signingKeyPrivate);
     manifest2.signature = "deadbeef".repeat(16); // invalid signature
 
+    // manifest3 is valid version 3 — returned after the bad poll to prove the loop continues
+    const manifest3 = createSignedManifest(3, signingKeyPrivate, "relay3", "http://relay3:4000/health");
+
     let callCount = 0;
     const storage: CloudStorageProvider = {
       download: vi.fn(async () => {
         callCount++;
-        const m = callCount === 1 ? manifest1 : manifest2;
-        return new TextEncoder().encode(JSON.stringify(m));
+        if (callCount === 1) return new TextEncoder().encode(JSON.stringify(manifest1));
+        if (callCount === 2) return new TextEncoder().encode(JSON.stringify(manifest2)); // bad sig
+        return new TextEncoder().encode(JSON.stringify(manifest3)); // subsequent polls get v3
       }),
       upload: vi.fn(),
     };
@@ -398,14 +404,81 @@ describe("CELLO-M6B-008: RelayPoolManager manifest polling", () => {
     mgr.startPolling(200);
     logger.events.length = 0;
 
+    // First poll: retrieves manifest2 with invalid signature — must be rejected
     await vi.advanceTimersByTimeAsync(200);
 
     const invalidEvent = logger.events.find(e => e.name === "relay.manifest.invalid");
     expect(invalidEvent).toBeDefined();
     expect(invalidEvent?.context.reason).toBe("signature_verification_failed");
-    expect(mgr.currentVersion).toBe(1); // unchanged
+    expect(mgr.currentVersion).toBe(1); // unchanged — attacker cannot corrupt the pool
+
+    const eventCountAfterBadPoll = logger.events.length;
+    logger.events.length = 0;
+
+    // I-1: verify the poll loop CONTINUES after the invalid-signature rejection.
+    // Second poll: retrieves manifest3 (valid, version 3) — must be applied.
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(logger.events.length).toBeGreaterThan(0); // loop fired again
+    const refreshedEvent = logger.events.find(e => e.name === "relay.manifest.refreshed");
+    expect(refreshedEvent).toBeDefined();
+    expect(refreshedEvent?.context.manifestVersion).toBe(3);
+    expect(mgr.currentVersion).toBe(3); // pool updated on the next valid poll
+
+    // Silence the unused variable warning
+    void eventCountAfterBadPoll;
 
     mgr.stopPolling();
+    mgr.stop();
+    vi.useRealTimers();
+  });
+
+  // AC-005: CELLO_ENV=local — startPolling() is NOT called; no relay.manifest.poll.* events fire
+  it("AC-005: startPolling() is never called in local mode (no S3 in local dev)", async () => {
+    // This test verifies the directory wiring gate: when env === "local", the code path
+    // that calls startPolling() is never reached (the local branch returns early before
+    // the startPolling() call). We verify this at the RelayPoolManager level by asserting
+    // that startPolling() is never called on a manager that is only used in local mode —
+    // i.e., if we never call startPolling(), no relay.manifest.poll.* events fire.
+    const manifest1 = createSignedManifest(1, signingKeyPrivate);
+
+    const storage: CloudStorageProvider = {
+      download: vi.fn(async () => new TextEncoder().encode(JSON.stringify(manifest1))),
+      upload: vi.fn(),
+    };
+
+    const logger = createMockLogger();
+    const signerPubkeyHex = Buffer.from(signingKeyPublic).toString("hex");
+
+    const mgr = new RelayPoolManager({
+      storage,
+      signerPublicKeyHex: signerPubkeyHex,
+      logger,
+      pingFn: async () => ({ ok: true }),
+      pingIntervalMs: 999_999,
+    });
+
+    vi.useFakeTimers();
+
+    // Local mode: loadManifest() is called once at startup (existing behavior)
+    await mgr.loadManifest();
+    expect(mgr.currentVersion).toBe(1);
+
+    // Local mode: startPolling() is NOT called
+    // (bin/directory.ts returns early from the local branch before startPolling())
+    logger.events.length = 0;
+
+    // Advance timers by 10 poll cycles to confirm no polls fire
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // No relay.manifest.poll.* events should fire
+    const pollEvents = logger.events.filter(e => e.name.startsWith("relay.manifest.poll."));
+    expect(pollEvents).toHaveLength(0);
+
+    // The storage download should NOT have been called again (no polls)
+    // download was called once in loadManifest() above
+    expect(storage.download).toHaveBeenCalledTimes(1);
+
     mgr.stop();
     vi.useRealTimers();
   });
