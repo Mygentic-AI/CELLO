@@ -533,6 +533,13 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
     logger.error("relay.manifest.load.failed", { reason: msg, attempt: 5, env });
     process.exit(1);
   }
+
+  // M6B-008: start manifest poll loop
+  // This code only runs when env !== "local" (checked at line 494),
+  // so the poll loop is automatically disabled in local mode.
+  const pollIntervalMs = parseInt(process.env["RELAY_MANIFEST_POLL_INTERVAL_MS"] ?? "120000", 10);
+  mgr.startPolling(pollIntervalMs);
+
   return mgr;
 })();
 
@@ -814,6 +821,11 @@ const shutdown = () => {
 
   healthServer.close();
   checkpointCoordinator.stop();
+  // M6B-008: stop manifest poll loop and health check timer
+  if (relayPoolManager) {
+    relayPoolManager.stopPolling();
+    relayPoolManager.stop();
+  }
   result.stop()
     .then(() => pgPool?.end())
     .then(() => auditLogShipper.flush())

@@ -1,0 +1,412 @@
+/**
+ * CELLO-M6B-008: RelayPoolManager manifest polling tests
+ *
+ * ─── Phase P Pseudocode ──────────────────────────────────────────────────────
+ *
+ * RelayPoolManager.startPolling(intervalMs: number):
+ *   this.#pollInterval = setInterval(() => {
+ *     versionBefore = this.#currentVersion
+ *     try:
+ *       await this.loadManifest()
+ *       if this.#currentVersion > versionBefore:
+ *         log relay.manifest.refreshed with { manifestVersion, relayCount }
+ *       else:
+ *         log relay.manifest.poll.noop (shouldn't reach here — loadManifest throws on stale)
+ *     catch (err):
+ *       reason = err.message
+ *       if reason starts with "Manifest rejected: version":
+ *         log relay.manifest.poll.noop (stale manifest, expected no-op)
+ *       else:
+ *         log relay.manifest.poll.failed (real failure — S3 error, signature invalid, etc.)
+ *   }, intervalMs)
+ *   log relay.manifest.poll.started with { intervalMs }
+ *
+ * RelayPoolManager.stopPolling():
+ *   if this.#pollInterval !== undefined:
+ *     clearInterval(this.#pollInterval)
+ *     this.#pollInterval = undefined
+ *
+ * bin/directory.ts wiring (CELLO_ENV != 'local' only):
+ *   after await relayPoolManager.loadManifest():
+ *     const pollIntervalMs = parseInt(process.env.RELAY_MANIFEST_POLL_INTERVAL_MS ?? "120000", 10)
+ *     if (env !== "local"):
+ *       relayPoolManager.startPolling(pollIntervalMs)
+ *
+ *   in SIGTERM handler (before process.exit):
+ *     relayPoolManager.stopPolling()
+ *     relayPoolManager.stop()
+ *
+ * ─── End Phase P ─────────────────────────────────────────────────────────────
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { RelayPoolManager, type RelayPoolManifest } from "../relay-pool-manager.js";
+import type { CloudStorageProvider, Logger } from "@cello-protocol/interfaces";
+import { ed25519 } from "@noble/curves/ed25519.js";
+import { randomBytes } from "node:crypto";
+
+// Test helper: create a signed manifest
+function createSignedManifest(
+  version: number,
+  signingKeyBytes: Uint8Array,
+  relayId = "relay1",
+  healthCheckUrl = "http://relay1:4000/health",
+): RelayPoolManifest {
+  const manifest: RelayPoolManifest = {
+    version,
+    signedBy: "test-node",
+    signature: "", // will be filled below
+    updatedAt: new Date().toISOString(),
+    relays: [
+      {
+        relayId,
+        endpoint: "wss://relay1.example.com",
+        region: "us-east-1",
+        status: "active",
+        healthCheckUrl,
+        peerId: "12D3KooWTest",
+        multiaddrs: ["/dns4/relay1.example.com/tcp/443/wss/p2p/12D3KooWTest"],
+      },
+    ],
+  };
+
+  // Sign the manifest body (version, updatedAt, relays)
+  const body = { version: manifest.version, updatedAt: manifest.updatedAt, relays: manifest.relays };
+  const sorted = Object.fromEntries(Object.keys(body).sort().map(k => [k, body[k as keyof typeof body]]));
+  const payload = new TextEncoder().encode(JSON.stringify(sorted));
+  const signature = ed25519.sign(payload, signingKeyBytes);
+  manifest.signature = Buffer.from(signature).toString("hex");
+
+  return manifest;
+}
+
+// Test helper: mock logger that tracks events
+function createMockLogger(): Logger & { events: Array<{ name: string; context: Record<string, unknown> }> } {
+  const events: Array<{ name: string; context: Record<string, unknown> }> = [];
+  return {
+    events,
+    info: (name: string, context: Record<string, unknown>) => {
+      events.push({ name, context });
+    },
+    warn: (name: string, context: Record<string, unknown>) => {
+      events.push({ name, context });
+    },
+    error: (name: string, context: Record<string, unknown>) => {
+      events.push({ name, context });
+    },
+    debug: (name: string, context: Record<string, unknown>) => {
+      events.push({ name, context });
+    },
+  };
+}
+
+// AC-001: poll loop updates relay pool when manifest version increases
+describe("CELLO-M6B-008: RelayPoolManager manifest polling", () => {
+  let signingKeyPrivate: Uint8Array;
+  let signingKeyPublic: Uint8Array;
+
+  beforeEach(() => {
+    // Generate a signing keypair for the test (RFC 8032)
+    signingKeyPrivate = randomBytes(32);
+    signingKeyPublic = ed25519.getPublicKey(signingKeyPrivate);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("AC-001: poll loop retrieves newer manifest and updates relay pool", async () => {
+    // Given: CloudStorageProvider stub that returns version 1, then version 2
+    const manifest1 = createSignedManifest(1, signingKeyPrivate, "relay1", "http://relay1:4000/health");
+    const manifest2 = createSignedManifest(2, signingKeyPrivate, "relay2", "http://relay2:4000/health");
+
+    let callCount = 0;
+    const storage: CloudStorageProvider = {
+      download: vi.fn(async () => {
+        callCount++;
+        const m = callCount === 1 ? manifest1 : manifest2;
+        return new TextEncoder().encode(JSON.stringify(m));
+      }),
+      upload: vi.fn(),
+    };
+
+    const logger = createMockLogger();
+    const signerPubkeyHex = Buffer.from(signingKeyPublic).toString("hex");
+
+    const mgr = new RelayPoolManager({
+      storage,
+      signerPublicKeyHex: signerPubkeyHex,
+      logger,
+      pingFn: async () => ({ ok: true }),
+      pingIntervalMs: 999_999, // set very high to prevent health checks from firing during test
+    });
+
+    // Set up fake timers before loading manifest
+    vi.useFakeTimers();
+
+    // Load initial manifest
+    await mgr.loadManifest();
+    expect(mgr.currentVersion).toBe(1);
+    expect(mgr.relays[0]?.healthCheckUrl).toBe("http://relay1:4000/health");
+
+    // Clear events from initial load
+    logger.events.length = 0;
+
+    // Start polling with 200ms interval
+    mgr.startPolling(200);
+
+    // Verify relay.manifest.poll.started was logged
+    const startedEvent = logger.events.find(e => e.name === "relay.manifest.poll.started");
+    expect(startedEvent).toBeDefined();
+    expect(startedEvent?.context.intervalMs).toBe(200);
+
+    // Clear events before poll
+    logger.events.length = 0;
+
+    // Advance time to trigger first poll
+    await vi.advanceTimersByTimeAsync(200);
+
+    // Then: relay pool reflects version 2; relay.manifest.refreshed is logged
+    expect(mgr.currentVersion).toBe(2);
+    expect(mgr.relays[0]?.healthCheckUrl).toBe("http://relay2:4000/health");
+
+    const refreshedEvent = logger.events.find(e => e.name === "relay.manifest.refreshed");
+    expect(refreshedEvent).toBeDefined();
+    expect(refreshedEvent?.context.manifestVersion).toBe(2);
+    expect(refreshedEvent?.context.relayCount).toBe(1);
+
+    mgr.stopPolling();
+    mgr.stop();
+    vi.useRealTimers();
+  });
+
+  // AC-002: stale manifest version is a no-op
+  it("AC-002: poll retrieves same version manifest and logs noop", async () => {
+    const manifest1 = createSignedManifest(1, signingKeyPrivate);
+
+    const storage: CloudStorageProvider = {
+      download: vi.fn(async () => new TextEncoder().encode(JSON.stringify(manifest1))),
+      upload: vi.fn(),
+    };
+
+    const logger = createMockLogger();
+    const signerPubkeyHex = Buffer.from(signingKeyPublic).toString("hex");
+
+    const mgr = new RelayPoolManager({
+      storage,
+      signerPublicKeyHex: signerPubkeyHex,
+      logger,
+      pingFn: async () => ({ ok: true }),
+      pingIntervalMs: 999_999,
+    });
+
+    vi.useFakeTimers();
+    await mgr.loadManifest();
+    expect(mgr.currentVersion).toBe(1);
+
+    mgr.startPolling(200);
+    logger.events.length = 0;
+
+    await vi.advanceTimersByTimeAsync(200);
+
+    const noopEvent = logger.events.find(e => e.name === "relay.manifest.poll.noop");
+    expect(noopEvent).toBeDefined();
+    expect(noopEvent?.context.currentVersion).toBe(1);
+    expect(mgr.currentVersion).toBe(1);
+
+    mgr.stopPolling();
+    mgr.stop();
+    vi.useRealTimers();
+  });
+
+  // AC-003: transient S3 failure doesn't stop poll loop
+  it("AC-003: poll continues after transient failure", async () => {
+    const manifest1 = createSignedManifest(1, signingKeyPrivate);
+
+    // Disable retries for this test to avoid fake timer issues with exponential backoff
+    let callCount = 0;
+    const storage: CloudStorageProvider = {
+      download: vi.fn(async () => {
+        callCount++;
+        // Call 1: initial loadManifest() — succeed
+        if (callCount === 1) {
+          return new TextEncoder().encode(JSON.stringify(manifest1));
+        }
+        // Call 2: first poll attempt — fail
+        if (callCount === 2) {
+          throw new Error("S3 unavailable");
+        }
+        // Call 3+: second poll — succeed
+        return new TextEncoder().encode(JSON.stringify(manifest1));
+      }),
+      upload: vi.fn(),
+    };
+
+    const logger = createMockLogger();
+    const signerPubkeyHex = Buffer.from(signingKeyPublic).toString("hex");
+
+    const mgr = new RelayPoolManager({
+      storage,
+      signerPublicKeyHex: signerPubkeyHex,
+      logger,
+      pingFn: async () => ({ ok: true }),
+      pingIntervalMs: 999_999,
+      maxLoadAttempts: 1, // no retries — fail immediately
+      retryDelayMs: 0, // no delay
+    });
+
+    vi.useFakeTimers();
+    await mgr.loadManifest();
+    expect(mgr.currentVersion).toBe(1);
+    expect(callCount).toBe(1);
+
+    mgr.startPolling(200);
+    logger.events.length = 0;
+
+    await vi.advanceTimersByTimeAsync(200);
+    const failedEvent = logger.events.find(e => e.name === "relay.manifest.poll.failed");
+    expect(failedEvent).toBeDefined();
+    expect(failedEvent?.context.reason).toContain("S3 unavailable");
+    expect(callCount).toBe(2);
+
+    logger.events.length = 0;
+
+    await vi.advanceTimersByTimeAsync(200);
+    const noopEvent = logger.events.find(e => e.name === "relay.manifest.poll.noop");
+    expect(noopEvent).toBeDefined();
+    expect(callCount).toBe(3); // second poll succeeded
+
+    mgr.stopPolling();
+    mgr.stop();
+    vi.useRealTimers();
+  });
+
+  // AC-004: stopPolling() terminates the loop
+  it("AC-004: stopPolling() prevents further polls", async () => {
+    const manifest1 = createSignedManifest(1, signingKeyPrivate);
+
+    const storage: CloudStorageProvider = {
+      download: vi.fn(async () => new TextEncoder().encode(JSON.stringify(manifest1))),
+      upload: vi.fn(),
+    };
+
+    const logger = createMockLogger();
+    const signerPubkeyHex = Buffer.from(signingKeyPublic).toString("hex");
+
+    const mgr = new RelayPoolManager({
+      storage,
+      signerPublicKeyHex: signerPubkeyHex,
+      logger,
+      pingFn: async () => ({ ok: true }),
+      pingIntervalMs: 999_999,
+    });
+
+    vi.useFakeTimers();
+    await mgr.loadManifest();
+
+    mgr.startPolling(200);
+    logger.events.length = 0;
+
+    await vi.advanceTimersByTimeAsync(200);
+    const eventCountAfterFirstPoll = logger.events.length;
+    expect(eventCountAfterFirstPoll).toBeGreaterThan(0);
+
+    mgr.stopPolling();
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(logger.events.length).toBe(eventCountAfterFirstPoll);
+
+    mgr.stop();
+    vi.useRealTimers();
+  });
+
+  // AC-006: configurable interval
+  it("AC-006: poll loop respects RELAY_MANIFEST_POLL_INTERVAL_MS", async () => {
+    const manifest1 = createSignedManifest(1, signingKeyPrivate);
+
+    const storage: CloudStorageProvider = {
+      download: vi.fn(async () => new TextEncoder().encode(JSON.stringify(manifest1))),
+      upload: vi.fn(),
+    };
+
+    const logger = createMockLogger();
+    const signerPubkeyHex = Buffer.from(signingKeyPublic).toString("hex");
+
+    const mgr = new RelayPoolManager({
+      storage,
+      signerPublicKeyHex: signerPubkeyHex,
+      logger,
+      pingFn: async () => ({ ok: true }),
+      pingIntervalMs: 999_999,
+    });
+
+    vi.useFakeTimers();
+    await mgr.loadManifest();
+
+    mgr.startPolling(300_000); // 5 minutes
+
+    const startedEvent = logger.events.find(e => e.name === "relay.manifest.poll.started");
+    expect(startedEvent).toBeDefined();
+    expect(startedEvent?.context.intervalMs).toBe(300_000);
+
+    logger.events.length = 0;
+
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(logger.events.length).toBe(0); // no poll yet
+
+    await vi.advanceTimersByTimeAsync(200_001);
+    expect(logger.events.length).toBeGreaterThan(0); // poll fired
+
+    mgr.stopPolling();
+    mgr.stop();
+    vi.useRealTimers();
+  });
+
+  // SI-001: manifest signature verification on every poll
+  it("SI-001: invalid signature on polled manifest is rejected", async () => {
+    const manifest1 = createSignedManifest(1, signingKeyPrivate);
+
+    // Create manifest2 with invalid signature
+    const manifest2 = createSignedManifest(2, signingKeyPrivate);
+    manifest2.signature = "deadbeef".repeat(16); // invalid signature
+
+    let callCount = 0;
+    const storage: CloudStorageProvider = {
+      download: vi.fn(async () => {
+        callCount++;
+        const m = callCount === 1 ? manifest1 : manifest2;
+        return new TextEncoder().encode(JSON.stringify(m));
+      }),
+      upload: vi.fn(),
+    };
+
+    const logger = createMockLogger();
+    const signerPubkeyHex = Buffer.from(signingKeyPublic).toString("hex");
+
+    const mgr = new RelayPoolManager({
+      storage,
+      signerPublicKeyHex: signerPubkeyHex,
+      logger,
+      pingFn: async () => ({ ok: true }),
+      pingIntervalMs: 999_999,
+    });
+
+    vi.useFakeTimers();
+    await mgr.loadManifest();
+    expect(mgr.currentVersion).toBe(1);
+
+    mgr.startPolling(200);
+    logger.events.length = 0;
+
+    await vi.advanceTimersByTimeAsync(200);
+
+    const invalidEvent = logger.events.find(e => e.name === "relay.manifest.invalid");
+    expect(invalidEvent).toBeDefined();
+    expect(invalidEvent?.context.reason).toBe("signature_verification_failed");
+    expect(mgr.currentVersion).toBe(1); // unchanged
+
+    mgr.stopPolling();
+    mgr.stop();
+    vi.useRealTimers();
+  });
+});

@@ -198,6 +198,7 @@ export class RelayPoolManager {
   #currentRelays: RelayManifestEntry[] = [];
   #failureState = new Map<string, RelayState>();
   #healthCheckTimer: ReturnType<typeof setInterval> | undefined;
+  #pollInterval: ReturnType<typeof setInterval> | undefined;
 
   constructor(opts: RelayPoolManagerOptions) {
     this.#storage = opts.storage;
@@ -474,6 +475,77 @@ export class RelayPoolManager {
       return (stateA?.consecutiveFailures ?? 0) - (stateB?.consecutiveFailures ?? 0);
     });
     return sorted[0]!;
+  }
+
+  /**
+   * Start the manifest poll loop.
+   * M6B-008: Polls S3 for manifest updates every intervalMs milliseconds.
+   * When a newer manifest version is retrieved, applyManifest() updates the relay pool.
+   * Transient S3 failures are logged but do not stop the poll loop.
+   * Safe to call multiple times — idempotent.
+   *
+   * @param intervalMs — poll interval in milliseconds (default: 120_000 = 2 minutes)
+   */
+  startPolling(intervalMs: number): void {
+    if (this.#pollInterval !== undefined) {
+      // Already polling — no-op
+      return;
+    }
+
+    this.#pollInterval = setInterval(() => {
+      const versionBefore = this.#currentVersion;
+      void this.loadManifest()
+        .then(() => {
+          // loadManifest() calls applyManifest() internally.
+          // If we get here without throwing, the manifest was applied (or was stale and threw).
+          if (this.#currentVersion > versionBefore) {
+            this.#logger.info("relay.manifest.refreshed", {
+              manifestVersion: this.#currentVersion,
+              relayCount: this.#currentRelays.length,
+            });
+          } else {
+            // Shouldn't reach here — loadManifest throws on stale version.
+            // But be defensive: log noop if somehow we got here.
+            this.#logger.debug("relay.manifest.poll.noop", {
+              currentVersion: this.#currentVersion,
+              receivedVersion: this.#currentVersion,
+            });
+          }
+        })
+        .catch((err: unknown) => {
+          const reason = err instanceof Error ? err.message : String(err);
+          // Distinguish stale-version (no-op) from real failure
+          if (reason.startsWith("Manifest rejected: version")) {
+            this.#logger.debug("relay.manifest.poll.noop", {
+              currentVersion: versionBefore,
+              receivedVersion: versionBefore,
+            });
+          } else {
+            this.#logger.warn("relay.manifest.poll.failed", {
+              reason,
+              currentVersion: this.#currentVersion,
+            });
+          }
+        });
+    }, intervalMs);
+
+    this.#logger.info("relay.manifest.poll.started", { intervalMs });
+
+    // Allow Node.js to exit even if the poll timer is still running
+    if (typeof this.#pollInterval === "object" && "unref" in this.#pollInterval) {
+      (this.#pollInterval as NodeJS.Timeout).unref();
+    }
+  }
+
+  /**
+   * Stop the manifest poll loop.
+   * Safe to call multiple times — idempotent.
+   */
+  stopPolling(): void {
+    if (this.#pollInterval !== undefined) {
+      clearInterval(this.#pollInterval);
+      this.#pollInterval = undefined;
+    }
   }
 
   /**
