@@ -175,6 +175,14 @@ Resources:
       UnhealthyThresholdCount: 3
       HealthCheckIntervalSeconds: 30
       HealthCheckTimeoutSeconds: 5
+      # Reduce deregistration delay from the AWS default of 300s to 30s.
+      # The default 300s causes CloudFormation stack updates to fail because
+      # `aws ecs wait` (10-min timeout) expires before the old task finishes
+      # deregistering. 30s is sufficient for in-flight WebSocket connections
+      # to drain without blocking the deployment pipeline.
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
       Tags:
         - Key: Project
           Value: cello
