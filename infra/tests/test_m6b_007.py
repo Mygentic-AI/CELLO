@@ -817,6 +817,7 @@ if __name__ == "__main__":
         test_ac001_relay_alb_dns_name_output,
         test_ac001_relay_alb_hosted_zone_id_output,
         test_ac002_port_4001_from_directory_sg_present,
+        test_ac002_port_4000_from_directory_sg_unchanged,
         test_ac002_port_4002_from_alb_sg,
         test_ac002_port_4000_from_alb_sg,
         test_si001_port_4002_no_internet_ingress,

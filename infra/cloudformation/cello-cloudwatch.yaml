@@ -1,10 +1,18 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   CELLO CloudWatch — alarms and dashboards for all regions.
-  Deploys 10 named alarms per region routed to cello-ops-critical or
+  Deploys named alarms per region routed to cello-ops-critical or
   cello-ops-warning SNS topics, and one multi-region operations dashboard.
   Deploy order: AFTER cello-ecs-directory and cello-ecs-relay (alarm
   dimensions reference ECS service metrics that require those stacks first).
+
+  Cross-stack dependency: RelayAlb5xxAlarm imports
+  cello-${Environment}-relay-alb-arn via !ImportValue — this export is
+  produced by cello-ecs-relay. If cello-cloudwatch is deployed or updated
+  in isolation before cello-ecs-relay has been deployed to the same region,
+  CloudFormation will fail with "Export not found". The deploy.sh ordering
+  (Step 11 = cello-ecs-relay, Step 12 = cello-cloudwatch) enforces this
+  constraint. Never deploy cello-cloudwatch in isolation in a fresh region.
 
   SECOPS-002: AC-001 (10 alarms), AC-002 (directory task count),
   AC-003 (checkpoint gap), AC-004 (multi-region dashboard),

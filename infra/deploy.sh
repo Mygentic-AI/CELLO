@@ -535,6 +535,9 @@ deploy_stack "cello-ecs-relay-${ENVIRONMENT}" "cello-ecs-relay.yaml" \
 
 # ── STEP 12: cello-cloudwatch — CloudWatch alarms and dashboards ─────────────
 # depends on: cello-ecs-directory, cello-ecs-relay (alarm dimensions reference ECS services)
+# NOTE: RelayAlb5xxAlarm uses !ImportValue "cello-${Environment}-relay-alb-arn" from Step 11
+# (cello-ecs-relay). Never deploy cello-cloudwatch before cello-ecs-relay in a new region —
+# CloudFormation will fail with "Export not found".
 
 deploy_stack "cello-cloudwatch-${ENVIRONMENT}" "cello-cloudwatch.yaml" \
   "Environment=${ENVIRONMENT}"
