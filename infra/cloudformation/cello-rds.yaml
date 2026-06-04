@@ -10,7 +10,11 @@ Parameters:
     Description: Deployment environment
   InstanceClass:
     Type: String
-    Default: db.t3.small
+    # CELLO-M6B-009 AC-004: db.t3.medium is the default for 1000 concurrent users.
+    # db.t3.medium: ~450 max connections. With 50 per node × 3 nodes = 150 app connections
+    # + ~50 overhead (replication, rotation Lambda, admin) = 200 total, leaving 250 connections
+    # of headroom for spikes and manual admin. Safe to push pool max to 75 on medium if needed later.
+    Default: db.t3.medium
     AllowedValues: [db.t3.small, db.t3.medium, db.t3.large]
     Description: RDS instance class
 

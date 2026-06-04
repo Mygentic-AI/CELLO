@@ -213,6 +213,8 @@ export class CelloRelayNode {
   readonly #ackSigningKeyProvider: KeyProvider | null;
   /** PERSIST-012: stable relay identifier included in signed ACKs. */
   readonly #relayId: string | null;
+  /** CELLO-M6B-009: idle session sweep interval timer. */
+  #idleSweepInterval: NodeJS.Timeout | null = null;
 
   // nonce_hex → NonceEntry
   readonly #nonces = new Map<string, NonceEntry>();
@@ -241,12 +243,13 @@ export class CelloRelayNode {
   }
 
   async start(): Promise<void> {
+    // CELLO-M6B-009 AC-005: explicit maxInboundStreams caps
     await this.#node.handle(RELAY_PROTOCOL_ID, (stream) => {
       void this.#handleRelayStream(stream);
-    });
+    }, { maxInboundStreams: 2048 });
     await this.#node.handle(DIRECTORY_RELAY_PROTOCOL_ID, (stream) => {
       void this.#handleDirectoryRelayStream(stream);
-    });
+    }, { maxInboundStreams: 128 });
     // OBS-001 AC-001: relay startup log
     const peerId = truncId(this.#node.getPeerId());
     const addrs = this.#node.listenAddresses();
@@ -951,6 +954,40 @@ export class CelloRelayNode {
       this.confirmSeal(sessionId);
     } else {
       this.rejectSeal(sessionId, dirResult.reason);
+    }
+  }
+
+  // ─── Idle session sweep (CELLO-M6B-009) ──────────────────────────────────────
+
+  /**
+   * Start the idle session sweep.
+   *
+   * Runs immediately, then every `intervalMs` milliseconds.
+   * Sessions with lastActivityAt older than `maxIdleMs` and status 'active' are destroyed.
+   *
+   * @param intervalMs How often to run the sweep (default: 1 hour = 3_600_000ms)
+   * @param maxIdleMs Sessions idle longer than this are swept (default: 24 hours = 86_400_000ms)
+   */
+  startIdleSweep(intervalMs: number, maxIdleMs: number): void {
+    const sweep = () => {
+      this.#store.sweepIdleSessions(maxIdleMs, this.#logger);
+    };
+
+    // Run first sweep immediately
+    sweep();
+
+    // Schedule recurring sweeps
+    this.#idleSweepInterval = setInterval(sweep, intervalMs);
+  }
+
+  /**
+   * Stop the idle session sweep.
+   * Called during shutdown (SIGTERM handler).
+   */
+  stopIdleSweep(): void {
+    if (this.#idleSweepInterval) {
+      clearInterval(this.#idleSweepInterval);
+      this.#idleSweepInterval = null;
     }
   }
 

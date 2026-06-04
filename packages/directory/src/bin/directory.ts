@@ -136,13 +136,21 @@ const auditLogShipper: AuditLogShipper = await (async (): Promise<AuditLogShippe
 
 let pgPool: pg.Pool | undefined;
 
+// CELLO-M6B-009 AC-001/AC-002/AC-003: PostgreSQL connection pool configuration
+const poolMax = parseInt(process.env["DIRECTORY_PG_POOL_MAX"] ?? "50", 10);
+
+// AC-003: warn if pool max exceeds soft ceiling for db.t3.medium
+if (poolMax > 100) {
+  logger.warn("directory.pool.max.high", { configured: poolMax, recommended_max: 100 });
+}
+
 const store = await (async () => {
   if (env === "local") {
     const databaseUrl = requireEnv("DATABASE_URL");
-    pgPool = new pg.Pool({ connectionString: databaseUrl });
+    pgPool = new pg.Pool({ connectionString: databaseUrl, max: poolMax });
     const s = new PgDirectoryStore(pgPool, logger, nodeId, awsRegion);
     await s.loadProfiles();
-    logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env });
+    logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env, poolMax });
     return s;
   }
   // dev/staging/production: PgDirectoryStore backed by RDS credentials from Secrets Manager
@@ -168,10 +176,10 @@ const store = await (async () => {
     logSecretsUnavailable(logger, { nodeId, region: awsRegion, reason });
     process.exit(1);
   }
-  pgPool = new pg.Pool({ connectionString: databaseUrl });
+  pgPool = new pg.Pool({ connectionString: databaseUrl, max: poolMax });
   const s = new PgDirectoryStore(pgPool, logger, nodeId, awsRegion);
   await s.loadProfiles();
-  logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env });
+  logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env, poolMax });
   return s;
 })();
 

@@ -322,11 +322,20 @@ logRelayServiceStarted(logger, {
   environment: celloEnv,
 });
 
+// ─── CELLO-M6B-009: Idle session sweep ─────────────────────────────────────────
+
+const sweepIntervalMs = 3_600_000; // 1 hour
+const maxIdleMs = parseInt(process.env["RELAY_SESSION_MAX_IDLE_MS"] ?? "86400000", 10);
+relayResult.relay.startIdleSweep(sweepIntervalMs, maxIdleMs);
+
 // ─── Shutdown handlers ──────────────────────────────────────────────────────────
 
 const shutdown = () => {
   const uptimeMs = Date.now() - startedAt;
   logRelayServiceStopped(logger, { relayId, region: awsRegion, environment: celloEnv, uptimeMs });
+
+  // CELLO-M6B-009: stop idle session sweep
+  relayResult.relay.stopIdleSweep();
 
   healthServer.close();
   relayResult.stop()
