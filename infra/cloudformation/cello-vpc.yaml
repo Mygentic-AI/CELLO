@@ -181,6 +181,12 @@ Resources:
           FromPort: 9090
           ToPort: 9090
           SourceSecurityGroupId: !Ref AlbSecurityGroup
+        # Port 8081: internal API (ops-agent pre-authorization endpoint).
+        # M6B-004: ALB routes /internal/* to this port via InternalApiTargetGroup.
+        - IpProtocol: tcp
+          FromPort: 8081
+          ToPort: 8081
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
       Tags:
         - Key: Name
           Value: !Sub "cello-ecs-directory-sg-${Environment}"

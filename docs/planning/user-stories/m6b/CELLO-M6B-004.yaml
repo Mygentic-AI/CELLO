@@ -91,10 +91,10 @@ acceptance_criteria:
     when: "the template is validated with `aws cloudformation validate-template`"
     then: "validation succeeds with no errors; the template contains:
       (1) an InternalApiTargetGroup resource on port 8081;
-      (2) an InternalApiPathRule listener rule routing /internal/* to
+      (2) an InternalPathForwardRule listener rule routing /internal/* to
       InternalApiTargetGroup at a priority lower than AgentLookupPathRule
       and BootstrapPathRule (i.e. priority >= 5);
-      (3) DirectoryService DependsOn includes InternalApiPathRule;
+      (3) DirectoryService DependsOn includes InternalPathForwardRule;
       (4) the ALB security group or VPC security group allows inbound TCP
       on port 8081 from the ALB;
       (5) DirectoryService LoadBalancers block includes a ContainerPort 8081
@@ -131,11 +131,11 @@ acceptance_criteria:
       x-cello-internal-api-key header returns HTTP 401 (not 502 or connection
       refused) — proving the rule routes to the directory, not the default
       WebSocket listener"
-    test_type: integration
+    test_type: manual
     component_under_test: infra
-    notes: "Run manually after deployment. Documents the live verification
-      step. A 401 proves the directory received the request and rejected it
-      on auth grounds — correct behavior."
+    notes: "Manual deployment verification gate. Run after deployment. A 401
+      proves the directory received the request and rejected it on auth grounds —
+      correct behavior. Not automated because it requires live AWS resources."
 
   - id: AC-004
     given: "V28 deployed to dev us-east-1 via the directory pipeline"
@@ -143,10 +143,11 @@ acceptance_criteria:
     then: "SELECT account_id FROM agent_profiles WHERE k_local_pubkey = '{pubkey}'
       returns a non-null UUID — proving linkAgentToAccount() succeeded in
       production with cello_service role (not superuser)"
-    test_type: integration
+    test_type: manual
     component_under_test: directory
-    notes: "Run manually after deployment. Verifies the production regression
-      from OPS-AGENT-001 is closed."
+    notes: "Manual deployment verification gate. Run after deployment. Verifies
+      the production regression from OPS-AGENT-001 is closed. Not automated
+      because it requires live AWS resources and Telegram bot interaction."
 
 # ─── Security Invariants ────────────────────────────────────
 security_invariants:
@@ -214,6 +215,15 @@ implementation_notes: >
   region deployment must work from the same template with a single
   Environment parameter. This is the region-expansion test: would a fresh
   us-west-2 deployment work with zero manual steps?
+
+  DEPLOYMENT GATE (required before story close):
+  - [ ] AC-001 validation script passes locally (infra/cloudformation/tests/validate-cello-ecs-directory.sh)
+  - [ ] AC-002 integration test passes (CELLO_ENV=local pnpm --filter directory run test m6b-004-v28-migration.test.ts)
+  - [ ] Deployed to dev us-east-1 via directory pipeline
+  - [ ] AC-003 manual verification executed and passed (curl test with/without x-cello-internal-api-key header)
+  - [ ] AC-004 manual verification executed and passed (SELECT account_id after live registration)
+  - [ ] SI-001 integration test passes (m6b-004-si-001-internal-api-auth.test.ts)
+  - [ ] infra/STATE.md updated to reflect IaC transition state
 
 # ─── References ─────────────────────────────────────────────
 references:

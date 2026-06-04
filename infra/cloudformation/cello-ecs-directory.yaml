@@ -26,18 +26,11 @@ Parameters:
     Type: String
     Description: "ECR image URI for the directory service (e.g. {account}.dkr.ecr.{region}.amazonaws.com/cello-directory:latest)"
 
-# Bootstrap endpoint hostname mapping: AWS region → public Route53 hostname.
-# Used by CELLO_DIRECTORY_HOSTNAME env var so GET /bootstrap returns the correct
-# publicly-routable multiaddr. Clients call this to auto-discover the directory
-# without manual CELLO_DIRECTORY_MULTIADDR configuration.
-Mappings:
-  DirectoryHostname:
-    us-east-1:
-      Hostname: directory-us1.cello.mygentic.ai
-    eu-central-1:
-      Hostname: directory-eu1.cello.mygentic.ai
-    ap-northeast-1:
-      Hostname: directory-ap1.cello.mygentic.ai
+# Bootstrap endpoint hostname mapping removed — now uses SSM Parameter Store
+# for dynamic region expansion without template edits.
+# Parameter path: /cello/{Environment}/directory/hostname
+# Each region stores its own hostname (e.g., directory-us1.cello.mygentic.ai).
+# For new region expansion, create the SSM parameter before deploying the stack.
 
 Resources:
   Cluster:
@@ -84,6 +77,10 @@ Resources:
             # ALB forwards external port 80 → container port 8080 (WS upgrade).
             - ContainerPort: 8080
               Protocol: tcp
+            # Port 8081: internal API (/internal/* endpoints, ops-agent).
+            # M6B-004: ALB routes /internal/* → InternalApiTargetGroup → port 8081.
+            - ContainerPort: 8081
+              Protocol: tcp
             # Port 9090: health check HTTP server. Not exposed via ALB.
             # ECS health checks and ALB target group health checks use this port.
             # Separated from port 8080 so the WS listener can own port 8080.
@@ -105,8 +102,9 @@ Resources:
             # returned by GET /bootstrap. Clients (cello-mcp) call this endpoint to
             # auto-discover the directory multiaddr without manual CELLO_DIRECTORY_MULTIADDR config.
             # Format: /dns4/<hostname>/tcp/80/ws/p2p/<peer-id>
+            # Fetched from SSM Parameter Store for dynamic region expansion.
             - Name: CELLO_DIRECTORY_HOSTNAME
-              Value: !FindInMap [DirectoryHostname, !Ref "AWS::Region", Hostname]
+              Value: !Sub "{{resolve:ssm:/cello/${Environment}/directory/hostname}}"
             - Name: HOME
               Value: /tmp
             - Name: CELLO_RELAY_MULTIADDR
@@ -236,6 +234,29 @@ Resources:
         - Key: Project
           Value: cello
 
+  # M6B-004: Internal API target group for port 8081 (/internal/* endpoints).
+  # Used by ops-agent to call /internal/pre-authorize. Health check uses the
+  # health server on port 9090 (same as BootstrapTargetGroup) because port 8081
+  # serves only the internal API, not health checks.
+  InternalApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 8081
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: "9090"
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      Tags:
+        - Key: Project
+          Value: cello
+
   HttpListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
@@ -285,8 +306,12 @@ Resources:
   # doesn't work: the internet-facing ALB resolves to public IPs, so Fargate tasks in the
   # same VPC route via the internet gateway and arrive with their public IP (not VPC CIDR).
   # The API key header is the sole access control — same security model as any API endpoint.
+  #
+  # M6B-004: Routes to InternalApiTargetGroup (port 8081), not TargetGroup (port 8080).
+  # Port 8081 is dedicated to the internal API — isolates it from the libp2p WebSocket
+  # listener on port 8080.
 
-  InternalPathForwardRule:
+  InternalApiPathRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     DependsOn: HttpListener
     Properties:
@@ -298,13 +323,13 @@ Resources:
             - "/internal/*"
       Actions:
         - Type: forward
-          TargetGroupArn: !Ref TargetGroup
+          TargetGroupArn: !Ref InternalApiTargetGroup
 
   DirectoryService:
     Type: AWS::ECS::Service
     # DependsOn ensures CloudFormation does not start registering targets before
     # the /internal/* forward rule is active (AC-009d).
-    DependsOn: [HttpListener, InternalPathForwardRule, BootstrapPathRule, AgentLookupPathRule]
+    DependsOn: [HttpListener, InternalApiPathRule, BootstrapPathRule, AgentLookupPathRule]
     Properties:
       ServiceName: !Sub "cello-directory-${Environment}"
       Cluster: !Ref Cluster
@@ -330,6 +355,15 @@ Resources:
         - ContainerName: directory
           ContainerPort: 9090
           TargetGroupArn: !Ref BootstrapTargetGroup
+        # M6B-004: Register port 8081 with InternalApiTargetGroup.
+        # CRITICAL: Without this LoadBalancers entry, ECS never auto-registers
+        # tasks into InternalApiTargetGroup on deploy or restart. The target group
+        # exists but remains empty, causing HTTP 504 from the ALB on every
+        # /internal/* request after any directory restart. This is the root cause
+        # of the ops-agent 504 issue observed after M6 directory restarts.
+        - ContainerName: directory
+          ContainerPort: 8081
+          TargetGroupArn: !Ref InternalApiTargetGroup
       Tags:
         - Key: Project
           Value: cello
