@@ -2,13 +2,16 @@
 /**
  * derive-pubkey.js — Derive Ed25519 public key from a private key hex (CELLO-RELAY-001).
  *
- * Takes a 32-byte hex private key as argv[1] and prints the public key hex to stdout.
+ * Reads the 32-byte hex private key from stdin and prints the public key hex to stdout.
+ * The key is NEVER passed as a CLI argument to prevent exposure via ps(1), shell history,
+ * or /proc/[pid]/cmdline (SI-001).
+ *
  * Used by infra/sign-manifest.sh to derive the signedBy field.
  *
  * Usage:
- *   node infra/scripts/derive-pubkey.js <privateKeyHex>
+ *   printf '%s' "<privateKeyHex>" | node infra/scripts/derive-pubkey.js
  *
- * Arguments:
+ * Arguments (stdin):
  *   privateKeyHex  32-byte Ed25519 private key seed as a 64-character lowercase hex string
  *
  * Output:
@@ -31,10 +34,16 @@ const require = createRequire(join(repoRoot, "packages", "crypto", "package.json
 const curvesPath = require.resolve("@noble/curves/ed25519.js");
 const { ed25519 } = await import(curvesPath);
 
-const [, , privateKeyHex] = process.argv;
+// Read private key from stdin using event-based pattern (compatible with execFile input option)
+const privateKeyHex = await new Promise((resolve, reject) => {
+  const chunks = [];
+  process.stdin.on("data", (chunk) => chunks.push(chunk));
+  process.stdin.on("end", () => resolve(Buffer.concat(chunks).toString("utf8").trim()));
+  process.stdin.on("error", reject);
+});
 
 if (!privateKeyHex) {
-  process.stderr.write("Usage: node derive-pubkey.js <privateKeyHex>\n");
+  process.stderr.write("Usage: printf '%s' <privateKeyHex> | node derive-pubkey.js\n");
   process.exit(1);
 }
 

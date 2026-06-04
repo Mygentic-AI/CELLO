@@ -346,8 +346,12 @@ export class RelayPoolManager {
           healthCheckUrl: relay.healthCheckUrl, // CELLO-M6B-006
         });
       }
-      // CELLO-M6B-006: update healthCheckUrl map for no-op detection
-      this.#relayHealthCheckUrls.set(relay.relayId, relay.healthCheckUrl);
+      // NOTE: #relayHealthCheckUrls is intentionally NOT populated here.
+      // Per story requirement: "the first relay_register after a directory restart always
+      // triggers a re-sign, even if the URL hasn't changed." The map is populated only
+      // after a successful reSignManifestForRelayInner (step 8 below), so a fresh directory
+      // instance always has an empty map and therefore treats the first registration as a
+      // URL change, causing a re-sign. A redundant manifest update is safe.
     }
 
     // Remove state for relays no longer in the manifest

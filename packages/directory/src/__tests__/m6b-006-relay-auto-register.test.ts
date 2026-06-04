@@ -35,7 +35,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { InMemoryKeyProvider, generateKeypair, buildRelayRegistrationTbs } from "@cello-protocol/crypto";
 import type { CloudStorageProvider, Logger } from "@cello-protocol/interfaces";
 import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
-import { RelayPoolManager } from "../relay-pool-manager.js";
+import { RelayPoolManager, buildCanonicalPayload } from "../relay-pool-manager.js";
 import type { RelayPoolManifest, RelayManifestEntry } from "../relay-pool-manager.js";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { Encoder, decode as cborDecode } from "cbor-x";
@@ -203,12 +203,10 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
       // healthCheckUrl updated
       expect(updatedManifest.relays[0]!.healthCheckUrl).toBe(newUrl);
 
-      // SI-001: signature is valid against directory's public key
-      const payload = canonicalJson({
-        version: updatedManifest.version,
-        updatedAt: updatedManifest.updatedAt,
-        relays: updatedManifest.relays,
-      });
+      // SI-001: signature is valid against directory's public key.
+      // Use buildCanonicalPayload directly (the same function RelayPoolManager uses)
+      // to ensure sign and verify use identical bytes — avoids independent helper drift.
+      const payload = buildCanonicalPayload(updatedManifest);
       const valid = ed25519.verify(
         Buffer.from(updatedManifest.signature, "hex"),
         payload,
@@ -245,7 +243,7 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
     });
   });
 
-  describe("AC-004: No-op when healthCheckUrl unchanged", () => {
+  describe("AC-004: No-op when healthCheckUrl unchanged (after prior registration in same process)", () => {
     let storage: InMemoryCloudStorage;
     let rpm: RelayPoolManager;
 
@@ -261,12 +259,21 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
         logger,
       });
       await rpm.loadManifest();
+
+      // First call registers the URL into the in-memory map (triggers re-sign on restart).
+      // Subsequent calls with the same URL should be no-ops.
+      await rpm.reSignManifestForRelay({
+        relayId: "aaaa1111",
+        healthCheckUrl: "http://10.0.1.50:4000/health",
+        keyProvider: dirKp.keyProvider,
+      });
     });
 
-    it("does not increment version when healthCheckUrl is unchanged", async () => {
+    it("does not increment version when healthCheckUrl is unchanged after prior registration", async () => {
+      // Second call with the same URL — should be a no-op (URL already tracked in memory).
       const result = await rpm.reSignManifestForRelay({
         relayId: "aaaa1111",
-        healthCheckUrl: "http://10.0.1.50:4000/health", // Same as initial
+        healthCheckUrl: "http://10.0.1.50:4000/health", // Same as prior registration
         keyProvider: dirKp.keyProvider,
       });
 
@@ -276,13 +283,13 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
         expect(result.reason).toBe("no_change");
       }
 
-      // Verify version unchanged in storage
+      // Verify version was only incremented once (by the first registration, not the second)
       const manifestBytes = storage.getFile("relay-manifest.json");
       const manifest: RelayPoolManifest = JSON.parse(new TextDecoder().decode(manifestBytes!));
-      expect(manifest.version).toBe(1);
+      expect(manifest.version).toBe(2); // incremented once by the first call, not again
     });
 
-    it("does not log relay.manifest.updated for no-op", async () => {
+    it("does not log relay.manifest.updated for no-op after prior same-URL registration", async () => {
       const { logger, events } = makeSpyLogger();
       const rpmWithSpy = new RelayPoolManager({
         storage,
@@ -290,6 +297,16 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
         logger,
       });
       await rpmWithSpy.loadManifest();
+
+      // First call — always re-signs after restart (URL not yet in map)
+      await rpmWithSpy.reSignManifestForRelay({
+        relayId: "aaaa1111",
+        healthCheckUrl: "http://10.0.1.50:4000/health",
+        keyProvider: dirKp.keyProvider,
+      });
+
+      // Clear events; second call with the same URL should be a no-op
+      events.length = 0;
 
       await rpmWithSpy.reSignManifestForRelay({
         relayId: "aaaa1111",
@@ -299,6 +316,36 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
 
       const updatedEvent = events.find(e => e.event === "relay.manifest.updated");
       expect(updatedEvent).toBeUndefined();
+    });
+
+    it("AC-004-restart: first relay_register after directory restart always triggers re-sign, even with same URL", async () => {
+      // Simulate a directory restart: new RPM instance, same manifest in storage.
+      // The in-memory URL map starts empty — first call must trigger a re-sign.
+      const { logger } = makeSpyLogger();
+      const freshRpm = new RelayPoolManager({
+        storage,
+        signerPublicKeyHex: dirKp.publicKeyHex,
+        logger,
+      });
+      await freshRpm.loadManifest();
+
+      // After loadManifest, #relayHealthCheckUrls is empty (intentionally not populated
+      // from manifest data — see relay-pool-manager.ts applyManifest comment).
+      const currentManifestBytes = storage.getFile("relay-manifest.json");
+      const currentManifest: RelayPoolManifest = JSON.parse(new TextDecoder().decode(currentManifestBytes!));
+      const versionBeforeRestart = currentManifest.version;
+
+      // First register after restart: same URL as in manifest — must still re-sign
+      const result = await freshRpm.reSignManifestForRelay({
+        relayId: "aaaa1111",
+        healthCheckUrl: "http://10.0.1.50:4000/health", // same URL
+        keyProvider: dirKp.keyProvider,
+      });
+
+      expect(result.updated).toBe(true);
+      if (result.updated) {
+        expect(result.version).toBe(versionBeforeRestart + 1);
+      }
     });
   });
 
@@ -337,15 +384,10 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
       const updated: RelayPoolManifest = JSON.parse(new TextDecoder().decode(updatedBytes!));
       expect(updated.relays[0]!.healthCheckUrl).toBe(newUrl);
 
-      // SI-001: signature verification
-      const payload = canonicalJson({
-        version: updated.version,
-        updatedAt: updated.updatedAt,
-        relays: updated.relays,
-      });
+      // SI-001: signature verification — use buildCanonicalPayload (the production function)
       expect(ed25519.verify(
         Buffer.from(updated.signature, "hex"),
-        payload,
+        buildCanonicalPayload(updated),
         Buffer.from(dirKp.publicKeyHex, "hex")
       )).toBe(true);
     });
@@ -377,9 +419,12 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
         })
       ).rejects.toThrow("simulated_upload_failure");
 
-      // The in-memory healthCheckUrl should NOT be updated (upload failed before step 8)
-      // This ensures the next registration attempt will still try to re-sign
-      expect(rpm.getRelayHealthCheckUrl("aaaa1111")).toBe("http://10.0.1.50:4000/health");
+      // The in-memory healthCheckUrl should NOT be updated to the new URL (upload failed before step 8).
+      // Because applyManifest intentionally does NOT populate #relayHealthCheckUrls (to ensure
+      // re-sign always happens on first registration after restart), the value is undefined here.
+      // The key invariant is: the new URL "http://10.0.1.99:4000/health" was NEVER committed.
+      // This ensures the next registration attempt will still trigger re-sign (undefined !== newUrl).
+      expect(rpm.getRelayHealthCheckUrl("aaaa1111")).not.toBe("http://10.0.1.99:4000/health");
     });
 
     it("AC-006 (wired): relay_register_ok returned to relay even when S3 upload fails; relay.manifest.update.failed logged by handler", async () => {
@@ -498,6 +543,91 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
         expect(registeredEvent, "relay.registered must be logged by the handler layer").toBeDefined();
         expect(registeredEvent!.level).toBe("info");
         expect(registeredEvent!.context).toMatchObject({ relayId, region: "us-east-1" });
+      } finally {
+        await relayNode.stop();
+        await stopDir();
+      }
+    });
+  });
+
+  describe("AC-002: Directory rejects relay_register without health_check_url", () => {
+    it("returns relay_register_error with reason missing_fields when health_check_url is absent", async () => {
+      // AC-002: "verified by the directory's relay_register handler asserting the field is
+      // present and non-empty before calling registerRelay()." This test sends a frame
+      // WITHOUT health_check_url and confirms the directory returns relay_register_error.
+      const relayKp = generateKeypair();
+      const relayPubkey = await relayKp.getPublicKey();
+      const relayId = Buffer.from(relayPubkey).toString("hex");
+      const dirKpWired = generateKeypair();
+
+      const storage = new InMemoryCloudStorage();
+      const dirPrivKey = new Uint8Array(32).fill(55);
+      const dirPubKey = ed25519.getPublicKey(dirPrivKey);
+      const dirPubKeyHex = Buffer.from(dirPubKey).toString("hex");
+      const relayEntry: RelayManifestEntry = {
+        relayId,
+        endpoint: "wss://relay-ac002-test.example.com",
+        region: "us-east-1",
+        status: "active",
+        healthCheckUrl: "http://10.0.5.50:4000/health",
+      };
+      const initialManifest = buildSignedManifest(dirPrivKey, dirPubKeyHex, [relayEntry], 1);
+      storage.setFile("relay-manifest.json", new TextEncoder().encode(JSON.stringify(initialManifest)));
+
+      const { logger: spyLogger } = makeSpyLogger();
+      const rpm = new RelayPoolManager({
+        storage,
+        signerPublicKeyHex: dirPubKeyHex,
+        logger: spyLogger,
+        pingIntervalMs: 999_999,
+      });
+      await rpm.loadManifest();
+
+      const store = new InMemoryDirectoryStore();
+      const { node: dirNode, stop: stopDir } = await createDirectoryNode({
+        keyProvider: dirKpWired,
+        relay: makeNoOpRelayAdapter(),
+        relayEndpoint: { peer_id: "12D3KooWdeadbeef", multiaddrs: [] },
+        store,
+        relayPoolManager: rpm,
+        logger: spyLogger,
+      });
+
+      const relayNode = await createNode({
+        keyProvider: relayKp,
+        listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      });
+      await relayNode.start();
+
+      try {
+        const dirAddrs = dirNode.listenAddresses();
+        await relayNode.dial(String(dirAddrs[0]));
+
+        const stream = await relayNode.newStream(dirNode.getPeerId(), DIRECTORY_RELAY_PROTOCOL) as Stream;
+        const timestamp = Date.now();
+        const tbs = buildRelayRegistrationTbs(relayId, relayId, timestamp);
+        const sig = await relayKp.sign(tbs);
+
+        // Send relay_register WITHOUT health_check_url — handler must reject
+        stream.send(lp.encode.single(CBOR_ENC.encode({
+          type: "relay_register",
+          relay_id: relayId,
+          public_key_hex: relayId,
+          region: "us-east-1",
+          // health_check_url intentionally omitted
+          timestamp,
+          signature: sig,
+        })));
+        await stream.close();
+
+        const iter = (lp.decode(stream) as AsyncIterable<unknown>)[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
+        const { value: rawResp } = await iter.next();
+        expect(rawResp).toBeDefined();
+        const respBytes = rawResp instanceof Uint8Array ? rawResp : (rawResp as unknown as { slice(): Uint8Array }).slice();
+        const resp = cborDecode(respBytes) as { type: string; reason?: string };
+
+        expect(resp.type).toBe("relay_register_error");
+        expect(resp.reason).toBe("missing_fields");
       } finally {
         await relayNode.stop();
         await stopDir();
@@ -629,11 +759,8 @@ describe("CELLO-M6B-006: Relay Auto-Registration", () => {
         ],
       };
 
-      const payload = canonicalJson({
-        version: manifest.version,
-        updatedAt: manifest.updatedAt,
-        relays: manifest.relays,
-      });
+      // Use buildCanonicalPayload (the actual production function) to verify key ordering.
+      const payload = buildCanonicalPayload(manifest);
       const json = new TextDecoder().decode(payload);
       const parsed = JSON.parse(json);
 

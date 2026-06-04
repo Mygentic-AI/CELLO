@@ -133,7 +133,8 @@ echo "  Signing key retrieved."
 
 # Derive the public key from the private key to construct the signedBy field.
 # Uses derive-pubkey.js which resolves @noble/curves via createRequire (ESM-safe).
-SIGNING_PUBLIC_KEY_HEX=$(node "${DERIVE_PUBKEY_SCRIPT}" "${SIGNING_KEY}" 2>/dev/null || echo "")
+# Private key is piped via stdin — never passed as a CLI argument (SI-001).
+SIGNING_PUBLIC_KEY_HEX=$(printf '%s' "${SIGNING_KEY}" | node "${DERIVE_PUBKEY_SCRIPT}" 2>/dev/null || echo "")
 
 if [[ -z "${SIGNING_PUBLIC_KEY_HEX}" ]]; then
   echo "ERROR: failed to derive public key from signing key" >&2
@@ -158,8 +159,10 @@ else
   echo "  No existing manifest — starting at version 1."
 fi
 
-# HIGH-3: Guard against unparseable existing manifest — refuse to reset version
-if [[ -n "${CURRENT_MANIFEST_JSON}" ]] && [[ -z "${CURRENT_VERSION}" || "${CURRENT_VERSION}" == "0" ]]; then
+# Guard against unparseable existing manifest — refuse to proceed if manifest exists
+# but version could not be parsed. We only check for empty (parse failure), not "0",
+# because version 0 is a valid bootstrap state (e.g. a manually created placeholder).
+if [[ -n "${CURRENT_MANIFEST_JSON}" ]] && [[ -z "${CURRENT_VERSION}" ]]; then
   echo "ERROR: existing manifest in S3 could not be parsed — refusing to reset version" >&2
   exit 1
 fi
@@ -190,7 +193,9 @@ process.stdout.write(JSON.stringify(sorted));
 # ── Sign the canonical JSON ───────────────────────────────────────────────────
 
 echo "  Signing manifest..."
-SIGNATURE=$(node "${SIGN_SCRIPT}" "${SIGNING_KEY}" "${CANONICAL_JSON}")
+# SI: private key is piped via stdin — never passed as a CLI argument to prevent
+# exposure via ps(1), shell history, or /proc/[pid]/cmdline.
+SIGNATURE=$(printf '%s' "${SIGNING_KEY}" | node "${SIGN_SCRIPT}" "${CANONICAL_JSON}")
 
 if [[ -z "${SIGNATURE}" ]]; then
   echo "ERROR: signing failed — empty signature returned" >&2

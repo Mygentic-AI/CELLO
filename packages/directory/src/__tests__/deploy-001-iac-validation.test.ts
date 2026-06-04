@@ -170,6 +170,10 @@ describe("DEPLOY-001: AC-004 secrets use placeholder values", () => {
     expect(raw).toContain("directory/node-private-key");
     expect(raw).toContain("directory/kms-key-arn");
     expect(raw).toContain("relay/node-private-key");
+    // CELLO-M6B-006: relay transport key secret must exist in IaC so the
+    // RelayTaskExecutionRole IAM grant has a resource to protect and ECS can
+    // inject CELLO_RELAY_TRANSPORT_KEY_HEX at task launch.
+    expect(raw).toContain("relay/transport-key");
   });
 });
 
@@ -248,6 +252,22 @@ describe("DEPLOY-001: AC-006 relay task role IAM policy", () => {
     const raw = JSON.stringify(taskRole);
 
     expect(raw).not.toContain("directory/");
+  });
+});
+
+// ─── CELLO-M6B-006: RelayTaskExecutionRole grants access to relay/transport-key ──
+
+describe("M6B-006: RelayTaskExecutionRole grants secretsmanager access to relay/transport-key", () => {
+  it("RelayTaskExecutionRole policy includes relay/transport-key* ARN", () => {
+    // CRITICAL-1 fix: the ECS agent (execution role) must be able to inject
+    // CELLO_RELAY_TRANSPORT_KEY_HEX at task launch. Without this IAM grant,
+    // ECS returns ResourceNotFoundException and the task fails to start.
+    const template = loadTemplate("cello-iam.yaml");
+    const resources = template["Resources"] as Record<string, Record<string, unknown>>;
+    const execRole = resources["RelayTaskExecutionRole"];
+    expect(execRole, "RelayTaskExecutionRole must exist").toBeDefined();
+    const raw = JSON.stringify(execRole);
+    expect(raw).toContain("relay/transport-key");
   });
 });
 
