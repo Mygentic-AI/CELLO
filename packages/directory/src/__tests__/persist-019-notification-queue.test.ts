@@ -70,7 +70,7 @@ import pg from "pg";
 import { randomUUID, randomBytes } from "node:crypto";
 import type { Logger } from "@cello-protocol/interfaces";
 import type { DirectoryNotification } from "@cello-protocol/interfaces";
-import type { PendingConnectionRequest, SessionSealed, SessionSealedSingle, SealVerified } from "@cello-protocol/protocol-types";
+import type { PendingConnectionRequest, SessionSealedSingle, SealVerified } from "@cello-protocol/protocol-types";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { PendingConnectionRequestTtlSweep } from "../pending-connection-request-ttl-sweep.js";
 
