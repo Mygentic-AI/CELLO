@@ -1121,3 +1121,34 @@ The peer ID change is a separate root cause: `cello/dev/relay/transport-key` exi
 3. When relay connects and registers, directory re-signs and re-uploads the manifest automatically — no human intervention needed
 4. `RelayPoolManager` polls S3 periodically (no directory restart needed on manifest update)
 5. Create `infra/sign-manifest.sh` — signs and uploads a new relay manifest given a private key, relay IP, and peer ID; removes the need for ad-hoc one-off scripts
+
+---
+
+## CELLO-M6B-001 — PID Lock File for Single-Instance cello-mcp
+
+Correctness story. Ensures exactly one cello-mcp process per agent at all times. On startup, cello-mcp reads its lock file (`~/.cello/cello-mcp.pid`), kills any prior process found there (SIGTERM → 5s wait → SIGKILL escalation), then writes its own PID and registers an exit handler that removes the lock file on SIGTERM/SIGINT/normal exit. This prevents the 30-second SQLCipher write-lock timeout that operators saw when Claude Code restarted the MCP server without the prior instance having released the DB lock.
+
+**Delivered:**
+- `core/adapter-claude-code/src/lock-file.ts` — `acquireLockFile()` and `releaseLockFile()` with full dependency injection (`killFn`, `unlinkFn`) for deterministic testing
+- `getLockFilePath(agentName, baseDir)` — M7-ready path logic: agent-namespaced path at `~/.cello/agents/{name}/cello-mcp.pid` when `CELLO_AGENT_NAME` is set, default path at `~/.cello/cello-mcp.pid` otherwise
+- Signal handlers wired in `core/adapter-claude-code/src/cello-mcp.ts`: `process.on("SIGTERM")` and `process.on("SIGINT")` both call `process.exit(0)`, which fires the `exit` event handler that calls `releaseLock()`
+- Lock acquired BEFORE database open (AC-004 ordering invariant): `acquireLockFile` at module top-level line, background async task for SQLCipher open is structured to execute after the lock is held
+- 9 observability events added to canonical taxonomy in `2026-05-16_0753_development-pipeline-and-local-iteration.md` (lines 271–279)
+- `@cello-protocol/connect` version bumped from 0.0.25 to 0.0.26
+
+**Bugs found during review cycle:**
+
+### 1. Double-event emission when SIGTERM threw (I-1)
+**Symptom:** When `killFn(priorPid, "SIGTERM")` threw (race: process already dead between existence check and kill), the code set `sigTermDelivered` only after the call — meaning when it threw, `stillRunning` was never set to `false`. The code then fell into the `else` branch and emitted `client.startup.prior.process.killed` with `signal: "SIGTERM"`, even though the kill had failed. Result: two log events for the same process — one `prior.kill.failed` (accurate) and one `prior.process.killed` (inaccurate, contradicts the taxonomy's "after successfully killing" qualifier).
+**Fix:** Introduced `sigTermDelivered` flag. SIGTERM throw sets the flag to `false` and skips the entire polling phase. The `else if (sigTermDelivered)` guard on the graceful-exit branch prevents `prior.process.killed` from being emitted when the kill failed.
+**Rule:** An event named "X killed" must only fire when X was actually killed by the current process. A failed kill attempt followed by the process being already dead is not the same as successfully delivering a signal.
+
+### 2. Stale-PID test was non-deterministic on high-PID-max Linux systems (M-1)
+**Symptom:** The AC-002 stale-PID test used `stalePid = 999999`, relying on no real process running at that PID. On Linux systems with `kernel.pid_max > 999999` (configurable up to 4194304), a real process could exist there, causing the test to attempt `process.kill(999999, "SIGTERM")` and then assert that no kill event was emitted — which would fail.
+**Fix:** Replaced the hardcoded PID with a mock `killFn` that throws ESRCH for the existence check, deterministically simulating a stale process without any OS dependency.
+**Rule:** Tests that rely on "this PID is very likely unused" are non-deterministic. Use dependency injection to make the condition certain.
+
+### 3. No test for `client.startup.lock.release.failed` (M-2)
+**Symptom:** 8 of 9 observability events had tests. `lock.release.failed` (non-ENOENT unlink failure) had no coverage — a regression that changed the error handling path would pass the suite silently.
+**Fix:** Added `unlinkFn` injection parameter to `releaseLockFile()`. Added two tests: EACCES throws → event logged, and ENOENT throws → silent (idempotent case). Both tests use injected `unlinkFn` — no filesystem permission manipulation needed.
+**Rule:** Every observability event must have a test that exercises exactly the condition that triggers it.
