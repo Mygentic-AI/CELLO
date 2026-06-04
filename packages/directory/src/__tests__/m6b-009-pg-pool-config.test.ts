@@ -74,6 +74,47 @@ function runBin(env: NodeJS.ProcessEnv): { stdout: string; stderr: string; code:
   }
 }
 
+// ─── NaN guard: non-numeric DIRECTORY_PG_POOL_MAX falls back to 50 ──────────────
+// This guards against the silent pg.Pool(max: NaN) bug — pg silently uses its
+// internal default of 10 when given NaN, defeating explicit pool sizing.
+
+describe("CELLO-M6B-009: NaN guard — non-numeric DIRECTORY_PG_POOL_MAX falls back to 50", () => {
+  it("resolvePoolMax returns 50 when DIRECTORY_PG_POOL_MAX is a non-numeric string", () => {
+    const logger = new StdoutLogger();
+    const warnSpy = vi.spyOn(logger, "warn");
+
+    const fakeEnv = { DIRECTORY_PG_POOL_MAX: "abc" } as NodeJS.ProcessEnv;
+    const poolMax = resolvePoolMax(fakeEnv, logger);
+
+    expect(poolMax).toBe(50);
+    // NaN fallback is silent — no WARN is emitted for misconfiguration (it falls back to default)
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("resolvePoolMax returns 50 when DIRECTORY_PG_POOL_MAX is an empty string", () => {
+    const logger = new StdoutLogger();
+    const warnSpy = vi.spyOn(logger, "warn");
+
+    const fakeEnv = { DIRECTORY_PG_POOL_MAX: "" } as NodeJS.ProcessEnv;
+    const poolMax = resolvePoolMax(fakeEnv, logger);
+
+    expect(poolMax).toBe(50);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("resolvePoolMax returns 50 when DIRECTORY_PG_POOL_MAX is zero (invalid)", () => {
+    const logger = new StdoutLogger();
+    const warnSpy = vi.spyOn(logger, "warn");
+
+    // Zero is not a valid pool size — falls back to 50
+    const fakeEnv = { DIRECTORY_PG_POOL_MAX: "0" } as NodeJS.ProcessEnv;
+    const poolMax = resolvePoolMax(fakeEnv, logger);
+
+    expect(poolMax).toBe(50);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
 // ─── AC-002: Default pool max is 50 ──────────────────────────────────────────
 
 describe("CELLO-M6B-009 AC-002: default pool max", () => {

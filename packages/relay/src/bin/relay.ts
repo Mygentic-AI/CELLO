@@ -231,6 +231,7 @@ try {
     directory: directoryAdapter,
     ackSigningKeyProvider: kp,
     relayId,
+    logger,
   });
 } catch (err: unknown) {
   const reason = err instanceof Error ? err.message : String(err);
@@ -325,7 +326,11 @@ logRelayServiceStarted(logger, {
 // ─── CELLO-M6B-009: Idle session sweep ─────────────────────────────────────────
 
 const sweepIntervalMs = 3_600_000; // 1 hour
-const maxIdleMs = parseInt(process.env["RELAY_SESSION_MAX_IDLE_MS"] ?? "86400000", 10);
+const parsedIdleMs = parseInt(process.env["RELAY_SESSION_MAX_IDLE_MS"] ?? "86400000", 10);
+// Guard against NaN (empty string, non-numeric value): fall back to 24 h default.
+// NaN propagates silently through arithmetic — `cutoff = Date.now() - NaN` is NaN,
+// and `lastActivityAt < NaN` is always false (IEEE 754), so no session would ever be swept.
+const maxIdleMs = Number.isFinite(parsedIdleMs) && parsedIdleMs > 0 ? parsedIdleMs : 86_400_000;
 relayResult.relay.startIdleSweep(sweepIntervalMs, maxIdleMs);
 
 // ─── Shutdown handlers ──────────────────────────────────────────────────────────

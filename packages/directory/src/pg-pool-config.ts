@@ -19,7 +19,10 @@ import type { Logger } from "@cello-protocol/interfaces";
  * @returns      Resolved pool max (integer >= 1)
  */
 export function resolvePoolMax(env: NodeJS.ProcessEnv, logger: Logger): number {
-  const poolMax = parseInt(env["DIRECTORY_PG_POOL_MAX"] ?? "50", 10);
+  const raw = parseInt(env["DIRECTORY_PG_POOL_MAX"] ?? "50", 10);
+  // Guard against NaN (empty string, non-numeric value): pg.Pool silently uses its
+  // internal default of 10 when given NaN, which defeats explicit pool sizing.
+  const poolMax = Number.isFinite(raw) && raw > 0 ? raw : 50;
 
   if (poolMax > 100) {
     logger.warn("directory.pool.max.high", { configured: poolMax, recommended_max: 100 });

@@ -1052,6 +1052,11 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
   return {
     relay,
     node,
-    stop: async () => { await node.stop(); },
+    // stopIdleSweep is called first to clear the setInterval handle before the node
+    // shuts down — prevents a leaked interval from keeping Node.js alive after stop().
+    stop: async () => {
+      relay.stopIdleSweep();
+      await node.stop();
+    },
   };
 }
