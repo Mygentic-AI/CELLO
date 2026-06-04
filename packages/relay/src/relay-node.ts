@@ -976,7 +976,11 @@ export class CelloRelayNode {
       this.#store.sweepIdleSessions(maxIdleMs, this.#logger);
     };
 
-    // Run first sweep immediately
+    // Run first sweep immediately to catch sessions that were idle before the relay process started.
+    // This is intentional: on relay restart after a crash, sessions from the previous process instance
+    // may still be in memory (or would be persisted in a future PgRelayStore). The immediate sweep
+    // catches these aged-out sessions without waiting for the first scheduled interval.
+    // On a fresh relay with no sessions, this emits relay.session.sweep.complete with sweptCount: 0.
     sweep();
 
     // Schedule recurring sweeps

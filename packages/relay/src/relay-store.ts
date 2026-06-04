@@ -36,6 +36,21 @@ export interface RelayStore {
    * Returns the count of destroyed sessions.
    */
   sweepIdleSessions(maxIdleMs: number, logger: Logger): number;
+
+  /**
+   * Test-only: back-date a session's lastActivityAt without going through setSession().
+   *
+   * setSession() always refreshes lastActivityAt to Date.now(), which makes it impossible
+   * to test the idle-sweep logic using only the public API. This method directly sets
+   * the stored timestamp, allowing tests to simulate aged-out sessions.
+   *
+   * @internal Do not call from production code — the method name is intentionally prefixed with
+   * double-underscore to signal test-only use. This method is part of the interface because
+   * idle-sweep tests require cross-package access (e2e-tests → relay-store). Moving it outside
+   * the interface would require duplicating the session storage structure or exporting internal
+   * Map references.
+   */
+  __setLastActivityAtForTest(sessionIdHex: string, ts: number): void;
 }
 
 const DELIVERY_QUEUE_BOUND = 256;
@@ -102,26 +117,7 @@ export class InMemoryRelayStore implements RelayStore {
 
   /**
    * Test-only: back-date a session's lastActivityAt without going through setSession().
-   *
-   * setSession() always refreshes lastActivityAt to Date.now(), which makes it impossible
-   * to test the idle-sweep logic using only the public API. This method directly sets
-   * the stored timestamp, allowing tests to simulate aged-out sessions without relying
-   * on the aliasing behaviour of getSession() (which returns a live Map reference today
-   * but is not contractually guaranteed to do so).
-   *
-   * Do not call from production code — the method name is intentionally prefixed with
-   * double-underscore to signal test-only use.
-   *
-   * Pattern rationale: This method must be public on the RelayStore interface because
-   * the idle-sweep tests require cross-package access (e2e-tests → relay-store). Moving
-   * it outside the interface would require duplicating the session storage structure or
-   * exporting internal Map references. TypeScript's `@internal` JSDoc tag was considered
-   * but would require `stripInternal: true` in tsconfig (breaking existing exports).
-   * Runtime validation (checking NODE_ENV) was rejected because CELLO uses CELLO_ENV
-   * ('local'/'dev'/'staging'/'production'), and test runners set CELLO_ENV=local for
-   * integration tests — making NODE_ENV an unreliable test/production discriminator.
-   * The double-underscore prefix is CELLO's established convention for test utilities
-   * that must be exported but should never appear in production call paths.
+   * See interface JSDoc for full documentation.
    */
   __setLastActivityAtForTest(sessionIdHex: string, ts: number): void {
     const state = this.#sessions.get(sessionIdHex);
