@@ -70,7 +70,7 @@ import pg from "pg";
 import { randomUUID, randomBytes } from "node:crypto";
 import type { Logger } from "@cello-protocol/interfaces";
 import type { DirectoryNotification } from "@cello-protocol/interfaces";
-import type { PendingConnectionRequest } from "@cello-protocol/protocol-types";
+import type { PendingConnectionRequest, SessionSealedSingle, SealVerified } from "@cello-protocol/protocol-types";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { PendingConnectionRequestTtlSweep } from "../pending-connection-request-ttl-sweep.js";
 
@@ -508,6 +508,112 @@ describeIntegration("PERSIST-019 AC-003: FIFO ordering and transactional delete"
       [pubkeyHex],
     );
     expect(parseInt(countResult.rows[0]!.count, 10)).toBe(0);
+  });
+});
+
+// ─── CELLO-M6B-012 AC-001: session_sealed Uint8Array field integrity ────────
+
+describeIntegration("CELLO-M6B-012 AC-001: session_sealed Uint8Array field integrity", () => {
+  it("session_id, sealed_root, directory_signature survive enqueue→drain as Uint8Array", async () => {
+    const logger = makeMockLogger();
+    const store = new PgDirectoryStore(superPool, logger);
+
+    const pubkeyHex = randomBytes(32).toString("hex");
+    const correlationId = randomUUID();
+
+    // Use new Uint8Array(randomBytes(N)) for field values.
+    // enqueueNotification will use jsonStringify which produces __type:Uint8Array sentinels.
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sealedRoot = new Uint8Array(randomBytes(32));
+    const dirSig = new Uint8Array(randomBytes(64));
+
+    const notification: DirectoryNotification = {
+      type: "session_sealed",
+      signature_type: "single",
+      session_id: sessionId,
+      sealed_root: sealedRoot,
+      directory_signature: dirSig,
+      close_timestamp: Date.now(),
+    };
+
+    // Use enqueueNotification (production path using jsonStringify with
+    // __type:Uint8Array sentinel), NOT raw superPool.query + JSON.stringify.
+    store.enqueueNotification(pubkeyHex, notification, correlationId);
+
+    // Wait for the fire-and-forget insert to land in Postgres
+    await waitForRow(superPool, "notification_queue", "pubkey_hex", pubkeyHex);
+
+    const drained = await store.drainNotifications(pubkeyHex, correlationId);
+    expect(drained).toHaveLength(1);
+    const n = drained[0] as SessionSealedSingle;
+
+    // AC-001 assertion (1): result.type must be 'session_sealed'
+    expect(n.type).toBe('session_sealed');
+
+    // Type integrity — must be Uint8Array, not Buffer or plain object
+    expect(n.session_id).toBeInstanceOf(Uint8Array);
+    expect(n.sealed_root).toBeInstanceOf(Uint8Array);
+    expect(n.directory_signature).toBeInstanceOf(Uint8Array);
+
+    // Value integrity — bytes must survive the round-trip unchanged
+    expect(Buffer.from(n.session_id).toString("hex")).toBe(
+      Buffer.from(sessionId).toString("hex"),
+    );
+    expect(Buffer.from(n.sealed_root).toString("hex")).toBe(
+      Buffer.from(sealedRoot).toString("hex"),
+    );
+    expect(Buffer.from(n.directory_signature).toString("hex")).toBe(
+      Buffer.from(dirSig).toString("hex"),
+    );
+  });
+});
+
+// ─── CELLO-M6B-012 AC-002: seal_verified Uint8Array field integrity ────────
+
+describeIntegration("CELLO-M6B-012 AC-002: seal_verified Uint8Array field integrity", () => {
+  it("session_id and sealed_root survive enqueue→drain as Uint8Array", async () => {
+    const logger = makeMockLogger();
+    const store = new PgDirectoryStore(superPool, logger);
+
+    const pubkeyHex = randomBytes(32).toString("hex");
+    const correlationId = randomUUID();
+
+    // Use new Uint8Array(randomBytes(N)) for field values.
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sealedRoot = new Uint8Array(randomBytes(32));
+
+    const notification: DirectoryNotification = {
+      type: "seal_verified",
+      session_id: sessionId,
+      sealed_root: sealedRoot,
+      leaf_count: 42,
+      timestamp: Date.now(),
+    };
+
+    // Use enqueueNotification (production path)
+    store.enqueueNotification(pubkeyHex, notification, correlationId);
+
+    // Wait for the fire-and-forget insert to land in Postgres
+    await waitForRow(superPool, "notification_queue", "pubkey_hex", pubkeyHex);
+
+    const drained = await store.drainNotifications(pubkeyHex, correlationId);
+    expect(drained).toHaveLength(1);
+    const n = drained[0] as SealVerified;
+
+    // AC-002 assertion (1): result.type must be 'seal_verified'
+    expect(n.type).toBe('seal_verified');
+
+    // Type integrity — must be Uint8Array, not Buffer or plain object
+    expect(n.session_id).toBeInstanceOf(Uint8Array);
+    expect(n.sealed_root).toBeInstanceOf(Uint8Array);
+
+    // Value integrity — bytes must survive the round-trip unchanged
+    expect(Buffer.from(n.session_id).toString("hex")).toBe(
+      Buffer.from(sessionId).toString("hex"),
+    );
+    expect(Buffer.from(n.sealed_root).toString("hex")).toBe(
+      Buffer.from(sealedRoot).toString("hex"),
+    );
   });
 });
 
