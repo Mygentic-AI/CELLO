@@ -189,19 +189,15 @@ End with APPROVED or BLOCKED.`,
 
   log(`Round ${roundNum} sprint review complete.`)
 
-  const reviewText = typeof sprintReviewResult === 'string' ? sprintReviewResult : JSON.stringify(sprintReviewResult)
-  const approved = reviewText.includes('APPROVED')
-
-  if (!approved) {
-    await agent(
-      `You are the CELLO sprint coder. Fix ALL findings from the sprint reviewer for story ${STORY_ID}.
+  await agent(
+    `You are the CELLO sprint coder. Fix ALL findings from the sprint reviewer for story ${STORY_ID}.
 
 ${WORKTREE_CONTEXT}
 
 SPRINT REVIEWER FINDINGS:
-${reviewText}
+${typeof sprintReviewResult === 'string' ? sprintReviewResult : JSON.stringify(sprintReviewResult)}
 
-Fix every finding — blocking, high, medium, AND low. No exceptions.
+Fix every finding — blocking, high, medium, AND low. No exceptions regardless of APPROVED/BLOCKED.
 
 Run gates after fixing (targeted filter only):
   cd ${CLIENT_WORKTREE} && pnpm --filter @cello-protocol/client run test -- --pool-options.threads.maxThreads=1 --pool-options.threads.minThreads=1
@@ -209,28 +205,21 @@ Run gates after fixing (targeted filter only):
   cd ${CLIENT_WORKTREE} && pnpm run typecheck
 
 Commit: "fix(${STORY_ID}): address sprint review findings round ${roundNum}"`,
-      { label: `fix-sprint-r${roundNum}`, phase: 'Review', model: 'us.anthropic.claude-sonnet-4-6', agentType: 'cello-sprint-coder' }
-    )
-  }
+    { label: `fix-sprint-r${roundNum}`, phase: 'Review', model: 'us.anthropic.claude-sonnet-4-6', agentType: 'cello-sprint-coder' }
+  )
 
-  return { round: roundNum, approved, codeReview: codeReviewResult, sprintReview: sprintReviewResult }
+  return { round: roundNum, codeReview: codeReviewResult, sprintReview: sprintReviewResult }
 }
 
-let finalResult = null
-for (let i = 1; i <= 3; i++) {
-  const result = await runRound(i)
-  finalResult = result
-  if (result.approved) {
-    log(`APPROVED at round ${i}. Done.`)
-    break
-  }
-  if (i < 3) log(`BLOCKED after round ${i}. Starting round ${i + 1}.`)
-}
+const round1 = await runRound(1)
+const round2 = await runRound(2)
+const round3 = await runRound(3)
+
+log('All 3 rounds complete.')
 
 return {
   storyId: STORY_ID,
   worktrees: { trustlessCello: WORKTREE_PATH, celloClient: CLIENT_WORKTREE },
-  finalRound: finalResult.round,
-  approved: finalResult.approved,
-  status: finalResult.approved ? 'approved' : 'max-rounds-reached',
+  rounds: [round1, round2, round3],
+  status: 'done',
 }
