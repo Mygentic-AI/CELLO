@@ -187,10 +187,37 @@ observability:
       trigger: "When the lock file is removed on exit"
       context_fields: [pid]
       correlationId: false
+    - name: client.startup.lock.read.failed
+      level: warn
+      trigger: "When reading the lock file fails with unexpected error (not ENOENT)"
+      context_fields: [reason]
+      correlationId: false
+    - name: client.startup.lock.eperm
+      level: warn
+      trigger: "When the prior process exists but is owned by another user"
+      context_fields: [priorPid, reason]
+      correlationId: false
+    - name: client.startup.lock.check.failed
+      level: warn
+      trigger: "When kill(pid, 0) check fails with unknown error (not ESRCH/EPERM)"
+      context_fields: [priorPid, reason]
+      correlationId: false
+    - name: client.startup.lock.write.failed
+      level: warn
+      trigger: "When writing the PID to lock file fails"
+      context_fields: [reason]
+      correlationId: false
+    - name: client.startup.prior.kill.failed
+      level: warn
+      trigger: "When sending SIGTERM or SIGKILL to prior process fails"
+      context_fields: [priorPid, signal, reason]
+      correlationId: false
   error_events: []
   notes: >
-    client.startup.prior.process.killed and client.startup.lock.released must be
-    added to the canonical event taxonomy in
+    All 7 events (client.startup.prior.process.killed, client.startup.lock.released,
+    client.startup.lock.read.failed, client.startup.lock.eperm,
+    client.startup.lock.check.failed, client.startup.lock.write.failed,
+    client.startup.prior.kill.failed) must be added to the canonical event taxonomy in
     docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
     All cello-mcp startup events use the client.startup.* namespace — do not use
     bare startup.* names.
