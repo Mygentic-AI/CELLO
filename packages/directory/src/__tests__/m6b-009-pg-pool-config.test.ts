@@ -294,3 +294,38 @@ describeIntegration("CELLO-M6B-009 AC-001: pool max enforced under concurrent lo
     }
   }, 30_000);
 });
+
+// ─── AC-010: Manual integration test — 20 concurrent registrations in dev ──────
+
+describe.skip("CELLO-M6B-009 AC-010: directory dev deployment with 50 concurrent registrations (manual)", () => {
+  it("20 concurrent agent registrations complete within 60 seconds with no errors", () => {
+    // AC-010: Given: The directory deployed to dev us-east-1 with DIRECTORY_PG_POOL_MAX=50
+    //         When: 20 concurrent agent registrations are initiated simultaneously
+    //         Then: all 20 registrations complete within 60 seconds; no registration returns
+    //               an error; pool wait times are logged at INFO via pg's pool event hooks
+    //               if any exceed 5 seconds
+
+    // MANUAL EXECUTION INSTRUCTIONS:
+    // 1. Ensure directory is deployed to dev us-east-1 with DIRECTORY_PG_POOL_MAX=50
+    //    Verify: aws ecs describe-task-definition --task-definition cello-directory-dev \
+    //            --region us-east-1 --query 'taskDefinition.containerDefinitions[0].environment'
+    //    Expected: { Name: DIRECTORY_PG_POOL_MAX, Value: "50" }
+    //
+    // 2. Run 20 concurrent registrations from a local test client:
+    //    cd packages/e2e-tests
+    //    CELLO_ENV=dev DIRECTORY_URL=<dev-alb-url> pnpm tsx src/manual/concurrent-registrations.ts
+    //
+    // 3. Expected log output patterns:
+    //    - "adapter.initialised" with poolMax:50
+    //    - No "directory.pool.max.high" WARN (50 <= 100)
+    //    - All 20 registrations return 200 status within 60 seconds
+    //    - If any pool acquisition exceeds 5 seconds, a WARN event with pool wait time is logged
+    //
+    // 4. Pass criteria:
+    //    - All 20 registrations complete successfully (no 500/timeout errors)
+    //    - Total time from first request to last response < 60 seconds
+    //    - No pool exhaustion errors in CloudWatch logs
+    //
+    // TODO: Implement src/manual/concurrent-registrations.ts script if it does not exist
+  });
+});

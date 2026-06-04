@@ -111,6 +111,17 @@ export class InMemoryRelayStore implements RelayStore {
    *
    * Do not call from production code — the method name is intentionally prefixed with
    * double-underscore to signal test-only use.
+   *
+   * Pattern rationale: This method must be public on the RelayStore interface because
+   * the idle-sweep tests require cross-package access (e2e-tests → relay-store). Moving
+   * it outside the interface would require duplicating the session storage structure or
+   * exporting internal Map references. TypeScript's `@internal` JSDoc tag was considered
+   * but would require `stripInternal: true` in tsconfig (breaking existing exports).
+   * Runtime validation (checking NODE_ENV) was rejected because CELLO uses CELLO_ENV
+   * ('local'/'dev'/'staging'/'production'), and test runners set CELLO_ENV=local for
+   * integration tests — making NODE_ENV an unreliable test/production discriminator.
+   * The double-underscore prefix is CELLO's established convention for test utilities
+   * that must be exported but should never appear in production call paths.
    */
   __setLastActivityAtForTest(sessionIdHex: string, ts: number): void {
     const state = this.#sessions.get(sessionIdHex);
