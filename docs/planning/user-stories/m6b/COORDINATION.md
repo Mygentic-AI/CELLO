@@ -217,3 +217,11 @@ This triggered a cascade that consumed the entire session:
 cello-client: CELLO-M6B-001 merged to main at e2412cd. Published @cello-protocol/connect@0.0.26 — tagged v0.0.26, CI will publish to npm beta. PID lock file active — orphan process problem eliminated.
 trustless-cello: CELLO-M6B-001 merged to main at 6885e66. Documentation-only (story YAML status→done, observability events). No pipeline triggered.
 Note: workflow file workarounds for sonnet 4.6 arg-drop bug were lost in a git reset --hard during merge prep. Re-apply manually before next story run.
+
+---
+
+### 2026-06-04 — M6B-002 merged
+
+cello-client: CELLO-M6B-002 merged at f8cffb4. @cello-protocol/client bumped to 0.0.18 (already on branch). @cello-protocol/connect bumped to 0.0.27 at commit 673822d, tagged v0.0.27. CI will publish to npm beta.
+trustless-cello: CELLO-M6B-002 merged at f737849. Taxonomy conflict resolved — both M6B-001 lock events and M6B-002 frost.ceremony.failed event kept. Directory pipeline triggered (packages/directory/ + infra/cloudformation/cello-cloudwatch.yaml changed).
+Wait for directory pipeline ProductionDeploy Succeeded before merging M6B-004.
