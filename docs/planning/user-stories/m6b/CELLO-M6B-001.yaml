@@ -200,10 +200,16 @@ observability:
       trigger: "When the lock file is removed on exit"
       context_fields: [pid]
       correlationId: false
+    - name: client.startup.lock.release.failed
+      level: warn
+      trigger: "When unlinking the lock file on exit fails with an unexpected error (not ENOENT)"
+      context_fields: [reason, pid]
+      correlationId: false
   error_events: []
   notes: >
-    client.startup.prior.process.killed, client.startup.lock.acquired, and
-    client.startup.lock.released must be added to the canonical event taxonomy in
+    client.startup.prior.process.killed, client.startup.lock.acquired,
+    client.startup.lock.released, and client.startup.lock.release.failed must be
+    added to the canonical event taxonomy in
     docs/planning/discussion_logs/2026-05-16_0753_development-pipeline-and-local-iteration.md.
     All cello-mcp startup events use the client.startup.* namespace — do not use
     bare startup.* names.
