@@ -221,12 +221,22 @@ export class NetworkRelayAdapter implements RelayAdapter {
   /**
    * Open a stream to the relay, send one frame, read one response frame, close.
    * One request/response per stream open — same pattern as /cello/frost/1.0.0.
+   * If the connection dropped since startup (idle timeout), re-dial once before giving up.
    */
   async #sendAndReceive(frameBytes: Uint8Array): Promise<Record<string, unknown>> {
     const node = this.#node;
     if (!node) throw new Error("NetworkRelayAdapter: not connected");
 
-    const stream = await node.newStream(this.#relayPeerId, DIRECTORY_RELAY_PROTOCOL_ID);
+    // Re-dial if the connection to the relay has dropped since startup (idle timeout).
+    // newStream throws on a dead connection; re-dial once and retry.
+    const stream = await node.newStream(this.#relayPeerId, DIRECTORY_RELAY_PROTOCOL_ID).catch(
+      async () => {
+        for (const addr of this.#relayMultiaddrs) {
+          try { await node.dial(addr); break; } catch { /* try next */ }
+        }
+        return node.newStream(this.#relayPeerId, DIRECTORY_RELAY_PROTOCOL_ID);
+      },
+    );
     try {
       stream.send(lp.encode.single(frameBytes));
       await stream.close();
