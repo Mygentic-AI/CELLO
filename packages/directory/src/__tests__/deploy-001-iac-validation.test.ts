@@ -530,6 +530,28 @@ describe("M6B-006: AC-008 cello-cloudwatch.yaml contains RelayManifestUpdateFail
     expect(props["Threshold"]).toBe(3);
     expect(props["ComparisonOperator"]).toBe("GreaterThanThreshold");
   });
+
+  it("Alarm dimensions match MetricFilter dimensions exactly (prevents INSUFFICIENT_DATA)", () => {
+    const template = loadTemplate("cello-cloudwatch.yaml");
+    const resources = template["Resources"] as Record<string, Record<string, unknown>>;
+
+    // Extract dimension keys from the MetricFilter
+    const filter = resources["RelayManifestUpdateFailedMetricFilter"];
+    const filterProps = filter["Properties"] as Record<string, unknown>;
+    const transformations = filterProps["MetricTransformations"] as Array<Record<string, unknown>>;
+    const filterDimensions = transformations[0]["Dimensions"] as Array<{ Key: string }>;
+    const filterDimKeys = filterDimensions.map((d) => d.Key).sort();
+
+    // Extract dimension keys from the Alarm
+    const alarm = resources["RelayManifestUpdateFailedAlarm"];
+    const alarmProps = alarm["Properties"] as Record<string, unknown>;
+    const alarmDimensions = alarmProps["Dimensions"] as Array<{ Name: string }>;
+    const alarmDimKeys = alarmDimensions.map((d) => d.Name).sort();
+
+    // CloudWatch metrics are uniquely identified by their exact dimension set.
+    // A mismatch means the alarm queries a different metric series than what the filter publishes.
+    expect(alarmDimKeys).toEqual(filterDimKeys);
+  });
 });
 
 // ─── SI-004: VPC Peering ports restricted ───────────────────────────────────
