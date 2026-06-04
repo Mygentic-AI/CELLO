@@ -255,3 +255,12 @@ M6B-007 and M6B-008 are now unblocked (pending pipeline completion).
 
 trustless-cello: CELLO-M6B-012 merged. PERSIST-019 AC-003 Uint8Array round-trip tests added. Directory pipeline triggered (test-only change).
 No cello-client side.
+
+---
+
+### 2026-06-04 — M6B-007 merged
+
+trustless-cello: CELLO-M6B-007 merged at 42d36d4. Relay public WebSocket ALB added (port 4002, CELLO_RELAY_WS_LISTEN_ADDR env var, RelayAlb/RelayTargetGroup/RelayAlbListener CFN resources).
+Additional fix commit f28fe89: ALB deregistration delay reduced to 30s on relay target group — fixes eu-central-1 pipeline timeout that was blocking M6B-006 relay deployment.
+Both relay pipeline and directory pipeline triggered.
+No cello-client side.
